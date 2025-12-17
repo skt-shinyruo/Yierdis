@@ -4,14 +4,12 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 public final class YierdisDb {
     private static final long NO_EXPIRE = -1L;
 
-    private final ConcurrentHashMap<ByteArrayKey, Entry> store = new ConcurrentHashMap<>();
+    private final YierdisDict<Entry> store = new YierdisDict<>();
 
     public YierdisDb() {
         // Scheduling (if any) is done by the Netty event loop in YierdisServer, not by a dedicated thread.
@@ -102,13 +100,20 @@ public final class YierdisDb {
         }
         long now = System.currentTimeMillis();
         List<byte[]> out = new ArrayList<>();
-        for (Map.Entry<ByteArrayKey, Entry> e : store.entrySet()) {
-            if (removeIfExpired(e.getKey(), e.getValue(), now)) {
-                continue;
+        List<ByteArrayKey> expiredKeys = new ArrayList<>();
+        List<Entry> expiredValues = new ArrayList<>();
+        store.forEach((k, e) -> {
+            if (isEntryExpired(e, now)) {
+                expiredKeys.add(k);
+                expiredValues.add(e);
+                return;
             }
-            if (globMatches(globPattern, e.getKey().bytes())) {
-                out.add(e.getKey().bytes());
+            if (globMatches(globPattern, k.bytes())) {
+                out.add(k.bytes());
             }
+        });
+        for (int i = 0; i < expiredKeys.size(); i++) {
+            store.remove(expiredKeys.get(i), expiredValues.get(i));
         }
         return out;
     }
@@ -549,8 +554,16 @@ public final class YierdisDb {
 
     public void cleanupExpired() {
         long now = System.currentTimeMillis();
-        for (Map.Entry<ByteArrayKey, Entry> e : store.entrySet()) {
-            removeIfExpired(e.getKey(), e.getValue(), now);
+        List<ByteArrayKey> expiredKeys = new ArrayList<>();
+        List<Entry> expiredValues = new ArrayList<>();
+        store.forEach((k, e) -> {
+            if (isEntryExpired(e, now)) {
+                expiredKeys.add(k);
+                expiredValues.add(e);
+            }
+        });
+        for (int i = 0; i < expiredKeys.size(); i++) {
+            store.remove(expiredKeys.get(i), expiredValues.get(i));
         }
     }
 
