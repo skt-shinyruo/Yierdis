@@ -105,6 +105,10 @@ public final class CommandProcessor {
                     return zrange(args);
                 case "ZREVRANGE":
                     return zrevrange(args);
+                case "ZRANGEBYSCORE":
+                    return zrangebyscore(args);
+                case "ZREMRANGEBYSCORE":
+                    return zremrangebyscore(args);
                 case "ZREM":
                     return zrem(args);
 
@@ -482,6 +486,54 @@ public final class CommandProcessor {
         return toBulkStringArray(db.zrevrange(args.get(1), start, stop, withScores));
     }
 
+    private RespObject zrangebyscore(List<byte[]> args) {
+        if (args.size() < 4) {
+            return wrongArity("zrangebyscore");
+        }
+
+        ScoreBound min = parseScoreBound(args.get(2));
+        ScoreBound max = parseScoreBound(args.get(3));
+
+        boolean withScores = false;
+        long offset = 0;
+        long count = Long.MAX_VALUE;
+
+        int i = 4;
+        while (i < args.size()) {
+            String opt = upperAscii(args.get(i));
+            if ("WITHSCORES".equals(opt)) {
+                withScores = true;
+                i++;
+                continue;
+            }
+            if ("LIMIT".equals(opt)) {
+                if (i + 2 >= args.size()) {
+                    return RespError.of("ERR syntax error");
+                }
+                offset = parseLong(args.get(i + 1), "offset");
+                count = parseLong(args.get(i + 2), "count");
+                if (offset < 0 || count < 0) {
+                    return RespError.of("ERR syntax error");
+                }
+                i += 3;
+                continue;
+            }
+            return RespError.of("ERR syntax error");
+        }
+
+        return toBulkStringArray(db.zrangeByScore(args.get(1), min.value, min.exclusive, max.value, max.exclusive, withScores, offset, count));
+    }
+
+    private RespObject zremrangebyscore(List<byte[]> args) {
+        if (args.size() != 4) {
+            return wrongArity("zremrangebyscore");
+        }
+
+        ScoreBound min = parseScoreBound(args.get(2));
+        ScoreBound max = parseScoreBound(args.get(3));
+        return RespInteger.of(db.zremrangeByScore(args.get(1), min.value, min.exclusive, max.value, max.exclusive));
+    }
+
     private RespObject zrem(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("zrem");
@@ -524,6 +576,50 @@ public final class CommandProcessor {
             return Long.parseLong(ascii(s));
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+        }
+    }
+
+    private static ScoreBound parseScoreBound(byte[] raw) {
+        String s = ascii(raw);
+        if (s == null || s.isEmpty()) {
+            throw new YierdisDb.YierdisCommandException("ERR min or max is not a float");
+        }
+        s = s.trim();
+        boolean exclusive = false;
+        if (s.startsWith("(")) {
+            exclusive = true;
+            s = s.substring(1);
+        } else if (s.startsWith("[")) {
+            // Accept bracket-inclusive to be tolerant with newer Redis range syntaxes.
+            s = s.substring(1);
+        }
+
+        if ("-inf".equalsIgnoreCase(s)) {
+            return new ScoreBound(Double.NEGATIVE_INFINITY, exclusive);
+        }
+        if ("+inf".equalsIgnoreCase(s) || "inf".equalsIgnoreCase(s)) {
+            return new ScoreBound(Double.POSITIVE_INFINITY, exclusive);
+        }
+
+        double v;
+        try {
+            v = Double.parseDouble(s);
+        } catch (NumberFormatException e) {
+            throw new YierdisDb.YierdisCommandException("ERR min or max is not a float");
+        }
+        if (Double.isNaN(v) || Double.isInfinite(v)) {
+            throw new YierdisDb.YierdisCommandException("ERR min or max is not a float");
+        }
+        return new ScoreBound(v, exclusive);
+    }
+
+    private static final class ScoreBound {
+        final double value;
+        final boolean exclusive;
+
+        private ScoreBound(double value, boolean exclusive) {
+            this.value = value;
+            this.exclusive = exclusive;
         }
     }
 }

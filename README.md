@@ -104,6 +104,8 @@ java -cp target/yierdis-0.1.0-SNAPSHOT.jar yier.bubu.redis.client.YierdisCli
 - `ZADD key score member [score member ...]`
 - `ZRANGE key start stop [WITHSCORES] [REV]`
 - `ZREVRANGE key start stop [WITHSCORES]`
+- `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`
+- `ZREMRANGEBYSCORE key min max`
 - `ZREM key member [member ...]`
 
 ## 说明

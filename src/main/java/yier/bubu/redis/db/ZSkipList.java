@@ -13,6 +13,23 @@ final class ZSkipList {
     private int level = 1;
     private int length = 0;
 
+    Node first() {
+        return header.forward[0];
+    }
+
+    /**
+     * Returns the first node whose score is within the given lower bound.
+     */
+    Node findFirstByScore(double score, boolean exclusive) {
+        Node x = header;
+        for (int i = level - 1; i >= 0; i--) {
+            while (x.forward[i] != null && (exclusive ? x.forward[i].score <= score : x.forward[i].score < score)) {
+                x = x.forward[i];
+            }
+        }
+        return x.forward[0];
+    }
+
     Node insert(double score, ByteArrayKey member) {
         Node[] update = new Node[MAX_LEVEL];
         int[] rank = new int[MAX_LEVEL];
@@ -151,4 +168,3 @@ final class ZSkipList {
         }
     }
 }
-

@@ -214,4 +214,103 @@ public class ZSetCommandTest {
 
         db.shutdown();
     }
+
+    @Test
+    public void zrangeByScoreRespectsBoundsLimitAndWithScores() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = b("zbyscore");
+        cp.execute(Arrays.asList(
+                b("ZADD"), key,
+                b("1"), b("a"),
+                b("2"), b("b"),
+                b("2"), b("c"),
+                b("3"), b("d")
+        ));
+
+        RespArray range = (RespArray) cp.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("2"), b("3")));
+        Assert.assertEquals(3, range.values().size());
+        Assert.assertEquals("b", ((RespBulkString) range.values().get(0)).asString());
+        Assert.assertEquals("c", ((RespBulkString) range.values().get(1)).asString());
+        Assert.assertEquals("d", ((RespBulkString) range.values().get(2)).asString());
+
+        RespArray exMin = (RespArray) cp.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("(2"), b("3")));
+        Assert.assertEquals(1, exMin.values().size());
+        Assert.assertEquals("d", ((RespBulkString) exMin.values().get(0)).asString());
+
+        RespArray exMax = (RespArray) cp.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("2"), b("(3")));
+        Assert.assertEquals(2, exMax.values().size());
+        Assert.assertEquals("b", ((RespBulkString) exMax.values().get(0)).asString());
+        Assert.assertEquals("c", ((RespBulkString) exMax.values().get(1)).asString());
+
+        RespArray limit = (RespArray) cp.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("2"), b("3"), b("LIMIT"), b("1"), b("1")));
+        Assert.assertEquals(1, limit.values().size());
+        Assert.assertEquals("c", ((RespBulkString) limit.values().get(0)).asString());
+
+        RespArray withScores = (RespArray) cp.execute(Arrays.asList(
+                b("ZRANGEBYSCORE"), key, b("-inf"), b("+inf"),
+                b("WITHSCORES"), b("LIMIT"), b("0"), b("2")
+        ));
+        Assert.assertEquals(4, withScores.values().size());
+        Assert.assertEquals("a", ((RespBulkString) withScores.values().get(0)).asString());
+        Assert.assertEquals("1", ((RespBulkString) withScores.values().get(1)).asString());
+        Assert.assertEquals("b", ((RespBulkString) withScores.values().get(2)).asString());
+        Assert.assertEquals("2", ((RespBulkString) withScores.values().get(3)).asString());
+
+        db.shutdown();
+    }
+
+    @Test
+    public void zremrangeByScoreRemovesAndDeletesKeyWhenEmpty() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = b("zrembyscore");
+        cp.execute(Arrays.asList(
+                b("ZADD"), key,
+                b("1"), b("a"),
+                b("2"), b("b"),
+                b("3"), b("c")
+        ));
+
+        RespInteger removed = (RespInteger) cp.execute(Arrays.asList(b("ZREMRANGEBYSCORE"), key, b("2"), b("3")));
+        Assert.assertEquals(2, removed.value());
+
+        RespArray remaining = (RespArray) cp.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
+        Assert.assertEquals(1, remaining.values().size());
+        Assert.assertEquals("a", ((RespBulkString) remaining.values().get(0)).asString());
+
+        RespInteger removedAll = (RespInteger) cp.execute(Arrays.asList(b("ZREMRANGEBYSCORE"), key, b("-inf"), b("+inf")));
+        Assert.assertEquals(1, removedAll.value());
+
+        RespInteger exists = (RespInteger) cp.execute(Arrays.asList(b("EXISTS"), key));
+        Assert.assertEquals(0, exists.value());
+
+        db.shutdown();
+    }
+
+    @Test
+    public void zrangeByScoreWorksAfterUpgradeToSkiplist() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = b("zbyscore:upgrade");
+        byte[] big = new byte[65];
+        Arrays.fill(big, (byte) 'x');
+
+        RespInteger added = (RespInteger) cp.execute(Arrays.asList(
+                b("ZADD"), key,
+                b("1"), big,
+                b("0"), b("a")
+        ));
+        Assert.assertEquals(2, added.value());
+
+        RespArray range = (RespArray) cp.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("0"), b("1")));
+        Assert.assertEquals(2, range.values().size());
+        Assert.assertEquals("a", ((RespBulkString) range.values().get(0)).asString());
+        Assert.assertArrayEquals(big, ((RespBulkString) range.values().get(1)).data());
+
+        db.shutdown();
+    }
 }

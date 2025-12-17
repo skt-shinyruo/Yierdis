@@ -530,6 +530,19 @@ public final class YierdisDb {
         }
     }
 
+    public List<byte[]> zrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        if (e == null) {
+            return new ArrayList<>();
+        }
+        synchronized (e) {
+            if (!(e.value instanceof ZSetValue)) {
+                throw new WrongTypeException();
+            }
+            return ((ZSetValue) e.value).zrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        }
+    }
+
     public int zrem(byte[] keyBytes, List<byte[]> members) {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
@@ -543,6 +556,28 @@ public final class YierdisDb {
                 }
                 ZSetValue zv = (ZSetValue) old.value;
                 removed[0] = zv.zrem(members);
+                if (zv.size() == 0) {
+                    return null;
+                }
+                return old;
+            }
+        });
+        return removed[0];
+    }
+
+    public int zremrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive) {
+        long now = System.currentTimeMillis();
+        final int[] removed = new int[]{0};
+        store.computeIfPresent(new ByteArrayKey(keyBytes), (k, old) -> {
+            if (isEntryExpired(old, now)) {
+                return null;
+            }
+            synchronized (old) {
+                if (!(old.value instanceof ZSetValue)) {
+                    throw new WrongTypeException();
+                }
+                ZSetValue zv = (ZSetValue) old.value;
+                removed[0] = zv.zremrangeByScore(min, minExclusive, max, maxExclusive);
                 if (zv.size() == 0) {
                     return null;
                 }
