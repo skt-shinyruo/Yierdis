@@ -11,6 +11,7 @@ final class ListValue implements YierdisValue {
     private static final int LISTPACK_MAX_ENTRIES = 128;
     private static final int LISTPACK_MAX_ELEMENT_BYTES = 64;
     private static final int QUICKLIST_NODE_MAX_ENTRIES = 64;
+    private static final int QUICKLIST_NODE_MAX_BYTES = 8 * 1024;
 
     private List<byte[]> listpack = new ArrayList<>();
     private ArrayDeque<ListPackNode> quicklist;
@@ -173,7 +174,7 @@ final class ListValue implements YierdisValue {
         ArrayDeque<ListPackNode> out = new ArrayDeque<>();
         ListPackNode node = new ListPackNode();
         for (byte[] v : listpack) {
-            if (node.size() >= QUICKLIST_NODE_MAX_ENTRIES) {
+            if (!node.canAdd(v)) {
                 out.addLast(node);
                 node = new ListPackNode();
             }
@@ -188,7 +189,7 @@ final class ListValue implements YierdisValue {
     }
 
     private void qlAddFirst(byte[] v) {
-        if (quicklist.isEmpty() || quicklist.peekFirst().isFull()) {
+        if (quicklist.isEmpty() || !quicklist.peekFirst().canAdd(v)) {
             quicklist.addFirst(new ListPackNode());
         }
         quicklist.peekFirst().addFirst(v);
@@ -196,7 +197,7 @@ final class ListValue implements YierdisValue {
     }
 
     private void qlAddLast(byte[] v) {
-        if (quicklist.isEmpty() || quicklist.peekLast().isFull()) {
+        if (quicklist.isEmpty() || !quicklist.peekLast().canAdd(v)) {
             quicklist.addLast(new ListPackNode());
         }
         quicklist.peekLast().addLast(v);
@@ -212,6 +213,7 @@ final class ListValue implements YierdisValue {
         if (n.isEmpty()) {
             quicklist.removeFirst();
         }
+        maybeMergeFirstTwo();
         return v;
     }
 
@@ -224,7 +226,62 @@ final class ListValue implements YierdisValue {
         if (n.isEmpty()) {
             quicklist.removeLast();
         }
+        maybeMergeLastTwo();
         return v;
+    }
+
+    private void maybeMergeFirstTwo() {
+        if (quicklist.size() < 2) {
+            return;
+        }
+        ListPackNode first = quicklist.pollFirst();
+        ListPackNode second = quicklist.pollFirst();
+        if (first == null || second == null) {
+            if (second != null) {
+                quicklist.addFirst(second);
+            }
+            if (first != null) {
+                quicklist.addFirst(first);
+            }
+            return;
+        }
+
+        if (first.canAppendAll(second)) {
+            first.appendAll(second);
+            quicklist.addFirst(first);
+            return;
+        }
+
+        // Restore original order: first, second
+        quicklist.addFirst(second);
+        quicklist.addFirst(first);
+    }
+
+    private void maybeMergeLastTwo() {
+        if (quicklist.size() < 2) {
+            return;
+        }
+        ListPackNode last = quicklist.pollLast();
+        ListPackNode prev = quicklist.pollLast();
+        if (last == null || prev == null) {
+            if (prev != null) {
+                quicklist.addLast(prev);
+            }
+            if (last != null) {
+                quicklist.addLast(last);
+            }
+            return;
+        }
+
+        if (prev.canAppendAll(last)) {
+            prev.appendAll(last);
+            quicklist.addLast(prev);
+            return;
+        }
+
+        // Restore original order: prev, last
+        quicklist.addLast(prev);
+        quicklist.addLast(last);
     }
 
     private byte[] pollListpackFirst() {
@@ -244,9 +301,17 @@ final class ListValue implements YierdisValue {
 
     private static final class ListPackNode {
         private final ArrayList<byte[]> values = new ArrayList<>();
+        private int bytesSize = 0;
 
-        boolean isFull() {
-            return values.size() >= QUICKLIST_NODE_MAX_ENTRIES;
+        boolean canAdd(byte[] v) {
+            int len = v == null ? 0 : v.length;
+            if (values.isEmpty()) {
+                return true;
+            }
+            if (values.size() >= QUICKLIST_NODE_MAX_ENTRIES) {
+                return false;
+            }
+            return bytesSize + len <= QUICKLIST_NODE_MAX_BYTES;
         }
 
         boolean isEmpty() {
@@ -263,17 +328,21 @@ final class ListValue implements YierdisValue {
 
         void addFirst(byte[] v) {
             values.add(0, v);
+            bytesSize += v == null ? 0 : v.length;
         }
 
         void addLast(byte[] v) {
             values.add(v);
+            bytesSize += v == null ? 0 : v.length;
         }
 
         byte[] removeFirst() {
             if (values.isEmpty()) {
                 return null;
             }
-            return values.remove(0);
+            byte[] v = values.remove(0);
+            bytesSize -= v == null ? 0 : v.length;
+            return v;
         }
 
         byte[] removeLast() {
@@ -281,7 +350,32 @@ final class ListValue implements YierdisValue {
             if (s == 0) {
                 return null;
             }
-            return values.remove(s - 1);
+            byte[] v = values.remove(s - 1);
+            bytesSize -= v == null ? 0 : v.length;
+            return v;
+        }
+
+        boolean canAppendAll(ListPackNode other) {
+            if (other == null || other.isEmpty()) {
+                return true;
+            }
+            if (this.isEmpty()) {
+                return true;
+            }
+            if (this.values.size() + other.values.size() > QUICKLIST_NODE_MAX_ENTRIES) {
+                return false;
+            }
+            return this.bytesSize + other.bytesSize <= QUICKLIST_NODE_MAX_BYTES;
+        }
+
+        void appendAll(ListPackNode other) {
+            if (other == null || other.isEmpty()) {
+                return;
+            }
+            for (byte[] v : other.values) {
+                values.add(v);
+            }
+            bytesSize += other.bytesSize;
         }
     }
 }
