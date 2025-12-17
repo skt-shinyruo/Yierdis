@@ -514,11 +514,8 @@ public final class CommandProcessor {
                 if (i + 2 >= args.size()) {
                     return RespError.of("ERR syntax error");
                 }
-                offset = parseLong(args.get(i + 1), "offset");
-                count = parseLong(args.get(i + 2), "count");
-                if (offset < 0 || count < 0) {
-                    return RespError.of("ERR syntax error");
-                }
+                offset = parseNonNegativeLong(args.get(i + 1), "offset");
+                count = parseNonNegativeLong(args.get(i + 2), "count");
                 i += 3;
                 continue;
             }
@@ -562,11 +559,8 @@ public final class CommandProcessor {
                 if (i + 2 >= args.size()) {
                     return RespError.of("ERR syntax error");
                 }
-                offset = parseLong(args.get(i + 1), "offset");
-                count = parseLong(args.get(i + 2), "count");
-                if (offset < 0 || count < 0) {
-                    return RespError.of("ERR syntax error");
-                }
+                offset = parseNonNegativeLong(args.get(i + 1), "offset");
+                count = parseNonNegativeLong(args.get(i + 2), "count");
                 i += 3;
                 continue;
             }
@@ -635,6 +629,14 @@ public final class CommandProcessor {
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("value is not an integer or out of range: " + label);
         }
+    }
+
+    private static long parseNonNegativeLong(byte[] s, String label) {
+        long v = parseLong(s, label);
+        if (v < 0) {
+            throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+        }
+        return v;
     }
 
     private static ScoreBound parseScoreBound(byte[] raw) {
