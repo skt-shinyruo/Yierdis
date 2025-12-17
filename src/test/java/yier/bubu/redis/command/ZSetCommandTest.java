@@ -258,6 +258,15 @@ public class ZSetCommandTest {
         Assert.assertEquals("b", ((RespBulkString) withScores.values().get(2)).asString());
         Assert.assertEquals("2", ((RespBulkString) withScores.values().get(3)).asString());
 
+        RespArray emptyWhenMinGreaterThanMax = (RespArray) cp.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("3"), b("2")));
+        Assert.assertEquals(0, emptyWhenMinGreaterThanMax.values().size());
+
+        RespArray emptyWhenCountZero = (RespArray) cp.execute(Arrays.asList(
+                b("ZRANGEBYSCORE"), key, b("-inf"), b("+inf"),
+                b("LIMIT"), b("0"), b("0")
+        ));
+        Assert.assertEquals(0, emptyWhenCountZero.values().size());
+
         db.shutdown();
     }
 
@@ -352,6 +361,16 @@ public class ZSetCommandTest {
         Assert.assertEquals("3", ((RespBulkString) withScores.values().get(1)).asString());
         Assert.assertEquals("c", ((RespBulkString) withScores.values().get(2)).asString());
         Assert.assertEquals("2", ((RespBulkString) withScores.values().get(3)).asString());
+
+        RespArray exMin = (RespArray) cp.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("3"), b("(2")));
+        Assert.assertEquals(1, exMin.values().size());
+        Assert.assertEquals("d", ((RespBulkString) exMin.values().get(0)).asString());
+
+        RespArray emptyWhenMaxLessThanMin = (RespArray) cp.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("1"), b("2")));
+        Assert.assertEquals(0, emptyWhenMaxLessThanMin.values().size());
+
+        RespArray offsetPastEnd = (RespArray) cp.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("3"), b("2"), b("LIMIT"), b("10"), b("1")));
+        Assert.assertEquals(0, offsetPastEnd.values().size());
 
         db.shutdown();
     }

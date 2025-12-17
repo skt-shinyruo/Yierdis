@@ -103,6 +103,35 @@ public class CommandErrorTest {
         db.shutdown();
     }
 
+    @Test
+    public void scoreRangeCommandsValidateArityAndLimitArguments() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        RespError zrangeByScoreWrongArity = (RespError) cp.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0")));
+        Assert.assertEquals("ERR wrong number of arguments for 'zrangebyscore' command", zrangeByScoreWrongArity.message());
+
+        RespError zrevrangeByScoreWrongArity = (RespError) cp.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("0")));
+        Assert.assertEquals("ERR wrong number of arguments for 'zrevrangebyscore' command", zrevrangeByScoreWrongArity.message());
+
+        RespError badOpt = (RespError) cp.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0"), b("1"), b("WITHSCORESX")));
+        Assert.assertEquals("ERR syntax error", badOpt.message());
+
+        RespError limitMissingCount = (RespError) cp.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0")));
+        Assert.assertEquals("ERR syntax error", limitMissingCount.message());
+
+        RespError negativeOffset = (RespError) cp.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0"), b("1"), b("LIMIT"), b("-1"), b("1")));
+        Assert.assertEquals("ERR value is not an integer or out of range: offset", negativeOffset.message());
+
+        RespError negativeCount = (RespError) cp.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0"), b("-1")));
+        Assert.assertEquals("ERR value is not an integer or out of range: count", negativeCount.message());
+
+        RespError badCount = (RespError) cp.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0"), b("x")));
+        Assert.assertEquals("ERR value is not an integer or out of range: count", badCount.message());
+
+        db.shutdown();
+    }
+
     private static void assertWrongType(RespObject obj) {
         Assert.assertTrue(obj instanceof RespError);
         Assert.assertTrue(((RespError) obj).message().startsWith("WRONGTYPE"));
