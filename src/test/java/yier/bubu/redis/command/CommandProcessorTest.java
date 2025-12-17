@@ -180,6 +180,88 @@ public class CommandProcessorTest {
     }
 
     @Test
+    public void keysGlobMatchesOnRawBytes() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] v = new byte[]{1};
+        byte[] k1 = new byte[]{0, 'a'};
+        byte[] k2 = new byte[]{0, 'b'};
+        byte[] k3 = new byte[]{1, 'a'};
+
+        cp.execute(Arrays.asList(b("SET"), k1, v));
+        cp.execute(Arrays.asList(b("SET"), k2, v));
+        cp.execute(Arrays.asList(b("SET"), k3, v));
+
+        // Prefix match: 0x00 + '*'
+        RespArray prefix = (RespArray) cp.execute(Arrays.asList(
+                b("KEYS"),
+                new byte[]{0, '*'}
+        ));
+        Assert.assertEquals(2, prefix.values().size());
+        Assert.assertTrue(containsBytes(prefix, k1));
+        Assert.assertTrue(containsBytes(prefix, k2));
+
+        // Exactly 2 bytes: 0x00 + '?'
+        RespArray oneByte = (RespArray) cp.execute(Arrays.asList(
+                b("KEYS"),
+                new byte[]{0, '?'}
+        ));
+        Assert.assertEquals(2, oneByte.values().size());
+        Assert.assertTrue(containsBytes(oneByte, k1));
+        Assert.assertTrue(containsBytes(oneByte, k2));
+
+        db.shutdown();
+    }
+
+    @Test
+    public void incrErrorsOnNonIntegerOrOverflow() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = b("k");
+
+        // Non-integer
+        cp.execute(Arrays.asList(b("SET"), key, new byte[]{'x'}));
+        RespObject err1 = cp.execute(Arrays.asList(b("INCR"), key));
+        Assert.assertTrue(err1 instanceof RespError);
+        Assert.assertEquals("ERR value is not an integer or out of range", ((RespError) err1).message());
+
+        // Overflow
+        cp.execute(Arrays.asList(b("SET"), key, b(Long.toString(Long.MAX_VALUE))));
+        RespObject err2 = cp.execute(Arrays.asList(b("INCR"), key));
+        Assert.assertTrue(err2 instanceof RespError);
+        Assert.assertEquals("ERR value is not an integer or out of range", ((RespError) err2).message());
+
+        db.shutdown();
+    }
+
+    @Test
+    public void expireZeroDeletesKeyImmediately() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = new byte[]{0, (byte) 0xFF};
+        byte[] value = new byte[]{1, 2, 3};
+
+        cp.execute(Arrays.asList(b("SET"), key, value));
+
+        RespInteger expire = (RespInteger) cp.execute(Arrays.asList(b("EXPIRE"), key, b("0")));
+        Assert.assertEquals(1, expire.value());
+
+        RespInteger ttl = (RespInteger) cp.execute(Arrays.asList(b("TTL"), key));
+        Assert.assertEquals(-2, ttl.value());
+
+        RespBulkString get = (RespBulkString) cp.execute(Arrays.asList(b("GET"), key));
+        Assert.assertTrue(get.isNull());
+
+        RespInteger exists = (RespInteger) cp.execute(Arrays.asList(b("EXISTS"), key));
+        Assert.assertEquals(0, exists.value());
+
+        db.shutdown();
+    }
+
+    @Test
     public void setGetIncrExpireTtl() {
         YierdisDb db = new YierdisDb();
         CommandProcessor cp = new CommandProcessor(db);
@@ -312,5 +394,18 @@ public class CommandProcessorTest {
             out.add(p.getBytes(StandardCharsets.UTF_8));
         }
         return out;
+    }
+
+    private static byte[] b(String s) {
+        return s.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static boolean containsBytes(RespArray array, byte[] expected) {
+        for (RespObject o : array.values()) {
+            if (o instanceof RespBulkString && Arrays.equals(expected, ((RespBulkString) o).data())) {
+                return true;
+            }
+        }
+        return false;
     }
 }
