@@ -4,5 +4,6 @@ public enum ValueType {
     STRING,
     LIST,
     SET,
-    HASH
+    HASH,
+    ZSET
 }

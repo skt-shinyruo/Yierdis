@@ -89,12 +89,21 @@ public final class CommandProcessor {
 
                 case "SADD":
                     return sadd(args);
+                case "SREM":
+                    return srem(args);
                 case "SMEMBERS":
                     return smembers(args);
                 case "SISMEMBER":
                     return sismember(args);
                 case "SCARD":
                     return scard(args);
+
+                case "ZADD":
+                    return zadd(args);
+                case "ZRANGE":
+                    return zrange(args);
+                case "ZREM":
+                    return zrem(args);
 
                 default:
                     return RespError.of("ERR unknown command '" + args.get(0) + "'");
@@ -394,6 +403,13 @@ public final class CommandProcessor {
         return RespInteger.of(db.sadd(args.get(1), args.subList(2, args.size())));
     }
 
+    private RespObject srem(List<String> args) {
+        if (args.size() < 3) {
+            return wrongArity("srem");
+        }
+        return RespInteger.of(db.srem(args.get(1), args.subList(2, args.size())));
+    }
+
     private RespObject smembers(List<String> args) {
         if (args.size() != 2) {
             return wrongArity("smembers");
@@ -413,6 +429,39 @@ public final class CommandProcessor {
             return wrongArity("scard");
         }
         return RespInteger.of(db.scard(args.get(1)));
+    }
+
+    private RespObject zadd(List<String> args) {
+        if (args.size() < 4) {
+            return wrongArity("zadd");
+        }
+        int added = db.zadd(args.get(1), args.subList(2, args.size()));
+        return RespInteger.of(added);
+    }
+
+    private RespObject zrange(List<String> args) {
+        if (args.size() != 4 && args.size() != 5) {
+            return wrongArity("zrange");
+        }
+        int start = (int) parseLong(args.get(2), "start");
+        int stop = (int) parseLong(args.get(3), "stop");
+
+        boolean withScores = false;
+        if (args.size() == 5) {
+            if (!"WITHSCORES".equalsIgnoreCase(args.get(4))) {
+                return RespError.of("ERR syntax error");
+            }
+            withScores = true;
+        }
+
+        return toBulkStringArray(db.zrange(args.get(1), start, stop, withScores));
+    }
+
+    private RespObject zrem(List<String> args) {
+        if (args.size() < 3) {
+            return wrongArity("zrem");
+        }
+        return RespInteger.of(db.zrem(args.get(1), args.subList(2, args.size())));
     }
 
     private static RespArray toBulkStringArray(List<String> values) {

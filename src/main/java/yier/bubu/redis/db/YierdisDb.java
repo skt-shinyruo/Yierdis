@@ -7,10 +7,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
@@ -19,33 +15,12 @@ public final class YierdisDb {
 
     private final ConcurrentHashMap<String, Entry> store = new ConcurrentHashMap<>();
 
-    private final ScheduledExecutorService scheduler;
-    private ScheduledFuture<?> cleanupFuture;
-
     public YierdisDb() {
-        this.scheduler = Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory("yierdis-expirer"));
-    }
-
-    public void startExpirationCleanup(long period, TimeUnit unit) {
-        if (period <= 0) {
-            return;
-        }
-        if (cleanupFuture != null) {
-            cleanupFuture.cancel(false);
-        }
-        cleanupFuture = scheduler.scheduleAtFixedRate(new Runnable() {
-            @Override
-            public void run() {
-                cleanupExpired();
-            }
-        }, period, period, unit);
+        // Scheduling (if any) is done by the Netty event loop in YierdisServer, not by a dedicated thread.
     }
 
     public void shutdown() {
-        if (cleanupFuture != null) {
-            cleanupFuture.cancel(false);
-        }
-        scheduler.shutdownNow();
+        // No-op: this DB does not own threads. Kept for API symmetry / tests.
     }
 
     public void flushDb() {
@@ -439,6 +414,28 @@ public final class YierdisDb {
         return added[0];
     }
 
+    public int srem(String key, List<String> members) {
+        long now = System.currentTimeMillis();
+        final int[] removed = new int[]{0};
+        store.computeIfPresent(key, (k, old) -> {
+            if (isEntryExpired(old, now)) {
+                return null;
+            }
+            synchronized (old) {
+                if (!(old.value instanceof SetValue)) {
+                    throw new WrongTypeException();
+                }
+                SetValue sv = (SetValue) old.value;
+                removed[0] = sv.removeAll(members);
+                if (sv.size() == 0) {
+                    return null;
+                }
+                return old;
+            }
+        });
+        return removed[0];
+    }
+
     public List<String> smembers(String key) {
         Entry e = getEntryIfNotExpired(key);
         if (e == null) {
@@ -478,7 +475,68 @@ public final class YierdisDb {
         }
     }
 
-    private void cleanupExpired() {
+    public int zadd(String key, List<String> scoreMemberPairs) {
+        if (scoreMemberPairs.size() % 2 != 0) {
+            throw new YierdisCommandException("ERR wrong number of arguments for 'zadd' command");
+        }
+        long now = System.currentTimeMillis();
+        final int[] added = new int[]{0};
+        store.compute(key, (k, old) -> {
+            if (old != null && isEntryExpired(old, now)) {
+                old = null;
+            }
+            if (old == null) {
+                ZSetValue zv = new ZSetValue();
+                added[0] = zv.zaddMany(scoreMemberPairs);
+                return new Entry(zv, NO_EXPIRE);
+            }
+            synchronized (old) {
+                if (!(old.value instanceof ZSetValue)) {
+                    throw new WrongTypeException();
+                }
+                added[0] = ((ZSetValue) old.value).zaddMany(scoreMemberPairs);
+                return old;
+            }
+        });
+        return added[0];
+    }
+
+    public List<String> zrange(String key, int start, int stop, boolean withScores) {
+        Entry e = getEntryIfNotExpired(key);
+        if (e == null) {
+            return new ArrayList<>();
+        }
+        synchronized (e) {
+            if (!(e.value instanceof ZSetValue)) {
+                throw new WrongTypeException();
+            }
+            return ((ZSetValue) e.value).zrange(start, stop, withScores);
+        }
+    }
+
+    public int zrem(String key, List<String> members) {
+        long now = System.currentTimeMillis();
+        final int[] removed = new int[]{0};
+        store.computeIfPresent(key, (k, old) -> {
+            if (isEntryExpired(old, now)) {
+                return null;
+            }
+            synchronized (old) {
+                if (!(old.value instanceof ZSetValue)) {
+                    throw new WrongTypeException();
+                }
+                ZSetValue zv = (ZSetValue) old.value;
+                removed[0] = zv.zrem(members);
+                if (zv.size() == 0) {
+                    return null;
+                }
+                return old;
+            }
+        });
+        return removed[0];
+    }
+
+    public void cleanupExpired() {
         long now = System.currentTimeMillis();
         for (Map.Entry<String, Entry> e : store.entrySet()) {
             removeIfExpired(e.getKey(), e.getValue(), now);
@@ -599,18 +657,4 @@ public final class YierdisDb {
         }
     }
 
-    private static final class DaemonThreadFactory implements ThreadFactory {
-        private final String threadName;
-
-        private DaemonThreadFactory(String threadName) {
-            this.threadName = threadName;
-        }
-
-        @Override
-        public Thread newThread(Runnable r) {
-            Thread t = new Thread(r, threadName);
-            t.setDaemon(true);
-            return t;
-        }
-    }
 }

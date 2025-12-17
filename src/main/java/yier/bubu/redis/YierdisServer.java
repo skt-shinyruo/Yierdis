@@ -12,6 +12,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,15 +25,26 @@ public final class YierdisServer {
         ServerConfig config = ServerConfig.fromArgs(args);
 
         final YierdisDb db = new YierdisDb();
-        if (config.expirationCleanupIntervalMillis > 0) {
-            db.startExpirationCleanup(config.expirationCleanupIntervalMillis, TimeUnit.MILLISECONDS);
-        }
-
         final CommandProcessor commandProcessor = new CommandProcessor(db);
 
         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
-        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        EventLoopGroup workerGroup = new NioEventLoopGroup(1);
+        ScheduledFuture<?> cleanupFuture = null;
         try {
+            if (config.expirationCleanupIntervalMillis > 0) {
+                long period = config.expirationCleanupIntervalMillis;
+                cleanupFuture = workerGroup.next().scheduleAtFixedRate(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            db.cleanupExpired();
+                        } catch (Exception e) {
+                            log.debug("Expiration cleanup error", e);
+                        }
+                    }
+                }, period, period, TimeUnit.MILLISECONDS);
+            }
+
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
@@ -52,6 +64,9 @@ public final class YierdisServer {
             log.info("yierdis started on 0.0.0.0:{} (RESP2)", config.port);
             serverChannel.closeFuture().sync();
         } finally {
+            if (cleanupFuture != null) {
+                cleanupFuture.cancel(false);
+            }
             db.shutdown();
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
