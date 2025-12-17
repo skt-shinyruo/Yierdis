@@ -499,7 +499,7 @@ public final class YierdisDb {
         return added[0];
     }
 
-    public List<byte[]> zrange(byte[] keyBytes, int start, int stop, boolean withScores) {
+    public List<byte[]> zrange(byte[] keyBytes, long start, long stop, boolean withScores) {
         Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return new ArrayList<>();
@@ -509,6 +509,19 @@ public final class YierdisDb {
                 throw new WrongTypeException();
             }
             return ((ZSetValue) e.value).zrange(start, stop, withScores);
+        }
+    }
+
+    public List<byte[]> zrevrange(byte[] keyBytes, long start, long stop, boolean withScores) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        if (e == null) {
+            return new ArrayList<>();
+        }
+        synchronized (e) {
+            if (!(e.value instanceof ZSetValue)) {
+                throw new WrongTypeException();
+            }
+            return ((ZSetValue) e.value).zrevrange(start, stop, withScores);
         }
     }
 

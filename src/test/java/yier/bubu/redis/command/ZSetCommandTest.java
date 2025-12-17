@@ -76,8 +76,60 @@ public class ZSetCommandTest {
         RespArray startTooLarge = (RespArray) cp.execute(Arrays.asList(b("ZRANGE"), key, b("10"), b("20")));
         Assert.assertTrue(startTooLarge.values().isEmpty());
 
+        RespArray stopHuge = (RespArray) cp.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("9223372036854775807")));
+        Assert.assertEquals(4, stopHuge.values().size());
+
+        RespArray startHugeNegative = (RespArray) cp.execute(Arrays.asList(b("ZRANGE"), key, b("-9223372036854775808"), b("-1")));
+        Assert.assertEquals(4, startHugeNegative.values().size());
+
         RespArray startAfterStop = (RespArray) cp.execute(Arrays.asList(b("ZRANGE"), key, b("2"), b("1")));
         Assert.assertTrue(startAfterStop.values().isEmpty());
+
+        db.shutdown();
+    }
+
+    @Test
+    public void zrevrangeAndZrangeRevReturnReverseOrder() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = b("zrev");
+
+        byte[] m1 = new byte[]{0};
+        byte[] m2 = new byte[]{0, 0};
+        byte[] m3 = new byte[]{0, 1};
+        byte[] m4 = new byte[]{(byte) 0xFF};
+
+        RespInteger added = (RespInteger) cp.execute(Arrays.asList(
+                b("ZADD"),
+                key,
+                b("1"), m4,
+                b("1"), m3,
+                b("1"), m2,
+                b("1"), m1
+        ));
+        Assert.assertEquals(4, added.value());
+
+        RespArray rev = (RespArray) cp.execute(Arrays.asList(b("ZREVRANGE"), key, b("0"), b("-1")));
+        Assert.assertEquals(4, rev.values().size());
+        Assert.assertArrayEquals(m4, ((RespBulkString) rev.values().get(0)).data());
+        Assert.assertArrayEquals(m3, ((RespBulkString) rev.values().get(1)).data());
+        Assert.assertArrayEquals(m2, ((RespBulkString) rev.values().get(2)).data());
+        Assert.assertArrayEquals(m1, ((RespBulkString) rev.values().get(3)).data());
+
+        RespArray revViaZrange = (RespArray) cp.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1"), b("REV")));
+        Assert.assertEquals(4, revViaZrange.values().size());
+        Assert.assertArrayEquals(m4, ((RespBulkString) revViaZrange.values().get(0)).data());
+        Assert.assertArrayEquals(m3, ((RespBulkString) revViaZrange.values().get(1)).data());
+        Assert.assertArrayEquals(m2, ((RespBulkString) revViaZrange.values().get(2)).data());
+        Assert.assertArrayEquals(m1, ((RespBulkString) revViaZrange.values().get(3)).data());
+
+        RespArray revWithScores = (RespArray) cp.execute(Arrays.asList(b("ZREVRANGE"), key, b("0"), b("1"), b("WITHSCORES")));
+        Assert.assertEquals(4, revWithScores.values().size());
+        Assert.assertArrayEquals(m4, ((RespBulkString) revWithScores.values().get(0)).data());
+        Assert.assertEquals("1", ((RespBulkString) revWithScores.values().get(1)).asString());
+        Assert.assertArrayEquals(m3, ((RespBulkString) revWithScores.values().get(2)).data());
+        Assert.assertEquals("1", ((RespBulkString) revWithScores.values().get(3)).asString());
 
         db.shutdown();
     }

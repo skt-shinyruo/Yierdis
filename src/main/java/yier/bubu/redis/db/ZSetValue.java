@@ -54,14 +54,22 @@ final class ZSetValue implements YierdisValue {
         return removed;
     }
 
-    List<byte[]> zrange(int start, int stop, boolean withScores) {
+    List<byte[]> zrange(long start, long stop, boolean withScores) {
+        return rangeByIndex(start, stop, withScores, false);
+    }
+
+    List<byte[]> zrevrange(long start, long stop, boolean withScores) {
+        return rangeByIndex(start, stop, withScores, true);
+    }
+
+    private List<byte[]> rangeByIndex(long start, long stop, boolean withScores, boolean reverse) {
         int size = byMember.size();
         if (size == 0) {
             return new ArrayList<>();
         }
 
-        int normalizedStart = normalizeIndex(start, size);
-        int normalizedStop = normalizeIndex(stop, size);
+        long normalizedStart = normalizeIndex(start, size);
+        long normalizedStop = normalizeIndex(stop, size);
 
         if (normalizedStart < 0) {
             normalizedStart = 0;
@@ -76,16 +84,26 @@ final class ZSetValue implements YierdisValue {
             return new ArrayList<>();
         }
 
-        int startRank = normalizedStart + 1;
-        int stopRank = normalizedStop + 1;
-        ZSkipList.Node node = byScore.getElementByRank(startRank);
-        int remaining = stopRank - startRank + 1;
+        int remaining;
+        ZSkipList.Node node;
+        boolean stepBackwards = reverse;
+        if (!reverse) {
+            int startRank = (int) normalizedStart + 1;
+            int stopRank = (int) normalizedStop + 1;
+            remaining = stopRank - startRank + 1;
+            node = byScore.getElementByRank(startRank);
+        } else {
+            int startRank = size - (int) normalizedStart;
+            int stopRank = size - (int) normalizedStop;
+            remaining = startRank - stopRank + 1;
+            node = byScore.getElementByRank(startRank);
+        }
 
         if (!withScores) {
             List<byte[]> out = new ArrayList<>(remaining);
             for (int i = 0; i < remaining && node != null; i++) {
                 out.add(node.member.bytes());
-                node = node.forward[0];
+                node = stepBackwards ? node.backward : node.forward[0];
             }
             return out;
         }
@@ -94,16 +112,16 @@ final class ZSetValue implements YierdisValue {
         for (int i = 0; i < remaining && node != null; i++) {
             out.add(node.member.bytes());
             out.add(formatScoreBytes(node.score));
-            node = node.forward[0];
+            node = stepBackwards ? node.backward : node.forward[0];
         }
         return out;
     }
 
-    private static int normalizeIndex(int idx, int size) {
+    private static long normalizeIndex(long idx, int size) {
         if (idx >= 0) {
             return idx;
         }
-        return size + idx;
+        return (long) size + idx;
     }
 
     private static double parseScore(byte[] s) {
@@ -125,4 +143,5 @@ final class ZSetValue implements YierdisValue {
         }
         return Double.toString(score).getBytes(StandardCharsets.US_ASCII);
     }
+
 }

@@ -99,6 +99,13 @@ java -cp target/yierdis-0.1.0-SNAPSHOT.jar yier.bubu.redis.client.YierdisCli
 - `SISMEMBER key member`
 - `SCARD key`
 
+### ZSet
+
+- `ZADD key score member [score member ...]`
+- `ZRANGE key start stop [WITHSCORES] [REV]`
+- `ZREVRANGE key start stop [WITHSCORES]`
+- `ZREM key member [member ...]`
+
 ## 说明
 
 - 这是一个 **单机内存版** 实现：不包含 AOF/RDB 持久化、复制、集群、事务、Lua、ACL 等复杂功能。

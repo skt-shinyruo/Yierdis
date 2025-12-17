@@ -103,6 +103,8 @@ public final class CommandProcessor {
                     return zadd(args);
                 case "ZRANGE":
                     return zrange(args);
+                case "ZREVRANGE":
+                    return zrevrange(args);
                 case "ZREM":
                     return zrem(args);
 
@@ -436,11 +438,38 @@ public final class CommandProcessor {
     }
 
     private RespObject zrange(List<byte[]> args) {
-        if (args.size() != 4 && args.size() != 5) {
+        if (args.size() < 4 || args.size() > 6) {
             return wrongArity("zrange");
         }
-        int start = (int) parseLong(args.get(2), "start");
-        int stop = (int) parseLong(args.get(3), "stop");
+        long start = parseLong(args.get(2), "start");
+        long stop = parseLong(args.get(3), "stop");
+
+        boolean withScores = false;
+        boolean rev = false;
+        for (int i = 4; i < args.size(); i++) {
+            String opt = upperAscii(args.get(i));
+            if ("WITHSCORES".equals(opt)) {
+                withScores = true;
+                continue;
+            }
+            if ("REV".equals(opt)) {
+                rev = true;
+                continue;
+            }
+            return RespError.of("ERR syntax error");
+        }
+
+        return toBulkStringArray(rev
+                ? db.zrevrange(args.get(1), start, stop, withScores)
+                : db.zrange(args.get(1), start, stop, withScores));
+    }
+
+    private RespObject zrevrange(List<byte[]> args) {
+        if (args.size() != 4 && args.size() != 5) {
+            return wrongArity("zrevrange");
+        }
+        long start = parseLong(args.get(2), "start");
+        long stop = parseLong(args.get(3), "stop");
 
         boolean withScores = false;
         if (args.size() == 5) {
@@ -450,7 +479,7 @@ public final class CommandProcessor {
             withScores = true;
         }
 
-        return toBulkStringArray(db.zrange(args.get(1), start, stop, withScores));
+        return toBulkStringArray(db.zrevrange(args.get(1), start, stop, withScores));
     }
 
     private RespObject zrem(List<byte[]> args) {
