@@ -61,6 +61,125 @@ public class CommandProcessorTest {
     }
 
     @Test
+    public void keyAndMembersAreBinarySafe() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = new byte[]{0, (byte) 0xFF, 'k'};
+        byte[] value = new byte[]{1, 2, 3};
+
+        Assert.assertTrue(cp.execute(Arrays.asList(
+                "SET".getBytes(StandardCharsets.UTF_8),
+                key,
+                value
+        )) instanceof RespSimpleString);
+
+        RespObject get = cp.execute(Arrays.asList(
+                "GET".getBytes(StandardCharsets.UTF_8),
+                key
+        ));
+        Assert.assertTrue(get instanceof RespBulkString);
+        Assert.assertArrayEquals(value, ((RespBulkString) get).data());
+
+        RespInteger exists1 = (RespInteger) cp.execute(Arrays.asList(
+                "EXISTS".getBytes(StandardCharsets.UTF_8),
+                key
+        ));
+        Assert.assertEquals(1, exists1.value());
+
+        RespArray keys = (RespArray) cp.execute(Arrays.asList(
+                "KEYS".getBytes(StandardCharsets.UTF_8),
+                "*".getBytes(StandardCharsets.UTF_8)
+        ));
+        boolean found = false;
+        for (RespObject o : keys.values()) {
+            if (o instanceof RespBulkString && Arrays.equals(key, ((RespBulkString) o).data())) {
+                found = true;
+                break;
+            }
+        }
+        Assert.assertTrue(found);
+
+        byte[] hkey = new byte[]{'h', 0};
+        byte[] field = new byte[]{0, 'f'};
+        byte[] hval = new byte[]{(byte) 0xFF, 'v'};
+        RespInteger hset = (RespInteger) cp.execute(Arrays.asList(
+                "HSET".getBytes(StandardCharsets.UTF_8),
+                hkey,
+                field,
+                hval
+        ));
+        Assert.assertEquals(1, hset.value());
+
+        RespObject hget = cp.execute(Arrays.asList(
+                "HGET".getBytes(StandardCharsets.UTF_8),
+                hkey,
+                field
+        ));
+        Assert.assertTrue(hget instanceof RespBulkString);
+        Assert.assertArrayEquals(hval, ((RespBulkString) hget).data());
+
+        byte[] lkey = new byte[]{'l', 0};
+        byte[] item = new byte[]{0, 1, 2, 3};
+        RespInteger rpush = (RespInteger) cp.execute(Arrays.asList(
+                "RPUSH".getBytes(StandardCharsets.UTF_8),
+                lkey,
+                item
+        ));
+        Assert.assertEquals(1, rpush.value());
+
+        RespArray lrange = (RespArray) cp.execute(Arrays.asList(
+                "LRANGE".getBytes(StandardCharsets.UTF_8),
+                lkey,
+                "0".getBytes(StandardCharsets.UTF_8),
+                "-1".getBytes(StandardCharsets.UTF_8)
+        ));
+        Assert.assertEquals(1, lrange.values().size());
+        Assert.assertArrayEquals(item, ((RespBulkString) lrange.values().get(0)).data());
+
+        byte[] skey = new byte[]{'s', 0};
+        byte[] member = new byte[]{0, (byte) 0xFF};
+        RespInteger sadd = (RespInteger) cp.execute(Arrays.asList(
+                "SADD".getBytes(StandardCharsets.UTF_8),
+                skey,
+                member
+        ));
+        Assert.assertEquals(1, sadd.value());
+
+        RespInteger isMember = (RespInteger) cp.execute(Arrays.asList(
+                "SISMEMBER".getBytes(StandardCharsets.UTF_8),
+                skey,
+                member
+        ));
+        Assert.assertEquals(1, isMember.value());
+
+        byte[] zkey = new byte[]{'z', 0};
+        byte[] m1 = new byte[]{(byte) 0xFF};
+        byte[] m2 = new byte[]{0};
+        RespInteger zadd = (RespInteger) cp.execute(Arrays.asList(
+                "ZADD".getBytes(StandardCharsets.UTF_8),
+                zkey,
+                "1".getBytes(StandardCharsets.UTF_8),
+                m1,
+                "1".getBytes(StandardCharsets.UTF_8),
+                m2
+        ));
+        Assert.assertEquals(2, zadd.value());
+
+        RespArray zrange = (RespArray) cp.execute(Arrays.asList(
+                "ZRANGE".getBytes(StandardCharsets.UTF_8),
+                zkey,
+                "0".getBytes(StandardCharsets.UTF_8),
+                "-1".getBytes(StandardCharsets.UTF_8)
+        ));
+        Assert.assertEquals(2, zrange.values().size());
+        Assert.assertArrayEquals(m2, ((RespBulkString) zrange.values().get(0)).data());
+        Assert.assertArrayEquals(m1, ((RespBulkString) zrange.values().get(1)).data());
+
+        db.shutdown();
+    }
+
+    @Test
     public void setGetIncrExpireTtl() {
         YierdisDb db = new YierdisDb();
         CommandProcessor cp = new CommandProcessor(db);

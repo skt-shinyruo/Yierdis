@@ -4,10 +4,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ThreadLocalRandom;
 
 final class ZSetValue implements YierdisValue {
-    private final Map<String, ZSkipList.Node> byMember = new HashMap<>();
+    private final Map<ByteArrayKey, ZSkipList.Node> byMember = new HashMap<>();
     private final ZSkipList byScore = new ZSkipList();
 
     @Override
@@ -19,11 +20,11 @@ final class ZSetValue implements YierdisValue {
         return byMember.size();
     }
 
-    int zaddMany(List<String> scoreMemberPairs) {
+    int zaddMany(List<byte[]> scoreMemberPairs) {
         int added = 0;
         for (int i = 0; i < scoreMemberPairs.size(); i += 2) {
             double score = parseScore(scoreMemberPairs.get(i));
-            String member = scoreMemberPairs.get(i + 1);
+            ByteArrayKey member = new ByteArrayKey(scoreMemberPairs.get(i + 1));
 
             ZSkipList.Node old = byMember.get(member);
             if (old != null) {
@@ -41,10 +42,10 @@ final class ZSetValue implements YierdisValue {
         return added;
     }
 
-    int zrem(List<String> members) {
+    int zrem(List<byte[]> members) {
         int removed = 0;
-        for (String m : members) {
-            ZSkipList.Node old = byMember.remove(m);
+        for (byte[] m : members) {
+            ZSkipList.Node old = byMember.remove(new ByteArrayKey(m));
             if (old == null) {
                 continue;
             }
@@ -54,7 +55,7 @@ final class ZSetValue implements YierdisValue {
         return removed;
     }
 
-    List<String> zrange(int start, int stop, boolean withScores) {
+    List<byte[]> zrange(int start, int stop, boolean withScores) {
         int size = byMember.size();
         if (size == 0) {
             return new ArrayList<>();
@@ -82,18 +83,18 @@ final class ZSetValue implements YierdisValue {
         int remaining = stopRank - startRank + 1;
 
         if (!withScores) {
-            List<String> out = new ArrayList<>(remaining);
+            List<byte[]> out = new ArrayList<>(remaining);
             for (int i = 0; i < remaining && node != null; i++) {
-                out.add(node.member);
+                out.add(node.member.bytes());
                 node = node.forward[0];
             }
             return out;
         }
 
-        List<String> out = new ArrayList<>(remaining * 2);
+        List<byte[]> out = new ArrayList<>(remaining * 2);
         for (int i = 0; i < remaining && node != null; i++) {
-            out.add(node.member);
-            out.add(formatScore(node.score));
+            out.add(node.member.bytes());
+            out.add(formatScoreBytes(node.score));
             node = node.forward[0];
         }
         return out;
@@ -106,10 +107,10 @@ final class ZSetValue implements YierdisValue {
         return size + idx;
     }
 
-    private static double parseScore(String s) {
+    private static double parseScore(byte[] s) {
         double v;
         try {
-            v = Double.parseDouble(s);
+            v = Double.parseDouble(new String(s, StandardCharsets.US_ASCII));
         } catch (NumberFormatException e) {
             throw new YierdisDb.YierdisCommandException("ERR value is not a valid float");
         }
@@ -119,11 +120,11 @@ final class ZSetValue implements YierdisValue {
         return v;
     }
 
-    private static String formatScore(double score) {
+    private static byte[] formatScoreBytes(double score) {
         if (score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE) {
-            return Long.toString((long) score);
+            return Long.toString((long) score).getBytes(StandardCharsets.US_ASCII);
         }
-        return Double.toString(score);
+        return Double.toString(score).getBytes(StandardCharsets.US_ASCII);
     }
 
     private static final class ZSkipList {
@@ -137,7 +138,7 @@ final class ZSetValue implements YierdisValue {
         private int level = 1;
         private int length = 0;
 
-        Node insert(double score, String member) {
+        Node insert(double score, ByteArrayKey member) {
             Node[] update = new Node[MAX_LEVEL];
             int[] rank = new int[MAX_LEVEL];
 
@@ -185,7 +186,7 @@ final class ZSetValue implements YierdisValue {
             return newNode;
         }
 
-        boolean delete(double score, String member) {
+        boolean delete(double score, ByteArrayKey member) {
             Node[] update = new Node[MAX_LEVEL];
             Node x = header;
             for (int i = level - 1; i >= 0; i--) {
@@ -242,7 +243,7 @@ final class ZSetValue implements YierdisValue {
             return null;
         }
 
-        private static boolean lessThan(Node node, double score, String member) {
+        private static boolean lessThan(Node node, double score, ByteArrayKey member) {
             if (Double.compare(node.score, score) < 0) {
                 return true;
             }
@@ -261,13 +262,13 @@ final class ZSetValue implements YierdisValue {
         }
 
         static final class Node {
-            final String member;
+            final ByteArrayKey member;
             final double score;
             final Node[] forward;
             final int[] span;
             Node backward;
 
-            Node(int level, String member, double score) {
+            Node(int level, ByteArrayKey member, double score) {
                 this.member = member;
                 this.score = score;
                 this.forward = new Node[level];

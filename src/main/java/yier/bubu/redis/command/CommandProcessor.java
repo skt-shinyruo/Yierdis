@@ -11,10 +11,7 @@ import yier.bubu.redis.protocol.RespSimpleString;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 public final class CommandProcessor {
@@ -178,7 +175,7 @@ public final class CommandProcessor {
         if (args.size() != 2) {
             return wrongArity("type");
         }
-        ValueType t = db.typeOf(utf8(args.get(1)));
+        ValueType t = db.typeOf(args.get(1));
         if (t == null) {
             return RespSimpleString.of("none");
         }
@@ -189,19 +186,14 @@ public final class CommandProcessor {
         if (args.size() != 2) {
             return wrongArity("keys");
         }
-        Set<String> keys = db.keys(utf8(args.get(1)));
-        List<RespObject> out = new ArrayList<>(keys.size());
-        for (String k : keys) {
-            out.add(RespBulkString.ofString(k));
-        }
-        return RespArray.of(out);
+        return toBulkStringArray(db.keys(args.get(1)));
     }
 
     private RespObject del(List<byte[]> args) {
         if (args.size() < 2) {
             return wrongArity("del");
         }
-        long removed = db.del(utf8List(args, 1));
+        long removed = db.del(args.subList(1, args.size()));
         return RespInteger.of(removed);
     }
 
@@ -209,7 +201,7 @@ public final class CommandProcessor {
         if (args.size() < 2) {
             return wrongArity("exists");
         }
-        long count = db.exists(utf8List(args, 1));
+        long count = db.exists(args.subList(1, args.size()));
         return RespInteger.of(count);
     }
 
@@ -218,7 +210,7 @@ public final class CommandProcessor {
             return wrongArity("set");
         }
 
-        String key = utf8(args.get(1));
+        byte[] key = args.get(1);
         byte[] value = args.get(2);
 
         YierdisDb.SetMode mode = YierdisDb.SetMode.NORMAL;
@@ -259,7 +251,7 @@ public final class CommandProcessor {
         if (args.size() != 2) {
             return wrongArity("get");
         }
-        byte[] value = db.getStringBytes(utf8(args.get(1)));
+        byte[] value = db.getStringBytes(args.get(1));
         return value == null ? RespBulkString.nullString() : RespBulkString.ofBytes(value);
     }
 
@@ -267,14 +259,14 @@ public final class CommandProcessor {
         if (args.size() != 2) {
             return wrongArity("strlen");
         }
-        return RespInteger.of(db.strlen(utf8(args.get(1))));
+        return RespInteger.of(db.strlen(args.get(1)));
     }
 
     private RespObject append(List<byte[]> args) {
         if (args.size() != 3) {
             return wrongArity("append");
         }
-        int len = db.append(utf8(args.get(1)), args.get(2));
+        int len = db.append(args.get(1), args.get(2));
         return RespInteger.of(len);
     }
 
@@ -282,7 +274,7 @@ public final class CommandProcessor {
         if (args.size() != 2) {
             return wrongArity(delta > 0 ? "incr" : "decr");
         }
-        long v = db.incrBy(utf8(args.get(1)), delta);
+        long v = db.incrBy(args.get(1), delta);
         return RespInteger.of(v);
     }
 
@@ -291,21 +283,21 @@ public final class CommandProcessor {
             return wrongArity("expire");
         }
         long seconds = parseLong(args.get(2), "seconds");
-        return RespInteger.of(db.expire(utf8(args.get(1)), seconds) ? 1 : 0);
+        return RespInteger.of(db.expire(args.get(1), seconds) ? 1 : 0);
     }
 
     private RespObject ttl(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("ttl");
         }
-        return RespInteger.of(db.ttlSeconds(utf8(args.get(1))));
+        return RespInteger.of(db.ttlSeconds(args.get(1)));
     }
 
     private RespObject lpush(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("lpush");
         }
-        int len = db.lpush(utf8(args.get(1)), utf8List(args, 2));
+        int len = db.lpush(args.get(1), args.subList(2, args.size()));
         return RespInteger.of(len);
     }
 
@@ -313,7 +305,7 @@ public final class CommandProcessor {
         if (args.size() < 3) {
             return wrongArity("rpush");
         }
-        int len = db.rpush(utf8(args.get(1)), utf8List(args, 2));
+        int len = db.rpush(args.get(1), args.subList(2, args.size()));
         return RespInteger.of(len);
     }
 
@@ -323,7 +315,7 @@ public final class CommandProcessor {
         }
         int start = (int) parseLong(args.get(2), "start");
         int stop = (int) parseLong(args.get(3), "stop");
-        List<String> values = db.lrange(utf8(args.get(1)), start, stop);
+        List<byte[]> values = db.lrange(args.get(1), start, stop);
         return toBulkStringArray(values);
     }
 
@@ -336,7 +328,7 @@ public final class CommandProcessor {
         if (hasCount) {
             count = (int) parseLong(args.get(2), "count");
         }
-        List<String> popped = db.lpop(utf8(args.get(1)), count);
+        List<byte[]> popped = db.lpop(args.get(1), count);
         return popResponse(popped, hasCount);
     }
 
@@ -349,16 +341,16 @@ public final class CommandProcessor {
         if (hasCount) {
             count = (int) parseLong(args.get(2), "count");
         }
-        List<String> popped = db.rpop(utf8(args.get(1)), count);
+        List<byte[]> popped = db.rpop(args.get(1), count);
         return popResponse(popped, hasCount);
     }
 
-    private static RespObject popResponse(List<String> popped, boolean hasCount) {
+    private static RespObject popResponse(List<byte[]> popped, boolean hasCount) {
         if (!hasCount) {
             if (popped.isEmpty()) {
                 return RespBulkString.nullString();
             }
-            return RespBulkString.ofString(popped.get(0));
+            return RespBulkString.ofBytes(popped.get(0));
         }
         return toBulkStringArray(popped);
     }
@@ -367,7 +359,7 @@ public final class CommandProcessor {
         if (args.size() < 4) {
             return wrongArity("hset");
         }
-        int added = db.hset(utf8(args.get(1)), utf8List(args, 2));
+        int added = db.hset(args.get(1), args.subList(2, args.size()));
         return RespInteger.of(added);
     }
 
@@ -375,71 +367,71 @@ public final class CommandProcessor {
         if (args.size() != 3) {
             return wrongArity("hget");
         }
-        String v = db.hget(utf8(args.get(1)), utf8(args.get(2)));
-        return v == null ? RespBulkString.nullString() : RespBulkString.ofString(v);
+        byte[] v = db.hget(args.get(1), args.get(2));
+        return v == null ? RespBulkString.nullString() : RespBulkString.ofBytes(v);
     }
 
     private RespObject hgetall(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("hgetall");
         }
-        return toBulkStringArray(db.hgetall(utf8(args.get(1))));
+        return toBulkStringArray(db.hgetall(args.get(1)));
     }
 
     private RespObject hlen(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("hlen");
         }
-        return RespInteger.of(db.hlen(utf8(args.get(1))));
+        return RespInteger.of(db.hlen(args.get(1)));
     }
 
     private RespObject hdel(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("hdel");
         }
-        return RespInteger.of(db.hdel(utf8(args.get(1)), utf8List(args, 2)));
+        return RespInteger.of(db.hdel(args.get(1), args.subList(2, args.size())));
     }
 
     private RespObject sadd(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("sadd");
         }
-        return RespInteger.of(db.sadd(utf8(args.get(1)), utf8List(args, 2)));
+        return RespInteger.of(db.sadd(args.get(1), args.subList(2, args.size())));
     }
 
     private RespObject srem(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("srem");
         }
-        return RespInteger.of(db.srem(utf8(args.get(1)), utf8List(args, 2)));
+        return RespInteger.of(db.srem(args.get(1), args.subList(2, args.size())));
     }
 
     private RespObject smembers(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("smembers");
         }
-        return toBulkStringArray(db.smembers(utf8(args.get(1))));
+        return toBulkStringArray(db.smembers(args.get(1)));
     }
 
     private RespObject sismember(List<byte[]> args) {
         if (args.size() != 3) {
             return wrongArity("sismember");
         }
-        return RespInteger.of(db.sismember(utf8(args.get(1)), utf8(args.get(2))) ? 1 : 0);
+        return RespInteger.of(db.sismember(args.get(1), args.get(2)) ? 1 : 0);
     }
 
     private RespObject scard(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("scard");
         }
-        return RespInteger.of(db.scard(utf8(args.get(1))));
+        return RespInteger.of(db.scard(args.get(1)));
     }
 
     private RespObject zadd(List<byte[]> args) {
         if (args.size() < 4) {
             return wrongArity("zadd");
         }
-        int added = db.zadd(utf8(args.get(1)), utf8List(args, 2));
+        int added = db.zadd(args.get(1), args.subList(2, args.size()));
         return RespInteger.of(added);
     }
 
@@ -458,17 +450,17 @@ public final class CommandProcessor {
             withScores = true;
         }
 
-        return toBulkStringArray(db.zrange(utf8(args.get(1)), start, stop, withScores));
+        return toBulkStringArray(db.zrange(args.get(1), start, stop, withScores));
     }
 
     private RespObject zrem(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("zrem");
         }
-        return RespInteger.of(db.zrem(utf8(args.get(1)), utf8List(args, 2)));
+        return RespInteger.of(db.zrem(args.get(1), args.subList(2, args.size())));
     }
 
-    private static RespArray toBulkStringArray(List<String> values) {
+    private static RespArray toBulkStringArray(List<byte[]> values) {
         if (values == null) {
             return RespArray.nullArray();
         }
@@ -476,8 +468,8 @@ public final class CommandProcessor {
             return RespArray.empty();
         }
         List<RespObject> out = new ArrayList<>(values.size());
-        for (String v : values) {
-            out.add(RespBulkString.ofString(v));
+        for (byte[] v : values) {
+            out.add(RespBulkString.ofBytes(v));
         }
         return RespArray.of(out);
     }
@@ -496,17 +488,6 @@ public final class CommandProcessor {
 
     private static String utf8(byte[] s) {
         return s == null ? null : new String(s, StandardCharsets.UTF_8);
-    }
-
-    private static List<String> utf8List(List<byte[]> args, int fromIndex) {
-        if (fromIndex >= args.size()) {
-            return Collections.emptyList();
-        }
-        List<String> out = new ArrayList<>(args.size() - fromIndex);
-        for (int i = fromIndex; i < args.size(); i++) {
-            out.add(utf8(args.get(i)));
-        }
-        return out;
     }
 
     private static long parseLong(byte[] s, String label) {

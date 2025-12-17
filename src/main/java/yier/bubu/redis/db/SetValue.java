@@ -1,5 +1,6 @@
 package yier.bubu.redis.db;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -12,7 +13,7 @@ final class SetValue implements YierdisValue {
 
     private long[] intset = new long[0];
     private int intsetSize = 0;
-    private Set<String> hashset;
+    private Set<ByteArrayKey> hashset;
 
     @Override
     public ValueType type() {
@@ -26,20 +27,20 @@ final class SetValue implements YierdisValue {
         return intsetSize;
     }
 
-    int addAll(List<String> members) {
+    int addAll(List<byte[]> members) {
         int added = 0;
-        for (String m : members) {
+        for (byte[] m : members) {
             if (hashset != null) {
-                if (hashset.add(m)) {
+                if (hashset.add(new ByteArrayKey(m))) {
                     added++;
                 }
                 continue;
             }
 
-            Long parsed = parseLongStrict(m);
+            Long parsed = parseLongStrictAscii(m);
             if (parsed == null) {
                 convertToHashSet();
-                if (hashset.add(m)) {
+                if (hashset.add(new ByteArrayKey(m))) {
                     added++;
                 }
                 continue;
@@ -55,17 +56,17 @@ final class SetValue implements YierdisValue {
         return added;
     }
 
-    int removeAll(List<String> members) {
+    int removeAll(List<byte[]> members) {
         int removed = 0;
-        for (String m : members) {
+        for (byte[] m : members) {
             if (hashset != null) {
-                if (hashset.remove(m)) {
+                if (hashset.remove(new ByteArrayKey(m))) {
                     removed++;
                 }
                 continue;
             }
 
-            Long parsed = parseLongStrict(m);
+            Long parsed = parseLongStrictAscii(m);
             if (parsed == null) {
                 continue;
             }
@@ -76,24 +77,28 @@ final class SetValue implements YierdisValue {
         return removed;
     }
 
-    boolean contains(String member) {
+    boolean contains(byte[] member) {
         if (hashset != null) {
-            return hashset.contains(member);
+            return hashset.contains(new ByteArrayKey(member));
         }
-        Long parsed = parseLongStrict(member);
+        Long parsed = parseLongStrictAscii(member);
         if (parsed == null) {
             return false;
         }
         return intsetContains(parsed);
     }
 
-    List<String> members() {
+    List<byte[]> members() {
         if (hashset != null) {
-            return new ArrayList<>(hashset);
+            List<byte[]> out = new ArrayList<>(hashset.size());
+            for (ByteArrayKey k : hashset) {
+                out.add(k.bytes());
+            }
+            return out;
         }
-        List<String> out = new ArrayList<>(intsetSize);
+        List<byte[]> out = new ArrayList<>(intsetSize);
         for (int i = 0; i < intsetSize; i++) {
-            out.add(Long.toString(intset[i]));
+            out.add(Long.toString(intset[i]).getBytes(StandardCharsets.US_ASCII));
         }
         return out;
     }
@@ -102,24 +107,51 @@ final class SetValue implements YierdisValue {
         if (hashset != null) {
             return;
         }
-        Set<String> out = new HashSet<>(Math.max(16, intsetSize * 2));
+        Set<ByteArrayKey> out = new HashSet<>(Math.max(16, intsetSize * 2));
         for (int i = 0; i < intsetSize; i++) {
-            out.add(Long.toString(intset[i]));
+            out.add(new ByteArrayKey(Long.toString(intset[i]).getBytes(StandardCharsets.US_ASCII)));
         }
         this.hashset = out;
         this.intset = null;
         this.intsetSize = 0;
     }
 
-    private static Long parseLongStrict(String s) {
-        if (s == null || s.isEmpty()) {
+    private static Long parseLongStrictAscii(byte[] s) {
+        if (s == null || s.length == 0) {
             return null;
         }
-        try {
-            return Long.parseLong(s);
-        } catch (NumberFormatException e) {
-            return null;
+
+        int i = 0;
+        boolean negative = false;
+        byte first = s[0];
+        if (first == '-' || first == '+') {
+            negative = first == '-';
+            i = 1;
+            if (i == s.length) {
+                return null;
+            }
         }
+
+        long limit = negative ? Long.MIN_VALUE : -Long.MAX_VALUE;
+        long multMin = limit / 10;
+        long result = 0;
+
+        while (i < s.length) {
+            int digit = s[i++] - '0';
+            if (digit < 0 || digit > 9) {
+                return null;
+            }
+            if (result < multMin) {
+                return null;
+            }
+            result *= 10;
+            if (result < limit + digit) {
+                return null;
+            }
+            result -= digit;
+        }
+
+        return negative ? result : -result;
     }
 
     private boolean intsetContains(long v) {

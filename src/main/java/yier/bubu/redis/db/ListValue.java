@@ -9,10 +9,10 @@ final class ListValue implements YierdisValue {
     // We approximate that behavior by using an ArrayList for small lists (listpack-like),
     // and upgrading to ArrayDeque for larger ones.
     private static final int LISTPACK_MAX_ENTRIES = 128;
-    private static final int LISTPACK_MAX_ELEMENT_CHARS = 64;
+    private static final int LISTPACK_MAX_ELEMENT_BYTES = 64;
 
-    private List<String> listpack = new ArrayList<>();
-    private ArrayDeque<String> deque;
+    private List<byte[]> listpack = new ArrayList<>();
+    private ArrayDeque<byte[]> deque;
 
     @Override
     public ValueType type() {
@@ -26,9 +26,9 @@ final class ListValue implements YierdisValue {
         return listpack.size();
     }
 
-    void lpushAll(List<String> values) {
+    void lpushAll(List<byte[]> values) {
         if (deque != null) {
-            for (String v : values) {
+            for (byte[] v : values) {
                 deque.addFirst(v);
             }
             return;
@@ -40,7 +40,7 @@ final class ListValue implements YierdisValue {
             return;
         }
 
-        for (String v : values) {
+        for (byte[] v : values) {
             listpack.add(0, v);
         }
         if (listpack.size() > LISTPACK_MAX_ENTRIES) {
@@ -48,9 +48,9 @@ final class ListValue implements YierdisValue {
         }
     }
 
-    void rpushAll(List<String> values) {
+    void rpushAll(List<byte[]> values) {
         if (deque != null) {
-            for (String v : values) {
+            for (byte[] v : values) {
                 deque.addLast(v);
             }
             return;
@@ -68,10 +68,10 @@ final class ListValue implements YierdisValue {
         }
     }
 
-    List<String> lpop(int count) {
-        List<String> out = new ArrayList<>(Math.max(0, count));
+    List<byte[]> lpop(int count) {
+        List<byte[]> out = new ArrayList<>(Math.max(0, count));
         for (int i = 0; i < count; i++) {
-            String v = deque != null ? deque.pollFirst() : pollListpackFirst();
+            byte[] v = deque != null ? deque.pollFirst() : pollListpackFirst();
             if (v == null) {
                 break;
             }
@@ -80,10 +80,10 @@ final class ListValue implements YierdisValue {
         return out;
     }
 
-    List<String> rpop(int count) {
-        List<String> out = new ArrayList<>(Math.max(0, count));
+    List<byte[]> rpop(int count) {
+        List<byte[]> out = new ArrayList<>(Math.max(0, count));
         for (int i = 0; i < count; i++) {
-            String v = deque != null ? deque.pollLast() : pollListpackLast();
+            byte[] v = deque != null ? deque.pollLast() : pollListpackLast();
             if (v == null) {
                 break;
             }
@@ -92,7 +92,7 @@ final class ListValue implements YierdisValue {
         return out;
     }
 
-    List<String> range(int start, int stop) {
+    List<byte[]> range(int start, int stop) {
         int size = size();
         if (size == 0) {
             return new ArrayList<>();
@@ -114,10 +114,10 @@ final class ListValue implements YierdisValue {
             return new ArrayList<>();
         }
 
-        List<String> out = new ArrayList<>(normalizedStop - normalizedStart + 1);
+        List<byte[]> out = new ArrayList<>(normalizedStop - normalizedStart + 1);
         int idx = 0;
-        Iterable<String> it = deque != null ? deque : listpack;
-        for (String v : it) {
+        Iterable<byte[]> it = deque != null ? deque : listpack;
+        for (byte[] v : it) {
             if (idx > normalizedStop) {
                 break;
             }
@@ -136,12 +136,12 @@ final class ListValue implements YierdisValue {
         return size + idx;
     }
 
-    private boolean shouldConvert(List<String> incoming) {
+    private boolean shouldConvert(List<byte[]> incoming) {
         if (listpack.size() + incoming.size() > LISTPACK_MAX_ENTRIES) {
             return true;
         }
-        for (String s : incoming) {
-            if (s != null && s.length() > LISTPACK_MAX_ELEMENT_CHARS) {
+        for (byte[] s : incoming) {
+            if (s != null && s.length > LISTPACK_MAX_ELEMENT_BYTES) {
                 return true;
             }
         }
@@ -152,20 +152,20 @@ final class ListValue implements YierdisValue {
         if (deque != null) {
             return;
         }
-        ArrayDeque<String> out = new ArrayDeque<>(Math.max(16, listpack.size() * 2));
+        ArrayDeque<byte[]> out = new ArrayDeque<>(Math.max(16, listpack.size() * 2));
         out.addAll(listpack);
         this.deque = out;
         this.listpack = null;
     }
 
-    private String pollListpackFirst() {
+    private byte[] pollListpackFirst() {
         if (listpack.isEmpty()) {
             return null;
         }
         return listpack.remove(0);
     }
 
-    private String pollListpackLast() {
+    private byte[] pollListpackLast() {
         int size = listpack.size();
         if (size == 0) {
             return null;

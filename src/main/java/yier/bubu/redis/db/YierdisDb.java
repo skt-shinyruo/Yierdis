@@ -5,15 +5,13 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Pattern;
 
 public final class YierdisDb {
     private static final long NO_EXPIRE = -1L;
 
-    private final ConcurrentHashMap<String, Entry> store = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<ByteArrayKey, Entry> store = new ConcurrentHashMap<>();
 
     public YierdisDb() {
         // Scheduling (if any) is done by the Netty event loop in YierdisServer, not by a dedicated thread.
@@ -27,10 +25,11 @@ public final class YierdisDb {
         store.clear();
     }
 
-    public long del(Collection<String> keys) {
+    public long del(Collection<byte[]> keys) {
         long now = System.currentTimeMillis();
         long removed = 0;
-        for (String key : keys) {
+        for (byte[] keyBytes : keys) {
+            ByteArrayKey key = new ByteArrayKey(keyBytes);
             Entry e = store.get(key);
             if (e == null) {
                 continue;
@@ -45,18 +44,18 @@ public final class YierdisDb {
         return removed;
     }
 
-    public long exists(Collection<String> keys) {
+    public long exists(Collection<byte[]> keys) {
         long count = 0;
-        for (String k : keys) {
-            if (getEntryIfNotExpired(k) != null) {
+        for (byte[] keyBytes : keys) {
+            if (getEntryIfNotExpired(new ByteArrayKey(keyBytes)) != null) {
                 count++;
             }
         }
         return count;
     }
 
-    public ValueType typeOf(String key) {
-        Entry e = getEntryIfNotExpired(key);
+    public ValueType typeOf(byte[] keyBytes) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return null;
         }
@@ -65,8 +64,8 @@ public final class YierdisDb {
         }
     }
 
-    public boolean expire(String key, long seconds) {
-        Entry e = getEntryIfNotExpired(key);
+    public boolean expire(byte[] keyBytes, long seconds) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return false;
         }
@@ -77,7 +76,8 @@ public final class YierdisDb {
         return true;
     }
 
-    public long ttlSeconds(String key) {
+    public long ttlSeconds(byte[] keyBytes) {
+        ByteArrayKey key = new ByteArrayKey(keyBytes);
         Entry e = store.get(key);
         if (e == null) {
             return -2;
@@ -96,30 +96,29 @@ public final class YierdisDb {
         }
     }
 
-    public Set<String> keys(String globPattern) {
+    public List<byte[]> keys(byte[] globPattern) {
         if (globPattern == null) {
-            return Collections.emptySet();
+            return Collections.emptyList();
         }
-        Pattern regex = Pattern.compile(globToRegex(globPattern));
         long now = System.currentTimeMillis();
-        Set<String> out = ConcurrentHashMap.newKeySet();
-        for (Map.Entry<String, Entry> e : store.entrySet()) {
+        List<byte[]> out = new ArrayList<>();
+        for (Map.Entry<ByteArrayKey, Entry> e : store.entrySet()) {
             if (removeIfExpired(e.getKey(), e.getValue(), now)) {
                 continue;
             }
-            if (regex.matcher(e.getKey()).matches()) {
-                out.add(e.getKey());
+            if (globMatches(globPattern, e.getKey().bytes())) {
+                out.add(e.getKey().bytes());
             }
         }
         return out;
     }
 
-    public boolean setString(String key, byte[] value, SetMode mode, ExpireOption expireOption) {
+    public boolean setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption) {
         long now = System.currentTimeMillis();
         long expireAt = expireOption == null ? NO_EXPIRE : expireOption.toExpireAtMillis(now);
 
         final boolean[] didSet = new boolean[]{false};
-        store.compute(key, (k, old) -> {
+        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
@@ -137,8 +136,8 @@ public final class YierdisDb {
         return didSet[0];
     }
 
-    public byte[] getStringBytes(String key) {
-        Entry e = getEntryIfNotExpired(key);
+    public byte[] getStringBytes(byte[] keyBytes) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return null;
         }
@@ -150,8 +149,8 @@ public final class YierdisDb {
         }
     }
 
-    public int strlen(String key) {
-        Entry e = getEntryIfNotExpired(key);
+    public int strlen(byte[] keyBytes) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return 0;
         }
@@ -163,10 +162,10 @@ public final class YierdisDb {
         }
     }
 
-    public int append(String key, byte[] appendValue) {
+    public int append(byte[] keyBytes, byte[] appendValue) {
         long now = System.currentTimeMillis();
         final int[] newLen = new int[]{0};
-        store.compute(key, (k, old) -> {
+        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
@@ -188,10 +187,10 @@ public final class YierdisDb {
         return newLen[0];
     }
 
-    public long incrBy(String key, long delta) {
+    public long incrBy(byte[] keyBytes, long delta) {
         long now = System.currentTimeMillis();
         final long[] result = new long[]{0L};
-        store.compute(key, (k, old) -> {
+        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
@@ -213,18 +212,18 @@ public final class YierdisDb {
         return result[0];
     }
 
-    public int lpush(String key, List<String> values) {
-        return pushInternal(key, values, true);
+    public int lpush(byte[] keyBytes, List<byte[]> values) {
+        return pushInternal(keyBytes, values, true);
     }
 
-    public int rpush(String key, List<String> values) {
-        return pushInternal(key, values, false);
+    public int rpush(byte[] keyBytes, List<byte[]> values) {
+        return pushInternal(keyBytes, values, false);
     }
 
-    private int pushInternal(String key, List<String> values, boolean left) {
+    private int pushInternal(byte[] keyBytes, List<byte[]> values, boolean left) {
         long now = System.currentTimeMillis();
         final int[] len = new int[]{0};
-        store.compute(key, (k, old) -> {
+        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
@@ -256,8 +255,8 @@ public final class YierdisDb {
         return len[0];
     }
 
-    public List<String> lrange(String key, int start, int stop) {
-        Entry e = getEntryIfNotExpired(key);
+    public List<byte[]> lrange(byte[] keyBytes, int start, int stop) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return new ArrayList<>();
         }
@@ -269,21 +268,21 @@ public final class YierdisDb {
         }
     }
 
-    public List<String> lpop(String key, int count) {
-        return popInternal(key, count, true);
+    public List<byte[]> lpop(byte[] keyBytes, int count) {
+        return popInternal(keyBytes, count, true);
     }
 
-    public List<String> rpop(String key, int count) {
-        return popInternal(key, count, false);
+    public List<byte[]> rpop(byte[] keyBytes, int count) {
+        return popInternal(keyBytes, count, false);
     }
 
-    private List<String> popInternal(String key, int count, boolean left) {
+    private List<byte[]> popInternal(byte[] keyBytes, int count, boolean left) {
         if (count <= 0) {
             return new ArrayList<>();
         }
         long now = System.currentTimeMillis();
-        final List<String>[] popped = new List[]{null};
-        store.computeIfPresent(key, (k, old) -> {
+        final List<byte[]>[] popped = new List[]{null};
+        store.computeIfPresent(new ByteArrayKey(keyBytes), (k, old) -> {
             if (isEntryExpired(old, now)) {
                 popped[0] = new ArrayList<>();
                 return null;
@@ -303,13 +302,13 @@ public final class YierdisDb {
         return popped[0] == null ? new ArrayList<>() : popped[0];
     }
 
-    public int hset(String key, List<String> fieldValuePairs) {
+    public int hset(byte[] keyBytes, List<byte[]> fieldValuePairs) {
         if (fieldValuePairs.size() % 2 != 0) {
             throw new YierdisCommandException("ERR wrong number of arguments for 'hset' command");
         }
         long now = System.currentTimeMillis();
         final int[] added = new int[]{0};
-        store.compute(key, (k, old) -> {
+        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
@@ -329,8 +328,8 @@ public final class YierdisDb {
         return added[0];
     }
 
-    public String hget(String key, String field) {
-        Entry e = getEntryIfNotExpired(key);
+    public byte[] hget(byte[] keyBytes, byte[] fieldBytes) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return null;
         }
@@ -338,12 +337,12 @@ public final class YierdisDb {
             if (!(e.value instanceof HashValue)) {
                 throw new WrongTypeException();
             }
-            return ((HashValue) e.value).hget(field);
+            return ((HashValue) e.value).hget(fieldBytes);
         }
     }
 
-    public List<String> hgetall(String key) {
-        Entry e = getEntryIfNotExpired(key);
+    public List<byte[]> hgetall(byte[] keyBytes) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return new ArrayList<>();
         }
@@ -355,8 +354,8 @@ public final class YierdisDb {
         }
     }
 
-    public int hlen(String key) {
-        Entry e = getEntryIfNotExpired(key);
+    public int hlen(byte[] keyBytes) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return 0;
         }
@@ -368,10 +367,10 @@ public final class YierdisDb {
         }
     }
 
-    public int hdel(String key, List<String> fields) {
+    public int hdel(byte[] keyBytes, List<byte[]> fields) {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
-        store.computeIfPresent(key, (k, old) -> {
+        store.computeIfPresent(new ByteArrayKey(keyBytes), (k, old) -> {
             if (isEntryExpired(old, now)) {
                 return null;
             }
@@ -390,10 +389,10 @@ public final class YierdisDb {
         return removed[0];
     }
 
-    public int sadd(String key, List<String> members) {
+    public int sadd(byte[] keyBytes, List<byte[]> members) {
         long now = System.currentTimeMillis();
         final int[] added = new int[]{0};
-        store.compute(key, (k, old) -> {
+        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
@@ -413,10 +412,10 @@ public final class YierdisDb {
         return added[0];
     }
 
-    public int srem(String key, List<String> members) {
+    public int srem(byte[] keyBytes, List<byte[]> members) {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
-        store.computeIfPresent(key, (k, old) -> {
+        store.computeIfPresent(new ByteArrayKey(keyBytes), (k, old) -> {
             if (isEntryExpired(old, now)) {
                 return null;
             }
@@ -435,8 +434,8 @@ public final class YierdisDb {
         return removed[0];
     }
 
-    public List<String> smembers(String key) {
-        Entry e = getEntryIfNotExpired(key);
+    public List<byte[]> smembers(byte[] keyBytes) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return new ArrayList<>();
         }
@@ -448,8 +447,8 @@ public final class YierdisDb {
         }
     }
 
-    public boolean sismember(String key, String member) {
-        Entry e = getEntryIfNotExpired(key);
+    public boolean sismember(byte[] keyBytes, byte[] memberBytes) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return false;
         }
@@ -457,12 +456,12 @@ public final class YierdisDb {
             if (!(e.value instanceof SetValue)) {
                 throw new WrongTypeException();
             }
-            return ((SetValue) e.value).contains(member);
+            return ((SetValue) e.value).contains(memberBytes);
         }
     }
 
-    public int scard(String key) {
-        Entry e = getEntryIfNotExpired(key);
+    public int scard(byte[] keyBytes) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return 0;
         }
@@ -474,13 +473,13 @@ public final class YierdisDb {
         }
     }
 
-    public int zadd(String key, List<String> scoreMemberPairs) {
+    public int zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
         if (scoreMemberPairs.size() % 2 != 0) {
             throw new YierdisCommandException("ERR wrong number of arguments for 'zadd' command");
         }
         long now = System.currentTimeMillis();
         final int[] added = new int[]{0};
-        store.compute(key, (k, old) -> {
+        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
@@ -500,8 +499,8 @@ public final class YierdisDb {
         return added[0];
     }
 
-    public List<String> zrange(String key, int start, int stop, boolean withScores) {
-        Entry e = getEntryIfNotExpired(key);
+    public List<byte[]> zrange(byte[] keyBytes, int start, int stop, boolean withScores) {
+        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
         if (e == null) {
             return new ArrayList<>();
         }
@@ -513,10 +512,10 @@ public final class YierdisDb {
         }
     }
 
-    public int zrem(String key, List<String> members) {
+    public int zrem(byte[] keyBytes, List<byte[]> members) {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
-        store.computeIfPresent(key, (k, old) -> {
+        store.computeIfPresent(new ByteArrayKey(keyBytes), (k, old) -> {
             if (isEntryExpired(old, now)) {
                 return null;
             }
@@ -537,12 +536,12 @@ public final class YierdisDb {
 
     public void cleanupExpired() {
         long now = System.currentTimeMillis();
-        for (Map.Entry<String, Entry> e : store.entrySet()) {
+        for (Map.Entry<ByteArrayKey, Entry> e : store.entrySet()) {
             removeIfExpired(e.getKey(), e.getValue(), now);
         }
     }
 
-    private Entry getEntryIfNotExpired(String key) {
+    private Entry getEntryIfNotExpired(ByteArrayKey key) {
         Entry e = store.get(key);
         if (e == null) {
             return null;
@@ -553,7 +552,7 @@ public final class YierdisDb {
         return e;
     }
 
-    private boolean removeIfExpired(String key, Entry e, long nowMillis) {
+    private boolean removeIfExpired(ByteArrayKey key, Entry e, long nowMillis) {
         if (!isEntryExpired(e, nowMillis)) {
             return false;
         }
@@ -572,42 +571,33 @@ public final class YierdisDb {
         return expireAt <= nowMillis;
     }
 
-    private static String globToRegex(String glob) {
-        // Minimal glob -> regex conversion:
-        // * => .*
-        // ? => .
-        // Escape other regex metas.
-        StringBuilder sb = new StringBuilder(glob.length() + 8);
-        sb.append('^');
-        for (int i = 0; i < glob.length(); i++) {
-            char c = glob.charAt(i);
-            switch (c) {
-                case '*':
-                    sb.append(".*");
-                    break;
-                case '?':
-                    sb.append('.');
-                    break;
-                case '.':
-                case '\\':
-                case '+':
-                case '(':
-                case ')':
-                case '^':
-                case '$':
-                case '{':
-                case '}':
-                case '[':
-                case ']':
-                case '|':
-                    sb.append('\\').append(c);
-                    break;
-                default:
-                    sb.append(c);
+    private static boolean globMatches(byte[] pattern, byte[] text) {
+        int p = 0;
+        int t = 0;
+        int star = -1;
+        int match = 0;
+        while (t < text.length) {
+            if (p < pattern.length && (pattern[p] == '?' || pattern[p] == text[t])) {
+                p++;
+                t++;
+                continue;
             }
+            if (p < pattern.length && pattern[p] == '*') {
+                star = p++;
+                match = t;
+                continue;
+            }
+            if (star != -1) {
+                p = star + 1;
+                t = ++match;
+                continue;
+            }
+            return false;
         }
-        sb.append('$');
-        return sb.toString();
+        while (p < pattern.length && pattern[p] == '*') {
+            p++;
+        }
+        return p == pattern.length;
     }
 
     static final class Entry {
