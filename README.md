@@ -25,6 +25,27 @@ redis-cli -p 6378 expire a 10
 redis-cli -p 6378 ttl a
 ```
 
+## 客户端（CLI）
+
+项目内置一个极简的 RESP2 客户端，方便本地调试（默认连接 `127.0.0.1:6378`）。
+
+```bash
+# 单次执行
+java -cp target/yierdis-0.1.0-SNAPSHOT.jar yier.bubu.redis.client.YierdisCli PING
+java -cp target/yierdis-0.1.0-SNAPSHOT.jar yier.bubu.redis.client.YierdisCli SET a 1
+java -cp target/yierdis-0.1.0-SNAPSHOT.jar yier.bubu.redis.client.YierdisCli GET a
+
+# 交互模式（输入 quit/exit 退出）
+java -cp target/yierdis-0.1.0-SNAPSHOT.jar yier.bubu.redis.client.YierdisCli
+```
+
+常用参数：
+
+- `--host <host>`
+- `--port <port>`
+- `--timeoutMillis <ms>`
+- `--hex`（bulk string 以 hex 输出，便于观察二进制数据）
+
 ## 已实现命令（简化版）
 
 ### 通用
