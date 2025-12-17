@@ -10,9 +10,10 @@ import yier.bubu.redis.protocol.RespSimpleString;
 import org.junit.Assert;
 import org.junit.Test;
 
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Arrays;
+
+import static yier.bubu.redis.testutil.TestBytes.b;
+import static yier.bubu.redis.testutil.TestBytes.cmd;
 
 public class CommandProcessorTest {
     @Test
@@ -20,38 +21,38 @@ public class CommandProcessorTest {
         YierdisDb db = new YierdisDb();
         CommandProcessor cp = new CommandProcessor(db);
 
-        byte[] key = "k".getBytes(StandardCharsets.UTF_8);
+        byte[] key = b("k");
         byte[] value = new byte[]{0, (byte) 0xFF, 'a', '\n'};
 
         Assert.assertTrue(cp.execute(Arrays.asList(
-                "SET".getBytes(StandardCharsets.UTF_8),
+                b("SET"),
                 key,
                 value
         )) instanceof RespSimpleString);
 
         RespObject get = cp.execute(Arrays.asList(
-                "GET".getBytes(StandardCharsets.UTF_8),
+                b("GET"),
                 key
         ));
         Assert.assertTrue(get instanceof RespBulkString);
         Assert.assertArrayEquals(value, ((RespBulkString) get).data());
 
         RespInteger len = (RespInteger) cp.execute(Arrays.asList(
-                "STRLEN".getBytes(StandardCharsets.UTF_8),
+                b("STRLEN"),
                 key
         ));
         Assert.assertEquals(value.length, len.value());
 
         byte[] extra = new byte[]{1, 2, 3};
         RespInteger newLen = (RespInteger) cp.execute(Arrays.asList(
-                "APPEND".getBytes(StandardCharsets.UTF_8),
+                b("APPEND"),
                 key,
                 extra
         ));
         Assert.assertEquals(value.length + extra.length, newLen.value());
 
         RespObject get2 = cp.execute(Arrays.asList(
-                "GET".getBytes(StandardCharsets.UTF_8),
+                b("GET"),
                 key
         ));
         Assert.assertTrue(get2 instanceof RespBulkString);
@@ -215,18 +216,6 @@ public class CommandProcessorTest {
         Assert.assertTrue(((RespError) err).message().startsWith("WRONGTYPE"));
 
         db.shutdown();
-    }
-
-    private static java.util.List<byte[]> cmd(String... parts) {
-        java.util.List<byte[]> out = new ArrayList<>(parts.length);
-        for (String p : parts) {
-            out.add(p.getBytes(StandardCharsets.UTF_8));
-        }
-        return out;
-    }
-
-    private static byte[] b(String s) {
-        return s.getBytes(StandardCharsets.UTF_8);
     }
 
     private static boolean containsBytes(RespArray array, byte[] expected) {

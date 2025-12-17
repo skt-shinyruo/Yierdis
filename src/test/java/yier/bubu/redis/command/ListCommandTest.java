@@ -9,9 +9,11 @@ import yier.bubu.redis.protocol.RespInteger;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
 
-import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+
+import static yier.bubu.redis.testutil.TestBytes.b;
 
 public class ListCommandTest {
     @Test
@@ -86,7 +88,37 @@ public class ListCommandTest {
         db.shutdown();
     }
 
-    private static byte[] b(String s) {
-        return s.getBytes(StandardCharsets.UTF_8);
+    @Test
+    public void listUpgradesAfterManyElementsAndKeepsOrder() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = b("big-list");
+        int n = 129; // > ListValue.LISTPACK_MAX_ENTRIES
+
+        ArrayList<byte[]> args = new ArrayList<>(2 + n);
+        args.add(b("RPUSH"));
+        args.add(key);
+        for (int i = 0; i < n; i++) {
+            args.add(b("v" + i));
+        }
+
+        RespInteger len = (RespInteger) cp.execute(args);
+        Assert.assertEquals(n, len.value());
+
+        RespArray range = (RespArray) cp.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("-1")));
+        Assert.assertEquals(n, range.values().size());
+        Assert.assertEquals("v0", ((RespBulkString) range.values().get(0)).asString());
+        Assert.assertEquals("v" + (n - 1), ((RespBulkString) range.values().get(n - 1)).asString());
+
+        RespArray popped = (RespArray) cp.execute(Arrays.asList(b("LPOP"), key, b("2")));
+        Assert.assertEquals(2, popped.values().size());
+        Assert.assertEquals("v0", ((RespBulkString) popped.values().get(0)).asString());
+        Assert.assertEquals("v1", ((RespBulkString) popped.values().get(1)).asString());
+
+        RespBulkString last = (RespBulkString) cp.execute(Arrays.asList(b("RPOP"), key));
+        Assert.assertEquals("v" + (n - 1), last.asString());
+
+        db.shutdown();
     }
 }

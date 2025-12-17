@@ -9,9 +9,11 @@ import yier.bubu.redis.protocol.RespInteger;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
 
-import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+
+import static yier.bubu.redis.testutil.TestBytes.b;
 
 public class HashCommandTest {
     @Test
@@ -87,8 +89,43 @@ public class HashCommandTest {
         db.shutdown();
     }
 
-    private static byte[] b(String s) {
-        return s.getBytes(StandardCharsets.UTF_8);
+    @Test
+    public void hashUpgradesAfterManyFieldsAndKeepsData() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = b("big-hash");
+
+        int fields = 513; // > HashValue.LISTPACK_MAX_ENTRIES
+        ArrayList<byte[]> args = new ArrayList<>(2 + fields * 2);
+        args.add(b("HSET"));
+        args.add(key);
+        for (int i = 0; i < fields; i++) {
+            args.add(b("f" + i));
+            args.add(b("v" + i));
+        }
+
+        RespInteger added = (RespInteger) cp.execute(args);
+        Assert.assertEquals(fields, added.value());
+
+        RespInteger hlen = (RespInteger) cp.execute(Arrays.asList(b("HLEN"), key));
+        Assert.assertEquals(fields, hlen.value());
+
+        RespBulkString v0 = (RespBulkString) cp.execute(Arrays.asList(b("HGET"), key, b("f0")));
+        Assert.assertEquals("v0", v0.asString());
+
+        RespBulkString vLast = (RespBulkString) cp.execute(Arrays.asList(b("HGET"), key, b("f" + (fields - 1))));
+        Assert.assertEquals("v" + (fields - 1), vLast.asString());
+
+        RespArray all = (RespArray) cp.execute(Arrays.asList(b("HGETALL"), key));
+        Assert.assertEquals(fields * 2, all.values().size());
+
+        RespInteger updated = (RespInteger) cp.execute(Arrays.asList(b("HSET"), key, b("f0"), b("v0-new")));
+        Assert.assertEquals(0L, updated.value());
+        RespBulkString v0New = (RespBulkString) cp.execute(Arrays.asList(b("HGET"), key, b("f0")));
+        Assert.assertEquals("v0-new", v0New.asString());
+
+        db.shutdown();
     }
 
     private static void assertContainsPair(RespArray arr, byte[] field, byte[] value) {
@@ -106,4 +143,3 @@ public class HashCommandTest {
         Assert.fail("Missing pair in HGETALL response");
     }
 }
-

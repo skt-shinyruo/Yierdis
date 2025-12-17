@@ -10,8 +10,9 @@ import yier.bubu.redis.protocol.RespInteger;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+
+import static yier.bubu.redis.testutil.TestBytes.b;
 
 public class ZSetCommandTest {
     @Test
@@ -103,9 +104,4 @@ public class ZSetCommandTest {
 
         db.shutdown();
     }
-
-    private static byte[] b(String s) {
-        return s.getBytes(StandardCharsets.UTF_8);
-    }
 }
-

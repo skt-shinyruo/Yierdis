@@ -45,6 +45,26 @@ public class RespDecoderTest {
     }
 
     @Test
+    public void decodeRejectsNonNumericInteger() {
+        assertDecoderThrows(":nope\r\n", NumberFormatException.class);
+    }
+
+    @Test
+    public void decodeRejectsIntegerOverflow() {
+        assertDecoderThrows(":9223372036854775808\r\n", NumberFormatException.class);
+    }
+
+    @Test
+    public void decodeRejectsNonNumericBulkLength() {
+        assertDecoderThrows("$x\r\n", NumberFormatException.class);
+    }
+
+    @Test
+    public void decodeRejectsNonNumericArrayLength() {
+        assertDecoderThrows("*x\r\n", NumberFormatException.class);
+    }
+
+    @Test
     public void decodeNilBulkString() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
         Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("$-1\r\n", StandardCharsets.US_ASCII)));
@@ -157,6 +177,51 @@ public class RespDecoderTest {
     }
 
     @Test
+    public void decodeWaitsWhenBulkPayloadIsTooShortEvenIfCrlfPresent() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
+
+        // Declared len=3 but we only provide 2 bytes + CRLF.
+        Assert.assertFalse(ch.writeInbound(Unpooled.copiedBuffer("$3\r\nab\r\n", StandardCharsets.US_ASCII)));
+        Assert.assertNull(ch.readInbound());
+
+        ch.finishAndReleaseAll();
+    }
+
+    @Test
+    public void decodeWaitsWhenBulkStringIsMissingLf() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
+
+        Assert.assertFalse(ch.writeInbound(Unpooled.copiedBuffer("$1\r\na\r", StandardCharsets.US_ASCII)));
+        Assert.assertNull(ch.readInbound());
+
+        Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("\n", StandardCharsets.US_ASCII)));
+        Object msg = ch.readInbound();
+        Assert.assertTrue(msg instanceof RespBulkString);
+        Assert.assertEquals("a", ((RespBulkString) msg).asString());
+
+        ch.finishAndReleaseAll();
+    }
+
+    @Test
+    public void decodeResumesAfterPartialArrayFrame() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
+
+        Assert.assertFalse(ch.writeInbound(Unpooled.copiedBuffer("*2\r\n$3\r\nSET\r\n$1\r\n", StandardCharsets.US_ASCII)));
+        Assert.assertNull(ch.readInbound());
+
+        Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("a\r\n", StandardCharsets.US_ASCII)));
+        Object msg = ch.readInbound();
+        Assert.assertTrue(msg instanceof RespArray);
+
+        RespArray arr = (RespArray) msg;
+        Assert.assertEquals(2, arr.values().size());
+        Assert.assertEquals("SET", ((RespBulkString) arr.values().get(0)).asString());
+        Assert.assertEquals("a", ((RespBulkString) arr.values().get(1)).asString());
+
+        ch.finishAndReleaseAll();
+    }
+
+    @Test
     public void decodeRejectsUnknownPrefix() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
         try {
@@ -213,5 +278,30 @@ public class RespDecoderTest {
         Assert.assertEquals("1", ((RespBulkString) arr.values().get(2)).asString());
 
         ch.finishAndReleaseAll();
+    }
+
+    private static void assertDecoderThrows(String payload, Class<? extends Throwable> expected) {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
+        try {
+            ch.writeInbound(Unpooled.copiedBuffer(payload, StandardCharsets.US_ASCII));
+            Assert.fail("Expected decode exception: " + expected.getSimpleName());
+        } catch (io.netty.handler.codec.DecoderException e) {
+            Throwable cause = unwrapDecoderCause(e);
+            Assert.assertTrue("Expected " + expected.getSimpleName() + " but got " + cause.getClass().getName(),
+                    expected.isInstance(cause));
+        } finally {
+            try {
+                ch.finishAndReleaseAll();
+            } catch (Exception ignored) {
+                // EmbeddedChannel may rethrow stored decoder exceptions on finish/close.
+            }
+        }
+    }
+
+    private static Throwable unwrapDecoderCause(io.netty.handler.codec.DecoderException e) {
+        if (e.getCause() == null) {
+            return e;
+        }
+        return e.getCause();
     }
 }
