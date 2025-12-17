@@ -7,8 +7,15 @@ import java.util.Map;
 import java.nio.charset.StandardCharsets;
 
 final class ZSetValue implements YierdisValue {
-    private final Map<ByteArrayKey, ZSkipList.Node> byMember = new HashMap<>();
-    private final ZSkipList byScore = new ZSkipList();
+    // Redis uses listpack for small ZSETs and upgrades to dict+skiplist as needed.
+    // We approximate that behavior with an in-Java "listpack-like" sorted array and upgrade to
+    // HashMap+skiplist once size/element thresholds are crossed.
+    private static final int LISTPACK_MAX_ENTRIES = 128;
+    private static final int LISTPACK_MAX_ELEMENT_BYTES = 64;
+
+    private List<ListPackEntry> listpack = new ArrayList<>();
+    private Map<ByteArrayKey, ZSkipList.Node> byMember;
+    private ZSkipList byScore;
 
     @Override
     public ValueType type() {
@@ -16,6 +23,9 @@ final class ZSetValue implements YierdisValue {
     }
 
     int size() {
+        if (listpack != null) {
+            return listpack.size();
+        }
         return byMember.size();
     }
 
@@ -23,25 +33,33 @@ final class ZSetValue implements YierdisValue {
         int added = 0;
         for (int i = 0; i < scoreMemberPairs.size(); i += 2) {
             double score = parseScore(scoreMemberPairs.get(i));
-            ByteArrayKey member = new ByteArrayKey(scoreMemberPairs.get(i + 1));
+            byte[] memberBytes = scoreMemberPairs.get(i + 1);
 
-            ZSkipList.Node old = byMember.get(member);
-            if (old != null) {
-                if (Double.compare(old.score, score) == 0) {
+            if (listpack != null) {
+                if (memberBytes != null && memberBytes.length > LISTPACK_MAX_ELEMENT_BYTES) {
+                    convertToSkipList();
+                }
+                if (listpack != null) {
+                    added += listpackZadd(score, memberBytes);
                     continue;
                 }
-                byScore.delete(old.score, old.member);
-            } else {
-                added++;
             }
 
-            ZSkipList.Node next = byScore.insert(score, member);
-            byMember.put(member, next);
+            ByteArrayKey member = new ByteArrayKey(memberBytes);
+            added += skiplistZadd(score, member);
         }
         return added;
     }
 
     int zrem(List<byte[]> members) {
+        if (listpack != null) {
+            int removed = 0;
+            for (byte[] m : members) {
+                removed += listpackZrem(m);
+            }
+            return removed;
+        }
+
         int removed = 0;
         for (byte[] m : members) {
             ZSkipList.Node old = byMember.remove(new ByteArrayKey(m));
@@ -63,6 +81,10 @@ final class ZSetValue implements YierdisValue {
     }
 
     private List<byte[]> rangeByIndex(long start, long stop, boolean withScores, boolean reverse) {
+        if (listpack != null) {
+            return rangeByIndexListpack(start, stop, withScores, reverse);
+        }
+
         int size = byMember.size();
         if (size == 0) {
             return new ArrayList<>();
@@ -117,6 +139,48 @@ final class ZSetValue implements YierdisValue {
         return out;
     }
 
+    private List<byte[]> rangeByIndexListpack(long start, long stop, boolean withScores, boolean reverse) {
+        int size = listpack.size();
+        if (size == 0) {
+            return new ArrayList<>();
+        }
+
+        long normalizedStart = normalizeIndex(start, size);
+        long normalizedStop = normalizeIndex(stop, size);
+
+        if (normalizedStart < 0) {
+            normalizedStart = 0;
+        }
+        if (normalizedStop < 0) {
+            return new ArrayList<>();
+        }
+        if (normalizedStop >= size) {
+            normalizedStop = size - 1;
+        }
+        if (normalizedStart > normalizedStop) {
+            return new ArrayList<>();
+        }
+
+        int remaining = (int) (normalizedStop - normalizedStart + 1);
+        if (!withScores) {
+            List<byte[]> out = new ArrayList<>(remaining);
+            for (long i = normalizedStart; i <= normalizedStop; i++) {
+                int idx = !reverse ? (int) i : (size - 1 - (int) i);
+                out.add(listpack.get(idx).member.bytes());
+            }
+            return out;
+        }
+
+        List<byte[]> out = new ArrayList<>(remaining * 2);
+        for (long i = normalizedStart; i <= normalizedStop; i++) {
+            int idx = !reverse ? (int) i : (size - 1 - (int) i);
+            ListPackEntry e = listpack.get(idx);
+            out.add(e.member.bytes());
+            out.add(formatScoreBytes(e.score));
+        }
+        return out;
+    }
+
     private static long normalizeIndex(long idx, int size) {
         if (idx >= 0) {
             return idx;
@@ -142,6 +206,116 @@ final class ZSetValue implements YierdisValue {
             return Long.toString((long) score).getBytes(StandardCharsets.US_ASCII);
         }
         return Double.toString(score).getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private int skiplistZadd(double score, ByteArrayKey member) {
+        if (byMember == null) {
+            byMember = new HashMap<>();
+            byScore = new ZSkipList();
+        }
+
+        ZSkipList.Node old = byMember.get(member);
+        if (old != null) {
+            if (Double.compare(old.score, score) == 0) {
+                return 0;
+            }
+            byScore.delete(old.score, old.member);
+        }
+
+        ZSkipList.Node next = byScore.insert(score, member);
+        byMember.put(member, next);
+        return old == null ? 1 : 0;
+    }
+
+    private int listpackZadd(double score, byte[] memberBytes) {
+        ByteArrayKey member = new ByteArrayKey(memberBytes);
+        int idx = indexOfMember(member);
+        if (idx >= 0) {
+            ListPackEntry old = listpack.get(idx);
+            if (Double.compare(old.score, score) == 0) {
+                return 0;
+            }
+            listpack.remove(idx);
+            insertSorted(new ListPackEntry(member, score));
+            return 0;
+        }
+
+        if (listpack.size() >= LISTPACK_MAX_ENTRIES) {
+            convertToSkipList();
+            return skiplistZadd(score, member);
+        }
+
+        insertSorted(new ListPackEntry(member, score));
+        return 1;
+    }
+
+    private int listpackZrem(byte[] memberBytes) {
+        ByteArrayKey member = new ByteArrayKey(memberBytes);
+        int idx = indexOfMember(member);
+        if (idx < 0) {
+            return 0;
+        }
+        listpack.remove(idx);
+        return 1;
+    }
+
+    private int indexOfMember(ByteArrayKey member) {
+        for (int i = 0; i < listpack.size(); i++) {
+            if (listpack.get(i).member.equals(member)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private void insertSorted(ListPackEntry entry) {
+        int low = 0;
+        int high = listpack.size();
+        while (low < high) {
+            int mid = (low + high) >>> 1;
+            ListPackEntry cur = listpack.get(mid);
+            if (lessThan(cur, entry.score, entry.member)) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        listpack.add(low, entry);
+    }
+
+    private static boolean lessThan(ListPackEntry node, double score, ByteArrayKey member) {
+        if (Double.compare(node.score, score) < 0) {
+            return true;
+        }
+        if (Double.compare(node.score, score) > 0) {
+            return false;
+        }
+        return node.member.compareTo(member) < 0;
+    }
+
+    private void convertToSkipList() {
+        if (listpack == null) {
+            return;
+        }
+        Map<ByteArrayKey, ZSkipList.Node> outByMember = new HashMap<>(Math.max(16, listpack.size() * 2));
+        ZSkipList outByScore = new ZSkipList();
+        for (ListPackEntry e : listpack) {
+            ZSkipList.Node n = outByScore.insert(e.score, e.member);
+            outByMember.put(e.member, n);
+        }
+        this.byMember = outByMember;
+        this.byScore = outByScore;
+        this.listpack = null;
+    }
+
+    private static final class ListPackEntry {
+        final ByteArrayKey member;
+        final double score;
+
+        private ListPackEntry(ByteArrayKey member, double score) {
+            this.member = member;
+            this.score = score;
+        }
     }
 
 }

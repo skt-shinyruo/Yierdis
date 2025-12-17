@@ -10,6 +10,7 @@ import yier.bubu.redis.protocol.RespInteger;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
@@ -153,6 +154,63 @@ public class ZSetCommandTest {
 
         RespSimpleString type = (RespSimpleString) cp.execute(Arrays.asList(b("TYPE"), key));
         Assert.assertEquals("none", type.value());
+
+        db.shutdown();
+    }
+
+    @Test
+    public void zsetUpgradesAfterManyElementsAndKeepsOrder() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = b("big-zset");
+        int n = 129; // > ZSetValue.LISTPACK_MAX_ENTRIES
+
+        ArrayList<byte[]> args = new ArrayList<>(2 + n * 2);
+        args.add(b("ZADD"));
+        args.add(key);
+        for (int i = 0; i < n; i++) {
+            args.add(b(Integer.toString(i))); // score
+            args.add(b(String.format("m%03d", i))); // member
+        }
+
+        RespInteger added = (RespInteger) cp.execute(args);
+        Assert.assertEquals(n, added.value());
+
+        RespArray range = (RespArray) cp.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
+        Assert.assertEquals(n, range.values().size());
+        Assert.assertEquals("m000", ((RespBulkString) range.values().get(0)).asString());
+        Assert.assertEquals("m128", ((RespBulkString) range.values().get(n - 1)).asString());
+
+        RespArray rev = (RespArray) cp.execute(Arrays.asList(b("ZREVRANGE"), key, b("0"), b("1")));
+        Assert.assertEquals(2, rev.values().size());
+        Assert.assertEquals("m128", ((RespBulkString) rev.values().get(0)).asString());
+        Assert.assertEquals("m127", ((RespBulkString) rev.values().get(1)).asString());
+
+        db.shutdown();
+    }
+
+    @Test
+    public void zsetUpgradesWhenMemberIsTooLargeForListpack() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = b("zset:big-member");
+        byte[] small = b("a");
+        byte[] big = new byte[65];
+        Arrays.fill(big, (byte) 'x');
+
+        RespInteger added = (RespInteger) cp.execute(Arrays.asList(
+                b("ZADD"), key,
+                b("1"), big,
+                b("0"), small
+        ));
+        Assert.assertEquals(2, added.value());
+
+        RespArray range = (RespArray) cp.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
+        Assert.assertEquals(2, range.values().size());
+        Assert.assertArrayEquals(small, ((RespBulkString) range.values().get(0)).data());
+        Assert.assertArrayEquals(big, ((RespBulkString) range.values().get(1)).data());
 
         db.shutdown();
     }
