@@ -83,6 +83,17 @@ final class ZSetValue implements YierdisValue {
         return zrangeByScoreSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
     }
 
+    List<byte[]> zrevrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+        if (count <= 0) {
+            return new ArrayList<>();
+        }
+
+        if (listpack != null) {
+            return zrevrangeByScoreListpack(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        }
+        return zrevrangeByScoreSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
+    }
+
     int zremrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive) {
         if (listpack != null) {
             int removed = 0;
@@ -99,6 +110,53 @@ final class ZSetValue implements YierdisValue {
         int removed = 0;
         ZSkipList.Node node = firstNodeForMin(min, minExclusive);
         while (node != null && scoreInRange(node.score, min, minExclusive, max, maxExclusive)) {
+            ZSkipList.Node next = node.forward[0];
+            byMember.remove(node.member);
+            byScore.delete(node.score, node.member);
+            removed++;
+            node = next;
+        }
+        return removed;
+    }
+
+    int zremrangeByRank(long start, long stop) {
+        int size = size();
+        if (size == 0) {
+            return 0;
+        }
+
+        long normalizedStart = normalizeIndex(start, size);
+        long normalizedStop = normalizeIndex(stop, size);
+
+        if (normalizedStart < 0) {
+            normalizedStart = 0;
+        }
+        if (normalizedStop < 0) {
+            return 0;
+        }
+        if (normalizedStop >= size) {
+            normalizedStop = size - 1;
+        }
+        if (normalizedStart > normalizedStop) {
+            return 0;
+        }
+
+        if (listpack != null) {
+            int removed = 0;
+            for (long i = normalizedStop; i >= normalizedStart; i--) {
+                listpack.remove((int) i);
+                removed++;
+            }
+            return removed;
+        }
+
+        int startRank = (int) normalizedStart + 1;
+        int stopRank = (int) normalizedStop + 1;
+        int remaining = stopRank - startRank + 1;
+        int removed = 0;
+
+        ZSkipList.Node node = byScore.getElementByRank(startRank);
+        for (int i = 0; i < remaining && node != null; i++) {
             ZSkipList.Node next = node.forward[0];
             byMember.remove(node.member);
             byScore.delete(node.score, node.member);
@@ -216,6 +274,46 @@ final class ZSetValue implements YierdisValue {
         return out;
     }
 
+    private List<byte[]> zrevrangeByScoreListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+        int size = listpack.size();
+        if (size == 0) {
+            return new ArrayList<>();
+        }
+
+        int startIdx = 0;
+        if (min != Double.NEGATIVE_INFINITY) {
+            startIdx = lowerBoundByScore(min, minExclusive);
+        }
+
+        int endExclusive = size;
+        if (max != Double.POSITIVE_INFINITY) {
+            endExclusive = upperBoundByScore(max, maxExclusive);
+        }
+        int endIdx = endExclusive - 1;
+        if (endIdx < startIdx) {
+            return new ArrayList<>();
+        }
+
+        long skipped = Math.max(0, offset);
+        long remaining = count;
+        int expected = (int) Math.min(size, remaining);
+        List<byte[]> out = new ArrayList<>(withScores ? expected * 2 : expected);
+
+        for (int i = endIdx; i >= startIdx && remaining > 0; i--) {
+            ListPackEntry e = listpack.get(i);
+            if (skipped > 0) {
+                skipped--;
+                continue;
+            }
+            out.add(e.member.bytes());
+            if (withScores) {
+                out.add(formatScoreBytes(e.score));
+            }
+            remaining--;
+        }
+        return out;
+    }
+
     private int lowerBoundByScore(double score, boolean exclusive) {
         int low = 0;
         int high = listpack.size();
@@ -226,6 +324,21 @@ final class ZSetValue implements YierdisValue {
                 low = mid + 1;
             } else {
                 high = mid;
+            }
+        }
+        return low;
+    }
+
+    private int upperBoundByScore(double score, boolean exclusive) {
+        int low = 0;
+        int high = listpack.size();
+        while (low < high) {
+            int mid = (low + high) >>> 1;
+            double s = listpack.get(mid).score;
+            if (Double.compare(s, score) > 0 || (exclusive && Double.compare(s, score) == 0)) {
+                high = mid;
+            } else {
+                low = mid + 1;
             }
         }
         return low;
@@ -268,11 +381,62 @@ final class ZSetValue implements YierdisValue {
         return out;
     }
 
+    private List<byte[]> zrevrangeByScoreSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+        int size = byMember.size();
+        if (size == 0) {
+            return new ArrayList<>();
+        }
+
+        ZSkipList.Node node = lastNodeForMax(max, maxExclusive);
+        if (node == null) {
+            return new ArrayList<>();
+        }
+
+        long skipped = Math.max(0, offset);
+        long remaining = count;
+        int expected = (int) Math.min(size, remaining);
+        List<byte[]> out = new ArrayList<>(withScores ? expected * 2 : expected);
+
+        while (node != null && remaining > 0) {
+            double s = node.score;
+            if (!scoreAtOrAboveMin(s, min, minExclusive)) {
+                break;
+            }
+            if (skipped > 0) {
+                skipped--;
+                node = node.backward;
+                continue;
+            }
+
+            out.add(node.member.bytes());
+            if (withScores) {
+                out.add(formatScoreBytes(s));
+            }
+            remaining--;
+            node = node.backward;
+        }
+        return out;
+    }
+
     private ZSkipList.Node firstNodeForMin(double min, boolean minExclusive) {
         if (min == Double.NEGATIVE_INFINITY) {
             return byScore.first();
         }
         return byScore.findFirstByScore(min, minExclusive);
+    }
+
+    private ZSkipList.Node lastNodeForMax(double max, boolean maxExclusive) {
+        if (max == Double.POSITIVE_INFINITY) {
+            return byScore.last();
+        }
+        return byScore.findLastByScore(max, maxExclusive);
+    }
+
+    private static boolean scoreAtOrAboveMin(double s, double min, boolean minExclusive) {
+        if (Double.compare(s, min) < 0) {
+            return false;
+        }
+        return !minExclusive || Double.compare(s, min) != 0;
     }
 
     private static boolean scoreInRange(double s, double min, boolean minExclusive, double max, boolean maxExclusive) {

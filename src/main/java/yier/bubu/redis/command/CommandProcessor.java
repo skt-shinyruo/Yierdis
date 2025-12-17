@@ -107,8 +107,12 @@ public final class CommandProcessor {
                     return zrevrange(args);
                 case "ZRANGEBYSCORE":
                     return zrangebyscore(args);
+                case "ZREVRANGEBYSCORE":
+                    return zrevrangebyscore(args);
                 case "ZREMRANGEBYSCORE":
                     return zremrangebyscore(args);
+                case "ZREMRANGEBYRANK":
+                    return zremrangebyrank(args);
                 case "ZREM":
                     return zrem(args);
 
@@ -532,6 +536,60 @@ public final class CommandProcessor {
         ScoreBound min = parseScoreBound(args.get(2));
         ScoreBound max = parseScoreBound(args.get(3));
         return RespInteger.of(db.zremrangeByScore(args.get(1), min.value, min.exclusive, max.value, max.exclusive));
+    }
+
+    private RespObject zrevrangebyscore(List<byte[]> args) {
+        if (args.size() < 4) {
+            return wrongArity("zrevrangebyscore");
+        }
+
+        ScoreBound max = parseScoreBound(args.get(2));
+        ScoreBound min = parseScoreBound(args.get(3));
+
+        boolean withScores = false;
+        long offset = 0;
+        long count = Long.MAX_VALUE;
+
+        int i = 4;
+        while (i < args.size()) {
+            String opt = upperAscii(args.get(i));
+            if ("WITHSCORES".equals(opt)) {
+                withScores = true;
+                i++;
+                continue;
+            }
+            if ("LIMIT".equals(opt)) {
+                if (i + 2 >= args.size()) {
+                    return RespError.of("ERR syntax error");
+                }
+                offset = parseLong(args.get(i + 1), "offset");
+                count = parseLong(args.get(i + 2), "count");
+                if (offset < 0 || count < 0) {
+                    return RespError.of("ERR syntax error");
+                }
+                i += 3;
+                continue;
+            }
+            return RespError.of("ERR syntax error");
+        }
+
+        return toBulkStringArray(db.zrevrangeByScore(
+                args.get(1),
+                min.value, min.exclusive,
+                max.value, max.exclusive,
+                withScores,
+                offset,
+                count
+        ));
+    }
+
+    private RespObject zremrangebyrank(List<byte[]> args) {
+        if (args.size() != 4) {
+            return wrongArity("zremrangebyrank");
+        }
+        long start = parseLong(args.get(2), "start");
+        long stop = parseLong(args.get(3), "stop");
+        return RespInteger.of(db.zremrangeByRank(args.get(1), start, stop));
     }
 
     private RespObject zrem(List<byte[]> args) {
