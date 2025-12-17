@@ -71,7 +71,11 @@ final class ListValue implements YierdisValue {
     }
 
     List<byte[]> lpop(int count) {
-        List<byte[]> out = new ArrayList<>(Math.max(0, count));
+        if (count <= 0) {
+            return new ArrayList<>();
+        }
+        int expected = Math.min(count, totalSize);
+        List<byte[]> out = new ArrayList<>(expected);
         for (int i = 0; i < count; i++) {
             byte[] v = quicklist != null ? qlPollFirst() : pollListpackFirst();
             if (v == null) {
@@ -84,7 +88,11 @@ final class ListValue implements YierdisValue {
     }
 
     List<byte[]> rpop(int count) {
-        List<byte[]> out = new ArrayList<>(Math.max(0, count));
+        if (count <= 0) {
+            return new ArrayList<>();
+        }
+        int expected = Math.min(count, totalSize);
+        List<byte[]> out = new ArrayList<>(expected);
         for (int i = 0; i < count; i++) {
             byte[] v = quicklist != null ? qlPollLast() : pollListpackLast();
             if (v == null) {

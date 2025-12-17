@@ -121,4 +121,40 @@ public class ListCommandTest {
 
         db.shutdown();
     }
+
+    @Test
+    public void lrangeDoesNotOverflowOnHugePositiveIndices() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = b("list:huge-index");
+        cp.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b"), b("c")));
+
+        RespArray empty = (RespArray) cp.execute(Arrays.asList(
+                b("LRANGE"), key,
+                b("9223372036854775807"), b("9223372036854775807")
+        ));
+        Assert.assertTrue(empty.values().isEmpty());
+
+        db.shutdown();
+    }
+
+    @Test
+    public void lpopRpopDoNotOverflowOnHugeCount() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = b("list:huge-count");
+        cp.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b"), b("c")));
+
+        RespArray popped = (RespArray) cp.execute(Arrays.asList(b("RPOP"), key, b("9223372036854775807")));
+        Assert.assertEquals(3, popped.values().size());
+        Assert.assertEquals("c", ((RespBulkString) popped.values().get(0)).asString());
+        Assert.assertEquals("b", ((RespBulkString) popped.values().get(1)).asString());
+        Assert.assertEquals("a", ((RespBulkString) popped.values().get(2)).asString());
+
+        Assert.assertEquals(0L, ((RespInteger) cp.execute(Arrays.asList(b("EXISTS"), key))).value());
+
+        db.shutdown();
+    }
 }

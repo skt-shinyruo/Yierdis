@@ -68,10 +68,13 @@ public final class RespDecoder extends ByteToMessageDecoder {
                     return null;
                 }
                 int len = Integer.parseInt(line.trim());
-                if (len < 0) {
+                if (len == -1) {
                     return RespBulkString.nullString();
                 }
-                if (in.readableBytes() < len + 2) {
+                if (len < -1) {
+                    throw new IllegalArgumentException("Protocol error: invalid bulk length");
+                }
+                if (in.readableBytes() < (long) len + 2) {
                     in.readerIndex(startIdx);
                     return null;
                 }
@@ -89,10 +92,13 @@ public final class RespDecoder extends ByteToMessageDecoder {
                     return null;
                 }
                 int count = Integer.parseInt(line.trim());
-                if (count < 0) {
+                if (count == -1) {
                     return RespArray.nullArray();
                 }
-                List<RespObject> items = new ArrayList<>(count);
+                if (count < -1) {
+                    throw new IllegalArgumentException("Protocol error: invalid array length");
+                }
+                List<RespObject> items = new ArrayList<>(Math.min(count, 16));
                 for (int i = 0; i < count; i++) {
                     RespObject item = tryDecodeOne(in);
                     if (item == null) {

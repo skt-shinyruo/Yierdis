@@ -77,6 +77,11 @@ public class RespDecoderTest {
     }
 
     @Test
+    public void decodeRejectsInvalidNegativeBulkLength() {
+        assertDecoderThrows("$-2\r\n", IllegalArgumentException.class);
+    }
+
+    @Test
     public void decodeBinaryBulkString() {
         // $3 [0x00 0x01 0xFF]
         byte[] payload = new byte[]{
@@ -94,6 +99,16 @@ public class RespDecoderTest {
     }
 
     @Test
+    public void decodeDoesNotOverflowWhenBulkLengthIsHugeButIncomplete() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
+        // The decoder should treat this as an incomplete frame and wait for more bytes,
+        // not overflow its length checks or attempt to allocate a huge byte array.
+        Assert.assertFalse(ch.writeInbound(Unpooled.copiedBuffer("$2147483647\r\n", StandardCharsets.US_ASCII)));
+        Assert.assertNull(ch.readInbound());
+        ch.finishAndReleaseAll();
+    }
+
+    @Test
     public void decodeNullArray() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
         Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("*-1\r\n", StandardCharsets.US_ASCII)));
@@ -103,6 +118,21 @@ public class RespDecoderTest {
         Assert.assertTrue(((RespArray) msg).isNull());
         Assert.assertNull(((RespArray) msg).values());
 
+        ch.finishAndReleaseAll();
+    }
+
+    @Test
+    public void decodeRejectsInvalidNegativeArrayLength() {
+        assertDecoderThrows("*-2\r\n", IllegalArgumentException.class);
+    }
+
+    @Test
+    public void decodeDoesNotOverflowWhenArrayLengthIsHugeButIncomplete() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
+        // The decoder should treat this as an incomplete frame and wait for more bytes,
+        // not attempt to pre-allocate an enormous ArrayList.
+        Assert.assertFalse(ch.writeInbound(Unpooled.copiedBuffer("*2147483647\r\n", StandardCharsets.US_ASCII)));
+        Assert.assertNull(ch.readInbound());
         ch.finishAndReleaseAll();
     }
 

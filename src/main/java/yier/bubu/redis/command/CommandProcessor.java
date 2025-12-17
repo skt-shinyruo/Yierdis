@@ -323,8 +323,8 @@ public final class CommandProcessor {
         if (args.size() != 4) {
             return wrongArity("lrange");
         }
-        int start = (int) parseLong(args.get(2), "start");
-        int stop = (int) parseLong(args.get(3), "stop");
+        int start = parseIntClamped(args.get(2), "start");
+        int stop = parseIntClamped(args.get(3), "stop");
         List<byte[]> values = db.lrange(args.get(1), start, stop);
         return toBulkStringArray(values);
     }
@@ -336,7 +336,7 @@ public final class CommandProcessor {
         int count = 1;
         boolean hasCount = args.size() == 3;
         if (hasCount) {
-            count = (int) parseLong(args.get(2), "count");
+            count = parseIntClamped(args.get(2), "count");
         }
         List<byte[]> popped = db.lpop(args.get(1), count);
         return popResponse(popped, hasCount);
@@ -349,7 +349,7 @@ public final class CommandProcessor {
         int count = 1;
         boolean hasCount = args.size() == 3;
         if (hasCount) {
-            count = (int) parseLong(args.get(2), "count");
+            count = parseIntClamped(args.get(2), "count");
         }
         List<byte[]> popped = db.rpop(args.get(1), count);
         return popResponse(popped, hasCount);
@@ -637,6 +637,17 @@ public final class CommandProcessor {
             throw new IllegalArgumentException("value is not an integer or out of range: " + label);
         }
         return v;
+    }
+
+    private static int parseIntClamped(byte[] s, String label) {
+        long v = parseLong(s, label);
+        if (v > Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        if (v < Integer.MIN_VALUE) {
+            return Integer.MIN_VALUE;
+        }
+        return (int) v;
     }
 
     private static ScoreBound parseScoreBound(byte[] raw) {
