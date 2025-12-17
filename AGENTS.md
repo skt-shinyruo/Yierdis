@@ -24,8 +24,8 @@ Key requirements for contributions:
 
 - `mvn test`: compile + run unit tests.
 - `mvn -DskipTests package`: build shaded JAR at `target/yierdis-0.1.0-SNAPSHOT.jar`.
-- `java -jar target/yierdis-0.1.0-SNAPSHOT.jar --port 6379`: run locally.
-  - Verify with `redis-cli --resp2 -p 6379 ping`.
+- `java -jar target/yierdis-0.1.0-SNAPSHOT.jar --port 6378`: run locally.
+  - Verify with `redis-cli --resp2 -p 6378 ping`.
 
 ## Coding Style & Testing
 

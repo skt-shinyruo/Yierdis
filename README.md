@@ -11,18 +11,18 @@
 
 ```bash
 mvn -q -DskipTests package
-java -jar target/yierdis-0.1.0-SNAPSHOT.jar --port 6379
+java -jar target/yierdis-0.1.0-SNAPSHOT.jar --port 6378
 ```
 
 然后可以用 `redis-cli` 连接：
 
 ```bash
-redis-cli -p 6379 ping
-redis-cli -p 6379 set a 1
-redis-cli -p 6379 get a
-redis-cli -p 6379 incr a
-redis-cli -p 6379 expire a 10
-redis-cli -p 6379 ttl a
+redis-cli -p 6378 ping
+redis-cli -p 6378 set a 1
+redis-cli -p 6378 get a
+redis-cli -p 6378 incr a
+redis-cli -p 6378 expire a 10
+redis-cli -p 6378 ttl a
 ```
 
 ## 已实现命令（简化版）

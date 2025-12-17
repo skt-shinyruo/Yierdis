@@ -10,7 +10,7 @@ final class ServerConfig {
     }
 
     static ServerConfig fromArgs(String[] args) {
-        int port = 6379;
+        int port = 6378;
         long cleanupIntervalMillis = 1000;
 
         for (int i = 0; i < args.length; i++) {
