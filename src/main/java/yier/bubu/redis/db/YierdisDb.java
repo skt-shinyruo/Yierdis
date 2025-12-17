@@ -114,7 +114,7 @@ public final class YierdisDb {
         return out;
     }
 
-    public boolean setString(String key, String value, SetMode mode, ExpireOption expireOption) {
+    public boolean setString(String key, byte[] value, SetMode mode, ExpireOption expireOption) {
         long now = System.currentTimeMillis();
         long expireAt = expireOption == null ? NO_EXPIRE : expireOption.toExpireAtMillis(now);
 
@@ -137,7 +137,7 @@ public final class YierdisDb {
         return didSet[0];
     }
 
-    public String getString(String key) {
+    public byte[] getStringBytes(String key) {
         Entry e = getEntryIfNotExpired(key);
         if (e == null) {
             return null;
@@ -146,16 +146,24 @@ public final class YierdisDb {
             if (!(e.value instanceof StringValue)) {
                 throw new WrongTypeException();
             }
-            return ((StringValue) e.value).get();
+            return ((StringValue) e.value).toBytes();
         }
     }
 
     public int strlen(String key) {
-        String s = getString(key);
-        return s == null ? 0 : s.length();
+        Entry e = getEntryIfNotExpired(key);
+        if (e == null) {
+            return 0;
+        }
+        synchronized (e) {
+            if (!(e.value instanceof StringValue)) {
+                throw new WrongTypeException();
+            }
+            return ((StringValue) e.value).byteLength();
+        }
     }
 
-    public int append(String key, String appendValue) {
+    public int append(String key, byte[] appendValue) {
         long now = System.currentTimeMillis();
         final int[] newLen = new int[]{0};
         store.compute(key, (k, old) -> {
@@ -164,7 +172,7 @@ public final class YierdisDb {
             }
             if (old == null) {
                 StringValue v = new StringValue(appendValue);
-                newLen[0] = v.get().length();
+                newLen[0] = v.byteLength();
                 return new Entry(v, NO_EXPIRE);
             }
 
@@ -173,8 +181,7 @@ public final class YierdisDb {
                     throw new WrongTypeException();
                 }
                 StringValue sv = (StringValue) old.value;
-                sv.set(sv.get() + appendValue);
-                newLen[0] = sv.get().length();
+                newLen[0] = sv.append(appendValue);
                 return old;
             }
         });
@@ -199,15 +206,7 @@ public final class YierdisDb {
                     throw new WrongTypeException();
                 }
                 StringValue sv = (StringValue) old.value;
-                long current;
-                try {
-                    current = Long.parseLong(sv.get().trim());
-                } catch (NumberFormatException e) {
-                    throw new YierdisCommandException("ERR value is not an integer or out of range");
-                }
-                long next = current + delta;
-                sv.set(Long.toString(next));
-                result[0] = next;
+                result[0] = sv.incrBy(delta);
                 return old;
             }
         });

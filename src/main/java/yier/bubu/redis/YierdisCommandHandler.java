@@ -28,10 +28,10 @@ final class YierdisCommandHandler extends SimpleChannelInboundHandler<RespObject
     protected void channelRead0(ChannelHandlerContext ctx, RespObject msg) {
         RespObject response;
         try {
-            List<String> args = asCommandArgs(msg);
+            List<byte[]> args = asCommandArgs(msg);
             if (args.isEmpty()) {
                 response = RespError.of("ERR empty command");
-            } else if ("QUIT".equalsIgnoreCase(args.get(0))) {
+            } else if (isQuit(args.get(0))) {
                 ctx.writeAndFlush(RespSimpleString.of("OK")).addListener(ChannelFutureListener.CLOSE);
                 return;
             } else {
@@ -44,25 +44,31 @@ final class YierdisCommandHandler extends SimpleChannelInboundHandler<RespObject
         ctx.writeAndFlush(response);
     }
 
-    private static List<String> asCommandArgs(RespObject msg) {
+    private static List<byte[]> asCommandArgs(RespObject msg) {
         if (!(msg instanceof RespArray)) {
             throw new IllegalArgumentException("Protocol error: expected array");
         }
         RespArray array = (RespArray) msg;
         List<RespObject> items = array.values();
-        List<String> args = new ArrayList<>(items.size());
+        List<byte[]> args = new ArrayList<>(items.size());
         for (RespObject item : items) {
-            if (item == null) {
-                args.add(null);
-                continue;
-            }
             if (item instanceof RespBulkString) {
-                args.add(((RespBulkString) item).asString());
+                args.add(((RespBulkString) item).data());
                 continue;
             }
-            args.add(item.toHumanReadableString());
+            throw new IllegalArgumentException("Protocol error: expected bulk string array");
         }
         return args;
+    }
+
+    private static boolean isQuit(byte[] cmd) {
+        if (cmd == null || cmd.length != 4) {
+            return false;
+        }
+        return (cmd[0] == 'Q' || cmd[0] == 'q')
+                && (cmd[1] == 'U' || cmd[1] == 'u')
+                && (cmd[2] == 'I' || cmd[2] == 'i')
+                && (cmd[3] == 'T' || cmd[3] == 't');
     }
 
     @Override

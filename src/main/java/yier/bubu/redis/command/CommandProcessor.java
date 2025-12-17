@@ -9,6 +9,7 @@ import yier.bubu.redis.protocol.RespInteger;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -23,8 +24,11 @@ public final class CommandProcessor {
         this.db = db;
     }
 
-    public RespObject execute(List<String> args) {
-        String cmd = upper(args.get(0));
+    public RespObject execute(List<byte[]> args) {
+        if (args == null || args.isEmpty() || args.get(0) == null || args.get(0).length == 0) {
+            return RespError.of("ERR empty command");
+        }
+        String cmd = upperAscii(args.get(0));
         try {
             switch (cmd) {
                 case "PING":
@@ -106,7 +110,7 @@ public final class CommandProcessor {
                     return zrem(args);
 
                 default:
-                    return RespError.of("ERR unknown command '" + args.get(0) + "'");
+                    return RespError.of("ERR unknown command '" + utf8(args.get(0)) + "'");
             }
         } catch (YierdisDb.WrongTypeException e) {
             return RespError.of(e.getMessage());
@@ -117,27 +121,27 @@ public final class CommandProcessor {
         }
     }
 
-    private RespObject ping(List<String> args) {
+    private RespObject ping(List<byte[]> args) {
         if (args.size() == 1) {
             return RespSimpleString.of("PONG");
         }
         if (args.size() == 2) {
-            return RespBulkString.ofString(args.get(1));
+            return RespBulkString.ofBytes(args.get(1));
         }
         return wrongArity("ping");
     }
 
-    private RespObject echo(List<String> args) {
+    private RespObject echo(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("echo");
         }
-        return RespBulkString.ofString(args.get(1));
+        return RespBulkString.ofBytes(args.get(1));
     }
 
-    private RespObject hello(List<String> args) {
+    private RespObject hello(List<byte[]> args) {
         // Minimal RESP2-friendly HELLO implementation.
         // Redis returns a map in RESP3 and an array of alternating keys/values in RESP2.
-        String version = args.size() >= 2 ? args.get(1) : "2";
+        String version = args.size() >= 2 ? utf8(args.get(1)) : "2";
         if ("3".equals(version)) {
             return RespError.of("ERR RESP3 is not supported (use HELLO 2 / redis-cli --resp2)");
         }
@@ -160,32 +164,32 @@ public final class CommandProcessor {
         out.add(RespBulkString.ofString(v));
     }
 
-    private RespObject select(List<String> args) {
+    private RespObject select(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("select");
         }
-        if ("0".equals(args.get(1))) {
+        if ("0".equals(ascii(args.get(1)))) {
             return RespSimpleString.of("OK");
         }
         return RespError.of("ERR only DB 0 is supported");
     }
 
-    private RespObject type(List<String> args) {
+    private RespObject type(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("type");
         }
-        ValueType t = db.typeOf(args.get(1));
+        ValueType t = db.typeOf(utf8(args.get(1)));
         if (t == null) {
             return RespSimpleString.of("none");
         }
         return RespSimpleString.of(t.name().toLowerCase());
     }
 
-    private RespObject keys(List<String> args) {
+    private RespObject keys(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("keys");
         }
-        Set<String> keys = db.keys(args.get(1));
+        Set<String> keys = db.keys(utf8(args.get(1)));
         List<RespObject> out = new ArrayList<>(keys.size());
         for (String k : keys) {
             out.add(RespBulkString.ofString(k));
@@ -193,36 +197,36 @@ public final class CommandProcessor {
         return RespArray.of(out);
     }
 
-    private RespObject del(List<String> args) {
+    private RespObject del(List<byte[]> args) {
         if (args.size() < 2) {
             return wrongArity("del");
         }
-        long removed = db.del(args.subList(1, args.size()));
+        long removed = db.del(utf8List(args, 1));
         return RespInteger.of(removed);
     }
 
-    private RespObject exists(List<String> args) {
+    private RespObject exists(List<byte[]> args) {
         if (args.size() < 2) {
             return wrongArity("exists");
         }
-        long count = db.exists(args.subList(1, args.size()));
+        long count = db.exists(utf8List(args, 1));
         return RespInteger.of(count);
     }
 
-    private RespObject set(List<String> args) {
+    private RespObject set(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("set");
         }
 
-        String key = args.get(1);
-        String value = args.get(2);
+        String key = utf8(args.get(1));
+        byte[] value = args.get(2);
 
         YierdisDb.SetMode mode = YierdisDb.SetMode.NORMAL;
         YierdisDb.ExpireOption expire = null;
 
         // SET key value [EX seconds|PX milliseconds] [NX|XX]
         for (int i = 3; i < args.size(); i++) {
-            String opt = upper(args.get(i));
+            String opt = upperAscii(args.get(i));
             if ("NX".equals(opt)) {
                 mode = YierdisDb.SetMode.NX;
                 continue;
@@ -251,79 +255,79 @@ public final class CommandProcessor {
         return RespSimpleString.of("OK");
     }
 
-    private RespObject get(List<String> args) {
+    private RespObject get(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("get");
         }
-        String value = db.getString(args.get(1));
-        return value == null ? RespBulkString.nullString() : RespBulkString.ofString(value);
+        byte[] value = db.getStringBytes(utf8(args.get(1)));
+        return value == null ? RespBulkString.nullString() : RespBulkString.ofBytes(value);
     }
 
-    private RespObject strlen(List<String> args) {
+    private RespObject strlen(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("strlen");
         }
-        return RespInteger.of(db.strlen(args.get(1)));
+        return RespInteger.of(db.strlen(utf8(args.get(1))));
     }
 
-    private RespObject append(List<String> args) {
+    private RespObject append(List<byte[]> args) {
         if (args.size() != 3) {
             return wrongArity("append");
         }
-        int len = db.append(args.get(1), args.get(2));
+        int len = db.append(utf8(args.get(1)), args.get(2));
         return RespInteger.of(len);
     }
 
-    private RespObject incrBy(List<String> args, long delta) {
+    private RespObject incrBy(List<byte[]> args, long delta) {
         if (args.size() != 2) {
             return wrongArity(delta > 0 ? "incr" : "decr");
         }
-        long v = db.incrBy(args.get(1), delta);
+        long v = db.incrBy(utf8(args.get(1)), delta);
         return RespInteger.of(v);
     }
 
-    private RespObject expire(List<String> args) {
+    private RespObject expire(List<byte[]> args) {
         if (args.size() != 3) {
             return wrongArity("expire");
         }
         long seconds = parseLong(args.get(2), "seconds");
-        return RespInteger.of(db.expire(args.get(1), seconds) ? 1 : 0);
+        return RespInteger.of(db.expire(utf8(args.get(1)), seconds) ? 1 : 0);
     }
 
-    private RespObject ttl(List<String> args) {
+    private RespObject ttl(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("ttl");
         }
-        return RespInteger.of(db.ttlSeconds(args.get(1)));
+        return RespInteger.of(db.ttlSeconds(utf8(args.get(1))));
     }
 
-    private RespObject lpush(List<String> args) {
+    private RespObject lpush(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("lpush");
         }
-        int len = db.lpush(args.get(1), args.subList(2, args.size()));
+        int len = db.lpush(utf8(args.get(1)), utf8List(args, 2));
         return RespInteger.of(len);
     }
 
-    private RespObject rpush(List<String> args) {
+    private RespObject rpush(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("rpush");
         }
-        int len = db.rpush(args.get(1), args.subList(2, args.size()));
+        int len = db.rpush(utf8(args.get(1)), utf8List(args, 2));
         return RespInteger.of(len);
     }
 
-    private RespObject lrange(List<String> args) {
+    private RespObject lrange(List<byte[]> args) {
         if (args.size() != 4) {
             return wrongArity("lrange");
         }
         int start = (int) parseLong(args.get(2), "start");
         int stop = (int) parseLong(args.get(3), "stop");
-        List<String> values = db.lrange(args.get(1), start, stop);
+        List<String> values = db.lrange(utf8(args.get(1)), start, stop);
         return toBulkStringArray(values);
     }
 
-    private RespObject lpop(List<String> args) {
+    private RespObject lpop(List<byte[]> args) {
         if (args.size() != 2 && args.size() != 3) {
             return wrongArity("lpop");
         }
@@ -332,11 +336,11 @@ public final class CommandProcessor {
         if (hasCount) {
             count = (int) parseLong(args.get(2), "count");
         }
-        List<String> popped = db.lpop(args.get(1), count);
+        List<String> popped = db.lpop(utf8(args.get(1)), count);
         return popResponse(popped, hasCount);
     }
 
-    private RespObject rpop(List<String> args) {
+    private RespObject rpop(List<byte[]> args) {
         if (args.size() != 2 && args.size() != 3) {
             return wrongArity("rpop");
         }
@@ -345,7 +349,7 @@ public final class CommandProcessor {
         if (hasCount) {
             count = (int) parseLong(args.get(2), "count");
         }
-        List<String> popped = db.rpop(args.get(1), count);
+        List<String> popped = db.rpop(utf8(args.get(1)), count);
         return popResponse(popped, hasCount);
     }
 
@@ -359,87 +363,87 @@ public final class CommandProcessor {
         return toBulkStringArray(popped);
     }
 
-    private RespObject hset(List<String> args) {
+    private RespObject hset(List<byte[]> args) {
         if (args.size() < 4) {
             return wrongArity("hset");
         }
-        int added = db.hset(args.get(1), args.subList(2, args.size()));
+        int added = db.hset(utf8(args.get(1)), utf8List(args, 2));
         return RespInteger.of(added);
     }
 
-    private RespObject hget(List<String> args) {
+    private RespObject hget(List<byte[]> args) {
         if (args.size() != 3) {
             return wrongArity("hget");
         }
-        String v = db.hget(args.get(1), args.get(2));
+        String v = db.hget(utf8(args.get(1)), utf8(args.get(2)));
         return v == null ? RespBulkString.nullString() : RespBulkString.ofString(v);
     }
 
-    private RespObject hgetall(List<String> args) {
+    private RespObject hgetall(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("hgetall");
         }
-        return toBulkStringArray(db.hgetall(args.get(1)));
+        return toBulkStringArray(db.hgetall(utf8(args.get(1))));
     }
 
-    private RespObject hlen(List<String> args) {
+    private RespObject hlen(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("hlen");
         }
-        return RespInteger.of(db.hlen(args.get(1)));
+        return RespInteger.of(db.hlen(utf8(args.get(1))));
     }
 
-    private RespObject hdel(List<String> args) {
+    private RespObject hdel(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("hdel");
         }
-        return RespInteger.of(db.hdel(args.get(1), args.subList(2, args.size())));
+        return RespInteger.of(db.hdel(utf8(args.get(1)), utf8List(args, 2)));
     }
 
-    private RespObject sadd(List<String> args) {
+    private RespObject sadd(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("sadd");
         }
-        return RespInteger.of(db.sadd(args.get(1), args.subList(2, args.size())));
+        return RespInteger.of(db.sadd(utf8(args.get(1)), utf8List(args, 2)));
     }
 
-    private RespObject srem(List<String> args) {
+    private RespObject srem(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("srem");
         }
-        return RespInteger.of(db.srem(args.get(1), args.subList(2, args.size())));
+        return RespInteger.of(db.srem(utf8(args.get(1)), utf8List(args, 2)));
     }
 
-    private RespObject smembers(List<String> args) {
+    private RespObject smembers(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("smembers");
         }
-        return toBulkStringArray(db.smembers(args.get(1)));
+        return toBulkStringArray(db.smembers(utf8(args.get(1))));
     }
 
-    private RespObject sismember(List<String> args) {
+    private RespObject sismember(List<byte[]> args) {
         if (args.size() != 3) {
             return wrongArity("sismember");
         }
-        return RespInteger.of(db.sismember(args.get(1), args.get(2)) ? 1 : 0);
+        return RespInteger.of(db.sismember(utf8(args.get(1)), utf8(args.get(2))) ? 1 : 0);
     }
 
-    private RespObject scard(List<String> args) {
+    private RespObject scard(List<byte[]> args) {
         if (args.size() != 2) {
             return wrongArity("scard");
         }
-        return RespInteger.of(db.scard(args.get(1)));
+        return RespInteger.of(db.scard(utf8(args.get(1))));
     }
 
-    private RespObject zadd(List<String> args) {
+    private RespObject zadd(List<byte[]> args) {
         if (args.size() < 4) {
             return wrongArity("zadd");
         }
-        int added = db.zadd(args.get(1), args.subList(2, args.size()));
+        int added = db.zadd(utf8(args.get(1)), utf8List(args, 2));
         return RespInteger.of(added);
     }
 
-    private RespObject zrange(List<String> args) {
+    private RespObject zrange(List<byte[]> args) {
         if (args.size() != 4 && args.size() != 5) {
             return wrongArity("zrange");
         }
@@ -448,20 +452,20 @@ public final class CommandProcessor {
 
         boolean withScores = false;
         if (args.size() == 5) {
-            if (!"WITHSCORES".equalsIgnoreCase(args.get(4))) {
+            if (!"WITHSCORES".equalsIgnoreCase(ascii(args.get(4)))) {
                 return RespError.of("ERR syntax error");
             }
             withScores = true;
         }
 
-        return toBulkStringArray(db.zrange(args.get(1), start, stop, withScores));
+        return toBulkStringArray(db.zrange(utf8(args.get(1)), start, stop, withScores));
     }
 
-    private RespObject zrem(List<String> args) {
+    private RespObject zrem(List<byte[]> args) {
         if (args.size() < 3) {
             return wrongArity("zrem");
         }
-        return RespInteger.of(db.zrem(args.get(1), args.subList(2, args.size())));
+        return RespInteger.of(db.zrem(utf8(args.get(1)), utf8List(args, 2)));
     }
 
     private static RespArray toBulkStringArray(List<String> values) {
@@ -482,13 +486,32 @@ public final class CommandProcessor {
         return RespError.of("ERR wrong number of arguments for '" + cmdLower + "' command");
     }
 
-    private static String upper(String s) {
-        return s == null ? null : s.toUpperCase();
+    private static String upperAscii(byte[] s) {
+        return s == null ? null : new String(s, StandardCharsets.US_ASCII).toUpperCase();
     }
 
-    private static long parseLong(String s, String label) {
+    private static String ascii(byte[] s) {
+        return s == null ? null : new String(s, StandardCharsets.US_ASCII);
+    }
+
+    private static String utf8(byte[] s) {
+        return s == null ? null : new String(s, StandardCharsets.UTF_8);
+    }
+
+    private static List<String> utf8List(List<byte[]> args, int fromIndex) {
+        if (fromIndex >= args.size()) {
+            return Collections.emptyList();
+        }
+        List<String> out = new ArrayList<>(args.size() - fromIndex);
+        for (int i = fromIndex; i < args.size(); i++) {
+            out.add(utf8(args.get(i)));
+        }
+        return out;
+    }
+
+    private static long parseLong(byte[] s, String label) {
         try {
-            return Long.parseLong(s);
+            return Long.parseLong(ascii(s));
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("value is not an integer or out of range: " + label);
         }

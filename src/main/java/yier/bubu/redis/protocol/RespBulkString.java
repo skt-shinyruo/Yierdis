@@ -13,7 +13,10 @@ public final class RespBulkString implements RespObject {
     }
 
     public static RespBulkString ofBytes(byte[] data) {
-        return new RespBulkString(Arrays.copyOf(data, data.length));
+        if (data == null) {
+            return NULL;
+        }
+        return new RespBulkString(data);
     }
 
     public static RespBulkString ofString(String value) {
@@ -32,7 +35,7 @@ public final class RespBulkString implements RespObject {
     }
 
     public byte[] data() {
-        return data == null ? null : Arrays.copyOf(data, data.length);
+        return data;
     }
 
     public String asString() {

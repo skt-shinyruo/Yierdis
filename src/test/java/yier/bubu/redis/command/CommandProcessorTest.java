@@ -10,9 +10,56 @@ import yier.bubu.redis.protocol.RespSimpleString;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 
 public class CommandProcessorTest {
+    @Test
+    public void stringIsBinarySafe() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = "k".getBytes(StandardCharsets.UTF_8);
+        byte[] value = new byte[]{0, (byte) 0xFF, 'a', '\n'};
+
+        Assert.assertTrue(cp.execute(Arrays.asList(
+                "SET".getBytes(StandardCharsets.UTF_8),
+                key,
+                value
+        )) instanceof RespSimpleString);
+
+        RespObject get = cp.execute(Arrays.asList(
+                "GET".getBytes(StandardCharsets.UTF_8),
+                key
+        ));
+        Assert.assertTrue(get instanceof RespBulkString);
+        Assert.assertArrayEquals(value, ((RespBulkString) get).data());
+
+        RespInteger len = (RespInteger) cp.execute(Arrays.asList(
+                "STRLEN".getBytes(StandardCharsets.UTF_8),
+                key
+        ));
+        Assert.assertEquals(value.length, len.value());
+
+        byte[] extra = new byte[]{1, 2, 3};
+        RespInteger newLen = (RespInteger) cp.execute(Arrays.asList(
+                "APPEND".getBytes(StandardCharsets.UTF_8),
+                key,
+                extra
+        ));
+        Assert.assertEquals(value.length + extra.length, newLen.value());
+
+        RespObject get2 = cp.execute(Arrays.asList(
+                "GET".getBytes(StandardCharsets.UTF_8),
+                key
+        ));
+        Assert.assertTrue(get2 instanceof RespBulkString);
+        Assert.assertArrayEquals(new byte[]{0, (byte) 0xFF, 'a', '\n', 1, 2, 3}, ((RespBulkString) get2).data());
+
+        db.shutdown();
+    }
+
     @Test
     public void setGetIncrExpireTtl() {
         YierdisDb db = new YierdisDb();
@@ -140,7 +187,11 @@ public class CommandProcessorTest {
         db.shutdown();
     }
 
-    private static java.util.List<String> cmd(String... parts) {
-        return Arrays.asList(parts);
+    private static java.util.List<byte[]> cmd(String... parts) {
+        java.util.List<byte[]> out = new ArrayList<>(parts.length);
+        for (String p : parts) {
+            out.add(p.getBytes(StandardCharsets.UTF_8));
+        }
+        return out;
     }
 }
