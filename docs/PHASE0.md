@@ -69,10 +69,9 @@ jcmd <pid> GC.heap_info
 
 ## Suggested acceptance criteria (adjust as needed)
 
-- Total object count drops significantly for `strings` (notably fewer `StringValue`/wrappers).
+- Total object count drops significantly for `strings` (notably fewer per-key wrapper objects; string values are stored directly in `YierdisObject`).
 - For future phases:
   - fewer `HashMap$Node` / wrapper key objects after replacing hash/set/zset large encodings
   - fewer `ArrayList` / small entry objects after implementing packed encodings
 - Full GC count approaches 0 for these runs.
 - Young GC frequency and/or pause time decreases noticeably under the same heap settings.
-
