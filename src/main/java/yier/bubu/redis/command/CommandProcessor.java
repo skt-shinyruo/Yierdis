@@ -12,6 +12,7 @@ import yier.bubu.redis.protocol.RespSimpleString;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 public final class CommandProcessor {
@@ -189,7 +190,7 @@ public final class CommandProcessor {
         if (t == null) {
             return RespSimpleString.of("none");
         }
-        return RespSimpleString.of(t.name().toLowerCase());
+        return RespSimpleString.of(t.name().toLowerCase(Locale.ROOT));
     }
 
     private RespObject keys(List<byte[]> args) {
@@ -612,7 +613,7 @@ public final class CommandProcessor {
     }
 
     private static String upperAscii(byte[] s) {
-        return s == null ? null : new String(s, StandardCharsets.US_ASCII).toUpperCase();
+        return s == null ? null : new String(s, StandardCharsets.US_ASCII).toUpperCase(Locale.ROOT);
     }
 
     private static String ascii(byte[] s) {

@@ -151,7 +151,20 @@ final class SetValue implements YierdisValue {
             result -= digit;
         }
 
-        return negative ? result : -result;
+        long value = negative ? result : -result;
+
+        // Only treat canonical integer representations as integers. This preserves binary-safe
+        // semantics for members like "01" (distinct from "1"), "+1", and "-0" (distinct from "0").
+        String canonical = Long.toString(value);
+        if (canonical.length() != s.length) {
+            return null;
+        }
+        for (int j = 0; j < s.length; j++) {
+            if ((byte) canonical.charAt(j) != s[j]) {
+                return null;
+            }
+        }
+        return value;
     }
 
     private boolean intsetContains(long v) {

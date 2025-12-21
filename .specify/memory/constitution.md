@@ -1,50 +1,44 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+# Yierdis Constitution
+
+This repository is a **simplified Redis-compatible server** (RESP2 over TCP) written in **Java 17** with **Netty**. It is intentionally minimal and optimized for learning, demos, and correctness-focused iteration.
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Compatibility Over Completeness
+- Prefer **well-behaved RESP2** semantics and error messages over adding many commands.
+- Preserve behavior that common clients rely on (e.g., `redis-cli --resp2`).
+- Breaking changes require an explicit migration note.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### II. Keep The Server Minimal
+- In-memory only; no production claims.
+- Avoid adding large subsystems unless they clearly serve the learning goals (AOF/RDB/replication/cluster are out of scope unless explicitly planned).
+- Prefer small, readable classes and direct control flow.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### III. Maintain The Project Identity
+- Java package prefix is **`yier.bubu.redis`**.
+- Server-side class naming uses **`Yierdis*`** (avoid introducing new `Redis*` server classes).
+- Protocol framing stays in `protocol/`; command semantics stay in `command/` + `db/`.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### IV. Safety & Predictability First
+- No AUTH/TLS: do not encourage exposure to untrusted networks.
+- Add **bounds** for anything user-controlled that may cause CPU/memory blowups (e.g., RESP bulk length, array depth).
+- Prefer deterministic tests; avoid `Thread.sleep` (allow small time variance for TTL assertions).
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### V. Measure Before Optimizing
+- Optimize only after identifying a clear bottleneck (profiling, benchmarks, or reproducible tests).
+- Avoid changes that complicate the codebase without a measurable benefit.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+## Quality Gates
+- `mvn test` must pass for all changes.
+- New commands or semantics changes require tests under `src/test/java/yier/bubu/redis/**`.
+- Keep formatting consistent (4 spaces, no tabs).
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
-
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
-
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+## Non-Goals (Unless Explicitly Planned)
+- Persistence (AOF/RDB), replication, cluster, Lua, ACL, TLS.
+- Production-grade performance tuning and hardening.
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
+- This constitution is the top-level guidance for repo changes.
+- Amendments should include: rationale, affected behaviors, and how to verify (tests/commands).
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
-
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2025-12-18 | **Last Amended**: 2025-12-18

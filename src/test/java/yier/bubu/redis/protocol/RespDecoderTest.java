@@ -100,7 +100,7 @@ public class RespDecoderTest {
 
     @Test
     public void decodeDoesNotOverflowWhenBulkLengthIsHugeButIncomplete() {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
+        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder(Integer.MAX_VALUE, 1024, 64, 1024));
         // The decoder should treat this as an incomplete frame and wait for more bytes,
         // not overflow its length checks or attempt to allocate a huge byte array.
         Assert.assertFalse(ch.writeInbound(Unpooled.copiedBuffer("$2147483647\r\n", StandardCharsets.US_ASCII)));
@@ -128,12 +128,93 @@ public class RespDecoderTest {
 
     @Test
     public void decodeDoesNotOverflowWhenArrayLengthIsHugeButIncomplete() {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
+        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder(1024, Integer.MAX_VALUE, 64, 1024));
         // The decoder should treat this as an incomplete frame and wait for more bytes,
         // not attempt to pre-allocate an enormous ArrayList.
         Assert.assertFalse(ch.writeInbound(Unpooled.copiedBuffer("*2147483647\r\n", StandardCharsets.US_ASCII)));
         Assert.assertNull(ch.readInbound());
         ch.finishAndReleaseAll();
+    }
+
+    @Test
+    public void decodeRejectsBulkStringExceedingMaxBulkBytes() {
+        RespDecoder decoder = new RespDecoder(3, 1024, 64, 1024);
+        EmbeddedChannel ch = new EmbeddedChannel(decoder);
+        try {
+            ch.writeInbound(Unpooled.copiedBuffer("$4\r\nabcd\r\n", StandardCharsets.US_ASCII));
+            Assert.fail("Expected IllegalArgumentException");
+        } catch (io.netty.handler.codec.DecoderException e) {
+            Throwable cause = unwrapDecoderCause(e);
+            Assert.assertTrue(cause instanceof IllegalArgumentException);
+            Assert.assertTrue(cause.getMessage().contains("bulk length too large"));
+        } finally {
+            try {
+                ch.finishAndReleaseAll();
+            } catch (Exception ignored) {
+                // EmbeddedChannel may rethrow stored decoder exceptions on finish/close.
+            }
+        }
+    }
+
+    @Test
+    public void decodeRejectsArrayExceedingMaxArrayLen() {
+        RespDecoder decoder = new RespDecoder(1024, 2, 64, 1024);
+        EmbeddedChannel ch = new EmbeddedChannel(decoder);
+        try {
+            ch.writeInbound(Unpooled.copiedBuffer("*3\r\n", StandardCharsets.US_ASCII));
+            Assert.fail("Expected IllegalArgumentException");
+        } catch (io.netty.handler.codec.DecoderException e) {
+            Throwable cause = unwrapDecoderCause(e);
+            Assert.assertTrue(cause instanceof IllegalArgumentException);
+            Assert.assertTrue(cause.getMessage().contains("array length too large"));
+        } finally {
+            try {
+                ch.finishAndReleaseAll();
+            } catch (Exception ignored) {
+                // EmbeddedChannel may rethrow stored decoder exceptions on finish/close.
+            }
+        }
+    }
+
+    @Test
+    public void decodeRejectsNestedArraysExceedingMaxDepth() {
+        RespDecoder decoder = new RespDecoder(1024, 1024, 2, 1024);
+        EmbeddedChannel ch = new EmbeddedChannel(decoder);
+        try {
+            ch.writeInbound(Unpooled.copiedBuffer("*1\r\n*1\r\n*", StandardCharsets.US_ASCII));
+            Assert.fail("Expected IllegalArgumentException");
+        } catch (io.netty.handler.codec.DecoderException e) {
+            Throwable cause = unwrapDecoderCause(e);
+            Assert.assertTrue(cause instanceof IllegalArgumentException);
+            Assert.assertTrue(cause.getMessage().contains("nested arrays too deep"));
+        } finally {
+            try {
+                ch.finishAndReleaseAll();
+            } catch (Exception ignored) {
+                // EmbeddedChannel may rethrow stored decoder exceptions on finish/close.
+            }
+        }
+    }
+
+    @Test
+    public void decodeRejectsLineExceedingMaxLineBytes() {
+        RespDecoder decoder = new RespDecoder(1024, 1024, 64, 4);
+        EmbeddedChannel ch = new EmbeddedChannel(decoder);
+        try {
+            // A line without CRLF that exceeds maxLineBytes + 2 should be rejected.
+            ch.writeInbound(Unpooled.copiedBuffer("+aaaaaaa", StandardCharsets.US_ASCII));
+            Assert.fail("Expected IllegalArgumentException");
+        } catch (io.netty.handler.codec.DecoderException e) {
+            Throwable cause = unwrapDecoderCause(e);
+            Assert.assertTrue(cause instanceof IllegalArgumentException);
+            Assert.assertTrue(cause.getMessage().contains("line too long"));
+        } finally {
+            try {
+                ch.finishAndReleaseAll();
+            } catch (Exception ignored) {
+                // EmbeddedChannel may rethrow stored decoder exceptions on finish/close.
+            }
+        }
     }
 
     @Test
