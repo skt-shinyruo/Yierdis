@@ -16,11 +16,33 @@ public final class RespDecoder extends ByteToMessageDecoder {
     private static final byte CR = '\r';
     private static final byte LF = '\n';
 
+    // Hard upper bounds for user-controlled inputs (DoS protection).
+    private static final int DEFAULT_MAX_BULK_BYTES = 64 * 1024 * 1024; // 64 MiB
+    private static final int DEFAULT_MAX_ARRAY_LEN = 1024;
+    private static final int DEFAULT_MAX_NESTING_DEPTH = 64;
+    private static final int DEFAULT_MAX_LINE_BYTES = 1024;
+
+    private final int maxBulkBytes;
+    private final int maxArrayLen;
+    private final int maxNestingDepth;
+    private final int maxLineBytes;
+
+    public RespDecoder() {
+        this(DEFAULT_MAX_BULK_BYTES, DEFAULT_MAX_ARRAY_LEN, DEFAULT_MAX_NESTING_DEPTH, DEFAULT_MAX_LINE_BYTES);
+    }
+
+    RespDecoder(int maxBulkBytes, int maxArrayLen, int maxNestingDepth, int maxLineBytes) {
+        this.maxBulkBytes = requirePositive(maxBulkBytes, "maxBulkBytes");
+        this.maxArrayLen = requirePositive(maxArrayLen, "maxArrayLen");
+        this.maxNestingDepth = requirePositive(maxNestingDepth, "maxNestingDepth");
+        this.maxLineBytes = requirePositive(maxLineBytes, "maxLineBytes");
+    }
+
     @Override
     protected void decode(io.netty.channel.ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
         for (; ; ) {
             int startIdx = in.readerIndex();
-            RespObject obj = tryDecodeOne(in);
+            RespObject obj = tryDecodeOne(in, 0);
             if (obj == null) {
                 in.readerIndex(startIdx);
                 return;
@@ -29,7 +51,7 @@ public final class RespDecoder extends ByteToMessageDecoder {
         }
     }
 
-    private RespObject tryDecodeOne(ByteBuf in) {
+    private RespObject tryDecodeOne(ByteBuf in, int nestingDepth) {
         int startIdx = in.readerIndex();
         if (!in.isReadable()) {
             return null;
@@ -74,6 +96,9 @@ public final class RespDecoder extends ByteToMessageDecoder {
                 if (len < -1) {
                     throw new IllegalArgumentException("Protocol error: invalid bulk length");
                 }
+                if (len > maxBulkBytes) {
+                    throw new IllegalArgumentException("Protocol error: bulk length too large");
+                }
                 if (in.readableBytes() < (long) len + 2) {
                     in.readerIndex(startIdx);
                     return null;
@@ -86,6 +111,9 @@ public final class RespDecoder extends ByteToMessageDecoder {
                 return RespBulkString.ofBytes(data);
             }
             case '*': {
+                if (nestingDepth >= maxNestingDepth) {
+                    throw new IllegalArgumentException("Protocol error: nested arrays too deep");
+                }
                 String line = readLine(in);
                 if (line == null) {
                     in.readerIndex(startIdx);
@@ -98,9 +126,12 @@ public final class RespDecoder extends ByteToMessageDecoder {
                 if (count < -1) {
                     throw new IllegalArgumentException("Protocol error: invalid array length");
                 }
+                if (count > maxArrayLen) {
+                    throw new IllegalArgumentException("Protocol error: array length too large");
+                }
                 List<RespObject> items = new ArrayList<>(Math.min(count, 16));
                 for (int i = 0; i < count; i++) {
-                    RespObject item = tryDecodeOne(in);
+                    RespObject item = tryDecodeOne(in, nestingDepth + 1);
                     if (item == null) {
                         in.readerIndex(startIdx);
                         return null;
@@ -117,14 +148,20 @@ public final class RespDecoder extends ByteToMessageDecoder {
     /**
      * Reads a RESP line (up to CRLF) and returns it without CRLF.
      */
-    private static String readLine(ByteBuf in) {
+    private String readLine(ByteBuf in) {
         int start = in.readerIndex();
-        int end = indexOfCrlf(in);
+        int end = indexOfCrlf(in, maxLineBytes);
         if (end < 0) {
+            if (in.writerIndex() - start > maxLineBytes + 2) {
+                throw new IllegalArgumentException("Protocol error: line too long");
+            }
             return null;
         }
 
         int len = end - start;
+        if (len > maxLineBytes) {
+            throw new IllegalArgumentException("Protocol error: line too long");
+        }
         byte[] buf = new byte[len];
         in.readBytes(buf);
         // consume CRLF
@@ -132,12 +169,22 @@ public final class RespDecoder extends ByteToMessageDecoder {
         return new String(buf, StandardCharsets.UTF_8);
     }
 
-    private static int indexOfCrlf(ByteBuf in) {
-        for (int i = in.readerIndex(); i < in.writerIndex() - 1; i++) {
+    private static int indexOfCrlf(ByteBuf in, int maxLineBytes) {
+        int start = in.readerIndex();
+        int maxCrlfStart = start + maxLineBytes;
+        int scanLimit = Math.min(in.writerIndex() - 1, maxCrlfStart + 1);
+        for (int i = start; i < scanLimit; i++) {
             if (in.getByte(i) == CR && in.getByte(i + 1) == LF) {
                 return i;
             }
         }
         return -1;
+    }
+
+    private static int requirePositive(int value, String name) {
+        if (value <= 0) {
+            throw new IllegalArgumentException(name + " must be positive");
+        }
+        return value;
     }
 }

@@ -54,6 +54,48 @@ public class SetCommandTest {
     }
 
     @Test
+    public void setMembersAreBinarySafeEvenWhenIntegerLike() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        byte[] key = b("s");
+
+        RespInteger added = (RespInteger) cp.execute(Arrays.asList(
+                b("SADD"),
+                key,
+                b("1"),
+                b("01"),
+                b("+1"),
+                b("0"),
+                b("-0")
+        ));
+        Assert.assertEquals(5, added.value());
+
+        RespInteger card = (RespInteger) cp.execute(Arrays.asList(b("SCARD"), key));
+        Assert.assertEquals(5, card.value());
+
+        Assert.assertEquals(1, ((RespInteger) cp.execute(Arrays.asList(b("SISMEMBER"), key, b("1")))).value());
+        Assert.assertEquals(1, ((RespInteger) cp.execute(Arrays.asList(b("SISMEMBER"), key, b("01")))).value());
+        Assert.assertEquals(1, ((RespInteger) cp.execute(Arrays.asList(b("SISMEMBER"), key, b("+1")))).value());
+        Assert.assertEquals(1, ((RespInteger) cp.execute(Arrays.asList(b("SISMEMBER"), key, b("0")))).value());
+        Assert.assertEquals(1, ((RespInteger) cp.execute(Arrays.asList(b("SISMEMBER"), key, b("-0")))).value());
+
+        RespInteger removed = (RespInteger) cp.execute(Arrays.asList(b("SREM"), key, b("01")));
+        Assert.assertEquals(1, removed.value());
+
+        RespInteger card2 = (RespInteger) cp.execute(Arrays.asList(b("SCARD"), key));
+        Assert.assertEquals(4, card2.value());
+
+        Assert.assertEquals(1, ((RespInteger) cp.execute(Arrays.asList(b("SISMEMBER"), key, b("1")))).value());
+        Assert.assertEquals(0, ((RespInteger) cp.execute(Arrays.asList(b("SISMEMBER"), key, b("01")))).value());
+        Assert.assertEquals(1, ((RespInteger) cp.execute(Arrays.asList(b("SISMEMBER"), key, b("+1")))).value());
+        Assert.assertEquals(1, ((RespInteger) cp.execute(Arrays.asList(b("SISMEMBER"), key, b("0")))).value());
+        Assert.assertEquals(1, ((RespInteger) cp.execute(Arrays.asList(b("SISMEMBER"), key, b("-0")))).value());
+
+        db.shutdown();
+    }
+
+    @Test
     public void sremDeletesKeyWhenEmpty() {
         YierdisDb db = new YierdisDb();
         CommandProcessor cp = new CommandProcessor(db);

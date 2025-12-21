@@ -11,6 +11,7 @@ import org.junit.Assert;
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.Locale;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestBytes.cmd;
@@ -57,6 +58,18 @@ public class CommandProcessorTest {
         ));
         Assert.assertTrue(get2 instanceof RespBulkString);
         Assert.assertArrayEquals(new byte[]{0, (byte) 0xFF, 'a', '\n', 1, 2, 3}, ((RespBulkString) get2).data());
+
+        db.shutdown();
+    }
+
+    @Test
+    public void integerLikeStringsAreBinarySafe() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        assertBinarySafeRoundTrip(cp, b("k:01"), b("01"));
+        assertBinarySafeRoundTrip(cp, b("k:+1"), b("+1"));
+        assertBinarySafeRoundTrip(cp, b("k:-0"), b("-0"));
 
         db.shutdown();
     }
@@ -193,6 +206,30 @@ public class CommandProcessorTest {
     }
 
     @Test
+    public void commandParsingIsLocaleIndependent() {
+        Locale original = Locale.getDefault();
+        try {
+            Locale.setDefault(new Locale("tr", "TR"));
+
+            YierdisDb db = new YierdisDb();
+            CommandProcessor cp = new CommandProcessor(db);
+
+            RespObject pong = cp.execute(cmd("ping"));
+            Assert.assertTrue(pong instanceof RespSimpleString);
+            Assert.assertEquals("PONG", ((RespSimpleString) pong).value());
+
+            cp.execute(cmd("set", "a", "1"));
+            RespObject type = cp.execute(cmd("type", "a"));
+            Assert.assertTrue(type instanceof RespSimpleString);
+            Assert.assertEquals("string", ((RespSimpleString) type).value());
+
+            db.shutdown();
+        } finally {
+            Locale.setDefault(original);
+        }
+    }
+
+    @Test
     public void setNxReturnsNilWhenKeyExists() {
         YierdisDb db = new YierdisDb();
         CommandProcessor cp = new CommandProcessor(db);
@@ -216,6 +253,16 @@ public class CommandProcessorTest {
         Assert.assertTrue(((RespError) err).message().startsWith("WRONGTYPE"));
 
         db.shutdown();
+    }
+
+    private static void assertBinarySafeRoundTrip(CommandProcessor cp, byte[] key, byte[] value) {
+        Assert.assertTrue(cp.execute(Arrays.asList(b("SET"), key, value)) instanceof RespSimpleString);
+
+        RespBulkString get = (RespBulkString) cp.execute(Arrays.asList(b("GET"), key));
+        Assert.assertArrayEquals(value, get.data());
+
+        RespInteger len = (RespInteger) cp.execute(Arrays.asList(b("STRLEN"), key));
+        Assert.assertEquals(value.length, len.value());
     }
 
     private static boolean containsBytes(RespArray array, byte[] expected) {

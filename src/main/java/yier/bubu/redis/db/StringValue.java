@@ -26,7 +26,7 @@ final class StringValue implements YierdisValue {
             return;
         }
 
-        Long parsed = tryParseLongAscii(value, value.length);
+        Long parsed = tryParseLongForIntEncoding(value, value.length);
         if (parsed != null) {
             encoding = Encoding.INT;
             intValue = parsed;
@@ -100,7 +100,7 @@ final class StringValue implements YierdisValue {
             return;
         }
 
-        Long parsed = tryParseLong(value);
+        Long parsed = tryParseLongForIntEncoding(value);
         if (parsed != null) {
             encoding = Encoding.INT;
             intValue = parsed;
@@ -158,6 +158,19 @@ final class StringValue implements YierdisValue {
         }
     }
 
+    private static Long tryParseLongForIntEncoding(String s) {
+        Long parsed = tryParseLong(s);
+        if (parsed == null) {
+            return null;
+        }
+        // Only use INT encoding when the input is already the canonical decimal form.
+        // This preserves binary-safe semantics for values like "01", "+1", and "-0".
+        if (!Long.toString(parsed).equals(s)) {
+            return null;
+        }
+        return parsed;
+    }
+
     private static int longByteLength(long v) {
         if (v == Long.MIN_VALUE) {
             return 20;
@@ -209,12 +222,25 @@ final class StringValue implements YierdisValue {
         return negative ? result : -result;
     }
 
-    private static Long tryParseLongAscii(byte[] buf, int len) {
+    private static Long tryParseLongForIntEncoding(byte[] buf, int len) {
+        long parsed;
         try {
-            return parseLongAscii(buf, len);
+            parsed = parseLongAscii(buf, len);
         } catch (YierdisDb.YierdisCommandException e) {
             return null;
         }
+        // Only use INT encoding when the raw bytes are already the canonical decimal form.
+        // This keeps GET/STRLEN/etc binary-safe for values like "01", "+1", and "-0".
+        String canonical = Long.toString(parsed);
+        if (canonical.length() != len) {
+            return null;
+        }
+        for (int i = 0; i < len; i++) {
+            if ((byte) canonical.charAt(i) != buf[i]) {
+                return null;
+            }
+        }
+        return parsed;
     }
 
     private static long safeAdd(long a, long b) {
