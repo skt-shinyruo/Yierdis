@@ -1,9 +1,8 @@
 package yier.bubu.redis.db;
 
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.nio.charset.StandardCharsets;
 
 final class ZSetValue implements YierdisValue {
@@ -13,13 +12,18 @@ final class ZSetValue implements YierdisValue {
     private static final int LISTPACK_MAX_ENTRIES = 128;
     private static final int LISTPACK_MAX_ELEMENT_BYTES = 64;
 
-    private List<ListPackEntry> listpack = new ArrayList<>();
-    private Map<ByteArrayKey, ZSkipList.Node> byMember;
+    private PackedZSet listpack = new PackedZSet();
+    private ByteArrayHashMap<ZSkipList.Node> byMember;
     private ZSkipList byScore;
 
     @Override
     public ValueType type() {
         return ValueType.ZSET;
+    }
+
+    @Override
+    public ValueEncoding encoding() {
+        return listpack != null ? ValueEncoding.ZSET_PACKED : ValueEncoding.ZSET_SKIPLIST;
     }
 
     int size() {
@@ -62,7 +66,7 @@ final class ZSetValue implements YierdisValue {
 
         int removed = 0;
         for (byte[] m : members) {
-            ZSkipList.Node old = byMember.remove(new ByteArrayKey(m));
+            ZSkipList.Node old = byMember.remove(m);
             if (old == null) {
                 continue;
             }
@@ -98,9 +102,9 @@ final class ZSetValue implements YierdisValue {
         if (listpack != null) {
             int removed = 0;
             for (int i = listpack.size() - 1; i >= 0; i--) {
-                double s = listpack.get(i).score;
+                double s = listpack.scoreAt(i);
                 if (scoreInRange(s, min, minExclusive, max, maxExclusive)) {
-                    listpack.remove(i);
+                    listpack.removeAt(i);
                     removed++;
                 }
             }
@@ -111,7 +115,7 @@ final class ZSetValue implements YierdisValue {
         ZSkipList.Node node = firstNodeForMin(min, minExclusive);
         while (node != null && scoreInRange(node.score, min, minExclusive, max, maxExclusive)) {
             ZSkipList.Node next = node.forward[0];
-            byMember.remove(node.member);
+            byMember.remove(node.member.bytes());
             byScore.delete(node.score, node.member);
             removed++;
             node = next;
@@ -144,7 +148,7 @@ final class ZSetValue implements YierdisValue {
         if (listpack != null) {
             int removed = 0;
             for (long i = normalizedStop; i >= normalizedStart; i--) {
-                listpack.remove((int) i);
+                listpack.removeAt((int) i);
                 removed++;
             }
             return removed;
@@ -158,7 +162,7 @@ final class ZSetValue implements YierdisValue {
         ZSkipList.Node node = byScore.getElementByRank(startRank);
         for (int i = 0; i < remaining && node != null; i++) {
             ZSkipList.Node next = node.forward[0];
-            byMember.remove(node.member);
+            byMember.remove(node.member.bytes());
             byScore.delete(node.score, node.member);
             removed++;
             node = next;
@@ -250,12 +254,12 @@ final class ZSetValue implements YierdisValue {
         List<byte[]> out = new ArrayList<>(withScores ? expected * 2 : expected);
 
         for (int i = startIdx; i < size && remaining > 0; i++) {
-            ListPackEntry e = listpack.get(i);
-            if (!scoreInRange(e.score, min, minExclusive, max, maxExclusive)) {
+            double score = listpack.scoreAt(i);
+            if (!scoreInRange(score, min, minExclusive, max, maxExclusive)) {
                 if (max == Double.POSITIVE_INFINITY) {
                     continue;
                 }
-                if (e.score > max || (maxExclusive && Double.compare(e.score, max) == 0)) {
+                if (score > max || (maxExclusive && Double.compare(score, max) == 0)) {
                     break;
                 }
                 continue;
@@ -265,9 +269,9 @@ final class ZSetValue implements YierdisValue {
                 continue;
             }
 
-            out.add(e.member.bytes());
+            out.add(listpack.memberBytesAt(i));
             if (withScores) {
-                out.add(formatScoreBytes(e.score));
+                out.add(formatScoreBytes(score));
             }
             remaining--;
         }
@@ -300,14 +304,13 @@ final class ZSetValue implements YierdisValue {
         List<byte[]> out = new ArrayList<>(withScores ? expected * 2 : expected);
 
         for (int i = endIdx; i >= startIdx && remaining > 0; i--) {
-            ListPackEntry e = listpack.get(i);
             if (skipped > 0) {
                 skipped--;
                 continue;
             }
-            out.add(e.member.bytes());
+            out.add(listpack.memberBytesAt(i));
             if (withScores) {
-                out.add(formatScoreBytes(e.score));
+                out.add(formatScoreBytes(listpack.scoreAt(i)));
             }
             remaining--;
         }
@@ -319,7 +322,7 @@ final class ZSetValue implements YierdisValue {
         int high = listpack.size();
         while (low < high) {
             int mid = (low + high) >>> 1;
-            double s = listpack.get(mid).score;
+            double s = listpack.scoreAt(mid);
             if (s < score || (exclusive && Double.compare(s, score) == 0)) {
                 low = mid + 1;
             } else {
@@ -334,7 +337,7 @@ final class ZSetValue implements YierdisValue {
         int high = listpack.size();
         while (low < high) {
             int mid = (low + high) >>> 1;
-            double s = listpack.get(mid).score;
+            double s = listpack.scoreAt(mid);
             if (Double.compare(s, score) > 0 || (exclusive && Double.compare(s, score) == 0)) {
                 high = mid;
             } else {
@@ -485,7 +488,7 @@ final class ZSetValue implements YierdisValue {
             List<byte[]> out = new ArrayList<>(remaining);
             for (long i = normalizedStart; i <= normalizedStop; i++) {
                 int idx = !reverse ? (int) i : (size - 1 - (int) i);
-                out.add(listpack.get(idx).member.bytes());
+                out.add(listpack.memberBytesAt(idx));
             }
             return out;
         }
@@ -493,9 +496,8 @@ final class ZSetValue implements YierdisValue {
         List<byte[]> out = new ArrayList<>(remaining * 2);
         for (long i = normalizedStart; i <= normalizedStop; i++) {
             int idx = !reverse ? (int) i : (size - 1 - (int) i);
-            ListPackEntry e = listpack.get(idx);
-            out.add(e.member.bytes());
-            out.add(formatScoreBytes(e.score));
+            out.add(listpack.memberBytesAt(idx));
+            out.add(formatScoreBytes(listpack.scoreAt(idx)));
         }
         return out;
     }
@@ -529,11 +531,11 @@ final class ZSetValue implements YierdisValue {
 
     private int skiplistZadd(double score, ByteArrayKey member) {
         if (byMember == null) {
-            byMember = new HashMap<>();
+            byMember = new ByteArrayHashMap<>();
             byScore = new ZSkipList();
         }
 
-        ZSkipList.Node old = byMember.get(member);
+        ZSkipList.Node old = byMember.get(member.bytes());
         if (old != null) {
             if (Double.compare(old.score, score) == 0) {
                 return 0;
@@ -542,7 +544,7 @@ final class ZSetValue implements YierdisValue {
         }
 
         ZSkipList.Node next = byScore.insert(score, member);
-        byMember.put(member, next);
+        byMember.put(member.bytes(), next);
         return old == null ? 1 : 0;
     }
 
@@ -550,12 +552,12 @@ final class ZSetValue implements YierdisValue {
         ByteArrayKey member = new ByteArrayKey(memberBytes);
         int idx = indexOfMember(member);
         if (idx >= 0) {
-            ListPackEntry old = listpack.get(idx);
-            if (Double.compare(old.score, score) == 0) {
+            double oldScore = listpack.scoreAt(idx);
+            if (Double.compare(oldScore, score) == 0) {
                 return 0;
             }
-            listpack.remove(idx);
-            insertSorted(new ListPackEntry(member, score));
+            listpack.removeAt(idx);
+            insertSorted(member, score);
             return 0;
         }
 
@@ -564,7 +566,7 @@ final class ZSetValue implements YierdisValue {
             return skiplistZadd(score, member);
         }
 
-        insertSorted(new ListPackEntry(member, score));
+        insertSorted(member, score);
         return 1;
     }
 
@@ -574,66 +576,247 @@ final class ZSetValue implements YierdisValue {
         if (idx < 0) {
             return 0;
         }
-        listpack.remove(idx);
+        listpack.removeAt(idx);
         return 1;
     }
 
     private int indexOfMember(ByteArrayKey member) {
-        for (int i = 0; i < listpack.size(); i++) {
-            if (listpack.get(i).member.equals(member)) {
-                return i;
-            }
-        }
-        return -1;
+        return listpack.indexOfMember(member);
     }
 
-    private void insertSorted(ListPackEntry entry) {
+    private void insertSorted(ByteArrayKey member, double score) {
         int low = 0;
         int high = listpack.size();
         while (low < high) {
             int mid = (low + high) >>> 1;
-            ListPackEntry cur = listpack.get(mid);
-            if (lessThan(cur, entry.score, entry.member)) {
+            if (lessThan(mid, score, member)) {
                 low = mid + 1;
             } else {
                 high = mid;
             }
         }
-        listpack.add(low, entry);
+        listpack.insertAt(low, score, member.bytes());
     }
 
-    private static boolean lessThan(ListPackEntry node, double score, ByteArrayKey member) {
-        if (Double.compare(node.score, score) < 0) {
+    private boolean lessThan(int entryIndex, double score, ByteArrayKey member) {
+        double nodeScore = listpack.scoreAt(entryIndex);
+        if (Double.compare(nodeScore, score) < 0) {
             return true;
         }
-        if (Double.compare(node.score, score) > 0) {
+        if (Double.compare(nodeScore, score) > 0) {
             return false;
         }
-        return node.member.compareTo(member) < 0;
+        return listpack.compareMemberAt(entryIndex, member) < 0;
     }
 
     private void convertToSkipList() {
         if (listpack == null) {
             return;
         }
-        Map<ByteArrayKey, ZSkipList.Node> outByMember = new HashMap<>(Math.max(16, listpack.size() * 2));
+        int size = listpack.size();
+        ByteArrayHashMap<ZSkipList.Node> outByMember = new ByteArrayHashMap<>(Math.max(16, size));
         ZSkipList outByScore = new ZSkipList();
-        for (ListPackEntry e : listpack) {
-            ZSkipList.Node n = outByScore.insert(e.score, e.member);
-            outByMember.put(e.member, n);
+        for (int i = 0; i < size; i++) {
+            double score = listpack.scoreAt(i);
+            ByteArrayKey member = new ByteArrayKey(listpack.memberBytesAt(i));
+            ZSkipList.Node n = outByScore.insert(score, member);
+            outByMember.put(member.bytes(), n);
         }
         this.byMember = outByMember;
         this.byScore = outByScore;
         this.listpack = null;
     }
 
-    private static final class ListPackEntry {
-        final ByteArrayKey member;
-        final double score;
+    private static final class PackedZSet {
+        private byte[] blob = new byte[0];
+        private int[] offsets = new int[0];
+        private int size = 0;
 
-        private ListPackEntry(ByteArrayKey member, double score) {
-            this.member = member;
-            this.score = score;
+        int size() {
+            return size;
+        }
+
+        double scoreAt(int index) {
+            if (index < 0 || index >= size) {
+                throw new IndexOutOfBoundsException();
+            }
+            int entryStart = offsets[index];
+            long bits = readLongBE(blob, entryStart);
+            return Double.longBitsToDouble(bits);
+        }
+
+        byte[] memberBytesAt(int index) {
+            if (index < 0 || index >= size) {
+                throw new IndexOutOfBoundsException();
+            }
+            int entryStart = offsets[index];
+            int p = entryStart + Long.BYTES;
+            long r = readVarint(blob, p);
+            int memberLen = (int) r;
+            p = (int) (r >>> 32);
+            return Arrays.copyOfRange(blob, p, p + memberLen);
+        }
+
+        int compareMemberAt(int index, ByteArrayKey member) {
+            if (index < 0 || index >= size) {
+                throw new IndexOutOfBoundsException();
+            }
+            int entryStart = offsets[index];
+            int p = entryStart + Long.BYTES;
+            long r = readVarint(blob, p);
+            int memberLen = (int) r;
+            p = (int) (r >>> 32);
+            return compareLex(blob, p, memberLen, member.bytes());
+        }
+
+        int indexOfMember(ByteArrayKey member) {
+            byte[] target = member.bytes();
+            for (int i = 0; i < size; i++) {
+                int entryStart = offsets[i];
+                int p = entryStart + Long.BYTES;
+                long r = readVarint(blob, p);
+                int memberLen = (int) r;
+                p = (int) (r >>> 32);
+                if (memberLen != target.length) {
+                    continue;
+                }
+                if (bytesEqual(blob, p, memberLen, target)) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        void insertAt(int index, double score, byte[] memberBytes) {
+            if (index < 0 || index > size) {
+                throw new IndexOutOfBoundsException();
+            }
+            int memberLen = memberBytes.length;
+            int encodedLen = Long.BYTES + varintLength(memberLen) + memberLen;
+
+            int insertPos = index == size ? blob.length : offsets[index];
+            byte[] next = new byte[blob.length + encodedLen];
+            System.arraycopy(blob, 0, next, 0, insertPos);
+
+            int w = insertPos;
+            writeLongBE(next, w, Double.doubleToLongBits(score));
+            w += Long.BYTES;
+            w = writeVarint(next, w, memberLen);
+            System.arraycopy(memberBytes, 0, next, w, memberLen);
+
+            System.arraycopy(blob, insertPos, next, insertPos + encodedLen, blob.length - insertPos);
+
+            int[] nextOffsets = new int[size + 1];
+            System.arraycopy(offsets, 0, nextOffsets, 0, index);
+            nextOffsets[index] = insertPos;
+            for (int i = index; i < size; i++) {
+                nextOffsets[i + 1] = offsets[i] + encodedLen;
+            }
+
+            blob = next;
+            offsets = nextOffsets;
+            size++;
+        }
+
+        void removeAt(int index) {
+            if (index < 0 || index >= size) {
+                throw new IndexOutOfBoundsException();
+            }
+            int start = offsets[index];
+            int end = index + 1 < size ? offsets[index + 1] : blob.length;
+            int removedLen = end - start;
+
+            byte[] next = new byte[blob.length - removedLen];
+            System.arraycopy(blob, 0, next, 0, start);
+            System.arraycopy(blob, end, next, start, blob.length - end);
+
+            int[] nextOffsets = new int[size - 1];
+            System.arraycopy(offsets, 0, nextOffsets, 0, index);
+            for (int i = index + 1; i < size; i++) {
+                nextOffsets[i - 1] = offsets[i] - removedLen;
+            }
+
+            blob = next;
+            offsets = nextOffsets;
+            size--;
+        }
+
+        private static boolean bytesEqual(byte[] buf, int bufOff, int len, byte[] other) {
+            for (int i = 0; i < len; i++) {
+                if (buf[bufOff + i] != other[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static int compareLex(byte[] buf, int bufOff, int len, byte[] other) {
+            int min = Math.min(len, other.length);
+            for (int i = 0; i < min; i++) {
+                int av = buf[bufOff + i] & 0xFF;
+                int bv = other[i] & 0xFF;
+                if (av != bv) {
+                    return Integer.compare(av, bv);
+                }
+            }
+            return Integer.compare(len, other.length);
+        }
+
+        private static int varintLength(int v) {
+            int len = 1;
+            while ((v & ~0x7F) != 0) {
+                v >>>= 7;
+                len++;
+            }
+            return len;
+        }
+
+        private static int writeVarint(byte[] out, int pos, int v) {
+            while ((v & ~0x7F) != 0) {
+                out[pos++] = (byte) ((v & 0x7F) | 0x80);
+                v >>>= 7;
+            }
+            out[pos++] = (byte) v;
+            return pos;
+        }
+
+        private static long readVarint(byte[] buf, int pos) {
+            int result = 0;
+            int shift = 0;
+            while (true) {
+                int b = buf[pos++] & 0xFF;
+                result |= (b & 0x7F) << shift;
+                if ((b & 0x80) == 0) {
+                    break;
+                }
+                shift += 7;
+                if (shift > 28) {
+                    throw new IllegalStateException("varint too long");
+                }
+            }
+            return (((long) pos) << 32) | (result & 0xffffffffL);
+        }
+
+        private static long readLongBE(byte[] buf, int pos) {
+            return ((long) (buf[pos] & 0xFF) << 56)
+                    | ((long) (buf[pos + 1] & 0xFF) << 48)
+                    | ((long) (buf[pos + 2] & 0xFF) << 40)
+                    | ((long) (buf[pos + 3] & 0xFF) << 32)
+                    | ((long) (buf[pos + 4] & 0xFF) << 24)
+                    | ((long) (buf[pos + 5] & 0xFF) << 16)
+                    | ((long) (buf[pos + 6] & 0xFF) << 8)
+                    | ((long) (buf[pos + 7] & 0xFF));
+        }
+
+        private static void writeLongBE(byte[] out, int pos, long v) {
+            out[pos] = (byte) (v >>> 56);
+            out[pos + 1] = (byte) (v >>> 48);
+            out[pos + 2] = (byte) (v >>> 40);
+            out[pos + 3] = (byte) (v >>> 32);
+            out[pos + 4] = (byte) (v >>> 24);
+            out[pos + 5] = (byte) (v >>> 16);
+            out[pos + 6] = (byte) (v >>> 8);
+            out[pos + 7] = (byte) v;
         }
     }
 

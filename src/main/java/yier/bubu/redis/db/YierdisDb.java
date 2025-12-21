@@ -9,7 +9,7 @@ import java.util.concurrent.TimeUnit;
 public final class YierdisDb {
     private static final long NO_EXPIRE = -1L;
 
-    private final YierdisDict<Entry> store = new YierdisDict<>();
+    private final ByteArrayKeyspace<YierdisObject> store = new ByteArrayKeyspace<>();
 
     public YierdisDb() {
         // Scheduling (if any) is done by the Netty event loop in YierdisServer, not by a dedicated thread.
@@ -23,19 +23,22 @@ public final class YierdisDb {
         store.clear();
     }
 
+    public int size() {
+        return store.size();
+    }
+
     public long del(Collection<byte[]> keys) {
         long now = System.currentTimeMillis();
         long removed = 0;
         for (byte[] keyBytes : keys) {
-            ByteArrayKey key = new ByteArrayKey(keyBytes);
-            Entry e = store.get(key);
+            YierdisObject e = store.get(keyBytes);
             if (e == null) {
                 continue;
             }
-            if (removeIfExpired(key, e, now)) {
+            if (removeIfExpired(keyBytes, e, now)) {
                 continue;
             }
-            if (store.remove(key, e)) {
+            if (store.remove(keyBytes, e)) {
                 removed++;
             }
         }
@@ -45,7 +48,7 @@ public final class YierdisDb {
     public long exists(Collection<byte[]> keys) {
         long count = 0;
         for (byte[] keyBytes : keys) {
-            if (getEntryIfNotExpired(new ByteArrayKey(keyBytes)) != null) {
+            if (getObjectIfNotExpired(keyBytes) != null) {
                 count++;
             }
         }
@@ -53,17 +56,17 @@ public final class YierdisDb {
     }
 
     public ValueType typeOf(byte[] keyBytes) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return null;
         }
         synchronized (e) {
-            return e.value.type();
+            return e.type;
         }
     }
 
     public boolean expire(byte[] keyBytes, long seconds) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return false;
         }
@@ -75,13 +78,12 @@ public final class YierdisDb {
     }
 
     public long ttlSeconds(byte[] keyBytes) {
-        ByteArrayKey key = new ByteArrayKey(keyBytes);
-        Entry e = store.get(key);
+        YierdisObject e = store.get(keyBytes);
         if (e == null) {
             return -2;
         }
         long now = System.currentTimeMillis();
-        if (removeIfExpired(key, e, now)) {
+        if (removeIfExpired(keyBytes, e, now)) {
             return -2;
         }
 
@@ -100,16 +102,16 @@ public final class YierdisDb {
         }
         long now = System.currentTimeMillis();
         List<byte[]> out = new ArrayList<>();
-        List<ByteArrayKey> expiredKeys = new ArrayList<>();
-        List<Entry> expiredValues = new ArrayList<>();
+        List<byte[]> expiredKeys = new ArrayList<>();
+        List<YierdisObject> expiredValues = new ArrayList<>();
         store.forEach((k, e) -> {
             if (isEntryExpired(e, now)) {
                 expiredKeys.add(k);
                 expiredValues.add(e);
                 return;
             }
-            if (globMatches(globPattern, k.bytes())) {
-                out.add(k.bytes());
+            if (globMatches(globPattern, k)) {
+                out.add(k);
             }
         });
         for (int i = 0; i < expiredKeys.size(); i++) {
@@ -123,7 +125,7 @@ public final class YierdisDb {
         long expireAt = expireOption == null ? NO_EXPIRE : expireOption.toExpireAtMillis(now);
 
         final boolean[] didSet = new boolean[]{false};
-        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.compute(keyBytes, (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
@@ -133,59 +135,63 @@ public final class YierdisDb {
             if (mode == SetMode.XX && old == null) {
                 return null;
             }
-
-            Entry next = new Entry(new StringValue(value), expireAt);
-            didSet[0] = true;
-            return next;
+            if (old == null) {
+                didSet[0] = true;
+                return YierdisObject.newString(value, expireAt);
+            }
+            synchronized (old) {
+                old.overwriteWithString(value, expireAt);
+                didSet[0] = true;
+                return old;
+            }
         });
         return didSet[0];
     }
 
     public byte[] getStringBytes(byte[] keyBytes) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return null;
         }
         synchronized (e) {
-            if (!(e.value instanceof StringValue)) {
+            if (e.type != ValueType.STRING) {
                 throw new WrongTypeException();
             }
-            return ((StringValue) e.value).toBytes();
+            return e.stringBytesView();
         }
     }
 
     public int strlen(byte[] keyBytes) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return 0;
         }
         synchronized (e) {
-            if (!(e.value instanceof StringValue)) {
+            if (e.type != ValueType.STRING) {
                 throw new WrongTypeException();
             }
-            return ((StringValue) e.value).byteLength();
+            return e.stringByteLength();
         }
     }
 
     public int append(byte[] keyBytes, byte[] appendValue) {
         long now = System.currentTimeMillis();
         final int[] newLen = new int[]{0};
-        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.compute(keyBytes, (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
             if (old == null) {
-                StringValue v = new StringValue(appendValue);
-                newLen[0] = v.byteLength();
-                return new Entry(v, NO_EXPIRE);
+                YierdisObject o = YierdisObject.newString(appendValue, NO_EXPIRE);
+                newLen[0] = o.stringByteLength();
+                return o;
             }
 
             synchronized (old) {
-                if (!(old.value instanceof StringValue)) {
+                if (old.type != ValueType.STRING) {
                     throw new WrongTypeException();
                 }
-                StringValue sv = (StringValue) old.value;
-                newLen[0] = sv.append(appendValue);
+                newLen[0] = old.stringAppend(appendValue);
                 return old;
             }
         });
@@ -195,22 +201,21 @@ public final class YierdisDb {
     public long incrBy(byte[] keyBytes, long delta) {
         long now = System.currentTimeMillis();
         final long[] result = new long[]{0L};
-        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.compute(keyBytes, (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
             if (old == null) {
                 long next = delta;
                 result[0] = next;
-                return new Entry(new StringValue(Long.toString(next)), NO_EXPIRE);
+                return YierdisObject.newStringInt(next, NO_EXPIRE);
             }
 
             synchronized (old) {
-                if (!(old.value instanceof StringValue)) {
+                if (old.type != ValueType.STRING) {
                     throw new WrongTypeException();
                 }
-                StringValue sv = (StringValue) old.value;
-                result[0] = sv.incrBy(delta);
+                result[0] = old.stringIncrBy(delta);
                 return old;
             }
         });
@@ -228,7 +233,7 @@ public final class YierdisDb {
     private int pushInternal(byte[] keyBytes, List<byte[]> values, boolean left) {
         long now = System.currentTimeMillis();
         final int[] len = new int[]{0};
-        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.compute(keyBytes, (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
@@ -240,20 +245,21 @@ public final class YierdisDb {
                     lv.rpushAll(values);
                 }
                 len[0] = lv.size();
-                return new Entry(lv, NO_EXPIRE);
+                return YierdisObject.newList(lv, NO_EXPIRE);
             }
 
             synchronized (old) {
-                if (!(old.value instanceof ListValue)) {
+                if (old.type != ValueType.LIST) {
                     throw new WrongTypeException();
                 }
-                ListValue lv = (ListValue) old.value;
+                ListValue lv = (ListValue) old.payload;
                 if (left) {
                     lv.lpushAll(values);
                 } else {
                     lv.rpushAll(values);
                 }
                 len[0] = lv.size();
+                old.refreshCompositeEncodingFromPayload();
                 return old;
             }
         });
@@ -261,15 +267,15 @@ public final class YierdisDb {
     }
 
     public List<byte[]> lrange(byte[] keyBytes, int start, int stop) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return new ArrayList<>();
         }
         synchronized (e) {
-            if (!(e.value instanceof ListValue)) {
+            if (e.type != ValueType.LIST) {
                 throw new WrongTypeException();
             }
-            return ((ListValue) e.value).range(start, stop);
+            return ((ListValue) e.payload).range(start, stop);
         }
     }
 
@@ -287,20 +293,21 @@ public final class YierdisDb {
         }
         long now = System.currentTimeMillis();
         final List<byte[]>[] popped = new List[]{null};
-        store.computeIfPresent(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.computeIfPresent(keyBytes, (k, old) -> {
             if (isEntryExpired(old, now)) {
                 popped[0] = new ArrayList<>();
                 return null;
             }
             synchronized (old) {
-                if (!(old.value instanceof ListValue)) {
+                if (old.type != ValueType.LIST) {
                     throw new WrongTypeException();
                 }
-                ListValue lv = (ListValue) old.value;
+                ListValue lv = (ListValue) old.payload;
                 popped[0] = left ? lv.lpop(count) : lv.rpop(count);
                 if (lv.size() == 0) {
                     return null;
                 }
+                old.refreshCompositeEncodingFromPayload();
                 return old;
             }
         });
@@ -313,20 +320,21 @@ public final class YierdisDb {
         }
         long now = System.currentTimeMillis();
         final int[] added = new int[]{0};
-        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.compute(keyBytes, (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
             if (old == null) {
                 HashValue hv = new HashValue();
                 added[0] = hv.hsetMany(fieldValuePairs);
-                return new Entry(hv, NO_EXPIRE);
+                return YierdisObject.newHash(hv, NO_EXPIRE);
             }
             synchronized (old) {
-                if (!(old.value instanceof HashValue)) {
+                if (old.type != ValueType.HASH) {
                     throw new WrongTypeException();
                 }
-                added[0] = ((HashValue) old.value).hsetMany(fieldValuePairs);
+                added[0] = ((HashValue) old.payload).hsetMany(fieldValuePairs);
+                old.refreshCompositeEncodingFromPayload();
                 return old;
             }
         });
@@ -334,60 +342,61 @@ public final class YierdisDb {
     }
 
     public byte[] hget(byte[] keyBytes, byte[] fieldBytes) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return null;
         }
         synchronized (e) {
-            if (!(e.value instanceof HashValue)) {
+            if (e.type != ValueType.HASH) {
                 throw new WrongTypeException();
             }
-            return ((HashValue) e.value).hget(fieldBytes);
+            return ((HashValue) e.payload).hget(fieldBytes);
         }
     }
 
     public List<byte[]> hgetall(byte[] keyBytes) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return new ArrayList<>();
         }
         synchronized (e) {
-            if (!(e.value instanceof HashValue)) {
+            if (e.type != ValueType.HASH) {
                 throw new WrongTypeException();
             }
-            return ((HashValue) e.value).hgetallPairs();
+            return ((HashValue) e.payload).hgetallPairs();
         }
     }
 
     public int hlen(byte[] keyBytes) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return 0;
         }
         synchronized (e) {
-            if (!(e.value instanceof HashValue)) {
+            if (e.type != ValueType.HASH) {
                 throw new WrongTypeException();
             }
-            return ((HashValue) e.value).size();
+            return ((HashValue) e.payload).size();
         }
     }
 
     public int hdel(byte[] keyBytes, List<byte[]> fields) {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
-        store.computeIfPresent(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.computeIfPresent(keyBytes, (k, old) -> {
             if (isEntryExpired(old, now)) {
                 return null;
             }
             synchronized (old) {
-                if (!(old.value instanceof HashValue)) {
+                if (old.type != ValueType.HASH) {
                     throw new WrongTypeException();
                 }
-                HashValue hv = (HashValue) old.value;
+                HashValue hv = (HashValue) old.payload;
                 removed[0] = hv.hdel(fields);
                 if (hv.size() == 0) {
                     return null;
                 }
+                old.refreshCompositeEncodingFromPayload();
                 return old;
             }
         });
@@ -397,20 +406,21 @@ public final class YierdisDb {
     public int sadd(byte[] keyBytes, List<byte[]> members) {
         long now = System.currentTimeMillis();
         final int[] added = new int[]{0};
-        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.compute(keyBytes, (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
             if (old == null) {
                 SetValue sv = new SetValue();
                 added[0] = sv.addAll(members);
-                return new Entry(sv, NO_EXPIRE);
+                return YierdisObject.newSet(sv, NO_EXPIRE);
             }
             synchronized (old) {
-                if (!(old.value instanceof SetValue)) {
+                if (old.type != ValueType.SET) {
                     throw new WrongTypeException();
                 }
-                added[0] = ((SetValue) old.value).addAll(members);
+                added[0] = ((SetValue) old.payload).addAll(members);
+                old.refreshCompositeEncodingFromPayload();
                 return old;
             }
         });
@@ -420,19 +430,20 @@ public final class YierdisDb {
     public int srem(byte[] keyBytes, List<byte[]> members) {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
-        store.computeIfPresent(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.computeIfPresent(keyBytes, (k, old) -> {
             if (isEntryExpired(old, now)) {
                 return null;
             }
             synchronized (old) {
-                if (!(old.value instanceof SetValue)) {
+                if (old.type != ValueType.SET) {
                     throw new WrongTypeException();
                 }
-                SetValue sv = (SetValue) old.value;
+                SetValue sv = (SetValue) old.payload;
                 removed[0] = sv.removeAll(members);
                 if (sv.size() == 0) {
                     return null;
                 }
+                old.refreshCompositeEncodingFromPayload();
                 return old;
             }
         });
@@ -440,41 +451,41 @@ public final class YierdisDb {
     }
 
     public List<byte[]> smembers(byte[] keyBytes) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return new ArrayList<>();
         }
         synchronized (e) {
-            if (!(e.value instanceof SetValue)) {
+            if (e.type != ValueType.SET) {
                 throw new WrongTypeException();
             }
-            return ((SetValue) e.value).members();
+            return ((SetValue) e.payload).members();
         }
     }
 
     public boolean sismember(byte[] keyBytes, byte[] memberBytes) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return false;
         }
         synchronized (e) {
-            if (!(e.value instanceof SetValue)) {
+            if (e.type != ValueType.SET) {
                 throw new WrongTypeException();
             }
-            return ((SetValue) e.value).contains(memberBytes);
+            return ((SetValue) e.payload).contains(memberBytes);
         }
     }
 
     public int scard(byte[] keyBytes) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return 0;
         }
         synchronized (e) {
-            if (!(e.value instanceof SetValue)) {
+            if (e.type != ValueType.SET) {
                 throw new WrongTypeException();
             }
-            return ((SetValue) e.value).size();
+            return ((SetValue) e.payload).size();
         }
     }
 
@@ -484,20 +495,21 @@ public final class YierdisDb {
         }
         long now = System.currentTimeMillis();
         final int[] added = new int[]{0};
-        store.compute(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.compute(keyBytes, (k, old) -> {
             if (old != null && isEntryExpired(old, now)) {
                 old = null;
             }
             if (old == null) {
                 ZSetValue zv = new ZSetValue();
                 added[0] = zv.zaddMany(scoreMemberPairs);
-                return new Entry(zv, NO_EXPIRE);
+                return YierdisObject.newZSet(zv, NO_EXPIRE);
             }
             synchronized (old) {
-                if (!(old.value instanceof ZSetValue)) {
+                if (old.type != ValueType.ZSET) {
                     throw new WrongTypeException();
                 }
-                added[0] = ((ZSetValue) old.value).zaddMany(scoreMemberPairs);
+                added[0] = ((ZSetValue) old.payload).zaddMany(scoreMemberPairs);
+                old.refreshCompositeEncodingFromPayload();
                 return old;
             }
         });
@@ -505,73 +517,74 @@ public final class YierdisDb {
     }
 
     public List<byte[]> zrange(byte[] keyBytes, long start, long stop, boolean withScores) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return new ArrayList<>();
         }
         synchronized (e) {
-            if (!(e.value instanceof ZSetValue)) {
+            if (e.type != ValueType.ZSET) {
                 throw new WrongTypeException();
             }
-            return ((ZSetValue) e.value).zrange(start, stop, withScores);
+            return ((ZSetValue) e.payload).zrange(start, stop, withScores);
         }
     }
 
     public List<byte[]> zrevrange(byte[] keyBytes, long start, long stop, boolean withScores) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return new ArrayList<>();
         }
         synchronized (e) {
-            if (!(e.value instanceof ZSetValue)) {
+            if (e.type != ValueType.ZSET) {
                 throw new WrongTypeException();
             }
-            return ((ZSetValue) e.value).zrevrange(start, stop, withScores);
+            return ((ZSetValue) e.payload).zrevrange(start, stop, withScores);
         }
     }
 
     public List<byte[]> zrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return new ArrayList<>();
         }
         synchronized (e) {
-            if (!(e.value instanceof ZSetValue)) {
+            if (e.type != ValueType.ZSET) {
                 throw new WrongTypeException();
             }
-            return ((ZSetValue) e.value).zrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            return ((ZSetValue) e.payload).zrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
         }
     }
 
     public List<byte[]> zrevrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        Entry e = getEntryIfNotExpired(new ByteArrayKey(keyBytes));
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
         if (e == null) {
             return new ArrayList<>();
         }
         synchronized (e) {
-            if (!(e.value instanceof ZSetValue)) {
+            if (e.type != ValueType.ZSET) {
                 throw new WrongTypeException();
             }
-            return ((ZSetValue) e.value).zrevrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            return ((ZSetValue) e.payload).zrevrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
         }
     }
 
     public int zrem(byte[] keyBytes, List<byte[]> members) {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
-        store.computeIfPresent(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.computeIfPresent(keyBytes, (k, old) -> {
             if (isEntryExpired(old, now)) {
                 return null;
             }
             synchronized (old) {
-                if (!(old.value instanceof ZSetValue)) {
+                if (old.type != ValueType.ZSET) {
                     throw new WrongTypeException();
                 }
-                ZSetValue zv = (ZSetValue) old.value;
+                ZSetValue zv = (ZSetValue) old.payload;
                 removed[0] = zv.zrem(members);
                 if (zv.size() == 0) {
                     return null;
                 }
+                old.refreshCompositeEncodingFromPayload();
                 return old;
             }
         });
@@ -581,19 +594,20 @@ public final class YierdisDb {
     public int zremrangeByRank(byte[] keyBytes, long start, long stop) {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
-        store.computeIfPresent(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.computeIfPresent(keyBytes, (k, old) -> {
             if (isEntryExpired(old, now)) {
                 return null;
             }
             synchronized (old) {
-                if (!(old.value instanceof ZSetValue)) {
+                if (old.type != ValueType.ZSET) {
                     throw new WrongTypeException();
                 }
-                ZSetValue zv = (ZSetValue) old.value;
+                ZSetValue zv = (ZSetValue) old.payload;
                 removed[0] = zv.zremrangeByRank(start, stop);
                 if (zv.size() == 0) {
                     return null;
                 }
+                old.refreshCompositeEncodingFromPayload();
                 return old;
             }
         });
@@ -603,19 +617,20 @@ public final class YierdisDb {
     public int zremrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive) {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
-        store.computeIfPresent(new ByteArrayKey(keyBytes), (k, old) -> {
+        store.computeIfPresent(keyBytes, (k, old) -> {
             if (isEntryExpired(old, now)) {
                 return null;
             }
             synchronized (old) {
-                if (!(old.value instanceof ZSetValue)) {
+                if (old.type != ValueType.ZSET) {
                     throw new WrongTypeException();
                 }
-                ZSetValue zv = (ZSetValue) old.value;
+                ZSetValue zv = (ZSetValue) old.payload;
                 removed[0] = zv.zremrangeByScore(min, minExclusive, max, maxExclusive);
                 if (zv.size() == 0) {
                     return null;
                 }
+                old.refreshCompositeEncodingFromPayload();
                 return old;
             }
         });
@@ -624,8 +639,8 @@ public final class YierdisDb {
 
     public void cleanupExpired() {
         long now = System.currentTimeMillis();
-        List<ByteArrayKey> expiredKeys = new ArrayList<>();
-        List<Entry> expiredValues = new ArrayList<>();
+        List<byte[]> expiredKeys = new ArrayList<>();
+        List<YierdisObject> expiredValues = new ArrayList<>();
         store.forEach((k, e) -> {
             if (isEntryExpired(e, now)) {
                 expiredKeys.add(k);
@@ -637,26 +652,26 @@ public final class YierdisDb {
         }
     }
 
-    private Entry getEntryIfNotExpired(ByteArrayKey key) {
-        Entry e = store.get(key);
+    private YierdisObject getObjectIfNotExpired(byte[] keyBytes) {
+        YierdisObject e = store.get(keyBytes);
         if (e == null) {
             return null;
         }
-        if (removeIfExpired(key, e, System.currentTimeMillis())) {
+        if (removeIfExpired(keyBytes, e, System.currentTimeMillis())) {
             return null;
         }
         return e;
     }
 
-    private boolean removeIfExpired(ByteArrayKey key, Entry e, long nowMillis) {
+    private boolean removeIfExpired(byte[] keyBytes, YierdisObject e, long nowMillis) {
         if (!isEntryExpired(e, nowMillis)) {
             return false;
         }
-        store.remove(key, e);
+        store.remove(keyBytes, e);
         return true;
     }
 
-    private boolean isEntryExpired(Entry e, long nowMillis) {
+    private boolean isEntryExpired(YierdisObject e, long nowMillis) {
         long expireAt;
         synchronized (e) {
             expireAt = e.expireAtMillis;
@@ -694,16 +709,6 @@ public final class YierdisDb {
             p++;
         }
         return p == pattern.length;
-    }
-
-    static final class Entry {
-        final YierdisValue value;
-        volatile long expireAtMillis;
-
-        Entry(YierdisValue value, long expireAtMillis) {
-            this.value = value;
-            this.expireAtMillis = expireAtMillis;
-        }
     }
 
     public enum SetMode {

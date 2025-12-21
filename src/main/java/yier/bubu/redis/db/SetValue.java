@@ -3,8 +3,6 @@ package yier.bubu.redis.db;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
-import java.util.HashSet;
 
 final class SetValue implements YierdisValue {
     // Redis uses intset for small integer-only sets and upgrades to hashtable as needed.
@@ -13,11 +11,16 @@ final class SetValue implements YierdisValue {
 
     private long[] intset = new long[0];
     private int intsetSize = 0;
-    private Set<ByteArrayKey> hashset;
+    private ByteArrayHashSet hashset;
 
     @Override
     public ValueType type() {
         return ValueType.SET;
+    }
+
+    @Override
+    public ValueEncoding encoding() {
+        return hashset != null ? ValueEncoding.SET_HT : ValueEncoding.SET_INTSET;
     }
 
     int size() {
@@ -31,7 +34,7 @@ final class SetValue implements YierdisValue {
         int added = 0;
         for (byte[] m : members) {
             if (hashset != null) {
-                if (hashset.add(new ByteArrayKey(m))) {
+                if (hashset.add(m)) {
                     added++;
                 }
                 continue;
@@ -40,7 +43,7 @@ final class SetValue implements YierdisValue {
             Long parsed = parseLongStrictAscii(m);
             if (parsed == null) {
                 convertToHashSet();
-                if (hashset.add(new ByteArrayKey(m))) {
+                if (hashset.add(m)) {
                     added++;
                 }
                 continue;
@@ -60,7 +63,7 @@ final class SetValue implements YierdisValue {
         int removed = 0;
         for (byte[] m : members) {
             if (hashset != null) {
-                if (hashset.remove(new ByteArrayKey(m))) {
+                if (hashset.remove(m)) {
                     removed++;
                 }
                 continue;
@@ -79,7 +82,7 @@ final class SetValue implements YierdisValue {
 
     boolean contains(byte[] member) {
         if (hashset != null) {
-            return hashset.contains(new ByteArrayKey(member));
+            return hashset.contains(member);
         }
         Long parsed = parseLongStrictAscii(member);
         if (parsed == null) {
@@ -91,9 +94,7 @@ final class SetValue implements YierdisValue {
     List<byte[]> members() {
         if (hashset != null) {
             List<byte[]> out = new ArrayList<>(hashset.size());
-            for (ByteArrayKey k : hashset) {
-                out.add(k.bytes());
-            }
+            hashset.forEach(out::add);
             return out;
         }
         List<byte[]> out = new ArrayList<>(intsetSize);
@@ -107,9 +108,9 @@ final class SetValue implements YierdisValue {
         if (hashset != null) {
             return;
         }
-        Set<ByteArrayKey> out = new HashSet<>(Math.max(16, intsetSize * 2));
+        ByteArrayHashSet out = new ByteArrayHashSet(Math.max(16, intsetSize));
         for (int i = 0; i < intsetSize; i++) {
-            out.add(new ByteArrayKey(Long.toString(intset[i]).getBytes(StandardCharsets.US_ASCII)));
+            out.add(Long.toString(intset[i]).getBytes(StandardCharsets.US_ASCII));
         }
         this.hashset = out;
         this.intset = null;

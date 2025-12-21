@@ -257,4 +257,9 @@ final class StringValue implements YierdisValue {
     public ValueType type() {
         return ValueType.STRING;
     }
+
+    @Override
+    public ValueEncoding encoding() {
+        return encoding == Encoding.INT ? ValueEncoding.STRING_INT : ValueEncoding.STRING_RAW;
+    }
 }
