@@ -13,7 +13,6 @@ buildNumber.properties
 logs/
 *.pid
 hs_err_pid*
-bench-out/
 
 # IntelliJ IDEA
 .idea/
