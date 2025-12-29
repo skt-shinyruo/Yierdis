@@ -1,21 +1,20 @@
 package yier.bubu.redis.db;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
 
 final class ListValue implements YierdisValue {
     // Redis stores small lists in a compact encoding and upgrades to quicklist as needed.
-    // We approximate that behavior by using an ArrayList for small lists (listpack-like),
-    // and upgrading to a quicklist-like "deque of listpacks" for larger ones.
+    // We approximate that behavior by using a small ring-buffer for packed lists and upgrading
+    // to a quicklist-like deque of nodes once size/element thresholds are crossed.
     private static final int LISTPACK_MAX_ENTRIES = 128;
     private static final int LISTPACK_MAX_ELEMENT_BYTES = 64;
     private static final int QUICKLIST_NODE_MAX_ENTRIES = 64;
     private static final int QUICKLIST_NODE_MAX_BYTES = 8 * 1024;
 
-    private PackedListPack listpack = new PackedListPack();
-    private ArrayDeque<ListPackNode> quicklist;
+    private PackedList listpack = new PackedList();
+    private ArrayDeque<ListNode> quicklist;
     private int totalSize = 0;
 
     @Override
@@ -98,7 +97,7 @@ final class ListValue implements YierdisValue {
             if (listpack.isEmpty()) {
                 break;
             }
-            byte[] v = pollListpackFirst();
+            byte[] v = listpack.removeFirst();
             totalSize--;
             out.add(v);
         }
@@ -125,7 +124,7 @@ final class ListValue implements YierdisValue {
             if (listpack.isEmpty()) {
                 break;
             }
-            byte[] v = pollListpackLast();
+            byte[] v = listpack.removeLast();
             totalSize--;
             out.add(v);
         }
@@ -158,7 +157,7 @@ final class ListValue implements YierdisValue {
         int idx = 0;
         if (quicklist != null) {
             outer:
-            for (ListPackNode n : quicklist) {
+            for (ListNode n : quicklist) {
                 for (int i = 0; i < n.size(); i++) {
                     if (idx > normalizedStop) {
                         break outer;
@@ -201,14 +200,15 @@ final class ListValue implements YierdisValue {
             return;
         }
 
-        ArrayDeque<ListPackNode> out = new ArrayDeque<>();
-        ListPackNode node = new ListPackNode();
+        ArrayDeque<ListNode> out = new ArrayDeque<>();
+        ListNode node = new ListNode();
         for (int i = 0; i < listpack.size(); i++) {
-            if (!node.canAddFrom(listpack, i)) {
+            byte[] v = listpack.get(i);
+            if (!node.canAdd(v)) {
                 out.addLast(node);
-                node = new ListPackNode();
+                node = new ListNode();
             }
-            node.addLastFrom(listpack, i);
+            node.addLast(v);
         }
         if (!node.isEmpty()) {
             out.addLast(node);
@@ -220,7 +220,7 @@ final class ListValue implements YierdisValue {
 
     private void qlAddFirst(byte[] v) {
         if (quicklist.isEmpty() || !quicklist.peekFirst().canAdd(v)) {
-            quicklist.addFirst(new ListPackNode());
+            quicklist.addFirst(new ListNode());
         }
         quicklist.peekFirst().addFirst(v);
         totalSize++;
@@ -228,7 +228,7 @@ final class ListValue implements YierdisValue {
 
     private void qlAddLast(byte[] v) {
         if (quicklist.isEmpty() || !quicklist.peekLast().canAdd(v)) {
-            quicklist.addLast(new ListPackNode());
+            quicklist.addLast(new ListNode());
         }
         quicklist.peekLast().addLast(v);
         totalSize++;
@@ -238,7 +238,7 @@ final class ListValue implements YierdisValue {
         if (quicklist.isEmpty()) {
             return null;
         }
-        ListPackNode n = quicklist.peekFirst();
+        ListNode n = quicklist.peekFirst();
         byte[] v = n.removeFirst();
         if (n.isEmpty()) {
             quicklist.removeFirst();
@@ -251,7 +251,7 @@ final class ListValue implements YierdisValue {
         if (quicklist.isEmpty()) {
             return null;
         }
-        ListPackNode n = quicklist.peekLast();
+        ListNode n = quicklist.peekLast();
         byte[] v = n.removeLast();
         if (n.isEmpty()) {
             quicklist.removeLast();
@@ -264,8 +264,8 @@ final class ListValue implements YierdisValue {
         if (quicklist.size() < 2) {
             return;
         }
-        ListPackNode first = quicklist.pollFirst();
-        ListPackNode second = quicklist.pollFirst();
+        ListNode first = quicklist.pollFirst();
+        ListNode second = quicklist.pollFirst();
         if (first == null || second == null) {
             if (second != null) {
                 quicklist.addFirst(second);
@@ -291,8 +291,8 @@ final class ListValue implements YierdisValue {
         if (quicklist.size() < 2) {
             return;
         }
-        ListPackNode last = quicklist.pollLast();
-        ListPackNode prev = quicklist.pollLast();
+        ListNode last = quicklist.pollLast();
+        ListNode prev = quicklist.pollLast();
         if (last == null || prev == null) {
             if (prev != null) {
                 quicklist.addLast(prev);
@@ -314,24 +314,9 @@ final class ListValue implements YierdisValue {
         quicklist.addLast(last);
     }
 
-    private byte[] pollListpackFirst() {
-        if (listpack.isEmpty()) {
-            return null;
-        }
-        return listpack.removeFirst();
-    }
-
-    private byte[] pollListpackLast() {
-        int size = listpack.size();
-        if (size == 0) {
-            return null;
-        }
-        return listpack.removeLast();
-    }
-
-    private static final class PackedListPack {
-        private byte[] blob = new byte[0];
-        private int[] offsets = new int[0];
+    private static final class PackedList {
+        private byte[][] elements = new byte[0][];
+        private int head = 0;
         private int size = 0;
         private int rawBytesSize = 0;
 
@@ -343,298 +328,156 @@ final class ListValue implements YierdisValue {
             return size == 0;
         }
 
-        int rawBytesSize() {
-            return rawBytesSize;
-        }
-
         byte[] get(int index) {
             if (index < 0 || index >= size) {
                 throw new IndexOutOfBoundsException();
             }
-            int p = offsets[index];
-            long r = readVarint(blob, p);
-            int storedLen = (int) r;
-            p = (int) (r >>> 32);
-            if (storedLen == 0) {
-                return null;
-            }
-            int len = storedLen - 1;
-            return Arrays.copyOfRange(blob, p, p + len);
-        }
-
-        int elementRawLen(int index) {
-            int p = offsets[index];
-            long r = readVarint(blob, p);
-            int storedLen = (int) r;
-            return storedLen == 0 ? 0 : storedLen - 1;
-        }
-
-        void appendElementTo(int index, PackedListPack dest) {
-            int p = offsets[index];
-            long r = readVarint(blob, p);
-            int storedLen = (int) r;
-            p = (int) (r >>> 32);
-            if (storedLen == 0) {
-                dest.addLastNull();
-                return;
-            }
-            int len = storedLen - 1;
-            dest.addLastFrom(blob, p, len);
+            return elements[physicalIndex(index)];
         }
 
         void addFirst(byte[] v) {
-            int rawLen = v == null ? 0 : v.length;
-            int storedLen = v == null ? 0 : rawLen + 1;
-            int encodedLen = varintLength(storedLen) + rawLen;
-
-            byte[] next = new byte[blob.length + encodedLen];
-            int w = 0;
-            w = writeVarint(next, w, storedLen);
-            if (rawLen > 0) {
-                System.arraycopy(v, 0, next, w, rawLen);
-            }
-            System.arraycopy(blob, 0, next, encodedLen, blob.length);
-
-            int[] nextOffsets = new int[size + 1];
-            nextOffsets[0] = 0;
-            for (int i = 0; i < size; i++) {
-                nextOffsets[i + 1] = offsets[i] + encodedLen;
-            }
-
-            blob = next;
-            offsets = nextOffsets;
+            ensureCapacity(size + 1);
+            head = dec(head, elements.length);
+            elements[head] = v;
             size++;
-            rawBytesSize += rawLen;
+            rawBytesSize += rawLen(v);
         }
 
         void addLast(byte[] v) {
-            if (v == null) {
-                addLastNull();
-                return;
-            }
-            addLastFrom(v, 0, v.length);
-        }
-
-        void addLastNull() {
-            int pairStart = blob.length;
-            byte[] next = Arrays.copyOf(blob, pairStart + 1);
-            next[pairStart] = 0; // storedLen=0 => null
-
-            blob = next;
-            offsets = Arrays.copyOf(offsets, size + 1);
-            offsets[size] = pairStart;
+            ensureCapacity(size + 1);
+            elements[physicalIndex(size)] = v;
             size++;
-        }
-
-        void addLastFrom(byte[] src, int off, int len) {
-            int storedLen = len + 1;
-            int encodedLen = varintLength(storedLen) + len;
-
-            int elemStart = blob.length;
-            byte[] next = new byte[elemStart + encodedLen];
-            System.arraycopy(blob, 0, next, 0, blob.length);
-
-            int w = elemStart;
-            w = writeVarint(next, w, storedLen);
-            if (len > 0) {
-                System.arraycopy(src, off, next, w, len);
-            }
-
-            blob = next;
-            offsets = Arrays.copyOf(offsets, size + 1);
-            offsets[size] = elemStart;
-            size++;
-            rawBytesSize += len;
+            rawBytesSize += rawLen(v);
         }
 
         byte[] removeFirst() {
             if (size == 0) {
                 return null;
             }
-            int start = offsets[0];
-            long r = readVarint(blob, start);
-            int storedLen = (int) r;
-            int p = (int) (r >>> 32);
-            int len = storedLen == 0 ? 0 : storedLen - 1;
-            int end = p + len;
-
-            byte[] value = storedLen == 0 ? null : Arrays.copyOfRange(blob, p, end);
-
-            byte[] next = new byte[blob.length - end];
-            System.arraycopy(blob, end, next, 0, blob.length - end);
-
-            int[] nextOffsets = new int[size - 1];
-            for (int i = 1; i < size; i++) {
-                nextOffsets[i - 1] = offsets[i] - end;
-            }
-
-            blob = next;
-            offsets = nextOffsets;
+            byte[] v = elements[head];
+            elements[head] = null;
+            head = inc(head, elements.length);
             size--;
-            rawBytesSize -= len;
-            return value;
+            rawBytesSize -= rawLen(v);
+            return v;
         }
 
         byte[] removeLast() {
-            int s = size;
-            if (s == 0) {
+            if (size == 0) {
                 return null;
             }
-            int start = offsets[s - 1];
-            long r = readVarint(blob, start);
-            int storedLen = (int) r;
-            int p = (int) (r >>> 32);
-            int len = storedLen == 0 ? 0 : storedLen - 1;
-            int end = p + len;
-
-            byte[] value = storedLen == 0 ? null : Arrays.copyOfRange(blob, p, end);
-
-            blob = Arrays.copyOf(blob, start);
-            offsets = Arrays.copyOf(offsets, s - 1);
+            int idx = physicalIndex(size - 1);
+            byte[] v = elements[idx];
+            elements[idx] = null;
             size--;
-            rawBytesSize -= len;
-            return value;
+            rawBytesSize -= rawLen(v);
+            return v;
         }
 
-        void appendAll(PackedListPack other) {
-            if (other == null || other.size == 0) {
+        int rawBytesSize() {
+            return rawBytesSize;
+        }
+
+        private int physicalIndex(int logicalIndex) {
+            int cap = elements.length;
+            if (cap == 0) {
+                return 0;
+            }
+            int idx = head + logicalIndex;
+            return idx >= cap ? idx - cap : idx;
+        }
+
+        private void ensureCapacity(int desired) {
+            int cap = elements.length;
+            if (cap >= desired) {
                 return;
             }
-            if (this.size == 0) {
-                this.blob = Arrays.copyOf(other.blob, other.blob.length);
-                this.offsets = Arrays.copyOf(other.offsets, other.offsets.length);
-                this.size = other.size;
-                this.rawBytesSize = other.rawBytesSize;
-                return;
+            int next = Math.max(8, cap);
+            while (next < desired) {
+                next <<= 1;
             }
-
-            int base = this.blob.length;
-            byte[] nextBlob = new byte[this.blob.length + other.blob.length];
-            System.arraycopy(this.blob, 0, nextBlob, 0, this.blob.length);
-            System.arraycopy(other.blob, 0, nextBlob, this.blob.length, other.blob.length);
-
-            int[] nextOffsets = Arrays.copyOf(this.offsets, this.size + other.size);
-            for (int i = 0; i < other.size; i++) {
-                nextOffsets[this.size + i] = base + other.offsets[i];
+            byte[][] out = new byte[next][];
+            for (int i = 0; i < size; i++) {
+                out[i] = elements[physicalIndex(i)];
             }
-
-            this.blob = nextBlob;
-            this.offsets = nextOffsets;
-            this.size += other.size;
-            this.rawBytesSize += other.rawBytesSize;
+            elements = out;
+            head = 0;
         }
 
-        private static int varintLength(int v) {
-            int len = 1;
-            while ((v & ~0x7F) != 0) {
-                v >>>= 7;
-                len++;
-            }
-            return len;
+        private static int rawLen(byte[] v) {
+            return v == null ? 0 : v.length;
         }
 
-        private static int writeVarint(byte[] out, int pos, int v) {
-            while ((v & ~0x7F) != 0) {
-                out[pos++] = (byte) ((v & 0x7F) | 0x80);
-                v >>>= 7;
-            }
-            out[pos++] = (byte) v;
-            return pos;
+        private static int inc(int i, int cap) {
+            i++;
+            return i == cap ? 0 : i;
         }
 
-        private static long readVarint(byte[] buf, int pos) {
-            int result = 0;
-            int shift = 0;
-            while (true) {
-                int b = buf[pos++] & 0xFF;
-                result |= (b & 0x7F) << shift;
-                if ((b & 0x80) == 0) {
-                    break;
-                }
-                shift += 7;
-                if (shift > 28) {
-                    throw new IllegalStateException("varint too long");
-                }
-            }
-            return (((long) pos) << 32) | (result & 0xffffffffL);
+        private static int dec(int i, int cap) {
+            i--;
+            return i < 0 ? cap - 1 : i;
         }
     }
 
-    private static final class ListPackNode {
-        private final PackedListPack pack = new PackedListPack();
-
-        boolean canAdd(byte[] v) {
-            int len = v == null ? 0 : v.length;
-            if (pack.isEmpty()) {
-                return true;
-            }
-            if (pack.size() >= QUICKLIST_NODE_MAX_ENTRIES) {
-                return false;
-            }
-            return pack.rawBytesSize() + len <= QUICKLIST_NODE_MAX_BYTES;
-        }
-
-        boolean canAddFrom(PackedListPack src, int elementIndex) {
-            int len = src.elementRawLen(elementIndex);
-            if (pack.isEmpty()) {
-                return true;
-            }
-            if (pack.size() >= QUICKLIST_NODE_MAX_ENTRIES) {
-                return false;
-            }
-            return pack.rawBytesSize() + len <= QUICKLIST_NODE_MAX_BYTES;
-        }
+    private static final class ListNode {
+        private final PackedList list = new PackedList();
 
         boolean isEmpty() {
-            return pack.isEmpty();
+            return list.isEmpty();
         }
 
         int size() {
-            return pack.size();
+            return list.size();
         }
 
-        byte[] get(int i) {
-            return pack.get(i);
+        byte[] get(int index) {
+            return list.get(index);
+        }
+
+        boolean canAdd(byte[] v) {
+            if (list.isEmpty()) {
+                return true;
+            }
+            if (list.size() >= QUICKLIST_NODE_MAX_ENTRIES) {
+                return false;
+            }
+            int len = v == null ? 0 : v.length;
+            return list.rawBytesSize() + len <= QUICKLIST_NODE_MAX_BYTES;
         }
 
         void addFirst(byte[] v) {
-            pack.addFirst(v);
+            list.addFirst(v);
         }
 
         void addLast(byte[] v) {
-            pack.addLast(v);
-        }
-
-        void addLastFrom(PackedListPack src, int elementIndex) {
-            src.appendElementTo(elementIndex, pack);
+            list.addLast(v);
         }
 
         byte[] removeFirst() {
-            return pack.removeFirst();
+            return list.removeFirst();
         }
 
         byte[] removeLast() {
-            return pack.removeLast();
+            return list.removeLast();
         }
 
-        boolean canAppendAll(ListPackNode other) {
+        boolean canAppendAll(ListNode other) {
             if (other == null || other.isEmpty()) {
                 return true;
             }
-            if (this.isEmpty()) {
-                return true;
-            }
-            if (this.pack.size() + other.pack.size() > QUICKLIST_NODE_MAX_ENTRIES) {
+            if (this.size() + other.size() > QUICKLIST_NODE_MAX_ENTRIES) {
                 return false;
             }
-            return this.pack.rawBytesSize() + other.pack.rawBytesSize() <= QUICKLIST_NODE_MAX_BYTES;
+            return this.list.rawBytesSize() + other.list.rawBytesSize() <= QUICKLIST_NODE_MAX_BYTES;
         }
 
-        void appendAll(ListPackNode other) {
+        void appendAll(ListNode other) {
             if (other == null || other.isEmpty()) {
                 return;
             }
-            pack.appendAll(other.pack);
+            for (int i = 0; i < other.size(); i++) {
+                this.addLast(other.get(i));
+            }
         }
     }
 }

@@ -63,6 +63,25 @@ public class CommandProcessorTest {
     }
 
     @Test
+    public void incrWorksAfterAppendWhenRawStringHasSpareCapacity() {
+        YierdisDb db = new YierdisDb();
+        CommandProcessor cp = new CommandProcessor(db);
+
+        Assert.assertTrue(cp.execute(cmd("SET", "k", "1")) instanceof RespSimpleString);
+
+        RespInteger len = (RespInteger) cp.execute(Arrays.asList(b("APPEND"), b("k"), b("0")));
+        Assert.assertEquals(2, len.value());
+
+        RespInteger incr = (RespInteger) cp.execute(Arrays.asList(b("INCR"), b("k")));
+        Assert.assertEquals(11, incr.value());
+
+        RespBulkString get = (RespBulkString) cp.execute(Arrays.asList(b("GET"), b("k")));
+        Assert.assertEquals("11", get.asString());
+
+        db.shutdown();
+    }
+
+    @Test
     public void integerLikeStringsAreBinarySafe() {
         YierdisDb db = new YierdisDb();
         CommandProcessor cp = new CommandProcessor(db);

@@ -1,9 +1,8 @@
 package yier.bubu.redis;
 
-import yier.bubu.redis.command.CommandProcessor;
+import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.protocol.RespDecoder;
-import yier.bubu.redis.protocol.RespEncoder;
+import yier.bubu.redis.protocol.RespCommandDecoder;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -24,13 +23,17 @@ public final class YierdisServer {
     public static void main(String[] args) throws Exception {
         ServerConfig config = ServerConfig.fromArgs(args);
 
-        final YierdisDb db = new YierdisDb();
-        final CommandProcessor commandProcessor = new CommandProcessor(db);
+         final YierdisDb db = new YierdisDb();
+         final YierdisFastCommandProcessor commandProcessor = new YierdisFastCommandProcessor(db);
 
-        EventLoopGroup bossGroup = new NioEventLoopGroup(1);
-        EventLoopGroup workerGroup = new NioEventLoopGroup(1);
-        ScheduledFuture<?> cleanupFuture = null;
-        try {
+
+         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
+         EventLoopGroup workerGroup = new NioEventLoopGroup(1);
+         ScheduledFuture<?> cleanupFuture = null;
+         try {
+             // Bind DB ownership to the worker event loop thread (Redis-style single-threaded execution).
+             workerGroup.next().submit(db::bindToCurrentThread).sync();
+
             if (config.expirationCleanupIntervalMillis > 0) {
                 long period = config.expirationCleanupIntervalMillis;
                 cleanupFuture = workerGroup.next().scheduleAtFixedRate(new Runnable() {
@@ -54,9 +57,8 @@ public final class YierdisServer {
                         @Override
                         protected void initChannel(SocketChannel ch) {
                             ch.pipeline()
-                                    .addLast("respDecoder", new RespDecoder())
-                                    .addLast("respEncoder", new RespEncoder())
-                                    .addLast("commandHandler", new YierdisCommandHandler(commandProcessor));
+                                    .addLast("respCommandDecoder", new RespCommandDecoder())
+                                    .addLast("commandHandler", new YierdisFastCommandHandler(commandProcessor));
                         }
                     });
 

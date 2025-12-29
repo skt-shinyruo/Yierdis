@@ -1,5 +1,6 @@
 package yier.bubu.redis.db;
 
+import java.util.Arrays;
 import java.util.concurrent.ThreadLocalRandom;
 
 final class ZSkipList {
@@ -47,7 +48,11 @@ final class ZSkipList {
         return x == header ? null : x;
     }
 
-    Node insert(double score, ByteArrayKey member) {
+    Node insert(double score, byte[] member) {
+        if (member == null) {
+            throw new IllegalArgumentException("member must not be null");
+        }
+
         Node[] update = new Node[MAX_LEVEL];
         int[] rank = new int[MAX_LEVEL];
 
@@ -95,7 +100,11 @@ final class ZSkipList {
         return newNode;
     }
 
-    boolean delete(double score, ByteArrayKey member) {
+    boolean delete(double score, byte[] member) {
+        if (member == null) {
+            return false;
+        }
+
         Node[] update = new Node[MAX_LEVEL];
         Node x = header;
         for (int i = level - 1; i >= 0; i--) {
@@ -106,7 +115,7 @@ final class ZSkipList {
         }
 
         x = x.forward[0];
-        if (x == null || Double.compare(x.score, score) != 0 || !x.member.equals(member)) {
+        if (x == null || Double.compare(x.score, score) != 0 || !Arrays.equals(x.member, member)) {
             return false;
         }
 
@@ -152,14 +161,26 @@ final class ZSkipList {
         return null;
     }
 
-    private static boolean lessThan(Node node, double score, ByteArrayKey member) {
+    private static boolean lessThan(Node node, double score, byte[] member) {
         if (Double.compare(node.score, score) < 0) {
             return true;
         }
         if (Double.compare(node.score, score) > 0) {
             return false;
         }
-        return node.member.compareTo(member) < 0;
+        return compareLex(node.member, member) < 0;
+    }
+
+    private static int compareLex(byte[] a, byte[] b) {
+        int min = Math.min(a.length, b.length);
+        for (int i = 0; i < min; i++) {
+            int av = a[i] & 0xFF;
+            int bv = b[i] & 0xFF;
+            if (av != bv) {
+                return Integer.compare(av, bv);
+            }
+        }
+        return Integer.compare(a.length, b.length);
     }
 
     private static int randomLevel() {
@@ -171,13 +192,13 @@ final class ZSkipList {
     }
 
     static final class Node {
-        final ByteArrayKey member;
+        final byte[] member;
         final double score;
         final Node[] forward;
         final int[] span;
         Node backward;
 
-        Node(int level, ByteArrayKey member, double score) {
+        Node(int level, byte[] member, double score) {
             this.member = member;
             this.score = score;
             this.forward = new Node[level];

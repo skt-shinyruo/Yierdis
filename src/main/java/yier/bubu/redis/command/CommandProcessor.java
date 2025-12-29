@@ -26,100 +26,139 @@ public final class CommandProcessor {
         if (args == null || args.isEmpty() || args.get(0) == null || args.get(0).length == 0) {
             return RespError.of("ERR empty command");
         }
-        String cmd = upperAscii(args.get(0));
+
+        byte[] cmd = args.get(0);
         try {
-            switch (cmd) {
-                case "PING":
-                    return ping(args);
-                case "ECHO":
-                    return echo(args);
-                case "HELLO":
-                    return hello(args);
-                case "COMMAND":
-                    return RespArray.empty();
-                case "SELECT":
-                    return select(args);
-                case "FLUSHDB":
-                    db.flushDb();
-                    return RespSimpleString.of("OK");
-                case "TYPE":
-                    return type(args);
-                case "KEYS":
-                    return keys(args);
-                case "DEL":
-                    return del(args);
-                case "EXISTS":
-                    return exists(args);
-                case "SET":
-                    return set(args);
-                case "GET":
-                    return get(args);
-                case "STRLEN":
-                    return strlen(args);
-                case "APPEND":
-                    return append(args);
-                case "INCR":
-                    return incrBy(args, 1);
-                case "DECR":
-                    return incrBy(args, -1);
-                case "EXPIRE":
-                    return expire(args);
-                case "TTL":
-                    return ttl(args);
-
-                case "LPUSH":
-                    return lpush(args);
-                case "RPUSH":
-                    return rpush(args);
-                case "LRANGE":
-                    return lrange(args);
-                case "LPOP":
-                    return lpop(args);
-                case "RPOP":
-                    return rpop(args);
-
-                case "HSET":
-                    return hset(args);
-                case "HGET":
-                    return hget(args);
-                case "HGETALL":
-                    return hgetall(args);
-                case "HLEN":
-                    return hlen(args);
-                case "HDEL":
-                    return hdel(args);
-
-                case "SADD":
-                    return sadd(args);
-                case "SREM":
-                    return srem(args);
-                case "SMEMBERS":
-                    return smembers(args);
-                case "SISMEMBER":
-                    return sismember(args);
-                case "SCARD":
-                    return scard(args);
-
-                case "ZADD":
-                    return zadd(args);
-                case "ZRANGE":
-                    return zrange(args);
-                case "ZREVRANGE":
-                    return zrevrange(args);
-                case "ZRANGEBYSCORE":
-                    return zrangebyscore(args);
-                case "ZREVRANGEBYSCORE":
-                    return zrevrangebyscore(args);
-                case "ZREMRANGEBYSCORE":
-                    return zremrangebyscore(args);
-                case "ZREMRANGEBYRANK":
-                    return zremrangebyrank(args);
-                case "ZREM":
-                    return zrem(args);
-
-                default:
-                    return RespError.of("ERR unknown command '" + utf8(args.get(0)) + "'");
+            if (asciiEqualsIgnoreCase(cmd, "PING")) {
+                return ping(args);
             }
+            if (asciiEqualsIgnoreCase(cmd, "ECHO")) {
+                return echo(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "HELLO")) {
+                return hello(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "COMMAND")) {
+                return RespArray.empty();
+            }
+            if (asciiEqualsIgnoreCase(cmd, "SELECT")) {
+                return select(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "FLUSHDB")) {
+                db.flushDb();
+                return RespSimpleString.of("OK");
+            }
+            if (asciiEqualsIgnoreCase(cmd, "TYPE")) {
+                return type(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "KEYS")) {
+                return keys(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "DEL")) {
+                return del(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "EXISTS")) {
+                return exists(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "SET")) {
+                return set(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "GET")) {
+                return get(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "STRLEN")) {
+                return strlen(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "APPEND")) {
+                return append(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "INCR")) {
+                return incrBy(args, 1);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "DECR")) {
+                return incrBy(args, -1);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "EXPIRE")) {
+                return expire(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "TTL")) {
+                return ttl(args);
+            }
+
+            if (asciiEqualsIgnoreCase(cmd, "LPUSH")) {
+                return lpush(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "RPUSH")) {
+                return rpush(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "LRANGE")) {
+                return lrange(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "LPOP")) {
+                return lpop(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "RPOP")) {
+                return rpop(args);
+            }
+
+            if (asciiEqualsIgnoreCase(cmd, "HSET")) {
+                return hset(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "HGET")) {
+                return hget(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "HGETALL")) {
+                return hgetall(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "HLEN")) {
+                return hlen(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "HDEL")) {
+                return hdel(args);
+            }
+
+            if (asciiEqualsIgnoreCase(cmd, "SADD")) {
+                return sadd(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "SREM")) {
+                return srem(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "SMEMBERS")) {
+                return smembers(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "SISMEMBER")) {
+                return sismember(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "SCARD")) {
+                return scard(args);
+            }
+
+            if (asciiEqualsIgnoreCase(cmd, "ZADD")) {
+                return zadd(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "ZRANGE")) {
+                return zrange(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "ZREVRANGE")) {
+                return zrevrange(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "ZRANGEBYSCORE")) {
+                return zrangebyscore(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "ZREVRANGEBYSCORE")) {
+                return zrevrangebyscore(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "ZREMRANGEBYSCORE")) {
+                return zremrangebyscore(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "ZREMRANGEBYRANK")) {
+                return zremrangebyrank(args);
+            }
+            if (asciiEqualsIgnoreCase(cmd, "ZREM")) {
+                return zrem(args);
+            }
+
+            return RespError.of("ERR unknown command '" + utf8(cmd) + "'");
         } catch (YierdisDb.WrongTypeException e) {
             return RespError.of(e.getMessage());
         } catch (YierdisDb.YierdisCommandException e) {
@@ -176,7 +215,8 @@ public final class CommandProcessor {
         if (args.size() != 2) {
             return wrongArity("select");
         }
-        if ("0".equals(ascii(args.get(1)))) {
+        byte[] index = args.get(1);
+        if (index != null && index.length == 1 && index[0] == '0') {
             return RespSimpleString.of("OK");
         }
         return RespError.of("ERR only DB 0 is supported");
@@ -229,21 +269,21 @@ public final class CommandProcessor {
 
         // SET key value [EX seconds|PX milliseconds] [NX|XX]
         for (int i = 3; i < args.size(); i++) {
-            String opt = upperAscii(args.get(i));
-            if ("NX".equals(opt)) {
+            byte[] opt = args.get(i);
+            if (asciiEqualsIgnoreCase(opt, "NX")) {
                 mode = YierdisDb.SetMode.NX;
                 continue;
             }
-            if ("XX".equals(opt)) {
+            if (asciiEqualsIgnoreCase(opt, "XX")) {
                 mode = YierdisDb.SetMode.XX;
                 continue;
             }
-            if ("EX".equals(opt) && i + 1 < args.size()) {
+            if (asciiEqualsIgnoreCase(opt, "EX") && i + 1 < args.size()) {
                 long seconds = parseLong(args.get(++i), "seconds");
                 expire = new YierdisDb.ExpireOption(TimeUnit.SECONDS, seconds);
                 continue;
             }
-            if ("PX".equals(opt) && i + 1 < args.size()) {
+            if (asciiEqualsIgnoreCase(opt, "PX") && i + 1 < args.size()) {
                 long millis = parseLong(args.get(++i), "milliseconds");
                 expire = new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, millis);
                 continue;
@@ -456,12 +496,12 @@ public final class CommandProcessor {
         boolean withScores = false;
         boolean rev = false;
         for (int i = 4; i < args.size(); i++) {
-            String opt = upperAscii(args.get(i));
-            if ("WITHSCORES".equals(opt)) {
+            byte[] opt = args.get(i);
+            if (asciiEqualsIgnoreCase(opt, "WITHSCORES")) {
                 withScores = true;
                 continue;
             }
-            if ("REV".equals(opt)) {
+            if (asciiEqualsIgnoreCase(opt, "REV")) {
                 rev = true;
                 continue;
             }
@@ -482,7 +522,7 @@ public final class CommandProcessor {
 
         boolean withScores = false;
         if (args.size() == 5) {
-            if (!"WITHSCORES".equalsIgnoreCase(ascii(args.get(4)))) {
+            if (!asciiEqualsIgnoreCase(args.get(4), "WITHSCORES")) {
                 return RespError.of("ERR syntax error");
             }
             withScores = true;
@@ -505,13 +545,13 @@ public final class CommandProcessor {
 
         int i = 4;
         while (i < args.size()) {
-            String opt = upperAscii(args.get(i));
-            if ("WITHSCORES".equals(opt)) {
+            byte[] opt = args.get(i);
+            if (asciiEqualsIgnoreCase(opt, "WITHSCORES")) {
                 withScores = true;
                 i++;
                 continue;
             }
-            if ("LIMIT".equals(opt)) {
+            if (asciiEqualsIgnoreCase(opt, "LIMIT")) {
                 if (i + 2 >= args.size()) {
                     return RespError.of("ERR syntax error");
                 }
@@ -550,13 +590,13 @@ public final class CommandProcessor {
 
         int i = 4;
         while (i < args.size()) {
-            String opt = upperAscii(args.get(i));
-            if ("WITHSCORES".equals(opt)) {
+            byte[] opt = args.get(i);
+            if (asciiEqualsIgnoreCase(opt, "WITHSCORES")) {
                 withScores = true;
                 i++;
                 continue;
             }
-            if ("LIMIT".equals(opt)) {
+            if (asciiEqualsIgnoreCase(opt, "LIMIT")) {
                 if (i + 2 >= args.size()) {
                     return RespError.of("ERR syntax error");
                 }
@@ -612,12 +652,54 @@ public final class CommandProcessor {
         return RespError.of("ERR wrong number of arguments for '" + cmdLower + "' command");
     }
 
-    private static String upperAscii(byte[] s) {
-        return s == null ? null : new String(s, StandardCharsets.US_ASCII).toUpperCase(Locale.ROOT);
+    private static boolean asciiEqualsIgnoreCase(byte[] raw, String literal) {
+        if (raw == null || literal == null) {
+            return false;
+        }
+        int len = raw.length;
+        if (len != literal.length()) {
+            return false;
+        }
+        for (int i = 0; i < len; i++) {
+            int b = raw[i] & 0xFF;
+            int c = literal.charAt(i);
+            if (b >= 'A' && b <= 'Z') {
+                b |= 0x20;
+            }
+            if (c >= 'A' && c <= 'Z') {
+                c |= 0x20;
+            }
+            if (b != c) {
+                return false;
+            }
+        }
+        return true;
     }
 
-    private static String ascii(byte[] s) {
-        return s == null ? null : new String(s, StandardCharsets.US_ASCII);
+    private static boolean asciiSliceEqualsIgnoreCase(byte[] raw, int off, int len, String literal) {
+        if (raw == null || literal == null) {
+            return false;
+        }
+        if (len != literal.length()) {
+            return false;
+        }
+        if (off < 0 || len < 0 || off + len > raw.length) {
+            return false;
+        }
+        for (int i = 0; i < len; i++) {
+            int b = raw[off + i] & 0xFF;
+            int c = literal.charAt(i);
+            if (b >= 'A' && b <= 'Z') {
+                b |= 0x20;
+            }
+            if (c >= 'A' && c <= 'Z') {
+                c |= 0x20;
+            }
+            if (b != c) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static String utf8(byte[] s) {
@@ -625,11 +707,41 @@ public final class CommandProcessor {
     }
 
     private static long parseLong(byte[] s, String label) {
-        try {
-            return Long.parseLong(ascii(s));
-        } catch (NumberFormatException e) {
+        if (s == null || s.length == 0) {
             throw new IllegalArgumentException("value is not an integer or out of range: " + label);
         }
+
+        int i = 0;
+        boolean negative = false;
+        byte first = s[0];
+        if (first == '-' || first == '+') {
+            negative = first == '-';
+            i = 1;
+            if (i == s.length) {
+                throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+            }
+        }
+
+        long limit = negative ? Long.MIN_VALUE : -Long.MAX_VALUE;
+        long multMin = limit / 10;
+        long result = 0;
+
+        while (i < s.length) {
+            int digit = s[i++] - '0';
+            if (digit < 0 || digit > 9) {
+                throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+            }
+            if (result < multMin) {
+                throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+            }
+            result *= 10;
+            if (result < limit + digit) {
+                throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+            }
+            result -= digit;
+        }
+
+        return negative ? result : -result;
     }
 
     private static long parseNonNegativeLong(byte[] s, String label) {
@@ -652,27 +764,35 @@ public final class CommandProcessor {
     }
 
     private static ScoreBound parseScoreBound(byte[] raw) {
-        String s = ascii(raw);
-        if (s == null || s.isEmpty()) {
+        if (raw == null || raw.length == 0) {
             throw new YierdisDb.YierdisCommandException("ERR min or max is not a float");
         }
-        s = s.trim();
+
+        int start = 0;
         boolean exclusive = false;
-        if (s.startsWith("(")) {
+        byte first = raw[0];
+        if (first == '(') {
             exclusive = true;
-            s = s.substring(1);
-        } else if (s.startsWith("[")) {
-            // Accept bracket-inclusive to be tolerant with newer Redis range syntaxes.
-            s = s.substring(1);
+            start = 1;
+        } else if (first == '[') {
+            start = 1;
+        }
+        if (start >= raw.length) {
+            throw new YierdisDb.YierdisCommandException("ERR min or max is not a float");
         }
 
-        if ("-inf".equalsIgnoreCase(s)) {
+        int len = raw.length - start;
+        if (len == 4 && raw[start] == '-' && asciiSliceEqualsIgnoreCase(raw, start + 1, 3, "INF")) {
             return new ScoreBound(Double.NEGATIVE_INFINITY, exclusive);
         }
-        if ("+inf".equalsIgnoreCase(s) || "inf".equalsIgnoreCase(s)) {
+        if (len == 4 && raw[start] == '+' && asciiSliceEqualsIgnoreCase(raw, start + 1, 3, "INF")) {
+            return new ScoreBound(Double.POSITIVE_INFINITY, exclusive);
+        }
+        if (len == 3 && asciiSliceEqualsIgnoreCase(raw, start, 3, "INF")) {
             return new ScoreBound(Double.POSITIVE_INFINITY, exclusive);
         }
 
+        String s = new String(raw, start, len, StandardCharsets.US_ASCII);
         double v;
         try {
             v = Double.parseDouble(s);

@@ -8,6 +8,7 @@ package yier.bubu.redis.db;
 public enum ValueEncoding {
     // STRING
     STRING_INT,
+    STRING_EMBSTR,
     STRING_RAW,
 
     // HASH
@@ -20,6 +21,7 @@ public enum ValueEncoding {
 
     // SET
     SET_INTSET,
+    SET_LISTPACK,
     SET_HT,
 
     // ZSET

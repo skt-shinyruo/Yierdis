@@ -8,7 +8,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public final class RespEncoder extends MessageToByteEncoder<RespObject> {
-    private static final byte[] CRLF = new byte[]{'\r', '\n'};
+    private static final byte CR = '\r';
+    private static final byte LF = '\n';
+    private static final byte[] CRLF = new byte[]{CR, LF};
+
+    private static final ThreadLocal<byte[]> TL_NUM_BUF = ThreadLocal.withInitial(() -> new byte[32]);
 
     @Override
     protected void encode(ChannelHandlerContext ctx, RespObject msg, ByteBuf out) {
@@ -18,7 +22,8 @@ public final class RespEncoder extends MessageToByteEncoder<RespObject> {
     private void writeObject(ByteBuf out, RespObject obj) {
         if (obj == null || obj instanceof RespNull) {
             out.writeByte('$');
-            out.writeBytes("-1".getBytes(StandardCharsets.US_ASCII));
+            out.writeByte('-');
+            out.writeByte('1');
             out.writeBytes(CRLF);
             return;
         }
@@ -42,7 +47,8 @@ public final class RespEncoder extends MessageToByteEncoder<RespObject> {
             case NULL:
             default:
                 out.writeByte('$');
-                out.writeBytes("-1".getBytes(StandardCharsets.US_ASCII));
+                out.writeByte('-');
+                out.writeByte('1');
                 out.writeBytes(CRLF);
         }
     }
@@ -61,20 +67,21 @@ public final class RespEncoder extends MessageToByteEncoder<RespObject> {
 
     private void writeInteger(ByteBuf out, RespInteger i) {
         out.writeByte(':');
-        out.writeCharSequence(Long.toString(i.value()), StandardCharsets.US_ASCII);
+        writeLongAscii(out, i.value());
         out.writeBytes(CRLF);
     }
 
     private void writeBulkString(ByteBuf out, RespBulkString b) {
         out.writeByte('$');
         if (b.isNull()) {
-            out.writeCharSequence("-1", StandardCharsets.US_ASCII);
+            out.writeByte('-');
+            out.writeByte('1');
             out.writeBytes(CRLF);
             return;
         }
 
         byte[] data = b.data();
-        out.writeCharSequence(Integer.toString(data.length), StandardCharsets.US_ASCII);
+        writeLongAscii(out, data.length);
         out.writeBytes(CRLF);
         out.writeBytes(data);
         out.writeBytes(CRLF);
@@ -83,16 +90,49 @@ public final class RespEncoder extends MessageToByteEncoder<RespObject> {
     private void writeArray(ByteBuf out, RespArray array) {
         out.writeByte('*');
         if (array.isNull()) {
-            out.writeCharSequence("-1", StandardCharsets.US_ASCII);
+            out.writeByte('-');
+            out.writeByte('1');
             out.writeBytes(CRLF);
             return;
         }
 
         List<RespObject> values = array.values();
-        out.writeCharSequence(Integer.toString(values.size()), StandardCharsets.US_ASCII);
+        writeLongAscii(out, values.size());
         out.writeBytes(CRLF);
         for (RespObject v : values) {
             writeObject(out, v);
         }
+    }
+
+    private static void writeLongAscii(ByteBuf out, long value) {
+        if (value == 0) {
+            out.writeByte('0');
+            return;
+        }
+        if (value == Long.MIN_VALUE) {
+            out.writeCharSequence("-9223372036854775808", StandardCharsets.US_ASCII);
+            return;
+        }
+
+        byte[] buf = TL_NUM_BUF.get();
+        int pos = buf.length;
+
+        long x = value;
+        boolean negative = x < 0;
+        if (negative) {
+            x = -x;
+        }
+
+        while (x != 0) {
+            long q = x / 10;
+            int digit = (int) (x - q * 10);
+            buf[--pos] = (byte) ('0' + digit);
+            x = q;
+        }
+        if (negative) {
+            buf[--pos] = '-';
+        }
+
+        out.writeBytes(buf, pos, buf.length - pos);
     }
 }

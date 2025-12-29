@@ -28,11 +28,7 @@ final class ByteArrayHashSet {
 
     boolean add(byte[] key) {
         Objects.requireNonNull(key, "key");
-        if (map.containsKey(key)) {
-            return false;
-        }
-        map.put(key, PRESENT);
-        return true;
+        return map.put(key, PRESENT) == null;
     }
 
     boolean remove(byte[] key) {

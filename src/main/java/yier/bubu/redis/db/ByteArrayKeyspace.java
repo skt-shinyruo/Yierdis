@@ -13,6 +13,7 @@ import java.util.function.BiFunction;
  */
 final class ByteArrayKeyspace<V> {
     private static final float LOAD_FACTOR = 0.75f;
+    private static final int MIN_CAPACITY = 16;
     private static final byte STATE_EMPTY = 0;
     private static final byte STATE_FILLED = 1;
     private static final byte STATE_TOMBSTONE = 2;
@@ -38,7 +39,7 @@ final class ByteArrayKeyspace<V> {
     private int rehashIndex = -1;
 
     ByteArrayKeyspace() {
-        this(16);
+        this(MIN_CAPACITY);
     }
 
     ByteArrayKeyspace(int expectedSize) {
@@ -139,7 +140,7 @@ final class ByteArrayKeyspace<V> {
     }
 
     void clear() {
-        initTable0(16);
+        initTable0(MIN_CAPACITY);
         keys1 = null;
         hashes1 = null;
         values1 = null;
@@ -157,6 +158,53 @@ final class ByteArrayKeyspace<V> {
         if (keys1 != null) {
             forEachTable(keys1, states1, values1, consumer);
         }
+    }
+
+    byte[] randomKey() {
+        rehashStep();
+        int total = size();
+        if (total == 0) {
+            return null;
+        }
+        if (keys1 == null) {
+            return randomKeyFromTable(keys0, states0);
+        }
+
+        int r = ThreadLocalRandom.current().nextInt(total);
+        byte[] k = r < size0 ? randomKeyFromTable(keys0, states0) : randomKeyFromTable(keys1, states1);
+        if (k != null) {
+            return k;
+        }
+        // Fallback to the other table (can happen if one table is empty).
+        return r < size0 ? randomKeyFromTable(keys1, states1) : randomKeyFromTable(keys0, states0);
+    }
+
+    private static byte[] randomKeyFromTable(byte[][] keys, byte[] states) {
+        if (keys == null) {
+            return null;
+        }
+        int len = states.length;
+        if (len == 0) {
+            return null;
+        }
+        int mask = len - 1;
+        int start = ThreadLocalRandom.current().nextInt(len);
+
+        int quickSteps = Math.min(16, len);
+        for (int i = 0; i < quickSteps; i++) {
+            int idx = (start + i) & mask;
+            if (states[idx] == STATE_FILLED) {
+                return keys[idx];
+            }
+        }
+
+        for (int i = 0; i < len; i++) {
+            int idx = (start + i) & mask;
+            if (states[idx] == STATE_FILLED) {
+                return keys[idx];
+            }
+        }
+        return null;
     }
 
     private void forEachTable(byte[][] keys, byte[] states, Object[] values, BiConsumer<byte[], V> consumer) {
@@ -197,7 +245,56 @@ final class ByteArrayKeyspace<V> {
         if (used0 + 1 <= threshold0) {
             return;
         }
-        initTable1(keys0.length << 1);
+
+        int target = tableSizeFor(size0 + 1, LOAD_FACTOR);
+        if (target < MIN_CAPACITY) {
+            target = MIN_CAPACITY;
+        }
+        startRehash(target);
+    }
+
+    private void maybeStartRehashForDeleteOrTombstones() {
+        if (keys1 != null) {
+            return;
+        }
+
+        int cap = keys0.length;
+        if (size0 == 0) {
+            if (cap > MIN_CAPACITY) {
+                initTable0(MIN_CAPACITY);
+            }
+            return;
+        }
+
+        if (cap <= MIN_CAPACITY) {
+            return;
+        }
+
+        int tombstones = used0 - size0;
+        // Shrink when very sparse.
+        if (size0 < cap / 8) {
+            int target = tableSizeFor(size0, LOAD_FACTOR);
+            if (target < MIN_CAPACITY) {
+                target = MIN_CAPACITY;
+            }
+            if (target < cap) {
+                startRehash(target);
+                return;
+            }
+        }
+
+        // Otherwise rebuild to clear tombstones (and possibly shrink if very sparse).
+        if (tombstones > cap / 4) {
+            int target = tableSizeFor(size0, LOAD_FACTOR);
+            if (target < MIN_CAPACITY) {
+                target = MIN_CAPACITY;
+            }
+            startRehash(target);
+        }
+    }
+
+    private void startRehash(int capacity) {
+        initTable1(capacity);
         rehashIndex = 0;
     }
 
@@ -427,6 +524,7 @@ final class ByteArrayKeyspace<V> {
                 keys0[index] = null;
                 values0[index] = null;
                 size0--;
+                maybeStartRehashForDeleteOrTombstones();
             } else {
                 states1[index] = STATE_TOMBSTONE;
                 keys1[index] = null;

@@ -1,5 +1,6 @@
 package yier.bubu.redis.db;
 
+import java.util.Arrays;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -8,76 +9,101 @@ import java.nio.charset.StandardCharsets;
  * This class is designed to be stored directly in the keyspace (i.e. avoid an extra wrapper per key).
  */
 final class YierdisObject {
+    // Redis uses EMBSTR for small strings (<= 44 bytes) and RAW for larger strings.
+    // In Java we approximate this by tracking the encoding and forcing a conversion to RAW
+    // before any in-place growth.
+    private static final int EMBSTR_MAX_BYTES = 44;
+
     ValueType type;
     ValueEncoding encoding;
     Object payload;
-    volatile long expireAtMillis;
 
+    int rawLen;
     long intValue;
 
-    private YierdisObject(ValueType type, ValueEncoding encoding, Object payload, long expireAtMillis) {
+    long intBytesCacheFor;
+    byte[] intBytesCache;
+
+    private YierdisObject(ValueType type, ValueEncoding encoding, Object payload) {
         this.type = type;
         this.encoding = encoding;
         this.payload = payload;
-        this.expireAtMillis = expireAtMillis;
     }
 
-    static YierdisObject newString(byte[] valueBytes, long expireAtMillis) {
+    static YierdisObject newString(byte[] valueBytes) {
         if (valueBytes == null) {
-            return new YierdisObject(ValueType.STRING, ValueEncoding.STRING_RAW, new byte[0], expireAtMillis);
+            YierdisObject o = new YierdisObject(ValueType.STRING, ValueEncoding.STRING_EMBSTR, new byte[0]);
+            o.rawLen = 0;
+            return o;
         }
 
         Long parsed = tryParseLongForIntEncoding(valueBytes, valueBytes.length);
         if (parsed != null) {
-            return newStringInt(parsed, expireAtMillis);
+            return newStringInt(parsed);
         }
 
-        return new YierdisObject(ValueType.STRING, ValueEncoding.STRING_RAW, valueBytes, expireAtMillis);
-    }
-
-    static YierdisObject newStringInt(long intValue, long expireAtMillis) {
-        YierdisObject o = new YierdisObject(ValueType.STRING, ValueEncoding.STRING_INT, null, expireAtMillis);
-        o.intValue = intValue;
+        ValueEncoding enc = valueBytes.length <= EMBSTR_MAX_BYTES ? ValueEncoding.STRING_EMBSTR : ValueEncoding.STRING_RAW;
+        YierdisObject o = new YierdisObject(ValueType.STRING, enc, valueBytes);
+        o.rawLen = valueBytes.length;
         return o;
     }
 
-    static YierdisObject newHash(HashValue hv, long expireAtMillis) {
-        return new YierdisObject(ValueType.HASH, hv.encoding(), hv, expireAtMillis);
+    static YierdisObject newStringInt(long intValue) {
+        YierdisObject o = new YierdisObject(ValueType.STRING, ValueEncoding.STRING_INT, null);
+        o.intValue = intValue;
+        o.rawLen = 0;
+        return o;
     }
 
-    static YierdisObject newList(ListValue lv, long expireAtMillis) {
-        return new YierdisObject(ValueType.LIST, lv.encoding(), lv, expireAtMillis);
+    static YierdisObject newHash(HashValue hv) {
+        return new YierdisObject(ValueType.HASH, hv.encoding(), hv);
     }
 
-    static YierdisObject newSet(SetValue sv, long expireAtMillis) {
-        return new YierdisObject(ValueType.SET, sv.encoding(), sv, expireAtMillis);
+    static YierdisObject newList(ListValue lv) {
+        return new YierdisObject(ValueType.LIST, lv.encoding(), lv);
     }
 
-    static YierdisObject newZSet(ZSetValue zv, long expireAtMillis) {
-        return new YierdisObject(ValueType.ZSET, zv.encoding(), zv, expireAtMillis);
+    static YierdisObject newSet(SetValue sv) {
+        return new YierdisObject(ValueType.SET, sv.encoding(), sv);
     }
 
-    void overwriteWithString(byte[] valueBytes, long expireAtMillis) {
-        YierdisObject next = newString(valueBytes, expireAtMillis);
+    static YierdisObject newZSet(ZSetValue zv) {
+        return new YierdisObject(ValueType.ZSET, zv.encoding(), zv);
+    }
+
+    void overwriteWithString(byte[] valueBytes) {
+        YierdisObject next = newString(valueBytes);
         this.type = next.type;
         this.encoding = next.encoding;
         this.payload = next.payload;
         this.intValue = next.intValue;
-        this.expireAtMillis = expireAtMillis;
+        this.rawLen = next.rawLen;
+        this.intBytesCache = null;
+        this.intBytesCacheFor = 0L;
     }
 
     int stringByteLength() {
         if (encoding == ValueEncoding.STRING_INT) {
             return longByteLength(intValue);
         }
-        return ((byte[]) payload).length;
+        return rawLen;
     }
 
     byte[] stringBytesView() {
         if (encoding == ValueEncoding.STRING_INT) {
-            return Long.toString(intValue).getBytes(StandardCharsets.US_ASCII);
+            byte[] cached = intBytesCache;
+            if (cached == null || intBytesCacheFor != intValue) {
+                cached = Long.toString(intValue).getBytes(StandardCharsets.US_ASCII);
+                intBytesCache = cached;
+                intBytesCacheFor = intValue;
+            }
+            return cached;
         }
-        return (byte[]) payload;
+        byte[] buf = (byte[]) payload;
+        if (rawLen == buf.length) {
+            return buf;
+        }
+        return Arrays.copyOf(buf, rawLen);
     }
 
     int stringAppend(byte[] suffixBytes) {
@@ -85,13 +111,11 @@ final class YierdisObject {
             return stringByteLength();
         }
 
-        ensureStringRaw();
-        byte[] current = (byte[]) payload;
-        byte[] next = new byte[current.length + suffixBytes.length];
-        System.arraycopy(current, 0, next, 0, current.length);
-        System.arraycopy(suffixBytes, 0, next, current.length, suffixBytes.length);
-        payload = next;
-        return next.length;
+        ensureStringRawForAppend(suffixBytes.length);
+        byte[] buf = (byte[]) payload;
+        System.arraycopy(suffixBytes, 0, buf, rawLen, suffixBytes.length);
+        rawLen += suffixBytes.length;
+        return rawLen;
     }
 
     long stringIncrBy(long delta) {
@@ -100,13 +124,16 @@ final class YierdisObject {
             current = intValue;
         } else {
             byte[] raw = (byte[]) payload;
-            current = parseLongAscii(raw, raw.length);
+            current = parseLongAscii(raw, rawLen);
         }
 
         long next = safeAdd(current, delta);
         encoding = ValueEncoding.STRING_INT;
         intValue = next;
+        intBytesCache = null;
+        intBytesCacheFor = 0L;
         payload = null;
+        rawLen = 0;
         return next;
     }
 
@@ -120,11 +147,62 @@ final class YierdisObject {
         if (encoding == ValueEncoding.STRING_RAW) {
             return;
         }
+        if (encoding == ValueEncoding.STRING_EMBSTR) {
+            // EMBSTR is already a compact byte[]; treat it as RAW for subsequent mutations.
+            encoding = ValueEncoding.STRING_RAW;
+            return;
+        }
+        if (encoding != ValueEncoding.STRING_INT) {
+            throw new IllegalStateException("unexpected string encoding: " + encoding);
+        }
 
         byte[] raw = Long.toString(intValue).getBytes(StandardCharsets.US_ASCII);
         encoding = ValueEncoding.STRING_RAW;
         payload = raw;
+        rawLen = raw.length;
         intValue = 0L;
+        intBytesCache = null;
+        intBytesCacheFor = 0L;
+    }
+
+    private void ensureStringRawForAppend(int additionalBytes) {
+        if (additionalBytes < 0) {
+            throw new IllegalArgumentException("additionalBytes must be >= 0");
+        }
+        if (encoding == ValueEncoding.STRING_INT) {
+            byte[] raw = Long.toString(intValue).getBytes(StandardCharsets.US_ASCII);
+            int required = raw.length + additionalBytes;
+            int cap = required == raw.length ? raw.length : nextCapacity(raw.length, required);
+            byte[] buf = cap == raw.length ? raw : Arrays.copyOf(raw, cap);
+            encoding = ValueEncoding.STRING_RAW;
+            payload = buf;
+            rawLen = raw.length;
+            intValue = 0L;
+            intBytesCache = null;
+            intBytesCacheFor = 0L;
+            return;
+        }
+
+        ensureStringRaw();
+        byte[] buf = (byte[]) payload;
+        int required = rawLen + additionalBytes;
+        if (buf.length >= required) {
+            return;
+        }
+        int cap = nextCapacity(buf.length, required);
+        payload = Arrays.copyOf(buf, cap);
+    }
+
+    private static int nextCapacity(int current, int required) {
+        int cap = Math.max(16, current);
+        while (cap < required) {
+            int next = cap < 1024 * 1024 ? (cap << 1) : (cap + 1024 * 1024);
+            if (next <= cap) {
+                return required;
+            }
+            cap = next;
+        }
+        return cap;
     }
 
     private static long safeAdd(long a, long b) {
