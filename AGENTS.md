@@ -31,20 +31,26 @@ Key requirements for contributions:
 
 ## Project Structure & Module Organization
 
-- `pom.xml`: single-module build that produces a runnable shaded JAR.
-- `src/main/java/yier/bubu/redis/**`: main code.
-  - `protocol/`: RESP2 types + `RespDecoder`/`RespEncoder`
-  - `command/`: command routing/semantics (`CommandProcessor`)
-  - `db/`: in-memory data store + TTL handling
-- `src/main/resources/`: runtime resources (e.g. `logback.xml`).
-- `src/test/java/yier/bubu/redis/**`: JUnit 4 tests mirroring the main packages.
+- `pom.xml`: parent/aggregator build (packaging `pom`) for all modules.
+- `yierdis-server/`: main server module (shaded runnable JAR).
+  - `src/main/java/yier/bubu/redis/**`: main code.
+    - `protocol/`: RESP2 types + `RespDecoder`/`RespEncoder`
+    - `command/`: command routing/semantics (`CommandProcessor`)
+    - `db/`: in-memory data store + TTL handling
+  - `src/main/resources/`: runtime resources (e.g. `logback.xml`).
+  - `src/test/java/yier/bubu/redis/**`: JUnit 4 tests mirroring the main packages.
+- `yierdis-offheap/`: off-heap module group (parent/aggregator `pom`).
+  - `api/`: off-heap abstraction API contracts (`yierdis-offheap-api`).
+  - `netty/`: Netty direct `ByteBuf` off-heap backend (`yierdis-offheap-netty`).
+  - `foreign/`: Foreign Memory backend (`yierdis-offheap-foreign`, built only under Maven profile `foreign-memory`).
 
 ## Build, Test, and Run
 
-- `mvn test`: compile + run unit tests.
-- `mvn -DskipTests package`: build shaded JAR at `target/yierdis-0.1.0-SNAPSHOT.jar`.
-- `java -jar target/yierdis-0.1.0-SNAPSHOT.jar --port 6378`: run locally.
+- `mvn test`: build modules + run unit tests (default does not compile the Foreign backend).
+- `mvn -DskipTests package`: build shaded server JAR at `yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar`.
+- `java -jar yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar --port 6378`: run locally.
   - Verify with `redis-cli --resp2 -p 6378 ping`.
+- `mvn -Pforeign-memory test`: also build/test the Foreign Memory backend (Java 17 incubator).
 
 ## Coding Style & Testing
 

@@ -1,0 +1,102 @@
+package yier.bubu.redis.db.offheap.api;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import org.junit.Assert;
+import org.junit.Test;
+
+public abstract class YierdisOffHeapAllocatorContractTest {
+    protected abstract YierdisOffHeapAllocator newAllocator(long maxBytes);
+
+    @Test
+    public void allocateWriteReadRoundTripWorks() {
+        try (YierdisOffHeapAllocator allocator = newAllocator(0)) {
+            try (YierdisOffHeapBuf buf = allocator.allocate(16)) {
+                byte[] src = new byte[16];
+                for (int i = 0; i < src.length; i++) {
+                    src[i] = (byte) i;
+                }
+                buf.setBytes(0, src, 0, src.length);
+
+                byte[] dst = new byte[16];
+                buf.getBytes(0, dst, 0, dst.length);
+                Assert.assertArrayEquals(src, dst);
+            }
+            Assert.assertEquals(0L, allocator.usedBytes());
+        }
+    }
+
+    @Test
+    public void sliceReadAndWriteToByteBufWork() {
+        try (YierdisOffHeapAllocator allocator = newAllocator(0)) {
+            try (YierdisOffHeapBuf buf = allocator.allocate(16)) {
+                byte[] src = new byte[16];
+                for (int i = 0; i < src.length; i++) {
+                    src[i] = (byte) (i + 1);
+                }
+                buf.setBytes(0, src, 0, src.length);
+
+                YierdisOffHeapSlice slice = buf.slice(3, 5);
+                byte[] sliced = new byte[5];
+                slice.getBytes(0, sliced, 0, sliced.length);
+                Assert.assertArrayEquals(new byte[]{4, 5, 6, 7, 8}, sliced);
+
+                ByteBuf out = Unpooled.buffer();
+                try {
+                    slice.writeTo(out);
+                    byte[] written = new byte[5];
+                    out.readBytes(written);
+                    Assert.assertArrayEquals(sliced, written);
+                } finally {
+                    out.release();
+                }
+            }
+        }
+    }
+
+    @Test
+    public void accessAfterCloseThrows() {
+        YierdisOffHeapAllocator allocator = newAllocator(0);
+        YierdisOffHeapBuf buf = allocator.allocate(8);
+        buf.close();
+
+        try {
+            buf.getByte(0);
+            Assert.fail("expected IllegalStateException");
+        } catch (IllegalStateException ignored) {
+            // expected
+        } finally {
+            allocator.close();
+        }
+    }
+
+    @Test
+    public void memoryLimitIsEnforced() {
+        try (YierdisOffHeapAllocator allocator = newAllocator(8)) {
+            try (YierdisOffHeapBuf ignored = allocator.allocate(8)) {
+                // ok
+            }
+            try {
+                allocator.allocate(9);
+                Assert.fail("expected YierdisOffHeapOutOfMemoryException");
+            } catch (YierdisOffHeapOutOfMemoryException ignored) {
+                // expected
+            }
+        }
+    }
+
+    @Test
+    public void allocatorCloseDetectsLeaks() {
+        YierdisOffHeapAllocator allocator = newAllocator(0);
+        YierdisOffHeapBuf buf = allocator.allocate(8);
+        try {
+            allocator.close();
+            Assert.fail("expected IllegalStateException");
+        } catch (IllegalStateException ignored) {
+            // expected
+        } finally {
+            // Ensure we don't leak native memory in the test process.
+            buf.close();
+        }
+    }
+}
