@@ -1,5 +1,8 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapZSet;
+import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -8,14 +11,29 @@ import java.nio.charset.StandardCharsets;
 final class ZSetValue implements YierdisValue {
     private static final int REF_BYTES = 8;
 
+    private final YierdisUnsafeOffHeapAllocator offHeapAllocator;
+    private final YierdisUnsafeOffHeapZSet offHeap;
+
     // Redis uses listpack for small ZSETs and upgrades to dict+skiplist as needed.
     // We approximate that behavior with an in-Java "listpack-like" sorted array and upgrade to
     // HashMap+skiplist once size/element thresholds are crossed.
-    private PackedZSet listpack = new PackedZSet();
+    private PackedZSet listpack;
     private ByteArrayHashMap<ZSkipList.Node> byMember;
     private ZSkipList byScore;
     private long rawBytes;
     private long skiplistLevels;
+
+    ZSetValue() {
+        this.offHeapAllocator = null;
+        this.offHeap = null;
+        this.listpack = new PackedZSet();
+    }
+
+    ZSetValue(YierdisUnsafeOffHeapAllocator allocator) {
+        this.offHeapAllocator = allocator;
+        this.offHeap = new YierdisUnsafeOffHeapZSet(allocator);
+        this.listpack = null;
+    }
 
     @Override
     public ValueType type() {
@@ -24,10 +42,16 @@ final class ZSetValue implements YierdisValue {
 
     @Override
     public ValueEncoding encoding() {
+        if (offHeapAllocator != null) {
+            return ValueEncoding.ZSET_SKIPLIST;
+        }
         return listpack != null ? ValueEncoding.ZSET_PACKED : ValueEncoding.ZSET_SKIPLIST;
     }
 
     int size() {
+        if (offHeapAllocator != null) {
+            return offHeap.size();
+        }
         if (listpack != null) {
             return listpack.size();
         }
@@ -35,6 +59,9 @@ final class ZSetValue implements YierdisValue {
     }
 
     long estimatedBytes() {
+        if (offHeapAllocator != null) {
+            return 0;
+        }
         if (listpack != null) {
             return listpack.estimatedBytes();
         }
@@ -45,6 +72,9 @@ final class ZSetValue implements YierdisValue {
     }
 
     int zaddMany(List<byte[]> scoreMemberPairs) {
+        if (offHeapAllocator != null) {
+            return offHeap.zaddMany(scoreMemberPairs);
+        }
         int added = 0;
         for (int i = 0; i < scoreMemberPairs.size(); i += 2) {
             double score = parseScore(scoreMemberPairs.get(i));
@@ -66,6 +96,9 @@ final class ZSetValue implements YierdisValue {
     }
 
     int zrem(List<byte[]> members) {
+        if (offHeapAllocator != null) {
+            return offHeap.zrem(members);
+        }
         if (listpack != null) {
             int removed = 0;
             for (byte[] m : members) {
@@ -89,6 +122,9 @@ final class ZSetValue implements YierdisValue {
     }
 
     List<byte[]> zrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+        if (offHeapAllocator != null) {
+            return offHeap.zrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        }
         if (count <= 0) {
             return new ArrayList<>();
         }
@@ -100,6 +136,9 @@ final class ZSetValue implements YierdisValue {
     }
 
     List<byte[]> zrevrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+        if (offHeapAllocator != null) {
+            return offHeap.zrevrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        }
         if (count <= 0) {
             return new ArrayList<>();
         }
@@ -111,6 +150,9 @@ final class ZSetValue implements YierdisValue {
     }
 
     int zremrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive) {
+        if (offHeapAllocator != null) {
+            return offHeap.zremrangeByScore(min, minExclusive, max, maxExclusive);
+        }
         if (listpack != null) {
             int removed = 0;
             for (int i = listpack.size() - 1; i >= 0; i--) {
@@ -138,6 +180,9 @@ final class ZSetValue implements YierdisValue {
     }
 
     int zremrangeByRank(long start, long stop) {
+        if (offHeapAllocator != null) {
+            return offHeap.zremrangeByRank(start, stop);
+        }
         int size = size();
         if (size == 0) {
             return 0;
@@ -187,30 +232,53 @@ final class ZSetValue implements YierdisValue {
     }
 
     List<byte[]> zrange(long start, long stop, boolean withScores) {
+        if (offHeapAllocator != null) {
+            return offHeap.zrange(start, stop, withScores);
+        }
         return rangeByIndex(start, stop, withScores, false);
     }
 
     List<byte[]> zrevrange(long start, long stop, boolean withScores) {
+        if (offHeapAllocator != null) {
+            return offHeap.zrevrange(start, stop, withScores);
+        }
         return rangeByIndex(start, stop, withScores, true);
     }
 
     int zrangeReplyCount(long start, long stop, boolean withScores) {
+        if (offHeapAllocator != null) {
+            return offHeap.zrangeReplyCount(start, stop, withScores);
+        }
         return rangeByIndexReplyCount(start, stop, withScores, false);
     }
 
     void zrangeReplyInto(long start, long stop, boolean withScores, YierdisBulkStringOutput out) {
+        if (offHeapAllocator != null) {
+            offHeap.zrangeReplyInto(start, stop, withScores, out);
+            return;
+        }
         rangeByIndexReplyInto(start, stop, withScores, false, out);
     }
 
     int zrevrangeReplyCount(long start, long stop, boolean withScores) {
+        if (offHeapAllocator != null) {
+            return offHeap.zrevrangeReplyCount(start, stop, withScores);
+        }
         return rangeByIndexReplyCount(start, stop, withScores, true);
     }
 
     void zrevrangeReplyInto(long start, long stop, boolean withScores, YierdisBulkStringOutput out) {
+        if (offHeapAllocator != null) {
+            offHeap.zrevrangeReplyInto(start, stop, withScores, out);
+            return;
+        }
         rangeByIndexReplyInto(start, stop, withScores, true, out);
     }
 
     int zrangeByScoreReplyCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+        if (offHeapAllocator != null) {
+            return offHeap.zrangeByScoreReplyCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        }
         if (count <= 0) {
             return 0;
         }
@@ -221,6 +289,10 @@ final class ZSetValue implements YierdisValue {
     }
 
     void zrangeByScoreReplyInto(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, YierdisBulkStringOutput out) {
+        if (offHeapAllocator != null) {
+            offHeap.zrangeByScoreReplyInto(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+            return;
+        }
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }
@@ -235,6 +307,9 @@ final class ZSetValue implements YierdisValue {
     }
 
     int zrevrangeByScoreReplyCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+        if (offHeapAllocator != null) {
+            return offHeap.zrevrangeByScoreReplyCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        }
         if (count <= 0) {
             return 0;
         }
@@ -245,6 +320,10 @@ final class ZSetValue implements YierdisValue {
     }
 
     void zrevrangeByScoreReplyInto(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, YierdisBulkStringOutput out) {
+        if (offHeapAllocator != null) {
+            offHeap.zrevrangeByScoreReplyInto(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+            return;
+        }
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }
@@ -1128,6 +1207,13 @@ final class ZSetValue implements YierdisValue {
         this.byMember = outByMember;
         this.byScore = outByScore;
         this.listpack = null;
+    }
+
+    @Override
+    public void close() {
+        if (offHeapAllocator != null) {
+            offHeap.close();
+        }
     }
 
     private static final class PackedZSet {

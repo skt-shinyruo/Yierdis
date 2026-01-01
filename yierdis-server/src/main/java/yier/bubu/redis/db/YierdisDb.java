@@ -134,7 +134,7 @@ public final class YierdisDb {
             }
             removeExpire(victim);
             if (store.remove(victim, e)) {
-                e.releaseStringPayloadIfAny();
+                e.releasePayloadIfAny();
                 usedBytes -= e.estimatedBytes;
             }
         }
@@ -262,8 +262,7 @@ public final class YierdisDb {
     }
 
     private long usedBytesForMaxmemory() {
-        long offHeapUsed = offHeapAllocator == null ? 0 : offHeapAllocator.usedBytes();
-        return usedBytes + offHeapUsed;
+        return usedBytes;
     }
 
     private void touch(YierdisObject e) {
@@ -320,7 +319,7 @@ public final class YierdisDb {
             return;
         }
         closed = true;
-        store.forEach((k, e) -> e.releaseStringPayloadIfAny());
+        store.forEach((k, e) -> e.releasePayloadIfAny());
         store.clear();
         expires.clear();
         usedBytes = 0;
@@ -331,7 +330,7 @@ public final class YierdisDb {
 
     public void flushDb() {
         checkThread();
-        store.forEach((k, e) -> e.releaseStringPayloadIfAny());
+        store.forEach((k, e) -> e.releasePayloadIfAny());
         store.clear();
         expires.clear();
         usedBytes = 0;
@@ -351,7 +350,7 @@ public final class YierdisDb {
         if (keyBytes == null || e == null) {
             return 0;
         }
-        int keyBytesCost = store instanceof YierdisUnsafeOffHeapKeyspace<?> ? 0 : keyBytes.length;
+        int keyBytesCost = keyBytes.length;
         return ENTRY_OVERHEAD_BYTES + keyBytesCost + estimateValueBytes(e);
     }
 
@@ -363,10 +362,7 @@ public final class YierdisDb {
             if (e.encoding == ValueEncoding.STRING_INT) {
                 return Long.BYTES;
             }
-            if (e.payload instanceof byte[] buf) {
-                return buf.length;
-            }
-            return 0;
+            return e.rawLen;
         }
 
         if (e.payload instanceof HashValue hv) {
@@ -406,7 +402,7 @@ public final class YierdisDb {
             }
             removeExpire(keyBytes);
             if (store.remove(keyBytes, e)) {
-                e.releaseStringPayloadIfAny();
+                e.releasePayloadIfAny();
                 usedBytes -= e.estimatedBytes;
                 removed++;
             }
@@ -524,7 +520,7 @@ public final class YierdisDb {
             byte[] key = expiredKeys.get(i);
             removeExpire(key);
             if (store.remove(key, expiredValues.get(i))) {
-                expiredValues.get(i).releaseStringPayloadIfAny();
+                expiredValues.get(i).releasePayloadIfAny();
                 usedBytes -= expiredValues.get(i).estimatedBytes;
             }
         }
@@ -542,7 +538,7 @@ public final class YierdisDb {
             store.compute(keyBytes, (k, old) -> {
                 long oldEstimate = old == null ? 0 : old.estimatedBytes;
                 if (old != null && isKeyExpired(k, now)) {
-                    old.releaseStringPayloadIfAny();
+                    old.releasePayloadIfAny();
                     removeExpire(k);
                     deltaBytes[0] -= oldEstimate;
                     old = null;
@@ -669,7 +665,7 @@ public final class YierdisDb {
             store.compute(keyBytes, (k, old) -> {
                 long oldEstimate = old == null ? 0 : old.estimatedBytes;
                 if (old != null && isKeyExpired(k, now)) {
-                    old.releaseStringPayloadIfAny();
+                    old.releasePayloadIfAny();
                     removeExpire(k);
                     deltaBytes[0] -= oldEstimate;
                     old = null;
@@ -709,7 +705,7 @@ public final class YierdisDb {
         store.compute(keyBytes, (k, old) -> {
             long oldEstimate = old == null ? 0 : old.estimatedBytes;
             if (old != null && isKeyExpired(k, now)) {
-                old.releaseStringPayloadIfAny();
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 old = null;
@@ -751,19 +747,21 @@ public final class YierdisDb {
 
     private int pushInternal(byte[] keyBytes, List<byte[]> values, boolean left) {
         long now = System.currentTimeMillis();
+        YierdisUnsafeOffHeapAllocator unsafeAllocator =
+                offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe ? unsafe : null;
         final int[] len = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         store.compute(keyBytes, (k, old) -> {
             long oldEstimate = old == null ? 0 : old.estimatedBytes;
             if (old != null && isKeyExpired(k, now)) {
-                old.releaseStringPayloadIfAny();
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 old = null;
                 oldEstimate = 0;
             }
             if (old == null) {
-                ListValue lv = new ListValue();
+                ListValue lv = unsafeAllocator != null ? new ListValue(unsafeAllocator) : new ListValue();
                 if (left) {
                     lv.lpushAll(values);
                 } else {
@@ -858,7 +856,7 @@ public final class YierdisDb {
         store.computeIfPresent(keyBytes, (k, old) -> {
             long oldEstimate = old.estimatedBytes;
             if (isKeyExpired(k, now)) {
-                old.releaseStringPayloadIfAny();
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 popped[0] = new ArrayList<>();
                 deltaBytes[0] -= oldEstimate;
@@ -870,6 +868,7 @@ public final class YierdisDb {
             ListValue lv = (ListValue) old.payload;
             popped[0] = left ? lv.lpop(count) : lv.rpop(count);
             if (lv.size() == 0) {
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 return null;
@@ -890,19 +889,21 @@ public final class YierdisDb {
             throw new YierdisCommandException("ERR wrong number of arguments for 'hset' command");
         }
         long now = System.currentTimeMillis();
+        YierdisUnsafeOffHeapAllocator unsafeAllocator =
+                offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe ? unsafe : null;
         final int[] added = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         store.compute(keyBytes, (k, old) -> {
             long oldEstimate = old == null ? 0 : old.estimatedBytes;
             if (old != null && isKeyExpired(k, now)) {
-                old.releaseStringPayloadIfAny();
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 old = null;
                 oldEstimate = 0;
             }
             if (old == null) {
-                HashValue hv = new HashValue();
+                HashValue hv = unsafeAllocator != null ? new HashValue(unsafeAllocator) : new HashValue();
                 added[0] = hv.hsetMany(fieldValuePairs);
                 YierdisObject o = YierdisObject.newHash(hv);
                 touch(o);
@@ -997,7 +998,7 @@ public final class YierdisDb {
         store.computeIfPresent(keyBytes, (k, old) -> {
             long oldEstimate = old.estimatedBytes;
             if (isKeyExpired(k, now)) {
-                old.releaseStringPayloadIfAny();
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 return null;
@@ -1008,6 +1009,7 @@ public final class YierdisDb {
             HashValue hv = (HashValue) old.payload;
             removed[0] = hv.hdel(fields);
             if (hv.size() == 0) {
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 return null;
@@ -1025,19 +1027,21 @@ public final class YierdisDb {
     public int sadd(byte[] keyBytes, List<byte[]> members) {
         checkThread();
         long now = System.currentTimeMillis();
+        YierdisUnsafeOffHeapAllocator unsafeAllocator =
+                offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe ? unsafe : null;
         final int[] added = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         store.compute(keyBytes, (k, old) -> {
             long oldEstimate = old == null ? 0 : old.estimatedBytes;
             if (old != null && isKeyExpired(k, now)) {
-                old.releaseStringPayloadIfAny();
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 old = null;
                 oldEstimate = 0;
             }
             if (old == null) {
-                SetValue sv = new SetValue();
+                SetValue sv = unsafeAllocator != null ? new SetValue(unsafeAllocator) : new SetValue();
                 added[0] = sv.addAll(members);
                 YierdisObject o = YierdisObject.newSet(sv);
                 touch(o);
@@ -1068,7 +1072,7 @@ public final class YierdisDb {
         store.computeIfPresent(keyBytes, (k, old) -> {
             long oldEstimate = old.estimatedBytes;
             if (isKeyExpired(k, now)) {
-                old.releaseStringPayloadIfAny();
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 return null;
@@ -1079,6 +1083,7 @@ public final class YierdisDb {
             SetValue sv = (SetValue) old.payload;
             removed[0] = sv.removeAll(members);
             if (sv.size() == 0) {
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 return null;
@@ -1163,20 +1168,27 @@ public final class YierdisDb {
             throw new YierdisCommandException("ERR wrong number of arguments for 'zadd' command");
         }
         long now = System.currentTimeMillis();
+        YierdisUnsafeOffHeapAllocator unsafeAllocator =
+                offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe ? unsafe : null;
         final int[] added = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         store.compute(keyBytes, (k, old) -> {
             long oldEstimate = old == null ? 0 : old.estimatedBytes;
             if (old != null && isKeyExpired(k, now)) {
-                old.releaseStringPayloadIfAny();
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 old = null;
                 oldEstimate = 0;
             }
             if (old == null) {
-                ZSetValue zv = new ZSetValue();
-                added[0] = zv.zaddMany(scoreMemberPairs);
+                ZSetValue zv = unsafeAllocator != null ? new ZSetValue(unsafeAllocator) : new ZSetValue();
+                try {
+                    added[0] = zv.zaddMany(scoreMemberPairs);
+                } catch (RuntimeException e) {
+                    zv.close();
+                    throw e;
+                }
                 YierdisObject o = YierdisObject.newZSet(zv);
                 touch(o);
                 refreshEstimatedBytes(k, o);
@@ -1366,7 +1378,7 @@ public final class YierdisDb {
         store.computeIfPresent(keyBytes, (k, old) -> {
             long oldEstimate = old.estimatedBytes;
             if (isKeyExpired(k, now)) {
-                old.releaseStringPayloadIfAny();
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 return null;
@@ -1377,6 +1389,7 @@ public final class YierdisDb {
             ZSetValue zv = (ZSetValue) old.payload;
             removed[0] = zv.zrem(members);
             if (zv.size() == 0) {
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 return null;
@@ -1399,7 +1412,7 @@ public final class YierdisDb {
         store.computeIfPresent(keyBytes, (k, old) -> {
             long oldEstimate = old.estimatedBytes;
             if (isKeyExpired(k, now)) {
-                old.releaseStringPayloadIfAny();
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 return null;
@@ -1410,6 +1423,7 @@ public final class YierdisDb {
             ZSetValue zv = (ZSetValue) old.payload;
             removed[0] = zv.zremrangeByRank(start, stop);
             if (zv.size() == 0) {
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 return null;
@@ -1432,7 +1446,7 @@ public final class YierdisDb {
         store.computeIfPresent(keyBytes, (k, old) -> {
             long oldEstimate = old.estimatedBytes;
             if (isKeyExpired(k, now)) {
-                old.releaseStringPayloadIfAny();
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 return null;
@@ -1443,6 +1457,7 @@ public final class YierdisDb {
             ZSetValue zv = (ZSetValue) old.payload;
             removed[0] = zv.zremrangeByScore(min, minExclusive, max, maxExclusive);
             if (zv.size() == 0) {
+                old.releasePayloadIfAny();
                 removeExpire(k);
                 deltaBytes[0] -= oldEstimate;
                 return null;
@@ -1498,7 +1513,7 @@ public final class YierdisDb {
                 if (expireAtMillis <= nowMillis) {
                     removeExpire(keyBytes);
                     if (store.remove(keyBytes, e)) {
-                        e.releaseStringPayloadIfAny();
+                        e.releasePayloadIfAny();
                         usedBytes -= e.estimatedBytes;
                     }
                     expired++;
@@ -1537,7 +1552,7 @@ public final class YierdisDb {
         }
         removeExpire(keyBytes);
         if (store.remove(keyBytes, e)) {
-            e.releaseStringPayloadIfAny();
+            e.releasePayloadIfAny();
             usedBytes -= e.estimatedBytes;
             return true;
         }

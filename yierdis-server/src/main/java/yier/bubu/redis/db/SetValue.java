@@ -1,5 +1,10 @@
 package yier.bubu.redis.db;
 
+import io.netty.util.internal.PlatformDependent;
+import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapDictLong;
+import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapRawSlice;
+import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -7,6 +12,9 @@ import java.util.List;
 final class SetValue implements YierdisValue {
     // Redis uses intset for small integer-only sets and upgrades to hashtable as needed.
     private static final byte[] LONG_MIN_VALUE_BYTES = "-9223372036854775808".getBytes(StandardCharsets.US_ASCII);
+    private static final int LONG_BYTES = Long.BYTES;
+
+    private final YierdisUnsafeOffHeapAllocator offHeapAllocator;
 
     private short[] intset16 = new short[0];
     private int[] intset32;
@@ -17,6 +25,21 @@ final class SetValue implements YierdisValue {
     private ByteArrayHashSet hashset;
     private long rawBytes;
 
+    // Unsafe off-heap mode:
+    // - intset stores sorted longs in a single off-heap long[]
+    // - hashtable stores members as dict keys (values are dummy 1L)
+    private long intsetAddr;
+    private int intsetCapOffHeap;
+    private YierdisUnsafeOffHeapDictLong hashsetOffHeap;
+
+    SetValue() {
+        this.offHeapAllocator = null;
+    }
+
+    SetValue(YierdisUnsafeOffHeapAllocator allocator) {
+        this.offHeapAllocator = allocator;
+    }
+
     @Override
     public ValueType type() {
         return ValueType.SET;
@@ -24,6 +47,9 @@ final class SetValue implements YierdisValue {
 
     @Override
     public ValueEncoding encoding() {
+        if (offHeapAllocator != null) {
+            return hashsetOffHeap != null ? ValueEncoding.SET_HT : ValueEncoding.SET_INTSET;
+        }
         if (hashset != null) {
             return ValueEncoding.SET_HT;
         }
@@ -31,6 +57,9 @@ final class SetValue implements YierdisValue {
     }
 
     int size() {
+        if (offHeapAllocator != null) {
+            return hashsetOffHeap != null ? hashsetOffHeap.size() : intsetSize;
+        }
         if (hashset != null) {
             return hashset.size();
         }
@@ -38,6 +67,9 @@ final class SetValue implements YierdisValue {
     }
 
     long estimatedBytes() {
+        if (offHeapAllocator != null) {
+            return 0;
+        }
         if (hashset != null) {
             return rawBytes + hashset.estimatedBytes();
         }
@@ -75,6 +107,19 @@ final class SetValue implements YierdisValue {
     }
 
     boolean contains(byte[] member) {
+        if (offHeapAllocator != null) {
+            if (hashsetOffHeap != null) {
+                return hashsetOffHeap.get(member) != 0L;
+            }
+
+            long parsed = parseCanonicalLongOrSentinel(member);
+            boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
+            if (!isInt) {
+                return false;
+            }
+            return intsetContainsOffHeap(parsed);
+        }
+
         if (hashset != null) {
             return hashset.contains(member);
         }
@@ -88,6 +133,24 @@ final class SetValue implements YierdisValue {
     }
 
     List<byte[]> members() {
+        if (offHeapAllocator != null) {
+            if (hashsetOffHeap != null) {
+                List<byte[]> out = new ArrayList<>(hashsetOffHeap.size());
+                hashsetOffHeap.forEach((keyPtr, keyLen, value) -> {
+                    byte[] k = new byte[keyLen];
+                    PlatformDependent.copyMemory(keyPtr, k, 0, keyLen);
+                    out.add(k);
+                });
+                return out;
+            }
+
+            List<byte[]> out = new ArrayList<>(intsetSize);
+            for (int i = 0; i < intsetSize; i++) {
+                out.add(Long.toString(intsetLongAtOffHeap(i)).getBytes(StandardCharsets.US_ASCII));
+            }
+            return out;
+        }
+
         if (hashset != null) {
             List<byte[]> out = new ArrayList<>(hashset.size());
             hashset.forEach(out::add);
@@ -106,6 +169,17 @@ final class SetValue implements YierdisValue {
             throw new IllegalArgumentException("out must not be null");
         }
 
+        if (offHeapAllocator != null) {
+            if (hashsetOffHeap != null) {
+                hashsetOffHeap.forEach((keyPtr, keyLen, value) -> out.bulkString(new YierdisUnsafeOffHeapRawSlice(keyPtr, keyLen)));
+                return;
+            }
+            for (int i = 0; i < intsetSize; i++) {
+                out.bulkStringLongAscii(intsetLongAtOffHeap(i));
+            }
+            return;
+        }
+
         if (hashset != null) {
             hashset.forEach(k -> out.bulkString(k, 0, k.length));
             return;
@@ -120,6 +194,26 @@ final class SetValue implements YierdisValue {
         if (member == null) {
             throw new IllegalArgumentException("member must not be null");
         }
+
+        if (offHeapAllocator != null) {
+            if (hashsetOffHeap != null) {
+                return hashsetOffHeap.put(member, 1L) == 0L;
+            }
+
+            long parsed = parseCanonicalLongOrSentinel(member);
+            boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
+            if (!isInt) {
+                convertToHashSetOffHeap();
+                return hashsetOffHeap.put(member, 1L) == 0L;
+            }
+
+            boolean added = intsetAddOffHeap(parsed);
+            if (added && intsetSize > YierdisEncodingThresholds.SET_MAX_INTSET_ENTRIES) {
+                convertToHashSetOffHeap();
+            }
+            return added;
+        }
+
         if (hashset != null) {
             boolean added = hashset.add(member);
             if (added) {
@@ -146,6 +240,20 @@ final class SetValue implements YierdisValue {
         if (member == null) {
             return false;
         }
+
+        if (offHeapAllocator != null) {
+            if (hashsetOffHeap != null) {
+                return hashsetOffHeap.remove(member) != 0L;
+            }
+
+            long parsed = parseCanonicalLongOrSentinel(member);
+            boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
+            if (!isInt) {
+                return false;
+            }
+            return intsetRemoveOffHeap(parsed);
+        }
+
         if (hashset != null) {
             boolean removed = hashset.remove(member);
             if (removed) {
@@ -183,8 +291,36 @@ final class SetValue implements YierdisValue {
         this.intsetSize = 0;
     }
 
+    private void convertToHashSetOffHeap() {
+        if (hashsetOffHeap != null) {
+            return;
+        }
+        if (offHeapAllocator == null) {
+            throw new IllegalStateException("offHeapAllocator must not be null");
+        }
+
+        YierdisUnsafeOffHeapDictLong out = new YierdisUnsafeOffHeapDictLong(offHeapAllocator);
+        for (int i = 0; i < intsetSize; i++) {
+            byte[] member = Long.toString(intsetLongAtOffHeap(i)).getBytes(StandardCharsets.US_ASCII);
+            out.put(member, 1L);
+        }
+
+        if (intsetAddr != 0 && intsetCapOffHeap > 0) {
+            offHeapAllocator.freeAddress(intsetAddr, Math.max(8, intsetCapOffHeap * LONG_BYTES));
+        }
+        intsetAddr = 0;
+        intsetCapOffHeap = 0;
+        intsetSize = 0;
+
+        this.hashsetOffHeap = out;
+    }
+
     private boolean intsetContains(long v) {
         return intsetIndexOf(v) >= 0;
+    }
+
+    private boolean intsetContainsOffHeap(long v) {
+        return intsetIndexOfOffHeap(v) >= 0;
     }
 
     private boolean intsetAdd(long v) {
@@ -230,6 +366,23 @@ final class SetValue implements YierdisValue {
         return true;
     }
 
+    private boolean intsetAddOffHeap(long v) {
+        ensureIntsetCapacityOffHeap(intsetSize + 1);
+
+        int idx = intsetIndexOfOffHeap(v);
+        if (idx >= 0) {
+            return false;
+        }
+
+        int insertAt = -(idx + 1);
+        for (int i = intsetSize; i > insertAt; i--) {
+            putLong(intsetAddr, i, getLong(intsetAddr, i - 1));
+        }
+        putLong(intsetAddr, insertAt, v);
+        intsetSize++;
+        return true;
+    }
+
     private boolean intsetRemove(long v) {
         int idx = intsetIndexOf(v);
         if (idx < 0) {
@@ -254,12 +407,41 @@ final class SetValue implements YierdisValue {
         return true;
     }
 
+    private boolean intsetRemoveOffHeap(long v) {
+        int idx = intsetIndexOfOffHeap(v);
+        if (idx < 0) {
+            return false;
+        }
+        for (int i = idx; i + 1 < intsetSize; i++) {
+            putLong(intsetAddr, i, getLong(intsetAddr, i + 1));
+        }
+        intsetSize--;
+        return true;
+    }
+
     private int intsetIndexOf(long v) {
         int low = 0;
         int high = intsetSize - 1;
         while (low <= high) {
             int mid = (low + high) >>> 1;
             long mv = intsetLongAt(mid);
+            if (mv < v) {
+                low = mid + 1;
+            } else if (mv > v) {
+                high = mid - 1;
+            } else {
+                return mid;
+            }
+        }
+        return -(low + 1);
+    }
+
+    private int intsetIndexOfOffHeap(long v) {
+        int low = 0;
+        int high = intsetSize - 1;
+        while (low <= high) {
+            int mid = (low + high) >>> 1;
+            long mv = intsetLongAtOffHeap(mid);
             if (mv < v) {
                 low = mid + 1;
             } else if (mv > v) {
@@ -280,6 +462,16 @@ final class SetValue implements YierdisValue {
             default:
                 return intset64[index];
         }
+    }
+
+    private long intsetLongAtOffHeap(int index) {
+        if (intsetAddr == 0) {
+            throw new IllegalStateException("off-heap intset not allocated");
+        }
+        if (index < 0 || index >= intsetSize) {
+            throw new IndexOutOfBoundsException();
+        }
+        return getLong(intsetAddr, index);
     }
 
     private void ensureIntsetEncoding(long v) {
@@ -362,6 +554,80 @@ final class SetValue implements YierdisValue {
                     return;
                 }
                 intset64 = growLongArray(intset64, desired);
+        }
+    }
+
+    private void ensureIntsetCapacityOffHeap(int desired) {
+        if (desired <= 0) {
+            throw new IllegalArgumentException("desired must be > 0");
+        }
+        if (intsetCapOffHeap >= desired && intsetAddr != 0) {
+            return;
+        }
+
+        int next = Math.max(4, intsetCapOffHeap);
+        while (next < desired) {
+            next <<= 1;
+        }
+
+        long nextAddr = offHeapAllocator.allocateAddress(Math.max(8, next * LONG_BYTES));
+        if (intsetAddr != 0 && intsetSize > 0) {
+            PlatformDependent.copyMemory(intsetAddr, nextAddr, (long) intsetSize * LONG_BYTES);
+        }
+        if (intsetAddr != 0 && intsetCapOffHeap > 0) {
+            offHeapAllocator.freeAddress(intsetAddr, Math.max(8, intsetCapOffHeap * LONG_BYTES));
+        }
+
+        intsetAddr = nextAddr;
+        intsetCapOffHeap = next;
+    }
+
+    private static long getLong(long base, int index) {
+        long addr = base + (long) index * LONG_BYTES;
+        long b0 = PlatformDependent.getByte(addr) & 0xffL;
+        long b1 = PlatformDependent.getByte(addr + 1) & 0xffL;
+        long b2 = PlatformDependent.getByte(addr + 2) & 0xffL;
+        long b3 = PlatformDependent.getByte(addr + 3) & 0xffL;
+        long b4 = PlatformDependent.getByte(addr + 4) & 0xffL;
+        long b5 = PlatformDependent.getByte(addr + 5) & 0xffL;
+        long b6 = PlatformDependent.getByte(addr + 6) & 0xffL;
+        long b7 = PlatformDependent.getByte(addr + 7) & 0xffL;
+        return b0
+                | (b1 << 8)
+                | (b2 << 16)
+                | (b3 << 24)
+                | (b4 << 32)
+                | (b5 << 40)
+                | (b6 << 48)
+                | (b7 << 56);
+    }
+
+    private static void putLong(long base, int index, long value) {
+        long addr = base + (long) index * LONG_BYTES;
+        PlatformDependent.putByte(addr, (byte) value);
+        PlatformDependent.putByte(addr + 1, (byte) (value >>> 8));
+        PlatformDependent.putByte(addr + 2, (byte) (value >>> 16));
+        PlatformDependent.putByte(addr + 3, (byte) (value >>> 24));
+        PlatformDependent.putByte(addr + 4, (byte) (value >>> 32));
+        PlatformDependent.putByte(addr + 5, (byte) (value >>> 40));
+        PlatformDependent.putByte(addr + 6, (byte) (value >>> 48));
+        PlatformDependent.putByte(addr + 7, (byte) (value >>> 56));
+    }
+
+    @Override
+    public void close() {
+        if (offHeapAllocator == null) {
+            return;
+        }
+        if (hashsetOffHeap != null) {
+            hashsetOffHeap.close();
+            hashsetOffHeap = null;
+        }
+        if (intsetAddr != 0 && intsetCapOffHeap > 0) {
+            offHeapAllocator.freeAddress(intsetAddr, Math.max(8, intsetCapOffHeap * LONG_BYTES));
+            intsetAddr = 0;
+            intsetCapOffHeap = 0;
+            intsetSize = 0;
         }
     }
 

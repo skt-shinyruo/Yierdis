@@ -14,12 +14,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
+import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class ZSetCommandTest {
     @Test
     public void zaddRejectsInvalidScores() {
-        YierdisDb db = new YierdisDb();
-        CommandProcessor cp = new CommandProcessor(db);
+        forEachDb(db -> {
+            CommandProcessor cp = new CommandProcessor(db);
 
         byte[] key = b("z");
 
@@ -35,13 +36,13 @@ public class ZSetCommandTest {
         Assert.assertTrue(err3 instanceof RespError);
         Assert.assertEquals("ERR value is not a valid float", ((RespError) err3).message());
 
-        db.shutdown();
+        });
     }
 
     @Test
     public void zrangeTieBreakIsRawByteLexAndBoundsWork() {
-        YierdisDb db = new YierdisDb();
-        CommandProcessor cp = new CommandProcessor(db);
+        forEachDb(db -> {
+            CommandProcessor cp = new CommandProcessor(db);
 
         byte[] key = new byte[]{'z', 0};
 
@@ -86,13 +87,13 @@ public class ZSetCommandTest {
         RespArray startAfterStop = (RespArray) cp.execute(Arrays.asList(b("ZRANGE"), key, b("2"), b("1")));
         Assert.assertTrue(startAfterStop.values().isEmpty());
 
-        db.shutdown();
+        });
     }
 
     @Test
     public void zrevrangeAndZrangeRevReturnReverseOrder() {
-        YierdisDb db = new YierdisDb();
-        CommandProcessor cp = new CommandProcessor(db);
+        forEachDb(db -> {
+            CommandProcessor cp = new CommandProcessor(db);
 
         byte[] key = b("zrev");
 
@@ -132,13 +133,13 @@ public class ZSetCommandTest {
         Assert.assertArrayEquals(m3, ((RespBulkString) revWithScores.values().get(2)).data());
         Assert.assertEquals("1", ((RespBulkString) revWithScores.values().get(3)).asString());
 
-        db.shutdown();
+        });
     }
 
     @Test
     public void zremDeletesKeyWhenEmpty() {
-        YierdisDb db = new YierdisDb();
-        CommandProcessor cp = new CommandProcessor(db);
+        forEachDb(db -> {
+            CommandProcessor cp = new CommandProcessor(db);
 
         byte[] key = new byte[]{0, 'z'};
         byte[] member = new byte[]{0, 1, 2};
@@ -155,13 +156,13 @@ public class ZSetCommandTest {
         RespSimpleString type = (RespSimpleString) cp.execute(Arrays.asList(b("TYPE"), key));
         Assert.assertEquals("none", type.value());
 
-        db.shutdown();
+        });
     }
 
     @Test
     public void zsetUpgradesAfterManyElementsAndKeepsOrder() {
-        YierdisDb db = new YierdisDb();
-        CommandProcessor cp = new CommandProcessor(db);
+        forEachDb(db -> {
+            CommandProcessor cp = new CommandProcessor(db);
 
         byte[] key = b("big-zset");
         int n = 129; // > ZSetValue.LISTPACK_MAX_ENTRIES
@@ -187,13 +188,13 @@ public class ZSetCommandTest {
         Assert.assertEquals("m128", ((RespBulkString) rev.values().get(0)).asString());
         Assert.assertEquals("m127", ((RespBulkString) rev.values().get(1)).asString());
 
-        db.shutdown();
+        });
     }
 
     @Test
     public void zsetUpgradesWhenMemberIsTooLargeForListpack() {
-        YierdisDb db = new YierdisDb();
-        CommandProcessor cp = new CommandProcessor(db);
+        forEachDb(db -> {
+            CommandProcessor cp = new CommandProcessor(db);
 
         byte[] key = b("zset:big-member");
         byte[] small = b("a");
@@ -212,13 +213,13 @@ public class ZSetCommandTest {
         Assert.assertArrayEquals(small, ((RespBulkString) range.values().get(0)).data());
         Assert.assertArrayEquals(big, ((RespBulkString) range.values().get(1)).data());
 
-        db.shutdown();
+        });
     }
 
     @Test
     public void zrangeByScoreRespectsBoundsLimitAndWithScores() {
-        YierdisDb db = new YierdisDb();
-        CommandProcessor cp = new CommandProcessor(db);
+        forEachDb(db -> {
+            CommandProcessor cp = new CommandProcessor(db);
 
         byte[] key = b("zbyscore");
         cp.execute(Arrays.asList(
@@ -267,13 +268,13 @@ public class ZSetCommandTest {
         ));
         Assert.assertEquals(0, emptyWhenCountZero.values().size());
 
-        db.shutdown();
+        });
     }
 
     @Test
     public void zremrangeByScoreRemovesAndDeletesKeyWhenEmpty() {
-        YierdisDb db = new YierdisDb();
-        CommandProcessor cp = new CommandProcessor(db);
+        forEachDb(db -> {
+            CommandProcessor cp = new CommandProcessor(db);
 
         byte[] key = b("zrembyscore");
         cp.execute(Arrays.asList(
@@ -296,13 +297,13 @@ public class ZSetCommandTest {
         RespInteger exists = (RespInteger) cp.execute(Arrays.asList(b("EXISTS"), key));
         Assert.assertEquals(0, exists.value());
 
-        db.shutdown();
+        });
     }
 
     @Test
     public void zrangeByScoreWorksAfterUpgradeToSkiplist() {
-        YierdisDb db = new YierdisDb();
-        CommandProcessor cp = new CommandProcessor(db);
+        forEachDb(db -> {
+            CommandProcessor cp = new CommandProcessor(db);
 
         byte[] key = b("zbyscore:upgrade");
         byte[] big = new byte[65];
@@ -320,13 +321,13 @@ public class ZSetCommandTest {
         Assert.assertEquals("a", ((RespBulkString) range.values().get(0)).asString());
         Assert.assertArrayEquals(big, ((RespBulkString) range.values().get(1)).data());
 
-        db.shutdown();
+        });
     }
 
     @Test
     public void zrevrangeByScoreRespectsBoundsLimitAndWithScores() {
-        YierdisDb db = new YierdisDb();
-        CommandProcessor cp = new CommandProcessor(db);
+        forEachDb(db -> {
+            CommandProcessor cp = new CommandProcessor(db);
 
         byte[] key = b("zrevbyscore");
         cp.execute(Arrays.asList(
@@ -372,13 +373,13 @@ public class ZSetCommandTest {
         RespArray offsetPastEnd = (RespArray) cp.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("3"), b("2"), b("LIMIT"), b("10"), b("1")));
         Assert.assertEquals(0, offsetPastEnd.values().size());
 
-        db.shutdown();
+        });
     }
 
     @Test
     public void zremrangeByRankRemovesAndDeletesKeyWhenEmpty() {
-        YierdisDb db = new YierdisDb();
-        CommandProcessor cp = new CommandProcessor(db);
+        forEachDb(db -> {
+            CommandProcessor cp = new CommandProcessor(db);
 
         byte[] key = b("zrembyrank");
         cp.execute(Arrays.asList(
@@ -406,13 +407,13 @@ public class ZSetCommandTest {
         RespInteger exists = (RespInteger) cp.execute(Arrays.asList(b("EXISTS"), key));
         Assert.assertEquals(0, exists.value());
 
-        db.shutdown();
+        });
     }
 
     @Test
     public void zrevrangeByScoreAndZremrangeByRankWorkAfterUpgradeToSkiplist() {
-        YierdisDb db = new YierdisDb();
-        CommandProcessor cp = new CommandProcessor(db);
+        forEachDb(db -> {
+            CommandProcessor cp = new CommandProcessor(db);
 
         byte[] key = b("zrange:upgrade2");
         byte[] big = new byte[65];
@@ -436,6 +437,6 @@ public class ZSetCommandTest {
         RespInteger exists = (RespInteger) cp.execute(Arrays.asList(b("EXISTS"), key));
         Assert.assertEquals(0, exists.value());
 
-        db.shutdown();
+        });
     }
 }

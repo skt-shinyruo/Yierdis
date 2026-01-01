@@ -2,6 +2,7 @@ package yier.bubu.redis.command;
 
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.ValueType;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.protocol.RespArray;
 import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.protocol.RespError;
@@ -169,6 +170,8 @@ public final class CommandProcessor {
             return RespError.of(e.getMessage());
         } catch (YierdisDb.YierdisCommandException e) {
             return RespError.of(e.getMessage());
+        } catch (YierdisOffHeapOutOfMemoryException e) {
+            return RespError.of("OOM off-heap memory limit exceeded");
         } catch (IllegalArgumentException e) {
             return RespError.of("ERR " + e.getMessage());
         }

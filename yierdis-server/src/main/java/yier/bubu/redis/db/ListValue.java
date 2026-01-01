@@ -1,5 +1,8 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapListpack;
+import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
@@ -10,10 +13,26 @@ final class ListValue implements YierdisValue {
     // to a quicklist-like deque of nodes once size/element thresholds are crossed.
     private static final int QUICKLIST_NODE_MAX_BYTES = YierdisEncodingThresholds.LIST_MAX_LISTPACK_BYTES;
 
-    private YierdisListpack listpack = new YierdisListpack();
+    private final YierdisUnsafeOffHeapAllocator offHeapAllocator;
+
+    private YierdisListpack listpack;
     private ArrayDeque<ListNode> quicklist;
+
+    private YierdisUnsafeOffHeapListpack listpackOffHeap;
+    private ArrayDeque<OffHeapListNode> quicklistOffHeap;
+
     private int totalSize = 0;
     private long allocatedBytes = 0;
+
+    ListValue() {
+        this.offHeapAllocator = null;
+        this.listpack = new YierdisListpack();
+    }
+
+    ListValue(YierdisUnsafeOffHeapAllocator allocator) {
+        this.offHeapAllocator = allocator;
+        this.listpackOffHeap = new YierdisUnsafeOffHeapListpack(allocator);
+    }
 
     @Override
     public ValueType type() {
@@ -22,6 +41,9 @@ final class ListValue implements YierdisValue {
 
     @Override
     public ValueEncoding encoding() {
+        if (offHeapAllocator != null) {
+            return quicklistOffHeap != null ? ValueEncoding.LIST_QUICKLIST : ValueEncoding.LIST_PACKED;
+        }
         return quicklist != null ? ValueEncoding.LIST_QUICKLIST : ValueEncoding.LIST_PACKED;
     }
 
@@ -30,10 +52,37 @@ final class ListValue implements YierdisValue {
     }
 
     long estimatedBytes() {
+        if (offHeapAllocator != null) {
+            return 0;
+        }
         return allocatedBytes;
     }
 
     void lpushAll(List<byte[]> values) {
+        if (offHeapAllocator != null) {
+            if (quicklistOffHeap != null) {
+                for (byte[] v : values) {
+                    qlAddFirstOffHeap(v);
+                }
+                return;
+            }
+
+            if (wouldExceedPackedBytesOffHeap(values)) {
+                convertToQuickListOffHeap();
+                lpushAll(values);
+                return;
+            }
+
+            for (byte[] v : values) {
+                listpackOffHeap.addFirst(v);
+                totalSize++;
+            }
+            if (quicklistOffHeap == null && listpackOffHeap.encodedBytes() > QUICKLIST_NODE_MAX_BYTES) {
+                convertToQuickListOffHeap();
+            }
+            return;
+        }
+
         if (quicklist != null) {
             for (byte[] v : values) {
                 qlAddFirst(v);
@@ -62,6 +111,30 @@ final class ListValue implements YierdisValue {
     }
 
     void rpushAll(List<byte[]> values) {
+        if (offHeapAllocator != null) {
+            if (quicklistOffHeap != null) {
+                for (byte[] v : values) {
+                    qlAddLastOffHeap(v);
+                }
+                return;
+            }
+
+            if (wouldExceedPackedBytesOffHeap(values)) {
+                convertToQuickListOffHeap();
+                rpushAll(values);
+                return;
+            }
+
+            for (byte[] v : values) {
+                listpackOffHeap.addLast(v);
+            }
+            totalSize += values.size();
+            if (quicklistOffHeap == null && listpackOffHeap.encodedBytes() > QUICKLIST_NODE_MAX_BYTES) {
+                convertToQuickListOffHeap();
+            }
+            return;
+        }
+
         if (quicklist != null) {
             for (byte[] v : values) {
                 qlAddLast(v);
@@ -96,6 +169,26 @@ final class ListValue implements YierdisValue {
         int expected = Math.min(count, totalSize);
         List<byte[]> out = new ArrayList<>(expected);
         for (int i = 0; i < count; i++) {
+            if (offHeapAllocator != null) {
+                if (quicklistOffHeap != null) {
+                    if (quicklistOffHeap.isEmpty()) {
+                        break;
+                    }
+                    byte[] v = qlPollFirstOffHeap();
+                    totalSize--;
+                    out.add(v);
+                    continue;
+                }
+
+                if (listpackOffHeap.isEmpty()) {
+                    break;
+                }
+                byte[] v = listpackOffHeap.removeFirst();
+                totalSize--;
+                out.add(v);
+                continue;
+            }
+
             if (quicklist != null) {
                 if (quicklist.isEmpty()) {
                     break;
@@ -123,6 +216,26 @@ final class ListValue implements YierdisValue {
         int expected = Math.min(count, totalSize);
         List<byte[]> out = new ArrayList<>(expected);
         for (int i = 0; i < count; i++) {
+            if (offHeapAllocator != null) {
+                if (quicklistOffHeap != null) {
+                    if (quicklistOffHeap.isEmpty()) {
+                        break;
+                    }
+                    byte[] v = qlPollLastOffHeap();
+                    totalSize--;
+                    out.add(v);
+                    continue;
+                }
+
+                if (listpackOffHeap.isEmpty()) {
+                    break;
+                }
+                byte[] v = listpackOffHeap.removeLast();
+                totalSize--;
+                out.add(v);
+                continue;
+            }
+
             if (quicklist != null) {
                 if (quicklist.isEmpty()) {
                     break;
@@ -167,6 +280,37 @@ final class ListValue implements YierdisValue {
 
         List<byte[]> out = new ArrayList<>(normalizedStop - normalizedStart + 1);
         int idx = 0;
+        if (offHeapAllocator != null) {
+            if (quicklistOffHeap != null) {
+                outer:
+                for (OffHeapListNode n : quicklistOffHeap) {
+                    YierdisUnsafeOffHeapListpack.Cursor c = n.cursor();
+                    while (c.next()) {
+                        if (idx > normalizedStop) {
+                            break outer;
+                        }
+                        if (idx >= normalizedStart) {
+                            out.add(c.toByteArray());
+                        }
+                        idx++;
+                    }
+                }
+                return out;
+            }
+
+            YierdisUnsafeOffHeapListpack.Cursor c = listpackOffHeap.cursor();
+            while (c.next()) {
+                if (idx > normalizedStop) {
+                    break;
+                }
+                if (idx >= normalizedStart) {
+                    out.add(c.toByteArray());
+                }
+                idx++;
+            }
+            return out;
+        }
+
         if (quicklist != null) {
             outer:
             for (ListNode n : quicklist) {
@@ -247,6 +391,37 @@ final class ListValue implements YierdisValue {
         }
 
         int idx = 0;
+        if (offHeapAllocator != null) {
+            if (quicklistOffHeap != null) {
+                outer:
+                for (OffHeapListNode n : quicklistOffHeap) {
+                    YierdisUnsafeOffHeapListpack.Cursor c = n.cursor();
+                    while (c.next()) {
+                        if (idx > normalizedStop) {
+                            break outer;
+                        }
+                        if (idx >= normalizedStart) {
+                            c.writeTo(out);
+                        }
+                        idx++;
+                    }
+                }
+                return;
+            }
+
+            YierdisUnsafeOffHeapListpack.Cursor c = listpackOffHeap.cursor();
+            while (c.next()) {
+                if (idx > normalizedStop) {
+                    break;
+                }
+                if (idx >= normalizedStart) {
+                    c.writeTo(out);
+                }
+                idx++;
+            }
+            return;
+        }
+
         if (quicklist != null) {
             outer:
             for (ListNode n : quicklist) {
@@ -297,6 +472,20 @@ final class ListValue implements YierdisValue {
         return predicted > QUICKLIST_NODE_MAX_BYTES;
     }
 
+    private boolean wouldExceedPackedBytesOffHeap(List<byte[]> incoming) {
+        if (incoming == null || incoming.isEmpty()) {
+            return false;
+        }
+        int predicted = listpackOffHeap.encodedBytes();
+        for (byte[] v : incoming) {
+            predicted += entryEncodedBytes(v);
+            if (predicted > QUICKLIST_NODE_MAX_BYTES) {
+                return true;
+            }
+        }
+        return predicted > QUICKLIST_NODE_MAX_BYTES;
+    }
+
     private void convertToQuickList() {
         if (quicklist != null) {
             return;
@@ -322,6 +511,31 @@ final class ListValue implements YierdisValue {
 
         this.quicklist = out;
         this.listpack = null;
+    }
+
+    private void convertToQuickListOffHeap() {
+        if (quicklistOffHeap != null) {
+            return;
+        }
+
+        ArrayDeque<OffHeapListNode> out = new ArrayDeque<>();
+        OffHeapListNode node = new OffHeapListNode(offHeapAllocator);
+        YierdisUnsafeOffHeapListpack.Cursor c = listpackOffHeap.cursor();
+        while (c.next()) {
+            int entryBytes = entryEncodedBytes(c.isNull() ? -1 : c.length());
+            if (!node.canAddEntry(entryBytes)) {
+                out.addLast(node);
+                node = new OffHeapListNode(offHeapAllocator);
+            }
+            node.addLast(c.toByteArray());
+        }
+        if (!node.isEmpty()) {
+            out.addLast(node);
+        }
+
+        listpackOffHeap.close();
+        listpackOffHeap = null;
+        this.quicklistOffHeap = out;
     }
 
     private void qlAddFirst(byte[] v) {
@@ -432,6 +646,106 @@ final class ListValue implements YierdisValue {
         quicklist.addLast(last);
     }
 
+    private void qlAddFirstOffHeap(byte[] v) {
+        if (quicklistOffHeap.isEmpty() || !quicklistOffHeap.peekFirst().canAdd(v)) {
+            quicklistOffHeap.addFirst(new OffHeapListNode(offHeapAllocator));
+        }
+        OffHeapListNode n = quicklistOffHeap.peekFirst();
+        n.addFirst(v);
+        totalSize++;
+    }
+
+    private void qlAddLastOffHeap(byte[] v) {
+        if (quicklistOffHeap.isEmpty() || !quicklistOffHeap.peekLast().canAdd(v)) {
+            quicklistOffHeap.addLast(new OffHeapListNode(offHeapAllocator));
+        }
+        OffHeapListNode n = quicklistOffHeap.peekLast();
+        n.addLast(v);
+        totalSize++;
+    }
+
+    private byte[] qlPollFirstOffHeap() {
+        if (quicklistOffHeap.isEmpty()) {
+            return null;
+        }
+        OffHeapListNode n = quicklistOffHeap.peekFirst();
+        byte[] v = n.removeFirst();
+        if (n.isEmpty()) {
+            quicklistOffHeap.removeFirst();
+            n.close();
+        }
+        maybeMergeFirstTwoOffHeap();
+        return v;
+    }
+
+    private byte[] qlPollLastOffHeap() {
+        if (quicklistOffHeap.isEmpty()) {
+            return null;
+        }
+        OffHeapListNode n = quicklistOffHeap.peekLast();
+        byte[] v = n.removeLast();
+        if (n.isEmpty()) {
+            quicklistOffHeap.removeLast();
+            n.close();
+        }
+        maybeMergeLastTwoOffHeap();
+        return v;
+    }
+
+    private void maybeMergeFirstTwoOffHeap() {
+        if (quicklistOffHeap.size() < 2) {
+            return;
+        }
+        OffHeapListNode first = quicklistOffHeap.pollFirst();
+        OffHeapListNode second = quicklistOffHeap.pollFirst();
+        if (first == null || second == null) {
+            if (second != null) {
+                quicklistOffHeap.addFirst(second);
+            }
+            if (first != null) {
+                quicklistOffHeap.addFirst(first);
+            }
+            return;
+        }
+
+        if (first.canAppendAll(second)) {
+            first.appendAll(second);
+            second.close();
+            quicklistOffHeap.addFirst(first);
+            return;
+        }
+
+        quicklistOffHeap.addFirst(second);
+        quicklistOffHeap.addFirst(first);
+    }
+
+    private void maybeMergeLastTwoOffHeap() {
+        if (quicklistOffHeap.size() < 2) {
+            return;
+        }
+        OffHeapListNode last = quicklistOffHeap.pollLast();
+        OffHeapListNode prev = quicklistOffHeap.pollLast();
+        if (last == null || prev == null) {
+            if (prev != null) {
+                quicklistOffHeap.addLast(prev);
+            }
+            if (last != null) {
+                quicklistOffHeap.addLast(last);
+            }
+            return;
+        }
+
+        if (prev.canAppendAll(last)) {
+            prev.appendAll(last);
+            last.close();
+            quicklistOffHeap.addLast(prev);
+            return;
+        }
+
+        quicklistOffHeap.addLast(prev);
+        quicklistOffHeap.addLast(last);
+    }
+
     private static final class ListNode {
         private final YierdisListpack listpack = new YierdisListpack();
 
@@ -503,6 +817,74 @@ final class ListValue implements YierdisValue {
         }
     }
 
+    private static final class OffHeapListNode implements AutoCloseable {
+        private final YierdisUnsafeOffHeapListpack listpack;
+
+        private OffHeapListNode(YierdisUnsafeOffHeapAllocator allocator) {
+            this.listpack = new YierdisUnsafeOffHeapListpack(allocator);
+        }
+
+        boolean isEmpty() {
+            return listpack.isEmpty();
+        }
+
+        YierdisUnsafeOffHeapListpack.Cursor cursor() {
+            return listpack.cursor();
+        }
+
+        boolean canAdd(byte[] v) {
+            return canAddEntry(entryEncodedBytes(v));
+        }
+
+        boolean canAddEntry(int entryBytes) {
+            if (entryBytes < 0) {
+                throw new IllegalArgumentException("entryBytes must be >= 0");
+            }
+            if (listpack.isEmpty()) {
+                return true;
+            }
+            return listpack.encodedBytes() + entryBytes <= QUICKLIST_NODE_MAX_BYTES;
+        }
+
+        void addFirst(byte[] v) {
+            listpack.addFirst(v);
+        }
+
+        void addLast(byte[] v) {
+            listpack.addLast(v);
+        }
+
+        byte[] removeFirst() {
+            return listpack.removeFirst();
+        }
+
+        byte[] removeLast() {
+            return listpack.removeLast();
+        }
+
+        boolean canAppendAll(OffHeapListNode other) {
+            if (other == null || other.isEmpty()) {
+                return true;
+            }
+            return this.listpack.encodedBytes() + other.listpack.encodedBytes() <= QUICKLIST_NODE_MAX_BYTES;
+        }
+
+        void appendAll(OffHeapListNode other) {
+            if (other == null || other.isEmpty()) {
+                return;
+            }
+            YierdisUnsafeOffHeapListpack.Cursor c = other.listpack.cursor();
+            while (c.next()) {
+                listpack.addLast(c.toByteArray());
+            }
+        }
+
+        @Override
+        public void close() {
+            listpack.close();
+        }
+    }
+
     private static int entryEncodedBytes(YierdisListpack.Cursor c) {
         if (c == null) {
             throw new IllegalArgumentException("cursor must not be null");
@@ -516,6 +898,29 @@ final class ListValue implements YierdisValue {
         int len = v == null ? -1 : v.length;
         int headerValue = len < 0 ? 0 : len + 1;
         return varIntSize(headerValue) + Math.max(0, len);
+    }
+
+    private static int entryEncodedBytes(int len) {
+        int headerValue = len < 0 ? 0 : len + 1;
+        return varIntSize(headerValue) + Math.max(0, len);
+    }
+
+    @Override
+    public void close() {
+        if (offHeapAllocator == null) {
+            return;
+        }
+        if (listpackOffHeap != null) {
+            listpackOffHeap.close();
+            listpackOffHeap = null;
+        }
+        if (quicklistOffHeap != null) {
+            for (OffHeapListNode n : quicklistOffHeap) {
+                n.close();
+            }
+            quicklistOffHeap.clear();
+            quicklistOffHeap = null;
+        }
     }
 
     private static int varIntSize(int value) {

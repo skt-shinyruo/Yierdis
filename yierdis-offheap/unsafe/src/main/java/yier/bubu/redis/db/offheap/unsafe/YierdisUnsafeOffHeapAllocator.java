@@ -17,10 +17,26 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
  * - slice views that can be written to Netty {@link ByteBuf} without heap copies
  */
 public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAllocator {
+    private static final int INTERNAL_HEADER_BYTES = Long.BYTES;
+    private static final int INTERNAL_HEADER_MAGIC = 0x59494552; // "YIER"
+    private static final int MIN_BLOCK_BYTES = 8;
+    private static final int MAX_SMALL_BLOCK_BYTES = 64 * 1024;
+    private static final int MIN_BLOCK_SHIFT = 3; // 2^3 == 8
+    private static final int MAX_SMALL_BLOCK_SHIFT = 16; // 2^16 == 65536
+    private static final int SIZE_CLASSES = MAX_SMALL_BLOCK_SHIFT - MIN_BLOCK_SHIFT + 1;
+
     private final long maxBytes;
+    private final long[] freeListHeads = new long[SIZE_CLASSES];
+    private final int[] freeListSizes = new int[SIZE_CLASSES];
+
+    private final int[] liveAllocCounts = new int[SIZE_CLASSES];
+    private final long[] liveAllocBytes = new long[SIZE_CLASSES];
+    private int liveLargeAllocs;
+    private long liveLargeBytes;
 
     private boolean closed;
     private long usedBytes;
+    private long reservedBytes;
 
     public YierdisUnsafeOffHeapAllocator(long maxBytes) {
         if (maxBytes < 0) {
@@ -57,8 +73,30 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAlloca
         if (address == 0) {
             throw new IllegalArgumentException("address must be != 0");
         }
-        PlatformDependent.freeMemory(address);
-        onFree(capacity);
+
+        long baseAddress = address - INTERNAL_HEADER_BYTES;
+        if (baseAddress <= 0) {
+            throw new IllegalArgumentException("address must be > " + INTERNAL_HEADER_BYTES);
+        }
+
+        int allocBytes = decodeAllocBytes(baseAddress);
+        onFreeLive(allocBytes);
+        if (closed || allocBytes > MAX_SMALL_BLOCK_BYTES) {
+            PlatformDependent.freeMemory(baseAddress);
+            onFree(allocBytes);
+            reservedBytes -= allocBytes;
+            if (reservedBytes < 0) {
+                throw new IllegalStateException("allocator reservedBytes underflow");
+            }
+            return;
+        }
+
+        int classIndex = classIndexForAllocationBytes(allocBytes);
+        long head = freeListHeads[classIndex];
+        writeLong(baseAddress, head);
+        freeListHeads[classIndex] = baseAddress;
+        freeListSizes[classIndex]++;
+        onFree(allocBytes);
     }
 
     @Override
@@ -75,14 +113,28 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAlloca
             throw new IllegalStateException("allocator is closed");
         }
 
-        long next = usedBytes + capacity;
-        if (maxBytes > 0 && next > maxBytes) {
-            throw new YierdisOffHeapOutOfMemoryException("off-heap memory limit exceeded");
+        int allocBytes = allocationBytesFor(capacity);
+        if (allocBytes <= MAX_SMALL_BLOCK_BYTES) {
+            int classIndex = classIndexForAllocationBytes(allocBytes);
+            long head = freeListHeads[classIndex];
+            if (head != 0) {
+                long next = readLong(head);
+                freeListHeads[classIndex] = next;
+                freeListSizes[classIndex]--;
+                usedBytes += allocBytes;
+                onAllocLive(allocBytes);
+                writeLong(head, encodeHeader(allocBytes));
+                return head + INTERNAL_HEADER_BYTES;
+            }
         }
 
-        long address = PlatformDependent.allocateMemory(capacity);
-        usedBytes = next;
-        return address;
+        ensureCanReserve(allocBytes);
+        long address = PlatformDependent.allocateMemory(allocBytes + INTERNAL_HEADER_BYTES);
+        reservedBytes += allocBytes;
+        usedBytes += allocBytes;
+        onAllocLive(allocBytes);
+        writeLong(address, encodeHeader(allocBytes));
+        return address + INTERNAL_HEADER_BYTES;
     }
 
     @Override
@@ -104,16 +156,200 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAlloca
     public void close() {
         closed = true;
         if (usedBytes != 0) {
-            throw new IllegalStateException("off-heap leak: " + usedBytes + " bytes still allocated");
+            // Best-effort: free anything already returned to our free lists so the process doesn't leak
+            // too much native memory on assertion failures.
+            freeAllFreeLists();
+            throw new IllegalStateException("off-heap leak: " + usedBytes + " bytes still allocated (" + liveSummary() + ")");
+        }
+        freeAllFreeLists();
+        if (reservedBytes != 0) {
+            throw new IllegalStateException("off-heap reserved bytes leak: " + reservedBytes + " bytes still reserved");
         }
     }
 
-    void onFree(int capacity) {
-        long next = usedBytes - capacity;
+    void onFree(int allocBytes) {
+        long next = usedBytes - allocBytes;
         if (next < 0) {
             throw new IllegalStateException("allocator accounting underflow");
         }
         usedBytes = next;
+    }
+
+    private void ensureCanReserve(int allocBytes) {
+        if (maxBytes <= 0) {
+            return;
+        }
+        if (allocBytes > maxBytes) {
+            throw new YierdisOffHeapOutOfMemoryException("off-heap memory limit exceeded");
+        }
+        long next = reservedBytes + allocBytes;
+        if (next <= maxBytes) {
+            return;
+        }
+        trimFreeListsFor(next - maxBytes);
+        if (reservedBytes + allocBytes > maxBytes) {
+            throw new YierdisOffHeapOutOfMemoryException("off-heap memory limit exceeded");
+        }
+    }
+
+    private void trimFreeListsFor(long bytesToFree) {
+        long remaining = bytesToFree;
+        for (int classIndex = SIZE_CLASSES - 1; classIndex >= 0 && remaining > 0; classIndex--) {
+            int allocBytes = allocationBytesForClass(classIndex);
+            while (freeListHeads[classIndex] != 0 && remaining > 0) {
+                long head = freeListHeads[classIndex];
+                long next = readLong(head);
+                freeListHeads[classIndex] = next;
+                freeListSizes[classIndex]--;
+                PlatformDependent.freeMemory(head);
+                reservedBytes -= allocBytes;
+                remaining -= allocBytes;
+            }
+        }
+        if (reservedBytes < 0) {
+            throw new IllegalStateException("allocator reservedBytes underflow");
+        }
+    }
+
+    private void freeAllFreeLists() {
+        for (int classIndex = 0; classIndex < SIZE_CLASSES; classIndex++) {
+            int allocBytes = allocationBytesForClass(classIndex);
+            long head = freeListHeads[classIndex];
+            while (head != 0) {
+                long next = readLong(head);
+                PlatformDependent.freeMemory(head);
+                reservedBytes -= allocBytes;
+                head = next;
+            }
+            freeListHeads[classIndex] = 0L;
+            freeListSizes[classIndex] = 0;
+        }
+        if (reservedBytes < 0) {
+            throw new IllegalStateException("allocator reservedBytes underflow");
+        }
+    }
+
+    private static int allocationBytesFor(int capacity) {
+        int aligned = align8(capacity);
+        if (aligned <= MAX_SMALL_BLOCK_BYTES) {
+            int nextPow2 = 1 << (32 - Integer.numberOfLeadingZeros(Math.max(MIN_BLOCK_BYTES, aligned) - 1));
+            return Math.min(MAX_SMALL_BLOCK_BYTES, nextPow2);
+        }
+        return aligned;
+    }
+
+    private static long encodeHeader(int allocBytes) {
+        return ((long) INTERNAL_HEADER_MAGIC << 32) | (allocBytes & 0xffffffffL);
+    }
+
+    private static int decodeAllocBytes(long baseAddress) {
+        long header = readLong(baseAddress);
+        int magic = (int) (header >>> 32);
+        if (magic != INTERNAL_HEADER_MAGIC) {
+            throw new IllegalStateException("invalid off-heap address or double-free detected");
+        }
+        return (int) header;
+    }
+
+    private void onAllocLive(int allocBytes) {
+        if (allocBytes <= MAX_SMALL_BLOCK_BYTES) {
+            int classIndex = classIndexForAllocationBytes(allocBytes);
+            liveAllocCounts[classIndex]++;
+            liveAllocBytes[classIndex] += allocBytes;
+            return;
+        }
+        liveLargeAllocs++;
+        liveLargeBytes += allocBytes;
+    }
+
+    private void onFreeLive(int allocBytes) {
+        if (allocBytes <= MAX_SMALL_BLOCK_BYTES) {
+            int classIndex = classIndexForAllocationBytes(allocBytes);
+            liveAllocCounts[classIndex]--;
+            liveAllocBytes[classIndex] -= allocBytes;
+            return;
+        }
+        liveLargeAllocs--;
+        liveLargeBytes -= allocBytes;
+    }
+
+    private String liveSummary() {
+        StringBuilder sb = new StringBuilder(64);
+        boolean first = true;
+        for (int classIndex = 0; classIndex < SIZE_CLASSES; classIndex++) {
+            int count = liveAllocCounts[classIndex];
+            if (count <= 0) {
+                continue;
+            }
+            int bytes = allocationBytesForClass(classIndex);
+            if (!first) {
+                sb.append(", ");
+            }
+            first = false;
+            sb.append(bytes).append("B x").append(count);
+        }
+        if (liveLargeAllocs > 0) {
+            if (!first) {
+                sb.append(", ");
+            }
+            sb.append("large ").append(liveLargeBytes).append("B x").append(liveLargeAllocs);
+            first = false;
+        }
+        if (first) {
+            return "no live allocation detail";
+        }
+        return sb.toString();
+    }
+
+    private static int align8(int v) {
+        int x = v + 7;
+        return x & ~7;
+    }
+
+    private static int allocationBytesForClass(int classIndex) {
+        return 1 << (MIN_BLOCK_SHIFT + classIndex);
+    }
+
+    private static int classIndexForAllocationBytes(int allocBytes) {
+        if (allocBytes < MIN_BLOCK_BYTES || (allocBytes & (allocBytes - 1)) != 0) {
+            throw new IllegalArgumentException("allocBytes must be a power-of-two >= " + MIN_BLOCK_BYTES);
+        }
+        int shift = 31 - Integer.numberOfLeadingZeros(allocBytes);
+        int index = shift - MIN_BLOCK_SHIFT;
+        if (index < 0 || index >= SIZE_CLASSES) {
+            throw new IllegalArgumentException("allocBytes is not a small-block size class: " + allocBytes);
+        }
+        return index;
+    }
+
+    private static long readLong(long addr) {
+        long b0 = PlatformDependent.getByte(addr) & 0xffL;
+        long b1 = PlatformDependent.getByte(addr + 1) & 0xffL;
+        long b2 = PlatformDependent.getByte(addr + 2) & 0xffL;
+        long b3 = PlatformDependent.getByte(addr + 3) & 0xffL;
+        long b4 = PlatformDependent.getByte(addr + 4) & 0xffL;
+        long b5 = PlatformDependent.getByte(addr + 5) & 0xffL;
+        long b6 = PlatformDependent.getByte(addr + 6) & 0xffL;
+        long b7 = PlatformDependent.getByte(addr + 7) & 0xffL;
+        return b0
+                | (b1 << 8)
+                | (b2 << 16)
+                | (b3 << 24)
+                | (b4 << 32)
+                | (b5 << 40)
+                | (b6 << 48)
+                | (b7 << 56);
+    }
+
+    private static void writeLong(long addr, long value) {
+        PlatformDependent.putByte(addr, (byte) value);
+        PlatformDependent.putByte(addr + 1, (byte) (value >>> 8));
+        PlatformDependent.putByte(addr + 2, (byte) (value >>> 16));
+        PlatformDependent.putByte(addr + 3, (byte) (value >>> 24));
+        PlatformDependent.putByte(addr + 4, (byte) (value >>> 32));
+        PlatformDependent.putByte(addr + 5, (byte) (value >>> 40));
+        PlatformDependent.putByte(addr + 6, (byte) (value >>> 48));
+        PlatformDependent.putByte(addr + 7, (byte) (value >>> 56));
     }
 
     public static final class YierdisUnsafeOffHeapBlock implements AutoCloseable {
@@ -237,8 +473,7 @@ final class YierdisUnsafeOffHeapBuf implements YierdisOffHeapBuf {
         closed = true;
         long addr = address;
         address = 0;
-        PlatformDependent.freeMemory(addr);
-        owner.onFree(capacity);
+        owner.freeAddress(addr, capacity);
     }
 
     void ensureOpen() {
