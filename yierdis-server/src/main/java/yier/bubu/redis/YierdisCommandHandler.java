@@ -9,6 +9,7 @@ import yier.bubu.redis.protocol.RespSimpleString;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.handler.codec.DecoderException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -74,6 +75,34 @@ final class YierdisCommandHandler extends SimpleChannelInboundHandler<RespObject
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         log.debug("Connection error", cause);
-        ctx.close();
+        Throwable root = unwrapDecoderException(cause);
+        String message = safeErrorMessage(root);
+        String err = message.startsWith("Protocol error")
+                ? "ERR " + message
+                : "ERR internal error";
+        ctx.writeAndFlush(RespError.of(err)).addListener(ChannelFutureListener.CLOSE);
+    }
+
+    private static Throwable unwrapDecoderException(Throwable cause) {
+        if (cause instanceof DecoderException && cause.getCause() != null) {
+            return cause.getCause();
+        }
+        return cause;
+    }
+
+    private static String safeErrorMessage(Throwable cause) {
+        if (cause == null) {
+            return "internal error";
+        }
+        String msg = cause.getMessage();
+        if (msg == null || msg.isBlank()) {
+            msg = cause.getClass().getSimpleName();
+        }
+        // Prevent response splitting via CRLF injection.
+        msg = msg.replace('\r', ' ').replace('\n', ' ');
+        if (msg.length() > 256) {
+            msg = msg.substring(0, 256);
+        }
+        return msg;
     }
 }

@@ -14,7 +14,6 @@ import java.util.AbstractList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.RandomAccess;
 import java.util.concurrent.TimeUnit;
 
@@ -24,6 +23,8 @@ import java.util.concurrent.TimeUnit;
  * It executes commands and writes RESP2 replies directly via {@link RespWriter}.
  */
 public final class YierdisFastCommandProcessor {
+    private static final String NULL_BULK_STRING_ERR = "ERR Protocol error: null bulk string";
+
     private static final byte[] HELLO_SERVER_KEY = "server".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_SERVER_VALUE = "yierdis".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_VERSION_KEY = "version".getBytes(StandardCharsets.US_ASCII);
@@ -53,6 +54,20 @@ public final class YierdisFastCommandProcessor {
         }
         if (cmd.isNull(0) || cmd.len(0) == 0) {
             out.error("ERR empty command");
+            return;
+        }
+
+        // Reject null bulk strings early to avoid NPEs deeper in the DB and data structures.
+        // We only allow a null bulk string for PING/ECHO's single message argument (argv[1]).
+        boolean allowNullMessage = asciiEqualsIgnoreCase(cmd, 0, "PING") || asciiEqualsIgnoreCase(cmd, 0, "ECHO");
+        for (int i = 1; i < argc; i++) {
+            if (!cmd.isNull(i)) {
+                continue;
+            }
+            if (allowNullMessage && argc == 2 && i == 1) {
+                continue;
+            }
+            out.error(NULL_BULK_STRING_ERR);
             return;
         }
 
@@ -309,10 +324,6 @@ public final class YierdisFastCommandProcessor {
             wrongArity(out, "type");
             return;
         }
-        if (cmd.isNull(1)) {
-            db.typeOf((byte[]) null);
-            return;
-        }
         ValueType t = db.typeOf(argView.reset(cmd, 1));
         if (t == null) {
             out.simpleString("none");
@@ -330,9 +341,6 @@ public final class YierdisFastCommandProcessor {
             out.error("ERR syntax error");
             return;
         }
-        if (cmd.isNull(2)) {
-            Objects.requireNonNull(null, "key");
-        }
         long bytes = db.memoryUsage(argView.reset(cmd, 2));
         if (bytes < 0) {
             out.bulkString((byte[]) null);
@@ -349,9 +357,6 @@ public final class YierdisFastCommandProcessor {
         if (!asciiEqualsIgnoreCase(cmd, 1, "ENCODING")) {
             out.error("ERR syntax error");
             return;
-        }
-        if (cmd.isNull(2)) {
-            Objects.requireNonNull(null, "key");
         }
         String enc = db.objectEncoding(argView.reset(cmd, 2));
         if (enc == null) {
@@ -391,9 +396,6 @@ public final class YierdisFastCommandProcessor {
 
         long count = 0;
         for (int i = 1; i < cmd.argc(); i++) {
-            if (cmd.isNull(i)) {
-                Objects.requireNonNull(null, "key");
-            }
             if (db.existsKey(argView.reset(cmd, i))) {
                 count++;
             }
@@ -462,10 +464,6 @@ public final class YierdisFastCommandProcessor {
             return;
         }
         bulkOut.reset(out);
-        if (cmd.isNull(1)) {
-            db.getStringForReply((byte[]) null, bulkOut);
-            return;
-        }
         db.getStringForReply(argView.reset(cmd, 1), bulkOut);
     }
 
@@ -473,9 +471,6 @@ public final class YierdisFastCommandProcessor {
         if (cmd.argc() != 2) {
             wrongArity(out, "strlen");
             return;
-        }
-        if (cmd.isNull(1)) {
-            Objects.requireNonNull(null, "key");
         }
         out.integer(db.strlen(argView.reset(cmd, 1)));
     }
@@ -507,9 +502,6 @@ public final class YierdisFastCommandProcessor {
             wrongArity(out, "expire");
             return;
         }
-        if (cmd.isNull(1)) {
-            Objects.requireNonNull(null, "key");
-        }
         long seconds = parseLong(cmd, 2, "seconds");
         out.integer(db.expire(argView.reset(cmd, 1), seconds) ? 1 : 0);
     }
@@ -518,9 +510,6 @@ public final class YierdisFastCommandProcessor {
         if (cmd.argc() != 2) {
             wrongArity(out, "ttl");
             return;
-        }
-        if (cmd.isNull(1)) {
-            Objects.requireNonNull(null, "key");
         }
         out.integer(db.ttlSeconds(argView.reset(cmd, 1)));
     }

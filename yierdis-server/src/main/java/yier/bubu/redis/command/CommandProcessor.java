@@ -17,6 +17,8 @@ import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 public final class CommandProcessor {
+    private static final String NULL_BULK_STRING_ERR = "ERR Protocol error: null bulk string";
+
     private final YierdisDb db;
 
     public CommandProcessor(YierdisDb db) {
@@ -29,6 +31,16 @@ public final class CommandProcessor {
         }
 
         byte[] cmd = args.get(0);
+        boolean allowNullMessage = asciiEqualsIgnoreCase(cmd, "PING") || asciiEqualsIgnoreCase(cmd, "ECHO");
+        for (int i = 1; i < args.size(); i++) {
+            if (args.get(i) != null) {
+                continue;
+            }
+            if (allowNullMessage && args.size() == 2 && i == 1) {
+                continue;
+            }
+            return RespError.of(NULL_BULK_STRING_ERR);
+        }
         try {
             if (asciiEqualsIgnoreCase(cmd, "PING")) {
                 return ping(args);

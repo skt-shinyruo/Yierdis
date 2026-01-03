@@ -4,6 +4,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.handler.codec.DecoderException;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
@@ -57,7 +58,49 @@ final class YierdisFastCommandHandler extends SimpleChannelInboundHandler<RespCo
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        // Best-effort: close the connection on protocol errors.
-        ctx.close();
+        // Best-effort: return a RESP error and close the connection.
+        // This covers protocol decode errors (e.g. invalid RESP frames) and unexpected runtime errors.
+        if (ctx == null) {
+            return;
+        }
+        Throwable root = unwrapDecoderException(cause);
+        String message = safeErrorMessage(root);
+        String err = message.startsWith("Protocol error")
+                ? "ERR " + message
+                : "ERR internal error";
+
+        ByteBuf out = ctx.alloc().buffer();
+        try {
+            new RespWriter(out).error(err);
+            ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
+            out = null;
+        } finally {
+            if (out != null) {
+                out.release();
+            }
+        }
+    }
+
+    private static Throwable unwrapDecoderException(Throwable cause) {
+        if (cause instanceof DecoderException && cause.getCause() != null) {
+            return cause.getCause();
+        }
+        return cause;
+    }
+
+    private static String safeErrorMessage(Throwable cause) {
+        if (cause == null) {
+            return "internal error";
+        }
+        String msg = cause.getMessage();
+        if (msg == null || msg.isBlank()) {
+            msg = cause.getClass().getSimpleName();
+        }
+        // Prevent response splitting via CRLF injection.
+        msg = msg.replace('\r', ' ').replace('\n', ' ');
+        if (msg.length() > 256) {
+            msg = msg.substring(0, 256);
+        }
+        return msg;
     }
 }

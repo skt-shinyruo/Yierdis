@@ -225,6 +225,41 @@ public class FastPipelineTest {
     }
 
     @Test
+    public void nullBulkStringKeyReturnsErrorAndConnectionStaysOpen() {
+        YierdisDb db = new YierdisDb();
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor));
+
+        ch.writeInbound(Unpooled.wrappedBuffer(command(b("GET"), (byte[]) null)));
+        Assert.assertArrayEquals(ascii("-ERR Protocol error: null bulk string\r\n"), readOutbound(ch));
+        Assert.assertTrue(ch.isOpen());
+
+        ch.writeInbound(Unpooled.wrappedBuffer(command(b("PING"))));
+        Assert.assertArrayEquals(ascii("+PONG\r\n"), readOutbound(ch));
+
+        ch.finishAndReleaseAll();
+    }
+
+    @Test
+    public void protocolErrorsReturnErrAndCloseConnection() {
+        YierdisDb db = new YierdisDb();
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor));
+
+        try {
+            ch.writeInbound(Unpooled.wrappedBuffer(ascii("+OK\r\n")));
+        } catch (Exception ignored) {
+            // EmbeddedChannel may surface decoder exceptions; the handler should still have produced an error reply.
+        }
+        Assert.assertArrayEquals(ascii("-ERR Protocol error: expected array\r\n"), readOutbound(ch));
+
+        ch.runPendingTasks();
+        Assert.assertFalse(ch.isOpen());
+
+        ch.finishAndReleaseAll();
+    }
+
+    @Test
     public void quitReturnsOkAndCloses() {
         YierdisDb db = new YierdisDb();
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
