@@ -1,6 +1,6 @@
 # yierdis (Java 17 + Netty)
 
-一个简化版的 Yierdis Server（兼容 Redis），实现 **RESP2 协议** 的核心子集，适合用来学习/演示 Netty 网络编程与 Redis 协议。
+一个简化版的 Yierdis Server（兼容 Redis），适合用来学习/演示 Netty 网络编程与 Redis 协议。
 
 ## 环境
 
