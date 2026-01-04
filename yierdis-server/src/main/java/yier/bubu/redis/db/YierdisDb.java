@@ -1,10 +1,12 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapExpireIndex;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapKeyspace;
+import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapString;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 
 import java.util.ArrayList;
@@ -23,6 +25,7 @@ public final class YierdisDb {
     private final YierdisKeyspace<YierdisObject> store;
     private final YierdisExpireIndex expires;
     private final YierdisOffHeapAllocator offHeapAllocator;
+    private final boolean keysStoredOffHeap;
 
     private static final int ENTRY_OVERHEAD_BYTES = 16;
     private static final String OOM_ERR = "OOM command not allowed when used memory > 'maxmemory'.";
@@ -51,9 +54,11 @@ public final class YierdisDb {
         if (offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafeAllocator) {
             this.store = new YierdisUnsafeOffHeapKeyspace<>(unsafeAllocator);
             this.expires = new YierdisUnsafeOffHeapExpireIndex(unsafeAllocator);
+            this.keysStoredOffHeap = true;
         } else {
             this.store = new ByteArrayKeyspace<>();
             this.expires = new YierdisHeapExpireIndex();
+            this.keysStoredOffHeap = false;
         }
         if (maxmemoryBytes < 0) {
             throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
@@ -159,7 +164,7 @@ public final class YierdisDb {
             return -1;
         }
         touch(e);
-        return e.estimatedBytes;
+        return e.estimatedBytes + estimateOffHeapBytesForMemoryUsage(canonical, e);
     }
 
     public long memoryUsage(byte[] keyBytes) {
@@ -171,7 +176,25 @@ public final class YierdisDb {
         if (e == null) {
             return -1;
         }
-        return e.estimatedBytes;
+        return e.estimatedBytes + estimateOffHeapBytesForMemoryUsage(keyBytes, e);
+    }
+
+    private long estimateOffHeapBytesForMemoryUsage(byte[] keyBytes, YierdisObject e) {
+        if (offHeapAllocator == null || e == null) {
+            return 0;
+        }
+        long extra = 0;
+        if (keysStoredOffHeap && keyBytes != null) {
+            extra += keyBytes.length;
+        }
+        if (e.type == ValueType.STRING) {
+            if (e.payload instanceof YierdisOffHeapBuf buf) {
+                extra += buf.capacity();
+            } else if (e.payload instanceof YierdisUnsafeOffHeapString s) {
+                extra += s.capacity();
+            }
+        }
+        return extra;
     }
 
     public String objectEncoding(YierdisBytesView keyView) {
@@ -262,7 +285,11 @@ public final class YierdisDb {
     }
 
     private long usedBytesForMaxmemory() {
-        return usedBytes;
+        long offHeapUsed = 0;
+        if (offHeapAllocator != null) {
+            offHeapUsed = offHeapAllocator.usedBytes();
+        }
+        return usedBytes + offHeapUsed;
     }
 
     private void touch(YierdisObject e) {
@@ -350,7 +377,7 @@ public final class YierdisDb {
         if (keyBytes == null || e == null) {
             return 0;
         }
-        int keyBytesCost = keyBytes.length;
+        int keyBytesCost = keysStoredOffHeap ? 0 : keyBytes.length;
         return ENTRY_OVERHEAD_BYTES + keyBytesCost + estimateValueBytes(e);
     }
 
@@ -361,6 +388,10 @@ public final class YierdisDb {
         if (e.type == ValueType.STRING) {
             if (e.encoding == ValueEncoding.STRING_INT) {
                 return Long.BYTES;
+            }
+            // 字符串 payload 若存放在 off-heap，则其容量由 allocator.usedBytes() 统计；这里避免重复计入。
+            if (offHeapAllocator != null && (e.payload instanceof YierdisOffHeapBuf || e.payload instanceof YierdisUnsafeOffHeapString)) {
+                return 0;
             }
             return e.rawLen;
         }

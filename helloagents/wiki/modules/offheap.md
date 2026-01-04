@@ -8,7 +8,7 @@
 
 - **Responsibility:** 分配器 API、slice/buf 抽象、unsafe/netty/foreign 等后端
 - **Status:** 🚧In Development
-- **Last Updated:** 2026-01-01
+- **Last Updated:** 2026-01-04
 
 ## Specifications
 
@@ -20,11 +20,14 @@
 条件：字符串值存储在 off-heap
 - 预期：`GET` 回复优先使用 off-heap slice，避免额外分配 heap `byte[]`
 
+### Requirement: usedBytes 可回归验证（泄漏检测）
+**Module:** offheap
+分配器应提供 `usedBytes()` 观测点，并在测试中覆盖删除/过期/淘汰/shutdown 等关键路径，确保堆外资源可回归验证。
+
 ## Dependencies
 
 - （无）
 
 ## Change History
 
-- （暂无）
-
+- 2026-01-04：增加 off-heap allocator 泄漏回归测试（shutdown 后 usedBytes 回到基线/归零）。

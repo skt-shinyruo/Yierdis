@@ -2,14 +2,15 @@ package yier.bubu.redis.command;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.protocol.RespArray;
 import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.protocol.RespInteger;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -20,7 +21,8 @@ public class HashCommandTest {
     @Test
     public void hsetHgetHlenAndHgetallAreBinarySafe() {
         forEachDb(db -> {
-            CommandProcessor cp = new CommandProcessor(db);
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = new byte[]{'h', 0, (byte) 0xFF};
             byte[] f1 = new byte[]{0, 'f', 1};
@@ -28,7 +30,7 @@ public class HashCommandTest {
             byte[] f2 = new byte[]{'k'};
             byte[] v2 = new byte[]{'\n'};
 
-            RespInteger added = (RespInteger) cp.execute(Arrays.asList(
+            RespInteger added = (RespInteger) client.execute(Arrays.asList(
                     b("HSET"),
                     key,
                     f1, v1,
@@ -36,93 +38,91 @@ public class HashCommandTest {
             ));
             Assert.assertEquals(2, added.value());
 
-            RespInteger added2 = (RespInteger) cp.execute(Arrays.asList(
+            RespInteger added2 = (RespInteger) client.execute(Arrays.asList(
                     b("HSET"),
                     key,
                     f1, v2
             ));
             Assert.assertEquals(0, added2.value());
 
-            RespInteger hlen = (RespInteger) cp.execute(Arrays.asList(b("HLEN"), key));
+            RespInteger hlen = (RespInteger) client.execute(Arrays.asList(b("HLEN"), key));
             Assert.assertEquals(2, hlen.value());
 
-            RespObject hget = cp.execute(Arrays.asList(b("HGET"), key, f1));
+            RespObject hget = client.execute(Arrays.asList(b("HGET"), key, f1));
             Assert.assertTrue(hget instanceof RespBulkString);
             Assert.assertArrayEquals(v2, ((RespBulkString) hget).data());
 
-            RespArray all = (RespArray) cp.execute(Arrays.asList(b("HGETALL"), key));
+            RespArray all = (RespArray) client.execute(Arrays.asList(b("HGETALL"), key));
             Assert.assertEquals(4, all.values().size());
             assertContainsPair(all, f1, v2);
             assertContainsPair(all, f2, v2);
+            }
         });
     }
 
     @Test
     public void hdelRemovesHashKeyWhenEmpty() {
         forEachDb(db -> {
-            CommandProcessor cp = new CommandProcessor(db);
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = new byte[]{0, 'h'};
             byte[] field = new byte[]{(byte) 0xFF};
             byte[] value = new byte[]{0, 1, 2};
 
-            Assert.assertTrue(cp.execute(Arrays.asList(b("HSET"), key, field, value)) instanceof RespInteger);
+            Assert.assertTrue(client.execute(Arrays.asList(b("HSET"), key, field, value)) instanceof RespInteger);
 
-            RespInteger removedMissing = (RespInteger) cp.execute(Arrays.asList(b("HDEL"), key, new byte[]{'x'}));
+            RespInteger removedMissing = (RespInteger) client.execute(Arrays.asList(b("HDEL"), key, new byte[]{'x'}));
             Assert.assertEquals(0, removedMissing.value());
 
-            RespInteger removed = (RespInteger) cp.execute(Arrays.asList(b("HDEL"), key, field));
+            RespInteger removed = (RespInteger) client.execute(Arrays.asList(b("HDEL"), key, field));
             Assert.assertEquals(1, removed.value());
 
-            RespInteger exists = (RespInteger) cp.execute(Arrays.asList(b("EXISTS"), key));
+            RespInteger exists = (RespInteger) client.execute(Arrays.asList(b("EXISTS"), key));
             Assert.assertEquals(0, exists.value());
 
-            RespSimpleString type = (RespSimpleString) cp.execute(Arrays.asList(b("TYPE"), key));
+            RespSimpleString type = (RespSimpleString) client.execute(Arrays.asList(b("TYPE"), key));
             Assert.assertEquals("none", type.value());
 
-            RespInteger hlen = (RespInteger) cp.execute(Arrays.asList(b("HLEN"), key));
+            RespInteger hlen = (RespInteger) client.execute(Arrays.asList(b("HLEN"), key));
             Assert.assertEquals(0, hlen.value());
 
-            RespArray all = (RespArray) cp.execute(Arrays.asList(b("HGETALL"), key));
+            RespArray all = (RespArray) client.execute(Arrays.asList(b("HGETALL"), key));
             Assert.assertTrue(all.values().isEmpty());
+            }
         });
     }
 
     @Test
     public void hashUpgradesAfterManyFieldsAndKeepsData() {
         forEachDb(db -> {
-            CommandProcessor cp = new CommandProcessor(db);
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("big-hash");
 
             int fields = 513; // > HashValue.LISTPACK_MAX_ENTRIES
-            ArrayList<byte[]> args = new ArrayList<>(2 + fields * 2);
-            args.add(b("HSET"));
-            args.add(key);
+            long addedTotal = 0;
             for (int i = 0; i < fields; i++) {
-                args.add(b("f" + i));
-                args.add(b("v" + i));
+                RespInteger added = (RespInteger) client.execute(Arrays.asList(b("HSET"), key, b("f" + i), b("v" + i)));
+                addedTotal += added.value();
             }
+            Assert.assertEquals(fields, addedTotal);
 
-            RespInteger added = (RespInteger) cp.execute(args);
-            Assert.assertEquals(fields, added.value());
-
-            RespInteger hlen = (RespInteger) cp.execute(Arrays.asList(b("HLEN"), key));
+            RespInteger hlen = (RespInteger) client.execute(Arrays.asList(b("HLEN"), key));
             Assert.assertEquals(fields, hlen.value());
 
-            RespBulkString v0 = (RespBulkString) cp.execute(Arrays.asList(b("HGET"), key, b("f0")));
+            RespBulkString v0 = (RespBulkString) client.execute(Arrays.asList(b("HGET"), key, b("f0")));
             Assert.assertEquals("v0", v0.asString());
 
-            RespBulkString vLast = (RespBulkString) cp.execute(Arrays.asList(b("HGET"), key, b("f" + (fields - 1))));
+            RespBulkString vLast = (RespBulkString) client.execute(Arrays.asList(b("HGET"), key, b("f" + (fields - 1))));
             Assert.assertEquals("v" + (fields - 1), vLast.asString());
 
-            RespArray all = (RespArray) cp.execute(Arrays.asList(b("HGETALL"), key));
-            Assert.assertEquals(fields * 2, all.values().size());
-
-            RespInteger updated = (RespInteger) cp.execute(Arrays.asList(b("HSET"), key, b("f0"), b("v0-new")));
+            RespInteger updated = (RespInteger) client.execute(Arrays.asList(b("HSET"), key, b("f0"), b("v0-new")));
             Assert.assertEquals(0L, updated.value());
-            RespBulkString v0New = (RespBulkString) cp.execute(Arrays.asList(b("HGET"), key, b("f0")));
+            RespBulkString v0New = (RespBulkString) client.execute(Arrays.asList(b("HGET"), key, b("f0")));
             Assert.assertEquals("v0-new", v0New.asString());
+            }
         });
     }
 

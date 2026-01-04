@@ -3,6 +3,8 @@ package yier.bubu.redis;
 final class ServerConfig {
     final int port;
     final long expirationCleanupIntervalMillis;
+    final int ioThreads;
+    final int executorQueueCapacity;
     final String offheapBackend;
     final long offheapMaxBytes;
     final long maxmemoryBytes;
@@ -12,6 +14,8 @@ final class ServerConfig {
     private ServerConfig(
             int port,
             long expirationCleanupIntervalMillis,
+            int ioThreads,
+            int executorQueueCapacity,
             String offheapBackend,
             long offheapMaxBytes,
             long maxmemoryBytes,
@@ -20,6 +24,14 @@ final class ServerConfig {
     ) {
         this.port = port;
         this.expirationCleanupIntervalMillis = expirationCleanupIntervalMillis;
+        if (ioThreads <= 0) {
+            throw new IllegalArgumentException("ioThreads must be > 0");
+        }
+        if (executorQueueCapacity <= 0) {
+            throw new IllegalArgumentException("executorQueueCapacity must be > 0");
+        }
+        this.ioThreads = ioThreads;
+        this.executorQueueCapacity = executorQueueCapacity;
         this.offheapBackend = offheapBackend;
         this.offheapMaxBytes = offheapMaxBytes;
         this.maxmemoryBytes = maxmemoryBytes;
@@ -30,6 +42,8 @@ final class ServerConfig {
     static ServerConfig fromArgs(String[] args) {
         int port = 6378;
         long cleanupIntervalMillis = 1000;
+        int ioThreads = 1;
+        int executorQueueCapacity = 1024;
         String offheapBackend = "none";
         long offheapMaxBytes = 0;
         long maxmemoryBytes = 0;
@@ -48,6 +62,14 @@ final class ServerConfig {
             }
             if ("--noCleanup".equals(arg)) {
                 cleanupIntervalMillis = 0;
+                continue;
+            }
+            if ("--ioThreads".equals(arg) && i + 1 < args.length) {
+                ioThreads = Integer.parseInt(args[++i]);
+                continue;
+            }
+            if ("--executorQueueCapacity".equals(arg) && i + 1 < args.length) {
+                executorQueueCapacity = Integer.parseInt(args[++i]);
                 continue;
             }
             if ("--offheapBackend".equals(arg) && i + 1 < args.length) {
@@ -75,6 +97,8 @@ final class ServerConfig {
         return new ServerConfig(
                 port,
                 cleanupIntervalMillis,
+                ioThreads,
+                executorQueueCapacity,
                 offheapBackend,
                 offheapMaxBytes,
                 maxmemoryBytes,

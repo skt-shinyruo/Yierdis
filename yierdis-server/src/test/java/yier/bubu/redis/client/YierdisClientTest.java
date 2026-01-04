@@ -2,32 +2,26 @@ package yier.bubu.redis.client;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelFutureListener;
-import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.CommandProcessor;
+import yier.bubu.redis.YierdisFastCommandHandler;
+import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.protocol.RespArray;
+import yier.bubu.redis.protocol.RespCommandDecoder;
 import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespDecoder;
-import yier.bubu.redis.protocol.RespEncoder;
 import yier.bubu.redis.protocol.RespError;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 
 public class YierdisClientTest {
     @Test
@@ -102,7 +96,7 @@ public class YierdisClientTest {
 
         static TestServer start() throws InterruptedException {
             YierdisDb db = new YierdisDb();
-            CommandProcessor cp = new CommandProcessor(db);
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
 
             EventLoopGroup bossGroup = new NioEventLoopGroup(1);
             EventLoopGroup workerGroup = new NioEventLoopGroup(1);
@@ -112,11 +106,10 @@ public class YierdisClientTest {
                     .childOption(ChannelOption.TCP_NODELAY, true)
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
-                        protected void initChannel(SocketChannel ch) {
-                            ch.pipeline()
-                                    .addLast("respDecoder", new RespDecoder())
-                                    .addLast("respEncoder", new RespEncoder())
-                                    .addLast("handler", new TestCommandHandler(cp));
+                    protected void initChannel(SocketChannel ch) {
+                        ch.pipeline()
+                                    .addLast("respCommandDecoder", new RespCommandDecoder())
+                                    .addLast("commandHandler", new YierdisFastCommandHandler(processor));
                         }
                     });
 
@@ -139,59 +132,4 @@ public class YierdisClientTest {
             }
         }
     }
-
-    private static final class TestCommandHandler extends SimpleChannelInboundHandler<RespObject> {
-        private final CommandProcessor commandProcessor;
-
-        private TestCommandHandler(CommandProcessor commandProcessor) {
-            this.commandProcessor = commandProcessor;
-        }
-
-        @Override
-        protected void channelRead0(ChannelHandlerContext ctx, RespObject msg) {
-            RespObject response;
-            try {
-                List<byte[]> args = asCommandArgs(msg);
-                if (args.isEmpty()) {
-                    response = RespError.of("ERR empty command");
-                } else if (isQuit(args.get(0))) {
-                    ctx.writeAndFlush(RespSimpleString.of("OK")).addListener(ChannelFutureListener.CLOSE);
-                    return;
-                } else {
-                    response = commandProcessor.execute(args);
-                }
-            } catch (Exception e) {
-                response = RespError.of("ERR " + e.getMessage());
-            }
-            ctx.writeAndFlush(response);
-        }
-
-        private static List<byte[]> asCommandArgs(RespObject msg) {
-            if (!(msg instanceof RespArray)) {
-                throw new IllegalArgumentException("Protocol error: expected array");
-            }
-            RespArray array = (RespArray) msg;
-            List<RespObject> items = array.values();
-            List<byte[]> args = new ArrayList<>(items.size());
-            for (RespObject item : items) {
-                if (item instanceof RespBulkString) {
-                    args.add(((RespBulkString) item).data());
-                    continue;
-                }
-                throw new IllegalArgumentException("Protocol error: expected bulk string array");
-            }
-            return args;
-        }
-
-        private static boolean isQuit(byte[] cmd) {
-            if (cmd == null || cmd.length != 4) {
-                return false;
-            }
-            return (cmd[0] == 'Q' || cmd[0] == 'q')
-                    && (cmd[1] == 'U' || cmd[1] == 'u')
-                    && (cmd[2] == 'I' || cmd[2] == 'i')
-                    && (cmd[3] == 'T' || cmd[3] == 't');
-        }
-    }
 }
-

@@ -8,7 +8,7 @@
 
 - **Responsibility:** RESP2 framing、命令解析、响应序列化
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-03
+- **Last Updated:** 2026-01-04
 
 ## Specifications
 
@@ -28,6 +28,15 @@
 条件：客户端发送包含 `$-1` 的 bulk string 参数
 - 预期：仅允许 `PING/ECHO` 的单参数消息为 `$-1`（返回 `(nil)`）；其余命令若出现 `$-1` 参数，返回 `ERR Protocol error: null bulk string`（避免触发 NPE/断线）
 
+### Requirement: RESP error 输出安全净化
+**Module:** protocol
+所有 `-ERR ...` 输出必须防御 CRLF 注入导致的响应拆分（response splitting），并限制 error 文本长度，避免异常信息导致大响应/日志污染。
+
+#### Scenario: CRLF 注入不可拆分 RESP
+条件：错误消息中包含 `\\r`/`\\n`（例如异常信息或拼接文本）
+- 预期：最终写出的 RESP error 不包含除结尾 CRLF 外的任意 CR/LF 字符
+- 预期：error 文本长度有上限（默认 256 chars）
+
 ## Dependencies
 
 - （无）
@@ -35,3 +44,4 @@
 ## Change History
 
 - 2026-01-03：补充协议错误与 `$-1`（null bulk string）参数的错误处理约定。
+- 2026-01-04：在 RESP error 写出层增加 CR/LF 过滤与限长，降低 response splitting 风险。

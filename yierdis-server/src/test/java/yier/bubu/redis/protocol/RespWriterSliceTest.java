@@ -84,6 +84,34 @@ public class RespWriterSliceTest {
         }
     }
 
+    @Test
+    public void errorSanitizesCrlfAndLimitsLength() {
+        ByteBuf buf = Unpooled.buffer();
+        try {
+            RespWriter w = new RespWriter(buf);
+            w.error("ERR oops\r\n+PONG\r\n");
+
+            byte[] out = readAll(buf);
+            Assert.assertEquals('\r', (char) out[out.length - 2]);
+            Assert.assertEquals('\n', (char) out[out.length - 1]);
+            for (int i = 0; i < out.length - 2; i++) {
+                Assert.assertNotEquals("should not contain CR before final CRLF", '\r', (char) out[i]);
+                Assert.assertNotEquals("should not contain LF before final CRLF", '\n', (char) out[i]);
+            }
+
+            buf.clear();
+            char[] big = new char[300];
+            for (int i = 0; i < big.length; i++) {
+                big[i] = 'x';
+            }
+            w.error("ERR " + new String(big));
+            byte[] limited = readAll(buf);
+            Assert.assertEquals("dash + 256 chars + CRLF", 1 + 256 + 2, limited.length);
+        } finally {
+            buf.release();
+        }
+    }
+
     private static byte[] readAll(ByteBuf buf) {
         byte[] out = new byte[buf.readableBytes()];
         buf.readBytes(out);
@@ -108,4 +136,3 @@ public class RespWriterSliceTest {
         return out;
     }
 }
-

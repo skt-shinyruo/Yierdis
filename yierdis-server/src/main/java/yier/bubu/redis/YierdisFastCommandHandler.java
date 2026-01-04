@@ -9,25 +9,64 @@ import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
 
-final class YierdisFastCommandHandler extends SimpleChannelInboundHandler<RespCommand> {
+public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler<RespCommand> {
     private final YierdisFastCommandProcessor commandProcessor;
+    private final CommandExecutor executor;
 
-    YierdisFastCommandHandler(YierdisFastCommandProcessor commandProcessor) {
+    public YierdisFastCommandHandler(YierdisFastCommandProcessor commandProcessor) {
         this.commandProcessor = commandProcessor;
+        this.executor = null;
+    }
+
+    public YierdisFastCommandHandler(YierdisFastCommandProcessor commandProcessor, CommandExecutor executor) {
+        this.commandProcessor = commandProcessor;
+        this.executor = executor;
     }
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, RespCommand msg) {
+        if (msg.argc() == 1 && isQuit(msg)) {
+            ByteBuf out = ctx.alloc().buffer();
+            try {
+                new RespWriter(out).simpleString("OK");
+                ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
+                out = null;
+            } finally {
+                msg.recycle();
+                if (out != null) {
+                    out.release();
+                }
+            }
+            return;
+        }
+
+        if (executor == null) {
+            ByteBuf out = ctx.alloc().buffer();
+            try {
+                RespWriter writer = new RespWriter(out);
+                commandProcessor.execute(msg, writer);
+                ctx.writeAndFlush(out);
+                out = null;
+            } finally {
+                msg.recycle();
+                if (out != null) {
+                    out.release();
+                }
+            }
+            return;
+        }
+
+        boolean accepted = executor.trySubmit(ctx, msg);
+        if (accepted) {
+            // 执行器接管 msg 的生命周期，负责 recycle。
+            return;
+        }
+
+        // 队列满或服务关闭：返回 busy 错误并回收命令帧，避免积压导致 OOM。
         ByteBuf out = ctx.alloc().buffer();
         try {
-            RespWriter writer = new RespWriter(out);
-            if (msg.argc() == 1 && isQuit(msg)) {
-                writer.simpleString("OK");
-                ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
-            } else {
-                commandProcessor.execute(msg, writer);
-                ctx.write(out);
-            }
+            new RespWriter(out).error("ERR busy");
+            ctx.writeAndFlush(out);
             out = null;
         } finally {
             msg.recycle();
@@ -49,11 +88,6 @@ final class YierdisFastCommandHandler extends SimpleChannelInboundHandler<RespCo
                 && (b1 == 'U' || b1 == 'u')
                 && (b2 == 'I' || b2 == 'i')
                 && (b3 == 'T' || b3 == 't');
-    }
-
-    @Override
-    public void channelReadComplete(ChannelHandlerContext ctx) {
-        ctx.flush();
     }
 
     @Override

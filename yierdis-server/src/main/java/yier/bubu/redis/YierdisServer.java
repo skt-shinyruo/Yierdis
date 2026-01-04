@@ -34,14 +34,15 @@ public final class YierdisServer {
                 config.maxmemorySamples
         );
         final YierdisFastCommandProcessor commandProcessor = new YierdisFastCommandProcessor(db);
+        final CommandExecutor executor = new CommandExecutor(db, commandProcessor, config.executorQueueCapacity);
 
 
          EventLoopGroup bossGroup = new NioEventLoopGroup(1);
-         EventLoopGroup workerGroup = new NioEventLoopGroup(1);
+         EventLoopGroup workerGroup = new NioEventLoopGroup(config.ioThreads);
          ScheduledFuture<?> cleanupFuture = null;
          try {
-             // Bind DB ownership to the worker event loop thread (Redis-style single-threaded execution).
-             workerGroup.next().submit(db::bindToCurrentThread).sync();
+             // 命令执行线程是 DB 的唯一访问者（保持单线程命令语义）。
+             executor.start();
 
             if (config.expirationCleanupIntervalMillis > 0) {
                 long period = config.expirationCleanupIntervalMillis;
@@ -49,7 +50,7 @@ public final class YierdisServer {
                     @Override
                     public void run() {
                         try {
-                            db.cleanupExpired();
+                            executor.trySubmitMaintenance(db::cleanupExpired);
                         } catch (Exception e) {
                             log.debug("Expiration cleanup error", e);
                         }
@@ -67,7 +68,7 @@ public final class YierdisServer {
                         protected void initChannel(SocketChannel ch) {
                             ch.pipeline()
                                     .addLast("respCommandDecoder", new RespCommandDecoder())
-                                    .addLast("commandHandler", new YierdisFastCommandHandler(commandProcessor));
+                                    .addLast("commandHandler", new YierdisFastCommandHandler(commandProcessor, executor));
                         }
                     });
 
@@ -78,6 +79,7 @@ public final class YierdisServer {
             if (cleanupFuture != null) {
                 cleanupFuture.cancel(false);
             }
+            executor.close();
             db.shutdown();
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();

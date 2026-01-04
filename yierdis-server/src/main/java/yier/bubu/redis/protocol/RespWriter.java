@@ -16,6 +16,8 @@ public final class RespWriter {
     private static final byte LF = '\n';
     private static final byte[] CRLF = new byte[]{CR, LF};
 
+    private static final int MAX_ERROR_MESSAGE_CHARS = 256;
+
     private static final ThreadLocal<byte[]> TL_NUM_BUF = ThreadLocal.withInitial(() -> new byte[32]);
 
     private final ByteBuf out;
@@ -31,8 +33,17 @@ public final class RespWriter {
     }
 
     public void error(String message) {
+        String msg = message;
+        if (msg == null || msg.isBlank()) {
+            msg = "ERR internal error";
+        }
+        // 安全净化：防止 CRLF 注入导致 RESP response splitting。
+        msg = msg.replace('\r', ' ').replace('\n', ' ');
+        if (msg.length() > MAX_ERROR_MESSAGE_CHARS) {
+            msg = msg.substring(0, MAX_ERROR_MESSAGE_CHARS);
+        }
         out.writeByte('-');
-        out.writeCharSequence(message, StandardCharsets.UTF_8);
+        out.writeCharSequence(msg, StandardCharsets.UTF_8);
         out.writeBytes(CRLF);
     }
 

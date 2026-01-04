@@ -14,6 +14,7 @@ import java.util.AbstractList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.RandomAccess;
 import java.util.concurrent.TimeUnit;
 
@@ -41,9 +42,58 @@ public final class YierdisFastCommandProcessor {
     private byte[][] argvScratch = new byte[16][];
     private final RespCommandArgBytesView argView = new RespCommandArgBytesView();
     private final WriterBulkStringOutput bulkOut = new WriterBulkStringOutput();
+    private final Command[] commandTable;
 
     public YierdisFastCommandProcessor(YierdisDb db) {
         this.db = db;
+        this.commandTable = new Command[]{
+                new Command("PING", this::ping),
+                new Command("ECHO", this::echo),
+                new Command("HELLO", this::hello),
+                new Command("COMMAND", (cmd, out) -> out.emptyArray()),
+                new Command("SELECT", this::select),
+                new Command("FLUSHDB", (cmd, out) -> {
+                    db.flushDb();
+                    out.simpleString("OK");
+                }),
+                new Command("TYPE", this::type),
+                new Command("MEMORY", this::memory),
+                new Command("OBJECT", this::object),
+                new Command("KEYS", this::keys),
+                new Command("DEL", this::del),
+                new Command("EXISTS", this::exists),
+                new Command("SET", this::set),
+                new Command("GET", this::get),
+                new Command("STRLEN", this::strlen),
+                new Command("APPEND", this::append),
+                new Command("INCR", this::incr),
+                new Command("DECR", this::decr),
+                new Command("EXPIRE", this::expire),
+                new Command("TTL", this::ttl),
+                new Command("LPUSH", this::lpush),
+                new Command("RPUSH", this::rpush),
+                new Command("LRANGE", this::lrange),
+                new Command("LPOP", this::lpop),
+                new Command("RPOP", this::rpop),
+                new Command("HSET", this::hset),
+                new Command("HGET", this::hget),
+                new Command("HGETALL", this::hgetall),
+                new Command("HLEN", this::hlen),
+                new Command("HDEL", this::hdel),
+                new Command("SADD", this::sadd),
+                new Command("SREM", this::srem),
+                new Command("SMEMBERS", this::smembers),
+                new Command("SISMEMBER", this::sismember),
+                new Command("SCARD", this::scard),
+                new Command("ZADD", this::zadd),
+                new Command("ZRANGE", this::zrange),
+                new Command("ZREVRANGE", this::zrevrange),
+                new Command("ZRANGEBYSCORE", this::zrangebyscore),
+                new Command("ZREVRANGEBYSCORE", this::zrevrangebyscore),
+                new Command("ZREMRANGEBYSCORE", this::zremrangebyscore),
+                new Command("ZREMRANGEBYRANK", this::zremrangebyrank),
+                new Command("ZREM", this::zrem),
+        };
     }
 
     public void execute(RespCommand cmd, RespWriter out) {
@@ -72,185 +122,13 @@ public final class YierdisFastCommandProcessor {
         }
 
         try {
-            if (asciiEqualsIgnoreCase(cmd, 0, "PING")) {
-                ping(cmd, out);
-                return;
+            for (Command c : commandTable) {
+                if (asciiEqualsIgnoreCase(cmd, 0, c.name)) {
+                    c.handler.execute(cmd, out);
+                    return;
+                }
             }
-            if (asciiEqualsIgnoreCase(cmd, 0, "ECHO")) {
-                echo(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "HELLO")) {
-                hello(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "COMMAND")) {
-                out.emptyArray();
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "SELECT")) {
-                select(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "FLUSHDB")) {
-                db.flushDb();
-                out.simpleString("OK");
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "TYPE")) {
-                type(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "MEMORY")) {
-                memory(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "OBJECT")) {
-                object(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "KEYS")) {
-                keys(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "DEL")) {
-                del(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "EXISTS")) {
-                exists(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "SET")) {
-                set(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "GET")) {
-                get(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "STRLEN")) {
-                strlen(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "APPEND")) {
-                append(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "INCR")) {
-                incrBy(cmd, out, 1);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "DECR")) {
-                incrBy(cmd, out, -1);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "EXPIRE")) {
-                expire(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "TTL")) {
-                ttl(cmd, out);
-                return;
-            }
-
-            if (asciiEqualsIgnoreCase(cmd, 0, "LPUSH")) {
-                push(cmd, out, true);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "RPUSH")) {
-                push(cmd, out, false);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "LRANGE")) {
-                lrange(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "LPOP")) {
-                pop(cmd, out, true);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "RPOP")) {
-                pop(cmd, out, false);
-                return;
-            }
-
-            if (asciiEqualsIgnoreCase(cmd, 0, "HSET")) {
-                hset(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "HGET")) {
-                hget(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "HGETALL")) {
-                hgetall(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "HLEN")) {
-                hlen(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "HDEL")) {
-                hdel(cmd, out);
-                return;
-            }
-
-            if (asciiEqualsIgnoreCase(cmd, 0, "SADD")) {
-                sadd(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "SREM")) {
-                srem(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "SMEMBERS")) {
-                smembers(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "SISMEMBER")) {
-                sismember(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "SCARD")) {
-                scard(cmd, out);
-                return;
-            }
-
-            if (asciiEqualsIgnoreCase(cmd, 0, "ZADD")) {
-                zadd(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "ZRANGE")) {
-                zrange(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "ZREVRANGE")) {
-                zrevrange(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "ZRANGEBYSCORE")) {
-                zrangebyscore(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "ZREVRANGEBYSCORE")) {
-                zrevrangebyscore(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "ZREMRANGEBYSCORE")) {
-                zremrangebyscore(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "ZREMRANGEBYRANK")) {
-                zremrangebyrank(cmd, out);
-                return;
-            }
-            if (asciiEqualsIgnoreCase(cmd, 0, "ZREM")) {
-                zrem(cmd, out);
-                return;
-            }
-
-            out.error("ERR unknown command '" + utf8(cmd, 0) + "'");
+            out.error("ERR unknown command");
         } catch (YierdisDb.WrongTypeException e) {
             out.error(e.getMessage());
         } catch (YierdisDb.YierdisCommandException e) {
@@ -259,6 +137,45 @@ public final class YierdisFastCommandProcessor {
             out.error("OOM off-heap memory limit exceeded");
         } catch (IllegalArgumentException e) {
             out.error("ERR " + e.getMessage());
+        }
+    }
+
+    private void incr(RespCommand cmd, RespWriter out) {
+        incrBy(cmd, out, 1);
+    }
+
+    private void decr(RespCommand cmd, RespWriter out) {
+        incrBy(cmd, out, -1);
+    }
+
+    private void lpush(RespCommand cmd, RespWriter out) {
+        push(cmd, out, true);
+    }
+
+    private void rpush(RespCommand cmd, RespWriter out) {
+        push(cmd, out, false);
+    }
+
+    private void lpop(RespCommand cmd, RespWriter out) {
+        pop(cmd, out, true);
+    }
+
+    private void rpop(RespCommand cmd, RespWriter out) {
+        pop(cmd, out, false);
+    }
+
+    @FunctionalInterface
+    private interface CommandHandler {
+        void execute(RespCommand cmd, RespWriter out);
+    }
+
+    private static final class Command {
+        private final String name;
+        private final CommandHandler handler;
+
+        private Command(String name, CommandHandler handler) {
+            this.name = Objects.requireNonNull(name, "name");
+            this.handler = Objects.requireNonNull(handler, "handler");
         }
     }
 
