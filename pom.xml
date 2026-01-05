@@ -26,6 +26,7 @@
     <modules>
         <module>yierdis-offheap</module>
         <module>yierdis-server</module>
+        <module>yierdis-bench</module>
     </modules>
 
     <dependencyManagement>

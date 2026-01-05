@@ -36,5 +36,5 @@ Yierdis 是一个“教学/演示导向”的简化版 Redis 兼容服务端：�
 - [架构设计](arch.md)
 - [命令/API 手册](api.md)
 - [数据模型](data.md)
+- [压测与基准测试](bench.md)
 - [变更历史](../history/index.md)
-

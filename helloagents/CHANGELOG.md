@@ -7,6 +7,7 @@
 ### Added
 - 引入单线程 `CommandExecutor` 解耦 Netty I/O 与命令执行（保持单线程命令语义），并增加 `--ioThreads` / `--executorQueueCapacity` 配置与 `ERR busy` 背压。
 - 增加 off-heap allocator 泄漏回归测试，覆盖淘汰/删除/过期与 shutdown 释放路径。
+- 增加纯 Java 压测工具模块 `yierdis-bench` 与一键脚本 `scripts/bench.sh`，用于对比 `none/netty/unsafe` 后端的吞吐与延迟分位数。
 
 ### Changed
 - `maxmemoryBytes` 统计口径调整为“heap 估算 + off-heap allocator.usedBytes 实占”，并避免对 off-heap string payload 双计数。

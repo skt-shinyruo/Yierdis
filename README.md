@@ -177,3 +177,30 @@ java --add-modules jdk.incubator.foreign -jar yierdis-server/target/yierdis-0.1.
 
 - `--offheapBackend none|netty|unsafe|foreign`（默认 `none`）
 - `--offheapMaxBytes <bytes>`（默认 `0` 表示不限制；>0 时作为硬限制，超限命令返回 OOM 错误）
+
+## 压力测试（可重复）
+
+本项目没有内置 JMH，但提供一个“可重复压测脚本”用于对比 `none/netty/unsafe` 三种后端的吞吐与延迟分位数（纯 Java 实现，不依赖
+`redis-benchmark` 等系统工具）。
+
+一键运行：
+
+```bash
+./scripts/bench.sh
+```
+
+常用可调参数（环境变量）：
+
+- `PORT_BASE`：起始端口（默认 `16378`，每个后端 +1）
+- `REQUESTS` / `CLIENTS` / `PIPELINE`：吞吐压测参数（每种命令单独跑一次）
+- `DATA_SIZE` / `KEYSPACE`：value 大小与 keyspace
+- `XMS` / `XMX` / `MAX_DIRECT_MEMORY`：JVM 内存与 Direct Memory 上限
+- `MAXMEMORY_BYTES` / `OFFHEAP_MAX_BYTES`：server 预算参数（容器环境建议保守）
+- `SKIP_PREFILL=1`：跳过预置数据（可能导致 GET 大量 miss，影响可比性）
+- `SKIP_LATENCY=1`：跳过延迟压测
+
+也可以直接运行 Java 工具查看完整参数：
+
+```bash
+java -jar yierdis-bench/target/yierdis-bench-0.1.0-SNAPSHOT.jar --help
+```
