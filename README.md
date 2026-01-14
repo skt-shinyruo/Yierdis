@@ -25,6 +25,23 @@ redis-cli -p 6378 expire a 10
 redis-cli -p 6378 ttl a
 ```
 
+如果需要显式指定协议版本：
+
+```bash
+# 强制 RESP2
+redis-cli -p 6378 --resp2 ping
+
+# 使用 RESP3（服务端会在 HELLO 3 后切换为 RESP3 回复；实现为最小子集）
+redis-cli -p 6378 --resp3 ping
+```
+
+也支持 inline command（便于 telnet/nc 调试；兼容 Redis `sdssplitargs` 风格：支持单/双引号、反斜杠转义、`\\xHH` 十六进制转义）：
+
+```bash
+printf "PING\r\n" | nc 127.0.0.1 6378
+printf "ECHO \"hello world\"\r\n" | nc 127.0.0.1 6378
+```
+
 ## 客户端（CLI）
 
 项目内置一个极简的 RESP2 客户端，方便本地调试（默认连接 `127.0.0.1:6378`）。
@@ -52,7 +69,7 @@ java -cp yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar yier.bubu.redis.client
 
 - `PING [message]`
 - `ECHO <message>`
-- `HELLO [2|3]`（仅支持 2，3 会返回错误提示）
+- `HELLO [2|3]`（支持 2/3；`HELLO 3` 会切换连接为 RESP3）
 - `COMMAND`（返回空数组，方便部分客户端探测）
 - `SELECT 0`
 - `QUIT`
@@ -113,6 +130,7 @@ java -cp yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar yier.bubu.redis.client
 ## 说明
 
 - 这是一个 **单机内存版** 实现：不包含 AOF/RDB 持久化、复制、集群、事务、Lua、ACL 等复杂功能。
+- 协议层默认 RESP2，并支持最小 RESP3（`HELLO 3` 协商后切换；nil 返回使用 RESP3 null），以及 inline command（仅用于调试，支持引号/转义/`\\xHH`）。
 - TTL 采用“访问时惰性删除”，并带一个轻量级后台清理任务（可关）。
 
 ## 内存管理（maxmemory / 淘汰，教学用）

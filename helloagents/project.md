@@ -8,7 +8,7 @@
 
 - **语言/运行时**：Java 17
 - **构建**：Maven（多模块）
-- **网络**：Netty（RESP2 over TCP）
+- **网络**：Netty（RESP2/RESP3 over TCP；支持 inline command（调试用，支持引号/转义/`\\xHH`））
 - **测试**：JUnit 4
 - **日志**：SLF4J + Logback
 
@@ -19,7 +19,7 @@
 - **包名前缀**：`yier.bubu.redis`
 - **服务端类命名**：使用 `Yierdis*`（避免引入新的 `Redis*` 服务端类名）
 - **缩进**：4 空格，无 Tab
-- **协议实现边界**：仅支持 RESP2（`HELLO 3` 返回错误提示）
+- **协议实现边界**：默认 RESP2；支持最小 RESP3（`HELLO 3` 协商后切换；覆盖 HELLO map 与 null），并支持 inline command（用于调试，支持引号/转义/`\\xHH`）
 
 ---
 
@@ -34,4 +34,3 @@
 
 - 推荐命令：`mvn test`
 - 测试要求：尽量可重复（避免 `Thread.sleep`；涉及 TTL 的断言允许小幅时间误差）
-

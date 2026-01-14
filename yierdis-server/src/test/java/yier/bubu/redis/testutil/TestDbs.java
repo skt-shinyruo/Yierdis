@@ -39,7 +39,7 @@ public final class TestDbs {
 
     public static void forEachDbWithMaxmemory(long maxmemoryBytes, String maxmemoryPolicy, int maxmemorySamples, Consumer<YierdisDb> test) {
         Objects.requireNonNull(test, "test");
-        YierdisDb heap = new YierdisDb(null, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples);
+        YierdisDb heap = new YierdisDb(null, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, 5, 5);
         try {
             test.accept(heap);
         } finally {
@@ -47,7 +47,7 @@ public final class TestDbs {
         }
 
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-        YierdisDb offHeap = new YierdisDb(allocator, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples);
+        YierdisDb offHeap = new YierdisDb(allocator, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, 5, 5);
         try {
             test.accept(offHeap);
         } finally {

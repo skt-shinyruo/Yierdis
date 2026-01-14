@@ -1,5 +1,7 @@
 package yier.bubu.redis.db.offheap.api;
 
+import io.netty.buffer.ByteBuf;
+
 public interface YierdisOffHeapBuf extends AutoCloseable {
     int capacity();
 
@@ -10,6 +12,8 @@ public interface YierdisOffHeapBuf extends AutoCloseable {
     void getBytes(int index, byte[] dst, int dstOff, int len);
 
     void setBytes(int index, byte[] src, int srcOff, int len);
+
+    void setBytes(int index, ByteBuf src, int srcIndex, int len);
 
     YierdisOffHeapSlice slice(int index, int len);
 

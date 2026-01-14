@@ -8,35 +8,49 @@
 
 - **Responsibility:** 端口监听、Pipeline 组装、定时任务（如 TTL 清理）的调度入口
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-04
+- **Last Updated:** 2026-01-08
 
 ## Specifications
 
-### Requirement: RESP2 TCP 服务端
+### Requirement: RESP2/RESP3 TCP 服务端（含 inline command，调试用）
 **Module:** server
-启动一个基于 Netty 的 TCP 服务端，支持 RESP2 命令请求与响应写回。
+启动一个基于 Netty 的 TCP 服务端，支持 Redis 风格命令请求与响应写回：默认 RESP2，并支持最小 RESP3（`HELLO 3` 协商后切换），同时支持 inline command（便于调试，支持引号/转义/`\\xHH`）。
 
 #### Scenario: 基本连通性
 条件：服务端启动并监听端口
 - 预期：`redis-cli --resp2` 可连接并执行 `PING` 得到响应
+- 预期：`redis-cli --resp3` 在执行 `HELLO 3` 后可继续执行基础命令
+- 预期：`nc/telnet` 可通过 inline `PING\\r\\n` / `ECHO \"hello world\"\\r\\n` 做最小交互调试
 
 #### Scenario: 协议错误（非法 RESP）
-条件：客户端发送非法 RESP2 请求（解码阶段抛出 `Protocol error: ...`）
+条件：客户端发送非法请求（解码阶段抛出 `Protocol error: ...`）
 - 预期：服务端返回 `ERR Protocol error: ...` 并关闭连接
 - 说明：连接关闭是“协议层错误”的默认策略，避免解码状态不一致影响后续请求
 
 ### Requirement: I/O 与命令执行解耦（单线程命令语义）
-**Module:** server
-将命令执行从 Netty I/O event-loop 中移出：I/O 线程仅负责解码与投递，命令在单线程 `CommandExecutor` 中串行执行（保持 Redis 风格单线程语义）。
+**Module:** yierdis-server
+执行模型已升级为 Netty 体系内的单线程执行器（`DefaultEventExecutorGroup(1)` + `NettyCommandExecutor`）：
+- 目标：保持 Redis 风格“全局单线程命令语义”，同时减少 per-command `flush` 并引入连接级背压闭环
+- 执行：I/O 线程负责解码与投递；命令在执行器线程串行执行；同一轮 drain 内对同一连接 `write` 聚合并在末尾 `flush`
+- 背压：基于 per-connection pending 计数进行 `autoRead` 关闭/开启（带滞回阈值 high/low），避免请求在内存中无界堆积
+
+#### Scenario: 高压 pipeline 下的 flush 合并与背压恢复
+- 当 backlog ≥ high watermark：服务端对该连接 `autoRead=false`，并可能返回 `-ERR busy`
+- 当 backlog ≤ low watermark：服务端恢复 `autoRead=true`，连接继续读入并保持响应顺序一致
+
+#### Configuration: 相关启动参数
+- `--executorQueueCapacity <n>`：全局执行队列容量（有界）
+- `--backpressureHigh <n>` / `--backpressureLow <n>`：连接级背压滞回阈值
+- `--executorMaxDrain <n>` / `--executorDrainMillis <ms>`：单次 drain 批量/时间预算（避免维护任务饥饿）
 
 #### Scenario: 多 worker I/O + 单线程执行
 条件：`--ioThreads > 1` 且多个连接并发请求
-- 预期：命令仍由同一个执行器线程串行执行
+- 预期：命令仍由同一个执行器线程串行执行（`DefaultEventExecutorGroup(1)`）
 - 预期：DB 仅绑定到执行器线程；I/O 线程不直接访问 DB（避免线程安全问题）
 
 #### Scenario: 执行队列满（背压）
-条件：执行器队列达到 `--executorQueueCapacity`
-- 预期：服务端立即返回 `ERR busy`，避免请求无界堆积导致 OOM/延迟雪崩
+条件：全局执行队列达到 `--executorQueueCapacity`
+- 预期：服务端立即返回 `-ERR busy`，避免请求无界堆积导致 OOM/延迟雪崩
 
 ## Dependencies
 
@@ -48,3 +62,6 @@
 
 - 2026-01-03：补充协议错误的连接生命周期处理约定（返回 `ERR` 并关闭连接）。
 - 2026-01-04：引入单线程 `CommandExecutor` 解耦 I/O 与执行，并增加队列上限与 `ERR busy` 背压策略。
+- 2026-01-07：补充 RESP3（`HELLO 3` 协商）与 inline command（调试用）支持，提高常见客户端兼容性。
+- 2026-01-08：执行模型升级为 Netty 体系内单线程 `NettyCommandExecutor`（`DefaultEventExecutorGroup(1)`）：flush 合并 + 连接级 `autoRead` 背压闭环。
+- 2026-01-08：inline command 解析增强：支持单/双引号、反斜杠转义与 `\\xHH` 十六进制转义。

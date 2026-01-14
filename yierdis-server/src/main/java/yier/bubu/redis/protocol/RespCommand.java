@@ -105,6 +105,26 @@ public final class RespCommand {
     }
 
     /**
+     * Returns the backing frame buffer for this command.
+     * <p>
+     * The returned buffer is owned by this {@link RespCommand} and will be released on {@link #recycle()}.
+     * Callers MUST NOT retain it beyond the command execution.
+     */
+    public ByteBuf frame() {
+        return frame;
+    }
+
+    /**
+     * Returns the argument's start offset within {@link #frame()}.
+     */
+    public int argOffset(int index) {
+        if (index < 0 || index >= argc) {
+            throw new IndexOutOfBoundsException();
+        }
+        return argOffsets[index];
+    }
+
+    /**
      * Returns the backing argument metadata arrays. Only the first {@link #argc()} entries are valid.
      */
     int[] argOffsetsUnsafe() {

@@ -8,7 +8,7 @@
 
 - **Responsibility:** Keyspace + 过期索引 + 值编码（string/list/set/hash/zset）+ maxmemory
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-04
+- **Last Updated:** 2026-01-08
 
 ## Specifications
 
@@ -32,6 +32,14 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 **Module:** db
 `maxmemoryBytes` 的触发依据统一为“heap 侧元数据估算 + off-heap allocator 实占”的总和，避免 off-heap 模式下漏计或明显双计数。
 
+#### Change: 淘汰与过期清理的时间预算可配置
+- `enforceMaxmemory()`：新增 eviction 时间预算（避免高压下长时间同步淘汰导致 tail latency 放大）
+- `cleanupExpired()`：时间预算从固定值改为可配置（避免不同部署/负载下出现过期清理不稳定）
+
+#### Configuration: 相关启动参数
+- `--evictionTimeLimitMillis <ms>`：单次 maxmemory 淘汰循环的时间预算
+- `--expireCleanupTimeLimitMillis <ms>`：单次过期清理的时间预算
+
 #### Scenario: off-heap 启用时触顶行为可预测
 条件：启用 off-heap 并持续写入直至达到 `maxmemoryBytes`
 - 预期：淘汰/拒写触发时机可解释（与 allocator.usedBytes 变化趋势一致）
@@ -44,3 +52,4 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 ## Change History
 
 - 2026-01-04：统一 maxmemory 统计口径（heap 估算 + off-heap usedBytes），并补齐相关回归测试与泄漏验证。
+- 2026-01-08：淘汰与过期清理增加“时间预算”并支持配置（`--evictionTimeLimitMillis` / `--expireCleanupTimeLimitMillis`），降低高压下维护任务放大 tail latency 的风险。

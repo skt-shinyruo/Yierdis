@@ -170,6 +170,36 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         return PlatformDependent.getByte(dataAddress() + index);
     }
 
+    public void setByte(int index, byte value) {
+        ensureOpen();
+        int cap = capacity();
+        if (index < 0 || index >= cap) {
+            throw new IndexOutOfBoundsException();
+        }
+        PlatformDependent.putByte(dataAddress() + index, value);
+    }
+
+    public void setBytes(int index, byte[] src, int srcOff, int len) {
+        ensureOpen();
+        if (src == null) {
+            throw new IllegalArgumentException("src must not be null");
+        }
+        if (len < 0) {
+            throw new IllegalArgumentException("len must be >= 0");
+        }
+        if (srcOff < 0 || srcOff + len > src.length) {
+            throw new IndexOutOfBoundsException();
+        }
+        int cap = capacity();
+        if (index < 0 || index + len > cap) {
+            throw new IndexOutOfBoundsException();
+        }
+        if (len == 0) {
+            return;
+        }
+        PlatformDependent.copyMemory(src, srcOff, dataAddress() + index, len);
+    }
+
     public long dataAddress() {
         ensureOpen();
         return baseAddress + HEADER_BYTES;

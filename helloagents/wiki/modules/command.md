@@ -2,13 +2,13 @@
 
 ## Purpose
 
-负责命令路由、参数校验、调用 DB 并输出 RESP2 回复。
+负责命令路由、参数校验、调用 DB，并按连接协商的协议版本输出 RESP2/RESP3 回复（最小子集）。
 
 ## Module Overview
 
 - **Responsibility:** 命令分发、参数解析、错误映射、性能优化（低分配写出路径）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-04
+- **Last Updated:** 2026-01-14
 
 ## Specifications
 
@@ -19,6 +19,7 @@
 #### Scenario: 参数错误与类型错误
 条件：用户传入错误参数或对错误类型 key 操作
 - 预期：返回 `ERR ...` 或 `WRONGTYPE ...`，并尽量与 Redis 的错误风格一致
+  - 说明：当连接处于 RESP3 时，nil 使用 RESP3 null（`_`）返回；其余基础类型尽量保持 RESP2 可解析子集
 
 #### Scenario: null bulk string 参数（`$-1`）
 条件：客户端发送包含 `$-1`（null bulk string）的命令参数
@@ -29,6 +30,12 @@
 **Module:** command
 命令路由通过 command table（command name → handler）统一注册点完成，减少长 if/else 链，提高可维护性与可测试性。
 
+### Requirement: BITMAP / HLL 命令族
+**Module:** command
+新增 BITMAP（`SETBIT/GETBIT/BITCOUNT`）与 HLL（`PFADD/PFCOUNT/PFMERGE`）命令族，并确保：
+- 参数校验与错误输出风格与 Redis 尽量一致
+- 写入命令接入 `maxmemory`（noeviction/eviction）防止不可控内存增长
+
 ## Dependencies
 
 - protocol
@@ -38,3 +45,6 @@
 
 - 2026-01-03：补充 `$-1`（null bulk string）参数的统一校验与错误输出约定。
 - 2026-01-04：移除对象式 `CommandProcessor` 线上路径，收敛为单一写出式实现，并引入 command table 驱动路由。
+- 2026-01-07：支持 `HELLO 3` 切换 RESP3（最小子集），并在 RESP3 模式下按协议输出 null（`_`）。
+- 2026-01-08：写命令热路径减少不必要的 `toByteArray`：支持从 `RespCommand.frame()` 的参数 slice 直接写入/追加到最终 payload（heap/off-heap）。
+- 2026-01-14：新增 BITMAP/HLL 命令族（`SETBIT/GETBIT/BITCOUNT/PFADD/PFCOUNT/PFMERGE`），并补齐相关参数校验与 `maxmemory` 接入。

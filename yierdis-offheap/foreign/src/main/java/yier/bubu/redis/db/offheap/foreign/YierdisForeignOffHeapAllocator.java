@@ -152,6 +152,26 @@ public final class YierdisForeignOffHeapAllocator implements YierdisOffHeapAlloc
         }
 
         @Override
+        public void setBytes(int index, ByteBuf src, int srcIndex, int len) {
+            ensureOpen();
+            if (src == null) {
+                throw new IllegalArgumentException("src must not be null");
+            }
+            if (len < 0) {
+                throw new IllegalArgumentException("len must be >= 0");
+            }
+            checkIndex(index, len);
+            if (srcIndex < 0 || srcIndex + len > src.writerIndex()) {
+                throw new IndexOutOfBoundsException();
+            }
+            if (len == 0) {
+                return;
+            }
+            ByteBuffer dst = segment.asSlice(index, len).asByteBuffer();
+            src.getBytes(srcIndex, dst);
+        }
+
+        @Override
         public YierdisOffHeapSlice slice(int index, int len) {
             ensureOpen();
             if (len < 0) {

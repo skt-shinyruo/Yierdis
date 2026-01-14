@@ -127,7 +127,8 @@ public final class YierdisBench {
                             config.clients,
                             config.pipeline,
                             config.keyspace,
-                            config.dataSize
+                            config.dataSize,
+                            config.strictReplies
                     );
                     println("预置完成: " + prefill);
                 }
@@ -142,7 +143,8 @@ public final class YierdisBench {
                         config.clients,
                         config.pipeline,
                         config.keyspace,
-                        config.dataSize
+                        config.dataSize,
+                        config.strictReplies
                 );
                 ThroughputResult getQps = runThroughput(
                         config.host,
@@ -152,7 +154,8 @@ public final class YierdisBench {
                         config.clients,
                         config.pipeline,
                         config.keyspace,
-                        config.dataSize
+                        config.dataSize,
+                        config.strictReplies
                 );
                 backendResult.setThroughput = setQps;
                 backendResult.getThroughput = getQps;
@@ -169,7 +172,8 @@ public final class YierdisBench {
                             config.latencyRequests,
                             config.latencyClients,
                             config.keyspace,
-                            config.dataSize
+                            config.dataSize,
+                            config.strictReplies
                     );
                     LatencyResult setLat = runLatency(
                             config.host,
@@ -178,7 +182,8 @@ public final class YierdisBench {
                             config.latencyRequests,
                             config.latencyClients,
                             config.keyspace,
-                            config.dataSize
+                            config.dataSize,
+                            config.strictReplies
                     );
                     LatencyResult getLat = runLatency(
                             config.host,
@@ -187,7 +192,8 @@ public final class YierdisBench {
                             config.latencyRequests,
                             config.latencyClients,
                             config.keyspace,
-                            config.dataSize
+                            config.dataSize,
+                            config.strictReplies
                     );
                     backendResult.pingLatency = pingLat;
                     backendResult.setLatency = setLat;
@@ -244,6 +250,7 @@ public final class YierdisBench {
         println("  --skipPrefill                      跳过预置数据（GET 可能大量 miss，影响可比性）");
         println("  --javaCmd <java>                   指定用于启动 server 子进程的 java 命令（默认: java）");
         println("  --serverArg \"--ioThreads 1\"        追加 server 参数（可重复多次）");
+        println("  --strictReplies                    开启最小语义校验：遇到非预期响应类型也计入 errors（默认关闭）");
         println("");
     }
 
@@ -306,7 +313,8 @@ public final class YierdisBench {
             int clients,
             int pipeline,
             int keyspace,
-            int dataSize
+            int dataSize,
+            boolean strictReplies
     ) throws InterruptedException {
         if (totalRequests <= 0) {
             throw new IllegalArgumentException("totalRequests must be > 0");
@@ -339,7 +347,7 @@ public final class YierdisBench {
             int n = perClient + (i < remainder ? 1 : 0);
             int startIndex = workload == Workload.SET_SEQUENTIAL ? (totalRequests * i) / clients : 0;
             futures.add(pool.submit(new ThroughputWorker(
-                    host, port, workload, n, pipeline, keyspace, value, startIndex
+                    host, port, workload, n, pipeline, keyspace, value, startIndex, strictReplies
             )));
         }
         pool.shutdown();
@@ -370,7 +378,8 @@ public final class YierdisBench {
             int totalRequests,
             int clients,
             int keyspace,
-            int dataSize
+            int dataSize,
+            boolean strictReplies
     ) throws InterruptedException {
         if (totalRequests <= 0) {
             throw new IllegalArgumentException("totalRequests must be > 0");
@@ -398,7 +407,7 @@ public final class YierdisBench {
         for (int i = 0; i < clients; i++) {
             int n = perClient + (i < remainder ? 1 : 0);
             futures.add(pool.submit(new LatencyWorker(
-                    host, port, workload, n, keyspace, value
+                    host, port, workload, n, keyspace, value, strictReplies
             )));
         }
         pool.shutdown();
@@ -439,22 +448,35 @@ public final class YierdisBench {
 
     private static void printSummary(List<BackendResult> results, boolean skipLatency) {
         String header = skipLatency
-                ? String.format("%-8s | %12s | %12s", "backend", "SET_QPS", "GET_QPS")
-                : String.format("%-8s | %12s | %12s | %16s | %16s | %16s", "backend", "SET_QPS", "GET_QPS", "PING_p95(ms)", "SET_p95(ms)", "GET_p95(ms)");
+                ? String.format("%-8s | %12s | %8s | %12s | %8s", "backend", "SET_QPS", "SET_ERR", "GET_QPS", "GET_ERR")
+                : String.format(
+                "%-8s | %12s | %8s | %12s | %8s | %14s | %8s | %14s | %8s | %14s | %8s",
+                "backend", "SET_QPS", "SET_ERR", "GET_QPS", "GET_ERR",
+                "PING_p95(ms)", "PING_E", "SET_p95(ms)", "SET_E", "GET_p95(ms)", "GET_E"
+        );
         println(header);
         println(repeat('-', header.length()));
 
         for (BackendResult r : results) {
             String setQps = r.setThroughput == null ? "-" : formatQps(r.setThroughput.qps);
             String getQps = r.getThroughput == null ? "-" : formatQps(r.getThroughput.qps);
+            String setErr = r.setThroughput == null ? "-" : Long.toString(r.setThroughput.errors);
+            String getErr = r.getThroughput == null ? "-" : Long.toString(r.getThroughput.errors);
             if (skipLatency) {
-                println(String.format("%-8s | %12s | %12s", r.backend, setQps, getQps));
+                println(String.format("%-8s | %12s | %8s | %12s | %8s", r.backend, setQps, setErr, getQps, getErr));
                 continue;
             }
             String pingP95 = r.pingLatency == null ? "-" : DF.format(r.pingLatency.stats.p95Millis());
             String setP95 = r.setLatency == null ? "-" : DF.format(r.setLatency.stats.p95Millis());
             String getP95 = r.getLatency == null ? "-" : DF.format(r.getLatency.stats.p95Millis());
-            println(String.format("%-8s | %12s | %12s | %16s | %16s | %16s", r.backend, setQps, getQps, pingP95, setP95, getP95));
+            String pingErr = r.pingLatency == null ? "-" : Long.toString(r.pingLatency.errors);
+            String setLatErr = r.setLatency == null ? "-" : Long.toString(r.setLatency.errors);
+            String getLatErr = r.getLatency == null ? "-" : Long.toString(r.getLatency.errors);
+            println(String.format(
+                    "%-8s | %12s | %8s | %12s | %8s | %14s | %8s | %14s | %8s | %14s | %8s",
+                    r.backend, setQps, setErr, getQps, getErr,
+                    pingP95, pingErr, setP95, setLatErr, getP95, getLatErr
+            ));
         }
     }
 
@@ -488,7 +510,34 @@ public final class YierdisBench {
         PING,
         SET_RANDOM,
         SET_SEQUENTIAL,
-        GET_RANDOM
+        GET_RANDOM;
+
+        boolean accepts(ReplyKind kind) {
+            if (kind == null) {
+                return false;
+            }
+            switch (this) {
+                case PING:
+                case SET_RANDOM:
+                case SET_SEQUENTIAL:
+                    return kind == ReplyKind.SIMPLE_STRING;
+                case GET_RANDOM:
+                    return kind == ReplyKind.BULK_STRING || kind == ReplyKind.NULL;
+                default:
+                    return true;
+            }
+        }
+    }
+
+    enum ReplyKind {
+        SIMPLE_STRING,
+        ERROR,
+        INTEGER,
+        BULK_STRING,
+        ARRAY,
+        NULL,
+        MAP,
+        SET
     }
 
     static final class BenchConfig {
@@ -518,6 +567,7 @@ public final class YierdisBench {
 
         final boolean skipPrefill;
         final boolean skipLatency;
+        final boolean strictReplies;
 
         private BenchConfig(
                 boolean showHelp,
@@ -542,7 +592,8 @@ public final class YierdisBench {
                 int latencyRequests,
                 int latencyClients,
                 boolean skipPrefill,
-                boolean skipLatency
+                boolean skipLatency,
+                boolean strictReplies
         ) {
             this.showHelp = showHelp;
             this.serverJar = serverJar;
@@ -567,6 +618,7 @@ public final class YierdisBench {
             this.latencyClients = latencyClients;
             this.skipPrefill = skipPrefill;
             this.skipLatency = skipLatency;
+            this.strictReplies = strictReplies;
         }
 
         static BenchConfig parse(String[] args) {
@@ -597,6 +649,7 @@ public final class YierdisBench {
             int latencyClients = DEFAULT_LATENCY_CLIENTS;
             boolean skipPrefill = false;
             boolean skipLatency = false;
+            boolean strictReplies = false;
 
             for (int i = 0; i < args.length; i++) {
                 String a = args[i];
@@ -671,6 +724,9 @@ public final class YierdisBench {
                     case "--skipLatency":
                         skipLatency = true;
                         break;
+                    case "--strictReplies":
+                        strictReplies = true;
+                        break;
                     default:
                         throw new IllegalArgumentException("未知参数: " + a + "（使用 --help 查看用法）");
                 }
@@ -716,7 +772,8 @@ public final class YierdisBench {
                     latencyRequests,
                     latencyClients,
                     skipPrefill,
-                    skipLatency
+                    skipLatency,
+                    strictReplies
             );
         }
 
@@ -874,6 +931,7 @@ public final class YierdisBench {
         private final int keyspace;
         private final byte[] value;
         private final int seqStartIndex;
+        private final boolean strictReplies;
 
         ThroughputWorker(
                 String host,
@@ -883,7 +941,8 @@ public final class YierdisBench {
                 int pipeline,
                 int keyspace,
                 byte[] value,
-                int seqStartIndex
+                int seqStartIndex,
+                boolean strictReplies
         ) {
             this.host = host;
             this.port = port;
@@ -893,6 +952,7 @@ public final class YierdisBench {
             this.keyspace = keyspace;
             this.value = value;
             this.seqStartIndex = seqStartIndex;
+            this.strictReplies = strictReplies;
         }
 
         @Override
@@ -941,7 +1001,12 @@ public final class YierdisBench {
                         out.flush();
 
                         for (int i = 0; i < batch; i++) {
-                            RespResponseSkipper.skipOne(in);
+                            ReplyKind kind = RespResponseSkipper.skipOne(in);
+                            if (kind == ReplyKind.ERROR) {
+                                errors++;
+                            } else if (strictReplies && !workload.accepts(kind)) {
+                                errors++;
+                            }
                         }
 
                         ops += batch;
@@ -964,14 +1029,16 @@ public final class YierdisBench {
         private final int requests;
         private final int keyspace;
         private final byte[] value;
+        private final boolean strictReplies;
 
-        LatencyWorker(String host, int port, Workload workload, int requests, int keyspace, byte[] value) {
+        LatencyWorker(String host, int port, Workload workload, int requests, int keyspace, byte[] value, boolean strictReplies) {
             this.host = host;
             this.port = port;
             this.workload = workload;
             this.requests = requests;
             this.keyspace = keyspace;
             this.value = value;
+            this.strictReplies = strictReplies;
         }
 
         @Override
@@ -1012,7 +1079,12 @@ public final class YierdisBench {
                                 throw new IllegalStateException("unexpected workload: " + workload);
                         }
                         out.flush();
-                        RespResponseSkipper.skipOne(in);
+                        ReplyKind kind = RespResponseSkipper.skipOne(in);
+                        if (kind == ReplyKind.ERROR) {
+                            errors++;
+                        } else if (strictReplies && !workload.accepts(kind)) {
+                            errors++;
+                        }
                         long t1 = System.nanoTime();
                         samples[i] = t1 - t0;
                         recorded++;
@@ -1123,32 +1195,36 @@ public final class YierdisBench {
         private RespResponseSkipper() {
         }
 
-        static void skipOne(InputStream in) throws IOException {
+        static ReplyKind skipOne(InputStream in) throws IOException {
             int type = in.read();
             if (type < 0) {
                 throw new IOException("EOF");
             }
             switch (type) {
                 case '+': // simple string
+                    skipLine(in);
+                    return ReplyKind.SIMPLE_STRING;
                 case '-': // error
+                    skipLine(in);
+                    return ReplyKind.ERROR;
                 case ':': // integer
                     skipLine(in);
-                    return;
+                    return ReplyKind.INTEGER;
                 case '$': { // bulk string
                     long len = readLongLine(in);
                     if (len == -1) {
-                        return;
+                        return ReplyKind.NULL;
                     }
                     if (len < 0) {
                         throw new IOException("invalid bulk length: " + len);
                     }
                     skipFully(in, len + 2); // data + CRLF
-                    return;
+                    return ReplyKind.BULK_STRING;
                 }
                 case '*': { // array
                     long count = readLongLine(in);
                     if (count == -1) {
-                        return;
+                        return ReplyKind.NULL;
                     }
                     if (count < 0) {
                         throw new IOException("invalid array length: " + count);
@@ -1156,7 +1232,55 @@ public final class YierdisBench {
                     for (long i = 0; i < count; i++) {
                         skipOne(in);
                     }
-                    return;
+                    return ReplyKind.ARRAY;
+                }
+                case '_': { // RESP3 null
+                    skipLine(in);
+                    return ReplyKind.NULL;
+                }
+                case '%': { // RESP3 map
+                    long pairs = readLongLine(in);
+                    if (pairs == -1) {
+                        return ReplyKind.NULL;
+                    }
+                    if (pairs < 0) {
+                        throw new IOException("invalid map length: " + pairs);
+                    }
+                    for (long i = 0; i < pairs * 2; i++) {
+                        skipOne(in);
+                    }
+                    return ReplyKind.MAP;
+                }
+                case '!': { // RESP3 bulk error
+                    long len = readLongLine(in);
+                    if (len < 0) {
+                        throw new IOException("invalid bulk error length: " + len);
+                    }
+                    skipFully(in, len + 2);
+                    return ReplyKind.ERROR;
+                }
+                case '~': { // RESP3 set
+                    long count = readLongLine(in);
+                    if (count == -1) {
+                        return ReplyKind.NULL;
+                    }
+                    if (count < 0) {
+                        throw new IOException("invalid set length: " + count);
+                    }
+                    for (long i = 0; i < count; i++) {
+                        skipOne(in);
+                    }
+                    return ReplyKind.SET;
+                }
+                case '|': { // RESP3 attribute
+                    long pairs = readLongLine(in);
+                    if (pairs < 0) {
+                        throw new IOException("invalid attribute length: " + pairs);
+                    }
+                    for (long i = 0; i < pairs * 2; i++) {
+                        skipOne(in);
+                    }
+                    return skipOne(in);
                 }
                 default:
                     throw new IOException("unknown RESP type: " + (char) type);

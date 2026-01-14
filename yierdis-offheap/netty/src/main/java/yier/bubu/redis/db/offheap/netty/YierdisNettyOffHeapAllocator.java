@@ -120,6 +120,27 @@ final class YierdisNettyOffHeapBuf implements YierdisOffHeapBuf {
     }
 
     @Override
+    public void setBytes(int index, ByteBuf src, int srcIndex, int len) {
+        ensureOpen();
+        if (src == null) {
+            throw new IllegalArgumentException("src must not be null");
+        }
+        if (len < 0) {
+            throw new IllegalArgumentException("len must be >= 0");
+        }
+        if (index < 0 || index + len > capacity) {
+            throw new IndexOutOfBoundsException();
+        }
+        if (srcIndex < 0 || srcIndex + len > src.writerIndex()) {
+            throw new IndexOutOfBoundsException();
+        }
+        if (len == 0) {
+            return;
+        }
+        buf.setBytes(index, src, srcIndex, len);
+    }
+
+    @Override
     public YierdisOffHeapSlice slice(int index, int len) {
         ensureOpen();
         if (len < 0) {

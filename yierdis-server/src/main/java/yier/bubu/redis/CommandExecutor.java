@@ -127,7 +127,7 @@ public final class CommandExecutor implements AutoCloseable {
     private void executeCommand(ChannelHandlerContext ctx, RespCommand cmd) {
         ByteBuf out = ctx.alloc().buffer();
         try {
-            RespWriter writer = new RespWriter(out);
+            RespWriter writer = new RespWriter(out, ctx.channel());
             commandProcessor.execute(cmd, writer);
             ctx.writeAndFlush(out);
             out = null;
@@ -135,7 +135,7 @@ public final class CommandExecutor implements AutoCloseable {
             // 兜底：避免执行器线程异常导致连接挂死；尽量返回统一错误。
             try {
                 if (out != null) {
-                    new RespWriter(out).error("ERR internal error");
+                    new RespWriter(out, ctx.channel()).error("ERR internal error");
                     ctx.writeAndFlush(out);
                     out = null;
                 }

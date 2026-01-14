@@ -13,6 +13,8 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.util.concurrent.DefaultEventExecutorGroup;
+import io.netty.util.concurrent.EventExecutorGroup;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,29 +33,38 @@ public final class YierdisServer {
                 offHeapAllocator,
                 config.maxmemoryBytes,
                 config.maxmemoryPolicy,
-                config.maxmemorySamples
+                config.maxmemorySamples,
+                config.evictionTimeLimitMillis,
+                config.expireCleanupTimeLimitMillis
         );
         final YierdisFastCommandProcessor commandProcessor = new YierdisFastCommandProcessor(db);
-        final CommandExecutor executor = new CommandExecutor(db, commandProcessor, config.executorQueueCapacity);
+        final EventExecutorGroup commandGroup = new DefaultEventExecutorGroup(1);
+        final NettyCommandExecutor executor = new NettyCommandExecutor(
+                db,
+                commandProcessor,
+                commandGroup.next(),
+                config.executorQueueCapacity,
+                config.backpressureHighWatermark,
+                config.backpressureLowWatermark,
+                config.executorMaxDrainCommands,
+                config.executorDrainTimeLimitMillis
+        );
 
 
          EventLoopGroup bossGroup = new NioEventLoopGroup(1);
          EventLoopGroup workerGroup = new NioEventLoopGroup(config.ioThreads);
          ScheduledFuture<?> cleanupFuture = null;
          try {
-             // 命令执行线程是 DB 的唯一访问者（保持单线程命令语义）。
+             // 命令执行器线程是 DB 的唯一访问者（保持单线程命令语义）。
              executor.start();
 
             if (config.expirationCleanupIntervalMillis > 0) {
                 long period = config.expirationCleanupIntervalMillis;
-                cleanupFuture = workerGroup.next().scheduleAtFixedRate(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            executor.trySubmitMaintenance(db::cleanupExpired);
-                        } catch (Exception e) {
-                            log.debug("Expiration cleanup error", e);
-                        }
+                cleanupFuture = executor.executor().scheduleAtFixedRate(() -> {
+                    try {
+                        db.cleanupExpired();
+                    } catch (Exception e) {
+                        log.debug("Expiration cleanup error", e);
                     }
                 }, period, period, TimeUnit.MILLISECONDS);
             }
@@ -73,7 +84,7 @@ public final class YierdisServer {
                     });
 
             Channel serverChannel = bootstrap.bind(config.port).sync().channel();
-            log.info("yierdis started on 0.0.0.0:{} (RESP2)", config.port);
+            log.info("yierdis started on 0.0.0.0:{} (RESP2 default; supports HELLO 3 / RESP3 + inline)", config.port);
             serverChannel.closeFuture().sync();
         } finally {
             if (cleanupFuture != null) {
@@ -83,6 +94,7 @@ public final class YierdisServer {
             db.shutdown();
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
+            commandGroup.shutdownGracefully();
         }
     }
 

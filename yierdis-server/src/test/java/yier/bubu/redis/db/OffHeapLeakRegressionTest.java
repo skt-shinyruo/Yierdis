@@ -18,7 +18,7 @@ public class OffHeapLeakRegressionTest {
     @Test
     public void nettyOffHeapEvictionAndExpireDoNotLeak() {
         YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator, 2500, "allkeys-random", 5);
+        YierdisDb db = new YierdisDb(allocator, 2500, "allkeys-random", 5, 5, 5);
         try {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
@@ -47,7 +47,7 @@ public class OffHeapLeakRegressionTest {
     @Test
     public void unsafeOffHeapEvictionDeleteAndExpireDoNotLeak() {
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator, 4500, "allkeys-random", 5);
+        YierdisDb db = new YierdisDb(allocator, 4500, "allkeys-random", 5, 5, 5);
         try {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
@@ -78,4 +78,3 @@ public class OffHeapLeakRegressionTest {
         return out;
     }
 }
-

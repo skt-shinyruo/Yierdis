@@ -8,6 +8,7 @@ import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapExpireIndex;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapKeyspace;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapString;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.protocol.RespCommand;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -34,6 +35,8 @@ public final class YierdisDb {
     private final MaxmemoryPolicy maxmemoryPolicy;
     private final int maxmemorySamples;
     private final boolean lruEnabled;
+    private final long evictionTimeLimitNanos;
+    private final long expireCleanupTimeLimitNanos;
 
     private long usedBytes;
     private long lruClock;
@@ -42,14 +45,21 @@ public final class YierdisDb {
     private boolean closed;
 
     public YierdisDb() {
-        this(null, 0, "noeviction", 5);
+        this(null, 0, "noeviction", 5, 5, 5);
     }
 
     public YierdisDb(YierdisOffHeapAllocator offHeapAllocator) {
-        this(offHeapAllocator, 0, "noeviction", 5);
+        this(offHeapAllocator, 0, "noeviction", 5, 5, 5);
     }
 
-    public YierdisDb(YierdisOffHeapAllocator offHeapAllocator, long maxmemoryBytes, String maxmemoryPolicy, int maxmemorySamples) {
+    public YierdisDb(
+            YierdisOffHeapAllocator offHeapAllocator,
+            long maxmemoryBytes,
+            String maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis
+    ) {
         this.offHeapAllocator = offHeapAllocator;
         if (offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafeAllocator) {
             this.store = new YierdisUnsafeOffHeapKeyspace<>(unsafeAllocator);
@@ -66,11 +76,19 @@ public final class YierdisDb {
         if (maxmemorySamples <= 0) {
             throw new IllegalArgumentException("maxmemorySamples must be > 0");
         }
+        if (evictionTimeLimitMillis <= 0) {
+            throw new IllegalArgumentException("evictionTimeLimitMillis must be > 0");
+        }
+        if (expireCleanupTimeLimitMillis <= 0) {
+            throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be > 0");
+        }
 
         this.maxmemoryBytes = maxmemoryBytes;
         this.maxmemoryPolicy = parseMaxmemoryPolicy(maxmemoryPolicy);
         this.maxmemorySamples = maxmemorySamples;
         this.lruEnabled = maxmemoryBytes > 0 && this.maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_LRU;
+        this.evictionTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(evictionTimeLimitMillis);
+        this.expireCleanupTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(expireCleanupTimeLimitMillis);
         // Scheduling (if any) is done by the Netty event loop in YierdisServer, not by a dedicated thread.
     }
 
@@ -125,7 +143,11 @@ public final class YierdisDb {
         int attempts = 0;
         int maxAttempts = Math.max(64, store.size() * 2);
         long nowMillis = System.currentTimeMillis();
+        long deadline = System.nanoTime() + evictionTimeLimitNanos;
         while (usedBytesForMaxmemory() > maxmemoryBytes && attempts++ < maxAttempts) {
+            if (System.nanoTime() >= deadline) {
+                break;
+            }
             byte[] victim = pickEvictionKey(nowMillis);
             if (victim == null) {
                 break;
@@ -612,6 +634,63 @@ public final class YierdisDb {
         return didSet[0];
     }
 
+    public boolean setString(byte[] keyBytes, RespCommand cmd, int valueArgIndex, SetMode mode, ExpireOption expireOption) {
+        checkThread();
+        if (cmd == null) {
+            throw new IllegalArgumentException("cmd must not be null");
+        }
+        long now = System.currentTimeMillis();
+        Long expireAtMillis = expireOption == null ? null : expireOption.toExpireAtMillis(now);
+
+        final boolean[] didSet = new boolean[]{false};
+        final long[] deltaBytes = new long[]{0};
+        try {
+            store.compute(keyBytes, (k, old) -> {
+                long oldEstimate = old == null ? 0 : old.estimatedBytes;
+                if (old != null && isKeyExpired(k, now)) {
+                    old.releasePayloadIfAny();
+                    removeExpire(k);
+                    deltaBytes[0] -= oldEstimate;
+                    old = null;
+                    oldEstimate = 0;
+                }
+                if (mode == SetMode.NX && old != null) {
+                    touch(old);
+                    return old;
+                }
+                if (mode == SetMode.XX && old == null) {
+                    return null;
+                }
+                if (old == null) {
+                    didSet[0] = true;
+                    YierdisObject next = YierdisObject.newString(offHeapAllocator, cmd, valueArgIndex);
+                    touch(next);
+                    refreshEstimatedBytes(k, next);
+                    deltaBytes[0] += next.estimatedBytes;
+                    return next;
+                }
+                old.overwriteWithString(offHeapAllocator, cmd, valueArgIndex);
+                touch(old);
+                deltaBytes[0] -= oldEstimate;
+                refreshEstimatedBytes(k, old);
+                deltaBytes[0] += old.estimatedBytes;
+                didSet[0] = true;
+                return old;
+            });
+        } catch (YierdisOffHeapOutOfMemoryException e) {
+            throw new YierdisCommandException("OOM off-heap memory limit exceeded");
+        }
+        usedBytes += deltaBytes[0];
+        if (didSet[0]) {
+            if (expireAtMillis != null) {
+                setExpireAtMillis(keyBytes, expireAtMillis);
+            } else {
+                removeExpire(keyBytes);
+            }
+        }
+        return didSet[0];
+    }
+
     public byte[] getStringBytes(byte[] keyBytes) {
         checkThread();
         YierdisObject e = getObjectIfNotExpired(keyBytes);
@@ -726,6 +805,347 @@ public final class YierdisDb {
         }
         usedBytes += deltaBytes[0];
         return newLen[0];
+    }
+
+    public int append(byte[] keyBytes, RespCommand cmd, int argIndex) {
+        checkThread();
+        if (cmd == null) {
+            throw new IllegalArgumentException("cmd must not be null");
+        }
+        long now = System.currentTimeMillis();
+        final int[] newLen = new int[]{0};
+        final long[] deltaBytes = new long[]{0};
+        try {
+            store.compute(keyBytes, (k, old) -> {
+                long oldEstimate = old == null ? 0 : old.estimatedBytes;
+                if (old != null && isKeyExpired(k, now)) {
+                    old.releasePayloadIfAny();
+                    removeExpire(k);
+                    deltaBytes[0] -= oldEstimate;
+                    old = null;
+                    oldEstimate = 0;
+                }
+                if (old == null) {
+                    YierdisObject o = YierdisObject.newString(offHeapAllocator, cmd, argIndex);
+                    newLen[0] = o.stringByteLength();
+                    touch(o);
+                    refreshEstimatedBytes(k, o);
+                    deltaBytes[0] += o.estimatedBytes;
+                    return o;
+                }
+
+                if (old.type != ValueType.STRING) {
+                    throw new WrongTypeException();
+                }
+                touch(old);
+                newLen[0] = old.stringAppend(offHeapAllocator, cmd, argIndex);
+                deltaBytes[0] -= oldEstimate;
+                refreshEstimatedBytes(k, old);
+                deltaBytes[0] += old.estimatedBytes;
+                return old;
+            });
+        } catch (YierdisOffHeapOutOfMemoryException e) {
+            throw new YierdisCommandException("OOM off-heap memory limit exceeded");
+        }
+        usedBytes += deltaBytes[0];
+        return newLen[0];
+    }
+
+    public int getBit(YierdisBytesView keyView, long offset) {
+        checkThread();
+        byte[] canonical = store.canonicalKey(keyView);
+        if (canonical == null) {
+            return 0;
+        }
+        return getBit(canonical, offset);
+    }
+
+    public int getBit(byte[] keyBytes, long offset) {
+        checkThread();
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
+        if (e == null) {
+            return 0;
+        }
+        if (e.type != ValueType.STRING) {
+            throw new WrongTypeException();
+        }
+        return e.stringGetBit(offset);
+    }
+
+    public int setBit(byte[] keyBytes, long offset, int value) {
+        checkThread();
+        long now = System.currentTimeMillis();
+        final int[] oldBit = new int[]{0};
+        final long[] deltaBytes = new long[]{0};
+        try {
+            store.compute(keyBytes, (k, old) -> {
+                long oldEstimate = old == null ? 0 : old.estimatedBytes;
+                if (old != null && isKeyExpired(k, now)) {
+                    old.releasePayloadIfAny();
+                    removeExpire(k);
+                    deltaBytes[0] -= oldEstimate;
+                    old = null;
+                    oldEstimate = 0;
+                }
+
+                if (old == null) {
+                    old = YierdisObject.newString(offHeapAllocator, (byte[]) null);
+                    touch(old);
+                } else {
+                    if (old.type != ValueType.STRING) {
+                        throw new WrongTypeException();
+                    }
+                    touch(old);
+                }
+
+                oldBit[0] = old.stringSetBit(offHeapAllocator, offset, value);
+                deltaBytes[0] -= oldEstimate;
+                refreshEstimatedBytes(k, old);
+                deltaBytes[0] += old.estimatedBytes;
+                return old;
+            });
+        } catch (YierdisOffHeapOutOfMemoryException e) {
+            throw new YierdisCommandException("OOM off-heap memory limit exceeded");
+        }
+        usedBytes += deltaBytes[0];
+        return oldBit[0];
+    }
+
+    public long bitcount(YierdisBytesView keyView) {
+        checkThread();
+        byte[] canonical = store.canonicalKey(keyView);
+        if (canonical == null) {
+            return 0L;
+        }
+        return bitcount(canonical);
+    }
+
+    public long bitcount(byte[] keyBytes) {
+        checkThread();
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
+        if (e == null) {
+            return 0L;
+        }
+        if (e.type != ValueType.STRING) {
+            throw new WrongTypeException();
+        }
+
+        int len = e.stringByteLength();
+        if (len <= 0) {
+            return 0L;
+        }
+        return bitcountRange(e, 0, len - 1);
+    }
+
+    public long bitcount(YierdisBytesView keyView, long start, long end) {
+        checkThread();
+        byte[] canonical = store.canonicalKey(keyView);
+        if (canonical == null) {
+            return 0L;
+        }
+        return bitcount(canonical, start, end);
+    }
+
+    public long bitcount(byte[] keyBytes, long start, long end) {
+        checkThread();
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
+        if (e == null) {
+            return 0L;
+        }
+        if (e.type != ValueType.STRING) {
+            throw new WrongTypeException();
+        }
+        int len = e.stringByteLength();
+        if (len <= 0) {
+            return 0L;
+        }
+
+        long s = start;
+        long ed = end;
+        if (s < 0) {
+            s = len + s;
+        }
+        if (ed < 0) {
+            ed = len + ed;
+        }
+        if (s < 0) {
+            s = 0;
+        }
+        if (ed < 0) {
+            return 0L;
+        }
+        if (s >= len) {
+            return 0L;
+        }
+        if (ed >= len) {
+            ed = len - 1L;
+        }
+        if (s > ed) {
+            return 0L;
+        }
+        return bitcountRange(e, (int) s, (int) ed);
+    }
+
+    private static long bitcountRange(YierdisObject e, int start, int end) {
+        if (start < 0 || end < start) {
+            return 0L;
+        }
+        long count = 0L;
+        if (e.encoding == ValueEncoding.STRING_INT) {
+            byte[] view = e.stringBytesView();
+            int to = Math.min(end, view.length - 1);
+            for (int i = start; i <= to; i++) {
+                count += Integer.bitCount(view[i] & 0xFF);
+            }
+            return count;
+        }
+
+        if (e.payload instanceof byte[] buf) {
+            int to = Math.min(end, e.rawLen - 1);
+            for (int i = start; i <= to; i++) {
+                count += Integer.bitCount(buf[i] & 0xFF);
+            }
+            return count;
+        }
+        if (e.payload instanceof yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf buf) {
+            int to = Math.min(end, e.rawLen - 1);
+            for (int i = start; i <= to; i++) {
+                count += Integer.bitCount(buf.getByte(i) & 0xFF);
+            }
+            return count;
+        }
+        if (e.payload instanceof yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapString s) {
+            int to = Math.min(end, e.rawLen - 1);
+            for (int i = start; i <= to; i++) {
+                count += Integer.bitCount(s.getByte(i) & 0xFF);
+            }
+            return count;
+        }
+        return 0L;
+    }
+
+    public int pfadd(byte[] keyBytes, RespCommand cmd, int firstElementArgIndex) {
+        checkThread();
+        if (cmd == null) {
+            throw new IllegalArgumentException("cmd must not be null");
+        }
+        long now = System.currentTimeMillis();
+        final boolean[] changed = new boolean[]{false};
+        final long[] deltaBytes = new long[]{0};
+        try {
+            store.compute(keyBytes, (k, old) -> {
+                long oldEstimate = old == null ? 0 : old.estimatedBytes;
+                if (old != null && isKeyExpired(k, now)) {
+                    old.releasePayloadIfAny();
+                    removeExpire(k);
+                    deltaBytes[0] -= oldEstimate;
+                    old = null;
+                    oldEstimate = 0;
+                }
+
+                if (old == null) {
+                    old = YierdisObject.newString(offHeapAllocator, YierdisHyperLogLog.newSparse());
+                    touch(old);
+                } else {
+                    if (old.type != ValueType.STRING) {
+                        throw new WrongTypeException();
+                    }
+                    touch(old);
+                }
+
+                changed[0] = YierdisHyperLogLog.pfAdd(old, offHeapAllocator, cmd, firstElementArgIndex);
+
+                deltaBytes[0] -= oldEstimate;
+                refreshEstimatedBytes(k, old);
+                deltaBytes[0] += old.estimatedBytes;
+                return old;
+            });
+        } catch (YierdisOffHeapOutOfMemoryException e) {
+            throw new YierdisCommandException("OOM off-heap memory limit exceeded");
+        }
+        usedBytes += deltaBytes[0];
+        return changed[0] ? 1 : 0;
+    }
+
+    public long pfcount(Collection<byte[]> keys) {
+        checkThread();
+        if (keys == null || keys.isEmpty()) {
+            return 0L;
+        }
+
+        int[] registers = new int[YierdisHyperLogLog.REGISTERS];
+        for (byte[] keyBytes : keys) {
+            YierdisObject e = getObjectIfNotExpired(keyBytes);
+            if (e == null) {
+                continue;
+            }
+            if (e.type != ValueType.STRING) {
+                throw new WrongTypeException();
+            }
+            if (!YierdisHyperLogLog.isHllString(e)) {
+                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            }
+            YierdisHyperLogLog.mergeHllIntoRegisters(e.stringBytesView(), registers);
+        }
+        return YierdisHyperLogLog.estimateCardinality(registers);
+    }
+
+    public void pfmerge(byte[] destKeyBytes, Collection<byte[]> sourceKeys) {
+        checkThread();
+        if (sourceKeys == null || sourceKeys.isEmpty()) {
+            throw new IllegalArgumentException("sourceKeys must not be empty");
+        }
+
+        int[] registers = new int[YierdisHyperLogLog.REGISTERS];
+        for (byte[] keyBytes : sourceKeys) {
+            YierdisObject e = getObjectIfNotExpired(keyBytes);
+            if (e == null) {
+                continue;
+            }
+            if (e.type != ValueType.STRING) {
+                throw new WrongTypeException();
+            }
+            if (!YierdisHyperLogLog.isHllString(e)) {
+                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            }
+            YierdisHyperLogLog.mergeHllIntoRegisters(e.stringBytesView(), registers);
+        }
+
+        byte[] mergedDense = YierdisHyperLogLog.denseBytesFromRegisters(registers);
+        long now = System.currentTimeMillis();
+        final long[] deltaBytes = new long[]{0};
+        try {
+            store.compute(destKeyBytes, (k, old) -> {
+                long oldEstimate = old == null ? 0 : old.estimatedBytes;
+                if (old != null && isKeyExpired(k, now)) {
+                    old.releasePayloadIfAny();
+                    removeExpire(k);
+                    deltaBytes[0] -= oldEstimate;
+                    old = null;
+                    oldEstimate = 0;
+                }
+
+                if (old == null) {
+                    YierdisObject next = YierdisObject.newString(offHeapAllocator, mergedDense);
+                    touch(next);
+                    refreshEstimatedBytes(k, next);
+                    deltaBytes[0] += next.estimatedBytes;
+                    return next;
+                }
+
+                old.overwriteWithString(offHeapAllocator, mergedDense);
+                touch(old);
+                deltaBytes[0] -= oldEstimate;
+                refreshEstimatedBytes(k, old);
+                deltaBytes[0] += old.estimatedBytes;
+                return old;
+            });
+        } catch (YierdisOffHeapOutOfMemoryException e) {
+            throw new YierdisCommandException("OOM off-heap memory limit exceeded");
+        }
+        usedBytes += deltaBytes[0];
+        // 与 SET 类似：PFMERGE 结果写入后应清除 destKey 的 TTL。
+        removeExpire(destKeyBytes);
     }
 
     public long incrBy(byte[] keyBytes, long delta) {
@@ -1506,7 +1926,7 @@ public final class YierdisDb {
     public void cleanupExpired() {
         checkThread();
         long startNanos = System.nanoTime();
-        long timeLimitNanos = startNanos + 5_000_000L; // ~5ms
+        long timeLimitNanos = startNanos + expireCleanupTimeLimitNanos;
         int loops = 0;
 
         for (; ; ) {

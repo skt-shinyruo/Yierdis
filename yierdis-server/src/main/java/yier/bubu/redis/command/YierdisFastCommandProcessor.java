@@ -7,6 +7,7 @@ import yier.bubu.redis.db.ValueType;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
 import yier.bubu.redis.protocol.RespCommand;
+import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespWriter;
 
 import java.nio.charset.StandardCharsets;
@@ -25,6 +26,8 @@ import java.util.concurrent.TimeUnit;
  */
 public final class YierdisFastCommandProcessor {
     private static final String NULL_BULK_STRING_ERR = "ERR Protocol error: null bulk string";
+    private static final int HLL_DENSE_BYTES = 8 + 12288;
+    private static final long MAX_STRING_BYTES = 512L * 1024 * 1024;
 
     private static final byte[] HELLO_SERVER_KEY = "server".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_SERVER_VALUE = "yierdis".getBytes(StandardCharsets.US_ASCII);
@@ -32,6 +35,7 @@ public final class YierdisFastCommandProcessor {
     private static final byte[] HELLO_VERSION_VALUE = "0.1.0".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_PROTO_KEY = "proto".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_PROTO_VALUE = "2".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] HELLO_PROTO_VALUE_RESP3 = "3".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_MODE_KEY = "mode".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_MODE_VALUE = "standalone".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_ROLE_KEY = "role".getBytes(StandardCharsets.US_ASCII);
@@ -66,6 +70,12 @@ public final class YierdisFastCommandProcessor {
                 new Command("GET", this::get),
                 new Command("STRLEN", this::strlen),
                 new Command("APPEND", this::append),
+                new Command("SETBIT", this::setbit),
+                new Command("GETBIT", this::getbit),
+                new Command("BITCOUNT", this::bitcount),
+                new Command("PFADD", this::pfadd),
+                new Command("PFCOUNT", this::pfcount),
+                new Command("PFMERGE", this::pfmerge),
                 new Command("INCR", this::incr),
                 new Command("DECR", this::decr),
                 new Command("EXPIRE", this::expire),
@@ -200,10 +210,22 @@ public final class YierdisFastCommandProcessor {
     }
 
     private void hello(RespCommand cmd, RespWriter out) {
-        // Minimal RESP2-friendly HELLO implementation.
+        // Minimal HELLO implementation (RESP2 + RESP3 handshake).
         String version = cmd.argc() >= 2 ? utf8(cmd, 1) : "2";
         if ("3".equals(version)) {
-            out.error("ERR RESP3 is not supported (use HELLO 2 / redis-cli --resp2)");
+            // Switch the connection to RESP3 and return a map as required by RESP3 clients.
+            out.setProtocol(RespProtocol.RESP3);
+            out.mapHeader(5);
+            out.bulkString(HELLO_SERVER_KEY);
+            out.bulkString(HELLO_SERVER_VALUE);
+            out.bulkString(HELLO_VERSION_KEY);
+            out.bulkString(HELLO_VERSION_VALUE);
+            out.bulkString(HELLO_PROTO_KEY);
+            out.bulkString(HELLO_PROTO_VALUE_RESP3);
+            out.bulkString(HELLO_MODE_KEY);
+            out.bulkString(HELLO_MODE_VALUE);
+            out.bulkString(HELLO_ROLE_KEY);
+            out.bulkString(HELLO_ROLE_VALUE);
             return;
         }
         if (!"2".equals(version)) {
@@ -211,6 +233,8 @@ public final class YierdisFastCommandProcessor {
             return;
         }
 
+        // Switch back to RESP2 when explicitly requested.
+        out.setProtocol(RespProtocol.RESP2);
         out.arrayHeader(10);
         out.bulkString(HELLO_SERVER_KEY);
         out.bulkString(HELLO_SERVER_VALUE);
@@ -327,7 +351,6 @@ public final class YierdisFastCommandProcessor {
         }
 
         byte[] key = cmd.toByteArray(1);
-        byte[] value = cmd.toByteArray(2);
 
         YierdisDb.SetMode mode = YierdisDb.SetMode.NORMAL;
         YierdisDb.ExpireOption expire = null;
@@ -366,7 +389,7 @@ public final class YierdisFastCommandProcessor {
             db.ensureWriteAllowed(extra);
         }
 
-        boolean ok = db.setString(key, value, mode, expire);
+        boolean ok = db.setString(key, cmd, 2, mode, expire);
         if (!ok) {
             out.bulkString((byte[]) null);
             return;
@@ -399,8 +422,102 @@ public final class YierdisFastCommandProcessor {
         }
         long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + 16L;
         db.ensureWriteAllowed(extra);
-        out.integer(db.append(cmd.toByteArray(1), cmd.toByteArray(2)));
+        out.integer(db.append(cmd.toByteArray(1), cmd, 2));
         db.enforceMaxmemory();
+    }
+
+    private void setbit(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() != 4) {
+            wrongArity(out, "setbit");
+            return;
+        }
+        long offset = parseNonNegativeLong(cmd, 2, "offset");
+        long v = parseLong(cmd, 3, "value");
+        if (v != 0 && v != 1) {
+            out.error("ERR bit is not an integer or out of range");
+            return;
+        }
+
+        int currentLen = db.strlen(argView.reset(cmd, 1));
+        long requiredBytes = (offset >>> 3) + 1;
+        if (requiredBytes > MAX_STRING_BYTES) {
+            out.error("ERR string exceeds maximum allowed size");
+            return;
+        }
+        long growth = Math.max(0L, requiredBytes - (long) currentLen);
+        long extra = (long) Math.max(0, cmd.len(1)) + growth + 16L;
+        db.ensureWriteAllowed(extra);
+
+        int old = db.setBit(cmd.toByteArray(1), offset, (int) v);
+        db.enforceMaxmemory();
+        out.integer(old);
+    }
+
+    private void getbit(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() != 3) {
+            wrongArity(out, "getbit");
+            return;
+        }
+        long offset = parseNonNegativeLong(cmd, 2, "offset");
+        out.integer(db.getBit(argView.reset(cmd, 1), offset));
+    }
+
+    private void bitcount(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() != 2 && cmd.argc() != 4) {
+            wrongArity(out, "bitcount");
+            return;
+        }
+        if (cmd.argc() == 2) {
+            out.integer(db.bitcount(argView.reset(cmd, 1)));
+            return;
+        }
+        long start = parseLong(cmd, 2, "start");
+        long end = parseLong(cmd, 3, "end");
+        out.integer(db.bitcount(argView.reset(cmd, 1), start, end));
+    }
+
+    private void pfadd(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() < 3) {
+            wrongArity(out, "pfadd");
+            return;
+        }
+        long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + 16L;
+        db.ensureWriteAllowed(extra);
+        out.integer(db.pfadd(cmd.toByteArray(1), cmd, 2));
+        db.enforceMaxmemory();
+    }
+
+    private void pfcount(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() < 2) {
+            wrongArity(out, "pfcount");
+            return;
+        }
+        int len = cmd.argc() - 1;
+        sliceResetFromCommand(cmd, 1, len);
+        try {
+            out.integer(db.pfcount(slice));
+        } finally {
+            clearScratch(len);
+        }
+    }
+
+    private void pfmerge(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() < 3) {
+            wrongArity(out, "pfmerge");
+            return;
+        }
+        long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + 16L;
+        db.ensureWriteAllowed(extra);
+
+        int sourcesLen = cmd.argc() - 2;
+        sliceResetFromCommand(cmd, 2, sourcesLen);
+        try {
+            db.pfmerge(cmd.toByteArray(1), slice);
+        } finally {
+            clearScratch(sourcesLen);
+        }
+        db.enforceMaxmemory();
+        out.simpleString("OK");
     }
 
     private void incrBy(RespCommand cmd, RespWriter out, long delta) {

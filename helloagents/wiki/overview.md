@@ -8,7 +8,7 @@
 
 ### 目标与背景
 
-Yierdis 是一个“教学/演示导向”的简化版 Redis 兼容服务端：使用 Java 17 + Netty，实现 RESP2 over TCP 的核心命令子集，便于学习网络编程与 Redis 协议/数据结构思路。
+Yierdis 是一个“教学/演示导向”的简化版 Redis 兼容服务端：使用 Java 17 + Netty，实现 RESP2/RESP3（最小子集）over TCP 的核心命令子集，并提供 inline command 支持（调试用，支持引号/转义/`\\xHH`），便于学习网络编程与 Redis 协议/数据结构思路。
 
 ### 范围
 
@@ -22,11 +22,11 @@ Yierdis 是一个“教学/演示导向”的简化版 Redis 兼容服务端：�
 | 模块 | 责任 | 状态 | 文档 |
 |------|------|------|------|
 | server | Netty 启动/管线/Handler | ✅Stable | [modules/server.md](modules/server.md) |
-| protocol | RESP2 编解码与对象模型 | ✅Stable | [modules/protocol.md](modules/protocol.md) |
+| protocol | RESP2/RESP3（最小子集）编解码与对象模型 | ✅Stable | [modules/protocol.md](modules/protocol.md) |
 | command | 命令路由与参数解析 | ✅Stable | [modules/command.md](modules/command.md) |
 | db | 内存存储、编码、TTL、淘汰 | ✅Stable | [modules/db.md](modules/db.md) |
 | offheap | 堆外内存抽象与后端 | 🚧In Development | [modules/offheap.md](modules/offheap.md) |
-| client | 内置 RESP2 CLI 客户端 | ✅Stable | [modules/client.md](modules/client.md) |
+| client | 内置 RESP2 CLI 客户端（用于调试） | ✅Stable | [modules/client.md](modules/client.md) |
 
 ---
 

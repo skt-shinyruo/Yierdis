@@ -386,6 +386,10 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAlloca
 }
 
 final class YierdisUnsafeOffHeapBuf implements YierdisOffHeapBuf {
+    private static final int COPY_CHUNK_BYTES = 8 * 1024;
+    private static final ThreadLocal<byte[]> TL_COPY_BUF =
+            ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
+
     private final YierdisUnsafeOffHeapAllocator owner;
     private final int capacity;
     private long address;
@@ -453,6 +457,45 @@ final class YierdisUnsafeOffHeapBuf implements YierdisOffHeapBuf {
             return;
         }
         PlatformDependent.copyMemory(src, srcOff, address + index, len);
+    }
+
+    @Override
+    public void setBytes(int index, ByteBuf src, int srcIndex, int len) {
+        ensureOpen();
+        if (src == null) {
+            throw new IllegalArgumentException("src must not be null");
+        }
+        if (len < 0) {
+            throw new IllegalArgumentException("len must be >= 0");
+        }
+        checkIndex(index, len);
+        if (srcIndex < 0 || srcIndex + len > src.writerIndex()) {
+            throw new IndexOutOfBoundsException();
+        }
+        if (len == 0) {
+            return;
+        }
+
+        long dst = address + index;
+        if (src.hasMemoryAddress()) {
+            PlatformDependent.copyMemory(src.memoryAddress() + srcIndex, dst, len);
+            return;
+        }
+        if (src.hasArray()) {
+            PlatformDependent.copyMemory(src.array(), src.arrayOffset() + srcIndex, dst, len);
+            return;
+        }
+
+        byte[] scratch = TL_COPY_BUF.get();
+        int remaining = len;
+        int off = 0;
+        while (remaining > 0) {
+            int chunk = Math.min(remaining, scratch.length);
+            src.getBytes(srcIndex + off, scratch, 0, chunk);
+            PlatformDependent.copyMemory(scratch, 0, dst + off, chunk);
+            off += chunk;
+            remaining -= chunk;
+        }
     }
 
     @Override
