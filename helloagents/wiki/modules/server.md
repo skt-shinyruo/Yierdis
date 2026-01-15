@@ -8,7 +8,7 @@
 
 - **Responsibility:** 端口监听、Pipeline 组装、定时任务（如 TTL 清理）的调度入口
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-08
+- **Last Updated:** 2026-01-14
 
 ## Specifications
 
@@ -54,9 +54,9 @@
 
 ## Dependencies
 
-- protocol
-- command
-- db
+- `yierdis-protocol`
+- `yierdis-core`
+- `yierdis-args`
 
 ## Change History
 

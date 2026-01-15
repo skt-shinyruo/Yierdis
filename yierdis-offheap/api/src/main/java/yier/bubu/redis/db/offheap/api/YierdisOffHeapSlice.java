@@ -1,7 +1,5 @@
 package yier.bubu.redis.db.offheap.api;
 
-import io.netty.buffer.ByteBuf;
-
 public interface YierdisOffHeapSlice {
     int length();
 
@@ -9,5 +7,5 @@ public interface YierdisOffHeapSlice {
 
     void getBytes(int index, byte[] dst, int dstOff, int len);
 
-    void writeTo(ByteBuf out);
+    void writeTo(YierdisBytesSink out);
 }

@@ -1,9 +1,10 @@
 package yier.bubu.redis.db.offheap.foreign;
 
-import io.netty.buffer.ByteBuf;
 import jdk.incubator.foreign.MemoryAccess;
 import jdk.incubator.foreign.MemorySegment;
 import jdk.incubator.foreign.ResourceScope;
+import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
+import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
@@ -77,6 +78,10 @@ public final class YierdisForeignOffHeapAllocator implements YierdisOffHeapAlloc
     }
 
     private static final class YierdisForeignOffHeapBuf implements YierdisOffHeapBuf {
+        private static final int COPY_CHUNK_BYTES = 8 * 1024;
+        private static final ThreadLocal<byte[]> TL_COPY_BUF =
+                ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
+
         private final YierdisForeignOffHeapAllocator owner;
         private final ResourceScope scope;
         private final MemorySegment segment;
@@ -152,7 +157,7 @@ public final class YierdisForeignOffHeapAllocator implements YierdisOffHeapAlloc
         }
 
         @Override
-        public void setBytes(int index, ByteBuf src, int srcIndex, int len) {
+        public void setBytes(int index, YierdisBytesSource src, int srcIndex, int len) {
             ensureOpen();
             if (src == null) {
                 throw new IllegalArgumentException("src must not be null");
@@ -161,14 +166,24 @@ public final class YierdisForeignOffHeapAllocator implements YierdisOffHeapAlloc
                 throw new IllegalArgumentException("len must be >= 0");
             }
             checkIndex(index, len);
-            if (srcIndex < 0 || srcIndex + len > src.writerIndex()) {
+            if (srcIndex < 0) {
                 throw new IndexOutOfBoundsException();
             }
             if (len == 0) {
                 return;
             }
+
             ByteBuffer dst = segment.asSlice(index, len).asByteBuffer();
-            src.getBytes(srcIndex, dst);
+            byte[] scratch = TL_COPY_BUF.get();
+            int remaining = len;
+            int srcOff = srcIndex;
+            while (remaining > 0) {
+                int chunk = Math.min(remaining, scratch.length);
+                src.getBytes(srcOff, scratch, 0, chunk);
+                dst.put(scratch, 0, chunk);
+                srcOff += chunk;
+                remaining -= chunk;
+            }
         }
 
         @Override
@@ -216,6 +231,10 @@ public final class YierdisForeignOffHeapAllocator implements YierdisOffHeapAlloc
     }
 
     private static final class YierdisForeignOffHeapSlice implements YierdisOffHeapSlice {
+        private static final int COPY_CHUNK_BYTES = 8 * 1024;
+        private static final ThreadLocal<byte[]> TL_COPY_BUF =
+                ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
+
         private final YierdisForeignOffHeapBuf owner;
         private final int offset;
         private final int len;
@@ -261,14 +280,26 @@ public final class YierdisForeignOffHeapAllocator implements YierdisOffHeapAlloc
         }
 
         @Override
-        public void writeTo(ByteBuf out) {
+        public void writeTo(YierdisBytesSink out) {
             owner.ensureOwnerOpen();
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
             }
+            if (len == 0) {
+                return;
+            }
+
             MemorySegment s = owner.segment().asSlice(offset, len);
             ByteBuffer bb = s.asByteBuffer();
-            out.writeBytes(bb);
+
+            byte[] scratch = TL_COPY_BUF.get();
+            int remaining = len;
+            while (remaining > 0) {
+                int chunk = Math.min(remaining, scratch.length);
+                bb.get(scratch, 0, chunk);
+                out.writeBytes(scratch, 0, chunk);
+                remaining -= chunk;
+            }
         }
     }
 }

@@ -64,7 +64,7 @@
 REQUESTS=3000000 CLIENTS=400 PIPELINE=32 DATA_SIZE=1024 KEYSPACE=2000000 ./scripts/bench.sh
 ```
 
-如需查看 Java 工具的全部参数（含 `--serverArg` 等），可直接运行：
+如需查看 Java 工具的 bench 参数，可直接运行（server 参数通过 `--` 透传，见下文）：
 
 ```bash
 java -jar yierdis-bench/target/yierdis-bench-0.1.0-SNAPSHOT.jar --help
@@ -84,15 +84,24 @@ bench 在汇总表格中会同时展示 throughput/latency 与 `errors`：
 默认情况下，bench 主要用于性能对比：只要响应不是 `-ERR`，就会按成功统计。
 
 当开启 `--strictReplies` 时，会对不同 workload 的响应做“最小类型校验”，例如：
-- `PING` 期望 simple string
-- `SET` 期望 simple string
-- `GET` 期望 bulk string 或 null bulk string
+- `PING` 期望 `+PONG`
+- `SET` 期望 `+OK`
+- `GET` 期望 bulk string（并校验 bulk 长度与 bench 的 `--dataSize` 一致；允许 `(nil)`）
 
 若返回类型不符合预期，也会计入 `errors`（用于捕捉协议/实现差异导致的隐藏错误）。
 
-### RESP3 基础类型跳过（为了兼容不同服务端）
-当目标服务端处于 RESP3（例如执行 `HELLO 3` 后），某些响应可能出现额外的 RESP3 基础类型（如 null、map、set、push 等）。
+### server 参数透传（SSOT：yierdis-args）
+bench 本身只定义“压测维度”的参数；与 server 共享的参数（例如 `--maxmemoryBytes`、`--offheapBackend` 等）会透传给 server，并由 `yierdis-args` 解析/校验。
 
-bench 的响应跳过逻辑支持跳过这些“非本次 workload 关心”的基础类型，以便：
-- 能在 pipeline 模式下持续对齐请求-响应边界
-- 不因为额外的 RESP3 元信息导致解析错位或误判为连接异常
+- 直接运行 bench jar 时：使用 `--` 分隔 bench 参数与 server 参数（示例见下）
+- 使用 `scripts/bench.sh` 时：通过环境变量（如 `MAXMEMORY_BYTES` / `OFFHEAP_MAX_BYTES` / `SERVER_ARGS_EXTRA`）透传
+
+示例（bench 端启动 server，并覆盖 server 参数）：
+
+```bash
+java -jar yierdis-bench/target/yierdis-bench-0.1.0-SNAPSHOT.jar \
+  --requests 200000 --clients 50 --pipeline 8 \
+  -- \
+  --maxmemoryBytes 104857600 --maxmemoryPolicy allkeys-lru --maxmemorySamples 5 \
+  --offheapBackend unsafe --offheapMaxBytes 4294967296
+```

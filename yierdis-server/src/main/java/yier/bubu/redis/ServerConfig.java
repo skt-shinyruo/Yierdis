@@ -1,5 +1,8 @@
 package yier.bubu.redis;
 
+import picocli.CommandLine;
+import yier.bubu.redis.args.YierdisServerArgs;
+
 final class ServerConfig {
     final int port;
     final long expirationCleanupIntervalMillis;
@@ -36,29 +39,8 @@ final class ServerConfig {
     ) {
         this.port = port;
         this.expirationCleanupIntervalMillis = expirationCleanupIntervalMillis;
-        if (ioThreads <= 0) {
-            throw new IllegalArgumentException("ioThreads must be > 0");
-        }
-        if (executorQueueCapacity <= 0) {
-            throw new IllegalArgumentException("executorQueueCapacity must be > 0");
-        }
         this.ioThreads = ioThreads;
         this.executorQueueCapacity = executorQueueCapacity;
-        if (backpressureHighWatermark <= 0) {
-            throw new IllegalArgumentException("backpressureHighWatermark must be > 0");
-        }
-        if (backpressureLowWatermark < 0) {
-            throw new IllegalArgumentException("backpressureLowWatermark must be >= 0");
-        }
-        if (backpressureLowWatermark >= backpressureHighWatermark) {
-            throw new IllegalArgumentException("backpressureLowWatermark must be < backpressureHighWatermark");
-        }
-        if (executorMaxDrainCommands <= 0) {
-            throw new IllegalArgumentException("executorMaxDrainCommands must be > 0");
-        }
-        if (executorDrainTimeLimitMillis <= 0) {
-            throw new IllegalArgumentException("executorDrainTimeLimitMillis must be > 0");
-        }
         this.backpressureHighWatermark = backpressureHighWatermark;
         this.backpressureLowWatermark = backpressureLowWatermark;
         this.executorMaxDrainCommands = executorMaxDrainCommands;
@@ -68,117 +50,44 @@ final class ServerConfig {
         this.maxmemoryBytes = maxmemoryBytes;
         this.maxmemoryPolicy = maxmemoryPolicy;
         this.maxmemorySamples = maxmemorySamples;
-        if (evictionTimeLimitMillis <= 0) {
-            throw new IllegalArgumentException("evictionTimeLimitMillis must be > 0");
-        }
-        if (expireCleanupTimeLimitMillis <= 0) {
-            throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be > 0");
-        }
         this.evictionTimeLimitMillis = evictionTimeLimitMillis;
         this.expireCleanupTimeLimitMillis = expireCleanupTimeLimitMillis;
     }
 
     static ServerConfig fromArgs(String[] args) {
-        int port = 6378;
-        long cleanupIntervalMillis = 1000;
-        int ioThreads = 1;
-        int executorQueueCapacity = 1024;
-        int backpressureHighWatermark = 256;
-        int backpressureLowWatermark = 128;
-        int executorMaxDrainCommands = 512;
-        long executorDrainTimeLimitMillis = 2;
-        String offheapBackend = "none";
-        long offheapMaxBytes = 0;
-        long maxmemoryBytes = 0;
-        String maxmemoryPolicy = "noeviction";
-        int maxmemorySamples = 5;
-        long evictionTimeLimitMillis = 5;
-        long expireCleanupTimeLimitMillis = 5;
-
-        for (int i = 0; i < args.length; i++) {
-            String arg = args[i];
-            if ("--port".equals(arg) && i + 1 < args.length) {
-                port = Integer.parseInt(args[++i]);
-                continue;
-            }
-            if ("--cleanupIntervalMillis".equals(arg) && i + 1 < args.length) {
-                cleanupIntervalMillis = Long.parseLong(args[++i]);
-                continue;
-            }
-            if ("--noCleanup".equals(arg)) {
-                cleanupIntervalMillis = 0;
-                continue;
-            }
-            if ("--ioThreads".equals(arg) && i + 1 < args.length) {
-                ioThreads = Integer.parseInt(args[++i]);
-                continue;
-            }
-            if ("--executorQueueCapacity".equals(arg) && i + 1 < args.length) {
-                executorQueueCapacity = Integer.parseInt(args[++i]);
-                continue;
-            }
-            if ("--backpressureHigh".equals(arg) && i + 1 < args.length) {
-                backpressureHighWatermark = Integer.parseInt(args[++i]);
-                continue;
-            }
-            if ("--backpressureLow".equals(arg) && i + 1 < args.length) {
-                backpressureLowWatermark = Integer.parseInt(args[++i]);
-                continue;
-            }
-            if ("--executorMaxDrain".equals(arg) && i + 1 < args.length) {
-                executorMaxDrainCommands = Integer.parseInt(args[++i]);
-                continue;
-            }
-            if ("--executorDrainMillis".equals(arg) && i + 1 < args.length) {
-                executorDrainTimeLimitMillis = Long.parseLong(args[++i]);
-                continue;
-            }
-            if ("--offheapBackend".equals(arg) && i + 1 < args.length) {
-                offheapBackend = args[++i];
-                continue;
-            }
-            if ("--offheapMaxBytes".equals(arg) && i + 1 < args.length) {
-                offheapMaxBytes = Long.parseLong(args[++i]);
-                continue;
-            }
-            if ("--maxmemoryBytes".equals(arg) && i + 1 < args.length) {
-                maxmemoryBytes = Long.parseLong(args[++i]);
-                continue;
-            }
-            if ("--maxmemoryPolicy".equals(arg) && i + 1 < args.length) {
-                maxmemoryPolicy = args[++i];
-                continue;
-            }
-            if ("--maxmemorySamples".equals(arg) && i + 1 < args.length) {
-                maxmemorySamples = Integer.parseInt(args[++i]);
-                continue;
-            }
-            if ("--evictionTimeLimitMillis".equals(arg) && i + 1 < args.length) {
-                evictionTimeLimitMillis = Long.parseLong(args[++i]);
-                continue;
-            }
-            if ("--expireCleanupTimeLimitMillis".equals(arg) && i + 1 < args.length) {
-                expireCleanupTimeLimitMillis = Long.parseLong(args[++i]);
-                continue;
-            }
+        YierdisServerArgs parsed = new YierdisServerArgs();
+        CommandLine cmd = new CommandLine(parsed);
+        try {
+            cmd.parseArgs(args);
+        } catch (CommandLine.ParameterException e) {
+            System.err.println(e.getMessage());
+            cmd.usage(System.err);
+            throw new IllegalArgumentException(e.getMessage(), e);
         }
 
+        if (parsed.help) {
+            cmd.usage(System.out);
+            return null;
+        }
+
+        parsed.normalizeAndValidate();
+
         return new ServerConfig(
-                port,
-                cleanupIntervalMillis,
-                ioThreads,
-                executorQueueCapacity,
-                backpressureHighWatermark,
-                backpressureLowWatermark,
-                executorMaxDrainCommands,
-                executorDrainTimeLimitMillis,
-                offheapBackend,
-                offheapMaxBytes,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis
+                parsed.port,
+                parsed.cleanupIntervalMillis,
+                parsed.ioThreads,
+                parsed.executorQueueCapacity,
+                parsed.backpressureHighWatermark,
+                parsed.backpressureLowWatermark,
+                parsed.executorMaxDrainCommands,
+                parsed.executorDrainTimeLimitMillis,
+                parsed.offheapBackend,
+                parsed.offheapMaxBytes,
+                parsed.maxmemoryBytes,
+                parsed.maxmemoryPolicy,
+                parsed.maxmemorySamples,
+                parsed.evictionTimeLimitMillis,
+                parsed.expireCleanupTimeLimitMillis
         );
     }
 }

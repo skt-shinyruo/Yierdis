@@ -2,6 +2,8 @@ package yier.bubu.redis.db.offheap.netty;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
+import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
+import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
@@ -78,6 +80,10 @@ public final class YierdisNettyOffHeapAllocator implements YierdisOffHeapAllocat
 }
 
 final class YierdisNettyOffHeapBuf implements YierdisOffHeapBuf {
+    private static final int COPY_CHUNK_BYTES = 8 * 1024;
+    private static final ThreadLocal<byte[]> TL_COPY_BUF =
+            ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
+
     private final YierdisNettyOffHeapAllocator owner;
     private final ByteBuf buf;
     private final int capacity;
@@ -120,7 +126,7 @@ final class YierdisNettyOffHeapBuf implements YierdisOffHeapBuf {
     }
 
     @Override
-    public void setBytes(int index, ByteBuf src, int srcIndex, int len) {
+    public void setBytes(int index, YierdisBytesSource src, int srcIndex, int len) {
         ensureOpen();
         if (src == null) {
             throw new IllegalArgumentException("src must not be null");
@@ -131,13 +137,35 @@ final class YierdisNettyOffHeapBuf implements YierdisOffHeapBuf {
         if (index < 0 || index + len > capacity) {
             throw new IndexOutOfBoundsException();
         }
-        if (srcIndex < 0 || srcIndex + len > src.writerIndex()) {
-            throw new IndexOutOfBoundsException();
-        }
         if (len == 0) {
             return;
         }
-        buf.setBytes(index, src, srcIndex, len);
+
+        if (srcIndex < 0) {
+            throw new IndexOutOfBoundsException();
+        }
+
+        if (src instanceof YierdisNettyByteBufSource nettySource) {
+            ByteBuf b = nettySource.unwrap();
+            if (srcIndex + len > b.writerIndex()) {
+                throw new IndexOutOfBoundsException();
+            }
+            buf.setBytes(index, b, srcIndex, len);
+            return;
+        }
+
+        byte[] scratch = TL_COPY_BUF.get();
+        int remaining = len;
+        int srcOff = srcIndex;
+        int dstOff = index;
+        while (remaining > 0) {
+            int chunk = Math.min(remaining, scratch.length);
+            src.getBytes(srcOff, scratch, 0, chunk);
+            buf.setBytes(dstOff, scratch, 0, chunk);
+            srcOff += chunk;
+            dstOff += chunk;
+            remaining -= chunk;
+        }
     }
 
     @Override
@@ -178,6 +206,10 @@ final class YierdisNettyOffHeapBuf implements YierdisOffHeapBuf {
 }
 
 final class YierdisNettyOffHeapSlice implements YierdisOffHeapSlice {
+    private static final int COPY_CHUNK_BYTES = 8 * 1024;
+    private static final ThreadLocal<byte[]> TL_COPY_BUF =
+            ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
+
     private final YierdisNettyOffHeapBuf owner;
     private final int offset;
     private final int len;
@@ -215,11 +247,29 @@ final class YierdisNettyOffHeapSlice implements YierdisOffHeapSlice {
     }
 
     @Override
-    public void writeTo(ByteBuf out) {
+    public void writeTo(YierdisBytesSink out) {
         owner.ensureOpen();
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }
-        out.writeBytes(owner.unwrap(), offset, len);
+        if (len == 0) {
+            return;
+        }
+
+        if (out instanceof YierdisNettyByteBufSink sink) {
+            sink.unwrap().writeBytes(owner.unwrap(), offset, len);
+            return;
+        }
+
+        byte[] scratch = TL_COPY_BUF.get();
+        int remaining = len;
+        int srcIndex = offset;
+        while (remaining > 0) {
+            int chunk = Math.min(remaining, scratch.length);
+            owner.unwrap().getBytes(srcIndex, scratch, 0, chunk);
+            out.writeBytes(scratch, 0, chunk);
+            srcIndex += chunk;
+            remaining -= chunk;
+        }
     }
 }

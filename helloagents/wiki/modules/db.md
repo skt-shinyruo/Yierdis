@@ -4,11 +4,13 @@
 
 实现内存数据结构、编码策略、TTL/过期清理、内存估算与淘汰策略。
 
+归属：`yierdis-core`（`yier.bubu.redis.db.*`），作为数据结构与内存语义 SSOT。
+
 ## Module Overview
 
 - **Responsibility:** Keyspace + 过期索引 + 值编码（string/list/set/hash/zset）+ maxmemory
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-08
+- **Last Updated:** 2026-01-14
 
 ## Specifications
 
@@ -47,7 +49,7 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 
 ## Dependencies
 
-- offheap（可选）
+- `yierdis-offheap-api`（可选：用于 off-heap allocator/buf/slice 抽象）
 
 ## Change History
 

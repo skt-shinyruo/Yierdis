@@ -23,11 +23,37 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Netty-friendly single-thread command executor.
  * <p>
- * Commands are enqueued from I/O threads and executed on a dedicated Netty {@link EventExecutor} (single thread),
- * keeping Redis-style "single thread command semantics" while enabling:
- * - bounded backlog (DoS protection)
- * - connection-level backpressure via autoRead on/off with hysteresis
- * - flush coalescing (batch write + flush)
+ * Commands are enqueued from I/O threads and executed on a dedicated Netty {@link EventExecutor} (single thread).
+ * This keeps Redis-style "single thread command semantics", while providing bounded backlog, backpressure and
+ * cooperative scheduling.
+ * <p>
+ * Key behaviors (contract):
+ * <ul>
+ *     <li><b>Bounded queue</b>: {@code queueCapacity} is a hard cap for the global backlog.
+ *     When the queue is full (or executor is closing), {@link #trySubmit(ChannelHandlerContext, RespCommand)}
+ *     returns {@code false} and the caller is expected to fail-fast (server returns {@code -ERR busy}).</li>
+ *     <li><b>Ownership</b>: on success, the executor takes ownership of {@link RespCommand} and will recycle it.
+ *     On failure, the caller must recycle.</li>
+ *     <li><b>Connection-level backpressure</b>: backpressure is tracked per-channel by a pending counter.
+ *     When {@code pending >= backpressureHighWatermark}, the executor disables Netty {@code autoRead} for that
+ *     channel (enter backpressure). When {@code pending <= backpressureLowWatermark}, it re-enables {@code autoRead}
+ *     (exit backpressure). This high/low hysteresis avoids oscillation.</li>
+ *     <li><b>Drain budget (cooperative)</b>: a drain "tick" stops when either:
+ *       <ul>
+ *         <li>{@code processed >= maxDrainCommands}, or</li>
+ *         <li>{@code now >= start + drainTimeLimitMillis}</li>
+ *       </ul>
+ *       The time limit is a <b>budget</b>, not a {@code sleep}. When the budget is hit and the queue is still not
+ *       empty, the executor schedules the next drain tick, allowing other tasks on the same executor (e.g. scheduled
+ *       TTL cleanup) to run between ticks.</li>
+ *     <li><b>Flush coalescing</b>: commands write replies via {@link RespWriter} into Netty buffers; each tick batches
+ *     {@code write(...)} calls and performs a single {@code flush()} per channel at the end.</li>
+ * </ul>
+ * <p>
+ * Configuration SSOT: these values are parsed and validated in {@code yierdis-args} ({@code YierdisServerArgs}).
+ * Relevant flags:
+ * {@code --executorQueueCapacity}, {@code --executorMaxDrain}, {@code --executorDrainMillis},
+ * {@code --backpressureHigh}, {@code --backpressureLow}.
  */
 public final class NettyCommandExecutor implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(NettyCommandExecutor.class);
@@ -48,6 +74,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
     private final int maxDrainCommands;
     private final long drainTimeLimitNanos;
 
+    private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean drainScheduled = new AtomicBoolean(false);
     private volatile boolean running = true;
 
@@ -98,6 +125,8 @@ public final class NettyCommandExecutor implements AutoCloseable {
      */
     public void start() {
         executor.submit(db::bindToCurrentThread).syncUninterruptibly();
+        started.set(true);
+        scheduleDrain();
     }
 
     /**
@@ -148,6 +177,9 @@ public final class NettyCommandExecutor implements AutoCloseable {
     }
 
     private void scheduleDrain() {
+        if (running && !started.get()) {
+            return;
+        }
         if (!drainScheduled.compareAndSet(false, true)) {
             return;
         }

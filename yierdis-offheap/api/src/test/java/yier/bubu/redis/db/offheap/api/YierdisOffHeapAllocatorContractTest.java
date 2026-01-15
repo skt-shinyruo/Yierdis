@@ -1,7 +1,5 @@
 package yier.bubu.redis.db.offheap.api;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -41,15 +39,9 @@ public abstract class YierdisOffHeapAllocatorContractTest {
                 slice.getBytes(0, sliced, 0, sliced.length);
                 Assert.assertArrayEquals(new byte[]{4, 5, 6, 7, 8}, sliced);
 
-                ByteBuf out = Unpooled.buffer();
-                try {
-                    slice.writeTo(out);
-                    byte[] written = new byte[5];
-                    out.readBytes(written);
-                    Assert.assertArrayEquals(sliced, written);
-                } finally {
-                    out.release();
-                }
+                YierdisByteArraySink out = new YierdisByteArraySink();
+                slice.writeTo(out);
+                Assert.assertArrayEquals(sliced, out.toByteArray());
             }
         }
     }

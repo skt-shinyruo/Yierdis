@@ -1,5 +1,20 @@
 package yier.bubu.redis.bench;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.embedded.EmbeddedChannel;
+import picocli.CommandLine;
+import picocli.CommandLine.ParameterException;
+import yier.bubu.redis.args.YierdisServerArgs;
+import yier.bubu.redis.protocol.RespBulkString;
+import yier.bubu.redis.protocol.RespDecoder;
+import yier.bubu.redis.protocol.RespError;
+import yier.bubu.redis.protocol.RespInteger;
+import yier.bubu.redis.protocol.RespObject;
+import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.protocol.RespType;
+import yier.bubu.redis.protocol.RespWriter;
+
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
@@ -44,10 +59,6 @@ public final class YierdisBench {
     private static final String DEFAULT_XMS = "4g";
     private static final String DEFAULT_XMX = "4g";
     private static final String DEFAULT_MAX_DIRECT_MEMORY = "6g";
-    private static final long DEFAULT_MAXMEMORY_BYTES = 7L * 1024 * 1024 * 1024; // 7GiB
-    private static final long DEFAULT_OFFHEAP_MAX_BYTES = 4L * 1024 * 1024 * 1024; // 4GiB
-    private static final String DEFAULT_MAXMEMORY_POLICY = "allkeys-lru";
-    private static final int DEFAULT_MAXMEMORY_SAMPLES = 5;
 
     private static final int DEFAULT_KEYSPACE = 1_000_000;
     private static final int DEFAULT_DATA_SIZE = 256;
@@ -65,21 +76,56 @@ public final class YierdisBench {
     private static final DecimalFormat DF = new DecimalFormat("0.000");
 
     public static void main(String[] args) throws Exception {
-        BenchConfig config = BenchConfig.parse(args);
-        if (config.showHelp) {
-            printHelp();
+        YierdisBenchArgs benchArgs = new YierdisBenchArgs();
+        CommandLine cmd = new CommandLine(benchArgs);
+        cmd.setUnmatchedArgumentsAllowed(true);
+        try {
+            cmd.parseArgs(args);
+        } catch (ParameterException e) {
+            System.err.println(e.getMessage());
+            cmd.usage(System.err);
+            return;
+        }
+        if (benchArgs.help) {
+            cmd.usage(System.out);
             return;
         }
 
-        Path serverJar = config.serverJar != null ? config.serverJar : findServerJar();
+        YierdisServerArgs baseServerArgs = new YierdisServerArgs();
+        CommandLine serverCmd = new CommandLine(baseServerArgs);
+        try {
+            serverCmd.parseArgs(benchArgs.serverArgs.toArray(new String[0]));
+        } catch (ParameterException e) {
+            System.err.println(e.getMessage());
+            serverCmd.usage(System.err);
+            return;
+        }
+        if (baseServerArgs.help) {
+            serverCmd.usage(System.out);
+            return;
+        }
+        baseServerArgs.normalizeAndValidate();
+
+        BenchConfig config = BenchConfig.from(benchArgs, baseServerArgs);
+
+        Path serverJar = null;
+        if (!config.noStartServer) {
+            serverJar = config.serverJar != null ? config.serverJar : findServerJar();
+        }
         Path runDir = Files.createTempDirectory(Path.of(".").toAbsolutePath().normalize(), ".bench-java.");
 
         println("YierdisBench（纯 Java）");
         println("运行目录: " + runDir);
-        println("serverJar: " + serverJar);
-        println("");
-        printBudgetHint(config);
-        println("");
+        if (serverJar != null) {
+            println("serverJar: " + serverJar);
+            println("");
+            printBudgetHint(config);
+            println("");
+        } else {
+            println("模式: connect-only（不启动内置 server）");
+            println("target: " + config.host + ":" + config.portBase);
+            println("");
+        }
 
         List<BackendResult> results = new ArrayList<>();
         for (int i = 0; i < config.backends.size(); i++) {
@@ -89,32 +135,41 @@ public final class YierdisBench {
 
             println("============================================================");
             println("后端: " + backend + "  port=" + port);
-            println("日志: " + logFile);
+            if (!config.noStartServer) {
+                println("日志: " + logFile);
+            }
 
-            ServerProcess server = new ServerProcess(
-                    config.javaCmd,
-                    serverJar,
-                    config.serverXms,
-                    config.serverXmx,
-                    config.serverMaxDirectMemory,
-                    port,
-                    backend,
-                    config.offheapMaxBytes,
-                    config.maxmemoryBytes,
-                    config.maxmemoryPolicy,
-                    config.maxmemorySamples,
-                    logFile,
-                    config.serverExtraArgs
-            );
+            ServerProcess server = null;
+            if (!config.noStartServer) {
+                YierdisServerArgs serverArgsForRun = config.baseServerArgs.copy();
+                serverArgsForRun.port = port;
+                serverArgsForRun.offheapBackend = backend;
+                if ("none".equalsIgnoreCase(backend)) {
+                    serverArgsForRun.offheapMaxBytes = 0;
+                }
+                serverArgsForRun.normalizeAndValidate();
+
+                server = new ServerProcess(
+                        config.javaCmd,
+                        serverJar,
+                        config.serverXms,
+                        config.serverXmx,
+                        config.serverMaxDirectMemory,
+                        serverArgsForRun,
+                        logFile
+                );
+            }
 
             BackendResult backendResult = new BackendResult(backend, port);
             Instant startedAt = Instant.now();
             try {
-                server.start();
-                if (!waitReady(config.host, port, READY_TIMEOUT_MILLIS)) {
-                    throw new IllegalStateException("服务未就绪，请检查日志: " + logFile);
+                if (server != null) {
+                    server.start();
+                    if (!waitReady(config.host, port, READY_TIMEOUT_MILLIS)) {
+                        throw new IllegalStateException("服务未就绪，请检查日志: " + logFile);
+                    }
+                    println("服务就绪，启动耗时: " + Duration.between(startedAt, Instant.now()).toMillis() + " ms");
                 }
-                println("服务就绪，启动耗时: " + Duration.between(startedAt, Instant.now()).toMillis() + " ms");
 
                 if (!config.skipPrefill) {
                     println("");
@@ -203,7 +258,9 @@ public final class YierdisBench {
                     println("GET : " + getLat);
                 }
             } finally {
-                server.stop();
+                if (server != null) {
+                    server.stop();
+                }
             }
 
             results.add(backendResult);
@@ -217,49 +274,13 @@ public final class YierdisBench {
         println("完成。");
     }
 
-    private static void printHelp() {
-        println("用法：java -jar yierdis-bench-<version>.jar [options]");
-        println("");
-        println("常用参数：");
-        println("  --serverJar <path>                 指定 yierdis-server jar；默认自动从 yierdis-server/target/ 查找");
-        println("  --backends none,netty,unsafe       默认: none,netty,unsafe");
-        println("  --host 127.0.0.1                   默认: 127.0.0.1");
-        println("  --portBase 16378                   默认: 16378（每个后端 +1）");
-        println("");
-        println("压测规模：");
-        println("  --keyspace 1000000                 默认: 1000000");
-        println("  --dataSize 256                     默认: 256 bytes");
-        println("  --requests 1000000                 默认: 1000000（吞吐压测每种命令的总请求数）");
-        println("  --clients 200                      默认: 200（吞吐压测连接数）");
-        println("  --pipeline 16                      默认: 16（吞吐压测 pipeline 深度）");
-        println("");
-        println("延迟压测：");
-        println("  --latencyRequests 200000           默认: 200000（总请求数）");
-        println("  --latencyClients 50                默认: 50（连接数）");
-        println("  --skipLatency                      跳过延迟压测");
-        println("");
-        println("服务端（子进程）预算：");
-        println("  --xms 4g --xmx 4g                  默认: -Xms4g -Xmx4g");
-        println("  --maxDirectMemory 6g               默认: -XX:MaxDirectMemorySize=6g");
-        println("  --maxmemoryBytes 7516192768        默认: 7GiB（容器 16G 保守起步）");
-        println("  --offheapMaxBytes 4294967296       默认: 4GiB（仅对 netty/unsafe 生效）");
-        println("  --maxmemoryPolicy allkeys-lru      默认: allkeys-lru");
-        println("  --maxmemorySamples 5               默认: 5");
-        println("");
-        println("其它：");
-        println("  --skipPrefill                      跳过预置数据（GET 可能大量 miss，影响可比性）");
-        println("  --javaCmd <java>                   指定用于启动 server 子进程的 java 命令（默认: java）");
-        println("  --serverArg \"--ioThreads 1\"        追加 server 参数（可重复多次）");
-        println("  --strictReplies                    开启最小语义校验：遇到非预期响应类型也计入 errors（默认关闭）");
-        println("");
-    }
-
     private static void printBudgetHint(BenchConfig config) {
         println("预算提示（共享容器 + memory limit=16G 的保守默认值，可通过参数覆盖）");
         println("  server JVM : -Xms" + config.serverXms + " -Xmx" + config.serverXmx
                 + " -XX:MaxDirectMemorySize=" + config.serverMaxDirectMemory);
-        println("  maxmemory  : --maxmemoryBytes " + config.maxmemoryBytes + " --maxmemoryPolicy " + config.maxmemoryPolicy);
-        println("  off-heap   : --offheapMaxBytes " + config.offheapMaxBytes + "（仅 netty/unsafe）");
+        println("  maxmemory  : --maxmemoryBytes " + config.baseServerArgs.maxmemoryBytes
+                + " --maxmemoryPolicy " + config.baseServerArgs.maxmemoryPolicy);
+        println("  off-heap   : --offheapMaxBytes " + config.baseServerArgs.offheapMaxBytes + "（bench 会按 backend 覆盖 --offheapBackend）");
         println("  提醒：容器 OOMKill 优先下调 offheapMaxBytes / maxDirectMemory，而不是只看 maxmemory。");
     }
 
@@ -287,11 +308,13 @@ public final class YierdisBench {
                 s.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
                 try (BufferedOutputStream out = new BufferedOutputStream(s.getOutputStream());
                      BufferedInputStream in = new BufferedInputStream(s.getInputStream())) {
-                    RespCommandWriter w = new RespCommandWriter(out);
-                    w.writePing();
-                    out.flush();
-                    RespResponseSkipper.skipOne(in);
-                    return true;
+                    try (RespCommandWriter w = new RespCommandWriter(out);
+                         RespReplyReader reader = new RespReplyReader(in)) {
+                        w.writePing();
+                        out.flush();
+                        reader.readKind();
+                        return true;
+                    }
                 }
             } catch (Exception ignored) {
                 try {
@@ -506,6 +529,33 @@ public final class YierdisBench {
         System.out.println(s);
     }
 
+    private static boolean validateStrictReply(Workload workload, RespObject obj, int expectedDataSize) {
+        if (obj == null || workload == null) {
+            return false;
+        }
+        switch (workload) {
+            case PING:
+                if (!(obj instanceof RespSimpleString)) {
+                    return false;
+                }
+                return "PONG".equals(((RespSimpleString) obj).value());
+            case SET_RANDOM:
+            case SET_SEQUENTIAL:
+                if (!(obj instanceof RespSimpleString)) {
+                    return false;
+                }
+                return "OK".equals(((RespSimpleString) obj).value());
+            case GET_RANDOM:
+                if (obj instanceof RespBulkString) {
+                    RespBulkString bs = (RespBulkString) obj;
+                    return bs.isNull() || (bs.data() != null && bs.data().length == expectedDataSize);
+                }
+                return false;
+            default:
+                return true;
+        }
+    }
+
     enum Workload {
         PING,
         SET_RANDOM,
@@ -541,7 +591,7 @@ public final class YierdisBench {
     }
 
     static final class BenchConfig {
-        final boolean showHelp;
+        final boolean noStartServer;
         final Path serverJar;
         final List<String> backends;
         final String host;
@@ -551,11 +601,7 @@ public final class YierdisBench {
         final String serverXms;
         final String serverXmx;
         final String serverMaxDirectMemory;
-        final long maxmemoryBytes;
-        final String maxmemoryPolicy;
-        final int maxmemorySamples;
-        final long offheapMaxBytes;
-        final List<String> serverExtraArgs;
+        final YierdisServerArgs baseServerArgs;
 
         final int keyspace;
         final int dataSize;
@@ -570,7 +616,7 @@ public final class YierdisBench {
         final boolean strictReplies;
 
         private BenchConfig(
-                boolean showHelp,
+                boolean noStartServer,
                 Path serverJar,
                 List<String> backends,
                 String host,
@@ -579,11 +625,7 @@ public final class YierdisBench {
                 String serverXms,
                 String serverXmx,
                 String serverMaxDirectMemory,
-                long maxmemoryBytes,
-                String maxmemoryPolicy,
-                int maxmemorySamples,
-                long offheapMaxBytes,
-                List<String> serverExtraArgs,
+                YierdisServerArgs baseServerArgs,
                 int keyspace,
                 int dataSize,
                 int requests,
@@ -595,7 +637,7 @@ public final class YierdisBench {
                 boolean skipLatency,
                 boolean strictReplies
         ) {
-            this.showHelp = showHelp;
+            this.noStartServer = noStartServer;
             this.serverJar = serverJar;
             this.backends = backends;
             this.host = host;
@@ -604,11 +646,7 @@ public final class YierdisBench {
             this.serverXms = serverXms;
             this.serverXmx = serverXmx;
             this.serverMaxDirectMemory = serverMaxDirectMemory;
-            this.maxmemoryBytes = maxmemoryBytes;
-            this.maxmemoryPolicy = maxmemoryPolicy;
-            this.maxmemorySamples = maxmemorySamples;
-            this.offheapMaxBytes = offheapMaxBytes;
-            this.serverExtraArgs = serverExtraArgs;
+            this.baseServerArgs = baseServerArgs;
             this.keyspace = keyspace;
             this.dataSize = dataSize;
             this.requests = requests;
@@ -621,167 +659,58 @@ public final class YierdisBench {
             this.strictReplies = strictReplies;
         }
 
-        static BenchConfig parse(String[] args) {
+        static BenchConfig from(YierdisBenchArgs args, YierdisServerArgs baseServerArgs) {
             Objects.requireNonNull(args, "args");
+            Objects.requireNonNull(baseServerArgs, "baseServerArgs");
 
-            boolean help = false;
-            Path serverJar = null;
-            List<String> backends = new ArrayList<>(DEFAULT_BACKENDS);
-            String host = DEFAULT_HOST;
-            int portBase = DEFAULT_PORT_BASE;
-
-            String javaCmd = "java";
-            String xms = DEFAULT_XMS;
-            String xmx = DEFAULT_XMX;
-            String maxDirect = DEFAULT_MAX_DIRECT_MEMORY;
-            long maxmemoryBytes = DEFAULT_MAXMEMORY_BYTES;
-            String maxmemoryPolicy = DEFAULT_MAXMEMORY_POLICY;
-            int maxmemorySamples = DEFAULT_MAXMEMORY_SAMPLES;
-            long offheapMaxBytes = DEFAULT_OFFHEAP_MAX_BYTES;
-            List<String> serverArgs = new ArrayList<>();
-
-            int keyspace = DEFAULT_KEYSPACE;
-            int dataSize = DEFAULT_DATA_SIZE;
-            int requests = DEFAULT_REQUESTS;
-            int clients = DEFAULT_CLIENTS;
-            int pipeline = DEFAULT_PIPELINE;
-            int latencyRequests = DEFAULT_LATENCY_REQUESTS;
-            int latencyClients = DEFAULT_LATENCY_CLIENTS;
-            boolean skipPrefill = false;
-            boolean skipLatency = false;
-            boolean strictReplies = false;
-
-            for (int i = 0; i < args.length; i++) {
-                String a = args[i];
-                switch (a) {
-                    case "--help":
-                    case "-h":
-                        help = true;
-                        break;
-                    case "--serverJar":
-                        serverJar = Path.of(requireArg(args, ++i, a));
-                        break;
-                    case "--backends":
-                        backends = splitCsv(requireArg(args, ++i, a));
-                        break;
-                    case "--host":
-                        host = requireArg(args, ++i, a);
-                        break;
-                    case "--portBase":
-                        portBase = Integer.parseInt(requireArg(args, ++i, a));
-                        break;
-                    case "--javaCmd":
-                        javaCmd = requireArg(args, ++i, a);
-                        break;
-                    case "--xms":
-                        xms = requireArg(args, ++i, a);
-                        break;
-                    case "--xmx":
-                        xmx = requireArg(args, ++i, a);
-                        break;
-                    case "--maxDirectMemory":
-                        maxDirect = requireArg(args, ++i, a);
-                        break;
-                    case "--maxmemoryBytes":
-                        maxmemoryBytes = Long.parseLong(requireArg(args, ++i, a));
-                        break;
-                    case "--maxmemoryPolicy":
-                        maxmemoryPolicy = requireArg(args, ++i, a);
-                        break;
-                    case "--maxmemorySamples":
-                        maxmemorySamples = Integer.parseInt(requireArg(args, ++i, a));
-                        break;
-                    case "--offheapMaxBytes":
-                        offheapMaxBytes = Long.parseLong(requireArg(args, ++i, a));
-                        break;
-                    case "--serverArg":
-                        serverArgs.add(requireArg(args, ++i, a));
-                        break;
-                    case "--keyspace":
-                        keyspace = Integer.parseInt(requireArg(args, ++i, a));
-                        break;
-                    case "--dataSize":
-                        dataSize = Integer.parseInt(requireArg(args, ++i, a));
-                        break;
-                    case "--requests":
-                        requests = Integer.parseInt(requireArg(args, ++i, a));
-                        break;
-                    case "--clients":
-                        clients = Integer.parseInt(requireArg(args, ++i, a));
-                        break;
-                    case "--pipeline":
-                        pipeline = Integer.parseInt(requireArg(args, ++i, a));
-                        break;
-                    case "--latencyRequests":
-                        latencyRequests = Integer.parseInt(requireArg(args, ++i, a));
-                        break;
-                    case "--latencyClients":
-                        latencyClients = Integer.parseInt(requireArg(args, ++i, a));
-                        break;
-                    case "--skipPrefill":
-                        skipPrefill = true;
-                        break;
-                    case "--skipLatency":
-                        skipLatency = true;
-                        break;
-                    case "--strictReplies":
-                        strictReplies = true;
-                        break;
-                    default:
-                        throw new IllegalArgumentException("未知参数: " + a + "（使用 --help 查看用法）");
-                }
+            if (args.serverJar != null && !Files.isRegularFile(args.serverJar)) {
+                throw new IllegalArgumentException("serverJar 不存在: " + args.serverJar.toAbsolutePath());
             }
 
-            if (serverJar != null && !Files.isRegularFile(serverJar)) {
-                throw new IllegalArgumentException("serverJar 不存在: " + serverJar.toAbsolutePath());
+            List<String> backends = splitCsv(args.backends);
+            if (args.noStartServer) {
+                backends = List.of("external");
             }
-
-            if (backends.isEmpty()) {
-                throw new IllegalArgumentException("backends 不能为空");
-            }
-            for (String b : backends) {
-                String normalized = b.trim().toLowerCase(Locale.ROOT);
-                if (normalized.isEmpty()) {
-                    continue;
-                }
-                if (!normalized.equals("none") && !normalized.equals("netty") && !normalized.equals("unsafe") && !normalized.equals("foreign")) {
-                    throw new IllegalArgumentException("不支持的 backend: " + b);
-                }
-            }
+            validateBackends(backends);
 
             return new BenchConfig(
-                    help,
-                    serverJar,
+                    args.noStartServer,
+                    args.serverJar,
                     backends,
-                    host,
-                    portBase,
-                    javaCmd,
-                    xms,
-                    xmx,
-                    maxDirect,
-                    maxmemoryBytes,
-                    maxmemoryPolicy,
-                    maxmemorySamples,
-                    offheapMaxBytes,
-                    serverArgs,
-                    keyspace,
-                    dataSize,
-                    requests,
-                    clients,
-                    pipeline,
-                    latencyRequests,
-                    latencyClients,
-                    skipPrefill,
-                    skipLatency,
-                    strictReplies
+                    args.host,
+                    args.portBase,
+                    args.javaCmd,
+                    args.xms,
+                    args.xmx,
+                    args.maxDirectMemory,
+                    baseServerArgs,
+                    args.keyspace,
+                    args.dataSize,
+                    args.requests,
+                    args.clients,
+                    args.pipeline,
+                    args.latencyRequests,
+                    args.latencyClients,
+                    args.skipPrefill,
+                    args.skipLatency,
+                    args.strictReplies
             );
         }
 
-        private static String requireArg(String[] args, int index, String optName) {
-            if (index < 0 || index >= args.length) {
-                throw new IllegalArgumentException("参数缺失: " + optName);
+        private static void validateBackends(List<String> backends) {
+            if (backends == null || backends.isEmpty()) {
+                throw new IllegalArgumentException("backends 不能为空");
             }
-            return args[index];
+            for (String b : backends) {
+                String normalized = b == null ? "" : b.trim().toLowerCase(Locale.ROOT);
+                if (normalized.isEmpty()) {
+                    continue;
+                }
+                if (!normalized.equals("none") && !normalized.equals("netty") && !normalized.equals("unsafe") && !normalized.equals("foreign")
+                        && !normalized.equals("external")) {
+                    throw new IllegalArgumentException("不支持的 backend: " + b);
+                }
+            }
         }
 
         private static List<String> splitCsv(String csv) {
@@ -806,14 +735,8 @@ public final class YierdisBench {
         private final String xms;
         private final String xmx;
         private final String maxDirectMemory;
-        private final int port;
-        private final String backend;
-        private final long offheapMaxBytes;
-        private final long maxmemoryBytes;
-        private final String maxmemoryPolicy;
-        private final int maxmemorySamples;
+        private final YierdisServerArgs serverArgs;
         private final Path logFile;
-        private final List<String> extraServerArgs;
 
         private Process process;
 
@@ -823,28 +746,16 @@ public final class YierdisBench {
                 String xms,
                 String xmx,
                 String maxDirectMemory,
-                int port,
-                String backend,
-                long offheapMaxBytes,
-                long maxmemoryBytes,
-                String maxmemoryPolicy,
-                int maxmemorySamples,
-                Path logFile,
-                List<String> extraServerArgs
+                YierdisServerArgs serverArgs,
+                Path logFile
         ) {
             this.javaCmd = Objects.requireNonNull(javaCmd, "javaCmd");
             this.serverJar = Objects.requireNonNull(serverJar, "serverJar");
             this.xms = Objects.requireNonNull(xms, "xms");
             this.xmx = Objects.requireNonNull(xmx, "xmx");
             this.maxDirectMemory = Objects.requireNonNull(maxDirectMemory, "maxDirectMemory");
-            this.port = port;
-            this.backend = Objects.requireNonNull(backend, "backend");
-            this.offheapMaxBytes = offheapMaxBytes;
-            this.maxmemoryBytes = maxmemoryBytes;
-            this.maxmemoryPolicy = maxmemoryPolicy;
-            this.maxmemorySamples = maxmemorySamples;
+            this.serverArgs = Objects.requireNonNull(serverArgs, "serverArgs");
             this.logFile = Objects.requireNonNull(logFile, "logFile");
-            this.extraServerArgs = extraServerArgs == null ? List.of() : extraServerArgs;
         }
 
         void start() throws IOException {
@@ -860,31 +771,7 @@ public final class YierdisBench {
             cmd.add("-XX:MaxDirectMemorySize=" + maxDirectMemory);
             cmd.add("-jar");
             cmd.add(serverJar.toAbsolutePath().toString());
-            cmd.add("--port");
-            cmd.add(Integer.toString(port));
-            cmd.add("--maxmemoryBytes");
-            cmd.add(Long.toString(maxmemoryBytes));
-            cmd.add("--maxmemoryPolicy");
-            cmd.add(maxmemoryPolicy);
-            cmd.add("--maxmemorySamples");
-            cmd.add(Integer.toString(maxmemorySamples));
-
-            if ("none".equalsIgnoreCase(backend)) {
-                cmd.add("--offheapBackend");
-                cmd.add("none");
-            } else {
-                cmd.add("--offheapBackend");
-                cmd.add(backend);
-                cmd.add("--offheapMaxBytes");
-                cmd.add(Long.toString(offheapMaxBytes));
-            }
-
-            for (String extra : extraServerArgs) {
-                if (extra == null || extra.isBlank()) {
-                    continue;
-                }
-                cmd.addAll(splitArgs(extra));
-            }
+            cmd.addAll(serverArgs.toArgv());
 
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.redirectErrorStream(true);
@@ -913,12 +800,6 @@ public final class YierdisBench {
                 Thread.currentThread().interrupt();
                 p.destroyForcibly();
             }
-        }
-
-        private static List<String> splitArgs(String s) {
-            // 简化：按空白切分，不支持复杂引用；用于追加简单参数（例如 --ioThreads 1）。
-            String[] parts = s.trim().split("\\s+");
-            return Arrays.asList(parts);
         }
     }
 
@@ -970,47 +851,50 @@ public final class YierdisBench {
                 socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
                 try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                      BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
-                    RespCommandWriter writer = new RespCommandWriter(out);
-                    byte[] keyBuf = new byte[9]; // "k" + 8 digits
+                    try (RespCommandWriter writer = new RespCommandWriter(out);
+                         RespReplyReader reader = new RespReplyReader(in)) {
+                        byte[] keyBuf = new byte[9]; // "k" + 8 digits
 
-                    int remaining = requests;
-                    int seq = seqStartIndex;
-                    while (remaining > 0) {
-                        int batch = Math.min(pipeline, remaining);
+                        int remaining = requests;
+                        int seq = seqStartIndex;
+                        while (remaining > 0) {
+                            int batch = Math.min(pipeline, remaining);
 
-                        for (int i = 0; i < batch; i++) {
-                            int keyIndex = workload == Workload.SET_SEQUENTIAL
-                                    ? seq++ % keyspace
-                                    : rnd.nextInt(keyspace);
-                            writeKey(keyBuf, keyIndex);
-                            switch (workload) {
-                                case SET_RANDOM:
-                                case SET_SEQUENTIAL:
-                                    writer.writeSet(keyBuf, value);
-                                    break;
-                                case GET_RANDOM:
-                                    writer.writeGet(keyBuf);
-                                    break;
-                                case PING:
-                                    writer.writePing();
-                                    break;
-                                default:
-                                    throw new IllegalStateException("unexpected workload: " + workload);
+                            for (int i = 0; i < batch; i++) {
+                                int keyIndex = workload == Workload.SET_SEQUENTIAL
+                                        ? seq++ % keyspace
+                                        : rnd.nextInt(keyspace);
+                                writeKey(keyBuf, keyIndex);
+                                switch (workload) {
+                                    case SET_RANDOM:
+                                    case SET_SEQUENTIAL:
+                                        writer.writeSet(keyBuf, value);
+                                        break;
+                                    case GET_RANDOM:
+                                        writer.writeGet(keyBuf);
+                                        break;
+                                    case PING:
+                                        writer.writePing();
+                                        break;
+                                    default:
+                                        throw new IllegalStateException("unexpected workload: " + workload);
+                                }
                             }
-                        }
-                        out.flush();
+                            out.flush();
 
-                        for (int i = 0; i < batch; i++) {
-                            ReplyKind kind = RespResponseSkipper.skipOne(in);
-                            if (kind == ReplyKind.ERROR) {
-                                errors++;
-                            } else if (strictReplies && !workload.accepts(kind)) {
-                                errors++;
+                            for (int i = 0; i < batch; i++) {
+                                RespObject reply = reader.readObject();
+                                ReplyKind kind = RespReplyReader.kindOf(reply);
+                                if (kind == ReplyKind.ERROR) {
+                                    errors++;
+                                } else if (strictReplies && (!workload.accepts(kind) || !validateStrictReply(workload, reply, value.length))) {
+                                    errors++;
+                                }
                             }
-                        }
 
-                        ops += batch;
-                        remaining -= batch;
+                            ops += batch;
+                            remaining -= batch;
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -1058,36 +942,38 @@ public final class YierdisBench {
                 socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
                 try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                      BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
-                    RespCommandWriter writer = new RespCommandWriter(out);
+                    try (RespCommandWriter writer = new RespCommandWriter(out);
+                         RespReplyReader reader = new RespReplyReader(in)) {
+                        for (int i = 0; i < requests; i++) {
+                            int keyIndex = rnd.nextInt(keyspace);
+                            writeKey(keyBuf, keyIndex);
 
-                    for (int i = 0; i < requests; i++) {
-                        int keyIndex = rnd.nextInt(keyspace);
-                        writeKey(keyBuf, keyIndex);
-
-                        long t0 = System.nanoTime();
-                        switch (workload) {
-                            case PING:
-                                writer.writePing();
-                                break;
-                            case SET_RANDOM:
-                                writer.writeSet(keyBuf, value);
-                                break;
-                            case GET_RANDOM:
-                                writer.writeGet(keyBuf);
-                                break;
-                            default:
-                                throw new IllegalStateException("unexpected workload: " + workload);
+                            long t0 = System.nanoTime();
+                            switch (workload) {
+                                case PING:
+                                    writer.writePing();
+                                    break;
+                                case SET_RANDOM:
+                                    writer.writeSet(keyBuf, value);
+                                    break;
+                                case GET_RANDOM:
+                                    writer.writeGet(keyBuf);
+                                    break;
+                                default:
+                                    throw new IllegalStateException("unexpected workload: " + workload);
+                            }
+                            out.flush();
+                            RespObject reply = reader.readObject();
+                            ReplyKind kind = RespReplyReader.kindOf(reply);
+                            if (kind == ReplyKind.ERROR) {
+                                errors++;
+                            } else if (strictReplies && (!workload.accepts(kind) || !validateStrictReply(workload, reply, value.length))) {
+                                errors++;
+                            }
+                            long t1 = System.nanoTime();
+                            samples[i] = t1 - t0;
+                            recorded++;
                         }
-                        out.flush();
-                        ReplyKind kind = RespResponseSkipper.skipOne(in);
-                        if (kind == ReplyKind.ERROR) {
-                            errors++;
-                        } else if (strictReplies && !workload.accepts(kind)) {
-                            errors++;
-                        }
-                        long t1 = System.nanoTime();
-                        samples[i] = t1 - t0;
-                        recorded++;
                     }
                 }
             } catch (Exception e) {
@@ -1099,251 +985,129 @@ public final class YierdisBench {
         }
     }
 
-    static final class RespCommandWriter {
-        private static final byte[] CRLF = new byte[]{'\r', '\n'};
+    static final class RespCommandWriter implements AutoCloseable {
         private static final byte[] CMD_PING = "PING".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] CMD_GET = "GET".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] CMD_SET = "SET".getBytes(StandardCharsets.US_ASCII);
 
         private final OutputStream out;
-        private final byte[] numBuf = new byte[32];
+        private final ByteBuf buf;
+        private final RespWriter writer;
 
         RespCommandWriter(OutputStream out) {
             this.out = Objects.requireNonNull(out, "out");
+            this.buf = Unpooled.buffer(256);
+            this.writer = new RespWriter(buf);
         }
 
         void writePing() throws IOException {
-            // *1\r\n$4\r\nPING\r\n
-            out.write('*');
-            writeIntAscii(1);
-            out.write(CRLF);
-
-            out.write('$');
-            writeIntAscii(CMD_PING.length);
-            out.write(CRLF);
-            out.write(CMD_PING);
-            out.write(CRLF);
+            writer.arrayHeader(1);
+            writer.bulkString(CMD_PING);
+            flush();
         }
 
         void writeGet(byte[] key) throws IOException {
-            // *2\r\n$3\r\nGET\r\n$<len>\r\n<key>\r\n
-            out.write('*');
-            writeIntAscii(2);
-            out.write(CRLF);
-
-            out.write('$');
-            writeIntAscii(CMD_GET.length);
-            out.write(CRLF);
-            out.write(CMD_GET);
-            out.write(CRLF);
-
-            out.write('$');
-            writeIntAscii(key.length);
-            out.write(CRLF);
-            out.write(key);
-            out.write(CRLF);
+            writer.arrayHeader(2);
+            writer.bulkString(CMD_GET);
+            writer.bulkString(key);
+            flush();
         }
 
         void writeSet(byte[] key, byte[] value) throws IOException {
-            // *3\r\n$3\r\nSET\r\n$<klen>\r\n<key>\r\n$<vlen>\r\n<val>\r\n
-            out.write('*');
-            writeIntAscii(3);
-            out.write(CRLF);
-
-            out.write('$');
-            writeIntAscii(CMD_SET.length);
-            out.write(CRLF);
-            out.write(CMD_SET);
-            out.write(CRLF);
-
-            out.write('$');
-            writeIntAscii(key.length);
-            out.write(CRLF);
-            out.write(key);
-            out.write(CRLF);
-
-            out.write('$');
-            writeIntAscii(value.length);
-            out.write(CRLF);
-            out.write(value);
-            out.write(CRLF);
+            writer.arrayHeader(3);
+            writer.bulkString(CMD_SET);
+            writer.bulkString(key);
+            writer.bulkString(value);
+            flush();
         }
 
-        private void writeIntAscii(int v) throws IOException {
-            if (v < 0) {
-                throw new IllegalArgumentException("v must be >= 0");
+        private void flush() throws IOException {
+            int len = buf.readableBytes();
+            if (len > 0) {
+                buf.readBytes(out, len);
             }
-            int pos = numBuf.length;
-            int x = v;
-            if (x == 0) {
-                numBuf[--pos] = '0';
-            } else {
-                while (x > 0) {
-                    int digit = x % 10;
-                    numBuf[--pos] = (byte) ('0' + digit);
-                    x /= 10;
-                }
-            }
-            out.write(numBuf, pos, numBuf.length - pos);
+            buf.clear();
+        }
+
+        @Override
+        public void close() {
+            buf.release();
         }
     }
 
-    static final class RespResponseSkipper {
-        private static final ThreadLocal<byte[]> TL_SKIP_BUF =
-                ThreadLocal.withInitial(() -> new byte[8 * 1024]);
+    static final class RespReplyReader implements AutoCloseable {
+        private static final int READ_BUF_BYTES = 8 * 1024;
 
-        private RespResponseSkipper() {
+        private final InputStream in;
+        private final EmbeddedChannel decoder;
+        private final byte[] readBuf = new byte[READ_BUF_BYTES];
+
+        RespReplyReader(InputStream in) {
+            this.in = Objects.requireNonNull(in, "in");
+            this.decoder = new EmbeddedChannel(new RespDecoder());
         }
 
-        static ReplyKind skipOne(InputStream in) throws IOException {
-            int type = in.read();
-            if (type < 0) {
-                throw new IOException("EOF");
-            }
-            switch (type) {
-                case '+': // simple string
-                    skipLine(in);
-                    return ReplyKind.SIMPLE_STRING;
-                case '-': // error
-                    skipLine(in);
-                    return ReplyKind.ERROR;
-                case ':': // integer
-                    skipLine(in);
-                    return ReplyKind.INTEGER;
-                case '$': { // bulk string
-                    long len = readLongLine(in);
-                    if (len == -1) {
-                        return ReplyKind.NULL;
-                    }
-                    if (len < 0) {
-                        throw new IOException("invalid bulk length: " + len);
-                    }
-                    skipFully(in, len + 2); // data + CRLF
-                    return ReplyKind.BULK_STRING;
-                }
-                case '*': { // array
-                    long count = readLongLine(in);
-                    if (count == -1) {
-                        return ReplyKind.NULL;
-                    }
-                    if (count < 0) {
-                        throw new IOException("invalid array length: " + count);
-                    }
-                    for (long i = 0; i < count; i++) {
-                        skipOne(in);
-                    }
-                    return ReplyKind.ARRAY;
-                }
-                case '_': { // RESP3 null
-                    skipLine(in);
-                    return ReplyKind.NULL;
-                }
-                case '%': { // RESP3 map
-                    long pairs = readLongLine(in);
-                    if (pairs == -1) {
-                        return ReplyKind.NULL;
-                    }
-                    if (pairs < 0) {
-                        throw new IOException("invalid map length: " + pairs);
-                    }
-                    for (long i = 0; i < pairs * 2; i++) {
-                        skipOne(in);
-                    }
-                    return ReplyKind.MAP;
-                }
-                case '!': { // RESP3 bulk error
-                    long len = readLongLine(in);
-                    if (len < 0) {
-                        throw new IOException("invalid bulk error length: " + len);
-                    }
-                    skipFully(in, len + 2);
-                    return ReplyKind.ERROR;
-                }
-                case '~': { // RESP3 set
-                    long count = readLongLine(in);
-                    if (count == -1) {
-                        return ReplyKind.NULL;
-                    }
-                    if (count < 0) {
-                        throw new IOException("invalid set length: " + count);
-                    }
-                    for (long i = 0; i < count; i++) {
-                        skipOne(in);
-                    }
-                    return ReplyKind.SET;
-                }
-                case '|': { // RESP3 attribute
-                    long pairs = readLongLine(in);
-                    if (pairs < 0) {
-                        throw new IOException("invalid attribute length: " + pairs);
-                    }
-                    for (long i = 0; i < pairs * 2; i++) {
-                        skipOne(in);
-                    }
-                    return skipOne(in);
-                }
-                default:
-                    throw new IOException("unknown RESP type: " + (char) type);
-            }
+        RespObject readObject() throws IOException {
+            return readOne();
         }
 
-        private static void skipLine(InputStream in) throws IOException {
-            int prev = -1;
-            for (; ; ) {
-                int b = in.read();
-                if (b < 0) {
-                    throw new IOException("EOF while reading line");
-                }
-                if (prev == '\r' && b == '\n') {
-                    return;
-                }
-                prev = b;
-            }
+        ReplyKind readKind() throws IOException {
+            RespObject obj = readOne();
+            return kindOf(obj);
         }
 
-        private static long readLongLine(InputStream in) throws IOException {
-            long sign = 1;
-            long value = 0;
-            boolean started = false;
-            int prev = -1;
-            for (; ; ) {
-                int b = in.read();
-                if (b < 0) {
-                    throw new IOException("EOF while reading integer line");
-                }
-                if (!started) {
-                    started = true;
-                    if (b == '-') {
-                        sign = -1;
-                        prev = b;
-                        continue;
+        private RespObject readOne() throws IOException {
+            while (true) {
+                Object msg = decoder.readInbound();
+                if (msg != null) {
+                    if (!(msg instanceof RespObject)) {
+                        throw new IOException("unexpected decoded type: " + msg.getClass().getName());
                     }
+                    return (RespObject) msg;
                 }
-                if (prev == '\r' && b == '\n') {
-                    return value * sign;
+
+                int n = in.read(readBuf);
+                if (n < 0) {
+                    throw new IOException("EOF");
                 }
-                if (b == '\r') {
-                    prev = b;
+                if (n == 0) {
                     continue;
                 }
-                if (b < '0' || b > '9') {
-                    throw new IOException("invalid digit in integer line: " + (char) b);
-                }
-                value = value * 10 + (b - '0');
-                prev = b;
+                decoder.writeInbound(Unpooled.wrappedBuffer(readBuf, 0, n));
+                decoder.runPendingTasks();
             }
         }
 
-        private static void skipFully(InputStream in, long len) throws IOException {
-            long remaining = len;
-            byte[] buf = TL_SKIP_BUF.get();
-            while (remaining > 0) {
-                int n = in.read(buf, 0, (int) Math.min(buf.length, remaining));
-                if (n < 0) {
-                    throw new IOException("EOF while skipping payload");
-                }
-                remaining -= n;
+        static ReplyKind kindOf(RespObject obj) {
+            if (obj == null) {
+                return null;
             }
+            RespType type = obj.type();
+            if (type == RespType.SIMPLE_STRING) {
+                return ReplyKind.SIMPLE_STRING;
+            }
+            if (type == RespType.ERROR) {
+                return ReplyKind.ERROR;
+            }
+            if (type == RespType.INTEGER) {
+                return ReplyKind.INTEGER;
+            }
+            if (type == RespType.BULK_STRING) {
+                RespBulkString bs = (RespBulkString) obj;
+                return bs.isNull() ? ReplyKind.NULL : ReplyKind.BULK_STRING;
+            }
+            if (type == RespType.ARRAY) {
+                return ReplyKind.ARRAY;
+            }
+            if (type == RespType.NULL) {
+                return ReplyKind.NULL;
+            }
+            return null;
+        }
+
+        @Override
+        public void close() {
+            decoder.finishAndReleaseAll();
         }
     }
 

@@ -25,7 +25,16 @@ public final class YierdisServer {
     private static final Logger log = LoggerFactory.getLogger(YierdisServer.class);
 
     public static void main(String[] args) throws Exception {
-        ServerConfig config = ServerConfig.fromArgs(args);
+        final ServerConfig config;
+        try {
+            config = ServerConfig.fromArgs(args);
+        } catch (IllegalArgumentException e) {
+            // fromArgs already printed usage; keep startup path clean.
+            return;
+        }
+        if (config == null) {
+            return;
+        }
 
         final YierdisOffHeapAllocator offHeapAllocator =
                 YierdisOffHeapAllocators.create(config.offheapBackend, config.offheapMaxBytes);

@@ -8,7 +8,7 @@
 
 - **Responsibility:** 连接管理、命令输入、RESP2 编解码（客户端侧）、输出显示（支持 hex）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-01
+- **Last Updated:** 2026-01-14
 
 ## Specifications
 
@@ -22,9 +22,9 @@
 
 ## Dependencies
 
-- protocol（客户端侧复用 RESP2 类型）
+- `yierdis-protocol`（客户端侧复用 RESP 对象模型/codec）
+- Netty（连接管理与 IO）
 
 ## Change History
 
 - （暂无）
-

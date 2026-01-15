@@ -44,6 +44,9 @@ public class NettyCommandExecutorTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
+        CountDownLatch blocker2Started = new CountDownLatch(1);
+        CountDownLatch unblock2 = new CountDownLatch(1);
+
         EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor, executor));
         try {
             byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
@@ -55,6 +58,75 @@ public class NettyCommandExecutorTest {
             Assert.assertArrayEquals(ascii("-ERR busy\r\n"), readOutbound(ch));
         } finally {
             unblock.countDown();
+            executor.close();
+            group.shutdownGracefully().syncUninterruptibly();
+            db.shutdown();
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void maxDrainCommandsLimitsPerTick() throws Exception {
+        DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
+        EventExecutor eventExecutor = group.next();
+
+        YierdisDb db = new YierdisDb();
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        NettyCommandExecutor executor = new NettyCommandExecutor(
+                db,
+                processor,
+                eventExecutor,
+                1024,
+                256,
+                128,
+                1,
+                1000
+        );
+        executor.start();
+
+        // Block the executor thread so we can control when drain ticks run.
+        CountDownLatch blocker1Started = new CountDownLatch(1);
+        CountDownLatch unblock1 = new CountDownLatch(1);
+        eventExecutor.submit(() -> {
+            blocker1Started.countDown();
+            unblock1.await();
+            return null;
+        });
+        Assert.assertTrue(blocker1Started.await(1, TimeUnit.SECONDS));
+
+        CountDownLatch blocker2Started = new CountDownLatch(1);
+        CountDownLatch unblock2 = new CountDownLatch(1);
+
+        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor, executor));
+        try {
+            byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
+
+            // Enqueue 2 commands while executor is blocked.
+            ch.writeInbound(Unpooled.wrappedBuffer(ping));
+            ch.writeInbound(Unpooled.wrappedBuffer(ping));
+
+            // Queue a second blocker behind the first drain tick, so we can observe intermediate state.
+            eventExecutor.submit(() -> {
+                blocker2Started.countDown();
+                unblock2.await();
+                return null;
+            });
+
+            // Allow one drain tick to run (maxDrainCommands=1), then the second blocker takes over.
+            unblock1.countDown();
+            Assert.assertTrue(blocker2Started.await(1, TimeUnit.SECONDS));
+
+            // Only the first command should have been processed in the first drain tick.
+            byte[] r1 = awaitOutbound(ch, 1000);
+            Assert.assertArrayEquals(ascii("+PONG\r\n"), r1);
+            Assert.assertNull("second reply must wait for next drain tick", readOutbound(ch));
+
+            // Allow the second drain tick to run and produce the second reply.
+            unblock2.countDown();
+            byte[] r2 = awaitOutbound(ch, 1000);
+            Assert.assertArrayEquals(ascii("+PONG\r\n"), r2);
+        } finally {
+            unblock2.countDown();
             executor.close();
             group.shutdownGracefully().syncUninterruptibly();
             db.shutdown();
@@ -152,4 +224,3 @@ public class NettyCommandExecutorTest {
         return s.getBytes(StandardCharsets.US_ASCII);
     }
 }
-

@@ -7,31 +7,31 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MVN_ARGS="${MVN_ARGS:--q -DskipTests package}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 
-# Bench config (defaults are aligned with yierdis-bench built-in defaults)
-HOST="${HOST:-127.0.0.1}"
-PORT_BASE="${PORT_BASE:-16378}"
-BACKENDS="${BACKENDS:-none,netty,unsafe}"
+# Bench config overrides (keep empty to use yierdis-bench built-in defaults)
+HOST="${HOST:-}"
+PORT_BASE="${PORT_BASE:-}"
+BACKENDS="${BACKENDS:-}"
 
-KEYSPACE="${KEYSPACE:-1000000}"
-DATA_SIZE="${DATA_SIZE:-256}"
+KEYSPACE="${KEYSPACE:-}"
+DATA_SIZE="${DATA_SIZE:-}"
 
-REQUESTS="${REQUESTS:-1000000}"
-CLIENTS="${CLIENTS:-200}"
-PIPELINE="${PIPELINE:-16}"
+REQUESTS="${REQUESTS:-}"
+CLIENTS="${CLIENTS:-}"
+PIPELINE="${PIPELINE:-}"
 
-LATENCY_REQUESTS="${LATENCY_REQUESTS:-200000}"
-LATENCY_CLIENTS="${LATENCY_CLIENTS:-50}"
+LATENCY_REQUESTS="${LATENCY_REQUESTS:-}"
+LATENCY_CLIENTS="${LATENCY_CLIENTS:-}"
 
-# Server (child process) JVM
-XMS="${XMS:-4g}"
-XMX="${XMX:-4g}"
-MAX_DIRECT_MEMORY="${MAX_DIRECT_MEMORY:-6g}"
+# Server (child process) JVM overrides
+XMS="${XMS:-}"
+XMX="${XMX:-}"
+MAX_DIRECT_MEMORY="${MAX_DIRECT_MEMORY:-}"
 
-# Server memory budgets (container-friendly conservative defaults for memory limit=16G)
-MAXMEMORY_BYTES="${MAXMEMORY_BYTES:-7516192768}"      # 7GiB
-OFFHEAP_MAX_BYTES="${OFFHEAP_MAX_BYTES:-4294967296}"  # 4GiB
-MAXMEMORY_POLICY="${MAXMEMORY_POLICY:-allkeys-lru}"
-MAXMEMORY_SAMPLES="${MAXMEMORY_SAMPLES:-5}"
+# Server args overrides (keep empty to use yierdis-server defaults in yierdis-args)
+MAXMEMORY_BYTES="${MAXMEMORY_BYTES:-}"
+OFFHEAP_MAX_BYTES="${OFFHEAP_MAX_BYTES:-}"
+MAXMEMORY_POLICY="${MAXMEMORY_POLICY:-}"
+MAXMEMORY_SAMPLES="${MAXMEMORY_SAMPLES:-}"
 
 # Optional flags
 SKIP_PREFILL="${SKIP_PREFILL:-0}"
@@ -39,7 +39,7 @@ SKIP_LATENCY="${SKIP_LATENCY:-0}"
 
 # Extra args
 JAVA_CMD="${JAVA_CMD:-java}"                       # used to start server child process
-SERVER_ARGS_EXTRA="${SERVER_ARGS_EXTRA:-}"         # appended to server args (best-effort split)
+SERVER_ARGS_EXTRA="${SERVER_ARGS_EXTRA:-}"         # appended to server args (split by shell)
 BENCH_ARGS_EXTRA="${BENCH_ARGS_EXTRA:-}"           # appended to bench args (as-is)
 BENCH_JVM_OPTS="${BENCH_JVM_OPTS:-}"               # JVM opts for the bench tool itself
 
@@ -71,33 +71,28 @@ main() {
 
   local server_jar bench_jar
   server_jar="$(pick_jar "$ROOT_DIR/yierdis-server/target/yierdis-*.jar" "original-")"
-  bench_jar="$(pick_jar "$ROOT_DIR/yierdis-bench/target/yierdis-bench-*.jar")"
+  bench_jar="$(pick_jar "$ROOT_DIR/yierdis-bench/target/yierdis-bench-*.jar" "original-")"
 
   local args=()
   args+=(--serverJar "$server_jar")
-  args+=(--host "$HOST")
-  args+=(--portBase "$PORT_BASE")
-  args+=(--backends "$BACKENDS")
+  [[ -n "$HOST" ]] && args+=(--host "$HOST")
+  [[ -n "$PORT_BASE" ]] && args+=(--portBase "$PORT_BASE")
+  [[ -n "$BACKENDS" ]] && args+=(--backends "$BACKENDS")
 
-  args+=(--keyspace "$KEYSPACE")
-  args+=(--dataSize "$DATA_SIZE")
+  [[ -n "$KEYSPACE" ]] && args+=(--keyspace "$KEYSPACE")
+  [[ -n "$DATA_SIZE" ]] && args+=(--dataSize "$DATA_SIZE")
 
-  args+=(--requests "$REQUESTS")
-  args+=(--clients "$CLIENTS")
-  args+=(--pipeline "$PIPELINE")
+  [[ -n "$REQUESTS" ]] && args+=(--requests "$REQUESTS")
+  [[ -n "$CLIENTS" ]] && args+=(--clients "$CLIENTS")
+  [[ -n "$PIPELINE" ]] && args+=(--pipeline "$PIPELINE")
 
-  args+=(--latencyRequests "$LATENCY_REQUESTS")
-  args+=(--latencyClients "$LATENCY_CLIENTS")
+  [[ -n "$LATENCY_REQUESTS" ]] && args+=(--latencyRequests "$LATENCY_REQUESTS")
+  [[ -n "$LATENCY_CLIENTS" ]] && args+=(--latencyClients "$LATENCY_CLIENTS")
 
-  args+=(--javaCmd "$JAVA_CMD")
-  args+=(--xms "$XMS")
-  args+=(--xmx "$XMX")
-  args+=(--maxDirectMemory "$MAX_DIRECT_MEMORY")
-
-  args+=(--maxmemoryBytes "$MAXMEMORY_BYTES")
-  args+=(--maxmemoryPolicy "$MAXMEMORY_POLICY")
-  args+=(--maxmemorySamples "$MAXMEMORY_SAMPLES")
-  args+=(--offheapMaxBytes "$OFFHEAP_MAX_BYTES")
+  [[ -n "$JAVA_CMD" ]] && args+=(--javaCmd "$JAVA_CMD")
+  [[ -n "$XMS" ]] && args+=(--xms "$XMS")
+  [[ -n "$XMX" ]] && args+=(--xmx "$XMX")
+  [[ -n "$MAX_DIRECT_MEMORY" ]] && args+=(--maxDirectMemory "$MAX_DIRECT_MEMORY")
 
   if [[ "$SKIP_PREFILL" == "1" ]]; then
     args+=(--skipPrefill)
@@ -105,8 +100,25 @@ main() {
   if [[ "$SKIP_LATENCY" == "1" ]]; then
     args+=(--skipLatency)
   fi
-  if [[ -n "$SERVER_ARGS_EXTRA" ]]; then
-    args+=(--serverArg "$SERVER_ARGS_EXTRA")
+
+  # Server args: pass through (parsed by yierdis-args on bench side, then forwarded to server).
+  local server_args=()
+  local extra_server_args=()
+  [[ -n "$MAXMEMORY_BYTES" ]] && server_args+=(--maxmemoryBytes "$MAXMEMORY_BYTES")
+  [[ -n "$MAXMEMORY_POLICY" ]] && server_args+=(--maxmemoryPolicy "$MAXMEMORY_POLICY")
+  [[ -n "$MAXMEMORY_SAMPLES" ]] && server_args+=(--maxmemorySamples "$MAXMEMORY_SAMPLES")
+  [[ -n "$OFFHEAP_MAX_BYTES" ]] && server_args+=(--offheapMaxBytes "$OFFHEAP_MAX_BYTES")
+
+  # SERVER_ARGS_EXTRA is appended as-is (split by shell)
+  # shellcheck disable=SC2206
+  extra_server_args=($SERVER_ARGS_EXTRA)
+  if [[ ${#extra_server_args[@]} -gt 0 ]]; then
+    server_args+=("${extra_server_args[@]}")
+  fi
+
+  if [[ ${#server_args[@]} -gt 0 ]]; then
+    args+=(--)
+    args+=("${server_args[@]}")
   fi
 
   # BENCH_ARGS_EXTRA is appended as-is (split by shell)
@@ -115,4 +127,3 @@ main() {
 }
 
 main "$@"
-

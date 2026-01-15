@@ -4,6 +4,8 @@
 
 负责命令路由、参数校验、调用 DB，并按连接协商的协议版本输出 RESP2/RESP3 回复（最小子集）。
 
+归属：`yierdis-core`（`yier.bubu.redis.command.*`），作为命令语义 SSOT；`yierdis-server` 仅负责 Netty 适配与调度。
+
 ## Module Overview
 
 - **Responsibility:** 命令分发、参数解析、错误映射、性能优化（低分配写出路径）
@@ -38,8 +40,8 @@
 
 ## Dependencies
 
-- protocol
-- db
+- 外部：`yierdis-protocol`（`RespCommand`/`RespWriter` 等）
+- 内部：`yierdis-core` 的 `db` 包（同模块内部依赖）
 
 ## Change History
 

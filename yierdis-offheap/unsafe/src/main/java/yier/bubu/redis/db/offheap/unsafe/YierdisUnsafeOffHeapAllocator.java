@@ -1,7 +1,9 @@
 package yier.bubu.redis.db.offheap.unsafe;
 
-import io.netty.buffer.ByteBuf;
 import io.netty.util.internal.PlatformDependent;
+import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
+import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
+import yier.bubu.redis.db.offheap.api.YierdisDirectBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
@@ -460,7 +462,7 @@ final class YierdisUnsafeOffHeapBuf implements YierdisOffHeapBuf {
     }
 
     @Override
-    public void setBytes(int index, ByteBuf src, int srcIndex, int len) {
+    public void setBytes(int index, YierdisBytesSource src, int srcIndex, int len) {
         ensureOpen();
         if (src == null) {
             throw new IllegalArgumentException("src must not be null");
@@ -469,7 +471,7 @@ final class YierdisUnsafeOffHeapBuf implements YierdisOffHeapBuf {
             throw new IllegalArgumentException("len must be >= 0");
         }
         checkIndex(index, len);
-        if (srcIndex < 0 || srcIndex + len > src.writerIndex()) {
+        if (srcIndex < 0) {
             throw new IndexOutOfBoundsException();
         }
         if (len == 0) {
@@ -479,10 +481,6 @@ final class YierdisUnsafeOffHeapBuf implements YierdisOffHeapBuf {
         long dst = address + index;
         if (src.hasMemoryAddress()) {
             PlatformDependent.copyMemory(src.memoryAddress() + srcIndex, dst, len);
-            return;
-        }
-        if (src.hasArray()) {
-            PlatformDependent.copyMemory(src.array(), src.arrayOffset() + srcIndex, dst, len);
             return;
         }
 
@@ -587,7 +585,7 @@ final class YierdisUnsafeOffHeapSlice implements YierdisOffHeapSlice {
     }
 
     @Override
-    public void writeTo(ByteBuf out) {
+    public void writeTo(YierdisBytesSink out) {
         owner.ensureOpen();
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
@@ -597,13 +595,12 @@ final class YierdisUnsafeOffHeapSlice implements YierdisOffHeapSlice {
         }
 
         long srcAddr = owner.address() + offset;
-        int before = out.writerIndex();
-        out.ensureWritable(len);
-
-        if (out.hasMemoryAddress()) {
-            long dstAddr = out.memoryAddress() + before;
+        if (out instanceof YierdisDirectBytesSink directSink && directSink.hasMemoryAddress()) {
+            int before = directSink.writerIndex();
+            directSink.ensureWritable(len);
+            long dstAddr = directSink.memoryAddress() + before;
             PlatformDependent.copyMemory(srcAddr, dstAddr, len);
-            out.writerIndex(before + len);
+            directSink.writerIndex(before + len);
             return;
         }
 

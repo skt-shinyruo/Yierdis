@@ -4,11 +4,13 @@
 
 实现 RESP2/RESP3（最小子集）的命令解码与响应写出，并提供 inline command 解析（调试用，兼容 `sdssplitargs` 风格）。
 
+归属：`yierdis-protocol`（`yier.bubu.redis.protocol.*`），作为 RESP codec SSOT。
+
 ## Module Overview
 
 - **Responsibility:** RESP2 framing（命令请求）+ inline command（调试）+ RESP2/RESP3 回复写出（连接级协议状态）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-08
+- **Last Updated:** 2026-01-14
 
 ## Specifications
 
@@ -57,7 +59,8 @@
 
 ## Dependencies
 
-- （无）
+- `io.netty:netty-all`（codec/pipeline 支撑）
+- `yierdis-offheap-api`（slice/buf：用于 zero-copy/低分配写出路径）
 
 ## Change History
 

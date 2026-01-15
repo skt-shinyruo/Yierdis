@@ -48,12 +48,12 @@ printf "ECHO \"hello world\"\r\n" | nc 127.0.0.1 6378
 
 ```bash
 # 单次执行
-java -cp yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar yier.bubu.redis.client.YierdisCli PING
-java -cp yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar yier.bubu.redis.client.YierdisCli SET a 1
-java -cp yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar yier.bubu.redis.client.YierdisCli GET a
+java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar PING
+java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar SET a 1
+java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar GET a
 
 # 交互模式（输入 quit/exit 退出）
-java -cp yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar yier.bubu.redis.client.YierdisCli
+java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 ```
 
 常用参数：
@@ -163,7 +163,7 @@ java -jar yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar \
 
 项目内置一层“堆外内存操作”抽象 API，并提供多个后端实现：
 
-- `netty`：基于 Netty direct `ByteBuf`
+- `netty`：基于 Netty direct `ByteBuf`（适配层在 `yierdis-offheap-netty`；`yierdis-offheap-api` 不依赖 Netty）
 - `unsafe`：基于 `sun.misc.Unsafe`（通过 Netty `PlatformDependent`）管理 native memory（无需 incubator modules）
 - `foreign`：基于 Java 17 incubator 的 Foreign Memory API（需要 Maven profile + JVM module 参数）
 
@@ -221,4 +221,12 @@ java --add-modules jdk.incubator.foreign -jar yierdis-server/target/yierdis-0.1.
 
 ```bash
 java -jar yierdis-bench/target/yierdis-bench-0.1.0-SNAPSHOT.jar --help
+```
+
+## 最小 Smoke（推荐）
+
+用于快速验证“server 启动/CLI/bench strictReplies”链路：
+
+```bash
+./scripts/smoke.sh
 ```
