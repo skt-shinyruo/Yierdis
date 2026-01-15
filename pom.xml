@@ -27,6 +27,7 @@
     <modules>
         <module>yierdis-offheap</module>
         <module>yierdis-protocol</module>
+        <module>yierdis-protocol-netty</module>
         <module>yierdis-core</module>
         <module>yierdis-args</module>
         <module>yierdis-client</module>

@@ -33,12 +33,15 @@ public class RespCommandDecoderZeroCopyTest {
         Assert.assertEquals((byte) 0xFF, cmd.byteAt(1, 1));
         Assert.assertArrayEquals(bin, cmd.toByteArray(1));
 
-        ByteBuf frame = cmd.frameUnsafe();
+        RespFrame frame = cmd.frameUnsafe();
         Assert.assertNotNull(frame);
-        Assert.assertEquals(1, frame.refCnt());
+        Assert.assertTrue(frame instanceof NettyRespFrame);
+        ByteBuf buf = ((NettyRespFrame) frame).unwrap();
+        Assert.assertNotNull(buf);
+        Assert.assertEquals(1, buf.refCnt());
 
         cmd.recycle();
-        Assert.assertEquals(0, frame.refCnt());
+        Assert.assertEquals(0, buf.refCnt());
 
         ch.finishAndReleaseAll();
     }
@@ -67,9 +70,10 @@ public class RespCommandDecoderZeroCopyTest {
         Assert.assertEquals(0, cmd.len(2));
         Assert.assertArrayEquals(new byte[0], cmd.toByteArray(2));
 
-        ByteBuf frame = cmd.frameUnsafe();
+        NettyRespFrame frame = (NettyRespFrame) cmd.frameUnsafe();
+        ByteBuf buf = frame.unwrap();
         cmd.recycle();
-        Assert.assertEquals(0, frame.refCnt());
+        Assert.assertEquals(0, buf.refCnt());
 
         ch.finishAndReleaseAll();
     }
@@ -92,10 +96,11 @@ public class RespCommandDecoderZeroCopyTest {
         Assert.assertFalse(cmd.isNull(0));
         Assert.assertEquals(4, cmd.len(0));
 
-        ByteBuf frame = cmd.frameUnsafe();
-        Assert.assertEquals(1, frame.refCnt());
+        NettyRespFrame frame = (NettyRespFrame) cmd.frameUnsafe();
+        ByteBuf buf = frame.unwrap();
+        Assert.assertEquals(1, buf.refCnt());
         cmd.recycle();
-        Assert.assertEquals(0, frame.refCnt());
+        Assert.assertEquals(0, buf.refCnt());
 
         ch.finishAndReleaseAll();
     }

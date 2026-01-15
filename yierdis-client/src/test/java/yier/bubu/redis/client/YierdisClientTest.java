@@ -15,6 +15,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.protocol.NettyRespSession;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespCommandDecoder;
 import yier.bubu.redis.protocol.RespBulkString;
@@ -147,7 +148,9 @@ public class YierdisClientTest {
             protected void channelRead0(ChannelHandlerContext ctx, RespCommand msg) {
                 ByteBuf out = ctx.alloc().buffer();
                 try {
-                    processor.execute(msg, new RespWriter(out, ctx.channel()));
+                    ByteBuf outBuf = out;
+                    processor.execute(msg, new RespWriter((src, srcIndex, len) -> outBuf.writeBytes(src, srcIndex, len),
+                            new NettyRespSession(ctx.channel())));
                     ctx.writeAndFlush(out);
                     out = null;
                 } finally {

@@ -6,6 +6,7 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import picocli.CommandLine;
 import picocli.CommandLine.ParameterException;
 import yier.bubu.redis.args.YierdisServerArgs;
+import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
 import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.protocol.RespDecoder;
 import yier.bubu.redis.protocol.RespError;
@@ -997,7 +998,8 @@ public final class YierdisBench {
         RespCommandWriter(OutputStream out) {
             this.out = Objects.requireNonNull(out, "out");
             this.buf = Unpooled.buffer(256);
-            this.writer = new RespWriter(buf);
+            YierdisBytesSink sink = (src, srcIndex, len) -> this.buf.writeBytes(src, srcIndex, len);
+            this.writer = new RespWriter(sink);
         }
 
         void writePing() throws IOException {

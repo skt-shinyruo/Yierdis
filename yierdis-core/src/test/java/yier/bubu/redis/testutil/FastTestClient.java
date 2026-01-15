@@ -5,6 +5,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.db.offheap.netty.YierdisNettyByteBufSink;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespCommandDecoder;
 import yier.bubu.redis.protocol.RespDecoder;
@@ -44,7 +45,7 @@ public final class FastTestClient implements AutoCloseable {
 
         ByteBuf out = Unpooled.buffer();
         try {
-            processor.execute(cmd, new RespWriter(out));
+            processor.execute(cmd, new RespWriter(new YierdisNettyByteBufSink(out)));
             byte[] replyBytes = readAll(out);
             Assert.assertNotNull("expected reply", replyBytes);
             return decodeOne(replyBytes);

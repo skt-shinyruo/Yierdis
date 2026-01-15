@@ -10,6 +10,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.db.offheap.netty.YierdisNettyByteBufSink;
+import yier.bubu.redis.protocol.NettyRespSession;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
 
@@ -249,7 +251,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
             ByteBuf out = ctx.alloc().buffer();
             boolean ok = false;
             try {
-                RespWriter writer = new RespWriter(out, ctx.channel());
+                RespWriter writer = new RespWriter(new YierdisNettyByteBufSink(out), new NettyRespSession(ctx.channel()));
                 commandProcessor.execute(cmd, writer);
                 ctx.write(out, ctx.voidPromise());
                 flushTargets.put(ctx.channel(), ctx);
@@ -265,7 +267,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
                 ByteBuf out = ctx.alloc().buffer();
                 boolean ok = false;
                 try {
-                    new RespWriter(out, ctx.channel()).error("ERR internal error");
+                    new RespWriter(new YierdisNettyByteBufSink(out), new NettyRespSession(ctx.channel())).error("ERR internal error");
                     ctx.write(out, ctx.voidPromise());
                     flushTargets.put(ctx.channel(), ctx);
                     ok = true;

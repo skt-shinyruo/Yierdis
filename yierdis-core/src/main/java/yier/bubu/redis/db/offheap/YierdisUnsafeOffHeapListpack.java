@@ -1,8 +1,8 @@
 package yier.bubu.redis.db.offheap;
 
-import io.netty.util.internal.PlatformDependent;
 import yier.bubu.redis.db.YierdisBulkStringOutput;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 
 /**
@@ -258,7 +258,7 @@ public final class YierdisUnsafeOffHeapListpack implements AutoCloseable {
             return;
         }
         long dstAddr = data.dataAddress() + dstOff;
-        PlatformDependent.copyMemory(src, srcOff, dstAddr, len);
+        YierdisUnsafeAccess.copyMemory(src, srcOff, dstAddr, len);
     }
 
     private void memmove(int srcOff, int dstOff, int len) {
@@ -276,8 +276,8 @@ public final class YierdisUnsafeOffHeapListpack implements AutoCloseable {
                 int chunk = Math.min(remaining, scratch.length);
                 long from = srcAddr + (remaining - chunk);
                 long to = dstAddr + (remaining - chunk);
-                PlatformDependent.copyMemory(from, scratch, 0, chunk);
-                PlatformDependent.copyMemory(scratch, 0, to, chunk);
+                YierdisUnsafeAccess.copyMemory(from, scratch, 0, chunk);
+                YierdisUnsafeAccess.copyMemory(scratch, 0, to, chunk);
                 remaining -= chunk;
             }
             return;
@@ -288,8 +288,8 @@ public final class YierdisUnsafeOffHeapListpack implements AutoCloseable {
         long to = dstAddr;
         while (remaining > 0) {
             int chunk = Math.min(remaining, scratch.length);
-            PlatformDependent.copyMemory(from, scratch, 0, chunk);
-            PlatformDependent.copyMemory(scratch, 0, to, chunk);
+            YierdisUnsafeAccess.copyMemory(from, scratch, 0, chunk);
+            YierdisUnsafeAccess.copyMemory(scratch, 0, to, chunk);
             from += chunk;
             to += chunk;
             remaining -= chunk;
@@ -324,7 +324,7 @@ public final class YierdisUnsafeOffHeapListpack implements AutoCloseable {
 
     private void dataOverwriteByte(int index, byte value) {
         long addr = data.dataAddress() + index;
-        PlatformDependent.putByte(addr, value);
+        YierdisUnsafeAccess.putByte(addr, value);
     }
 
     private int readVarInt(int offset, int limit) {

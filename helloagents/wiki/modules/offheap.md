@@ -8,7 +8,7 @@
 
 - **Responsibility:** 分配器 API、slice/buf 抽象、unsafe/netty/foreign 等后端
 - **Status:** 🚧In Development
-- **Last Updated:** 2026-01-14
+- **Last Updated:** 2026-01-15
 
 ## Specifications
 
@@ -38,9 +38,12 @@
 
 - `yierdis-offheap-api`：核心 API（不依赖 Netty）
 - `yierdis-offheap-netty`：Netty 适配（可选；依赖 Netty）
+- `yierdis-offheap-unsafe`：Unsafe 后端（可选；通过 `sun.misc.Unsafe` 提供 raw memory 读写/copy）
+- `yierdis-offheap-foreign`：Foreign Memory API 后端（可选；JDK 预览/演示用途）
 
 ## Change History
 
 - 2026-01-04：增加 off-heap allocator 泄漏回归测试（shutdown 后 usedBytes 回到基线/归零）。
 - 2026-01-08：写路径增强：支持“从输入源直接写入 off-heap”，减少写路径的 heap 中转分配。
 - 2026-01-14：offheap-api 去 Netty 依赖：以 `YierdisBytesSink/YierdisBytesSource` 替代 ByteBuf 直接依赖，Netty adapter 下沉到 offheap-netty 模块。
+- 2026-01-15：Unsafe 后端补齐 raw memory 访问封装（`YierdisUnsafeAccess`），并将 core 的 Netty internal（`PlatformDependent`）使用收敛到 off-heap/unsafe 单点。

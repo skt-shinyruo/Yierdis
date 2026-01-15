@@ -1,9 +1,9 @@
 package yier.bubu.redis.db.offheap;
 
-import io.netty.util.internal.PlatformDependent;
 import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisDirectBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
 
 /**
  * A raw off-heap slice backed by an absolute address.
@@ -40,7 +40,7 @@ public final class YierdisUnsafeOffHeapRawSlice implements YierdisOffHeapSlice {
         if (index < 0 || index >= len) {
             throw new IndexOutOfBoundsException();
         }
-        return PlatformDependent.getByte(address + index);
+        return YierdisUnsafeAccess.getByte(address + index);
     }
 
     @Override
@@ -60,7 +60,7 @@ public final class YierdisUnsafeOffHeapRawSlice implements YierdisOffHeapSlice {
         if (readLen == 0) {
             return;
         }
-        PlatformDependent.copyMemory(address + index, dst, dstOff, readLen);
+        YierdisUnsafeAccess.copyMemory(address + index, dst, dstOff, readLen);
     }
 
     @Override
@@ -76,7 +76,7 @@ public final class YierdisUnsafeOffHeapRawSlice implements YierdisOffHeapSlice {
             int before = directSink.writerIndex();
             directSink.ensureWritable(len);
             long dstAddr = directSink.memoryAddress() + before;
-            PlatformDependent.copyMemory(address, dstAddr, len);
+            YierdisUnsafeAccess.copyMemory(address, dstAddr, len);
             directSink.writerIndex(before + len);
             return;
         }
@@ -86,7 +86,7 @@ public final class YierdisUnsafeOffHeapRawSlice implements YierdisOffHeapSlice {
         long src = address;
         while (remaining > 0) {
             int chunk = Math.min(remaining, scratch.length);
-            PlatformDependent.copyMemory(src, scratch, 0, chunk);
+            YierdisUnsafeAccess.copyMemory(src, scratch, 0, chunk);
             out.writeBytes(scratch, 0, chunk);
             src += chunk;
             remaining -= chunk;

@@ -8,7 +8,7 @@
 
 - **Responsibility:** 端口监听、Pipeline 组装、定时任务（如 TTL 清理）的调度入口
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-14
+- **Last Updated:** 2026-01-15
 
 ## Specifications
 
@@ -54,7 +54,7 @@
 
 ## Dependencies
 
-- `yierdis-protocol`
+- `yierdis-protocol-netty`（Netty codec/adapters；`yierdis-protocol` 由其传递依赖提供）
 - `yierdis-core`
 - `yierdis-args`
 
@@ -65,3 +65,4 @@
 - 2026-01-07：补充 RESP3（`HELLO 3` 协商）与 inline command（调试用）支持，提高常见客户端兼容性。
 - 2026-01-08：执行模型升级为 Netty 体系内单线程 `NettyCommandExecutor`（`DefaultEventExecutorGroup(1)`）：flush 合并 + 连接级 `autoRead` 背压闭环。
 - 2026-01-08：inline command 解析增强：支持单/双引号、反斜杠转义与 `\\xHH` 十六进制转义。
+- 2026-01-15：依赖切换：RESP codec 下沉到 `yierdis-protocol-netty`；`RespWriter` 写出路径改为 bytes sink + session，降低协议层与 Netty 的耦合。

@@ -147,14 +147,15 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
             }
 
             int endIdx = in.readerIndex();
-            ByteBuf frame = in.retainedSlice(startIdx, endIdx - startIdx);
+            ByteBuf frameBuf = in.retainedSlice(startIdx, endIdx - startIdx);
+            NettyRespFrame frame = new NettyRespFrame(frameBuf);
             boolean ok = false;
             try {
                 cmd.setFrame(frame);
                 ok = true;
             } finally {
                 if (!ok) {
-                    frame.release();
+                    frame.close();
                 }
             }
             return cmd;
@@ -302,14 +303,15 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
             cmd.setArgSlice(arg, offsets[arg], lengths[arg]);
         }
 
-        ByteBuf frame = Unpooled.wrappedBuffer(decoded, 0, outPos);
+        ByteBuf frameBuf = Unpooled.wrappedBuffer(decoded, 0, outPos);
+        NettyRespFrame frame = new NettyRespFrame(frameBuf);
         boolean ok = false;
         try {
             cmd.setFrame(frame);
             ok = true;
         } finally {
             if (!ok) {
-                frame.release();
+                frame.close();
             }
         }
         return cmd;
@@ -405,3 +407,4 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
         return value;
     }
 }
+

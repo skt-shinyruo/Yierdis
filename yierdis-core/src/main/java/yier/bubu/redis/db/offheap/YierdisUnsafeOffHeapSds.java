@@ -1,7 +1,7 @@
 package yier.bubu.redis.db.offheap;
 
-import io.netty.util.internal.PlatformDependent;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 
 /**
@@ -35,7 +35,7 @@ public final class YierdisUnsafeOffHeapSds {
         writeInt(base, len);
         writeInt(base + Integer.BYTES, cap);
         if (len > 0) {
-            PlatformDependent.copyMemory(src, off, base + HEADER_BYTES, len);
+            YierdisUnsafeAccess.copyMemory(src, off, base + HEADER_BYTES, len);
         }
         return base;
     }
@@ -80,7 +80,7 @@ public final class YierdisUnsafeOffHeapSds {
         if (len == 0) {
             return;
         }
-        PlatformDependent.copyMemory(baseAddr + HEADER_BYTES, dst, dstOff, len);
+        YierdisUnsafeAccess.copyMemory(baseAddr + HEADER_BYTES, dst, dstOff, len);
     }
 
     private static int totalBytes(int cap) {
@@ -88,17 +88,17 @@ public final class YierdisUnsafeOffHeapSds {
     }
 
     private static int readInt(long addr) {
-        int b0 = PlatformDependent.getByte(addr) & 0xff;
-        int b1 = PlatformDependent.getByte(addr + 1) & 0xff;
-        int b2 = PlatformDependent.getByte(addr + 2) & 0xff;
-        int b3 = PlatformDependent.getByte(addr + 3) & 0xff;
+        int b0 = YierdisUnsafeAccess.getByte(addr) & 0xff;
+        int b1 = YierdisUnsafeAccess.getByte(addr + 1) & 0xff;
+        int b2 = YierdisUnsafeAccess.getByte(addr + 2) & 0xff;
+        int b3 = YierdisUnsafeAccess.getByte(addr + 3) & 0xff;
         return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
     }
 
     private static void writeInt(long addr, int value) {
-        PlatformDependent.putByte(addr, (byte) value);
-        PlatformDependent.putByte(addr + 1, (byte) (value >>> 8));
-        PlatformDependent.putByte(addr + 2, (byte) (value >>> 16));
-        PlatformDependent.putByte(addr + 3, (byte) (value >>> 24));
+        YierdisUnsafeAccess.putByte(addr, (byte) value);
+        YierdisUnsafeAccess.putByte(addr + 1, (byte) (value >>> 8));
+        YierdisUnsafeAccess.putByte(addr + 2, (byte) (value >>> 16));
+        YierdisUnsafeAccess.putByte(addr + 3, (byte) (value >>> 24));
     }
 }

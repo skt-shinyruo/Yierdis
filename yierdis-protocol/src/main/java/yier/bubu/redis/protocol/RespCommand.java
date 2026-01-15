@@ -1,8 +1,5 @@
 package yier.bubu.redis.protocol;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.util.Recycler;
-
 import java.util.Arrays;
 
 /**
@@ -11,34 +8,26 @@ import java.util.Arrays;
  * This is a deliberately minimal structure optimized for low allocation.
  */
 public final class RespCommand {
-    private static final Recycler<RespCommand> RECYCLER = new Recycler<>() {
-        @Override
-        protected RespCommand newObject(Handle<RespCommand> handle) {
-            return new RespCommand(handle);
-        }
-    };
+    private static final int DEFAULT_ARGV_CAPACITY = 16;
 
-    private final Recycler.Handle<RespCommand> handle;
-
-    private ByteBuf frame;
+    private RespFrame frame;
     private int[] argOffsets;
     private int[] argLengths;
     private int argc;
 
-    private RespCommand(Recycler.Handle<RespCommand> handle) {
-        this.handle = handle;
-        this.argOffsets = new int[16];
-        this.argLengths = new int[16];
+    private RespCommand() {
+        this.argOffsets = new int[DEFAULT_ARGV_CAPACITY];
+        this.argLengths = new int[DEFAULT_ARGV_CAPACITY];
     }
 
     static RespCommand acquire(int argc) {
-        RespCommand cmd = RECYCLER.get();
+        RespCommand cmd = new RespCommand();
         cmd.ensureCapacity(argc);
         cmd.argc = argc;
         return cmd;
     }
 
-    void setFrame(ByteBuf frame) {
+    void setFrame(RespFrame frame) {
         if (frame == null) {
             throw new IllegalArgumentException("frame must not be null");
         }
@@ -100,7 +89,7 @@ public final class RespCommand {
             return new byte[0];
         }
         byte[] out = new byte[len];
-        frame.getBytes(argOffsets[index], out);
+        frame.getBytes(argOffsets[index], out, 0, len);
         return out;
     }
 
@@ -110,7 +99,7 @@ public final class RespCommand {
      * The returned buffer is owned by this {@link RespCommand} and will be released on {@link #recycle()}.
      * Callers MUST NOT retain it beyond the command execution.
      */
-    public ByteBuf frame() {
+    public RespFrame frame() {
         return frame;
     }
 
@@ -135,19 +124,18 @@ public final class RespCommand {
         return argLengths;
     }
 
-    ByteBuf frameUnsafe() {
+    RespFrame frameUnsafe() {
         return frame;
     }
 
     public void recycle() {
         if (frame != null) {
-            frame.release();
+            frame.close();
             frame = null;
         }
         Arrays.fill(argOffsets, 0, argc, 0);
         Arrays.fill(argLengths, 0, argc, 0);
         argc = 0;
-        handle.recycle(this);
     }
 
     private void ensureCapacity(int desired) {

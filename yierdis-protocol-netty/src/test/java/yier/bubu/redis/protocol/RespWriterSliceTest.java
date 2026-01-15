@@ -5,7 +5,8 @@ import io.netty.buffer.Unpooled;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
-import yier.bubu.redis.db.offheap.netty.YierdisNettyOffHeapAllocator;
+import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
+import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 
 import java.nio.charset.StandardCharsets;
 
@@ -14,7 +15,8 @@ public class RespWriterSliceTest {
     public void bulkStringSupportsNullEmptyAndSlices() {
         ByteBuf buf = Unpooled.buffer();
         try {
-            RespWriter w = new RespWriter(buf);
+            YierdisBytesSink sink = (src, srcIndex, len) -> buf.writeBytes(src, srcIndex, len);
+            RespWriter w = new RespWriter(sink);
 
             w.bulkString((byte[]) null);
             w.bulkString(new byte[0]);
@@ -39,7 +41,8 @@ public class RespWriterSliceTest {
     public void bulkStringLongAsciiWritesCorrectFrame() {
         ByteBuf buf = Unpooled.buffer();
         try {
-            RespWriter w = new RespWriter(buf);
+            YierdisBytesSink sink = (src, srcIndex, len) -> buf.writeBytes(src, srcIndex, len);
+            RespWriter w = new RespWriter(sink);
             w.bulkStringLongAscii(0);
             w.bulkStringLongAscii(-123);
             w.bulkStringLongAscii(Long.MIN_VALUE);
@@ -57,7 +60,7 @@ public class RespWriterSliceTest {
 
     @Test
     public void bulkStringSupportsOffHeapSlices() {
-        YierdisNettyOffHeapAllocator alloc = new YierdisNettyOffHeapAllocator(0);
+        YierdisUnsafeOffHeapAllocator alloc = new YierdisUnsafeOffHeapAllocator(0);
         try {
             YierdisOffHeapBuf buf = alloc.allocate(6);
             try {
@@ -65,7 +68,8 @@ public class RespWriterSliceTest {
 
                 ByteBuf out = Unpooled.buffer();
                 try {
-                    RespWriter w = new RespWriter(out);
+                    YierdisBytesSink sink = (src, srcIndex, len) -> out.writeBytes(src, srcIndex, len);
+                    RespWriter w = new RespWriter(sink);
                     w.bulkString(buf.slice(1, 3)); // [1, 0xFF, 'a']
 
                     byte[] expected = new byte[]{
@@ -88,7 +92,8 @@ public class RespWriterSliceTest {
     public void errorSanitizesCrlfAndLimitsLength() {
         ByteBuf buf = Unpooled.buffer();
         try {
-            RespWriter w = new RespWriter(buf);
+            YierdisBytesSink sink = (src, srcIndex, len) -> buf.writeBytes(src, srcIndex, len);
+            RespWriter w = new RespWriter(sink);
             w.error("ERR oops\r\n+PONG\r\n");
 
             byte[] out = readAll(buf);
@@ -136,3 +141,4 @@ public class RespWriterSliceTest {
         return out;
     }
 }
+

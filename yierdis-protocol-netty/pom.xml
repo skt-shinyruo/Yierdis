@@ -10,17 +10,29 @@
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>yierdis-protocol</artifactId>
+    <artifactId>yierdis-protocol-netty</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis-protocol</name>
-    <description>RESP objects and codec implementation (SSOT) shared by server/client/bench.</description>
+    <name>yierdis-protocol-netty</name>
+    <description>Netty codec/adapters for yierdis-protocol (RESP SSOT).</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-api</artifactId>
+            <artifactId>yierdis-protocol</artifactId>
             <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-offheap-unsafe</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
         </dependency>
 
         <dependency>

@@ -6,6 +6,8 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.DecoderException;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.db.offheap.netty.YierdisNettyByteBufSink;
+import yier.bubu.redis.protocol.NettyRespSession;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
 
@@ -28,7 +30,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         if (msg.argc() == 1 && isQuit(msg)) {
             ByteBuf out = ctx.alloc().buffer();
             try {
-                new RespWriter(out, ctx.channel()).simpleString("OK");
+                new RespWriter(new YierdisNettyByteBufSink(out), new NettyRespSession(ctx.channel())).simpleString("OK");
                 ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
                 out = null;
             } finally {
@@ -43,7 +45,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         if (nettyExecutor == null) {
             ByteBuf out = ctx.alloc().buffer();
             try {
-                RespWriter writer = new RespWriter(out, ctx.channel());
+                RespWriter writer = new RespWriter(new YierdisNettyByteBufSink(out), new NettyRespSession(ctx.channel()));
                 commandProcessor.execute(msg, writer);
                 ctx.writeAndFlush(out);
                 out = null;
@@ -65,7 +67,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         // 队列满或服务关闭：返回 busy 错误并回收命令帧，避免积压导致 OOM。
         ByteBuf out = ctx.alloc().buffer();
         try {
-            new RespWriter(out, ctx.channel()).error("ERR busy");
+            new RespWriter(new YierdisNettyByteBufSink(out), new NettyRespSession(ctx.channel())).error("ERR busy");
             ctx.writeAndFlush(out);
             out = null;
         } finally {
@@ -105,7 +107,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
 
         ByteBuf out = ctx.alloc().buffer();
         try {
-            new RespWriter(out, ctx.channel()).error(err);
+            new RespWriter(new YierdisNettyByteBufSink(out), new NettyRespSession(ctx.channel())).error(err);
             ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
             out = null;
         } finally {

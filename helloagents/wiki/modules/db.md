@@ -10,7 +10,7 @@
 
 - **Responsibility:** Keyspace + 过期索引 + 值编码（string/list/set/hash/zset）+ maxmemory
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-14
+- **Last Updated:** 2026-01-15
 
 ## Specifications
 
@@ -55,3 +55,4 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 
 - 2026-01-04：统一 maxmemory 统计口径（heap 估算 + off-heap usedBytes），并补齐相关回归测试与泄漏验证。
 - 2026-01-08：淘汰与过期清理增加“时间预算”并支持配置（`--evictionTimeLimitMillis` / `--expireCleanupTimeLimitMillis`），降低高压下维护任务放大 tail latency 的风险。
+- 2026-01-15：off-heap 数据结构的 raw memory 读写/copy 从 Netty internal（`PlatformDependent`）迁移为自有 Unsafe 封装（`YierdisUnsafeAccess`），降低依赖耦合与升级风险。

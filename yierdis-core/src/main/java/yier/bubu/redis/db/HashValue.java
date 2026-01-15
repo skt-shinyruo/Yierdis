@@ -1,11 +1,11 @@
 package yier.bubu.redis.db;
 
-import io.netty.util.internal.PlatformDependent;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapDictLong;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapListpack;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapRawSlice;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapSds;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 
 import java.util.ArrayList;
@@ -225,7 +225,7 @@ final class HashValue implements YierdisValue {
                 List<byte[]> out = new ArrayList<>(dict.size() * 2);
                 dict.forEach((keyPtr, keyLen, valueAddr) -> {
                     byte[] k = new byte[keyLen];
-                    PlatformDependent.copyMemory(keyPtr, k, 0, keyLen);
+                    YierdisUnsafeAccess.copyMemory(keyPtr, k, 0, keyLen);
                     out.add(k);
 
                     if (valueAddr == 0L) {

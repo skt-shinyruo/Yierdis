@@ -1,7 +1,6 @@
 package yier.bubu.redis.protocol;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.channel.Channel;
+import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisDirectBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
 
@@ -10,7 +9,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Writes RESP2 responses directly into a {@link ByteBuf}.
+ * Writes RESP2/RESP3 responses into a {@link YierdisBytesSink}.
  * <p>
  * This is the server fast-path: it avoids building {@link RespObject} trees.
  */
@@ -18,25 +17,32 @@ public final class RespWriter {
     private static final byte CR = '\r';
     private static final byte LF = '\n';
     private static final byte[] CRLF = new byte[]{CR, LF};
+    private static final byte[] PLUS = new byte[]{'+'};
+    private static final byte[] MINUS = new byte[]{'-'};
+    private static final byte[] COLON = new byte[]{':'};
+    private static final byte[] DOLLAR = new byte[]{'$'};
+    private static final byte[] STAR = new byte[]{'*'};
+    private static final byte[] PERCENT = new byte[]{'%'};
+    private static final byte[] RESP2_NULL_BULK = new byte[]{'$', '-', '1', CR, LF};
+    private static final byte[] RESP2_NULL_ARRAY = new byte[]{'*', '-', '1', CR, LF};
+    private static final byte[] RESP3_NULL = new byte[]{'_', CR, LF};
 
     private static final int MAX_ERROR_MESSAGE_CHARS = 256;
 
     private static final ThreadLocal<byte[]> TL_NUM_BUF = ThreadLocal.withInitial(() -> new byte[32]);
 
-    private final ByteBuf out;
-    private final Channel channel;
-    private final ByteBufSink outSink;
+    private final YierdisBytesSink out;
+    private final RespSession session;
     private RespProtocol protocol;
 
-    public RespWriter(ByteBuf out) {
+    public RespWriter(YierdisBytesSink out) {
         this(out, null);
     }
 
-    public RespWriter(ByteBuf out, Channel channel) {
+    public RespWriter(YierdisBytesSink out, RespSession session) {
         this.out = Objects.requireNonNull(out, "out");
-        this.channel = channel;
-        this.outSink = new ByteBufSink(out);
-        this.protocol = RespProtocol.get(channel);
+        this.session = session;
+        this.protocol = session == null ? RespProtocol.RESP2 : normalizeProtocol(session.protocol());
     }
 
     public RespProtocol protocol() {
@@ -44,15 +50,20 @@ public final class RespWriter {
     }
 
     public void setProtocol(RespProtocol protocol) {
-        RespProtocol next = protocol == null ? RespProtocol.RESP2 : protocol;
+        RespProtocol next = normalizeProtocol(protocol);
         this.protocol = next;
-        RespProtocol.set(channel, next);
+        if (session != null) {
+            session.setProtocol(next);
+        }
     }
 
     public void simpleString(String value) {
-        out.writeByte('+');
-        out.writeCharSequence(value, StandardCharsets.UTF_8);
-        out.writeBytes(CRLF);
+        out.writeBytes(PLUS, 0, 1);
+        if (value != null && !value.isEmpty()) {
+            byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+            out.writeBytes(bytes, 0, bytes.length);
+        }
+        out.writeBytes(CRLF, 0, CRLF.length);
     }
 
     public void error(String message) {
@@ -65,15 +76,16 @@ public final class RespWriter {
         if (msg.length() > MAX_ERROR_MESSAGE_CHARS) {
             msg = msg.substring(0, MAX_ERROR_MESSAGE_CHARS);
         }
-        out.writeByte('-');
-        out.writeCharSequence(msg, StandardCharsets.UTF_8);
-        out.writeBytes(CRLF);
+        out.writeBytes(MINUS, 0, 1);
+        byte[] bytes = msg.getBytes(StandardCharsets.UTF_8);
+        out.writeBytes(bytes, 0, bytes.length);
+        out.writeBytes(CRLF, 0, CRLF.length);
     }
 
     public void integer(long value) {
-        out.writeByte(':');
+        out.writeBytes(COLON, 0, 1);
         writeLongAscii(out, value);
-        out.writeBytes(CRLF);
+        out.writeBytes(CRLF, 0, CRLF.length);
     }
 
     public void bulkString(byte[] data) {
@@ -95,13 +107,13 @@ public final class RespWriter {
         if (off < 0 || off + len > data.length) {
             throw new IndexOutOfBoundsException();
         }
-        out.writeByte('$');
+        out.writeBytes(DOLLAR, 0, 1);
         writeLongAscii(out, len);
-        out.writeBytes(CRLF);
+        out.writeBytes(CRLF, 0, CRLF.length);
         if (len > 0) {
             out.writeBytes(data, off, len);
         }
-        out.writeBytes(CRLF);
+        out.writeBytes(CRLF, 0, CRLF.length);
     }
 
     public void bulkString(YierdisOffHeapSlice slice) {
@@ -109,24 +121,24 @@ public final class RespWriter {
             nullValue();
             return;
         }
-        out.writeByte('$');
+        out.writeBytes(DOLLAR, 0, 1);
         int len = slice.length();
         if (len < 0) {
             throw new IllegalStateException("slice length must be >= 0");
         }
         writeLongAscii(out, len);
-        out.writeBytes(CRLF);
-        slice.writeTo(outSink);
-        out.writeBytes(CRLF);
+        out.writeBytes(CRLF, 0, CRLF.length);
+        slice.writeTo(out);
+        out.writeBytes(CRLF, 0, CRLF.length);
     }
 
     public void bulkStringLongAscii(long value) {
-        out.writeByte('$');
+        out.writeBytes(DOLLAR, 0, 1);
         int len = longAsciiLength(value);
         writeLongAscii(out, len);
-        out.writeBytes(CRLF);
+        out.writeBytes(CRLF, 0, CRLF.length);
         writeLongAscii(out, value);
-        out.writeBytes(CRLF);
+        out.writeBytes(CRLF, 0, CRLF.length);
     }
 
     public void nullArray() {
@@ -134,16 +146,13 @@ public final class RespWriter {
             nullValue();
             return;
         }
-        out.writeByte('*');
-        out.writeByte('-');
-        out.writeByte('1');
-        out.writeBytes(CRLF);
+        out.writeBytes(RESP2_NULL_ARRAY, 0, RESP2_NULL_ARRAY.length);
     }
 
     public void arrayHeader(int count) {
-        out.writeByte('*');
+        out.writeBytes(STAR, 0, 1);
         writeLongAscii(out, count);
-        out.writeBytes(CRLF);
+        out.writeBytes(CRLF, 0, CRLF.length);
     }
 
     public void bulkStringArray(List<byte[]> values) {
@@ -166,30 +175,27 @@ public final class RespWriter {
         if (protocol != RespProtocol.RESP3) {
             throw new IllegalStateException("RESP3 map requires RESP3 protocol");
         }
-        out.writeByte('%');
+        out.writeBytes(PERCENT, 0, 1);
         writeLongAscii(out, pairs);
-        out.writeBytes(CRLF);
+        out.writeBytes(CRLF, 0, CRLF.length);
     }
 
     public void nullValue() {
         if (protocol == RespProtocol.RESP3) {
-            out.writeByte('_');
-            out.writeBytes(CRLF);
+            out.writeBytes(RESP3_NULL, 0, RESP3_NULL.length);
             return;
         }
-        out.writeByte('$');
-        out.writeByte('-');
-        out.writeByte('1');
-        out.writeBytes(CRLF);
+        out.writeBytes(RESP2_NULL_BULK, 0, RESP2_NULL_BULK.length);
     }
 
-    static void writeLongAscii(ByteBuf out, long value) {
+    static void writeLongAscii(YierdisBytesSink out, long value) {
         if (value == 0) {
-            out.writeByte('0');
+            out.writeBytes(new byte[]{'0'}, 0, 1);
             return;
         }
         if (value == Long.MIN_VALUE) {
-            out.writeCharSequence("-9223372036854775808", StandardCharsets.US_ASCII);
+            byte[] min = "-9223372036854775808".getBytes(StandardCharsets.US_ASCII);
+            out.writeBytes(min, 0, min.length);
             return;
         }
 
@@ -231,44 +237,7 @@ public final class RespWriter {
         return v < 0 ? digits + 1 : digits;
     }
 
-    private static final class ByteBufSink implements YierdisDirectBytesSink {
-        private final ByteBuf out;
-
-        private ByteBufSink(ByteBuf out) {
-            this.out = out;
-        }
-
-        @Override
-        public void writeBytes(byte[] src, int srcIndex, int len) {
-            out.writeBytes(src, srcIndex, len);
-        }
-
-        @Override
-        public void ensureWritable(int len) {
-            out.ensureWritable(len);
-        }
-
-        @Override
-        public int writerIndex() {
-            return out.writerIndex();
-        }
-
-        @Override
-        public void writerIndex(int writerIndex) {
-            out.writerIndex(writerIndex);
-        }
-
-        @Override
-        public boolean hasMemoryAddress() {
-            return out.hasMemoryAddress();
-        }
-
-        @Override
-        public long memoryAddress() {
-            if (!out.hasMemoryAddress()) {
-                throw new UnsupportedOperationException("ByteBuf has no memory address");
-            }
-            return out.memoryAddress();
-        }
+    private static RespProtocol normalizeProtocol(RespProtocol protocol) {
+        return protocol == null ? RespProtocol.RESP2 : protocol;
     }
 }

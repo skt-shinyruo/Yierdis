@@ -1,12 +1,11 @@
 package yier.bubu.redis.db;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.util.internal.PlatformDependent;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapString;
 import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 import yier.bubu.redis.protocol.RespCommand;
 
@@ -117,7 +116,7 @@ final class YierdisObject {
                 YierdisOffHeapBuf buf = offHeapAllocator.allocate(len);
                 boolean ok = false;
                 try {
-                    YierdisBytesSource src = new NettyByteBufSource(cmd.frame());
+                    YierdisBytesSource src = cmd.frame();
                     buf.setBytes(0, src, cmd.argOffset(argIndex), len);
                     payload = buf;
                     ok = true;
@@ -159,40 +158,6 @@ final class YierdisObject {
 
     static YierdisObject newZSet(ZSetValue zv) {
         return new YierdisObject(ValueType.ZSET, zv.encoding(), zv);
-    }
-
-    private static final class NettyByteBufSource implements YierdisBytesSource {
-        private final ByteBuf buf;
-
-        private NettyByteBufSource(ByteBuf buf) {
-            if (buf == null) {
-                throw new IllegalArgumentException("buf must not be null");
-            }
-            this.buf = buf;
-        }
-
-        @Override
-        public byte getByte(int index) {
-            return buf.getByte(index);
-        }
-
-        @Override
-        public void getBytes(int index, byte[] dst, int dstOff, int len) {
-            buf.getBytes(index, dst, dstOff, len);
-        }
-
-        @Override
-        public boolean hasMemoryAddress() {
-            return buf.hasMemoryAddress();
-        }
-
-        @Override
-        public long memoryAddress() {
-            if (!buf.hasMemoryAddress()) {
-                return YierdisBytesSource.super.memoryAddress();
-            }
-            return buf.memoryAddress();
-        }
     }
 
     void overwriteWithString(byte[] valueBytes) {
@@ -473,7 +438,7 @@ final class YierdisObject {
             }
 
             if (current.capacity() >= nextLen) {
-                YierdisBytesSource src = new NettyByteBufSource(cmd.frame());
+                YierdisBytesSource src = cmd.frame();
                 current.setBytes(0, src, cmd.argOffset(argIndex), nextLen);
                 this.type = ValueType.STRING;
                 this.encoding = nextEnc;
@@ -491,7 +456,7 @@ final class YierdisObject {
                 YierdisOffHeapBuf nextBuf = offHeapAllocator.allocate(nextLen);
                 boolean ok = false;
                 try {
-                    YierdisBytesSource src = new NettyByteBufSource(cmd.frame());
+                    YierdisBytesSource src = cmd.frame();
                     nextBuf.setBytes(0, src, cmd.argOffset(argIndex), nextLen);
                     nextPayload = nextBuf;
                     ok = true;
@@ -725,7 +690,7 @@ final class YierdisObject {
             long addr = s.dataAddress() + from;
             while (remaining > 0) {
                 int chunk = Math.min(remaining, zeros.length);
-                PlatformDependent.copyMemory(zeros, 0, addr, chunk);
+                YierdisUnsafeAccess.copyMemory(zeros, 0, addr, chunk);
                 addr += chunk;
                 remaining -= chunk;
             }
@@ -777,7 +742,7 @@ final class YierdisObject {
             return rawLen;
         }
         if (payload instanceof YierdisOffHeapBuf buf) {
-            YierdisBytesSource src = new NettyByteBufSource(cmd.frame());
+            YierdisBytesSource src = cmd.frame();
             buf.setBytes(rawLen, src, cmd.argOffset(argIndex), len);
             rawLen += len;
             return rawLen;
@@ -899,7 +864,7 @@ final class YierdisObject {
             int cap = nextCapacity(currentCap, required);
             YierdisUnsafeOffHeapString next = new YierdisUnsafeOffHeapString(unsafe, cap);
             if (rawLen > 0) {
-                PlatformDependent.copyMemory(buf.dataAddress(), next.dataAddress(), rawLen);
+                YierdisUnsafeAccess.copyMemory(buf.dataAddress(), next.dataAddress(), rawLen);
                 next.setLength(rawLen);
             }
             buf.close();
@@ -1179,14 +1144,10 @@ final class YierdisObject {
             throw new IllegalArgumentException("dstAddress must be != 0");
         }
 
-        io.netty.buffer.ByteBuf frame = cmd.frame();
+        YierdisBytesSource frame = cmd.frame();
         int srcIndex = cmd.argOffset(argIndex);
         if (frame.hasMemoryAddress()) {
-            PlatformDependent.copyMemory(frame.memoryAddress() + srcIndex, dstAddress, len);
-            return;
-        }
-        if (frame.hasArray()) {
-            PlatformDependent.copyMemory(frame.array(), frame.arrayOffset() + srcIndex, dstAddress, len);
+            YierdisUnsafeAccess.copyMemory(frame.memoryAddress() + srcIndex, dstAddress, len);
             return;
         }
 
@@ -1196,7 +1157,7 @@ final class YierdisObject {
         while (remaining > 0) {
             int chunk = Math.min(remaining, scratch.length);
             frame.getBytes(srcIndex + off, scratch, 0, chunk);
-            PlatformDependent.copyMemory(scratch, 0, dstAddress + off, chunk);
+            YierdisUnsafeAccess.copyMemory(scratch, 0, dstAddress + off, chunk);
             off += chunk;
             remaining -= chunk;
         }

@@ -1,8 +1,8 @@
 package yier.bubu.redis.db.offheap;
 
-import io.netty.util.internal.PlatformDependent;
 import yier.bubu.redis.db.YierdisBytesView;
 import yier.bubu.redis.db.YierdisKeyspace;
+import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 
 import java.util.Objects;
@@ -169,7 +169,7 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
             if (keyLen > 0) {
                 keyPtr = allocator.allocateAddress(keyLen);
                 try {
-                    PlatformDependent.copyMemory(key, 0, keyPtr, keyLen);
+                    YierdisUnsafeAccess.copyMemory(key, 0, keyPtr, keyLen);
                 } catch (RuntimeException e) {
                     allocator.freeAddress(keyPtr, keyLen);
                     throw e;
@@ -400,7 +400,7 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
             return new byte[0];
         }
         byte[] out = new byte[keyLen];
-        PlatformDependent.copyMemory(keyPtr, out, 0, keyLen);
+        YierdisUnsafeAccess.copyMemory(keyPtr, out, 0, keyLen);
         return out;
     }
 
@@ -667,7 +667,7 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
 
     private static boolean equalsKey(long storedPtr, byte[] key, int len) {
         for (int i = 0; i < len; i++) {
-            if (PlatformDependent.getByte(storedPtr + i) != key[i]) {
+            if (YierdisUnsafeAccess.getByte(storedPtr + i) != key[i]) {
                 return false;
             }
         }
@@ -676,7 +676,7 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
 
     private static boolean equalsKey(long storedPtr, YierdisBytesView key, int len) {
         for (int i = 0; i < len; i++) {
-            if (PlatformDependent.getByte(storedPtr + i) != key.byteAt(i)) {
+            if (YierdisUnsafeAccess.getByte(storedPtr + i) != key.byteAt(i)) {
                 return false;
             }
         }
@@ -730,47 +730,47 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
         long dst = address;
         while (remaining > 0) {
             int chunk = Math.min(remaining, zeros.length);
-            PlatformDependent.copyMemory(zeros, 0, dst, chunk);
+            YierdisUnsafeAccess.copyMemory(zeros, 0, dst, chunk);
             dst += chunk;
             remaining -= chunk;
         }
     }
 
     private static byte getByte(long base, int index) {
-        return PlatformDependent.getByte(base + index);
+        return YierdisUnsafeAccess.getByte(base + index);
     }
 
     private static void putByte(long base, int index, byte value) {
-        PlatformDependent.putByte(base + index, value);
+        YierdisUnsafeAccess.putByte(base + index, value);
     }
 
     private static int getInt(long base, int index) {
         long addr = base + (long) index * HASH_BYTES;
-        int b0 = PlatformDependent.getByte(addr) & 0xff;
-        int b1 = PlatformDependent.getByte(addr + 1) & 0xff;
-        int b2 = PlatformDependent.getByte(addr + 2) & 0xff;
-        int b3 = PlatformDependent.getByte(addr + 3) & 0xff;
+        int b0 = YierdisUnsafeAccess.getByte(addr) & 0xff;
+        int b1 = YierdisUnsafeAccess.getByte(addr + 1) & 0xff;
+        int b2 = YierdisUnsafeAccess.getByte(addr + 2) & 0xff;
+        int b3 = YierdisUnsafeAccess.getByte(addr + 3) & 0xff;
         return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
     }
 
     private static void putInt(long base, int index, int value) {
         long addr = base + (long) index * HASH_BYTES;
-        PlatformDependent.putByte(addr, (byte) value);
-        PlatformDependent.putByte(addr + 1, (byte) (value >>> 8));
-        PlatformDependent.putByte(addr + 2, (byte) (value >>> 16));
-        PlatformDependent.putByte(addr + 3, (byte) (value >>> 24));
+        YierdisUnsafeAccess.putByte(addr, (byte) value);
+        YierdisUnsafeAccess.putByte(addr + 1, (byte) (value >>> 8));
+        YierdisUnsafeAccess.putByte(addr + 2, (byte) (value >>> 16));
+        YierdisUnsafeAccess.putByte(addr + 3, (byte) (value >>> 24));
     }
 
     private static long getLong(long base, int index) {
         long addr = base + (long) index * KEY_PTR_BYTES;
-        long b0 = PlatformDependent.getByte(addr) & 0xffL;
-        long b1 = PlatformDependent.getByte(addr + 1) & 0xffL;
-        long b2 = PlatformDependent.getByte(addr + 2) & 0xffL;
-        long b3 = PlatformDependent.getByte(addr + 3) & 0xffL;
-        long b4 = PlatformDependent.getByte(addr + 4) & 0xffL;
-        long b5 = PlatformDependent.getByte(addr + 5) & 0xffL;
-        long b6 = PlatformDependent.getByte(addr + 6) & 0xffL;
-        long b7 = PlatformDependent.getByte(addr + 7) & 0xffL;
+        long b0 = YierdisUnsafeAccess.getByte(addr) & 0xffL;
+        long b1 = YierdisUnsafeAccess.getByte(addr + 1) & 0xffL;
+        long b2 = YierdisUnsafeAccess.getByte(addr + 2) & 0xffL;
+        long b3 = YierdisUnsafeAccess.getByte(addr + 3) & 0xffL;
+        long b4 = YierdisUnsafeAccess.getByte(addr + 4) & 0xffL;
+        long b5 = YierdisUnsafeAccess.getByte(addr + 5) & 0xffL;
+        long b6 = YierdisUnsafeAccess.getByte(addr + 6) & 0xffL;
+        long b7 = YierdisUnsafeAccess.getByte(addr + 7) & 0xffL;
         return b0
                 | (b1 << 8)
                 | (b2 << 16)
@@ -783,14 +783,14 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
 
     private static void putLong(long base, int index, long value) {
         long addr = base + (long) index * KEY_PTR_BYTES;
-        PlatformDependent.putByte(addr, (byte) value);
-        PlatformDependent.putByte(addr + 1, (byte) (value >>> 8));
-        PlatformDependent.putByte(addr + 2, (byte) (value >>> 16));
-        PlatformDependent.putByte(addr + 3, (byte) (value >>> 24));
-        PlatformDependent.putByte(addr + 4, (byte) (value >>> 32));
-        PlatformDependent.putByte(addr + 5, (byte) (value >>> 40));
-        PlatformDependent.putByte(addr + 6, (byte) (value >>> 48));
-        PlatformDependent.putByte(addr + 7, (byte) (value >>> 56));
+        YierdisUnsafeAccess.putByte(addr, (byte) value);
+        YierdisUnsafeAccess.putByte(addr + 1, (byte) (value >>> 8));
+        YierdisUnsafeAccess.putByte(addr + 2, (byte) (value >>> 16));
+        YierdisUnsafeAccess.putByte(addr + 3, (byte) (value >>> 24));
+        YierdisUnsafeAccess.putByte(addr + 4, (byte) (value >>> 32));
+        YierdisUnsafeAccess.putByte(addr + 5, (byte) (value >>> 40));
+        YierdisUnsafeAccess.putByte(addr + 6, (byte) (value >>> 48));
+        YierdisUnsafeAccess.putByte(addr + 7, (byte) (value >>> 56));
     }
 
     public static final class KeyHandle {

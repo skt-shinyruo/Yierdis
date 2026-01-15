@@ -1,9 +1,9 @@
 package yier.bubu.redis.db.offheap;
 
-import io.netty.util.internal.PlatformDependent;
 import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisDirectBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 
 /**
@@ -52,7 +52,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
 
         YierdisUnsafeOffHeapString out = new YierdisUnsafeOffHeapString(allocator, len);
         if (len > 0) {
-            PlatformDependent.copyMemory(src, off, out.dataAddress(), len);
+            YierdisUnsafeAccess.copyMemory(src, off, out.dataAddress(), len);
         }
         out.setLength(len);
         return out;
@@ -86,7 +86,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         }
         ensureCapacity(len);
         if (len > 0) {
-            PlatformDependent.copyMemory(src, off, dataAddress(), len);
+            YierdisUnsafeAccess.copyMemory(src, off, dataAddress(), len);
         }
         setLength(len);
     }
@@ -99,7 +99,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         int oldLen = length();
         int newLen = oldLen + suffix.length;
         ensureCapacity(newLen);
-        PlatformDependent.copyMemory(suffix, 0, dataAddress() + oldLen, suffix.length);
+        YierdisUnsafeAccess.copyMemory(suffix, 0, dataAddress() + oldLen, suffix.length);
         setLength(newLen);
         return newLen;
     }
@@ -159,7 +159,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         if (len == 0) {
             return;
         }
-        PlatformDependent.copyMemory(dataAddress() + index, dst, dstOff, len);
+        YierdisUnsafeAccess.copyMemory(dataAddress() + index, dst, dstOff, len);
     }
 
     public byte getByte(int index) {
@@ -168,7 +168,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         if (index < 0 || index >= l) {
             throw new IndexOutOfBoundsException();
         }
-        return PlatformDependent.getByte(dataAddress() + index);
+        return YierdisUnsafeAccess.getByte(dataAddress() + index);
     }
 
     public void setByte(int index, byte value) {
@@ -177,7 +177,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         if (index < 0 || index >= cap) {
             throw new IndexOutOfBoundsException();
         }
-        PlatformDependent.putByte(dataAddress() + index, value);
+        YierdisUnsafeAccess.putByte(dataAddress() + index, value);
     }
 
     public void setBytes(int index, byte[] src, int srcOff, int len) {
@@ -198,7 +198,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         if (len == 0) {
             return;
         }
-        PlatformDependent.copyMemory(src, srcOff, dataAddress() + index, len);
+        YierdisUnsafeAccess.copyMemory(src, srcOff, dataAddress() + index, len);
     }
 
     public long dataAddress() {
@@ -240,7 +240,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
             writeInt(newBase, copyLen);
             writeInt(newBase + Integer.BYTES, newCapacity);
             if (copyLen > 0) {
-                PlatformDependent.copyMemory(oldBase + HEADER_BYTES, newBase + HEADER_BYTES, copyLen);
+                YierdisUnsafeAccess.copyMemory(oldBase + HEADER_BYTES, newBase + HEADER_BYTES, copyLen);
             }
         } catch (RuntimeException e) {
             allocator.freeAddress(newBase, Math.max(8, totalBytesForCapacity(newCapacity)));
@@ -281,18 +281,18 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
     }
 
     private static int readInt(long addr) {
-        int b0 = PlatformDependent.getByte(addr) & 0xff;
-        int b1 = PlatformDependent.getByte(addr + 1) & 0xff;
-        int b2 = PlatformDependent.getByte(addr + 2) & 0xff;
-        int b3 = PlatformDependent.getByte(addr + 3) & 0xff;
+        int b0 = YierdisUnsafeAccess.getByte(addr) & 0xff;
+        int b1 = YierdisUnsafeAccess.getByte(addr + 1) & 0xff;
+        int b2 = YierdisUnsafeAccess.getByte(addr + 2) & 0xff;
+        int b3 = YierdisUnsafeAccess.getByte(addr + 3) & 0xff;
         return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
     }
 
     private static void writeInt(long addr, int value) {
-        PlatformDependent.putByte(addr, (byte) value);
-        PlatformDependent.putByte(addr + 1, (byte) (value >>> 8));
-        PlatformDependent.putByte(addr + 2, (byte) (value >>> 16));
-        PlatformDependent.putByte(addr + 3, (byte) (value >>> 24));
+        YierdisUnsafeAccess.putByte(addr, (byte) value);
+        YierdisUnsafeAccess.putByte(addr + 1, (byte) (value >>> 8));
+        YierdisUnsafeAccess.putByte(addr + 2, (byte) (value >>> 16));
+        YierdisUnsafeAccess.putByte(addr + 3, (byte) (value >>> 24));
     }
 
     private static final class YierdisUnsafeOffHeapSlice implements YierdisOffHeapSlice {
@@ -321,7 +321,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
             if (index < 0 || index >= len) {
                 throw new IndexOutOfBoundsException();
             }
-            return PlatformDependent.getByte(owner.dataAddress() + offset + index);
+            return YierdisUnsafeAccess.getByte(owner.dataAddress() + offset + index);
         }
 
         @Override
@@ -342,7 +342,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
             if (readLen == 0) {
                 return;
             }
-            PlatformDependent.copyMemory(owner.dataAddress() + offset + index, dst, dstOff, readLen);
+            YierdisUnsafeAccess.copyMemory(owner.dataAddress() + offset + index, dst, dstOff, readLen);
         }
 
         @Override
@@ -360,7 +360,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
                 int before = directSink.writerIndex();
                 directSink.ensureWritable(len);
                 long dstAddr = directSink.memoryAddress() + before;
-                PlatformDependent.copyMemory(srcAddr, dstAddr, len);
+                YierdisUnsafeAccess.copyMemory(srcAddr, dstAddr, len);
                 directSink.writerIndex(before + len);
                 return;
             }
@@ -370,7 +370,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
             long addr = srcAddr;
             while (remaining > 0) {
                 int chunk = Math.min(remaining, scratch.length);
-                PlatformDependent.copyMemory(addr, scratch, 0, chunk);
+                YierdisUnsafeAccess.copyMemory(addr, scratch, 0, chunk);
                 out.writeBytes(scratch, 0, chunk);
                 addr += chunk;
                 remaining -= chunk;

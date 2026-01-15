@@ -22,7 +22,8 @@ Yierdis 是一个“教学/演示导向”的简化版 Redis 兼容服务端：�
 | 模块 | 责任 | 状态 | 文档 |
 |------|------|------|------|
 | server | Netty 启动/管线/Handler | ✅Stable | [modules/server.md](modules/server.md) |
-| protocol | RESP2/RESP3（最小子集）编解码与对象模型 | ✅Stable | [modules/protocol.md](modules/protocol.md) |
+| protocol | RESP 对象模型 + `RespWriter`（Netty-free SSOT） | ✅Stable | [modules/protocol.md](modules/protocol.md) |
+| protocol-netty | Netty codec/adapters（decoder/encoder/frame/session） | ✅Stable | [modules/protocol-netty.md](modules/protocol-netty.md) |
 | command | 命令路由与参数解析 | ✅Stable | [modules/command.md](modules/command.md) |
 | db | 内存存储、编码、TTL、淘汰 | ✅Stable | [modules/db.md](modules/db.md) |
 | offheap | 堆外内存抽象与后端 | 🚧In Development | [modules/offheap.md](modules/offheap.md) |

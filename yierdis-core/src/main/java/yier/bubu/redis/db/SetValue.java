@@ -1,8 +1,8 @@
 package yier.bubu.redis.db;
 
-import io.netty.util.internal.PlatformDependent;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapDictLong;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapRawSlice;
+import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 
 import java.nio.charset.StandardCharsets;
@@ -138,7 +138,7 @@ final class SetValue implements YierdisValue {
                 List<byte[]> out = new ArrayList<>(hashsetOffHeap.size());
                 hashsetOffHeap.forEach((keyPtr, keyLen, value) -> {
                     byte[] k = new byte[keyLen];
-                    PlatformDependent.copyMemory(keyPtr, k, 0, keyLen);
+                    YierdisUnsafeAccess.copyMemory(keyPtr, k, 0, keyLen);
                     out.add(k);
                 });
                 return out;
@@ -572,7 +572,7 @@ final class SetValue implements YierdisValue {
 
         long nextAddr = offHeapAllocator.allocateAddress(Math.max(8, next * LONG_BYTES));
         if (intsetAddr != 0 && intsetSize > 0) {
-            PlatformDependent.copyMemory(intsetAddr, nextAddr, (long) intsetSize * LONG_BYTES);
+            YierdisUnsafeAccess.copyMemory(intsetAddr, nextAddr, (long) intsetSize * LONG_BYTES);
         }
         if (intsetAddr != 0 && intsetCapOffHeap > 0) {
             offHeapAllocator.freeAddress(intsetAddr, Math.max(8, intsetCapOffHeap * LONG_BYTES));
@@ -584,14 +584,14 @@ final class SetValue implements YierdisValue {
 
     private static long getLong(long base, int index) {
         long addr = base + (long) index * LONG_BYTES;
-        long b0 = PlatformDependent.getByte(addr) & 0xffL;
-        long b1 = PlatformDependent.getByte(addr + 1) & 0xffL;
-        long b2 = PlatformDependent.getByte(addr + 2) & 0xffL;
-        long b3 = PlatformDependent.getByte(addr + 3) & 0xffL;
-        long b4 = PlatformDependent.getByte(addr + 4) & 0xffL;
-        long b5 = PlatformDependent.getByte(addr + 5) & 0xffL;
-        long b6 = PlatformDependent.getByte(addr + 6) & 0xffL;
-        long b7 = PlatformDependent.getByte(addr + 7) & 0xffL;
+        long b0 = YierdisUnsafeAccess.getByte(addr) & 0xffL;
+        long b1 = YierdisUnsafeAccess.getByte(addr + 1) & 0xffL;
+        long b2 = YierdisUnsafeAccess.getByte(addr + 2) & 0xffL;
+        long b3 = YierdisUnsafeAccess.getByte(addr + 3) & 0xffL;
+        long b4 = YierdisUnsafeAccess.getByte(addr + 4) & 0xffL;
+        long b5 = YierdisUnsafeAccess.getByte(addr + 5) & 0xffL;
+        long b6 = YierdisUnsafeAccess.getByte(addr + 6) & 0xffL;
+        long b7 = YierdisUnsafeAccess.getByte(addr + 7) & 0xffL;
         return b0
                 | (b1 << 8)
                 | (b2 << 16)
@@ -604,14 +604,14 @@ final class SetValue implements YierdisValue {
 
     private static void putLong(long base, int index, long value) {
         long addr = base + (long) index * LONG_BYTES;
-        PlatformDependent.putByte(addr, (byte) value);
-        PlatformDependent.putByte(addr + 1, (byte) (value >>> 8));
-        PlatformDependent.putByte(addr + 2, (byte) (value >>> 16));
-        PlatformDependent.putByte(addr + 3, (byte) (value >>> 24));
-        PlatformDependent.putByte(addr + 4, (byte) (value >>> 32));
-        PlatformDependent.putByte(addr + 5, (byte) (value >>> 40));
-        PlatformDependent.putByte(addr + 6, (byte) (value >>> 48));
-        PlatformDependent.putByte(addr + 7, (byte) (value >>> 56));
+        YierdisUnsafeAccess.putByte(addr, (byte) value);
+        YierdisUnsafeAccess.putByte(addr + 1, (byte) (value >>> 8));
+        YierdisUnsafeAccess.putByte(addr + 2, (byte) (value >>> 16));
+        YierdisUnsafeAccess.putByte(addr + 3, (byte) (value >>> 24));
+        YierdisUnsafeAccess.putByte(addr + 4, (byte) (value >>> 32));
+        YierdisUnsafeAccess.putByte(addr + 5, (byte) (value >>> 40));
+        YierdisUnsafeAccess.putByte(addr + 6, (byte) (value >>> 48));
+        YierdisUnsafeAccess.putByte(addr + 7, (byte) (value >>> 56));
     }
 
     @Override

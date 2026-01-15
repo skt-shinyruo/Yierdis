@@ -1,8 +1,5 @@
 package yier.bubu.redis.protocol;
 
-import io.netty.channel.Channel;
-import io.netty.util.AttributeKey;
-
 /**
  * Connection-level RESP protocol version.
  * <p>
@@ -11,9 +8,6 @@ import io.netty.util.AttributeKey;
 public enum RespProtocol {
     RESP2(2),
     RESP3(3);
-
-    public static final AttributeKey<RespProtocol> CHANNEL_PROTOCOL =
-            AttributeKey.valueOf("yierdis.resp.protocol");
 
     private final int proto;
 
@@ -24,20 +18,4 @@ public enum RespProtocol {
     public int proto() {
         return proto;
     }
-
-    public static RespProtocol get(Channel channel) {
-        if (channel == null) {
-            return RESP2;
-        }
-        RespProtocol p = channel.attr(CHANNEL_PROTOCOL).get();
-        return p == null ? RESP2 : p;
-    }
-
-    public static void set(Channel channel, RespProtocol protocol) {
-        if (channel == null) {
-            return;
-        }
-        channel.attr(CHANNEL_PROTOCOL).set(protocol == null ? RESP2 : protocol);
-    }
 }
-
