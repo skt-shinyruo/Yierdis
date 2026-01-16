@@ -12,6 +12,14 @@
 
 ## Specifications
 
+### Requirement: bytes 抽象（跨模块复用，不等同于“绑定 off-heap”）
+**Module:** offheap-api
+`yierdis-offheap-api` 除了 allocator/capability API 之外，还承载跨模块复用的通用 bytes 抽象：
+- `YierdisBytesSource`：统一的只读 bytes view（可由 heap byte[]、Netty ByteBuf、off-heap slice 等实现）
+- `YierdisBytesSink`：统一的写入目标（供 `RespWriter`、off-heap buf 写路径等复用）
+
+这层抽象用于减少重复接口与边界漂移，且保持 Netty-free；因此 `yierdis-protocol` / `yierdis-core` 依赖 `yierdis-offheap-api` 并不意味着协议/核心必须启用 off-heap 后端。
+
 ### Requirement: 可选启用的堆外存储
 **Module:** offheap
 当用户启用 `--offheapBackend` 时，部分数据结构可迁移到堆外，且命令行为保持一致。
@@ -41,6 +49,7 @@
 - 优先通过 `ServiceLoader` 发现 `YierdisOffHeapAllocatorProvider`（netty/unsafe/foreign 各自注册）
 - 在 server fat-jar（shade）场景下，使用 `ServicesResourceTransformer` 合并 `META-INF/services`，确保多后端可同时发现
 - 若指定后端不可用，启动期直接抛出明确错误（提示缺失依赖/需要的 profile），避免运行中才暴露
+- 建议在 server 启动时输出“可发现的 providers / 最终选择结果”，提升可运维性与排障效率
 
 ### Requirement: RESP frame slice 直接写入 off-heap（减少双拷贝）
 **Module:** offheap
@@ -68,3 +77,4 @@
 - 2026-01-16：capabilities 加固：引入 `YierdisOffHeapAddressAllocator/YierdisOffHeapBlock`，core 通过 capability 选择 keyspace/expires 的 off-heap 路径，避免对具体后端的 `instanceof` 耦合。
 - 2026-01-16：默认安全：keys/expires 的 off-heap 使用改为显式开关（`--offheapKeysEnabled`，仅允许 unsafe 后端）。
 - 2026-01-16：后端加载升级：引入 `YierdisOffHeapAllocatorProvider`（ServiceLoader）并在 server shade 场景合并 services 资源，提升可运维性与错误可读性。
+- 2026-01-16：可观测性增强：增加 providers 发现摘要（ServiceLoader）与 server 启动诊断输出；缺失后端错误信息附带 discovered providers（摘要在失败路径懒加载，避免成功路径额外 ServiceLoader 扫描）。

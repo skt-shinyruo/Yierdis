@@ -3,6 +3,7 @@ package yier.bubu.redis;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocators;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
@@ -36,8 +37,20 @@ public final class YierdisServer {
             return;
         }
 
-        final YierdisOffHeapAllocator offHeapAllocator =
-                YierdisOffHeapAllocators.create(config.offheapBackend, config.offheapMaxBytes);
+        final YierdisOffHeapBackend backend = YierdisOffHeapBackend.fromString(config.offheapBackend);
+        log.info("off-heap backend: {} (maxBytes={}, keysOffHeapEnabled={})",
+                backend.name().toLowerCase(java.util.Locale.ROOT),
+                config.offheapMaxBytes,
+                config.offheapKeysEnabled);
+        log.info("off-heap providers: {}", YierdisOffHeapAllocators.availableProvidersSummary());
+
+        final YierdisOffHeapAllocator offHeapAllocator;
+        try {
+            offHeapAllocator = YierdisOffHeapAllocators.create(backend, config.offheapMaxBytes);
+        } catch (RuntimeException e) {
+            log.error("Failed to initialize off-heap backend '{}': {}", backend, e.getMessage());
+            return;
+        }
         final YierdisDb db = new YierdisDb(
                 offHeapAllocator,
                 config.offheapKeysEnabled,

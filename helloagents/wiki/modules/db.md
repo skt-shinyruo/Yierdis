@@ -48,6 +48,8 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 - `YierdisDb.memoryStats()`：输出 heap/off-heap/结构开销等分解估算
 - `MEMORY STATS`：命令侧暴露预算分解（用于排障/教学；明确为估算）
 
+> 注意：以上统计口径属于“可解释的估算/预算”，并不等同于 JVM `Runtime.totalMemory()` 或 GC 视角的真实 heap 使用量；其目标是让 maxmemory/淘汰/拒写行为在不同后端下保持一致且可推导。
+
 #### Change: 淘汰与过期清理的时间预算可配置
 - `enforceMaxmemory()`：新增 eviction 时间预算（避免高压下长时间同步淘汰导致 tail latency 放大）
 - `cleanupExpired()`：时间预算从固定值改为可配置（避免不同部署/负载下出现过期清理不稳定）

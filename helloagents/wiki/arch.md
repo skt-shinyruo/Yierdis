@@ -66,6 +66,8 @@ flowchart LR
   OffheapForeign --> OffheapApi
 ```
 
+> 说明：图中 `yierdis-protocol -> yierdis-offheap-api` 的依赖，主要用于复用 **通用 bytes 抽象**（`YierdisBytesSource/YierdisBytesSink` 等），以支撑 `RespFrame`/`RespWriter` 的 zero-copy/低分配路径；这不等同于“协议层依赖某个具体 off-heap 后端”，后端选择仍由 server bootstrap 层负责。
+
 ## 核心调用链（请求/响应）
 
 ```mermaid
@@ -103,6 +105,7 @@ sequenceDiagram
 | ADR-20260116-01 | 单入口执行 + DB fail-fast 线程语义 | 2026-01-16 | ✅ Accepted | yierdis-server,yierdis-core | server 侧仅保留走执行器的命令路径；DB 未绑定/跨线程访问一律 fail-fast，降低误用与竞态风险 |
 | ADR-20260116-02 | 命令层拆分（CommandRegistry + Domain Commands） | 2026-01-16 | ✅ Accepted | yierdis-core | 将命令实现按 domain 拆分为多个 `*Commands`，集中注册与错误映射，降低新增命令的修改半径 |
 | ADR-20260116-03 | frame compaction 与连接级公平调度 | 2026-01-16 | ✅ Accepted | yierdis-server,yierdis-protocol-netty | 在 retained-bytes 预算基础上，支持可配置 compaction 与 per-channel round-robin，降低驻留与 starvation 风险 |
+| ADR-20260116-04 | 架构护栏与可观测性加固优先（bytes 模块后续评估） | 2026-01-16 | ✅ Accepted | yierdis-offheap-api,yierdis-server,yierdis-core,yierdis-protocol-netty,helloagents/wiki | 先通过文档/护栏/启动诊断降低退化风险；抽取 bytes 基础模块作为可选演进 |
 
 ## 架构风险评审（DB/Off-heap 重点）
 
@@ -116,6 +119,7 @@ sequenceDiagram
 ### 2) 可维护性（依赖/演进成本）
 
 - **避免 core 引入 Netty internal：**`io.netty.util.internal.PlatformDependent` 属于 Netty internal API，版本升级风险高、语义不稳定；目前 core 通过 `yierdis-offheap-api` 的 capability（`YierdisOffHeapAddressAllocator`）表达 raw memory 能力，具体实现留在后端模块中，便于替换与审计。
+- **bytes 抽象与 off-heap 能力的语义：**`yierdis-offheap-api` 同时承载（1）跨模块复用的 `YierdisBytesSource/YierdisBytesSink` 抽象（用于协议/写出/适配），以及（2）off-heap allocator/capability API（用于堆外后端）。因此 `yierdis-protocol` 依赖 `yierdis-offheap-api` 不代表协议层“绑定 off-heap”，只是复用 bytes 视图接口以避免重复定义与边界漂移。若未来团队认为模块命名造成长期误解，可评估抽取独立的 `bytes` 基础模块（属于后续演进，不在当前 SSOT 约束的必需范围内）。
 - **连接级协议状态：**RESP2/RESP3 协商属于连接级状态，必须与连接生命周期绑定；建议将状态存放在 `RespSession`（如 Netty 侧用 `Channel.attr`），并禁止通过静态变量/全局缓存共享，避免并发连接间状态串扰。
 
 ### 3) 可插拔性（后端替换/灰度能力）
