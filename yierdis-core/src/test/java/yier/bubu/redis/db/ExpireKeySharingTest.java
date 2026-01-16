@@ -12,6 +12,7 @@ public class ExpireKeySharingTest {
     public void expireStoresTtlUnderStoreCanonicalKey() throws Exception {
         YierdisDb db = new YierdisDb();
         try {
+            db.bindToCurrentThread();
             byte[] key1 = b("k");
             byte[] key2 = b("k");
             Assert.assertNotSame(key1, key2);
@@ -36,6 +37,7 @@ public class ExpireKeySharingTest {
     public void expireMigratesPreexistingNonCanonicalExpiresKey() throws Exception {
         YierdisDb db = new YierdisDb();
         try {
+            db.bindToCurrentThread();
             byte[] key1 = b("k");
             byte[] key2 = b("k");
             Assert.assertNotSame(key1, key2);

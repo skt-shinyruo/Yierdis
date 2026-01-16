@@ -3,6 +3,7 @@ package yier.bubu.redis;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
@@ -17,136 +18,152 @@ import java.util.Properties;
 public class Resp3InlineCompatibilityTest {
     @Test
     public void inlinePingWorksThroughFastPipeline() {
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor));
+        try (TestEnv env = new TestEnv()) {
+            EmbeddedChannel ch = env.ch;
 
-        ch.writeInbound(Unpooled.wrappedBuffer(ascii("PING\r\n")));
-        Assert.assertArrayEquals(ascii("+PONG\r\n"), readOutbound(ch));
-
-        ch.finishAndReleaseAll();
+            ch.writeInbound(Unpooled.wrappedBuffer(ascii("PING\r\n")));
+            Assert.assertArrayEquals(ascii("+PONG\r\n"), readOutbound(ch));
+        }
     }
 
     @Test
     public void inlineEchoWorksThroughFastPipeline() {
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor));
+        try (TestEnv env = new TestEnv()) {
+            EmbeddedChannel ch = env.ch;
 
-        ch.writeInbound(Unpooled.wrappedBuffer(ascii("ECHO hello\r\n")));
-        Assert.assertArrayEquals(ascii("$5\r\nhello\r\n"), readOutbound(ch));
-
-        ch.finishAndReleaseAll();
+            ch.writeInbound(Unpooled.wrappedBuffer(ascii("ECHO hello\r\n")));
+            Assert.assertArrayEquals(ascii("$5\r\nhello\r\n"), readOutbound(ch));
+        }
     }
 
     @Test
     public void inlineEchoSupportsDoubleQuotesWithSpaces() {
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor));
+        try (TestEnv env = new TestEnv()) {
+            EmbeddedChannel ch = env.ch;
 
-        ch.writeInbound(Unpooled.wrappedBuffer(ascii("ECHO \"hello world\"\r\n")));
-        Assert.assertArrayEquals(bulk(ascii("hello world")), readOutbound(ch));
-
-        ch.finishAndReleaseAll();
+            ch.writeInbound(Unpooled.wrappedBuffer(ascii("ECHO \"hello world\"\r\n")));
+            Assert.assertArrayEquals(bulk(ascii("hello world")), readOutbound(ch));
+        }
     }
 
     @Test
     public void inlineEchoSupportsSingleQuotesWithSpaces() {
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor));
+        try (TestEnv env = new TestEnv()) {
+            EmbeddedChannel ch = env.ch;
 
-        ch.writeInbound(Unpooled.wrappedBuffer(ascii("ECHO 'hello world'\r\n")));
-        Assert.assertArrayEquals(bulk(ascii("hello world")), readOutbound(ch));
-
-        ch.finishAndReleaseAll();
+            ch.writeInbound(Unpooled.wrappedBuffer(ascii("ECHO 'hello world'\r\n")));
+            Assert.assertArrayEquals(bulk(ascii("hello world")), readOutbound(ch));
+        }
     }
 
     @Test
     public void inlineEchoSupportsEscapesAndHexInDoubleQuotes() {
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor));
+        try (TestEnv env = new TestEnv()) {
+            EmbeddedChannel ch = env.ch;
 
-        ch.writeInbound(Unpooled.wrappedBuffer(ascii("ECHO \"a\\n\\x00b\"\r\n")));
-        Assert.assertArrayEquals(bulk(new byte[]{'a', '\n', 0, 'b'}), readOutbound(ch));
-
-        ch.finishAndReleaseAll();
+            ch.writeInbound(Unpooled.wrappedBuffer(ascii("ECHO \"a\\n\\x00b\"\r\n")));
+            Assert.assertArrayEquals(bulk(new byte[]{'a', '\n', 0, 'b'}), readOutbound(ch));
+        }
     }
 
     @Test
     public void inlineCommandRejectsUnbalancedQuotes() {
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor));
+        try (TestEnv env = new TestEnv()) {
+            EmbeddedChannel ch = env.ch;
 
-        try {
             ch.writeInbound(Unpooled.wrappedBuffer(ascii("ECHO \"unterminated\r\n")));
             Assert.assertArrayEquals(
                     ascii("-ERR Protocol error: unbalanced quotes in inline command\r\n"),
                     readOutbound(ch)
             );
-        } finally {
-            ch.finishAndReleaseAll();
         }
     }
 
     @Test
     public void inlineCommandRejectsGarbageAfterClosingQuote() {
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor));
+        try (TestEnv env = new TestEnv()) {
+            EmbeddedChannel ch = env.ch;
 
-        try {
             ch.writeInbound(Unpooled.wrappedBuffer(ascii("ECHO \"foo\"bar\r\n")));
             Assert.assertArrayEquals(
                     ascii("-ERR Protocol error: invalid inline command\r\n"),
                     readOutbound(ch)
             );
-        } finally {
-            ch.finishAndReleaseAll();
         }
     }
 
     @Test
     public void hello3SwitchesToResp3AndMissingBulkStringIsNull() {
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor));
+        try (TestEnv env = new TestEnv()) {
+            EmbeddedChannel ch = env.ch;
 
-        // HELLO 3 is sent as normal command (array of bulk strings); replies must be RESP3 map.
-        ch.writeInbound(Unpooled.wrappedBuffer(concat(
-                ascii("*2\r\n"),
-                bulk(ascii("HELLO")),
-                bulk(ascii("3"))
-        )));
+            // HELLO 3 is sent as normal command (array of bulk strings); replies must be RESP3 map.
+            ch.writeInbound(Unpooled.wrappedBuffer(concat(
+                    ascii("*2\r\n"),
+                    bulk(ascii("HELLO")),
+                    bulk(ascii("3"))
+            )));
 
-        byte[] helloReply = readOutbound(ch);
-        byte[] expectedHello = concat(
-                ascii("%5\r\n"),
-                bulk(ascii("server")),
-                bulk(ascii("yierdis")),
-                bulk(ascii("version")),
-                bulk(ascii(loadVersion())),
-                bulk(ascii("proto")),
-                bulk(ascii("3")),
-                bulk(ascii("mode")),
-                bulk(ascii("standalone")),
-                bulk(ascii("role")),
-                bulk(ascii("master"))
-        );
-        Assert.assertArrayEquals(expectedHello, helloReply);
+            byte[] helloReply = readOutbound(ch);
+            byte[] expectedHello = concat(
+                    ascii("%5\r\n"),
+                    bulk(ascii("server")),
+                    bulk(ascii("yierdis")),
+                    bulk(ascii("version")),
+                    bulk(ascii(loadVersion())),
+                    bulk(ascii("proto")),
+                    bulk(ascii("3")),
+                    bulk(ascii("mode")),
+                    bulk(ascii("standalone")),
+                    bulk(ascii("role")),
+                    bulk(ascii("master"))
+            );
+            Assert.assertArrayEquals(expectedHello, helloReply);
 
-        // After switching to RESP3, null bulk strings should be encoded as RESP3 null (_).
-        ch.writeInbound(Unpooled.wrappedBuffer(concat(
-                ascii("*2\r\n"),
-                bulk(ascii("GET")),
-                bulk(ascii("missing"))
-        )));
-        Assert.assertArrayEquals(ascii("_\r\n"), readOutbound(ch));
+            // After switching to RESP3, null bulk strings should be encoded as RESP3 null (_).
+            ch.writeInbound(Unpooled.wrappedBuffer(concat(
+                    ascii("*2\r\n"),
+                    bulk(ascii("GET")),
+                    bulk(ascii("missing"))
+            )));
+            Assert.assertArrayEquals(ascii("_\r\n"), readOutbound(ch));
+        }
+    }
 
-        ch.finishAndReleaseAll();
+    private static final class TestEnv implements AutoCloseable {
+        private final YierdisDb db;
+        private final NettyCommandExecutor executor;
+        private final EmbeddedChannel ch;
+
+        private TestEnv() {
+            this.db = new YierdisDb();
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            this.executor = new NettyCommandExecutor(
+                    db,
+                    processor,
+                    ImmediateEventExecutor.INSTANCE,
+                    1024,
+                    0,
+                    256,
+                    128,
+                    0,
+                    0,
+                    1024,
+                    10
+            );
+            executor.start();
+            this.ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
+        }
+
+        @Override
+        public void close() {
+            try {
+                executor.close();
+            } finally {
+                db.shutdown();
+                ch.finishAndReleaseAll();
+            }
+        }
     }
 
     private static String loadVersion() {

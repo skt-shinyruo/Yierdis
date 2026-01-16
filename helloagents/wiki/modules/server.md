@@ -33,6 +33,7 @@
 - 目标：保持 Redis 风格“全局单线程命令语义”，同时减少 per-command `flush` 并引入连接级背压闭环
 - 执行：I/O 线程负责解码与投递；命令在执行器线程串行执行；同一轮 drain 内对同一连接 `write` 聚合并在末尾 `flush`
 - 背压：采用“双约束”：per-connection pending **条数** + pending **bytes** 两套水位线（带滞回阈值 high/low），避免“少量大包积压”导致内存驻留不可解释
+- 公平性：支持连接级公平调度（per-channel queue + round-robin），避免热点连接长期挤占全局 backlog（可配置）
 
 #### Scenario: 高压 pipeline 下的 flush 合并与背压恢复
 - 当 backlog ≥ high watermark：服务端对该连接 `autoRead=false`，并可能返回 `-ERR busy`
@@ -41,6 +42,10 @@
 #### Configuration: 相关启动参数
 - `--executorQueueCapacity <n>`：全局执行队列容量（有界）
 - `--executorQueueMaxBytes <bytes>`：全局执行队列 bytes 上限（0 表示禁用；用于防止大 bulk 积压）
+- `--executorSchedulingPolicy global|fair`：执行队列调度策略（全局 FIFO / 连接级公平）
+- `--frameCompactionThresholdBytes <bytes>`：当单个 frame 驻留体积显著大于其逻辑长度时，允许 compact（0 禁用）
+- `--frameCompactionRatio <n>`：compaction 触发比率（retainedBytes / length，默认 2.0）
+- `--frameCompactionMaxCopyBytes <bytes>`：compaction 单次最大拷贝上限（避免对大 payload 复制）
 - `--backpressureHigh <n>` / `--backpressureLow <n>`：连接级背压滞回阈值
 - `--backpressureBytesHigh <bytes>` / `--backpressureBytesLow <bytes>`：连接级 bytes 背压滞回阈值（0 表示禁用）
 - `--executorMaxDrain <n>` / `--executorDrainMillis <ms>`：单次 drain 批量/时间预算（避免维护任务饥饿）
@@ -77,4 +82,5 @@
 - 2026-01-08：执行模型升级为 Netty 体系内单线程 `NettyCommandExecutor`（`DefaultEventExecutorGroup(1)`）：flush 合并 + 连接级 `autoRead` 背压闭环。
 - 2026-01-08：inline command 解析增强：支持单/双引号、反斜杠转义与 `\\xHH` 十六进制转义。
 - 2026-01-15：依赖切换：RESP codec 下沉到 `yierdis-protocol-netty`；`RespWriter` 写出路径改为 bytes sink + session，降低协议层与 Netty 的耦合。
-- 2026-01-16：执行器加固：引入 backlog bytes 预算与滞回反压（与条数阈值并存），并补齐可等待的优雅关停（drain executor → executor 线程内 shutdown DB）。
+- 2026-01-16：执行器加固：引入 backlog bytes 预算（`RespFrame.retainedBytes()` 口径）与滞回反压（与条数阈值并存），并提供可配置 frame compaction 与连接级公平调度。
+- 2026-01-16：执行模型硬化：DB owner-thread 语义 fail-fast；server 侧仅保留“走执行器”的 handler 入口，避免绕过 executor 直接访问 DB。

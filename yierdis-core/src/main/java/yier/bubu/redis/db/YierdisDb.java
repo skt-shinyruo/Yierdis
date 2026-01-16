@@ -41,15 +41,14 @@ public final class YierdisDb {
     private long usedBytes;
     private long lruClock;
 
-    private Thread ownerThread;
-    private boolean closed;
+    private final DbThreadGuard threadGuard = new DbThreadGuard();
 
     public YierdisDb() {
-        this(null, 0, "noeviction", 5, 5, 5);
+        this(null, false, 0, "noeviction", 5, 5, 5);
     }
 
     public YierdisDb(YierdisOffHeapAllocator offHeapAllocator) {
-        this(offHeapAllocator, 0, "noeviction", 5, 5, 5);
+        this(offHeapAllocator, false, 0, "noeviction", 5, 5, 5);
     }
 
     public YierdisDb(
@@ -60,8 +59,23 @@ public final class YierdisDb {
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
+        this(offHeapAllocator, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+    }
+
+    public YierdisDb(
+            YierdisOffHeapAllocator offHeapAllocator,
+            boolean offHeapKeysEnabled,
+            long maxmemoryBytes,
+            String maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis
+    ) {
         this.offHeapAllocator = offHeapAllocator;
-        if (offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator) {
+        if (offHeapKeysEnabled && !(offHeapAllocator instanceof YierdisOffHeapAddressAllocator)) {
+            throw new IllegalArgumentException("offHeapKeysEnabled requires an address allocator (unsafe off-heap backend)");
+        }
+        if (offHeapKeysEnabled && offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator) {
             this.store = new YierdisUnsafeOffHeapKeyspace<>(addressAllocator);
             this.expires = new YierdisUnsafeOffHeapExpireIndex(addressAllocator);
             this.keysStoredOffHeap = true;
@@ -351,23 +365,18 @@ public final class YierdisDb {
     }
 
     public void bindToCurrentThread() {
-        if (ownerThread == null) {
-            ownerThread = Thread.currentThread();
-        }
+        threadGuard.bindToCurrentThread();
     }
 
     private void checkThread() {
-        Thread owner = ownerThread;
-        if (owner != null && owner != Thread.currentThread()) {
-            throw new IllegalStateException("YierdisDb accessed from non-owner thread");
-        }
+        threadGuard.checkThread();
     }
 
     public void shutdown() {
-        if (closed) {
+        threadGuard.checkThreadForShutdown();
+        if (!threadGuard.tryMarkClosed()) {
             return;
         }
-        closed = true;
         store.forEach((k, e) -> e.releasePayloadIfAny());
         store.clear();
         expires.clear();
@@ -393,6 +402,18 @@ public final class YierdisDb {
     public long estimatedUsedBytes() {
         checkThread();
         return usedBytesForMaxmemory();
+    }
+
+    public YierdisMemoryStats memoryStats() {
+        checkThread();
+        return DbMemoryAccounting.snapshot(
+                maxmemoryBytes,
+                usedBytes,
+                offHeapAllocator,
+                store,
+                expires,
+                keysStoredOffHeap
+        );
     }
 
     private long estimateEntryBytes(byte[] keyBytes, YierdisObject e) {

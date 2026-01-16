@@ -1,27 +1,25 @@
 package yier.bubu.redis.client;
 
 import io.netty.bootstrap.ServerBootstrap;
-import io.netty.buffer.ByteBuf;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.channel.Channel;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.util.concurrent.DefaultEventExecutorGroup;
+import io.netty.util.concurrent.EventExecutorGroup;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.NettyCommandExecutor;
+import yier.bubu.redis.YierdisFastCommandHandler;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.protocol.RespError;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
-import yier.bubu.redis.protocol.RespWriter;
-import yier.bubu.redis.protocol.netty.NettyRespSession;
 import yier.bubu.redis.protocol.netty.RespCommandDecoder;
 
 import java.net.InetSocketAddress;
@@ -89,12 +87,23 @@ public class YierdisClientTest {
     private static final class TestServer implements AutoCloseable {
         private final EventLoopGroup bossGroup;
         private final EventLoopGroup workerGroup;
+        private final EventExecutorGroup commandGroup;
+        private final NettyCommandExecutor executor;
         private final Channel serverChannel;
         private final YierdisDb db;
 
-        private TestServer(EventLoopGroup bossGroup, EventLoopGroup workerGroup, Channel serverChannel, YierdisDb db) {
+        private TestServer(
+                EventLoopGroup bossGroup,
+                EventLoopGroup workerGroup,
+                EventExecutorGroup commandGroup,
+                NettyCommandExecutor executor,
+                Channel serverChannel,
+                YierdisDb db
+        ) {
             this.bossGroup = bossGroup;
             this.workerGroup = workerGroup;
+            this.commandGroup = commandGroup;
+            this.executor = executor;
             this.serverChannel = serverChannel;
             this.db = db;
         }
@@ -102,6 +111,22 @@ public class YierdisClientTest {
         static TestServer start() throws InterruptedException {
             YierdisDb db = new YierdisDb();
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+
+            EventExecutorGroup commandGroup = new DefaultEventExecutorGroup(1);
+            NettyCommandExecutor executor = new NettyCommandExecutor(
+                    db,
+                    processor,
+                    commandGroup.next(),
+                    1024,
+                    0,
+                    256,
+                    128,
+                    0,
+                    0,
+                    1024,
+                    10
+            );
+            executor.start();
 
             EventLoopGroup bossGroup = new NioEventLoopGroup(1);
             EventLoopGroup workerGroup = new NioEventLoopGroup(1);
@@ -111,15 +136,15 @@ public class YierdisClientTest {
                     .childOption(ChannelOption.TCP_NODELAY, true)
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
-                    protected void initChannel(SocketChannel ch) {
-                        ch.pipeline()
+                        protected void initChannel(SocketChannel ch) {
+                            ch.pipeline()
                                     .addLast("respCommandDecoder", new RespCommandDecoder())
-                                    .addLast("commandHandler", new FastCommandHandler(processor));
+                                    .addLast("commandHandler", new YierdisFastCommandHandler(executor));
                         }
                     });
 
             Channel serverChannel = bootstrap.bind(0).sync().channel();
-            return new TestServer(bossGroup, workerGroup, serverChannel, db);
+            return new TestServer(bossGroup, workerGroup, commandGroup, executor, serverChannel, db);
         }
 
         int port() {
@@ -131,34 +156,11 @@ public class YierdisClientTest {
             try {
                 serverChannel.close().syncUninterruptibly();
             } finally {
-                db.shutdown();
-                bossGroup.shutdownGracefully();
-                workerGroup.shutdownGracefully();
-            }
-        }
-
-        private static final class FastCommandHandler extends SimpleChannelInboundHandler<RespCommand> {
-            private final YierdisFastCommandProcessor processor;
-
-            private FastCommandHandler(YierdisFastCommandProcessor processor) {
-                this.processor = processor;
-            }
-
-            @Override
-            protected void channelRead0(ChannelHandlerContext ctx, RespCommand msg) {
-                ByteBuf out = ctx.alloc().buffer();
-                try {
-                    ByteBuf outBuf = out;
-                    processor.execute(msg, new RespWriter((src, srcIndex, len) -> outBuf.writeBytes(src, srcIndex, len),
-                            new NettyRespSession(ctx.channel())));
-                    ctx.writeAndFlush(out);
-                    out = null;
-                } finally {
-                    msg.recycle();
-                    if (out != null) {
-                        out.release();
-                    }
-                }
+                executor.shutdownGracefully().syncUninterruptibly();
+                executor.executor().submit(db::shutdown).syncUninterruptibly();
+                commandGroup.shutdownGracefully().syncUninterruptibly();
+                bossGroup.shutdownGracefully().syncUninterruptibly();
+                workerGroup.shutdownGracefully().syncUninterruptibly();
             }
         }
     }

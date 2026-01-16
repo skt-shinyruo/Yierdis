@@ -15,11 +15,16 @@
 - bench 增强：吞吐/延迟统计加入 `errors` 计数，支持 `--strictReplies` 最小语义校验（PING/SET/GET），并复用 `yierdis-protocol-netty` 的 RESP codec。
 - 增加 BITMAP（`SETBIT/GETBIT/BITCOUNT`）与 HyperLogLog（`PFADD/PFCOUNT/PFMERGE`）命令族（复用 STRING），并提供 heap/off-heap 双路径语义测试。
 - 增加 `scripts/smoke.sh`：一键验证 server 启动 + CLI + bench strictReplies 的最小链路。
-- 协议/执行器加固：引入 backlog bytes 预算（`RespFrame.length()` 口径）与连接级 bytes 背压（与条数阈值并存），避免少量大 bulk 积压导致内存驻留不可解释。
+- 协议/执行器加固：引入 backlog bytes 预算（`RespFrame.retainedBytes()` 口径）与连接级 bytes 背压（与条数阈值并存），避免少量大 bulk 积压导致内存驻留不可解释。
+- 执行器增强：支持连接级公平调度（per-channel queue + round-robin）与可配置 frame compaction（阈值/比率/最大拷贝上限），降低热点挤占与驻留抖动风险。
 - server 优雅关停：执行器支持可等待的 `shutdownGracefully()`（drain backlog + 资源回收），并保证 DB `shutdown()` 在执行器线程内执行（避免竞态）。
 - decoder 输入上限参数化（DoS 防护）：新增 `--protocolMaxBulkBytes/--protocolMaxArgs/--protocolMaxLineBytes` 并由 server 透传到 protocol-netty decoder。
 - off-heap capabilities：新增 `YierdisOffHeapAddressAllocator/YierdisOffHeapBlock`，以 capability 显式表达 raw address 能力（keyspace/expires 等索引结构可选启用）。
 - Version SSOT：构建时注入 `yierdis-version.properties`，`HELLO` 的 `version` 字段从资源读取，避免硬编码常量漂移。
+- 新增 `MEMORY STATS`：输出 maxmemory/heap/off-heap/结构开销等预算分解（明确为估算），用于解释拒写/淘汰行为。
+- 命令层拆分：引入 `CommandRegistry` 与 domain `*Commands`，降低新增命令的修改半径并提升可测试性。
+- off-heap 风险收敛：keys/expires 的 off-heap 使用改为显式开关（`--offheapKeysEnabled`，仅允许 unsafe 后端），默认安全。
+- off-heap 后端发现升级：引入 `YierdisOffHeapAllocatorProvider`（ServiceLoader），并在 server fat-jar（shade）场景合并 services 资源，提升可运维性与错误可读性。
 
 ### Changed
 - bench/server 参数体系收敛：共享参数由 `yierdis-args` 解析与校验；bench 通过 `--` 透传 server 参数，避免维护两套默认值。
@@ -35,6 +40,7 @@
 - 修复协议错误与 `$-1`（null bulk string）参数导致的连接断开：现在会返回明确的 `ERR ...`（协议错误会关闭连接）。
 - RESP error 输出统一做 CR/LF 过滤与限长，降低 response splitting 风险。
 - unknown command 不再回显客户端输入。
+- server args 增强：新增 `--executorSchedulingPolicy`、`--frameCompaction*`、`--offheapKeysEnabled`，并在 args SSOT 层完成归一化与校验。
 
 ## [0.1.0-SNAPSHOT] - 2026-01-01
 

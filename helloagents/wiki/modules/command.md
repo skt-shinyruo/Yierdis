@@ -10,7 +10,7 @@
 
 - **Responsibility:** 命令分发、参数解析、错误映射、性能优化（低分配写出路径）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-14
+- **Last Updated:** 2026-01-16
 
 ## Specifications
 
@@ -30,7 +30,12 @@
 
 ### Requirement: 命令表驱动路由
 **Module:** command
-命令路由通过 command table（command name → handler）统一注册点完成，减少长 if/else 链，提高可维护性与可测试性。
+命令路由通过 `CommandRegistry`（command name → handler）统一注册点完成，并按 domain 拆分为多个 `*Commands`：
+- `ServerCommands`：连接/通用命令（PING/ECHO/HELLO/SELECT/FLUSHDB/COMMAND）
+- `KeyCommands`：key/TTL/诊断命令（TYPE/MEMORY/OBJECT/KEYS/DEL/EXISTS/EXPIRE/TTL）
+- `StringCommands` / `HllCommands` / `ListCommands` / `HashCommands` / `SetCommands` / `ZSetCommands`
+
+目的：扩展新命令/新类型时局部改动，不再“牵一发动全身”。
 
 ### Requirement: BITMAP / HLL 命令族
 **Module:** command

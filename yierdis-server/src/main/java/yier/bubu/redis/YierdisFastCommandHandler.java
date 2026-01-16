@@ -5,24 +5,18 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.DecoderException;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.offheap.netty.YierdisNettyByteBufSink;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
 import yier.bubu.redis.protocol.netty.NettyRespSession;
 
+import java.util.Objects;
+
 public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler<RespCommand> {
-    private final YierdisFastCommandProcessor commandProcessor;
     private final NettyCommandExecutor nettyExecutor;
 
-    public YierdisFastCommandHandler(YierdisFastCommandProcessor commandProcessor) {
-        this.commandProcessor = commandProcessor;
-        this.nettyExecutor = null;
-    }
-
-    public YierdisFastCommandHandler(YierdisFastCommandProcessor commandProcessor, NettyCommandExecutor executor) {
-        this.commandProcessor = commandProcessor;
-        this.nettyExecutor = executor;
+    public YierdisFastCommandHandler(NettyCommandExecutor executor) {
+        this.nettyExecutor = Objects.requireNonNull(executor, "executor");
     }
 
     @Override
@@ -32,22 +26,6 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
             try {
                 new RespWriter(new YierdisNettyByteBufSink(out), new NettyRespSession(ctx.channel())).simpleString("OK");
                 ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
-                out = null;
-            } finally {
-                msg.recycle();
-                if (out != null) {
-                    out.release();
-                }
-            }
-            return;
-        }
-
-        if (nettyExecutor == null) {
-            ByteBuf out = ctx.alloc().buffer();
-            try {
-                RespWriter writer = new RespWriter(new YierdisNettyByteBufSink(out), new NettyRespSession(ctx.channel()));
-                commandProcessor.execute(msg, writer);
-                ctx.writeAndFlush(out);
                 out = null;
             } finally {
                 msg.recycle();

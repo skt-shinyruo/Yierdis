@@ -21,6 +21,27 @@ public final class RespCommandBuilder {
         cmd.setFrame(frame);
     }
 
+    /**
+     * Replaces the backing frame for the given command.
+     * <p>
+     * This method will close the existing frame (if any) to avoid leaking buffers, then set the new frame.
+     * The argv offsets/lengths remain unchanged, so callers MUST ensure the new frame contains the same bytes
+     * as the old frame.
+     */
+    public static void replaceFrame(RespCommand cmd, RespFrame newFrame) {
+        if (cmd == null) {
+            throw new IllegalArgumentException("cmd must not be null");
+        }
+        if (newFrame == null) {
+            throw new IllegalArgumentException("newFrame must not be null");
+        }
+        RespFrame old = cmd.frameUnsafe();
+        if (old != null) {
+            old.close();
+        }
+        cmd.setFrame(newFrame);
+    }
+
     public static void setArgSlice(RespCommand cmd, int index, int offset, int len) {
         if (cmd == null) {
             throw new IllegalArgumentException("cmd must not be null");
@@ -35,4 +56,3 @@ public final class RespCommandBuilder {
         cmd.setArgNull(index);
     }
 }
-

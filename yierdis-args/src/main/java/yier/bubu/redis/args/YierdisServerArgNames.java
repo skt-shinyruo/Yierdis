@@ -7,6 +7,10 @@ public final class YierdisServerArgNames {
     public static final String IO_THREADS = "--ioThreads";
     public static final String EXECUTOR_QUEUE_CAPACITY = "--executorQueueCapacity";
     public static final String EXECUTOR_QUEUE_MAX_BYTES = "--executorQueueMaxBytes";
+    public static final String EXECUTOR_SCHEDULING_POLICY = "--executorSchedulingPolicy";
+    public static final String FRAME_COMPACTION_THRESHOLD_BYTES = "--frameCompactionThresholdBytes";
+    public static final String FRAME_COMPACTION_RATIO = "--frameCompactionRatio";
+    public static final String FRAME_COMPACTION_MAX_COPY_BYTES = "--frameCompactionMaxCopyBytes";
     public static final String BACKPRESSURE_HIGH = "--backpressureHigh";
     public static final String BACKPRESSURE_LOW = "--backpressureLow";
     public static final String BACKPRESSURE_BYTES_HIGH = "--backpressureBytesHigh";
@@ -20,6 +24,7 @@ public final class YierdisServerArgNames {
 
     public static final String OFFHEAP_BACKEND = "--offheapBackend";
     public static final String OFFHEAP_MAX_BYTES = "--offheapMaxBytes";
+    public static final String OFFHEAP_KEYS_ENABLED = "--offheapKeysEnabled";
     public static final String MAXMEMORY_BYTES = "--maxmemoryBytes";
     public static final String MAXMEMORY_POLICY = "--maxmemoryPolicy";
     public static final String MAXMEMORY_SAMPLES = "--maxmemorySamples";

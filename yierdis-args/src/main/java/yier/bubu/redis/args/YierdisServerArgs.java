@@ -21,6 +21,7 @@ public final class YierdisServerArgs {
     private static final long DEFAULT_EXECUTOR_QUEUE_MAX_BYTES = 64L * 1024 * 1024; // 64 MiB
     private static final long DEFAULT_BACKPRESSURE_BYTES_HIGH = 16L * 1024 * 1024; // 16 MiB
     private static final long DEFAULT_BACKPRESSURE_BYTES_LOW = 8L * 1024 * 1024; // 8 MiB
+    private static final int DEFAULT_FRAME_COMPACTION_MAX_COPY_BYTES = 1024 * 1024; // 1 MiB
 
     @Option(names = {"-h", "--help"}, usageHelp = true, description = "Show this help message and exit.")
     public boolean help;
@@ -54,6 +55,34 @@ public final class YierdisServerArgs {
             description = "Command executor queue max bytes (0 disables)."
     )
     public long executorQueueMaxBytes = DEFAULT_EXECUTOR_QUEUE_MAX_BYTES;
+
+    @Option(
+            names = YierdisServerArgNames.EXECUTOR_SCHEDULING_POLICY,
+            defaultValue = "fair",
+            description = "Executor scheduling policy: global|fair."
+    )
+    public String executorSchedulingPolicy = "fair";
+
+    @Option(
+            names = YierdisServerArgNames.FRAME_COMPACTION_THRESHOLD_BYTES,
+            defaultValue = "0",
+            description = "Frame compaction threshold bytes (0 disables)."
+    )
+    public long frameCompactionThresholdBytes = 0;
+
+    @Option(
+            names = YierdisServerArgNames.FRAME_COMPACTION_RATIO,
+            defaultValue = "2.0",
+            description = "Frame compaction retained/length ratio threshold (>= 1.0)."
+    )
+    public double frameCompactionRatio = 2.0;
+
+    @Option(
+            names = YierdisServerArgNames.FRAME_COMPACTION_MAX_COPY_BYTES,
+            defaultValue = "" + DEFAULT_FRAME_COMPACTION_MAX_COPY_BYTES,
+            description = "Frame compaction max copy bytes."
+    )
+    public int frameCompactionMaxCopyBytes = DEFAULT_FRAME_COMPACTION_MAX_COPY_BYTES;
 
     @Option(names = YierdisServerArgNames.BACKPRESSURE_HIGH, defaultValue = "256", description = "Backpressure high watermark.")
     public int backpressureHighWatermark = 256;
@@ -116,6 +145,9 @@ public final class YierdisServerArgs {
     )
     public long offheapMaxBytes = 0;
 
+    @Option(names = YierdisServerArgNames.OFFHEAP_KEYS_ENABLED, description = "Enable storing keys/expires in off-heap (unsafe backend only).")
+    public boolean offheapKeysEnabled;
+
     @Option(names = YierdisServerArgNames.MAXMEMORY_BYTES, defaultValue = "0", description = "Maxmemory in bytes (0 disables eviction).")
     public long maxmemoryBytes = 0;
 
@@ -150,6 +182,23 @@ public final class YierdisServerArgs {
         }
         if (executorQueueMaxBytes < 0) {
             throw new IllegalArgumentException("executorQueueMaxBytes must be >= 0");
+        }
+        if (executorSchedulingPolicy == null || executorSchedulingPolicy.isBlank()) {
+            throw new IllegalArgumentException("executorSchedulingPolicy must not be blank");
+        }
+        String executorPolicy = executorSchedulingPolicy.trim().toLowerCase(Locale.ROOT);
+        if (!executorPolicy.equals("global") && !executorPolicy.equals("fair")) {
+            throw new IllegalArgumentException("unsupported executorSchedulingPolicy: " + executorSchedulingPolicy);
+        }
+        executorSchedulingPolicy = executorPolicy;
+        if (frameCompactionThresholdBytes < 0) {
+            throw new IllegalArgumentException("frameCompactionThresholdBytes must be >= 0");
+        }
+        if (Double.isNaN(frameCompactionRatio) || frameCompactionRatio < 1.0) {
+            throw new IllegalArgumentException("frameCompactionRatio must be >= 1.0");
+        }
+        if (frameCompactionMaxCopyBytes <= 0) {
+            throw new IllegalArgumentException("frameCompactionMaxCopyBytes must be > 0");
         }
         if (backpressureHighWatermark <= 0) {
             throw new IllegalArgumentException("backpressureHighWatermark must be > 0");
@@ -203,6 +252,9 @@ public final class YierdisServerArgs {
         if (backend.equals("none") && offheapMaxBytes != 0) {
             throw new IllegalArgumentException("offheapMaxBytes must be 0 when offheapBackend is 'none'");
         }
+        if (offheapKeysEnabled && !backend.equals("unsafe")) {
+            throw new IllegalArgumentException("offheapKeysEnabled requires offheapBackend='unsafe'");
+        }
         if (maxmemoryBytes < 0) {
             throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
         }
@@ -234,6 +286,10 @@ public final class YierdisServerArgs {
         out.ioThreads = ioThreads;
         out.executorQueueCapacity = executorQueueCapacity;
         out.executorQueueMaxBytes = executorQueueMaxBytes;
+        out.executorSchedulingPolicy = executorSchedulingPolicy;
+        out.frameCompactionThresholdBytes = frameCompactionThresholdBytes;
+        out.frameCompactionRatio = frameCompactionRatio;
+        out.frameCompactionMaxCopyBytes = frameCompactionMaxCopyBytes;
         out.backpressureHighWatermark = backpressureHighWatermark;
         out.backpressureLowWatermark = backpressureLowWatermark;
         out.backpressureBytesHighWatermark = backpressureBytesHighWatermark;
@@ -245,6 +301,7 @@ public final class YierdisServerArgs {
         out.protocolMaxLineBytes = protocolMaxLineBytes;
         out.offheapBackend = offheapBackend;
         out.offheapMaxBytes = offheapMaxBytes;
+        out.offheapKeysEnabled = offheapKeysEnabled;
         out.maxmemoryBytes = maxmemoryBytes;
         out.maxmemoryPolicy = maxmemoryPolicy;
         out.maxmemorySamples = maxmemorySamples;
@@ -282,6 +339,14 @@ public final class YierdisServerArgs {
         out.add(Integer.toString(executorQueueCapacity));
         out.add(YierdisServerArgNames.EXECUTOR_QUEUE_MAX_BYTES);
         out.add(Long.toString(executorQueueMaxBytes));
+        out.add(YierdisServerArgNames.EXECUTOR_SCHEDULING_POLICY);
+        out.add(executorSchedulingPolicy);
+        out.add(YierdisServerArgNames.FRAME_COMPACTION_THRESHOLD_BYTES);
+        out.add(Long.toString(frameCompactionThresholdBytes));
+        out.add(YierdisServerArgNames.FRAME_COMPACTION_RATIO);
+        out.add(Double.toString(frameCompactionRatio));
+        out.add(YierdisServerArgNames.FRAME_COMPACTION_MAX_COPY_BYTES);
+        out.add(Integer.toString(frameCompactionMaxCopyBytes));
         out.add(YierdisServerArgNames.BACKPRESSURE_HIGH);
         out.add(Integer.toString(backpressureHighWatermark));
         out.add(YierdisServerArgNames.BACKPRESSURE_LOW);
@@ -306,6 +371,9 @@ public final class YierdisServerArgs {
         out.add(offheapBackend);
         out.add(YierdisServerArgNames.OFFHEAP_MAX_BYTES);
         out.add(Long.toString(offheapMaxBytes));
+        if (offheapKeysEnabled) {
+            out.add(YierdisServerArgNames.OFFHEAP_KEYS_ENABLED);
+        }
 
         out.add(YierdisServerArgNames.MAXMEMORY_BYTES);
         out.add(Long.toString(maxmemoryBytes));

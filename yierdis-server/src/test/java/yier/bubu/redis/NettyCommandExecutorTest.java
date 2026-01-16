@@ -50,7 +50,7 @@ public class NettyCommandExecutorTest {
         CountDownLatch blocker2Started = new CountDownLatch(1);
         CountDownLatch unblock2 = new CountDownLatch(1);
 
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor, executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
         try {
             byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
 
@@ -61,9 +61,9 @@ public class NettyCommandExecutorTest {
             Assert.assertArrayEquals(ascii("-ERR busy\r\n"), readOutbound(ch));
         } finally {
             unblock.countDown();
-            executor.close();
+            executor.shutdownGracefully().syncUninterruptibly();
+            executor.executor().submit(db::shutdown).syncUninterruptibly();
             group.shutdownGracefully().syncUninterruptibly();
-            db.shutdown();
             ch.finishAndReleaseAll();
         }
     }
@@ -103,7 +103,7 @@ public class NettyCommandExecutorTest {
         CountDownLatch blocker2Started = new CountDownLatch(1);
         CountDownLatch unblock2 = new CountDownLatch(1);
 
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor, executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
         try {
             byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
 
@@ -133,9 +133,9 @@ public class NettyCommandExecutorTest {
             Assert.assertArrayEquals(ascii("+PONG\r\n"), r2);
         } finally {
             unblock2.countDown();
-            executor.close();
+            executor.shutdownGracefully().syncUninterruptibly();
+            executor.executor().submit(db::shutdown).syncUninterruptibly();
             group.shutdownGracefully().syncUninterruptibly();
-            db.shutdown();
             ch.finishAndReleaseAll();
         }
     }
@@ -171,7 +171,7 @@ public class NettyCommandExecutorTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(processor, executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
         try {
             Assert.assertTrue(ch.config().isAutoRead());
 
@@ -191,9 +191,9 @@ public class NettyCommandExecutorTest {
             Assert.assertTrue("autoRead should be re-enabled after backlog drains", ch.config().isAutoRead());
         } finally {
             unblock.countDown();
-            executor.close();
+            executor.shutdownGracefully().syncUninterruptibly();
+            executor.executor().submit(db::shutdown).syncUninterruptibly();
             group.shutdownGracefully().syncUninterruptibly();
-            db.shutdown();
             ch.finishAndReleaseAll();
         }
     }

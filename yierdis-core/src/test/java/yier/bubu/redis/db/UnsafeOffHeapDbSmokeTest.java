@@ -14,6 +14,7 @@ public class UnsafeOffHeapDbSmokeTest {
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
         YierdisDb db = new YierdisDb(allocator);
         try {
+            db.bindToCurrentThread();
             Assert.assertTrue(db.setString(b("s"), b("v"), YierdisDb.SetMode.NORMAL, null));
             Assert.assertArrayEquals(b("v"), db.getStringBytes(b("s")));
 
@@ -48,4 +49,3 @@ public class UnsafeOffHeapDbSmokeTest {
         }
     }
 }
-

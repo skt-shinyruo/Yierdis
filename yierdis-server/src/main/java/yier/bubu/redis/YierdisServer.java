@@ -40,6 +40,7 @@ public final class YierdisServer {
                 YierdisOffHeapAllocators.create(config.offheapBackend, config.offheapMaxBytes);
         final YierdisDb db = new YierdisDb(
                 offHeapAllocator,
+                config.offheapKeysEnabled,
                 config.maxmemoryBytes,
                 config.maxmemoryPolicy,
                 config.maxmemorySamples,
@@ -59,7 +60,11 @@ public final class YierdisServer {
                 config.backpressureBytesHighWatermark,
                 config.backpressureBytesLowWatermark,
                 config.executorMaxDrainCommands,
-                config.executorDrainTimeLimitMillis
+                config.executorDrainTimeLimitMillis,
+                config.executorSchedulingPolicy,
+                config.frameCompactionThresholdBytes,
+                config.frameCompactionRatio,
+                config.frameCompactionMaxCopyBytes
         );
 
 
@@ -95,7 +100,7 @@ public final class YierdisServer {
                                             config.protocolMaxArgs,
                                             config.protocolMaxLineBytes
                                     ))
-                                    .addLast("commandHandler", new YierdisFastCommandHandler(commandProcessor, executor));
+                                    .addLast("commandHandler", new YierdisFastCommandHandler(executor));
                         }
                     });
 

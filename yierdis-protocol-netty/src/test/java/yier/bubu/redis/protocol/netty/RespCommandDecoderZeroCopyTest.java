@@ -38,6 +38,7 @@ public class RespCommandDecoderZeroCopyTest {
         RespFrame frame = cmd.frame();
         Assert.assertNotNull(frame);
         Assert.assertTrue(frame instanceof NettyRespFrame);
+        Assert.assertTrue("retainedBytes must be a stable lower bound", frame.retainedBytes() >= frame.length());
         ByteBuf buf = ((NettyRespFrame) frame).unwrap();
         Assert.assertNotNull(buf);
         Assert.assertEquals(1, buf.refCnt());
@@ -46,6 +47,26 @@ public class RespCommandDecoderZeroCopyTest {
         Assert.assertEquals(0, buf.refCnt());
 
         ch.finishAndReleaseAll();
+    }
+
+    @Test
+    public void nettyRespFrameRetainedBytesCanExceedLogicalLengthForDerivedBuffers() {
+        ByteBuf root = Unpooled.buffer(1024);
+        try {
+            root.writeZero(100);
+            ByteBuf slice = root.retainedSlice(0, 100);
+            NettyRespFrame frame = new NettyRespFrame(slice);
+            try {
+                Assert.assertEquals(100, frame.length());
+                Assert.assertTrue(frame.retainedBytes() >= frame.length());
+                Assert.assertTrue(frame.retainedBytes() <= root.capacity());
+                Assert.assertTrue(frame.retainedBytes() > frame.length());
+            } finally {
+                frame.close();
+            }
+        } finally {
+            root.release();
+        }
     }
 
     @Test
@@ -74,6 +95,7 @@ public class RespCommandDecoderZeroCopyTest {
 
         NettyRespFrame frame = (NettyRespFrame) cmd.frame();
         ByteBuf buf = frame.unwrap();
+        Assert.assertTrue("retainedBytes must be a stable lower bound", frame.retainedBytes() >= frame.length());
         cmd.recycle();
         Assert.assertEquals(0, buf.refCnt());
 

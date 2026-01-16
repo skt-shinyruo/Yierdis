@@ -18,6 +18,7 @@ public class OffHeapStringStorageTest {
         YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(0);
         YierdisDb db = new YierdisDb(allocator);
         try {
+            db.bindToCurrentThread();
             byte[] key = b("k");
             byte[] value = b("hello");
 
@@ -41,6 +42,7 @@ public class OffHeapStringStorageTest {
         YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(0);
         YierdisDb db = new YierdisDb(allocator);
         try {
+            db.bindToCurrentThread();
             byte[] key = b("k");
             db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 0));
             Assert.assertTrue(allocator.usedBytes() > 0);
@@ -58,6 +60,7 @@ public class OffHeapStringStorageTest {
         YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(0);
         YierdisDb db = new YierdisDb(allocator);
         try {
+            db.bindToCurrentThread();
             byte[] key = b("k");
             db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 0));
             Assert.assertTrue(allocator.usedBytes() > 0);
@@ -76,6 +79,7 @@ public class OffHeapStringStorageTest {
         YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(5);
         YierdisDb db = new YierdisDb(allocator);
         try {
+            db.bindToCurrentThread();
             byte[] key = b("k");
             byte[] v1 = b("hello");
             byte[] v2 = b("world");
@@ -100,6 +104,7 @@ public class OffHeapStringStorageTest {
         YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(4);
         YierdisDb db = new YierdisDb(allocator);
         try {
+            db.bindToCurrentThread();
             try {
                 db.setString(b("k"), b("hello"), YierdisDb.SetMode.NORMAL, null);
                 Assert.fail("expected YierdisDb.YierdisCommandException");
@@ -146,4 +151,3 @@ public class OffHeapStringStorageTest {
         }
     }
 }
-

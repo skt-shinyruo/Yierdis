@@ -17,6 +17,17 @@ public interface RespFrame extends YierdisBytesSource, AutoCloseable {
      */
     int length();
 
+    /**
+     * Returns an estimate of bytes retained (kept alive) by holding onto this frame.
+     * <p>
+     * Default implementation falls back to {@link #length()}, which is a stable lower bound.
+     * Implementations may override to provide a more accurate estimate for backpressure/budgeting.
+     * The returned value MUST be stable for the lifetime of the frame.
+     */
+    default int retainedBytes() {
+        return length();
+    }
+
     @Override
     void close();
 }

@@ -12,6 +12,11 @@ import java.util.function.BiFunction;
  * This is intentionally minimal and <b>not</b> thread-safe.
  */
 final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
+    // The following memory estimation constants intentionally trade precision for explainability and low cost.
+    // They are used for diagnostics (MEMORY STATS / INFO), not for exact accounting.
+    private static final int ESTIMATED_HEAP_ARRAY_HEADER_BYTES = 16;
+    private static final int ESTIMATED_HEAP_REFERENCE_BYTES = 8;
+
     private static final float LOAD_FACTOR = 0.75f;
     private static final int MIN_CAPACITY = 16;
     private static final byte STATE_EMPTY = 0;
@@ -55,6 +60,66 @@ final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
 
     boolean isRehashing() {
         return keys1 != null;
+    }
+
+    int table0Capacity() {
+        return states0 == null ? 0 : states0.length;
+    }
+
+    int table1Capacity() {
+        return states1 == null ? 0 : states1.length;
+    }
+
+    /**
+     * Estimates the structural overhead of the hash table arrays (slot arrays) on heap.
+     * <p>
+     * Includes the backing arrays of the two tables during rehashing (Redis-style dual table period).
+     * Does <b>not</b> include individual key {@code byte[]} object headers nor value payloads.
+     */
+    long estimatedTableOverheadBytes() {
+        long bytes = estimateTableArrays(keys0, hashes0, values0, states0);
+        if (keys1 != null) {
+            bytes += estimateTableArrays(keys1, hashes1, values1, states1);
+        }
+        return bytes;
+    }
+
+    private static long estimateTableArrays(byte[][] keys, int[] hashes, Object[] values, byte[] states) {
+        if (states == null) {
+            return 0;
+        }
+        int cap = states.length;
+        long bytes = 0;
+        bytes += estimateRefArray(cap);   // keys
+        bytes += estimateIntArray(cap);   // hashes
+        bytes += estimateRefArray(cap);   // values
+        bytes += estimateByteArray(cap);  // states
+        return bytes;
+    }
+
+    private static long estimateRefArray(int len) {
+        return estimatePrimitiveArrayBytes(len, ESTIMATED_HEAP_REFERENCE_BYTES);
+    }
+
+    private static long estimateIntArray(int len) {
+        return estimatePrimitiveArrayBytes(len, Integer.BYTES);
+    }
+
+    private static long estimateByteArray(int len) {
+        return estimatePrimitiveArrayBytes(len, 1);
+    }
+
+    private static long estimatePrimitiveArrayBytes(int len, int elementBytes) {
+        if (len <= 0 || elementBytes <= 0) {
+            return 0;
+        }
+        long data = (long) len * (long) elementBytes;
+        long total = ESTIMATED_HEAP_ARRAY_HEADER_BYTES + data;
+        return align8(total);
+    }
+
+    private static long align8(long bytes) {
+        return (bytes + 7L) & ~7L;
     }
 
     @Override

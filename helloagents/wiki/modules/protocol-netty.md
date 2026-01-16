@@ -37,7 +37,10 @@ RESP2/RESP3 的协商属于连接级状态：
 - `NettyRespFrame` 封装 `ByteBuf`，并在 `close()` 时执行 `release()`
 - 业务侧仅通过 `RespFrame` 抽象读取 bytes view，并在命令结束后调用 `RespCommand.recycle()` 触发 frame 回收
 - 异常路径必须同样保证 recycle/close（避免 ByteBuf 泄漏）
-- `NettyRespFrame` 额外记录 frame `length()`（稳定长度），供 server 做 backlog bytes 预算（避免“少量大包积压”打穿内存）
+- `NettyRespFrame` 额外提供：
+  - `length()`：逻辑帧长度（稳定，不随底层 `ByteBuf` capacity 变化）
+  - `retainedBytes()`：更接近真实驻留内存的估算（考虑 slice/pooled buf），供 server 执行器做 backlog/backpressure 的 bytes 预算口径
+- 为支持 server 侧 **frame compaction**（“以拷贝换确定性”）：`RespCommandBuilder` 提供安全的 frame 替换能力（替换时关闭旧 frame，避免泄漏）
 
 ## Dependencies
 
@@ -47,3 +50,4 @@ RESP2/RESP3 的协商属于连接级状态：
 ## Change History
 
 - 2026-01-15：边界加固：netty codec/adapters 迁移到独立包 `yier.bubu.redis.protocol.netty`，`yierdis-protocol` 独占 `yier.bubu.redis.protocol`（消除 split-package）。
+- 2026-01-16：增加 `RespFrame.retainedBytes()` 口径与 `RespCommandBuilder.replaceFrame(...)`，为执行器 bytes 预算与 compaction 提供协议层支撑。

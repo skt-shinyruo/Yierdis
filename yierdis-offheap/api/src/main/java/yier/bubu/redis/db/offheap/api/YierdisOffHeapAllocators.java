@@ -1,6 +1,7 @@
 package yier.bubu.redis.db.offheap.api;
 
 import java.lang.reflect.Constructor;
+import java.util.ServiceLoader;
 
 public final class YierdisOffHeapAllocators {
     private static final String NETTY_ALLOCATOR_CLASS =
@@ -22,6 +23,13 @@ public final class YierdisOffHeapAllocators {
         if (backend == null || backend == YierdisOffHeapBackend.NONE) {
             return null;
         }
+
+        // Prefer ServiceLoader providers for early, explicit availability checks.
+        YierdisOffHeapAllocator provider = createByServiceLoader(backend, maxBytes);
+        if (provider != null) {
+            return provider;
+        }
+
         switch (backend) {
             case NETTY:
                 return createNetty(maxBytes);
@@ -31,6 +39,38 @@ public final class YierdisOffHeapAllocators {
                 return createForeign(maxBytes);
             default:
                 throw new IllegalArgumentException("unknown offheap backend: " + backend);
+        }
+    }
+
+    private static YierdisOffHeapAllocator createByServiceLoader(YierdisOffHeapBackend backend, long maxBytes) {
+        YierdisOffHeapAllocatorProvider found = null;
+        for (YierdisOffHeapAllocatorProvider p : ServiceLoader.load(YierdisOffHeapAllocatorProvider.class)) {
+            if (p == null) {
+                continue;
+            }
+            YierdisOffHeapBackend b;
+            try {
+                b = p.backend();
+            } catch (Throwable ignored) {
+                continue;
+            }
+            if (b != backend) {
+                continue;
+            }
+            if (found != null) {
+                throw new IllegalStateException("Multiple off-heap allocator providers found for backend: " + backend);
+            }
+            found = p;
+        }
+        if (found == null) {
+            return null;
+        }
+        try {
+            return found.create(maxBytes);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new IllegalStateException("Failed to initialize off-heap backend via provider: " + backend, t);
         }
     }
 

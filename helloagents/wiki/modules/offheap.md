@@ -32,8 +32,15 @@
 - `YierdisOffHeapBlock`：`allocateBlock` 返回的 owning handle（`close()` 释放），避免 address 生命周期管理分散
 
 当前实现策略：
-- core 仅在 allocator 实现了 `YierdisOffHeapAddressAllocator` 时启用 off-heap keyspace/expires；否则 keyspace/expires 保持 heap 路径
+- core 仅在 allocator 实现了 `YierdisOffHeapAddressAllocator` 且显式开启 `--offheapKeysEnabled` 时启用 off-heap keyspace/expires；否则 keyspace/expires 保持 heap 路径（默认安全）
 - string value 的 off-heap 存储仍可由任意 `YierdisOffHeapAllocator` 支持（buf/slice 路径）
+
+### Requirement: 后端发现（ServiceLoader）与启动期可用性校验
+**Module:** offheap-api
+后端加载由 `YierdisOffHeapAllocators` 统一负责：
+- 优先通过 `ServiceLoader` 发现 `YierdisOffHeapAllocatorProvider`（netty/unsafe/foreign 各自注册）
+- 在 server fat-jar（shade）场景下，使用 `ServicesResourceTransformer` 合并 `META-INF/services`，确保多后端可同时发现
+- 若指定后端不可用，启动期直接抛出明确错误（提示缺失依赖/需要的 profile），避免运行中才暴露
 
 ### Requirement: RESP frame slice 直接写入 off-heap（减少双拷贝）
 **Module:** offheap
@@ -59,3 +66,5 @@
 - 2026-01-14：offheap-api 去 Netty 依赖：以 `YierdisBytesSink/YierdisBytesSource` 替代 ByteBuf 直接依赖，Netty adapter 下沉到 offheap-netty 模块。
 - 2026-01-15：Unsafe 后端补齐 raw memory 访问封装（`YierdisUnsafeAccess`），并将 `PlatformDependent` 等 Netty internal 的使用限制在 off-heap/unsafe 后端实现内，降低依赖外溢风险。
 - 2026-01-16：capabilities 加固：引入 `YierdisOffHeapAddressAllocator/YierdisOffHeapBlock`，core 通过 capability 选择 keyspace/expires 的 off-heap 路径，避免对具体后端的 `instanceof` 耦合。
+- 2026-01-16：默认安全：keys/expires 的 off-heap 使用改为显式开关（`--offheapKeysEnabled`，仅允许 unsafe 后端）。
+- 2026-01-16：后端加载升级：引入 `YierdisOffHeapAllocatorProvider`（ServiceLoader）并在 server shade 场景合并 services 资源，提升可运维性与错误可读性。

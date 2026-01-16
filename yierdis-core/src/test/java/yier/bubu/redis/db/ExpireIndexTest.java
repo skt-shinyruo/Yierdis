@@ -11,6 +11,7 @@ public class ExpireIndexTest {
     @Test
     public void cleanupExpiredRemovesImmediatelyExpiredKeysWithoutAccess() {
         YierdisDb db = new YierdisDb();
+        db.bindToCurrentThread();
 
         byte[] key = b("k");
         db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 0));
@@ -25,6 +26,7 @@ public class ExpireIndexTest {
     @Test
     public void staleExpireIndexEntriesDoNotDeleteKeysWhenTtlIsCleared() {
         YierdisDb db = new YierdisDb();
+        db.bindToCurrentThread();
 
         byte[] key = b("k");
         db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 0));
@@ -41,6 +43,7 @@ public class ExpireIndexTest {
     @Test
     public void cleanupExpiredEventuallyRemovesManyExpiredKeysWithoutAccess() {
         YierdisDb db = new YierdisDb();
+        db.bindToCurrentThread();
 
         int n = 200;
         for (int i = 0; i < n; i++) {
@@ -60,6 +63,7 @@ public class ExpireIndexTest {
     @Test
     public void cleanupExpiredDoesNotDeleteUnexpiredKeys() {
         YierdisDb db = new YierdisDb();
+        db.bindToCurrentThread();
 
         byte[] key = b("k");
         db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 60_000));
@@ -72,4 +76,3 @@ public class ExpireIndexTest {
         db.shutdown();
     }
 }
-

@@ -20,6 +20,7 @@ public class OffHeapLeakRegressionTest {
         YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(0);
         YierdisDb db = new YierdisDb(allocator, 2500, "allkeys-random", 5, 5, 5);
         try {
+            db.bindToCurrentThread();
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 byte[] v1600 = repeat((byte) 'x', 1600);
@@ -49,6 +50,7 @@ public class OffHeapLeakRegressionTest {
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
         YierdisDb db = new YierdisDb(allocator, 4500, "allkeys-random", 5, 5, 5);
         try {
+            db.bindToCurrentThread();
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 byte[] v1600 = repeat((byte) 'x', 1600);

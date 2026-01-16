@@ -21,7 +21,8 @@
 
 为了让 `yierdis-core` 与 `yierdis-protocol` 不直接依赖 Netty，同时保留零拷贝与连接级协议状态：
 - `RespFrame` 负责承载命令参数的 bytes view，并提供可选的 memory address 能力（用于 off-heap fast-path）
-- `RespFrame.length()` 提供 frame 的稳定长度（用于 server backlog bytes 预算口径；由具体实现负责提供准确值）
+- `RespFrame.length()` 提供 frame 的稳定长度（逻辑长度）
+- `RespFrame.retainedBytes()` 提供更接近真实驻留内存的估算（用于 server backlog/backpressure 的 bytes 预算口径）
 - `RespSession` 负责承载连接级协议状态（RESP2/RESP3），供 `RespWriter` 在写出时选择对应编码
 - 具体 codec 与 Netty 绑定的实现放在 `yierdis-protocol-netty`
 

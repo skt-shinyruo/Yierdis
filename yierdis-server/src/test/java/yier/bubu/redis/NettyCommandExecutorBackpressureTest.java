@@ -33,7 +33,7 @@ public class NettyCommandExecutorBackpressureTest {
 
         EmbeddedChannel ch = new EmbeddedChannel(
                 new RespCommandDecoder(),
-                new YierdisFastCommandHandler(processor, executor)
+                new YierdisFastCommandHandler(executor)
         );
         try {
             byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
@@ -71,7 +71,7 @@ public class NettyCommandExecutorBackpressureTest {
 
         EmbeddedChannel ch = new EmbeddedChannel(
                 new RespCommandDecoder(),
-                new YierdisFastCommandHandler(processor, executor)
+                new YierdisFastCommandHandler(executor)
         );
         try {
             Assert.assertTrue(ch.config().isAutoRead());

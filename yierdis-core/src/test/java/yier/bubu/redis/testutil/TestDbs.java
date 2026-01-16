@@ -20,6 +20,7 @@ public final class TestDbs {
         Objects.requireNonNull(test, "test");
         YierdisDb db = new YierdisDb();
         try {
+            db.bindToCurrentThread();
             test.accept(db);
         } finally {
             db.shutdown();
@@ -31,6 +32,7 @@ public final class TestDbs {
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
         YierdisDb db = new YierdisDb(allocator);
         try {
+            db.bindToCurrentThread();
             test.accept(db);
         } finally {
             db.shutdown();
@@ -41,6 +43,7 @@ public final class TestDbs {
         Objects.requireNonNull(test, "test");
         YierdisDb heap = new YierdisDb(null, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, 5, 5);
         try {
+            heap.bindToCurrentThread();
             test.accept(heap);
         } finally {
             heap.shutdown();
@@ -49,6 +52,7 @@ public final class TestDbs {
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
         YierdisDb offHeap = new YierdisDb(allocator, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, 5, 5);
         try {
+            offHeap.bindToCurrentThread();
             test.accept(offHeap);
         } finally {
             offHeap.shutdown();

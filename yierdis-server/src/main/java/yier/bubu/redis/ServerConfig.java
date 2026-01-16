@@ -9,6 +9,10 @@ final class ServerConfig {
     final int ioThreads;
     final int executorQueueCapacity;
     final long executorQueueMaxBytes;
+    final NettyCommandExecutor.SchedulingPolicy executorSchedulingPolicy;
+    final long frameCompactionThresholdBytes;
+    final double frameCompactionRatio;
+    final int frameCompactionMaxCopyBytes;
     final int backpressureHighWatermark;
     final int backpressureLowWatermark;
     final long backpressureBytesHighWatermark;
@@ -20,6 +24,7 @@ final class ServerConfig {
     final int protocolMaxLineBytes;
     final String offheapBackend;
     final long offheapMaxBytes;
+    final boolean offheapKeysEnabled;
     final long maxmemoryBytes;
     final String maxmemoryPolicy;
     final int maxmemorySamples;
@@ -32,6 +37,10 @@ final class ServerConfig {
             int ioThreads,
             int executorQueueCapacity,
             long executorQueueMaxBytes,
+            NettyCommandExecutor.SchedulingPolicy executorSchedulingPolicy,
+            long frameCompactionThresholdBytes,
+            double frameCompactionRatio,
+            int frameCompactionMaxCopyBytes,
             int backpressureHighWatermark,
             int backpressureLowWatermark,
             long backpressureBytesHighWatermark,
@@ -43,6 +52,7 @@ final class ServerConfig {
             int protocolMaxLineBytes,
             String offheapBackend,
             long offheapMaxBytes,
+            boolean offheapKeysEnabled,
             long maxmemoryBytes,
             String maxmemoryPolicy,
             int maxmemorySamples,
@@ -54,6 +64,10 @@ final class ServerConfig {
         this.ioThreads = ioThreads;
         this.executorQueueCapacity = executorQueueCapacity;
         this.executorQueueMaxBytes = executorQueueMaxBytes;
+        this.executorSchedulingPolicy = executorSchedulingPolicy;
+        this.frameCompactionThresholdBytes = frameCompactionThresholdBytes;
+        this.frameCompactionRatio = frameCompactionRatio;
+        this.frameCompactionMaxCopyBytes = frameCompactionMaxCopyBytes;
         this.backpressureHighWatermark = backpressureHighWatermark;
         this.backpressureLowWatermark = backpressureLowWatermark;
         this.backpressureBytesHighWatermark = backpressureBytesHighWatermark;
@@ -65,6 +79,7 @@ final class ServerConfig {
         this.protocolMaxLineBytes = protocolMaxLineBytes;
         this.offheapBackend = offheapBackend;
         this.offheapMaxBytes = offheapMaxBytes;
+        this.offheapKeysEnabled = offheapKeysEnabled;
         this.maxmemoryBytes = maxmemoryBytes;
         this.maxmemoryPolicy = maxmemoryPolicy;
         this.maxmemorySamples = maxmemorySamples;
@@ -90,12 +105,21 @@ final class ServerConfig {
 
         parsed.normalizeAndValidate();
 
+        NettyCommandExecutor.SchedulingPolicy schedulingPolicy =
+                "global".equals(parsed.executorSchedulingPolicy)
+                        ? NettyCommandExecutor.SchedulingPolicy.GLOBAL
+                        : NettyCommandExecutor.SchedulingPolicy.FAIR;
+
         return new ServerConfig(
                 parsed.port,
                 parsed.cleanupIntervalMillis,
                 parsed.ioThreads,
                 parsed.executorQueueCapacity,
                 parsed.executorQueueMaxBytes,
+                schedulingPolicy,
+                parsed.frameCompactionThresholdBytes,
+                parsed.frameCompactionRatio,
+                parsed.frameCompactionMaxCopyBytes,
                 parsed.backpressureHighWatermark,
                 parsed.backpressureLowWatermark,
                 parsed.backpressureBytesHighWatermark,
@@ -107,6 +131,7 @@ final class ServerConfig {
                 parsed.protocolMaxLineBytes,
                 parsed.offheapBackend,
                 parsed.offheapMaxBytes,
+                parsed.offheapKeysEnabled,
                 parsed.maxmemoryBytes,
                 parsed.maxmemoryPolicy,
                 parsed.maxmemorySamples,

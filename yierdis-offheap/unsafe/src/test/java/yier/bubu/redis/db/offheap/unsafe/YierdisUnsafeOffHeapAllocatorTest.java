@@ -5,9 +5,12 @@ import org.junit.Test;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocatorContractTest;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocators;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocatorProvider;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBlock;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
+
+import java.util.ServiceLoader;
 
 public class YierdisUnsafeOffHeapAllocatorTest extends YierdisOffHeapAllocatorContractTest {
     @Override
@@ -21,6 +24,18 @@ public class YierdisUnsafeOffHeapAllocatorTest extends YierdisOffHeapAllocatorCo
             Assert.assertNotNull(allocator);
             Assert.assertEquals(YierdisOffHeapBackend.UNSAFE, allocator.backend());
         }
+    }
+
+    @Test
+    public void serviceLoaderProviderIsPresent() {
+        boolean found = false;
+        for (YierdisOffHeapAllocatorProvider p : ServiceLoader.load(YierdisOffHeapAllocatorProvider.class)) {
+            if (p.backend() == YierdisOffHeapBackend.UNSAFE) {
+                found = true;
+                break;
+            }
+        }
+        Assert.assertTrue(found);
     }
 
     @Test

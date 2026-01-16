@@ -5,8 +5,11 @@ import org.junit.Test;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocatorContractTest;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocators;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocatorProvider;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
+
+import java.util.ServiceLoader;
 
 public class YierdisNettyOffHeapAllocatorTest extends YierdisOffHeapAllocatorContractTest {
     @Override
@@ -31,5 +34,17 @@ public class YierdisNettyOffHeapAllocatorTest extends YierdisOffHeapAllocatorCon
             Assert.assertNotNull(allocator);
             Assert.assertEquals(YierdisOffHeapBackend.NETTY, allocator.backend());
         }
+    }
+
+    @Test
+    public void serviceLoaderProviderIsPresent() {
+        boolean found = false;
+        for (YierdisOffHeapAllocatorProvider p : ServiceLoader.load(YierdisOffHeapAllocatorProvider.class)) {
+            if (p.backend() == YierdisOffHeapBackend.NETTY) {
+                found = true;
+                break;
+            }
+        }
+        Assert.assertTrue(found);
     }
 }

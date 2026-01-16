@@ -14,6 +14,7 @@ public class UnsafeOffHeapKeyspaceTest {
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
         YierdisDb db = new YierdisDb(allocator);
         try {
+            db.bindToCurrentThread();
             db.setString(b("k"), b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 0));
             Assert.assertEquals(1, db.size());
             Assert.assertTrue(allocator.usedBytes() > 0);
@@ -26,4 +27,3 @@ public class UnsafeOffHeapKeyspaceTest {
         }
     }
 }
-
