@@ -1,7 +1,15 @@
-package yier.bubu.redis.protocol;
+package yier.bubu.redis.protocol.netty;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.ByteToMessageDecoder;
+
+import yier.bubu.redis.protocol.RespArray;
+import yier.bubu.redis.protocol.RespBulkString;
+import yier.bubu.redis.protocol.RespError;
+import yier.bubu.redis.protocol.RespInteger;
+import yier.bubu.redis.protocol.RespNull;
+import yier.bubu.redis.protocol.RespObject;
+import yier.bubu.redis.protocol.RespSimpleString;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -31,7 +39,7 @@ public final class RespDecoder extends ByteToMessageDecoder {
         this(DEFAULT_MAX_BULK_BYTES, DEFAULT_MAX_ARRAY_LEN, DEFAULT_MAX_NESTING_DEPTH, DEFAULT_MAX_LINE_BYTES);
     }
 
-    RespDecoder(int maxBulkBytes, int maxArrayLen, int maxNestingDepth, int maxLineBytes) {
+    public RespDecoder(int maxBulkBytes, int maxArrayLen, int maxNestingDepth, int maxLineBytes) {
         this.maxBulkBytes = requirePositive(maxBulkBytes, "maxBulkBytes");
         this.maxArrayLen = requirePositive(maxArrayLen, "maxArrayLen");
         this.maxNestingDepth = requirePositive(maxNestingDepth, "maxNestingDepth");
@@ -188,4 +196,3 @@ public final class RespDecoder extends ByteToMessageDecoder {
         return value;
     }
 }
-

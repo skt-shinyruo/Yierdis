@@ -7,10 +7,10 @@ import org.junit.Assert;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.offheap.netty.YierdisNettyByteBufSink;
 import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespCommandDecoder;
-import yier.bubu.redis.protocol.RespDecoder;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.netty.RespCommandDecoder;
+import yier.bubu.redis.protocol.netty.RespDecoder;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;

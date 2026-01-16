@@ -14,6 +14,14 @@ import java.util.Locale;
         usageHelpAutoWidth = true
 )
 public final class YierdisServerArgs {
+    private static final int DEFAULT_PROTOCOL_MAX_BULK_BYTES = 64 * 1024 * 1024; // 64 MiB
+    private static final int DEFAULT_PROTOCOL_MAX_ARGS = 1024;
+    private static final int DEFAULT_PROTOCOL_MAX_LINE_BYTES = 1024;
+
+    private static final long DEFAULT_EXECUTOR_QUEUE_MAX_BYTES = 64L * 1024 * 1024; // 64 MiB
+    private static final long DEFAULT_BACKPRESSURE_BYTES_HIGH = 16L * 1024 * 1024; // 16 MiB
+    private static final long DEFAULT_BACKPRESSURE_BYTES_LOW = 8L * 1024 * 1024; // 8 MiB
+
     @Option(names = {"-h", "--help"}, usageHelp = true, description = "Show this help message and exit.")
     public boolean help;
 
@@ -40,17 +48,59 @@ public final class YierdisServerArgs {
     )
     public int executorQueueCapacity = 1024;
 
+    @Option(
+            names = YierdisServerArgNames.EXECUTOR_QUEUE_MAX_BYTES,
+            defaultValue = "" + DEFAULT_EXECUTOR_QUEUE_MAX_BYTES,
+            description = "Command executor queue max bytes (0 disables)."
+    )
+    public long executorQueueMaxBytes = DEFAULT_EXECUTOR_QUEUE_MAX_BYTES;
+
     @Option(names = YierdisServerArgNames.BACKPRESSURE_HIGH, defaultValue = "256", description = "Backpressure high watermark.")
     public int backpressureHighWatermark = 256;
 
     @Option(names = YierdisServerArgNames.BACKPRESSURE_LOW, defaultValue = "128", description = "Backpressure low watermark.")
     public int backpressureLowWatermark = 128;
 
+    @Option(
+            names = YierdisServerArgNames.BACKPRESSURE_BYTES_HIGH,
+            defaultValue = "" + DEFAULT_BACKPRESSURE_BYTES_HIGH,
+            description = "Backpressure bytes high watermark (0 disables)."
+    )
+    public long backpressureBytesHighWatermark = DEFAULT_BACKPRESSURE_BYTES_HIGH;
+
+    @Option(
+            names = YierdisServerArgNames.BACKPRESSURE_BYTES_LOW,
+            defaultValue = "" + DEFAULT_BACKPRESSURE_BYTES_LOW,
+            description = "Backpressure bytes low watermark (0 disables)."
+    )
+    public long backpressureBytesLowWatermark = DEFAULT_BACKPRESSURE_BYTES_LOW;
+
     @Option(names = YierdisServerArgNames.EXECUTOR_MAX_DRAIN, defaultValue = "512", description = "Max commands drained per executor tick.")
     public int executorMaxDrainCommands = 512;
 
     @Option(names = YierdisServerArgNames.EXECUTOR_DRAIN_MILLIS, defaultValue = "2", description = "Executor drain time budget in milliseconds.")
     public long executorDrainTimeLimitMillis = 2;
+
+    @Option(
+            names = YierdisServerArgNames.PROTOCOL_MAX_BULK_BYTES,
+            defaultValue = "" + DEFAULT_PROTOCOL_MAX_BULK_BYTES,
+            description = "Protocol max bulk string bytes."
+    )
+    public int protocolMaxBulkBytes = DEFAULT_PROTOCOL_MAX_BULK_BYTES;
+
+    @Option(
+            names = YierdisServerArgNames.PROTOCOL_MAX_ARGS,
+            defaultValue = "" + DEFAULT_PROTOCOL_MAX_ARGS,
+            description = "Protocol max args per command."
+    )
+    public int protocolMaxArgs = DEFAULT_PROTOCOL_MAX_ARGS;
+
+    @Option(
+            names = YierdisServerArgNames.PROTOCOL_MAX_LINE_BYTES,
+            defaultValue = "" + DEFAULT_PROTOCOL_MAX_LINE_BYTES,
+            description = "Protocol max line bytes."
+    )
+    public int protocolMaxLineBytes = DEFAULT_PROTOCOL_MAX_LINE_BYTES;
 
     @Option(
             names = YierdisServerArgNames.OFFHEAP_BACKEND,
@@ -98,6 +148,9 @@ public final class YierdisServerArgs {
         if (executorQueueCapacity <= 0) {
             throw new IllegalArgumentException("executorQueueCapacity must be > 0");
         }
+        if (executorQueueMaxBytes < 0) {
+            throw new IllegalArgumentException("executorQueueMaxBytes must be >= 0");
+        }
         if (backpressureHighWatermark <= 0) {
             throw new IllegalArgumentException("backpressureHighWatermark must be > 0");
         }
@@ -107,11 +160,32 @@ public final class YierdisServerArgs {
         if (backpressureLowWatermark >= backpressureHighWatermark) {
             throw new IllegalArgumentException("backpressureLowWatermark must be < backpressureHighWatermark");
         }
+        if (backpressureBytesHighWatermark < 0) {
+            throw new IllegalArgumentException("backpressureBytesHighWatermark must be >= 0");
+        }
+        if (backpressureBytesLowWatermark < 0) {
+            throw new IllegalArgumentException("backpressureBytesLowWatermark must be >= 0");
+        }
+        if (backpressureBytesHighWatermark == 0 && backpressureBytesLowWatermark != 0) {
+            throw new IllegalArgumentException("backpressureBytesLowWatermark must be 0 when backpressureBytesHighWatermark is 0");
+        }
+        if (backpressureBytesHighWatermark > 0 && backpressureBytesLowWatermark >= backpressureBytesHighWatermark) {
+            throw new IllegalArgumentException("backpressureBytesLowWatermark must be < backpressureBytesHighWatermark");
+        }
         if (executorMaxDrainCommands <= 0) {
             throw new IllegalArgumentException("executorMaxDrainCommands must be > 0");
         }
         if (executorDrainTimeLimitMillis <= 0) {
             throw new IllegalArgumentException("executorDrainTimeLimitMillis must be > 0");
+        }
+        if (protocolMaxBulkBytes <= 0) {
+            throw new IllegalArgumentException("protocolMaxBulkBytes must be > 0");
+        }
+        if (protocolMaxArgs <= 0) {
+            throw new IllegalArgumentException("protocolMaxArgs must be > 0");
+        }
+        if (protocolMaxLineBytes <= 0) {
+            throw new IllegalArgumentException("protocolMaxLineBytes must be > 0");
         }
         if (offheapBackend == null || offheapBackend.isBlank()) {
             throw new IllegalArgumentException("offheapBackend must not be blank");
@@ -159,10 +233,16 @@ public final class YierdisServerArgs {
         out.noCleanup = noCleanup;
         out.ioThreads = ioThreads;
         out.executorQueueCapacity = executorQueueCapacity;
+        out.executorQueueMaxBytes = executorQueueMaxBytes;
         out.backpressureHighWatermark = backpressureHighWatermark;
         out.backpressureLowWatermark = backpressureLowWatermark;
+        out.backpressureBytesHighWatermark = backpressureBytesHighWatermark;
+        out.backpressureBytesLowWatermark = backpressureBytesLowWatermark;
         out.executorMaxDrainCommands = executorMaxDrainCommands;
         out.executorDrainTimeLimitMillis = executorDrainTimeLimitMillis;
+        out.protocolMaxBulkBytes = protocolMaxBulkBytes;
+        out.protocolMaxArgs = protocolMaxArgs;
+        out.protocolMaxLineBytes = protocolMaxLineBytes;
         out.offheapBackend = offheapBackend;
         out.offheapMaxBytes = offheapMaxBytes;
         out.maxmemoryBytes = maxmemoryBytes;
@@ -200,14 +280,27 @@ public final class YierdisServerArgs {
 
         out.add(YierdisServerArgNames.EXECUTOR_QUEUE_CAPACITY);
         out.add(Integer.toString(executorQueueCapacity));
+        out.add(YierdisServerArgNames.EXECUTOR_QUEUE_MAX_BYTES);
+        out.add(Long.toString(executorQueueMaxBytes));
         out.add(YierdisServerArgNames.BACKPRESSURE_HIGH);
         out.add(Integer.toString(backpressureHighWatermark));
         out.add(YierdisServerArgNames.BACKPRESSURE_LOW);
         out.add(Integer.toString(backpressureLowWatermark));
+        out.add(YierdisServerArgNames.BACKPRESSURE_BYTES_HIGH);
+        out.add(Long.toString(backpressureBytesHighWatermark));
+        out.add(YierdisServerArgNames.BACKPRESSURE_BYTES_LOW);
+        out.add(Long.toString(backpressureBytesLowWatermark));
         out.add(YierdisServerArgNames.EXECUTOR_MAX_DRAIN);
         out.add(Integer.toString(executorMaxDrainCommands));
         out.add(YierdisServerArgNames.EXECUTOR_DRAIN_MILLIS);
         out.add(Long.toString(executorDrainTimeLimitMillis));
+
+        out.add(YierdisServerArgNames.PROTOCOL_MAX_BULK_BYTES);
+        out.add(Integer.toString(protocolMaxBulkBytes));
+        out.add(YierdisServerArgNames.PROTOCOL_MAX_ARGS);
+        out.add(Integer.toString(protocolMaxArgs));
+        out.add(YierdisServerArgNames.PROTOCOL_MAX_LINE_BYTES);
+        out.add(Integer.toString(protocolMaxLineBytes));
 
         out.add(YierdisServerArgNames.OFFHEAP_BACKEND);
         out.add(offheapBackend);

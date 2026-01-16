@@ -1,13 +1,13 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapExpireIndex;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapKeyspace;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapString;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 import yier.bubu.redis.protocol.RespCommand;
 
 import java.util.ArrayList;
@@ -61,9 +61,9 @@ public final class YierdisDb {
             long expireCleanupTimeLimitMillis
     ) {
         this.offHeapAllocator = offHeapAllocator;
-        if (offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafeAllocator) {
-            this.store = new YierdisUnsafeOffHeapKeyspace<>(unsafeAllocator);
-            this.expires = new YierdisUnsafeOffHeapExpireIndex(unsafeAllocator);
+        if (offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator) {
+            this.store = new YierdisUnsafeOffHeapKeyspace<>(addressAllocator);
+            this.expires = new YierdisUnsafeOffHeapExpireIndex(addressAllocator);
             this.keysStoredOffHeap = true;
         } else {
             this.store = new ByteArrayKeyspace<>();
@@ -1198,8 +1198,8 @@ public final class YierdisDb {
 
     private int pushInternal(byte[] keyBytes, List<byte[]> values, boolean left) {
         long now = System.currentTimeMillis();
-        YierdisUnsafeOffHeapAllocator unsafeAllocator =
-                offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe ? unsafe : null;
+        YierdisOffHeapAddressAllocator addressAllocator =
+                offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
         final int[] len = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         store.compute(keyBytes, (k, old) -> {
@@ -1212,7 +1212,7 @@ public final class YierdisDb {
                 oldEstimate = 0;
             }
             if (old == null) {
-                ListValue lv = unsafeAllocator != null ? new ListValue(unsafeAllocator) : new ListValue();
+                ListValue lv = addressAllocator != null ? new ListValue(addressAllocator) : new ListValue();
                 if (left) {
                     lv.lpushAll(values);
                 } else {
@@ -1340,8 +1340,8 @@ public final class YierdisDb {
             throw new YierdisCommandException("ERR wrong number of arguments for 'hset' command");
         }
         long now = System.currentTimeMillis();
-        YierdisUnsafeOffHeapAllocator unsafeAllocator =
-                offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe ? unsafe : null;
+        YierdisOffHeapAddressAllocator addressAllocator =
+                offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
         final int[] added = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         store.compute(keyBytes, (k, old) -> {
@@ -1354,7 +1354,7 @@ public final class YierdisDb {
                 oldEstimate = 0;
             }
             if (old == null) {
-                HashValue hv = unsafeAllocator != null ? new HashValue(unsafeAllocator) : new HashValue();
+                HashValue hv = addressAllocator != null ? new HashValue(addressAllocator) : new HashValue();
                 added[0] = hv.hsetMany(fieldValuePairs);
                 YierdisObject o = YierdisObject.newHash(hv);
                 touch(o);
@@ -1478,8 +1478,8 @@ public final class YierdisDb {
     public int sadd(byte[] keyBytes, List<byte[]> members) {
         checkThread();
         long now = System.currentTimeMillis();
-        YierdisUnsafeOffHeapAllocator unsafeAllocator =
-                offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe ? unsafe : null;
+        YierdisOffHeapAddressAllocator addressAllocator =
+                offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
         final int[] added = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         store.compute(keyBytes, (k, old) -> {
@@ -1492,7 +1492,7 @@ public final class YierdisDb {
                 oldEstimate = 0;
             }
             if (old == null) {
-                SetValue sv = unsafeAllocator != null ? new SetValue(unsafeAllocator) : new SetValue();
+                SetValue sv = addressAllocator != null ? new SetValue(addressAllocator) : new SetValue();
                 added[0] = sv.addAll(members);
                 YierdisObject o = YierdisObject.newSet(sv);
                 touch(o);
@@ -1619,8 +1619,8 @@ public final class YierdisDb {
             throw new YierdisCommandException("ERR wrong number of arguments for 'zadd' command");
         }
         long now = System.currentTimeMillis();
-        YierdisUnsafeOffHeapAllocator unsafeAllocator =
-                offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe ? unsafe : null;
+        YierdisOffHeapAddressAllocator addressAllocator =
+                offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
         final int[] added = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         store.compute(keyBytes, (k, old) -> {
@@ -1633,7 +1633,7 @@ public final class YierdisDb {
                 oldEstimate = 0;
             }
             if (old == null) {
-                ZSetValue zv = unsafeAllocator != null ? new ZSetValue(unsafeAllocator) : new ZSetValue();
+                ZSetValue zv = addressAllocator != null ? new ZSetValue(addressAllocator) : new ZSetValue();
                 try {
                     added[0] = zv.zaddMany(scoreMemberPairs);
                 } catch (RuntimeException e) {

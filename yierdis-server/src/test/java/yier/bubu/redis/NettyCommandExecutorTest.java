@@ -9,7 +9,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.protocol.RespCommandDecoder;
+import yier.bubu.redis.protocol.netty.RespCommandDecoder;
 
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
@@ -28,8 +28,11 @@ public class NettyCommandExecutorTest {
                 processor,
                 eventExecutor,
                 1,
+                0,
                 256,
                 128,
+                0,
+                0,
                 128,
                 10
         );
@@ -77,8 +80,11 @@ public class NettyCommandExecutorTest {
                 processor,
                 eventExecutor,
                 1024,
+                0,
                 256,
                 128,
+                0,
+                0,
                 1,
                 1000
         );
@@ -146,7 +152,10 @@ public class NettyCommandExecutorTest {
                 processor,
                 eventExecutor,
                 1024,
+                0,
                 1,
+                0,
+                0,
                 0,
                 128,
                 10

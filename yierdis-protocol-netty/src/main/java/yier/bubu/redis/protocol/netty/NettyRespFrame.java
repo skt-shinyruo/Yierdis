@@ -1,19 +1,28 @@
-package yier.bubu.redis.protocol;
+package yier.bubu.redis.protocol.netty;
 
 import io.netty.buffer.ByteBuf;
 
-final class NettyRespFrame implements RespFrame {
-    private ByteBuf buf;
+import yier.bubu.redis.protocol.RespFrame;
 
-    NettyRespFrame(ByteBuf buf) {
+public final class NettyRespFrame implements RespFrame {
+    private ByteBuf buf;
+    private final int length;
+
+    public NettyRespFrame(ByteBuf buf) {
         if (buf == null) {
             throw new IllegalArgumentException("buf must not be null");
         }
         this.buf = buf;
+        this.length = buf.readableBytes();
     }
 
-    ByteBuf unwrap() {
+    public ByteBuf unwrap() {
         return buf;
+    }
+
+    @Override
+    public int length() {
+        return length;
     }
 
     @Override
@@ -47,4 +56,3 @@ final class NettyRespFrame implements RespFrame {
         }
     }
 }
-

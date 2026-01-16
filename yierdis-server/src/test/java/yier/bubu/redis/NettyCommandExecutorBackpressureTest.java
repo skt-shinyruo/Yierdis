@@ -8,7 +8,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.protocol.RespCommandDecoder;
+import yier.bubu.redis.protocol.netty.RespCommandDecoder;
 
 import java.nio.charset.StandardCharsets;
 
@@ -22,7 +22,10 @@ public class NettyCommandExecutorBackpressureTest {
                 processor,
                 ImmediateEventExecutor.INSTANCE,
                 1,
+                0,
                 1,
+                0,
+                0,
                 0,
                 1,
                 1
@@ -57,8 +60,11 @@ public class NettyCommandExecutorBackpressureTest {
                 processor,
                 ImmediateEventExecutor.INSTANCE,
                 16,
+                0,
                 2,
                 1,
+                0,
+                0,
                 16,
                 50
         );

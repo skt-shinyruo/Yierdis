@@ -11,9 +11,9 @@ import org.slf4j.LoggerFactory;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.netty.YierdisNettyByteBufSink;
-import yier.bubu.redis.protocol.NettyRespSession;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.netty.NettyRespSession;
 
 import java.util.IdentityHashMap;
 import java.util.Objects;
@@ -21,6 +21,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Netty-friendly single-thread command executor.
@@ -62,6 +63,8 @@ public final class NettyCommandExecutor implements AutoCloseable {
 
     private static final AttributeKey<AtomicInteger> PENDING_PER_CHANNEL =
             AttributeKey.valueOf("yierdis.exec.pending");
+    private static final AttributeKey<AtomicLong> PENDING_BYTES_PER_CHANNEL =
+            AttributeKey.valueOf("yierdis.exec.pendingBytes");
     private static final AttributeKey<Boolean> AUTOREAD_DISABLED_BY_EXECUTOR =
             AttributeKey.valueOf("yierdis.exec.autoreadDisabled");
 
@@ -70,9 +73,13 @@ public final class NettyCommandExecutor implements AutoCloseable {
     private final EventExecutor executor;
 
     private final ArrayBlockingQueue<Task> queue;
+    private final AtomicLong queuedBytes = new AtomicLong(0);
 
+    private final long queueMaxBytes;
     private final int backpressureHighWatermark;
     private final int backpressureLowWatermark;
+    private final long backpressureBytesHighWatermark;
+    private final long backpressureBytesLowWatermark;
     private final int maxDrainCommands;
     private final long drainTimeLimitNanos;
 
@@ -85,8 +92,11 @@ public final class NettyCommandExecutor implements AutoCloseable {
             YierdisFastCommandProcessor commandProcessor,
             EventExecutor executor,
             int queueCapacity,
+            long queueMaxBytes,
             int backpressureHighWatermark,
             int backpressureLowWatermark,
+            long backpressureBytesHighWatermark,
+            long backpressureBytesLowWatermark,
             int maxDrainCommands,
             long drainTimeLimitMillis
     ) {
@@ -95,6 +105,9 @@ public final class NettyCommandExecutor implements AutoCloseable {
         this.executor = Objects.requireNonNull(executor, "executor");
         if (queueCapacity <= 0) {
             throw new IllegalArgumentException("queueCapacity must be > 0");
+        }
+        if (queueMaxBytes < 0) {
+            throw new IllegalArgumentException("queueMaxBytes must be >= 0");
         }
         if (backpressureHighWatermark <= 0) {
             throw new IllegalArgumentException("backpressureHighWatermark must be > 0");
@@ -105,6 +118,18 @@ public final class NettyCommandExecutor implements AutoCloseable {
         if (backpressureLowWatermark >= backpressureHighWatermark) {
             throw new IllegalArgumentException("backpressureLowWatermark must be < backpressureHighWatermark");
         }
+        if (backpressureBytesHighWatermark < 0) {
+            throw new IllegalArgumentException("backpressureBytesHighWatermark must be >= 0");
+        }
+        if (backpressureBytesLowWatermark < 0) {
+            throw new IllegalArgumentException("backpressureBytesLowWatermark must be >= 0");
+        }
+        if (backpressureBytesHighWatermark == 0 && backpressureBytesLowWatermark != 0) {
+            throw new IllegalArgumentException("backpressureBytesLowWatermark must be 0 when backpressureBytesHighWatermark is 0");
+        }
+        if (backpressureBytesHighWatermark > 0 && backpressureBytesLowWatermark >= backpressureBytesHighWatermark) {
+            throw new IllegalArgumentException("backpressureBytesLowWatermark must be < backpressureBytesHighWatermark");
+        }
         if (maxDrainCommands <= 0) {
             throw new IllegalArgumentException("maxDrainCommands must be > 0");
         }
@@ -112,8 +137,11 @@ public final class NettyCommandExecutor implements AutoCloseable {
             throw new IllegalArgumentException("drainTimeLimitMillis must be > 0");
         }
         this.queue = new ArrayBlockingQueue<>(queueCapacity);
+        this.queueMaxBytes = queueMaxBytes;
         this.backpressureHighWatermark = backpressureHighWatermark;
         this.backpressureLowWatermark = backpressureLowWatermark;
+        this.backpressureBytesHighWatermark = backpressureBytesHighWatermark;
+        this.backpressureBytesLowWatermark = backpressureBytesLowWatermark;
         this.maxDrainCommands = maxDrainCommands;
         this.drainTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(drainTimeLimitMillis);
     }
@@ -144,20 +172,39 @@ public final class NettyCommandExecutor implements AutoCloseable {
             return false;
         }
 
-        AtomicInteger pending = pendingCounter(ctx.channel());
+        Channel ch = ctx.channel();
+        int retainedBytes = Math.max(0, safeRetainedBytes(cmd));
+
+        AtomicInteger pending = pendingCounter(ch);
         if (pending.get() >= backpressureHighWatermark) {
-            disableAutoRead(ctx.channel());
+            disableAutoRead(ch);
             return false;
         }
 
-        boolean accepted = queue.offer(Task.command(ctx, cmd));
+        AtomicLong pendingBytes = pendingBytesCounter(ch);
+        if (backpressureBytesHighWatermark > 0 && pendingBytes.get() >= backpressureBytesHighWatermark) {
+            disableAutoRead(ch);
+            return false;
+        }
+
+        if (!tryReserveQueuedBytes(retainedBytes)) {
+            return false;
+        }
+
+        boolean accepted = queue.offer(Task.command(ctx, cmd, retainedBytes));
         if (!accepted) {
+            releaseQueuedBytes(retainedBytes);
             return false;
         }
 
         int now = pending.incrementAndGet();
         if (now >= backpressureHighWatermark) {
-            disableAutoRead(ctx.channel());
+            disableAutoRead(ch);
+        }
+
+        long bytesNow = pendingBytes.addAndGet(retainedBytes);
+        if (backpressureBytesHighWatermark > 0 && bytesNow >= backpressureBytesHighWatermark) {
+            disableAutoRead(ch);
         }
 
         scheduleDrain();
@@ -286,14 +333,20 @@ public final class NettyCommandExecutor implements AutoCloseable {
             } catch (Throwable ignored) {
                 // ignore
             }
-            onCommandFinished(ctx.channel());
+            onCommandFinished(ctx.channel(), task.retainedBytes);
         }
     }
 
-    private void onCommandFinished(Channel ch) {
+    private void onCommandFinished(Channel ch, int retainedBytes) {
         AtomicInteger pending = pendingCounter(ch);
         int now = pending.decrementAndGet();
-        if (now <= backpressureLowWatermark) {
+        AtomicLong pendingBytes = pendingBytesCounter(ch);
+        long bytesNow = pendingBytes.addAndGet(-retainedBytes);
+        releaseQueuedBytes(retainedBytes);
+
+        boolean pendingOk = now <= backpressureLowWatermark;
+        boolean bytesOk = backpressureBytesHighWatermark <= 0 || bytesNow <= backpressureBytesLowWatermark;
+        if (pendingOk && bytesOk) {
             enableAutoReadIfWeDisabled(ch);
         }
     }
@@ -317,6 +370,17 @@ public final class NettyCommandExecutor implements AutoCloseable {
         }
         AtomicInteger created = new AtomicInteger();
         AtomicInteger existing = attr.setIfAbsent(created);
+        return existing == null ? created : existing;
+    }
+
+    private static AtomicLong pendingBytesCounter(Channel ch) {
+        Attribute<AtomicLong> attr = ch.attr(PENDING_BYTES_PER_CHANNEL);
+        AtomicLong pending = attr.get();
+        if (pending != null) {
+            return pending;
+        }
+        AtomicLong created = new AtomicLong();
+        AtomicLong existing = attr.setIfAbsent(created);
         return existing == null ? created : existing;
     }
 
@@ -366,6 +430,11 @@ public final class NettyCommandExecutor implements AutoCloseable {
                 } catch (Throwable ignored) {
                     // ignore
                 }
+                if (t.ctx != null) {
+                    onCommandFinished(t.ctx.channel(), t.retainedBytes);
+                } else {
+                    releaseQueuedBytes(t.retainedBytes);
+                }
             }
         }
     }
@@ -376,24 +445,83 @@ public final class NettyCommandExecutor implements AutoCloseable {
         scheduleDrain();
     }
 
+    /**
+     * Stops accepting new commands and drains/recycles any pending queued commands.
+     * <p>
+     * The returned future completes after the executor thread has processed the drain barrier, meaning it is safe
+     * to run single-threaded teardown work on the same executor afterwards (e.g. DB shutdown).
+     */
+    public io.netty.util.concurrent.Future<?> shutdownGracefully() {
+        running = false;
+        scheduleDrain();
+        return executor.submit(this::drainLeftoverCommands);
+    }
+
+    private boolean tryReserveQueuedBytes(int bytes) {
+        if (queueMaxBytes <= 0 || bytes <= 0) {
+            return true;
+        }
+        for (; ; ) {
+            long cur = queuedBytes.get();
+            long next = cur + bytes;
+            if (next < 0) {
+                // overflow guard: treat as OOM / reject.
+                return false;
+            }
+            if (next > queueMaxBytes) {
+                return false;
+            }
+            if (queuedBytes.compareAndSet(cur, next)) {
+                return true;
+            }
+        }
+    }
+
+    private void releaseQueuedBytes(int bytes) {
+        if (queueMaxBytes <= 0 || bytes <= 0) {
+            return;
+        }
+        long now = queuedBytes.addAndGet(-bytes);
+        if (now < 0) {
+            // Best-effort: avoid underflow breaking future reservations.
+            queuedBytes.set(0);
+        }
+    }
+
+    private static int safeRetainedBytes(RespCommand cmd) {
+        if (cmd == null) {
+            return 0;
+        }
+        try {
+            if (cmd.frame() == null) {
+                return 0;
+            }
+            return cmd.frame().length();
+        } catch (Throwable ignored) {
+            return 0;
+        }
+    }
+
     private static final class Task {
         private final ChannelHandlerContext ctx;
         private final RespCommand cmd;
         private final Runnable maintenance;
+        private final int retainedBytes;
 
-        private Task(ChannelHandlerContext ctx, RespCommand cmd, Runnable maintenance) {
+        private Task(ChannelHandlerContext ctx, RespCommand cmd, Runnable maintenance, int retainedBytes) {
             this.ctx = ctx;
             this.cmd = cmd;
             this.maintenance = maintenance;
+            this.retainedBytes = retainedBytes;
         }
 
-        static Task command(ChannelHandlerContext ctx, RespCommand cmd) {
-            return new Task(ctx, cmd, null);
+        static Task command(ChannelHandlerContext ctx, RespCommand cmd, int retainedBytes) {
+            return new Task(ctx, cmd, null, retainedBytes);
         }
 
         @SuppressWarnings("unused")
         static Task maintenance(Runnable task) {
-            return new Task(null, null, task);
+            return new Task(null, null, task, 0);
         }
     }
 }

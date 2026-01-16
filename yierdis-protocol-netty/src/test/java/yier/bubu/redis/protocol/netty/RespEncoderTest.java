@@ -1,8 +1,15 @@
-package yier.bubu.redis.protocol;
+package yier.bubu.redis.protocol.netty;
 
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.protocol.RespArray;
+import yier.bubu.redis.protocol.RespBulkString;
+import yier.bubu.redis.protocol.RespError;
+import yier.bubu.redis.protocol.RespInteger;
+import yier.bubu.redis.protocol.RespNull;
+import yier.bubu.redis.protocol.RespObject;
+import yier.bubu.redis.protocol.RespSimpleString;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -115,4 +122,3 @@ public class RespEncoderTest {
         return out;
     }
 }
-

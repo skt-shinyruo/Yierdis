@@ -6,6 +6,7 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocatorContractTest;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocators;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapBlock;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 
 public class YierdisUnsafeOffHeapAllocatorTest extends YierdisOffHeapAllocatorContractTest {
@@ -27,7 +28,7 @@ public class YierdisUnsafeOffHeapAllocatorTest extends YierdisOffHeapAllocatorCo
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
         Assert.assertEquals(0L, allocator.usedBytes());
 
-        YierdisUnsafeOffHeapAllocator.YierdisUnsafeOffHeapBlock block = allocator.allocateBlock(16);
+        YierdisOffHeapBlock block = allocator.allocateBlock(16);
         Assert.assertTrue(block.address() != 0);
         Assert.assertEquals(16, block.capacity());
         Assert.assertEquals(16L, allocator.usedBytes());

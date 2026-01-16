@@ -7,7 +7,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.protocol.RespCommandDecoder;
+import yier.bubu.redis.protocol.netty.RespCommandDecoder;
 
 import java.nio.charset.StandardCharsets;
 

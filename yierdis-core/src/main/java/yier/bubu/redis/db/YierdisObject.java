@@ -2,11 +2,10 @@ package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapString;
 import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 import yier.bubu.redis.protocol.RespCommand;
 
 import java.nio.charset.StandardCharsets;
@@ -65,8 +64,8 @@ final class YierdisObject {
         ValueEncoding enc = valueBytes.length <= EMBSTR_MAX_BYTES ? ValueEncoding.STRING_EMBSTR : ValueEncoding.STRING_RAW;
         Object payload = valueBytes;
         if (offHeapAllocator != null && valueBytes.length > 0) {
-            if (offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe) {
-                payload = YierdisUnsafeOffHeapString.fromBytes(unsafe, valueBytes, 0, valueBytes.length);
+            if (offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator) {
+                payload = YierdisUnsafeOffHeapString.fromBytes(addressAllocator, valueBytes, 0, valueBytes.length);
             } else {
                 YierdisOffHeapBuf buf = offHeapAllocator.allocate(valueBytes.length);
                 buf.setBytes(0, valueBytes, 0, valueBytes.length);
@@ -108,9 +107,9 @@ final class YierdisObject {
         ValueEncoding enc = len <= EMBSTR_MAX_BYTES ? ValueEncoding.STRING_EMBSTR : ValueEncoding.STRING_RAW;
         Object payload;
         if (offHeapAllocator != null) {
-            if (offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe) {
-                payload = new YierdisUnsafeOffHeapString(unsafe, len);
-                copyArgToUnsafeAddress(cmd, argIndex, ((YierdisUnsafeOffHeapString) payload).dataAddress(), len);
+            if (offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator) {
+                payload = new YierdisUnsafeOffHeapString(addressAllocator, len);
+                copyArgToAddress(addressAllocator, cmd, argIndex, ((YierdisUnsafeOffHeapString) payload).dataAddress(), len);
                 ((YierdisUnsafeOffHeapString) payload).setLength(len);
             } else {
                 YierdisOffHeapBuf buf = offHeapAllocator.allocate(len);
@@ -166,7 +165,7 @@ final class YierdisObject {
 
     void overwriteWithString(YierdisOffHeapAllocator offHeapAllocator, byte[] valueBytes) {
         if (payload instanceof YierdisUnsafeOffHeapString current
-                && offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe) {
+                && offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator) {
             if (valueBytes == null) {
                 current.close();
                 this.type = ValueType.STRING;
@@ -211,7 +210,7 @@ final class YierdisObject {
                 nextPayload = new byte[0];
             } else {
                 int cap = nextCapacity(Math.max(current.capacity(), 16), nextLen);
-                YierdisUnsafeOffHeapString next = new YierdisUnsafeOffHeapString(unsafe, cap);
+                YierdisUnsafeOffHeapString next = new YierdisUnsafeOffHeapString(addressAllocator, cap);
                 next.overwrite(valueBytes, 0, nextLen);
                 nextPayload = next;
             }
@@ -303,7 +302,7 @@ final class YierdisObject {
         }
 
         if (payload instanceof YierdisUnsafeOffHeapString current
-                && offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe) {
+                && offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator) {
             if (cmd.isNull(argIndex)) {
                 current.close();
                 this.type = ValueType.STRING;
@@ -356,7 +355,7 @@ final class YierdisObject {
             }
 
             if (current.capacity() >= nextLen) {
-                copyArgToUnsafeAddress(cmd, argIndex, current.dataAddress(), nextLen);
+                copyArgToAddress(addressAllocator, cmd, argIndex, current.dataAddress(), nextLen);
                 current.setLength(nextLen);
                 this.type = ValueType.STRING;
                 this.encoding = nextEnc;
@@ -369,8 +368,8 @@ final class YierdisObject {
             }
 
             int cap = nextCapacity(Math.max(current.capacity(), 16), nextLen);
-            YierdisUnsafeOffHeapString next = new YierdisUnsafeOffHeapString(unsafe, cap);
-            copyArgToUnsafeAddress(cmd, argIndex, next.dataAddress(), nextLen);
+            YierdisUnsafeOffHeapString next = new YierdisUnsafeOffHeapString(addressAllocator, cap);
+            copyArgToAddress(addressAllocator, cmd, argIndex, next.dataAddress(), nextLen);
             next.setLength(nextLen);
             current.close();
             this.type = ValueType.STRING;
@@ -687,11 +686,11 @@ final class YierdisObject {
         if (payload instanceof YierdisUnsafeOffHeapString s) {
             byte[] zeros = TL_ZERO_BUF.get();
             int remaining = toExclusive - from;
-            long addr = s.dataAddress() + from;
+            int off = from;
             while (remaining > 0) {
                 int chunk = Math.min(remaining, zeros.length);
-                YierdisUnsafeAccess.copyMemory(zeros, 0, addr, chunk);
-                addr += chunk;
+                s.setBytes(off, zeros, 0, chunk);
+                off += chunk;
                 remaining -= chunk;
             }
             return;
@@ -748,7 +747,10 @@ final class YierdisObject {
             return rawLen;
         }
         if (payload instanceof YierdisUnsafeOffHeapString s) {
-            copyArgToUnsafeAddress(cmd, argIndex, s.dataAddress() + rawLen, len);
+            if (!(offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator)) {
+                throw new IllegalStateException("off-heap address allocator is required for unsafe off-heap string append");
+            }
+            copyArgToAddress(addressAllocator, cmd, argIndex, s.dataAddress() + rawLen, len);
             rawLen += len;
             s.setLength(rawLen);
             return rawLen;
@@ -813,8 +815,8 @@ final class YierdisObject {
             int cap = required == raw.length ? raw.length : nextCapacity(raw.length, required);
             Object nextPayload = cap == raw.length ? raw : Arrays.copyOf(raw, cap);
             if (offHeapAllocator != null && cap > 0) {
-                if (offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe) {
-                    YierdisUnsafeOffHeapString next = new YierdisUnsafeOffHeapString(unsafe, cap);
+                if (offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator) {
+                    YierdisUnsafeOffHeapString next = new YierdisUnsafeOffHeapString(addressAllocator, cap);
                     next.overwrite(raw, 0, raw.length);
                     nextPayload = next;
                 } else {
@@ -858,13 +860,22 @@ final class YierdisObject {
             if (currentCap >= required) {
                 return;
             }
-            if (!(offHeapAllocator instanceof YierdisUnsafeOffHeapAllocator unsafe)) {
-                throw new IllegalStateException("unsafe allocator is required for off-heap string growth");
+            if (!(offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator)) {
+                throw new IllegalStateException("off-heap address allocator is required for off-heap string growth");
             }
             int cap = nextCapacity(currentCap, required);
-            YierdisUnsafeOffHeapString next = new YierdisUnsafeOffHeapString(unsafe, cap);
+            YierdisUnsafeOffHeapString next = new YierdisUnsafeOffHeapString(addressAllocator, cap);
             if (rawLen > 0) {
-                YierdisUnsafeAccess.copyMemory(buf.dataAddress(), next.dataAddress(), rawLen);
+                byte[] scratch = TL_COPY_BUF.get();
+                int remaining = rawLen;
+                int off = 0;
+                while (remaining > 0) {
+                    int chunk = Math.min(remaining, scratch.length);
+                    buf.getBytes(off, scratch, 0, chunk);
+                    next.setBytes(off, scratch, 0, chunk);
+                    off += chunk;
+                    remaining -= chunk;
+                }
                 next.setLength(rawLen);
             }
             buf.close();
@@ -1136,7 +1147,14 @@ final class YierdisObject {
         return negative ? result : -result;
     }
 
-    private static void copyArgToUnsafeAddress(RespCommand cmd, int argIndex, long dstAddress, int len) {
+    private static void copyArgToAddress(YierdisOffHeapAddressAllocator allocator,
+                                         RespCommand cmd,
+                                         int argIndex,
+                                         long dstAddress,
+                                         int len) {
+        if (allocator == null) {
+            throw new IllegalArgumentException("allocator must not be null");
+        }
         if (len <= 0) {
             return;
         }
@@ -1147,7 +1165,7 @@ final class YierdisObject {
         YierdisBytesSource frame = cmd.frame();
         int srcIndex = cmd.argOffset(argIndex);
         if (frame.hasMemoryAddress()) {
-            YierdisUnsafeAccess.copyMemory(frame.memoryAddress() + srcIndex, dstAddress, len);
+            allocator.copyMemory(frame.memoryAddress() + srcIndex, dstAddress, len);
             return;
         }
 
@@ -1157,7 +1175,7 @@ final class YierdisObject {
         while (remaining > 0) {
             int chunk = Math.min(remaining, scratch.length);
             frame.getBytes(srcIndex + off, scratch, 0, chunk);
-            YierdisUnsafeAccess.copyMemory(scratch, 0, dstAddress + off, chunk);
+            allocator.copyMemory(scratch, 0, dstAddress + off, chunk);
             off += chunk;
             remaining -= chunk;
         }

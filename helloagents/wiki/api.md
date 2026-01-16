@@ -20,6 +20,13 @@
 - `SELECT 0`
 - `QUIT`
 
+#### HELLO（最小子集）
+
+- `HELLO 2`：使用 RESP2 回复（array of bulk strings）
+- `HELLO 3`：切换连接为 RESP3 回复，并返回 RESP3 map（`%...`）
+- 返回字段包含：`server/version/proto/mode/role`
+- `version` 来自构建版本（`project.version` 资源注入），避免硬编码常量漂移
+
 ### Key/TTL
 - `SET key value [EX seconds|PX milliseconds] [NX|XX]`
 - `GET key`

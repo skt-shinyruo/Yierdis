@@ -4,13 +4,13 @@
 
 为 `yierdis-server` / `yierdis-client` / `yierdis-bench` 提供 Netty 侧的 RESP codec 与适配层：在不让 SSOT 模块（`yierdis-protocol` / `yierdis-core`）直接依赖 `io.netty.*` 的前提下，复用 Netty pipeline 的编解码能力。
 
-归属：`yierdis-protocol-netty`（`yier.bubu.redis.protocol.*`），作为 **Netty adapter**（非 SSOT：允许依赖 Netty）。
+归属：`yierdis-protocol-netty`（`yier.bubu.redis.protocol.netty.*`），作为 **Netty adapter**（非 SSOT：允许依赖 Netty）。
 
 ## Module Overview
 
 - **Responsibility:** Netty codec（`RespCommandDecoder` / `RespDecoder` / `RespEncoder`）+ `RespFrame/RespSession` 的 Netty 实现（frame ownership / release）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-15
+- **Last Updated:** 2026-01-16
 
 ## Specifications
 
@@ -21,6 +21,7 @@
 - 支持 RESP2 multi-bulk（`*<argc> ...`）作为主路径
 - 支持 inline command（调试用，兼容 `sdssplitargs` 风格：引号/转义/`\\xHH`）
 - 保持参数 **二进制安全**：bulk string 不强制 UTF-8 解码
+- 支持输入上限参数化：`maxBulkBytes/maxArgs/maxLineBytes`（与 server args SSOT 对齐，避免 DoS 风险）
 
 ### Requirement: 连接级 RESP2/RESP3 协议状态（session）
 **Module:** protocol-netty
@@ -36,6 +37,7 @@ RESP2/RESP3 的协商属于连接级状态：
 - `NettyRespFrame` 封装 `ByteBuf`，并在 `close()` 时执行 `release()`
 - 业务侧仅通过 `RespFrame` 抽象读取 bytes view，并在命令结束后调用 `RespCommand.recycle()` 触发 frame 回收
 - 异常路径必须同样保证 recycle/close（避免 ByteBuf 泄漏）
+- `NettyRespFrame` 额外记录 frame `length()`（稳定长度），供 server 做 backlog bytes 预算（避免“少量大包积压”打穿内存）
 
 ## Dependencies
 
@@ -44,4 +46,4 @@ RESP2/RESP3 的协商属于连接级状态：
 
 ## Change History
 
-- 2026-01-15：从 `yierdis-protocol` 拆分：将 Netty codec/adapters 下沉到 `yierdis-protocol-netty`，SSOT 模块保持 Netty-free。
+- 2026-01-15：边界加固：netty codec/adapters 迁移到独立包 `yier.bubu.redis.protocol.netty`，`yierdis-protocol` 独占 `yier.bubu.redis.protocol`（消除 split-package）。

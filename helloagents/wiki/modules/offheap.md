@@ -8,7 +8,7 @@
 
 - **Responsibility:** 分配器 API、slice/buf 抽象、unsafe/netty/foreign 等后端
 - **Status:** 🚧In Development
-- **Last Updated:** 2026-01-15
+- **Last Updated:** 2026-01-16
 
 ## Specifications
 
@@ -23,6 +23,17 @@
 ### Requirement: usedBytes 可回归验证（泄漏检测）
 **Module:** offheap
 分配器应提供 `usedBytes()` 观测点，并在测试中覆盖删除/过期/淘汰/shutdown 等关键路径，确保堆外资源可回归验证。
+
+### Requirement: capabilities/SPI（address allocator）
+**Module:** offheap-api/core
+为避免 core 侧对具体后端（unsafe/netty/foreign）的 `instanceof` 耦合，off-heap 后端能力以接口显式化：
+- `YierdisOffHeapAllocator`：通用 buf/slice 分配能力（所有后端）
+- `YierdisOffHeapAddressAllocator`：可选能力（raw address + copy/memset + block），供 keyspace/expires 等 off-heap 索引结构使用
+- `YierdisOffHeapBlock`：`allocateBlock` 返回的 owning handle（`close()` 释放），避免 address 生命周期管理分散
+
+当前实现策略：
+- core 仅在 allocator 实现了 `YierdisOffHeapAddressAllocator` 时启用 off-heap keyspace/expires；否则 keyspace/expires 保持 heap 路径
+- string value 的 off-heap 存储仍可由任意 `YierdisOffHeapAllocator` 支持（buf/slice 路径）
 
 ### Requirement: RESP frame slice 直接写入 off-heap（减少双拷贝）
 **Module:** offheap
@@ -46,4 +57,5 @@
 - 2026-01-04：增加 off-heap allocator 泄漏回归测试（shutdown 后 usedBytes 回到基线/归零）。
 - 2026-01-08：写路径增强：支持“从输入源直接写入 off-heap”，减少写路径的 heap 中转分配。
 - 2026-01-14：offheap-api 去 Netty 依赖：以 `YierdisBytesSink/YierdisBytesSource` 替代 ByteBuf 直接依赖，Netty adapter 下沉到 offheap-netty 模块。
-- 2026-01-15：Unsafe 后端补齐 raw memory 访问封装（`YierdisUnsafeAccess`），并将 core 的 Netty internal（`PlatformDependent`）使用收敛到 off-heap/unsafe 单点。
+- 2026-01-15：Unsafe 后端补齐 raw memory 访问封装（`YierdisUnsafeAccess`），并将 `PlatformDependent` 等 Netty internal 的使用限制在 off-heap/unsafe 后端实现内，降低依赖外溢风险。
+- 2026-01-16：capabilities 加固：引入 `YierdisOffHeapAddressAllocator/YierdisOffHeapBlock`，core 通过 capability 选择 keyspace/expires 的 off-heap 路径，避免对具体后端的 `instanceof` 耦合。

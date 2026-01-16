@@ -2,8 +2,7 @@ package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapDictLong;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapRawSlice;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -14,7 +13,7 @@ final class SetValue implements YierdisValue {
     private static final byte[] LONG_MIN_VALUE_BYTES = "-9223372036854775808".getBytes(StandardCharsets.US_ASCII);
     private static final int LONG_BYTES = Long.BYTES;
 
-    private final YierdisUnsafeOffHeapAllocator offHeapAllocator;
+    private final YierdisOffHeapAddressAllocator offHeapAllocator;
 
     private short[] intset16 = new short[0];
     private int[] intset32;
@@ -36,7 +35,7 @@ final class SetValue implements YierdisValue {
         this.offHeapAllocator = null;
     }
 
-    SetValue(YierdisUnsafeOffHeapAllocator allocator) {
+    SetValue(YierdisOffHeapAddressAllocator allocator) {
         this.offHeapAllocator = allocator;
     }
 
@@ -138,7 +137,7 @@ final class SetValue implements YierdisValue {
                 List<byte[]> out = new ArrayList<>(hashsetOffHeap.size());
                 hashsetOffHeap.forEach((keyPtr, keyLen, value) -> {
                     byte[] k = new byte[keyLen];
-                    YierdisUnsafeAccess.copyMemory(keyPtr, k, 0, keyLen);
+                    offHeapAllocator.copyMemory(keyPtr, k, 0, keyLen);
                     out.add(k);
                 });
                 return out;
@@ -171,7 +170,8 @@ final class SetValue implements YierdisValue {
 
         if (offHeapAllocator != null) {
             if (hashsetOffHeap != null) {
-                hashsetOffHeap.forEach((keyPtr, keyLen, value) -> out.bulkString(new YierdisUnsafeOffHeapRawSlice(keyPtr, keyLen)));
+                hashsetOffHeap.forEach((keyPtr, keyLen, value) ->
+                        out.bulkString(new YierdisUnsafeOffHeapRawSlice(offHeapAllocator, keyPtr, keyLen)));
                 return;
             }
             for (int i = 0; i < intsetSize; i++) {
@@ -572,7 +572,7 @@ final class SetValue implements YierdisValue {
 
         long nextAddr = offHeapAllocator.allocateAddress(Math.max(8, next * LONG_BYTES));
         if (intsetAddr != 0 && intsetSize > 0) {
-            YierdisUnsafeAccess.copyMemory(intsetAddr, nextAddr, (long) intsetSize * LONG_BYTES);
+            offHeapAllocator.copyMemory(intsetAddr, nextAddr, (long) intsetSize * LONG_BYTES);
         }
         if (intsetAddr != 0 && intsetCapOffHeap > 0) {
             offHeapAllocator.freeAddress(intsetAddr, Math.max(8, intsetCapOffHeap * LONG_BYTES));
@@ -582,16 +582,16 @@ final class SetValue implements YierdisValue {
         intsetCapOffHeap = next;
     }
 
-    private static long getLong(long base, int index) {
+    private long getLong(long base, int index) {
         long addr = base + (long) index * LONG_BYTES;
-        long b0 = YierdisUnsafeAccess.getByte(addr) & 0xffL;
-        long b1 = YierdisUnsafeAccess.getByte(addr + 1) & 0xffL;
-        long b2 = YierdisUnsafeAccess.getByte(addr + 2) & 0xffL;
-        long b3 = YierdisUnsafeAccess.getByte(addr + 3) & 0xffL;
-        long b4 = YierdisUnsafeAccess.getByte(addr + 4) & 0xffL;
-        long b5 = YierdisUnsafeAccess.getByte(addr + 5) & 0xffL;
-        long b6 = YierdisUnsafeAccess.getByte(addr + 6) & 0xffL;
-        long b7 = YierdisUnsafeAccess.getByte(addr + 7) & 0xffL;
+        long b0 = offHeapAllocator.getByte(addr) & 0xffL;
+        long b1 = offHeapAllocator.getByte(addr + 1) & 0xffL;
+        long b2 = offHeapAllocator.getByte(addr + 2) & 0xffL;
+        long b3 = offHeapAllocator.getByte(addr + 3) & 0xffL;
+        long b4 = offHeapAllocator.getByte(addr + 4) & 0xffL;
+        long b5 = offHeapAllocator.getByte(addr + 5) & 0xffL;
+        long b6 = offHeapAllocator.getByte(addr + 6) & 0xffL;
+        long b7 = offHeapAllocator.getByte(addr + 7) & 0xffL;
         return b0
                 | (b1 << 8)
                 | (b2 << 16)
@@ -602,16 +602,16 @@ final class SetValue implements YierdisValue {
                 | (b7 << 56);
     }
 
-    private static void putLong(long base, int index, long value) {
+    private void putLong(long base, int index, long value) {
         long addr = base + (long) index * LONG_BYTES;
-        YierdisUnsafeAccess.putByte(addr, (byte) value);
-        YierdisUnsafeAccess.putByte(addr + 1, (byte) (value >>> 8));
-        YierdisUnsafeAccess.putByte(addr + 2, (byte) (value >>> 16));
-        YierdisUnsafeAccess.putByte(addr + 3, (byte) (value >>> 24));
-        YierdisUnsafeAccess.putByte(addr + 4, (byte) (value >>> 32));
-        YierdisUnsafeAccess.putByte(addr + 5, (byte) (value >>> 40));
-        YierdisUnsafeAccess.putByte(addr + 6, (byte) (value >>> 48));
-        YierdisUnsafeAccess.putByte(addr + 7, (byte) (value >>> 56));
+        offHeapAllocator.putByte(addr, (byte) value);
+        offHeapAllocator.putByte(addr + 1, (byte) (value >>> 8));
+        offHeapAllocator.putByte(addr + 2, (byte) (value >>> 16));
+        offHeapAllocator.putByte(addr + 3, (byte) (value >>> 24));
+        offHeapAllocator.putByte(addr + 4, (byte) (value >>> 32));
+        offHeapAllocator.putByte(addr + 5, (byte) (value >>> 40));
+        offHeapAllocator.putByte(addr + 6, (byte) (value >>> 48));
+        offHeapAllocator.putByte(addr + 7, (byte) (value >>> 56));
     }
 
     @Override

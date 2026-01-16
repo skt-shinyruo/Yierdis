@@ -1,10 +1,12 @@
-package yier.bubu.redis.protocol;
+package yier.bubu.redis.protocol.netty;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.protocol.RespCommand;
+import yier.bubu.redis.protocol.RespFrame;
 
 import java.nio.charset.StandardCharsets;
 
@@ -33,7 +35,7 @@ public class RespCommandDecoderZeroCopyTest {
         Assert.assertEquals((byte) 0xFF, cmd.byteAt(1, 1));
         Assert.assertArrayEquals(bin, cmd.toByteArray(1));
 
-        RespFrame frame = cmd.frameUnsafe();
+        RespFrame frame = cmd.frame();
         Assert.assertNotNull(frame);
         Assert.assertTrue(frame instanceof NettyRespFrame);
         ByteBuf buf = ((NettyRespFrame) frame).unwrap();
@@ -70,7 +72,7 @@ public class RespCommandDecoderZeroCopyTest {
         Assert.assertEquals(0, cmd.len(2));
         Assert.assertArrayEquals(new byte[0], cmd.toByteArray(2));
 
-        NettyRespFrame frame = (NettyRespFrame) cmd.frameUnsafe();
+        NettyRespFrame frame = (NettyRespFrame) cmd.frame();
         ByteBuf buf = frame.unwrap();
         cmd.recycle();
         Assert.assertEquals(0, buf.refCnt());
@@ -96,7 +98,7 @@ public class RespCommandDecoderZeroCopyTest {
         Assert.assertFalse(cmd.isNull(0));
         Assert.assertEquals(4, cmd.len(0));
 
-        NettyRespFrame frame = (NettyRespFrame) cmd.frameUnsafe();
+        NettyRespFrame frame = (NettyRespFrame) cmd.frame();
         ByteBuf buf = frame.unwrap();
         Assert.assertEquals(1, buf.refCnt());
         cmd.recycle();
@@ -131,4 +133,3 @@ public class RespCommandDecoderZeroCopyTest {
         return out;
     }
 }
-

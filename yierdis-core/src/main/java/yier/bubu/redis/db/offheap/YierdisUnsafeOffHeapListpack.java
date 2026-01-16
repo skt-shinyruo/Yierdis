@@ -1,9 +1,8 @@
 package yier.bubu.redis.db.offheap;
 
 import yier.bubu.redis.db.YierdisBulkStringOutput;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 
 /**
  * A minimal listpack-like container backed by {@link YierdisUnsafeOffHeapString}.
@@ -19,12 +18,12 @@ public final class YierdisUnsafeOffHeapListpack implements AutoCloseable {
     private static final ThreadLocal<byte[]> TL_COPY_BUF =
             ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
 
-    private final YierdisUnsafeOffHeapAllocator allocator;
+    private final YierdisOffHeapAddressAllocator allocator;
     private YierdisUnsafeOffHeapString data;
     private int size;
     private int rawBytes;
 
-    public YierdisUnsafeOffHeapListpack(YierdisUnsafeOffHeapAllocator allocator) {
+    public YierdisUnsafeOffHeapListpack(YierdisOffHeapAddressAllocator allocator) {
         this.allocator = allocator;
         this.data = new YierdisUnsafeOffHeapString(allocator, 0);
     }
@@ -258,7 +257,7 @@ public final class YierdisUnsafeOffHeapListpack implements AutoCloseable {
             return;
         }
         long dstAddr = data.dataAddress() + dstOff;
-        YierdisUnsafeAccess.copyMemory(src, srcOff, dstAddr, len);
+        allocator.copyMemory(src, srcOff, dstAddr, len);
     }
 
     private void memmove(int srcOff, int dstOff, int len) {
@@ -276,8 +275,8 @@ public final class YierdisUnsafeOffHeapListpack implements AutoCloseable {
                 int chunk = Math.min(remaining, scratch.length);
                 long from = srcAddr + (remaining - chunk);
                 long to = dstAddr + (remaining - chunk);
-                YierdisUnsafeAccess.copyMemory(from, scratch, 0, chunk);
-                YierdisUnsafeAccess.copyMemory(scratch, 0, to, chunk);
+                allocator.copyMemory(from, scratch, 0, chunk);
+                allocator.copyMemory(scratch, 0, to, chunk);
                 remaining -= chunk;
             }
             return;
@@ -288,8 +287,8 @@ public final class YierdisUnsafeOffHeapListpack implements AutoCloseable {
         long to = dstAddr;
         while (remaining > 0) {
             int chunk = Math.min(remaining, scratch.length);
-            YierdisUnsafeAccess.copyMemory(from, scratch, 0, chunk);
-            YierdisUnsafeAccess.copyMemory(scratch, 0, to, chunk);
+            allocator.copyMemory(from, scratch, 0, chunk);
+            allocator.copyMemory(scratch, 0, to, chunk);
             from += chunk;
             to += chunk;
             remaining -= chunk;
@@ -324,7 +323,7 @@ public final class YierdisUnsafeOffHeapListpack implements AutoCloseable {
 
     private void dataOverwriteByte(int index, byte value) {
         long addr = data.dataAddress() + index;
-        YierdisUnsafeAccess.putByte(addr, value);
+        allocator.putByte(addr, value);
     }
 
     private int readVarInt(int offset, int limit) {

@@ -1,7 +1,10 @@
-package yier.bubu.redis.protocol;
+package yier.bubu.redis.protocol.netty;
 
 import io.netty.channel.Channel;
 import io.netty.util.AttributeKey;
+
+import yier.bubu.redis.protocol.RespProtocol;
+import yier.bubu.redis.protocol.RespSession;
 
 import java.util.Objects;
 
@@ -29,4 +32,3 @@ public final class NettyRespSession implements RespSession {
         channel.attr(PROTOCOL).set(protocol == null ? RespProtocol.RESP2 : protocol);
     }
 }
-

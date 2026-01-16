@@ -96,7 +96,10 @@ sequenceDiagram
 | ADR-20260114-01 | protocol/core/args/client 模块拆分与依赖收敛 | 2026-01-14 | ✅ Accepted | yierdis-protocol,yierdis-core,yierdis-args,yierdis-client,yierdis-server,yierdis-bench | 以“协议/核心/参数”为 SSOT，server/bench/client 只做装配与复用 |
 | ADR-20260114-02 | offheap-api 去 Netty 依赖 | 2026-01-14 | ✅ Accepted | yierdis-offheap-api,yierdis-offheap-netty | ByteBuf 适配下沉到 netty 模块；API 仅保留 bytes sink/source 抽象 |
 | ADR-20260115-01 | protocol 拆分 protocol-netty（codec 下沉） | 2026-01-15 | ✅ Accepted | yierdis-protocol,yierdis-protocol-netty,yierdis-server,yierdis-client,yierdis-bench | `yierdis-protocol` 收敛为 Netty-free SSOT；Netty codec/adapters 下沉到 `yierdis-protocol-netty`，降低耦合与泄漏风险 |
-| ADR-20260115-02 | core/off-heap 去 Netty PlatformDependent | 2026-01-15 | ✅ Accepted | yierdis-core,yierdis-offheap-unsafe | 通过 `YierdisUnsafeAccess` 统一 Unsafe 读写/copy，避免 core 直接依赖 Netty 的 internal 工具类 |
+| ADR-20260115-02 | off-heap capabilities（address allocator） | 2026-01-15 | ✅ Accepted | yierdis-core,yierdis-offheap-api,yierdis-offheap-unsafe | 以 `YierdisOffHeapAddressAllocator` 显式表达 raw address 能力：core 通过 capability 选择 keyspace/expires 的 off-heap 路径，避免对具体后端的 `instanceof` 耦合 |
+| ADR-20260115-03 | backlog bytes 预算（retained bytes SSOT） | 2026-01-15 | ✅ Accepted | yierdis-server,yierdis-protocol,yierdis-protocol-netty,yierdis-args | 在执行器中引入 bytes-based 预算与滞回反压（与条数阈值并存），口径以 `RespFrame.length()` 为准 |
+| ADR-20260115-04 | 消除 split-package（protocol-netty 独立包名） | 2026-01-15 | ✅ Accepted | yierdis-protocol-netty,yierdis-protocol,yierdis-server,yierdis-client,yierdis-bench | netty codec/adapters 迁移到 `yier.bubu.redis.protocol.netty`，让 `yierdis-protocol` 独占 `yier.bubu.redis.protocol` |
+| ADR-20260115-05 | Version SSOT（构建元数据注入） | 2026-01-16 | ✅ Accepted | yierdis-core,yierdis-server | `HELLO` 的 version 由构建资源注入读取，避免硬编码常量造成漂移 |
 
 ## 架构风险评审（DB/Off-heap 重点）
 
@@ -109,12 +112,12 @@ sequenceDiagram
 
 ### 2) 可维护性（依赖/演进成本）
 
-- **避免 core 引入 Netty internal：**`io.netty.util.internal.PlatformDependent` 属于 Netty internal API，版本升级风险高、语义不稳定；已通过 `YierdisUnsafeAccess` 将 core 的 raw memory 读写/copy 收敛为单点封装，便于替换与审计。
+- **避免 core 引入 Netty internal：**`io.netty.util.internal.PlatformDependent` 属于 Netty internal API，版本升级风险高、语义不稳定；目前 core 通过 `yierdis-offheap-api` 的 capability（`YierdisOffHeapAddressAllocator`）表达 raw memory 能力，具体实现留在后端模块中，便于替换与审计。
 - **连接级协议状态：**RESP2/RESP3 协商属于连接级状态，必须与连接生命周期绑定；建议将状态存放在 `RespSession`（如 Netty 侧用 `Channel.attr`），并禁止通过静态变量/全局缓存共享，避免并发连接间状态串扰。
 
 ### 3) 可插拔性（后端替换/灰度能力）
 
-- **off-heap 后端插拔：**建议将“后端选择”限制在 bootstrap/factory 层（server args → allocator/backend），core 逻辑仅依赖 `yierdis-offheap-api` 的抽象，避免业务逻辑散落 `if (backend == ...)` 的分支导致可插拔性退化。
+- **off-heap 后端插拔：**建议将“后端选择”限制在 bootstrap/factory 层（server args → allocator/backend），core 逻辑仅依赖 `yierdis-offheap-api` 的抽象与 capabilities（例如 `YierdisOffHeapAddressAllocator`），避免业务逻辑散落 `if (backend == ...)` 的分支导致可插拔性退化。
 - **codec 插拔：**协议对象模型与 codec 分层后，未来可新增非 Netty 的 codec（例如纯 NIO/foreign-memory）而不影响 core 与协议对象模型。
 
 ### 4) 预算口径（容量规划/成本估算）

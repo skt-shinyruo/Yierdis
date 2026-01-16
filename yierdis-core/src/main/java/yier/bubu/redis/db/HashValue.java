@@ -4,9 +4,8 @@ import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapDictLong;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapListpack;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapRawSlice;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapSds;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,7 +14,7 @@ final class HashValue implements YierdisValue {
     // Redis stores small hashes in a compact encoding (listpack) and upgrades to hashtable as needed.
     // We approximate that behavior by starting with small parallel arrays (packed) and upgrading to a hash map.
 
-    private final YierdisUnsafeOffHeapAllocator offHeapAllocator;
+    private final YierdisOffHeapAddressAllocator offHeapAllocator;
 
     // Packed form uses a listpack-like contiguous buffer containing [field][value] pairs.
     // This preserves binary-safe semantics while avoiding per-entry byte[] objects.
@@ -31,7 +30,7 @@ final class HashValue implements YierdisValue {
         this.packed = new YierdisListpack();
     }
 
-    HashValue(YierdisUnsafeOffHeapAllocator allocator) {
+    HashValue(YierdisOffHeapAddressAllocator allocator) {
         this.offHeapAllocator = allocator;
         this.dict = new YierdisUnsafeOffHeapDictLong(allocator);
     }
@@ -71,7 +70,7 @@ final class HashValue implements YierdisValue {
                     rawBytes += (long) field.length + (value == null ? 0 : value.length);
                     return 1;
                 }
-                int oldLen = YierdisUnsafeOffHeapSds.len(old);
+                int oldLen = YierdisUnsafeOffHeapSds.len(offHeapAllocator, old);
                 rawBytes += (value == null ? 0 : value.length) - oldLen;
                 YierdisUnsafeOffHeapSds.free(offHeapAllocator, old);
                 return 0;
@@ -145,9 +144,9 @@ final class HashValue implements YierdisValue {
                 if (addr == 0L) {
                     return null;
                 }
-                int len = YierdisUnsafeOffHeapSds.len(addr);
+                int len = YierdisUnsafeOffHeapSds.len(offHeapAllocator, addr);
                 byte[] out = new byte[len];
-                YierdisUnsafeOffHeapSds.getBytes(addr, out, 0, len);
+                YierdisUnsafeOffHeapSds.getBytes(offHeapAllocator, addr, out, 0, len);
                 return out;
             }
 
@@ -174,7 +173,7 @@ final class HashValue implements YierdisValue {
                 for (byte[] f : fields) {
                     long old = dict.remove(f);
                     if (old != 0L) {
-                        int oldLen = YierdisUnsafeOffHeapSds.len(old);
+                        int oldLen = YierdisUnsafeOffHeapSds.len(offHeapAllocator, old);
                         rawBytes -= (long) f.length + oldLen;
                         YierdisUnsafeOffHeapSds.free(offHeapAllocator, old);
                         removed++;
@@ -225,15 +224,15 @@ final class HashValue implements YierdisValue {
                 List<byte[]> out = new ArrayList<>(dict.size() * 2);
                 dict.forEach((keyPtr, keyLen, valueAddr) -> {
                     byte[] k = new byte[keyLen];
-                    YierdisUnsafeAccess.copyMemory(keyPtr, k, 0, keyLen);
+                    offHeapAllocator.copyMemory(keyPtr, k, 0, keyLen);
                     out.add(k);
 
                     if (valueAddr == 0L) {
                         out.add(null);
                     } else {
-                        int len = YierdisUnsafeOffHeapSds.len(valueAddr);
+                        int len = YierdisUnsafeOffHeapSds.len(offHeapAllocator, valueAddr);
                         byte[] v = new byte[len];
-                        YierdisUnsafeOffHeapSds.getBytes(valueAddr, v, 0, len);
+                        YierdisUnsafeOffHeapSds.getBytes(offHeapAllocator, valueAddr, v, 0, len);
                         out.add(v);
                     }
                 });
@@ -277,11 +276,11 @@ final class HashValue implements YierdisValue {
         if (offHeapAllocator != null) {
             if (dict != null) {
                 dict.forEach((keyPtr, keyLen, valueAddr) -> {
-                    out.bulkString(new YierdisUnsafeOffHeapRawSlice(keyPtr, keyLen));
+                    out.bulkString(new YierdisUnsafeOffHeapRawSlice(offHeapAllocator, keyPtr, keyLen));
                     if (valueAddr == 0L) {
                         out.bulkStringNull();
                     } else {
-                        YierdisOffHeapSlice slice = YierdisUnsafeOffHeapSds.slice(valueAddr);
+                        YierdisOffHeapSlice slice = YierdisUnsafeOffHeapSds.slice(offHeapAllocator, valueAddr);
                         out.bulkString(slice);
                     }
                 });
@@ -410,7 +409,7 @@ final class HashValue implements YierdisValue {
         packedOffHeap = null;
         rawBytes = 0;
         out.forEach((keyPtr, keyLen, valueAddr) -> {
-            int vlen = valueAddr == 0L ? 0 : YierdisUnsafeOffHeapSds.len(valueAddr);
+            int vlen = valueAddr == 0L ? 0 : YierdisUnsafeOffHeapSds.len(offHeapAllocator, valueAddr);
             rawBytes += (long) keyLen + vlen;
         });
         dict = out;

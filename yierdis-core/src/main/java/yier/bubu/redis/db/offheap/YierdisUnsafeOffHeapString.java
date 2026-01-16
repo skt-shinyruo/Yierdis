@@ -2,9 +2,8 @@ package yier.bubu.redis.db.offheap;
 
 import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisDirectBytesSink;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 
 /**
  * A minimal SDS-like off-heap byte buffer: (ptr,len,cap) semantics with an off-heap header.
@@ -19,11 +18,11 @@ import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 public final class YierdisUnsafeOffHeapString implements AutoCloseable {
     private static final int HEADER_BYTES = Integer.BYTES + Integer.BYTES;
 
-    private final YierdisUnsafeOffHeapAllocator allocator;
+    private final YierdisOffHeapAddressAllocator allocator;
     private long baseAddress;
     private boolean closed;
 
-    public YierdisUnsafeOffHeapString(YierdisUnsafeOffHeapAllocator allocator, int capacity) {
+    public YierdisUnsafeOffHeapString(YierdisOffHeapAddressAllocator allocator, int capacity) {
         if (allocator == null) {
             throw new IllegalArgumentException("allocator must not be null");
         }
@@ -39,7 +38,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         writeInt(addr + Integer.BYTES, capacity);
     }
 
-    public static YierdisUnsafeOffHeapString fromBytes(YierdisUnsafeOffHeapAllocator allocator, byte[] src, int off, int len) {
+    public static YierdisUnsafeOffHeapString fromBytes(YierdisOffHeapAddressAllocator allocator, byte[] src, int off, int len) {
         if (src == null) {
             throw new IllegalArgumentException("src must not be null");
         }
@@ -52,7 +51,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
 
         YierdisUnsafeOffHeapString out = new YierdisUnsafeOffHeapString(allocator, len);
         if (len > 0) {
-            YierdisUnsafeAccess.copyMemory(src, off, out.dataAddress(), len);
+            allocator.copyMemory(src, off, out.dataAddress(), len);
         }
         out.setLength(len);
         return out;
@@ -86,7 +85,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         }
         ensureCapacity(len);
         if (len > 0) {
-            YierdisUnsafeAccess.copyMemory(src, off, dataAddress(), len);
+            allocator.copyMemory(src, off, dataAddress(), len);
         }
         setLength(len);
     }
@@ -99,7 +98,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         int oldLen = length();
         int newLen = oldLen + suffix.length;
         ensureCapacity(newLen);
-        YierdisUnsafeAccess.copyMemory(suffix, 0, dataAddress() + oldLen, suffix.length);
+        allocator.copyMemory(suffix, 0, dataAddress() + oldLen, suffix.length);
         setLength(newLen);
         return newLen;
     }
@@ -159,7 +158,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         if (len == 0) {
             return;
         }
-        YierdisUnsafeAccess.copyMemory(dataAddress() + index, dst, dstOff, len);
+        allocator.copyMemory(dataAddress() + index, dst, dstOff, len);
     }
 
     public byte getByte(int index) {
@@ -168,7 +167,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         if (index < 0 || index >= l) {
             throw new IndexOutOfBoundsException();
         }
-        return YierdisUnsafeAccess.getByte(dataAddress() + index);
+        return allocator.getByte(dataAddress() + index);
     }
 
     public void setByte(int index, byte value) {
@@ -177,7 +176,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         if (index < 0 || index >= cap) {
             throw new IndexOutOfBoundsException();
         }
-        YierdisUnsafeAccess.putByte(dataAddress() + index, value);
+        allocator.putByte(dataAddress() + index, value);
     }
 
     public void setBytes(int index, byte[] src, int srcOff, int len) {
@@ -198,7 +197,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         if (len == 0) {
             return;
         }
-        YierdisUnsafeAccess.copyMemory(src, srcOff, dataAddress() + index, len);
+        allocator.copyMemory(src, srcOff, dataAddress() + index, len);
     }
 
     public long dataAddress() {
@@ -240,7 +239,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
             writeInt(newBase, copyLen);
             writeInt(newBase + Integer.BYTES, newCapacity);
             if (copyLen > 0) {
-                YierdisUnsafeAccess.copyMemory(oldBase + HEADER_BYTES, newBase + HEADER_BYTES, copyLen);
+                allocator.copyMemory(oldBase + HEADER_BYTES, newBase + HEADER_BYTES, copyLen);
             }
         } catch (RuntimeException e) {
             allocator.freeAddress(newBase, Math.max(8, totalBytesForCapacity(newCapacity)));
@@ -280,19 +279,19 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         return cap;
     }
 
-    private static int readInt(long addr) {
-        int b0 = YierdisUnsafeAccess.getByte(addr) & 0xff;
-        int b1 = YierdisUnsafeAccess.getByte(addr + 1) & 0xff;
-        int b2 = YierdisUnsafeAccess.getByte(addr + 2) & 0xff;
-        int b3 = YierdisUnsafeAccess.getByte(addr + 3) & 0xff;
+    private int readInt(long addr) {
+        int b0 = allocator.getByte(addr) & 0xff;
+        int b1 = allocator.getByte(addr + 1) & 0xff;
+        int b2 = allocator.getByte(addr + 2) & 0xff;
+        int b3 = allocator.getByte(addr + 3) & 0xff;
         return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
     }
 
-    private static void writeInt(long addr, int value) {
-        YierdisUnsafeAccess.putByte(addr, (byte) value);
-        YierdisUnsafeAccess.putByte(addr + 1, (byte) (value >>> 8));
-        YierdisUnsafeAccess.putByte(addr + 2, (byte) (value >>> 16));
-        YierdisUnsafeAccess.putByte(addr + 3, (byte) (value >>> 24));
+    private void writeInt(long addr, int value) {
+        allocator.putByte(addr, (byte) value);
+        allocator.putByte(addr + 1, (byte) (value >>> 8));
+        allocator.putByte(addr + 2, (byte) (value >>> 16));
+        allocator.putByte(addr + 3, (byte) (value >>> 24));
     }
 
     private static final class YierdisUnsafeOffHeapSlice implements YierdisOffHeapSlice {
@@ -321,7 +320,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
             if (index < 0 || index >= len) {
                 throw new IndexOutOfBoundsException();
             }
-            return YierdisUnsafeAccess.getByte(owner.dataAddress() + offset + index);
+            return owner.allocator.getByte(owner.dataAddress() + offset + index);
         }
 
         @Override
@@ -342,7 +341,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
             if (readLen == 0) {
                 return;
             }
-            YierdisUnsafeAccess.copyMemory(owner.dataAddress() + offset + index, dst, dstOff, readLen);
+            owner.allocator.copyMemory(owner.dataAddress() + offset + index, dst, dstOff, readLen);
         }
 
         @Override
@@ -360,7 +359,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
                 int before = directSink.writerIndex();
                 directSink.ensureWritable(len);
                 long dstAddr = directSink.memoryAddress() + before;
-                YierdisUnsafeAccess.copyMemory(srcAddr, dstAddr, len);
+                owner.allocator.copyMemory(srcAddr, dstAddr, len);
                 directSink.writerIndex(before + len);
                 return;
             }
@@ -370,7 +369,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
             long addr = srcAddr;
             while (remaining > 0) {
                 int chunk = Math.min(remaining, scratch.length);
-                YierdisUnsafeAccess.copyMemory(addr, scratch, 0, chunk);
+                owner.allocator.copyMemory(addr, scratch, 0, chunk);
                 out.writeBytes(scratch, 0, chunk);
                 addr += chunk;
                 remaining -= chunk;

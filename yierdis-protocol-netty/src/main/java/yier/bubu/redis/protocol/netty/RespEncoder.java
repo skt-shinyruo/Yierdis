@@ -1,8 +1,16 @@
-package yier.bubu.redis.protocol;
+package yier.bubu.redis.protocol.netty;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.MessageToByteEncoder;
+
+import yier.bubu.redis.protocol.RespArray;
+import yier.bubu.redis.protocol.RespBulkString;
+import yier.bubu.redis.protocol.RespError;
+import yier.bubu.redis.protocol.RespInteger;
+import yier.bubu.redis.protocol.RespNull;
+import yier.bubu.redis.protocol.RespObject;
+import yier.bubu.redis.protocol.RespSimpleString;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -136,4 +144,3 @@ public final class RespEncoder extends MessageToByteEncoder<RespObject> {
         out.writeBytes(buf, pos, buf.length - pos);
     }
 }
-

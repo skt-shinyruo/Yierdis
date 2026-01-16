@@ -8,10 +8,16 @@ final class ServerConfig {
     final long expirationCleanupIntervalMillis;
     final int ioThreads;
     final int executorQueueCapacity;
+    final long executorQueueMaxBytes;
     final int backpressureHighWatermark;
     final int backpressureLowWatermark;
+    final long backpressureBytesHighWatermark;
+    final long backpressureBytesLowWatermark;
     final int executorMaxDrainCommands;
     final long executorDrainTimeLimitMillis;
+    final int protocolMaxBulkBytes;
+    final int protocolMaxArgs;
+    final int protocolMaxLineBytes;
     final String offheapBackend;
     final long offheapMaxBytes;
     final long maxmemoryBytes;
@@ -25,10 +31,16 @@ final class ServerConfig {
             long expirationCleanupIntervalMillis,
             int ioThreads,
             int executorQueueCapacity,
+            long executorQueueMaxBytes,
             int backpressureHighWatermark,
             int backpressureLowWatermark,
+            long backpressureBytesHighWatermark,
+            long backpressureBytesLowWatermark,
             int executorMaxDrainCommands,
             long executorDrainTimeLimitMillis,
+            int protocolMaxBulkBytes,
+            int protocolMaxArgs,
+            int protocolMaxLineBytes,
             String offheapBackend,
             long offheapMaxBytes,
             long maxmemoryBytes,
@@ -41,10 +53,16 @@ final class ServerConfig {
         this.expirationCleanupIntervalMillis = expirationCleanupIntervalMillis;
         this.ioThreads = ioThreads;
         this.executorQueueCapacity = executorQueueCapacity;
+        this.executorQueueMaxBytes = executorQueueMaxBytes;
         this.backpressureHighWatermark = backpressureHighWatermark;
         this.backpressureLowWatermark = backpressureLowWatermark;
+        this.backpressureBytesHighWatermark = backpressureBytesHighWatermark;
+        this.backpressureBytesLowWatermark = backpressureBytesLowWatermark;
         this.executorMaxDrainCommands = executorMaxDrainCommands;
         this.executorDrainTimeLimitMillis = executorDrainTimeLimitMillis;
+        this.protocolMaxBulkBytes = protocolMaxBulkBytes;
+        this.protocolMaxArgs = protocolMaxArgs;
+        this.protocolMaxLineBytes = protocolMaxLineBytes;
         this.offheapBackend = offheapBackend;
         this.offheapMaxBytes = offheapMaxBytes;
         this.maxmemoryBytes = maxmemoryBytes;
@@ -77,10 +95,16 @@ final class ServerConfig {
                 parsed.cleanupIntervalMillis,
                 parsed.ioThreads,
                 parsed.executorQueueCapacity,
+                parsed.executorQueueMaxBytes,
                 parsed.backpressureHighWatermark,
                 parsed.backpressureLowWatermark,
+                parsed.backpressureBytesHighWatermark,
+                parsed.backpressureBytesLowWatermark,
                 parsed.executorMaxDrainCommands,
                 parsed.executorDrainTimeLimitMillis,
+                parsed.protocolMaxBulkBytes,
+                parsed.protocolMaxArgs,
+                parsed.protocolMaxLineBytes,
                 parsed.offheapBackend,
                 parsed.offheapMaxBytes,
                 parsed.maxmemoryBytes,

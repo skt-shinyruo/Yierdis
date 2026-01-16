@@ -1,7 +1,7 @@
 package yier.bubu.redis.db.offheap;
 
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapBlock;
 
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
@@ -27,12 +27,12 @@ public final class YierdisUnsafeOffHeapDictLong implements AutoCloseable {
     private static final int INT_BYTES = Integer.BYTES;
     private static final int LONG_BYTES = Long.BYTES;
 
-    private final YierdisUnsafeOffHeapAllocator allocator;
+    private final YierdisOffHeapAddressAllocator allocator;
     private final int seed;
 
     private Table table;
 
-    public YierdisUnsafeOffHeapDictLong(YierdisUnsafeOffHeapAllocator allocator) {
+    public YierdisUnsafeOffHeapDictLong(YierdisOffHeapAddressAllocator allocator) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
         this.seed = ThreadLocalRandom.current().nextInt();
     }
@@ -291,7 +291,7 @@ public final class YierdisUnsafeOffHeapDictLong implements AutoCloseable {
         if (keyLen > 0) {
             keyPtr = allocator.allocateAddress(keyLen);
             try {
-                YierdisUnsafeAccess.copyMemory(key, 0, keyPtr, keyLen);
+                allocator.copyMemory(key, 0, keyPtr, keyLen);
             } catch (RuntimeException e) {
                 allocator.freeAddress(keyPtr, keyLen);
                 throw e;
@@ -359,9 +359,9 @@ public final class YierdisUnsafeOffHeapDictLong implements AutoCloseable {
         }
     }
 
-    private static boolean equalsKey(long storedPtr, byte[] key, int len) {
+    private boolean equalsKey(long storedPtr, byte[] key, int len) {
         for (int i = 0; i < len; i++) {
-            if (YierdisUnsafeAccess.getByte(storedPtr + i) != key[i]) {
+            if (allocator.getByte(storedPtr + i) != key[i]) {
                 return false;
             }
         }
@@ -387,41 +387,41 @@ public final class YierdisUnsafeOffHeapDictLong implements AutoCloseable {
         return cap;
     }
 
-    private static byte getByte(long base, int index) {
-        return YierdisUnsafeAccess.getByte(base + index);
+    private byte getByte(long base, int index) {
+        return allocator.getByte(base + index);
     }
 
-    private static void putByte(long base, int index, byte value) {
-        YierdisUnsafeAccess.putByte(base + index, value);
+    private void putByte(long base, int index, byte value) {
+        allocator.putByte(base + index, value);
     }
 
-    private static int getInt(long base, int index) {
+    private int getInt(long base, int index) {
         long addr = base + (long) index * INT_BYTES;
-        int b0 = YierdisUnsafeAccess.getByte(addr) & 0xff;
-        int b1 = YierdisUnsafeAccess.getByte(addr + 1) & 0xff;
-        int b2 = YierdisUnsafeAccess.getByte(addr + 2) & 0xff;
-        int b3 = YierdisUnsafeAccess.getByte(addr + 3) & 0xff;
+        int b0 = allocator.getByte(addr) & 0xff;
+        int b1 = allocator.getByte(addr + 1) & 0xff;
+        int b2 = allocator.getByte(addr + 2) & 0xff;
+        int b3 = allocator.getByte(addr + 3) & 0xff;
         return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
     }
 
-    private static void putInt(long base, int index, int value) {
+    private void putInt(long base, int index, int value) {
         long addr = base + (long) index * INT_BYTES;
-        YierdisUnsafeAccess.putByte(addr, (byte) value);
-        YierdisUnsafeAccess.putByte(addr + 1, (byte) (value >>> 8));
-        YierdisUnsafeAccess.putByte(addr + 2, (byte) (value >>> 16));
-        YierdisUnsafeAccess.putByte(addr + 3, (byte) (value >>> 24));
+        allocator.putByte(addr, (byte) value);
+        allocator.putByte(addr + 1, (byte) (value >>> 8));
+        allocator.putByte(addr + 2, (byte) (value >>> 16));
+        allocator.putByte(addr + 3, (byte) (value >>> 24));
     }
 
-    private static long getLong(long base, int index) {
+    private long getLong(long base, int index) {
         long addr = base + (long) index * LONG_BYTES;
-        long b0 = YierdisUnsafeAccess.getByte(addr) & 0xffL;
-        long b1 = YierdisUnsafeAccess.getByte(addr + 1) & 0xffL;
-        long b2 = YierdisUnsafeAccess.getByte(addr + 2) & 0xffL;
-        long b3 = YierdisUnsafeAccess.getByte(addr + 3) & 0xffL;
-        long b4 = YierdisUnsafeAccess.getByte(addr + 4) & 0xffL;
-        long b5 = YierdisUnsafeAccess.getByte(addr + 5) & 0xffL;
-        long b6 = YierdisUnsafeAccess.getByte(addr + 6) & 0xffL;
-        long b7 = YierdisUnsafeAccess.getByte(addr + 7) & 0xffL;
+        long b0 = allocator.getByte(addr) & 0xffL;
+        long b1 = allocator.getByte(addr + 1) & 0xffL;
+        long b2 = allocator.getByte(addr + 2) & 0xffL;
+        long b3 = allocator.getByte(addr + 3) & 0xffL;
+        long b4 = allocator.getByte(addr + 4) & 0xffL;
+        long b5 = allocator.getByte(addr + 5) & 0xffL;
+        long b6 = allocator.getByte(addr + 6) & 0xffL;
+        long b7 = allocator.getByte(addr + 7) & 0xffL;
         return b0
                 | (b1 << 8)
                 | (b2 << 16)
@@ -432,16 +432,16 @@ public final class YierdisUnsafeOffHeapDictLong implements AutoCloseable {
                 | (b7 << 56);
     }
 
-    private static void putLong(long base, int index, long value) {
+    private void putLong(long base, int index, long value) {
         long addr = base + (long) index * LONG_BYTES;
-        YierdisUnsafeAccess.putByte(addr, (byte) value);
-        YierdisUnsafeAccess.putByte(addr + 1, (byte) (value >>> 8));
-        YierdisUnsafeAccess.putByte(addr + 2, (byte) (value >>> 16));
-        YierdisUnsafeAccess.putByte(addr + 3, (byte) (value >>> 24));
-        YierdisUnsafeAccess.putByte(addr + 4, (byte) (value >>> 32));
-        YierdisUnsafeAccess.putByte(addr + 5, (byte) (value >>> 40));
-        YierdisUnsafeAccess.putByte(addr + 6, (byte) (value >>> 48));
-        YierdisUnsafeAccess.putByte(addr + 7, (byte) (value >>> 56));
+        allocator.putByte(addr, (byte) value);
+        allocator.putByte(addr + 1, (byte) (value >>> 8));
+        allocator.putByte(addr + 2, (byte) (value >>> 16));
+        allocator.putByte(addr + 3, (byte) (value >>> 24));
+        allocator.putByte(addr + 4, (byte) (value >>> 32));
+        allocator.putByte(addr + 5, (byte) (value >>> 40));
+        allocator.putByte(addr + 6, (byte) (value >>> 48));
+        allocator.putByte(addr + 7, (byte) (value >>> 56));
     }
 
     public static final class KeyHandle {
@@ -467,11 +467,11 @@ public final class YierdisUnsafeOffHeapDictLong implements AutoCloseable {
         int size;
         int used;
 
-        final YierdisUnsafeOffHeapAllocator.YierdisUnsafeOffHeapBlock statesBlock;
-        final YierdisUnsafeOffHeapAllocator.YierdisUnsafeOffHeapBlock hashesBlock;
-        final YierdisUnsafeOffHeapAllocator.YierdisUnsafeOffHeapBlock keyPtrBlock;
-        final YierdisUnsafeOffHeapAllocator.YierdisUnsafeOffHeapBlock keyLenBlock;
-        final YierdisUnsafeOffHeapAllocator.YierdisUnsafeOffHeapBlock valuesBlock;
+        final YierdisOffHeapBlock statesBlock;
+        final YierdisOffHeapBlock hashesBlock;
+        final YierdisOffHeapBlock keyPtrBlock;
+        final YierdisOffHeapBlock keyLenBlock;
+        final YierdisOffHeapBlock valuesBlock;
 
         final long statesAddr;
         final long hashesAddr;
@@ -515,7 +515,7 @@ public final class YierdisUnsafeOffHeapDictLong implements AutoCloseable {
         }
     }
 
-    private static void clearMemory(long address, int bytes) {
+    private void clearMemory(long address, int bytes) {
         if (bytes <= 0) {
             return;
         }
@@ -525,7 +525,7 @@ public final class YierdisUnsafeOffHeapDictLong implements AutoCloseable {
         long dst = address;
         while (remaining > 0) {
             int chunk = Math.min(remaining, zeros.length);
-            YierdisUnsafeAccess.copyMemory(zeros, 0, dst, chunk);
+            allocator.copyMemory(zeros, 0, dst, chunk);
             dst += chunk;
             remaining -= chunk;
         }

@@ -1,4 +1,4 @@
-package yier.bubu.redis.protocol;
+package yier.bubu.redis.protocol.netty;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -7,6 +7,7 @@ import org.junit.Test;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.protocol.RespWriter;
 
 import java.nio.charset.StandardCharsets;
 
@@ -141,4 +142,3 @@ public class RespWriterSliceTest {
         return out;
     }
 }
-

@@ -35,6 +35,8 @@ redis-cli -p 6378 --resp2 ping
 redis-cli -p 6378 --resp3 ping
 ```
 
+`HELLO` 返回的 `version` 字段来自构建版本（`project.version` 资源注入），用于保证对外版本输出与构建产物一致（避免硬编码常量漂移）。
+
 也支持 inline command（便于 telnet/nc 调试；兼容 Redis `sdssplitargs` 风格：支持单/双引号、反斜杠转义、`\\xHH` 十六进制转义）：
 
 ```bash
@@ -158,6 +160,16 @@ java -jar yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar \
 
 - `OBJECT ENCODING <key>`
 - `MEMORY USAGE <key>`
+
+## 协议上限与反压（推荐）
+
+为了避免“少量大 bulk 积压导致内存驻留不可解释”的情况，server 支持按 **条数 + bytes** 做双约束：
+
+- `--protocolMaxBulkBytes <bytes>` / `--protocolMaxArgs <n>` / `--protocolMaxLineBytes <bytes>`：输入上限（DoS 防护）
+- `--executorQueueCapacity <n>`：全局执行队列条数上限（有界队列）
+- `--executorQueueMaxBytes <bytes>`：全局执行队列 bytes 上限（`0` 表示禁用）
+- `--backpressureHigh/--backpressureLow`：连接级条数背压水位线（滞回）
+- `--backpressureBytesHigh/--backpressureBytesLow`：连接级 bytes 背压水位线（滞回；`0` 表示禁用）
 
 ## Off-heap（实验）
 

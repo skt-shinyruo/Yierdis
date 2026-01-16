@@ -4,8 +4,9 @@ import io.netty.util.internal.PlatformDependent;
 import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
 import yier.bubu.redis.db.offheap.api.YierdisDirectBytesSink;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapBlock;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
@@ -18,7 +19,7 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
  * - accounting + optional max-bytes limit
  * - slice views that can be written to Netty {@link ByteBuf} without heap copies
  */
-public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAllocator {
+public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAddressAllocator {
     private static final int INTERNAL_HEADER_BYTES = Long.BYTES;
     private static final int INTERNAL_HEADER_MAGIC = 0x59494552; // "YIER"
     private static final int MIN_BLOCK_BYTES = 8;
@@ -53,7 +54,8 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAlloca
      * This is intentionally unsafe and backend-specific; it is meant for internal off-heap index structures
      * that need address-based access (e.g. hash tables, slot arrays).
      */
-    public YierdisUnsafeOffHeapBlock allocateBlock(int capacity) {
+    @Override
+    public YierdisOffHeapBlock allocateBlock(int capacity) {
         if (capacity <= 0) {
             throw new IllegalArgumentException("capacity must be > 0");
         }
@@ -61,6 +63,7 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAlloca
         return new YierdisUnsafeOffHeapBlock(this, address, capacity);
     }
 
+    @Override
     public long allocateAddress(int capacity) {
         if (capacity <= 0) {
             throw new IllegalArgumentException("capacity must be > 0");
@@ -68,6 +71,7 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAlloca
         return allocateAddressInternal(capacity);
     }
 
+    @Override
     public void freeAddress(long address, int capacity) {
         if (capacity <= 0) {
             throw new IllegalArgumentException("capacity must be > 0");
@@ -167,6 +171,54 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAlloca
         if (reservedBytes != 0) {
             throw new IllegalStateException("off-heap reserved bytes leak: " + reservedBytes + " bytes still reserved");
         }
+    }
+
+    @Override
+    public byte getByte(long address) {
+        if (address == 0) {
+            throw new IllegalArgumentException("address must be != 0");
+        }
+        return YierdisUnsafeAccess.getByte(address);
+    }
+
+    @Override
+    public void putByte(long address, byte value) {
+        if (address == 0) {
+            throw new IllegalArgumentException("address must be != 0");
+        }
+        YierdisUnsafeAccess.putByte(address, value);
+    }
+
+    @Override
+    public void setMemory(long address, long bytes, byte value) {
+        if (address == 0) {
+            throw new IllegalArgumentException("address must be != 0");
+        }
+        YierdisUnsafeAccess.setMemory(address, bytes, value);
+    }
+
+    @Override
+    public void copyMemory(long srcAddress, long dstAddress, long bytes) {
+        if (srcAddress == 0 || dstAddress == 0) {
+            throw new IllegalArgumentException("address must be != 0");
+        }
+        YierdisUnsafeAccess.copyMemory(srcAddress, dstAddress, bytes);
+    }
+
+    @Override
+    public void copyMemory(byte[] src, int srcIndex, long dstAddress, int len) {
+        if (dstAddress == 0) {
+            throw new IllegalArgumentException("dstAddress must be != 0");
+        }
+        YierdisUnsafeAccess.copyMemory(src, srcIndex, dstAddress, len);
+    }
+
+    @Override
+    public void copyMemory(long srcAddress, byte[] dst, int dstIndex, int len) {
+        if (srcAddress == 0) {
+            throw new IllegalArgumentException("srcAddress must be != 0");
+        }
+        YierdisUnsafeAccess.copyMemory(srcAddress, dst, dstIndex, len);
     }
 
     void onFree(int allocBytes) {
@@ -354,7 +406,7 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAlloca
         PlatformDependent.putByte(addr + 7, (byte) (value >>> 56));
     }
 
-    public static final class YierdisUnsafeOffHeapBlock implements AutoCloseable {
+    public static final class YierdisUnsafeOffHeapBlock implements YierdisOffHeapBlock {
         private final YierdisUnsafeOffHeapAllocator owner;
         private final int capacity;
         private long address;
@@ -366,10 +418,12 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAlloca
             this.capacity = capacity;
         }
 
+        @Override
         public long address() {
             return address;
         }
 
+        @Override
         public int capacity() {
             return capacity;
         }

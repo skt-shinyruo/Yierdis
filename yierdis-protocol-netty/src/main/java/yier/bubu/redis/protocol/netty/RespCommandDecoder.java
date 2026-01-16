@@ -1,9 +1,12 @@
-package yier.bubu.redis.protocol;
+package yier.bubu.redis.protocol.netty;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ByteToMessageDecoder;
+
+import yier.bubu.redis.protocol.RespCommand;
+import yier.bubu.redis.protocol.RespCommandBuilder;
 
 import java.util.Arrays;
 import java.util.List;
@@ -31,7 +34,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
         this(DEFAULT_MAX_BULK_BYTES, DEFAULT_MAX_ARGS, DEFAULT_MAX_LINE_BYTES);
     }
 
-    RespCommandDecoder(int maxBulkBytes, int maxArgs, int maxLineBytes) {
+    public RespCommandDecoder(int maxBulkBytes, int maxArgs, int maxLineBytes) {
         this.maxBulkBytes = requirePositive(maxBulkBytes, "maxBulkBytes");
         this.maxArgs = requirePositive(maxArgs, "maxArgs");
         this.maxLineBytes = requirePositive(maxLineBytes, "maxLineBytes");
@@ -90,7 +93,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
 
         in.readerIndex(argcLineEnd + 2); // consume CRLF
 
-        RespCommand cmd = RespCommand.acquire(argc);
+        RespCommand cmd = RespCommandBuilder.acquire(argc);
         try {
             for (int i = 0; i < argc; i++) {
                 if (!in.isReadable()) {
@@ -119,7 +122,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
                 if (len == -1) {
                     // Null bulk string.
                     in.readerIndex(lenLineEnd + 2);
-                    cmd.setArgNull(i);
+                    RespCommandBuilder.setArgNull(cmd, i);
                     continue;
                 }
                 if (len < -1) {
@@ -142,7 +145,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
                     throw new IllegalArgumentException("Protocol error: bad bulk string CRLF");
                 }
 
-                cmd.setArgSlice(i, dataStart - startIdx, len);
+                RespCommandBuilder.setArgSlice(cmd, i, dataStart - startIdx, len);
                 in.readerIndex(end);
             }
 
@@ -151,7 +154,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
             NettyRespFrame frame = new NettyRespFrame(frameBuf);
             boolean ok = false;
             try {
-                cmd.setFrame(frame);
+                RespCommandBuilder.setFrame(cmd, frame);
                 ok = true;
             } finally {
                 if (!ok) {
@@ -298,16 +301,16 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
         // Consume the line (+ CRLF) before we slice; this keeps the control flow aligned with the RESP path.
         in.readerIndex(lineEnd + 2);
 
-        RespCommand cmd = RespCommand.acquire(argc);
+        RespCommand cmd = RespCommandBuilder.acquire(argc);
         for (int arg = 0; arg < argc; arg++) {
-            cmd.setArgSlice(arg, offsets[arg], lengths[arg]);
+            RespCommandBuilder.setArgSlice(cmd, arg, offsets[arg], lengths[arg]);
         }
 
         ByteBuf frameBuf = Unpooled.wrappedBuffer(decoded, 0, outPos);
         NettyRespFrame frame = new NettyRespFrame(frameBuf);
         boolean ok = false;
         try {
-            cmd.setFrame(frame);
+            RespCommandBuilder.setFrame(cmd, frame);
             ok = true;
         } finally {
             if (!ok) {
@@ -407,4 +410,3 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
         return value;
     }
 }
-

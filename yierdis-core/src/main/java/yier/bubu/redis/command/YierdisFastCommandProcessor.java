@@ -10,12 +10,15 @@ import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespWriter;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.AbstractList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Properties;
 import java.util.RandomAccess;
 import java.util.concurrent.TimeUnit;
 
@@ -32,7 +35,7 @@ public final class YierdisFastCommandProcessor {
     private static final byte[] HELLO_SERVER_KEY = "server".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_SERVER_VALUE = "yierdis".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_VERSION_KEY = "version".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] HELLO_VERSION_VALUE = "0.1.0".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] HELLO_VERSION_VALUE = loadVersionBytes();
     private static final byte[] HELLO_PROTO_KEY = "proto".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_PROTO_VALUE = "2".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_PROTO_VALUE_RESP3 = "3".getBytes(StandardCharsets.US_ASCII);
@@ -40,6 +43,23 @@ public final class YierdisFastCommandProcessor {
     private static final byte[] HELLO_MODE_VALUE = "standalone".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_ROLE_KEY = "role".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_ROLE_VALUE = "master".getBytes(StandardCharsets.US_ASCII);
+
+    private static byte[] loadVersionBytes() {
+        String version = "unknown";
+        try (InputStream in = YierdisFastCommandProcessor.class.getResourceAsStream("/yierdis-version.properties")) {
+            if (in != null) {
+                Properties props = new Properties();
+                props.load(in);
+                String v = props.getProperty("version");
+                if (v != null && !v.isBlank()) {
+                    version = v.trim();
+                }
+            }
+        } catch (IOException ignored) {
+            // ignore
+        }
+        return version.getBytes(StandardCharsets.US_ASCII);
+    }
 
     private final YierdisDb db;
     private final ByteArraySliceList slice = new ByteArraySliceList();

@@ -33,6 +33,18 @@ public class YierdisServerArgsTest {
     }
 
     @Test
+    public void invalidBytesWatermarkOrderIsRejected() {
+        YierdisServerArgs args = parse("--backpressureBytesHigh", "10", "--backpressureBytesLow", "10");
+        assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
+    }
+
+    @Test
+    public void bytesLowWithoutBytesHighIsRejected() {
+        YierdisServerArgs args = parse("--backpressureBytesHigh", "0", "--backpressureBytesLow", "1");
+        assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
+    }
+
+    @Test
     public void invalidOffheapBackendIsRejected() {
         YierdisServerArgs args = parse("--offheapBackend", "???");
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
@@ -67,4 +79,3 @@ public class YierdisServerArgsTest {
         }
     }
 }
-

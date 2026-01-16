@@ -12,9 +12,9 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import yier.bubu.redis.protocol.RespArray;
 import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespDecoder;
-import yier.bubu.redis.protocol.RespEncoder;
 import yier.bubu.redis.protocol.RespObject;
+import yier.bubu.redis.protocol.netty.RespDecoder;
+import yier.bubu.redis.protocol.netty.RespEncoder;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -119,4 +119,3 @@ public final class YierdisClient implements AutoCloseable {
         }
     }
 }
-

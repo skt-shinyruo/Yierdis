@@ -7,9 +7,12 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.protocol.RespCommandDecoder;
+import yier.bubu.redis.protocol.netty.RespCommandDecoder;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Properties;
 
 public class Resp3InlineCompatibilityTest {
     @Test
@@ -125,7 +128,7 @@ public class Resp3InlineCompatibilityTest {
                 bulk(ascii("server")),
                 bulk(ascii("yierdis")),
                 bulk(ascii("version")),
-                bulk(ascii("0.1.0")),
+                bulk(ascii(loadVersion())),
                 bulk(ascii("proto")),
                 bulk(ascii("3")),
                 bulk(ascii("mode")),
@@ -144,6 +147,24 @@ public class Resp3InlineCompatibilityTest {
         Assert.assertArrayEquals(ascii("_\r\n"), readOutbound(ch));
 
         ch.finishAndReleaseAll();
+    }
+
+    private static String loadVersion() {
+        String version = "unknown";
+        try (InputStream in = Resp3InlineCompatibilityTest.class.getResourceAsStream("/yierdis-version.properties")) {
+            if (in == null) {
+                return version;
+            }
+            Properties props = new Properties();
+            props.load(in);
+            String v = props.getProperty("version");
+            if (v != null && !v.isBlank()) {
+                version = v.trim();
+            }
+        } catch (IOException ignored) {
+            // ignore
+        }
+        return version;
     }
 
     private static byte[] readOutbound(EmbeddedChannel ch) {

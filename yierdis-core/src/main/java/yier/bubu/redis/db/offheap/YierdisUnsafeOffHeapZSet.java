@@ -2,8 +2,7 @@ package yier.bubu.redis.db.offheap;
 
 import yier.bubu.redis.db.YierdisBulkStringOutput;
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -12,11 +11,11 @@ import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 
 public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
-    private final YierdisUnsafeOffHeapAllocator allocator;
+    private final YierdisOffHeapAddressAllocator allocator;
     private final YierdisUnsafeOffHeapDictLong byMember;
     private final UnsafeZSkipList byScore;
 
-    public YierdisUnsafeOffHeapZSet(YierdisUnsafeOffHeapAllocator allocator) {
+    public YierdisUnsafeOffHeapZSet(YierdisOffHeapAddressAllocator allocator) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
         this.byMember = new YierdisUnsafeOffHeapDictLong(allocator);
         this.byScore = new UnsafeZSkipList(allocator);
@@ -493,7 +492,7 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
     }
 
     private void writeNodeTo(YierdisBulkStringOutput out, long node, boolean withScores) {
-        out.bulkString(new YierdisUnsafeOffHeapRawSlice(byScore.memberPtr(node), byScore.memberLen(node)));
+        out.bulkString(new YierdisUnsafeOffHeapRawSlice(allocator, byScore.memberPtr(node), byScore.memberLen(node)));
         if (!withScores) {
             return;
         }
@@ -612,14 +611,14 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         private static final int LEVEL_OFFSET = 32;
         private static final int HEADER_BYTES = 40;
 
-        private final YierdisUnsafeOffHeapAllocator allocator;
+        private final YierdisOffHeapAddressAllocator allocator;
         private final long header;
 
         private long tail;
         private int level = 1;
         private int length = 0;
 
-        UnsafeZSkipList(YierdisUnsafeOffHeapAllocator allocator) {
+        UnsafeZSkipList(YierdisOffHeapAddressAllocator allocator) {
             this.allocator = allocator;
             this.header = allocateNode(MAX_LEVEL, 0L, 0, 0, 0L);
         }
@@ -831,11 +830,11 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
             return compareLex(memberPtr(node), memberLen(node), memberPtr, memberLen) < 0;
         }
 
-        private static int compareLex(long aPtr, int aLen, long bPtr, int bLen) {
+        private int compareLex(long aPtr, int aLen, long bPtr, int bLen) {
             int min = Math.min(aLen, bLen);
             for (int i = 0; i < min; i++) {
-                int av = YierdisUnsafeAccess.getByte(aPtr + i) & 0xFF;
-                int bv = YierdisUnsafeAccess.getByte(bPtr + i) & 0xFF;
+                int av = allocator.getByte(aPtr + i) & 0xFF;
+                int bv = allocator.getByte(bPtr + i) & 0xFF;
                 if (av != bv) {
                     return Integer.compare(av, bv);
                 }
@@ -883,30 +882,30 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
             return HEADER_BYTES + nodeLevel * Long.BYTES + level * Integer.BYTES;
         }
 
-        private static int readInt(long addr) {
-            int b0 = YierdisUnsafeAccess.getByte(addr) & 0xff;
-            int b1 = YierdisUnsafeAccess.getByte(addr + 1) & 0xff;
-            int b2 = YierdisUnsafeAccess.getByte(addr + 2) & 0xff;
-            int b3 = YierdisUnsafeAccess.getByte(addr + 3) & 0xff;
+        private int readInt(long addr) {
+            int b0 = allocator.getByte(addr) & 0xff;
+            int b1 = allocator.getByte(addr + 1) & 0xff;
+            int b2 = allocator.getByte(addr + 2) & 0xff;
+            int b3 = allocator.getByte(addr + 3) & 0xff;
             return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
         }
 
-        private static void writeInt(long addr, int value) {
-            YierdisUnsafeAccess.putByte(addr, (byte) value);
-            YierdisUnsafeAccess.putByte(addr + 1, (byte) (value >>> 8));
-            YierdisUnsafeAccess.putByte(addr + 2, (byte) (value >>> 16));
-            YierdisUnsafeAccess.putByte(addr + 3, (byte) (value >>> 24));
+        private void writeInt(long addr, int value) {
+            allocator.putByte(addr, (byte) value);
+            allocator.putByte(addr + 1, (byte) (value >>> 8));
+            allocator.putByte(addr + 2, (byte) (value >>> 16));
+            allocator.putByte(addr + 3, (byte) (value >>> 24));
         }
 
-        private static long readLong(long addr) {
-            long b0 = YierdisUnsafeAccess.getByte(addr) & 0xffL;
-            long b1 = YierdisUnsafeAccess.getByte(addr + 1) & 0xffL;
-            long b2 = YierdisUnsafeAccess.getByte(addr + 2) & 0xffL;
-            long b3 = YierdisUnsafeAccess.getByte(addr + 3) & 0xffL;
-            long b4 = YierdisUnsafeAccess.getByte(addr + 4) & 0xffL;
-            long b5 = YierdisUnsafeAccess.getByte(addr + 5) & 0xffL;
-            long b6 = YierdisUnsafeAccess.getByte(addr + 6) & 0xffL;
-            long b7 = YierdisUnsafeAccess.getByte(addr + 7) & 0xffL;
+        private long readLong(long addr) {
+            long b0 = allocator.getByte(addr) & 0xffL;
+            long b1 = allocator.getByte(addr + 1) & 0xffL;
+            long b2 = allocator.getByte(addr + 2) & 0xffL;
+            long b3 = allocator.getByte(addr + 3) & 0xffL;
+            long b4 = allocator.getByte(addr + 4) & 0xffL;
+            long b5 = allocator.getByte(addr + 5) & 0xffL;
+            long b6 = allocator.getByte(addr + 6) & 0xffL;
+            long b7 = allocator.getByte(addr + 7) & 0xffL;
             return b0
                     | (b1 << 8)
                     | (b2 << 16)
@@ -917,15 +916,15 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
                     | (b7 << 56);
         }
 
-        private static void writeLong(long addr, long value) {
-            YierdisUnsafeAccess.putByte(addr, (byte) value);
-            YierdisUnsafeAccess.putByte(addr + 1, (byte) (value >>> 8));
-            YierdisUnsafeAccess.putByte(addr + 2, (byte) (value >>> 16));
-            YierdisUnsafeAccess.putByte(addr + 3, (byte) (value >>> 24));
-            YierdisUnsafeAccess.putByte(addr + 4, (byte) (value >>> 32));
-            YierdisUnsafeAccess.putByte(addr + 5, (byte) (value >>> 40));
-            YierdisUnsafeAccess.putByte(addr + 6, (byte) (value >>> 48));
-            YierdisUnsafeAccess.putByte(addr + 7, (byte) (value >>> 56));
+        private void writeLong(long addr, long value) {
+            allocator.putByte(addr, (byte) value);
+            allocator.putByte(addr + 1, (byte) (value >>> 8));
+            allocator.putByte(addr + 2, (byte) (value >>> 16));
+            allocator.putByte(addr + 3, (byte) (value >>> 24));
+            allocator.putByte(addr + 4, (byte) (value >>> 32));
+            allocator.putByte(addr + 5, (byte) (value >>> 40));
+            allocator.putByte(addr + 6, (byte) (value >>> 48));
+            allocator.putByte(addr + 7, (byte) (value >>> 56));
         }
     }
 }

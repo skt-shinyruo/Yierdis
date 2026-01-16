@@ -2,8 +2,8 @@ package yier.bubu.redis.db.offheap;
 
 import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisDirectBytesSink;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeAccess;
 
 /**
  * A raw off-heap slice backed by an absolute address.
@@ -16,16 +16,21 @@ public final class YierdisUnsafeOffHeapRawSlice implements YierdisOffHeapSlice {
     private static final ThreadLocal<byte[]> TL_COPY_BUF =
             ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
 
+    private final YierdisOffHeapAddressAllocator allocator;
     private final long address;
     private final int len;
 
-    public YierdisUnsafeOffHeapRawSlice(long address, int len) {
+    public YierdisUnsafeOffHeapRawSlice(YierdisOffHeapAddressAllocator allocator, long address, int len) {
+        if (allocator == null) {
+            throw new IllegalArgumentException("allocator must not be null");
+        }
         if (address == 0) {
             throw new IllegalArgumentException("address must be != 0");
         }
         if (len < 0) {
             throw new IllegalArgumentException("len must be >= 0");
         }
+        this.allocator = allocator;
         this.address = address;
         this.len = len;
     }
@@ -40,7 +45,7 @@ public final class YierdisUnsafeOffHeapRawSlice implements YierdisOffHeapSlice {
         if (index < 0 || index >= len) {
             throw new IndexOutOfBoundsException();
         }
-        return YierdisUnsafeAccess.getByte(address + index);
+        return allocator.getByte(address + index);
     }
 
     @Override
@@ -60,7 +65,7 @@ public final class YierdisUnsafeOffHeapRawSlice implements YierdisOffHeapSlice {
         if (readLen == 0) {
             return;
         }
-        YierdisUnsafeAccess.copyMemory(address + index, dst, dstOff, readLen);
+        allocator.copyMemory(address + index, dst, dstOff, readLen);
     }
 
     @Override
@@ -76,7 +81,7 @@ public final class YierdisUnsafeOffHeapRawSlice implements YierdisOffHeapSlice {
             int before = directSink.writerIndex();
             directSink.ensureWritable(len);
             long dstAddr = directSink.memoryAddress() + before;
-            YierdisUnsafeAccess.copyMemory(address, dstAddr, len);
+            allocator.copyMemory(address, dstAddr, len);
             directSink.writerIndex(before + len);
             return;
         }
@@ -86,7 +91,7 @@ public final class YierdisUnsafeOffHeapRawSlice implements YierdisOffHeapSlice {
         long src = address;
         while (remaining > 0) {
             int chunk = Math.min(remaining, scratch.length);
-            YierdisUnsafeAccess.copyMemory(src, scratch, 0, chunk);
+            allocator.copyMemory(src, scratch, 0, chunk);
             out.writeBytes(scratch, 0, chunk);
             src += chunk;
             remaining -= chunk;

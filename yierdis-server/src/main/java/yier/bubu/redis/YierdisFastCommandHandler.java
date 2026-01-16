@@ -7,9 +7,9 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.DecoderException;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.offheap.netty.YierdisNettyByteBufSink;
-import yier.bubu.redis.protocol.NettyRespSession;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.netty.NettyRespSession;
 
 public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler<RespCommand> {
     private final YierdisFastCommandProcessor commandProcessor;

@@ -4,7 +4,6 @@ import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocators;
-import yier.bubu.redis.protocol.RespCommandDecoder;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -18,6 +17,7 @@ import io.netty.util.concurrent.EventExecutorGroup;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import yier.bubu.redis.protocol.netty.RespCommandDecoder;
 
 import java.util.concurrent.TimeUnit;
 
@@ -53,8 +53,11 @@ public final class YierdisServer {
                 commandProcessor,
                 commandGroup.next(),
                 config.executorQueueCapacity,
+                config.executorQueueMaxBytes,
                 config.backpressureHighWatermark,
                 config.backpressureLowWatermark,
+                config.backpressureBytesHighWatermark,
+                config.backpressureBytesLowWatermark,
                 config.executorMaxDrainCommands,
                 config.executorDrainTimeLimitMillis
         );
@@ -87,7 +90,11 @@ public final class YierdisServer {
                         @Override
                         protected void initChannel(SocketChannel ch) {
                             ch.pipeline()
-                                    .addLast("respCommandDecoder", new RespCommandDecoder())
+                                    .addLast("respCommandDecoder", new RespCommandDecoder(
+                                            config.protocolMaxBulkBytes,
+                                            config.protocolMaxArgs,
+                                            config.protocolMaxLineBytes
+                                    ))
                                     .addLast("commandHandler", new YierdisFastCommandHandler(commandProcessor, executor));
                         }
                     });
@@ -99,11 +106,17 @@ public final class YierdisServer {
             if (cleanupFuture != null) {
                 cleanupFuture.cancel(false);
             }
-            executor.close();
-            db.shutdown();
-            bossGroup.shutdownGracefully();
-            workerGroup.shutdownGracefully();
-            commandGroup.shutdownGracefully();
+
+            // Stop accepting new commands and ensure queued frames are released before shutting down the DB.
+            executor.shutdownGracefully().syncUninterruptibly();
+
+            // DB teardown must not race with command execution. Run it on the executor thread.
+            executor.executor().submit(db::shutdown).syncUninterruptibly();
+
+            // Shut down thread pools (wait to avoid leaking threads/resources in tests and tools).
+            commandGroup.shutdownGracefully().syncUninterruptibly();
+            bossGroup.shutdownGracefully().syncUninterruptibly();
+            workerGroup.shutdownGracefully().syncUninterruptibly();
         }
     }
 
