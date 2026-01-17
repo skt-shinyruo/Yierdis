@@ -20,6 +20,7 @@
 将 Netty `ByteBuf` 字节流解码为 `RespCommand`：
 - 支持 RESP2 multi-bulk（`*<argc> ...`）作为主路径
 - 支持 inline command（调试用，兼容 `sdssplitargs` 风格：引号/转义/`\\xHH`）
+- 严格区分 request/reply：仅接受 `*` multi-bulk 与 inline command；对 RESP reply（含常见 RESP3 类型前缀）与控制字符前缀统一判为 `Protocol error`，避免误路由为 inline 导致执行层状态错乱
 - 保持参数 **二进制安全**：bulk string 不强制 UTF-8 解码
 - 支持输入上限参数化：`maxBulkBytes/maxArgs/maxLineBytes`（与 server args SSOT 对齐，避免 DoS 风险）
 
@@ -29,6 +30,14 @@
 RESP2/RESP3 的协商属于连接级状态：
 - Netty 侧通过 `ConnectionContext`（实现 `RespSession`）将状态绑定到连接（典型实现为 `Channel.attr`）
 - SSOT 的 `RespWriter` 仅依赖 `RespSession` 抽象，不直接依赖 Netty
+- 说明：`ConnectionContext` **仅承载协议会话**（RESP2/RESP3）；server 侧背压/统计/closing 等运行时连接状态属于服务端实现细节，收敛到 server 模块的 `ServerConnectionState`；执行器调度 state 属于 server 内部实现细节，收敛到 `NettyExecutorChannelState`（避免 protocol 模块被调度策略绑死）
+
+### Requirement: 编码输出语义收敛（writer SSOT）
+**Module:** protocol-netty
+
+为避免 server fast-path（`RespWriter`）与 Netty codec（`RespEncoder`）的输出行为漂移：
+- `RespEncoder` 仅作为 Netty adapter：写出时内部调用 `RespWriter`（通过 `NettyByteBufSink` 适配到 `ByteBuf`）
+- CR/LF 净化与限长等安全语义以 `RespWriter` 为唯一权威
 
 ### Requirement: ByteBuf ownership/release（泄漏风险控制）
 **Module:** protocol-netty
@@ -45,9 +54,11 @@ RESP2/RESP3 的协商属于连接级状态：
 ## Dependencies
 
 - `yierdis-protocol`（RESP 对象模型 + `RespFrame/RespSession` 抽象 + `RespWriter`）
+- `yierdis-bytes-netty`（`ByteBuf` ↔ `BytesSink` 适配）
 - Netty（buffer/codec/pipeline）
 
 ## Change History
 
 - 2026-01-15：边界加固：netty codec/adapters 迁移到独立包 `yier.bubu.redis.protocol.netty`，`yierdis-protocol` 独占 `yier.bubu.redis.protocol`（消除 split-package）。
 - 2026-01-16：增加 `RespFrame.retainedBytes()` 口径与 `RespCommandBuilder.replaceFrame(...)`，为执行器 bytes 预算与 compaction 提供协议层支撑。
+- 2026-01-17：request 解码严格化：明确允许集合（array + inline），对 RESP reply/非法前缀统一 protocol error；连接态二分：`ConnectionContext` 仅表达协议会话，server 运行时连接状态迁移到 `ServerConnectionState`；`RespEncoder` 写出语义收敛为 `RespWriter`。

@@ -1,17 +1,16 @@
 package yier.bubu.redis;
 
+// INFO/STATS 提供器：基于执行器统计与连接态（ServerConnectionState）输出可观测性摘要，避免在热路径做额外分配。
+
 import yier.bubu.redis.command.ServerInfoProvider;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespSession;
 import yier.bubu.redis.protocol.RespWriter;
-import yier.bubu.redis.protocol.netty.ConnectionContext;
+import yier.bubu.redis.protocol.YierdisBuildInfo;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
-import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -24,7 +23,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private static final byte[] KEY_SERVER = ascii("server");
     private static final byte[] VALUE_SERVER = ascii("yierdis");
     private static final byte[] KEY_VERSION = ascii("version");
-    private static final byte[] VALUE_VERSION = loadVersionBytes();
+    private static final byte[] VALUE_VERSION = YierdisBuildInfo.versionAsciiBytes();
     private static final byte[] KEY_PORT = ascii("port");
     private static final byte[] KEY_IO_THREADS = ascii("io_threads");
     private static final byte[] KEY_EXECUTOR_POLICY = ascii("executor_policy");
@@ -124,7 +123,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         NettyCommandExecutor.StatsSnapshot s = ex.statsSnapshot();
-        ConnectionContext conn = connectionContext(out);
+        ServerConnectionState conn = connectionState(out);
 
         int pairs = 15 + (conn == null ? 0 : 11);
         writeHeader(out, pairs);
@@ -162,9 +161,9 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_CONN_BACKPRESSURE_EXIT, conn.backpressureExitCounter().get());
     }
 
-    private static ConnectionContext connectionContext(RespWriter out) {
+    private static ServerConnectionState connectionState(RespWriter out) {
         RespSession session = out.session();
-        if (session instanceof ConnectionContext ctx) {
+        if (session instanceof ServerConnectionState ctx) {
             return ctx;
         }
         return null;
@@ -187,23 +186,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private static void writePair(RespWriter out, byte[] key, long value) {
         out.bulkString(key);
         out.integer(value);
-    }
-
-    private static byte[] loadVersionBytes() {
-        String version = "unknown";
-        try (InputStream in = NettyServerInfoProvider.class.getResourceAsStream("/yierdis-version.properties")) {
-            if (in != null) {
-                Properties props = new Properties();
-                props.load(in);
-                String v = props.getProperty("version");
-                if (v != null && !v.isBlank()) {
-                    version = v.trim();
-                }
-            }
-        } catch (IOException ignored) {
-            // ignore
-        }
-        return version.getBytes(StandardCharsets.US_ASCII);
     }
 
     private static byte[] ascii(String s) {

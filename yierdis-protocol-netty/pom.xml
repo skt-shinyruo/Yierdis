@@ -24,6 +24,12 @@
         </dependency>
 
         <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-bytes-netty</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-all</artifactId>
         </dependency>

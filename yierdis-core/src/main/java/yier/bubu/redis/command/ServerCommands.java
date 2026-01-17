@@ -1,20 +1,20 @@
 package yier.bubu.redis.command;
 
+// server 侧通用命令实现：包含 PING/ECHO/HELLO/INFO/QUIT 等基础命令，并通过 RespWriter 直接写回响应。
+
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.YierdisBuildInfo;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
-import java.util.Properties;
 
 final class ServerCommands {
     private static final byte[] HELLO_SERVER_KEY = "server".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_SERVER_VALUE = "yierdis".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_VERSION_KEY = "version".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] HELLO_VERSION_VALUE = loadVersionBytes();
+    private static final byte[] HELLO_VERSION_VALUE = YierdisBuildInfo.versionAsciiBytes();
     private static final byte[] HELLO_PROTO_KEY = "proto".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_PROTO_VALUE = "2".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_PROTO_VALUE_RESP3 = "3".getBytes(StandardCharsets.US_ASCII);
@@ -144,22 +144,5 @@ final class ServerCommands {
     private void flushdb(RespCommand cmd, RespWriter out) {
         support.db().flushDb();
         out.simpleString("OK");
-    }
-
-    private static byte[] loadVersionBytes() {
-        String version = "unknown";
-        try (InputStream in = ServerCommands.class.getResourceAsStream("/yierdis-version.properties")) {
-            if (in != null) {
-                Properties props = new Properties();
-                props.load(in);
-                String v = props.getProperty("version");
-                if (v != null && !v.isBlank()) {
-                    version = v.trim();
-                }
-            }
-        } catch (IOException ignored) {
-            // ignore
-        }
-        return version.getBytes(StandardCharsets.US_ASCII);
     }
 }

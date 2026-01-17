@@ -1,10 +1,12 @@
 package yier.bubu.redis.client;
 
+import picocli.CommandLine;
 import yier.bubu.redis.protocol.RespArray;
 import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.protocol.RespError;
 import yier.bubu.redis.protocol.RespFrame;
 import yier.bubu.redis.protocol.RespInteger;
+import yier.bubu.redis.protocol.RespLimits;
 import yier.bubu.redis.protocol.RespMap;
 import yier.bubu.redis.protocol.RespNull;
 import yier.bubu.redis.protocol.RespObject;
@@ -13,47 +15,61 @@ import yier.bubu.redis.protocol.RespInlineCommandParser;
 import yier.bubu.redis.protocol.RespObjectParser;
 
 import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Properties;
 
 public final class YierdisCli {
-    public static void main(String[] args) throws Exception {
-        Config config = Config.parse(args);
-        if (config.showHelp) {
-            printHelp();
-            return;
+    public static void main(String[] args) {
+        System.exit(run(args));
+    }
+
+    static int run(String[] args) {
+        YierdisCliArgs parsed = new YierdisCliArgs();
+        CommandLine cmd = new CommandLine(parsed);
+        cmd.setStopAtPositional(true);
+        try {
+            cmd.parseArgs(args);
+        } catch (CommandLine.ParameterException e) {
+            System.err.println(e.getMessage());
+            cmd.usage(System.err);
+            return 2;
         }
 
-        try (YierdisClient client = YierdisClient.connect(config.host, config.port)) {
-            if (!config.commandArgs.isEmpty()) {
-                try (RespFrame frame = client.execute(config.commandArgs, config.timeoutMillis)) {
+        if (parsed.help) {
+            cmd.usage(System.out);
+            return 0;
+        }
+
+        try (YierdisClient client = YierdisClient.connect(parsed.host, parsed.port)) {
+            if (!parsed.command.isEmpty()) {
+                List<byte[]> commandArgs = parsed.command.stream()
+                        .map(s -> s == null ? null : s.getBytes(StandardCharsets.UTF_8))
+                        .toList();
+
+                try (RespFrame frame = client.execute(commandArgs, parsed.timeoutMillis)) {
                     RespObject resp = RespObjectParser.parse(frame);
-                    printResp(resp, config.hex);
-                    if (resp instanceof RespError) {
-                        System.exit(1);
-                    }
+                    printResp(resp, parsed.hex);
+                    return resp instanceof RespError ? 1 : 0;
                 }
-                return;
             }
 
-            runRepl(client, config);
+            return runRepl(client, parsed);
+        } catch (Exception e) {
+            System.err.println("(error) " + e.getMessage());
+            return 1;
         }
     }
 
-    private static void runRepl(YierdisClient client, Config config) throws Exception {
+    private static int runRepl(YierdisClient client, YierdisCliArgs config) throws Exception {
         BufferedReader br = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
         while (true) {
             System.out.print("yierdis> ");
             System.out.flush();
             String line = br.readLine();
             if (line == null) {
-                return;
+                return 0;
             }
 
             line = line.trim();
@@ -68,7 +84,7 @@ public final class YierdisCli {
                     }
                 } catch (Exception ignored) {
                 }
-                return;
+                return 0;
             }
 
             final List<byte[]> cmd;
@@ -91,42 +107,6 @@ public final class YierdisCli {
                 System.err.println("(error) " + e.getMessage());
             }
         }
-    }
-
-    private static void printHelp() {
-        String version = loadVersion();
-        String jar = "yierdis-client-" + version + ".jar";
-        System.out.println("Usage:");
-        System.out.println("  java -jar yierdis-client/target/" + jar + " [options] [COMMAND [ARG...]]");
-        System.out.println();
-        System.out.println("Options:");
-        System.out.println("  --host <host>            Default: 127.0.0.1");
-        System.out.println("  --port <port>            Default: 6378");
-        System.out.println("  --timeoutMillis <ms>     Default: 5000");
-        System.out.println("  --hex                    Print bulk strings as hex bytes");
-        System.out.println("  -h, --help               Show help");
-        System.out.println();
-        System.out.println("Examples:");
-        System.out.println("  java -jar yierdis-client/target/" + jar + " PING");
-        System.out.println("  java -jar yierdis-client/target/" + jar + " SET a 1");
-        System.out.println("  java -jar yierdis-client/target/" + jar + " --port 6378 GET a");
-    }
-
-    private static String loadVersion() {
-        String version = "unknown";
-        try (InputStream in = YierdisCli.class.getResourceAsStream("/yierdis-version.properties")) {
-            if (in != null) {
-                Properties props = new Properties();
-                props.load(in);
-                String v = props.getProperty("version");
-                if (v != null && !v.isBlank()) {
-                    version = v.trim();
-                }
-            }
-        } catch (IOException ignored) {
-            // ignore
-        }
-        return version;
     }
 
     private static void printResp(RespObject obj, boolean hex) {
@@ -279,71 +259,7 @@ public final class YierdisCli {
 
     private static List<byte[]> parseArgsToUtf8Bytes(String line) {
         // 保持与 server inline command 相同的解析规则（sdssplitargs 风格）。
-        return RespInlineCommandParser.splitUtf8(line, 1024);
-    }
-
-    private static final class Config {
-        final String host;
-        final int port;
-        final long timeoutMillis;
-        final boolean hex;
-        final boolean showHelp;
-        final List<byte[]> commandArgs;
-
-        private Config(String host, int port, long timeoutMillis, boolean hex, boolean showHelp, List<byte[]> commandArgs) {
-            this.host = host;
-            this.port = port;
-            this.timeoutMillis = timeoutMillis;
-            this.hex = hex;
-            this.showHelp = showHelp;
-            this.commandArgs = commandArgs;
-        }
-
-        static Config parse(String[] args) {
-            String host = "127.0.0.1";
-            int port = 6378;
-            long timeoutMillis = 5000;
-            boolean hex = false;
-            boolean showHelp = false;
-
-            int i = 0;
-            while (i < args.length) {
-                String a = args[i];
-                if ("-h".equals(a) || "--help".equals(a)) {
-                    showHelp = true;
-                    i++;
-                    continue;
-                }
-                if ("--hex".equals(a)) {
-                    hex = true;
-                    i++;
-                    continue;
-                }
-                if ("--host".equals(a) && i + 1 < args.length) {
-                    host = args[++i];
-                    i++;
-                    continue;
-                }
-                if ("--port".equals(a) && i + 1 < args.length) {
-                    port = Integer.parseInt(args[++i]);
-                    i++;
-                    continue;
-                }
-                if ("--timeoutMillis".equals(a) && i + 1 < args.length) {
-                    timeoutMillis = Long.parseLong(args[++i]);
-                    i++;
-                    continue;
-                }
-                break;
-            }
-
-            List<byte[]> cmd = new ArrayList<>();
-            for (; i < args.length; i++) {
-                cmd.add(args[i].getBytes(StandardCharsets.UTF_8));
-            }
-
-            return new Config(host, port, timeoutMillis, hex, showHelp, cmd);
-        }
+        return RespInlineCommandParser.splitUtf8(line, RespLimits.DEFAULT_MAX_ARGS);
     }
 
     private YierdisCli() {

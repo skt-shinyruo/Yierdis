@@ -27,6 +27,14 @@
 - `RespSession` 负责承载连接级协议状态（RESP2/RESP3），供 `RespWriter` 在写出时选择对应编码
 - 具体 codec 与 Netty 绑定的实现放在 `yierdis-protocol-netty`
 
+### Requirement: 协议默认安全上限 SSOT（`RespLimits`）
+**Module:** protocol
+
+为避免 server/client/codec/parser 在默认值上发生漂移（导致 DoS 风险、线上行为不一致或“参数看似可调但默认不一致”）：
+- `RespLimits` 作为 RESP 相关默认上限的 **Single Source of Truth**
+- 典型覆盖：`maxBulkBytes/maxArgs/maxLineBytes` 以及 reply 解析相关的 `maxArrayLen/maxNestingDepth`
+- 期望：`yierdis-args`（server 参数默认值）、`RespObjectParser`、Netty decoder 默认值保持一致，并通过单测锁定
+
 ### Requirement: RESP3（最小子集）握手与 nil
 **Module:** protocol
 在客户端通过 `HELLO 3` 协商后，服务端切换为 RESP3 回复，确保常见客户端探测路径可用。
@@ -59,3 +67,4 @@
 - 2026-01-07：支持 `HELLO 3` 协商切换 RESP3（最小子集），并增加最小 inline command 解码路径。
 - 2026-01-08：inline command 解析增强：支持单/双引号、反斜杠转义与 `\\xHH` 十六进制转义。
 - 2026-01-15：拆分 `yierdis-protocol-netty` 承载 Netty codec/adapters；`yierdis-protocol` 收敛为 Netty-free SSOT（对象模型 + `RespWriter` + `RespFrame/RespSession` 抽象）。
+- 2026-01-17：新增 `RespLimits` 作为协议默认安全上限 SSOT，并将默认值在 parser/decoder/args 之间收敛。

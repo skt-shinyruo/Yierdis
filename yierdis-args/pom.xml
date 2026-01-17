@@ -18,6 +18,12 @@
 
     <dependencies>
         <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-protocol</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
             <groupId>info.picocli</groupId>
             <artifactId>picocli</artifactId>
         </dependency>

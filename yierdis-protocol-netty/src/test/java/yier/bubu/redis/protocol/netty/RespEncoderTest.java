@@ -31,6 +31,18 @@ public class RespEncoderTest {
     }
 
     @Test
+    public void encodeErrorSanitizesCrLf() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespEncoder());
+
+        Assert.assertTrue(ch.writeOutbound(RespError.of("ERR a\r\nb")));
+
+        // Avoid RESP response splitting: CR/LF must be sanitized to spaces.
+        Assert.assertArrayEquals(ascii("-ERR a  b\r\n"), readBytes(ch));
+
+        ch.finishAndReleaseAll();
+    }
+
+    @Test
     public void encodeNilBulkStringAndNullArray() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespEncoder());
 

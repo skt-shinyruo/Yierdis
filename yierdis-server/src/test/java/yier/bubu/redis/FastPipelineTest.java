@@ -223,15 +223,26 @@ public class FastPipelineTest {
         try (TestEnv env = new TestEnv()) {
             EmbeddedChannel ch = env.ch;
 
-            try {
-                ch.writeInbound(Unpooled.wrappedBuffer(ascii("+OK\r\n")));
-            } catch (Exception ignored) {
-                // EmbeddedChannel may surface decoder exceptions; the handler should still have produced an error reply.
-            }
-            Assert.assertArrayEquals(ascii("-ERR Protocol error: expected array\r\n"), readOutbound(ch));
+            byte[][] bad = new byte[][]{
+                    ascii("+OK\r\n"),
+                    ascii("%1\r\n") // RESP3 map prefix (reply type) must not be treated as inline command
+            };
 
-            ch.runPendingTasks();
-            Assert.assertFalse(ch.isOpen());
+            for (byte[] input : bad) {
+                try {
+                    ch.writeInbound(Unpooled.wrappedBuffer(input));
+                } catch (Exception ignored) {
+                    // EmbeddedChannel may surface decoder exceptions; the handler should still have produced an error reply.
+                }
+                Assert.assertArrayEquals(ascii("-ERR Protocol error: expected array\r\n"), readOutbound(ch));
+
+                ch.runPendingTasks();
+                Assert.assertFalse(ch.isOpen());
+
+                // 每个 case 复用新的 channel（协议错误会关闭连接）。
+                ch.finishAndReleaseAll();
+                ch = env.newChannel();
+            }
         }
     }
 
@@ -297,7 +308,7 @@ public class FastPipelineTest {
     private static final class TestEnv implements AutoCloseable {
         private final YierdisDb db;
         private final NettyCommandExecutor executor;
-        private final EmbeddedChannel ch;
+        private EmbeddedChannel ch;
 
         private TestEnv() {
             this.db = new YierdisDb();
@@ -316,7 +327,13 @@ public class FastPipelineTest {
                     10
             );
             executor.start();
-            this.ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
+            this.ch = newChannel();
+        }
+
+        private EmbeddedChannel newChannel() {
+            EmbeddedChannel next = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
+            this.ch = next;
+            return next;
         }
 
         @Override

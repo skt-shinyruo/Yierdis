@@ -11,9 +11,11 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.buffer.Unpooled;
 import io.netty.util.ReferenceCountUtil;
 import yier.bubu.redis.YierdisServerBootstrap;
 import yier.bubu.redis.protocol.RespBulkString;
+import yier.bubu.redis.protocol.RespArray;
 import yier.bubu.redis.protocol.RespError;
 import yier.bubu.redis.protocol.RespFrame;
 import yier.bubu.redis.protocol.RespMap;
@@ -25,6 +27,9 @@ import yier.bubu.redis.protocol.RespObjectParser;
 import java.nio.charset.StandardCharsets;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 public class YierdisClientTest {
     @Test
@@ -105,6 +110,35 @@ public class YierdisClientTest {
     }
 
     @Test
+    public void memoryStatsHasStableKeySet() throws Exception {
+        try (TestServer server = TestServer.start()) {
+            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+                try (RespFrame frame = client.execute(Arrays.asList(b("MEMORY"), b("STATS")), 1000)) {
+                    RespObject obj = RespObjectParser.parse(frame);
+                    Assert.assertTrue(obj instanceof RespArray);
+                    RespArray arr = (RespArray) obj;
+                    Assert.assertFalse(arr.isNull());
+                    Assert.assertNotNull(arr.values());
+                    Assert.assertEquals(34, arr.values().size());
+
+                    HashSet<String> keys = new HashSet<>();
+                    for (int i = 0; i < arr.values().size(); i += 2) {
+                        keys.add(bulkUtf8(arr.values().get(i)));
+                    }
+
+                    Assert.assertTrue(keys.contains("maxmemory_bytes"));
+                    Assert.assertTrue(keys.contains("used_bytes_for_maxmemory"));
+                    Assert.assertTrue(keys.contains("heap_data_bytes_estimate"));
+                    Assert.assertTrue(keys.contains("offheap_used_bytes"));
+                    Assert.assertTrue(keys.contains("total_estimated_bytes"));
+                    Assert.assertTrue(keys.contains("key_count"));
+                    Assert.assertTrue(keys.contains("expire_count"));
+                }
+            }
+        }
+    }
+
+    @Test
     public void executeRejectsNonPositiveTimeout() throws Exception {
         try (TestServer server = TestServer.start()) {
             try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
@@ -134,6 +168,43 @@ public class YierdisClientTest {
                     Assert.fail("Expected IllegalStateException");
                 } catch (IllegalStateException e) {
                     Assert.assertTrue(e.getMessage().toLowerCase().contains("closed"));
+                }
+            }
+        }
+    }
+
+    @Test
+    public void serverCloseWakesExecuteWithoutTimeout() throws Exception {
+        try (CloseOnReadServer server = CloseOnReadServer.start()) {
+            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+                try {
+                    client.execute(Arrays.asList(b("PING")), 5000);
+                    Assert.fail("Expected IllegalStateException");
+                } catch (IllegalStateException e) {
+                    String msg = String.valueOf(e.getMessage());
+                    Assert.assertFalse(msg.contains("Timeout waiting for response"));
+                    Assert.assertTrue(msg.toLowerCase().contains("closed")
+                            || (e.getCause() != null && String.valueOf(e.getCause().getMessage()).toLowerCase().contains("closed")));
+                }
+            }
+        }
+    }
+
+    @Test
+    public void responseQueueOverflowClosesConnection() throws Exception {
+        try (FloodingServer server = FloodingServer.start(256)) {
+            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+                Assert.assertTrue(server.awaitFlood(1_000));
+                // Give the client a moment to decode/enqueue a few frames.
+                Thread.sleep(50);
+
+                try {
+                    client.execute(Arrays.asList(b("PING")), 1000);
+                    Assert.fail("Expected IllegalStateException");
+                } catch (IllegalStateException e) {
+                    String m1 = String.valueOf(e.getMessage()).toLowerCase();
+                    String m2 = e.getCause() == null ? "" : String.valueOf(e.getCause().getMessage()).toLowerCase();
+                    Assert.assertTrue(m1.contains("overflow") || m2.contains("overflow"));
                 }
             }
         }
@@ -215,6 +286,133 @@ public class YierdisClientTest {
 
             Channel ch = bootstrap.bind(0).sync().channel();
             return new BlackholeServer(boss, workers, ch);
+        }
+
+        int port() {
+            if (serverChannel.localAddress() instanceof InetSocketAddress addr) {
+                return addr.getPort();
+            }
+            throw new IllegalStateException("No local address");
+        }
+
+        @Override
+        public void close() {
+            try {
+                serverChannel.close().syncUninterruptibly();
+            } finally {
+                boss.shutdownGracefully();
+                workers.shutdownGracefully();
+            }
+        }
+    }
+
+    /**
+     * A TCP server that closes immediately after receiving any bytes.
+     * <p>
+     * Used to verify the client unblocks on close (without waiting for timeout).
+     */
+    private static final class CloseOnReadServer implements AutoCloseable {
+        private final EventLoopGroup boss;
+        private final EventLoopGroup workers;
+        private final Channel serverChannel;
+
+        private CloseOnReadServer(EventLoopGroup boss, EventLoopGroup workers, Channel serverChannel) {
+            this.boss = boss;
+            this.workers = workers;
+            this.serverChannel = serverChannel;
+        }
+
+        static CloseOnReadServer start() throws Exception {
+            EventLoopGroup boss = new NioEventLoopGroup(1);
+            EventLoopGroup workers = new NioEventLoopGroup(1);
+
+            ServerBootstrap bootstrap = new ServerBootstrap();
+            bootstrap.group(boss, workers)
+                    .channel(NioServerSocketChannel.class)
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) {
+                            ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+                                @Override
+                                public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                                    ReferenceCountUtil.release(msg);
+                                    ctx.close();
+                                }
+                            });
+                        }
+                    });
+
+            Channel ch = bootstrap.bind(0).sync().channel();
+            return new CloseOnReadServer(boss, workers, ch);
+        }
+
+        int port() {
+            if (serverChannel.localAddress() instanceof InetSocketAddress addr) {
+                return addr.getPort();
+            }
+            throw new IllegalStateException("No local address");
+        }
+
+        @Override
+        public void close() {
+            try {
+                serverChannel.close().syncUninterruptibly();
+            } finally {
+                boss.shutdownGracefully();
+                workers.shutdownGracefully();
+            }
+        }
+    }
+
+    /**
+     * A server that floods RESP frames on connect, used to trigger client response queue overflow.
+     */
+    private static final class FloodingServer implements AutoCloseable {
+        private final EventLoopGroup boss;
+        private final EventLoopGroup workers;
+        private final Channel serverChannel;
+        private final CountDownLatch flooded;
+        private final int frames;
+
+        private FloodingServer(EventLoopGroup boss, EventLoopGroup workers, Channel serverChannel, CountDownLatch flooded, int frames) {
+            this.boss = boss;
+            this.workers = workers;
+            this.serverChannel = serverChannel;
+            this.flooded = flooded;
+            this.frames = frames;
+        }
+
+        static FloodingServer start(int frames) throws Exception {
+            EventLoopGroup boss = new NioEventLoopGroup(1);
+            EventLoopGroup workers = new NioEventLoopGroup(1);
+            CountDownLatch flooded = new CountDownLatch(1);
+
+            ServerBootstrap bootstrap = new ServerBootstrap();
+            bootstrap.group(boss, workers)
+                    .channel(NioServerSocketChannel.class)
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) {
+                            ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+                                @Override
+                                public void channelActive(ChannelHandlerContext ctx) {
+                                    byte[] ok = "+OK\r\n".getBytes(StandardCharsets.US_ASCII);
+                                    for (int i = 0; i < frames; i++) {
+                                        ctx.write(Unpooled.copiedBuffer(ok));
+                                    }
+                                    ctx.flush();
+                                    flooded.countDown();
+                                }
+                            });
+                        }
+                    });
+
+            Channel ch = bootstrap.bind(0).sync().channel();
+            return new FloodingServer(boss, workers, ch, flooded, frames);
+        }
+
+        boolean awaitFlood(long timeoutMillis) throws InterruptedException {
+            return flooded.await(timeoutMillis, TimeUnit.MILLISECONDS);
         }
 
         int port() {

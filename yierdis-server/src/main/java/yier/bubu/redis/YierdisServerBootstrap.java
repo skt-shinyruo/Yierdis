@@ -1,12 +1,12 @@
 package yier.bubu.redis;
 
+// Server bootstrap：负责装配 Netty pipeline、DB/off-heap/执行器并管理生命周期，便于测试与工具复用启动/关停逻辑。
+
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
@@ -18,8 +18,6 @@ import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocators;
-import yier.bubu.redis.protocol.netty.RespCommandDecoder;
-import yier.bubu.redis.protocol.netty.ConnectionContext;
 
 import java.net.InetSocketAddress;
 import java.util.Locale;
@@ -166,20 +164,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .channel(NioServerSocketChannel.class)
                 .childOption(ChannelOption.TCP_NODELAY, true)
                 .childOption(ChannelOption.SO_KEEPALIVE, true)
-                .childHandler(new ChannelInitializer<SocketChannel>() {
-                    @Override
-                    protected void initChannel(SocketChannel ch) {
-                        // 连接态 SSOT：绑定 ConnectionContext，替代散落的 Channel.attr。
-                        ConnectionContext.getOrCreate(ch);
-                        ch.pipeline()
-                                .addLast("respCommandDecoder", new RespCommandDecoder(
-                                        config.protocolMaxBulkBytes,
-                                        config.protocolMaxArgs,
-                                        config.protocolMaxLineBytes
-                                ))
-                                .addLast("commandHandler", new YierdisFastCommandHandler(executor));
-                    }
-                });
+                .childHandler(new YierdisServerChannelInitializer(config, executor));
 
         serverChannel = bootstrap.bind(config.port).sync().channel();
     }

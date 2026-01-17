@@ -4,143 +4,99 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.MessageToByteEncoder;
 
+import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.protocol.RespArray;
 import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.protocol.RespError;
 import yier.bubu.redis.protocol.RespInteger;
+import yier.bubu.redis.protocol.RespMap;
 import yier.bubu.redis.protocol.RespNull;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
-
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public final class RespEncoder extends MessageToByteEncoder<RespObject> {
-    private static final byte CR = '\r';
-    private static final byte LF = '\n';
-    private static final byte[] CRLF = new byte[]{CR, LF};
-
-    private static final ThreadLocal<byte[]> TL_NUM_BUF = ThreadLocal.withInitial(() -> new byte[32]);
-
     @Override
     protected void encode(ChannelHandlerContext ctx, RespObject msg, ByteBuf out) {
-        writeObject(out, msg);
+        RespWriterAdapter.write(out, ConnectionContext.getOrCreate(ctx.channel()), msg);
     }
 
-    private void writeObject(ByteBuf out, RespObject obj) {
-        if (obj == null || obj instanceof RespNull) {
-            out.writeByte('$');
-            out.writeByte('-');
-            out.writeByte('1');
-            out.writeBytes(CRLF);
-            return;
+    /**
+     * 协议 Netty adapter：将 {@link RespObject} 写入 {@link ByteBuf} 时统一使用 {@link yier.bubu.redis.protocol.RespWriter} 的语义，
+     * 避免 codec 与 server fast-path 出现行为漂移。
+     */
+    private static final class RespWriterAdapter {
+        private RespWriterAdapter() {
         }
 
-        switch (obj.type()) {
-            case SIMPLE_STRING:
-                writeSimpleString(out, (RespSimpleString) obj);
+        static void write(ByteBuf out, yier.bubu.redis.protocol.RespSession session, RespObject obj) {
+            yier.bubu.redis.protocol.RespWriter writer =
+                    new yier.bubu.redis.protocol.RespWriter(new NettyByteBufSink(out), session);
+            writeObject(writer, obj);
+        }
+
+        private static void writeObject(yier.bubu.redis.protocol.RespWriter writer, RespObject obj) {
+            if (obj == null || obj instanceof RespNull) {
+                writer.nullValue();
                 return;
-            case ERROR:
-                writeError(out, (RespError) obj);
+            }
+
+            switch (obj.type()) {
+                case SIMPLE_STRING:
+                    writer.simpleString(((RespSimpleString) obj).value());
+                    return;
+                case ERROR:
+                    writer.error(((RespError) obj).message());
+                    return;
+                case INTEGER:
+                    writer.integer(((RespInteger) obj).value());
+                    return;
+                case BULK_STRING:
+                    writer.bulkString(((RespBulkString) obj).data());
+                    return;
+                case ARRAY:
+                    writeArray(writer, (RespArray) obj);
+                    return;
+                case MAP:
+                    writeMap(writer, (RespMap) obj);
+                    return;
+                case NULL:
+                default:
+                    writer.nullValue();
+            }
+        }
+
+        private static void writeArray(yier.bubu.redis.protocol.RespWriter writer, RespArray array) {
+            if (array.isNull()) {
+                writer.nullArray();
                 return;
-            case INTEGER:
-                writeInteger(out, (RespInteger) obj);
+            }
+            List<RespObject> values = array.values();
+            if (values == null) {
+                writer.nullArray();
                 return;
-            case BULK_STRING:
-                writeBulkString(out, (RespBulkString) obj);
+            }
+            writer.arrayHeader(values.size());
+            for (RespObject v : values) {
+                writeObject(writer, v);
+            }
+        }
+
+        private static void writeMap(yier.bubu.redis.protocol.RespWriter writer, RespMap map) {
+            if (map == null) {
+                writer.nullValue();
                 return;
-            case ARRAY:
-                writeArray(out, (RespArray) obj);
+            }
+            List<RespMap.Entry> entries = map.entries();
+            if (entries == null) {
+                writer.nullValue();
                 return;
-            case NULL:
-            default:
-                out.writeByte('$');
-                out.writeByte('-');
-                out.writeByte('1');
-                out.writeBytes(CRLF);
+            }
+            writer.mapHeader(entries.size());
+            for (RespMap.Entry e : entries) {
+                writeObject(writer, e.key());
+                writeObject(writer, e.value());
+            }
         }
-    }
-
-    private void writeSimpleString(ByteBuf out, RespSimpleString s) {
-        out.writeByte('+');
-        out.writeCharSequence(s.value(), StandardCharsets.UTF_8);
-        out.writeBytes(CRLF);
-    }
-
-    private void writeError(ByteBuf out, RespError e) {
-        out.writeByte('-');
-        out.writeCharSequence(e.message(), StandardCharsets.UTF_8);
-        out.writeBytes(CRLF);
-    }
-
-    private void writeInteger(ByteBuf out, RespInteger i) {
-        out.writeByte(':');
-        writeLongAscii(out, i.value());
-        out.writeBytes(CRLF);
-    }
-
-    private void writeBulkString(ByteBuf out, RespBulkString b) {
-        out.writeByte('$');
-        if (b.isNull()) {
-            out.writeByte('-');
-            out.writeByte('1');
-            out.writeBytes(CRLF);
-            return;
-        }
-
-        byte[] data = b.data();
-        writeLongAscii(out, data.length);
-        out.writeBytes(CRLF);
-        out.writeBytes(data);
-        out.writeBytes(CRLF);
-    }
-
-    private void writeArray(ByteBuf out, RespArray array) {
-        out.writeByte('*');
-        if (array.isNull()) {
-            out.writeByte('-');
-            out.writeByte('1');
-            out.writeBytes(CRLF);
-            return;
-        }
-
-        List<RespObject> values = array.values();
-        writeLongAscii(out, values.size());
-        out.writeBytes(CRLF);
-        for (RespObject v : values) {
-            writeObject(out, v);
-        }
-    }
-
-    private static void writeLongAscii(ByteBuf out, long value) {
-        if (value == 0) {
-            out.writeByte('0');
-            return;
-        }
-        if (value == Long.MIN_VALUE) {
-            out.writeCharSequence("-9223372036854775808", StandardCharsets.US_ASCII);
-            return;
-        }
-
-        byte[] buf = TL_NUM_BUF.get();
-        int pos = buf.length;
-
-        long x = value;
-        boolean negative = x < 0;
-        if (negative) {
-            x = -x;
-        }
-
-        while (x != 0) {
-            long q = x / 10;
-            int digit = (int) (x - q * 10);
-            buf[--pos] = (byte) ('0' + digit);
-            x = q;
-        }
-        if (negative) {
-            buf[--pos] = '-';
-        }
-
-        out.writeBytes(buf, pos, buf.length - pos);
     }
 }

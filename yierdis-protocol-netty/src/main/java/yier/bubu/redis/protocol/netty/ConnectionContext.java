@@ -1,5 +1,7 @@
 package yier.bubu.redis.protocol.netty;
 
+// 连接级上下文（协议会话 SSOT）：仅用于跟踪 RESP2/RESP3 协商状态（Netty adapter）。
+
 import io.netty.channel.Channel;
 import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
@@ -7,18 +9,14 @@ import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespSession;
 
 import java.util.Objects;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 连接级上下文（SSOT）。
+ * 连接级协议会话（SSOT）。
  * <p>
- * 该对象用于替代散落在多个 {@link Channel#attr(AttributeKey)} 中的状态：
- * - RESP 协议协商（RESP2/RESP3）
- * - 执行器的 per-connection pending/backpressure/closing 状态
- * - 为可观测性预留的连接级统计容器
+ * 该对象只承载协议协商状态（RESP2/RESP3），并通过 {@link Channel#attr(AttributeKey)} 与连接生命周期绑定。
+ * <p>
+ * 注意：server 侧的背压/统计/closing 等运行时连接状态属于服务端实现细节，应位于 server 模块中，
+ * 避免 protocol adapter 携带 server 语义。
  */
 public final class ConnectionContext implements RespSession {
     private static final AttributeKey<ConnectionContext> KEY =
@@ -39,37 +37,6 @@ public final class ConnectionContext implements RespSession {
     // --- RESP session ---
     private volatile RespProtocol protocol = RespProtocol.RESP2;
 
-    // --- Executor / backpressure (跨线程读写，使用原子类型) ---
-    private final AtomicInteger pending = new AtomicInteger(0);
-    private final AtomicLong pendingBytes = new AtomicLong(0);
-    private final AtomicBoolean autoReadDisabledByExecutor = new AtomicBoolean(false);
-    private final AtomicBoolean closing = new AtomicBoolean(false);
-
-    // FAIR 调度的 per-channel 队列状态（队列元素类型由 server/executor 决定）。
-    public static final class ExecutorState {
-        private final ConcurrentLinkedQueue<Object> queue = new ConcurrentLinkedQueue<>();
-        private final AtomicBoolean scheduled = new AtomicBoolean(false);
-
-        public ConcurrentLinkedQueue<Object> queue() {
-            return queue;
-        }
-
-        public AtomicBoolean scheduled() {
-            return scheduled;
-        }
-    }
-
-    private final ExecutorState executorState = new ExecutorState();
-
-    // --- Observability（低开销容器，具体字段在 server 侧填充/使用） ---
-    private final AtomicLong commandsEnqueued = new AtomicLong(0);
-    private final AtomicLong commandsExecuted = new AtomicLong(0);
-    private final AtomicLong commandsRejected = new AtomicLong(0);
-    private final AtomicLong commandsSkippedClosing = new AtomicLong(0);
-    private final AtomicLong closeAfterReply = new AtomicLong(0);
-    private final AtomicLong backpressureEnter = new AtomicLong(0);
-    private final AtomicLong backpressureExit = new AtomicLong(0);
-
     private ConnectionContext() {
     }
 
@@ -82,65 +49,5 @@ public final class ConnectionContext implements RespSession {
     @Override
     public void setProtocol(RespProtocol protocol) {
         this.protocol = protocol == null ? RespProtocol.RESP2 : protocol;
-    }
-
-    public AtomicInteger pendingCounter() {
-        return pending;
-    }
-
-    public AtomicLong pendingBytesCounter() {
-        return pendingBytes;
-    }
-
-    public boolean markAutoReadDisabledByExecutor() {
-        return autoReadDisabledByExecutor.compareAndSet(false, true);
-    }
-
-    public boolean clearAutoReadDisabledByExecutor() {
-        return autoReadDisabledByExecutor.compareAndSet(true, false);
-    }
-
-    public boolean autoReadDisabledByExecutor() {
-        return autoReadDisabledByExecutor.get();
-    }
-
-    public boolean isClosing() {
-        return closing.get();
-    }
-
-    public void markClosing() {
-        closing.set(true);
-    }
-
-    public ExecutorState executorState() {
-        return executorState;
-    }
-
-    public AtomicLong commandsEnqueuedCounter() {
-        return commandsEnqueued;
-    }
-
-    public AtomicLong commandsExecutedCounter() {
-        return commandsExecuted;
-    }
-
-    public AtomicLong commandsRejectedCounter() {
-        return commandsRejected;
-    }
-
-    public AtomicLong commandsSkippedClosingCounter() {
-        return commandsSkippedClosing;
-    }
-
-    public AtomicLong closeAfterReplyCounter() {
-        return closeAfterReply;
-    }
-
-    public AtomicLong backpressureEnterCounter() {
-        return backpressureEnter;
-    }
-
-    public AtomicLong backpressureExitCounter() {
-        return backpressureExit;
     }
 }

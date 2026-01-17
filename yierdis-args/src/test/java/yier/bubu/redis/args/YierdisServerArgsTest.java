@@ -3,6 +3,7 @@ package yier.bubu.redis.args;
 import org.junit.Assert;
 import org.junit.Test;
 import picocli.CommandLine;
+import yier.bubu.redis.protocol.RespLimits;
 
 public class YierdisServerArgsTest {
     @Test
@@ -60,6 +61,14 @@ public class YierdisServerArgsTest {
     public void invalidMaxmemoryPolicyIsRejected() {
         YierdisServerArgs args = parse("--maxmemoryPolicy", "random-evict");
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
+    }
+
+    @Test
+    public void protocolDefaultsMatchRespLimitsSsot() {
+        YierdisServerArgs args = new YierdisServerArgs();
+        Assert.assertEquals(RespLimits.DEFAULT_MAX_BULK_BYTES, args.protocolMaxBulkBytes);
+        Assert.assertEquals(RespLimits.DEFAULT_MAX_ARGS, args.protocolMaxArgs);
+        Assert.assertEquals(RespLimits.DEFAULT_MAX_LINE_BYTES, args.protocolMaxLineBytes);
     }
 
     private static YierdisServerArgs parse(String... argv) {

@@ -35,7 +35,7 @@
 - 背压：采用“双约束”：per-connection pending **条数** + pending **bytes** 两套水位线（带滞回阈值 high/low），避免“少量大包积压”导致内存驻留不可解释
 - 公平性：支持连接级公平调度（per-channel queue + round-robin），避免热点连接长期挤占全局 backlog（可配置）
 - 连接关闭语义：`QUIT` 由命令层请求 close-after-reply，执行器在 flush 后关闭连接，并跳过该连接后续已入队命令（仅回收，不执行 DB），保证 pipeline 顺序与无副作用
-- 连接态 SSOT：连接级协议状态（RESP2/RESP3）、pending/backpressure/closing 与低开销统计均收敛到 `ConnectionContext`（`Channel.attr` 绑定），避免多处 attr 分散导致的语义漂移
+- 连接态二分：`ConnectionContext`（protocol-netty）仅承载连接级协议会话（RESP2/RESP3，`Channel.attr` 绑定）；`ServerConnectionState`（server 私有）承载 pending/backpressure/closing 与低开销统计；执行器调度 state（per-channel queue + scheduled 标志）收敛到 server 私有 `NettyExecutorChannelState`（`Channel.attr` 绑定），避免 protocol 模块携带 server 语义与调度细节
 - 可观测性：提供 `INFO`/`STATS` 命令输出执行器/连接级统计摘要（队列、背压 enter/exit、reject、drain budget、close-after-reply 等），用于排障与容量评估
 
 #### Scenario: 高压 pipeline 下的 flush 合并与背压恢复
@@ -88,3 +88,4 @@
 - 2026-01-16：执行器加固：引入 backlog bytes 预算（`RespFrame.retainedBytes()` 口径）与滞回反压（与条数阈值并存），并提供可配置 frame compaction 与连接级公平调度。
 - 2026-01-16：执行模型硬化：DB owner-thread 语义 fail-fast；server 侧仅保留“走执行器”的 handler 入口，避免绕过 executor 直接访问 DB。
 - 2026-01-16：连接生命周期收敛：`QUIT` 纳入 core 命令；执行器支持 close-after-reply，并在 QUIT 后丢弃该连接后续 backlog 命令（仅回收，不执行）。
+- 2026-01-17：server 装配与边界收敛：Pipeline 装配下沉到 `YierdisServerChannelInitializer`；连接态二分（`ConnectionContext` 仅协议会话，运行时连接状态迁移到 `ServerConnectionState`）；执行器调度 state 下沉为 server 私有 `NettyExecutorChannelState`；协议 request 解码严格化（reply/非法前缀判为 protocol error 并关闭连接）。

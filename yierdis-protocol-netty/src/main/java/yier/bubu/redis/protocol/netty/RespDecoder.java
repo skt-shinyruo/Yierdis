@@ -2,6 +2,7 @@ package yier.bubu.redis.protocol.netty;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.ByteToMessageDecoder;
+import yier.bubu.redis.protocol.RespLimits;
 
 import java.util.List;
 
@@ -12,19 +13,13 @@ import java.util.List;
  * 语义解析（例如将 reply 转成 String/long/对象树）由上层按需完成，以减少分配与拷贝。
  */
 public final class RespDecoder extends ByteToMessageDecoder {
-    // Hard upper bounds for user-controlled inputs (DoS protection).
-    private static final int DEFAULT_MAX_BULK_BYTES = 64 * 1024 * 1024; // 64 MiB
-    private static final int DEFAULT_MAX_ARRAY_LEN = 1024;
-    private static final int DEFAULT_MAX_NESTING_DEPTH = 64;
-    private static final int DEFAULT_MAX_LINE_BYTES = 1024;
-
     private final int maxBulkBytes;
     private final int maxArrayLen;
     private final int maxNestingDepth;
     private final int maxLineBytes;
 
     public RespDecoder() {
-        this(DEFAULT_MAX_BULK_BYTES, DEFAULT_MAX_ARRAY_LEN, DEFAULT_MAX_NESTING_DEPTH, DEFAULT_MAX_LINE_BYTES);
+        this(RespLimits.DEFAULT_MAX_BULK_BYTES, RespLimits.DEFAULT_MAX_ARRAY_LEN, RespLimits.DEFAULT_MAX_NESTING_DEPTH, RespLimits.DEFAULT_MAX_LINE_BYTES);
     }
 
     public RespDecoder(int maxBulkBytes, int maxArrayLen, int maxNestingDepth, int maxLineBytes) {

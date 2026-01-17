@@ -48,6 +48,29 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 - `YierdisDb.memoryStats()`：输出 heap/off-heap/结构开销等分解估算
 - `MEMORY STATS`：命令侧暴露预算分解（用于排障/教学；明确为估算）
 
+#### Contract: `MEMORY STATS` 输出字段（稳定性约束）
+`MEMORY STATS` 输出为 RESP2 兼容的 **扁平 key/value 数组**：
+- 总元素数固定为 **34**（17 对 key/value）
+- key 均为 ASCII bulk string
+- value 均为十进制 ASCII bulk string（布尔值用 `0/1` 表示）
+
+字段含义（口径：估算/预算优先，可解释性优先）：
+- `maxmemory_bytes`：配置的 maxmemory 上限（0 表示不启用淘汰/拒写）
+- `used_bytes_for_maxmemory`：用于 maxmemory 判定的“统一口径已用 bytes”（heap 估算 + off-heap usedBytes 实占）
+- `heap_data_bytes_estimate`：heap 侧数据与元数据的估算值（不等同于 JVM/GC 视角真实 heap）
+- `offheap_used_bytes`：off-heap allocator 的实占 `usedBytes()`（可作为泄漏回归锚点）
+- `keyspace_table_overhead_bytes_estimate`：keyspace hash table 结构开销估算
+- `expire_table_overhead_bytes_estimate`：expire index hash table 结构开销估算
+- `expire_value_objects_bytes_estimate`：TTL 元数据/对象估算（不含 key/value payload）
+- `total_estimated_bytes`：上述各项汇总（用于解释触顶/拒写/淘汰行为）
+- `keys_stored_offheap`：keys/expires 是否存储在 off-heap（`0/1`；仅 unsafe 后端可启用）
+- `key_count`：keyspace key 数量
+- `expire_count`：expire index 数量
+- `keyspace_rehashing`：keyspace 是否处于渐进 rehash
+- `keyspace_table0_capacity` / `keyspace_table1_capacity`：rehash 双表容量（教学口径）
+- `expire_rehashing`：expire index 是否处于渐进 rehash
+- `expire_table0_capacity` / `expire_table1_capacity`：rehash 双表容量（教学口径）
+
 > 注意：以上统计口径属于“可解释的估算/预算”，并不等同于 JVM `Runtime.totalMemory()` 或 GC 视角的真实 heap 使用量；其目标是让 maxmemory/淘汰/拒写行为在不同后端下保持一致且可推导。
 
 #### Change: 淘汰与过期清理的时间预算可配置

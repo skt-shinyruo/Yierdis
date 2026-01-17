@@ -1,5 +1,7 @@
 package yier.bubu.redis.protocol.netty;
 
+// RESP 请求解码器：支持 RESP2 array-of-bulk-strings 与 inline command，并显式拒绝 reply 前缀以避免误解析。
+
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
@@ -8,6 +10,7 @@ import io.netty.handler.codec.ByteToMessageDecoder;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespCommandBuilder;
 import yier.bubu.redis.protocol.RespInlineCommandParser;
+import yier.bubu.redis.protocol.RespLimits;
 
 import java.util.List;
 
@@ -18,17 +21,12 @@ import java.util.List;
  * It avoids building generic {@link RespObject} trees.
  */
 public final class RespCommandDecoder extends ByteToMessageDecoder {
-    // Hard upper bounds for user-controlled inputs (DoS protection).
-    private static final int DEFAULT_MAX_BULK_BYTES = 64 * 1024 * 1024; // 64 MiB
-    private static final int DEFAULT_MAX_ARGS = 1024;
-    private static final int DEFAULT_MAX_LINE_BYTES = 1024;
-
     private final int maxBulkBytes;
     private final int maxArgs;
     private final int maxLineBytes;
 
     public RespCommandDecoder() {
-        this(DEFAULT_MAX_BULK_BYTES, DEFAULT_MAX_ARGS, DEFAULT_MAX_LINE_BYTES);
+        this(RespLimits.DEFAULT_MAX_BULK_BYTES, RespLimits.DEFAULT_MAX_ARGS, RespLimits.DEFAULT_MAX_LINE_BYTES);
     }
 
     public RespCommandDecoder(int maxBulkBytes, int maxArgs, int maxLineBytes) {
@@ -60,11 +58,54 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
         if (first == '*') {
             return decodeArrayOfBulkStrings(in, startIdx);
         }
-        // Avoid treating RESP replies as inline commands; keep the old behavior for these prefixes.
-        if (first == '+' || first == '-' || first == ':' || first == '$') {
+        // 严格区分 request 与 reply：禁止将 RESP reply（含 RESP3 类型前缀）误判为 inline command。
+        // 允许的 request：
+        // 1) RESP2 array-of-bulk-strings（以 '*' 开头）
+        // 2) inline command（用于调试；sdssplitargs 风格）
+        if (isRespReplyPrefix(first)) {
             throw new IllegalArgumentException("Protocol error: expected array");
         }
+        if (isInvalidRequestPrefix(first)) {
+            throw new IllegalArgumentException("Protocol error: invalid request");
+        }
         return decodeInlineCommand(in, startIdx);
+    }
+
+    private static boolean isRespReplyPrefix(byte b) {
+        // RESP2 reply:
+        // + simple string, - error, : integer, $ bulk string, * array
+        // RESP3 types we may see from buggy clients:
+        // _ null, % map, # boolean, , double, ( big number, ~ set, > push, = verbatim, ! blob error, | attribute
+        // 说明：这里不需要覆盖全部 RESP3 类型，但覆盖常见前缀可以避免误路由为 inline command。
+        switch (b) {
+            case '+':
+            case '-':
+            case ':':
+            case '$':
+            case '*':
+            case '_':
+            case '%':
+            case '#':
+            case ',':
+            case '(':
+            case '~':
+            case '>':
+            case '=':
+            case '!':
+            case '|':
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static boolean isInvalidRequestPrefix(byte b) {
+        // 允许空格/制表符用于 inline command 的前导空白，其余控制字符直接判为协议错误。
+        int x = b & 0xFF;
+        if (x == ' ' || x == '\t') {
+            return false;
+        }
+        return x < 0x20 || x == 0x7F;
     }
 
     private RespCommand decodeArrayOfBulkStrings(ByteBuf in, int startIdx) {

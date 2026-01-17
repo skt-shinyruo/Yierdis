@@ -2,6 +2,7 @@ package yier.bubu.redis.args;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
+import yier.bubu.redis.protocol.RespLimits;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,9 +15,9 @@ import java.util.Locale;
         usageHelpAutoWidth = true
 )
 public final class YierdisServerArgs {
-    private static final int DEFAULT_PROTOCOL_MAX_BULK_BYTES = 64 * 1024 * 1024; // 64 MiB
-    private static final int DEFAULT_PROTOCOL_MAX_ARGS = 1024;
-    private static final int DEFAULT_PROTOCOL_MAX_LINE_BYTES = 1024;
+    private static final int DEFAULT_PROTOCOL_MAX_BULK_BYTES = RespLimits.DEFAULT_MAX_BULK_BYTES;
+    private static final int DEFAULT_PROTOCOL_MAX_ARGS = RespLimits.DEFAULT_MAX_ARGS;
+    private static final int DEFAULT_PROTOCOL_MAX_LINE_BYTES = RespLimits.DEFAULT_MAX_LINE_BYTES;
 
     private static final long DEFAULT_EXECUTOR_QUEUE_MAX_BYTES = 64L * 1024 * 1024; // 64 MiB
     private static final long DEFAULT_BACKPRESSURE_BYTES_HIGH = 16L * 1024 * 1024; // 16 MiB

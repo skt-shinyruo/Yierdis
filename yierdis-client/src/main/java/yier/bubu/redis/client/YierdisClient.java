@@ -23,26 +23,39 @@ import java.util.Objects;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class YierdisClient implements AutoCloseable {
+    private static final int DEFAULT_RESPONSE_QUEUE_CAPACITY = 16;
+
     private final EventLoopGroup group;
     private final Channel channel;
-    private final BlockingQueue<NettyRespFrame> responses;
+    private final BlockingQueue<ResponseEvent> responses;
+    private final AtomicReference<Throwable> terminalError;
 
     private final Object requestLock = new Object();
     private volatile boolean closed;
 
-    private YierdisClient(EventLoopGroup group, Channel channel, BlockingQueue<NettyRespFrame> responses) {
+    private YierdisClient(
+            EventLoopGroup group,
+            Channel channel,
+            BlockingQueue<ResponseEvent> responses,
+            AtomicReference<Throwable> terminalError
+    ) {
         this.group = group;
         this.channel = channel;
         this.responses = responses;
+        this.terminalError = terminalError;
     }
 
     public static YierdisClient connect(String host, int port) throws InterruptedException {
         Objects.requireNonNull(host, "host");
 
         EventLoopGroup group = new NioEventLoopGroup(1);
-        BlockingQueue<NettyRespFrame> responses = new LinkedBlockingQueue<>();
+        BlockingQueue<ResponseEvent> responses = new LinkedBlockingQueue<>(DEFAULT_RESPONSE_QUEUE_CAPACITY);
+        AtomicReference<Throwable> terminalError = new AtomicReference<>(null);
+        AtomicBoolean terminalEnqueued = new AtomicBoolean(false);
 
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(group)
@@ -53,12 +66,12 @@ public final class YierdisClient implements AutoCloseable {
                     protected void initChannel(SocketChannel ch) {
                         ch.pipeline()
                                 .addLast("respDecoder", new RespDecoder())
-                                .addLast("clientHandler", new ClientHandler(responses));
+                                .addLast("clientHandler", new ClientHandler(responses, terminalError, terminalEnqueued));
                     }
                 });
 
         Channel channel = bootstrap.connect(host, port).sync().channel();
-        return new YierdisClient(group, channel, responses);
+        return new YierdisClient(group, channel, responses, terminalError);
     }
 
     public RespFrame execute(List<byte[]> args, long timeoutMillis) throws InterruptedException {
@@ -71,6 +84,11 @@ public final class YierdisClient implements AutoCloseable {
         synchronized (requestLock) {
             if (closed) {
                 throw new IllegalStateException("Client is closed");
+            }
+            Throwable terminal = terminalError.get();
+            if (terminal != null) {
+                closeSilently();
+                throw new IllegalStateException("Connection is closed", terminal);
             }
             if (!channel.isActive()) {
                 closed = true;
@@ -94,14 +112,22 @@ public final class YierdisClient implements AutoCloseable {
                 }
             }
 
-            NettyRespFrame resp = responses.poll(timeoutMillis, TimeUnit.MILLISECONDS);
-            if (resp == null) {
+            ResponseEvent event = responses.poll(timeoutMillis, TimeUnit.MILLISECONDS);
+            if (event == null) {
                 // RESP 是严格 FIFO 的 request/response 配对。超时意味着连接进入未知状态：
                 // 服务端可能稍后返回本次请求的响应，继续复用连接会导致后续请求响应错配。
                 closeSilently();
                 throw new IllegalStateException("Timeout waiting for response (connection closed to prevent response desync)");
             }
-            return resp;
+            if (event.isTerminal()) {
+                closeSilently();
+                Throwable err = event.error();
+                if (err instanceof RuntimeException re) {
+                    throw re;
+                }
+                throw new IllegalStateException(err == null ? "Connection closed" : err.getMessage(), err);
+            }
+            return event.frame();
         }
     }
 
@@ -142,28 +168,118 @@ public final class YierdisClient implements AutoCloseable {
 
     private void drainAndCloseResponses() {
         for (; ; ) {
-            NettyRespFrame frame = responses.poll();
-            if (frame == null) {
+            ResponseEvent event = responses.poll();
+            if (event == null) {
                 return;
             }
+            if (event.isTerminal()) {
+                continue;
+            }
             try {
-                frame.close();
+                event.frame().close();
             } catch (Throwable ignored) {
                 // ignore
             }
         }
     }
 
-    private static final class ClientHandler extends SimpleChannelInboundHandler<NettyRespFrame> {
-        private final BlockingQueue<NettyRespFrame> responses;
+    private static final class ResponseEvent {
+        private final NettyRespFrame frame;
+        private final Throwable error;
 
-        private ClientHandler(BlockingQueue<NettyRespFrame> responses) {
+        private ResponseEvent(NettyRespFrame frame, Throwable error) {
+            this.frame = frame;
+            this.error = error;
+        }
+
+        static ResponseEvent frame(NettyRespFrame frame) {
+            return new ResponseEvent(Objects.requireNonNull(frame, "frame"), null);
+        }
+
+        static ResponseEvent terminal(Throwable error) {
+            Throwable e = error == null ? new IllegalStateException("Connection closed") : error;
+            return new ResponseEvent(null, e);
+        }
+
+        boolean isTerminal() {
+            return error != null;
+        }
+
+        NettyRespFrame frame() {
+            return frame;
+        }
+
+        Throwable error() {
+            return error;
+        }
+    }
+
+    private static final class ClientHandler extends SimpleChannelInboundHandler<NettyRespFrame> {
+        private final BlockingQueue<ResponseEvent> responses;
+        private final AtomicReference<Throwable> terminalError;
+        private final AtomicBoolean terminalEnqueued;
+
+        private ClientHandler(
+                BlockingQueue<ResponseEvent> responses,
+                AtomicReference<Throwable> terminalError,
+                AtomicBoolean terminalEnqueued
+        ) {
             this.responses = responses;
+            this.terminalError = terminalError;
+            this.terminalEnqueued = terminalEnqueued;
         }
 
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, NettyRespFrame msg) {
-            responses.offer(msg);
+            if (msg == null) {
+                return;
+            }
+            if (!responses.offer(ResponseEvent.frame(msg))) {
+                // Overflow: close the received frame to avoid ByteBuf leaks, then close the connection to prevent desync.
+                closeFrameQuietly(msg);
+                signalTerminal(new IllegalStateException("Response queue overflow (connection closed)"));
+                ctx.close();
+            }
+        }
+
+        @Override
+        public void channelInactive(ChannelHandlerContext ctx) {
+            signalTerminal(new IllegalStateException("Connection closed"));
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            signalTerminal(cause);
+            ctx.close();
+        }
+
+        private void signalTerminal(Throwable cause) {
+            Throwable err = cause == null ? new IllegalStateException("Connection closed") : cause;
+            terminalError.compareAndSet(null, err);
+            if (!terminalEnqueued.compareAndSet(false, true)) {
+                return;
+            }
+            offerTerminal(err);
+        }
+
+        private void offerTerminal(Throwable err) {
+            if (responses.offer(ResponseEvent.terminal(err))) {
+                return;
+            }
+            // Best-effort: drop one queued frame to make room for the terminal signal.
+            ResponseEvent dropped = responses.poll();
+            if (dropped != null && !dropped.isTerminal()) {
+                closeFrameQuietly(dropped.frame());
+            }
+            responses.offer(ResponseEvent.terminal(err));
+        }
+
+        private static void closeFrameQuietly(NettyRespFrame frame) {
+            try {
+                frame.close();
+            } catch (Throwable ignored) {
+                // ignore
+            }
         }
     }
 }

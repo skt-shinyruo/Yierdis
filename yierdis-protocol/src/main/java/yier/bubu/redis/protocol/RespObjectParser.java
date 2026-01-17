@@ -10,12 +10,6 @@ import java.util.List;
  * 注意：该解析器以“易用/正确性”为主，会分配对象与 byte[]；性能敏感路径应优先使用 frame/zero-copy 视图。
  */
 public final class RespObjectParser {
-    // 与 netty decoder 保持同源的默认上限（DoS 保护/健壮性）。
-    private static final int DEFAULT_MAX_BULK_BYTES = 64 * 1024 * 1024; // 64 MiB
-    private static final int DEFAULT_MAX_ARRAY_LEN = 1024;
-    private static final int DEFAULT_MAX_NESTING_DEPTH = 64;
-    private static final int DEFAULT_MAX_LINE_BYTES = 1024;
-
     private final RespFrame frame;
     private final int maxBulkBytes;
     private final int maxArrayLen;
@@ -33,7 +27,12 @@ public final class RespObjectParser {
     }
 
     public static RespObject parse(RespFrame frame) {
-        return parse(frame, DEFAULT_MAX_BULK_BYTES, DEFAULT_MAX_ARRAY_LEN, DEFAULT_MAX_NESTING_DEPTH, DEFAULT_MAX_LINE_BYTES);
+        return parse(frame,
+                RespLimits.DEFAULT_MAX_BULK_BYTES,
+                RespLimits.DEFAULT_MAX_ARRAY_LEN,
+                RespLimits.DEFAULT_MAX_NESTING_DEPTH,
+                RespLimits.DEFAULT_MAX_LINE_BYTES
+        );
     }
 
     public static RespObject parse(RespFrame frame, int maxBulkBytes, int maxArrayLen, int maxNestingDepth, int maxLineBytes) {
@@ -197,4 +196,3 @@ public final class RespObjectParser {
         index += 2;
     }
 }
-
