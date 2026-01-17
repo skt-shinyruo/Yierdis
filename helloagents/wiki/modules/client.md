@@ -6,9 +6,9 @@
 
 ## Module Overview
 
-- **Responsibility:** 连接管理、命令输入、RESP2 编解码（客户端侧）、输出显示（支持 hex）
+- **Responsibility:** 连接管理、命令输入、回复解码（frame-based）、输出显示（支持 hex；按需解析）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-16
+- **Last Updated:** 2026-01-17
 
 ## Specifications
 
@@ -27,10 +27,11 @@
 
 ## Dependencies
 
-- `yierdis-protocol-netty`（客户端侧复用 RESP codec；对象模型由 `yierdis-protocol` 提供）
+- `yierdis-protocol-netty`（客户端侧复用 RESP codec；回复解码输出 `RespFrame`）
 - Netty（连接管理与 IO）
 
 ## Change History
 
 - 2026-01-15：依赖切换：RESP codec 下沉到 `yierdis-protocol-netty`，`yierdis-protocol` 保持 Netty-free SSOT。
 - 2026-01-16：行为加固：`execute()` 超时后关闭连接并标记 client 不可复用，避免 RESP FIFO 响应错配风险。
+- 2026-01-17：协议栈收敛：client/CLI 收敛为 frame-based 回复（`RespDecoder` 输出 frame）；对象模型解析仅用于输出/调试（例如 CLI 展示）。

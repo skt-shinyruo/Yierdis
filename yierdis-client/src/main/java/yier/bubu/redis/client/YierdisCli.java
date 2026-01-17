@@ -3,12 +3,14 @@ package yier.bubu.redis.client;
 import yier.bubu.redis.protocol.RespArray;
 import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.protocol.RespError;
+import yier.bubu.redis.protocol.RespFrame;
 import yier.bubu.redis.protocol.RespInteger;
 import yier.bubu.redis.protocol.RespMap;
 import yier.bubu.redis.protocol.RespNull;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
 import yier.bubu.redis.protocol.RespInlineCommandParser;
+import yier.bubu.redis.protocol.RespObjectParser;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -30,10 +32,12 @@ public final class YierdisCli {
 
         try (YierdisClient client = YierdisClient.connect(config.host, config.port)) {
             if (!config.commandArgs.isEmpty()) {
-                RespObject resp = client.execute(config.commandArgs, config.timeoutMillis);
-                printResp(resp, config.hex);
-                if (resp instanceof RespError) {
-                    System.exit(1);
+                try (RespFrame frame = client.execute(config.commandArgs, config.timeoutMillis)) {
+                    RespObject resp = RespObjectParser.parse(frame);
+                    printResp(resp, config.hex);
+                    if (resp instanceof RespError) {
+                        System.exit(1);
+                    }
                 }
                 return;
             }
@@ -59,7 +63,9 @@ public final class YierdisCli {
             if ("exit".equalsIgnoreCase(line) || "quit".equalsIgnoreCase(line)) {
                 // Best-effort QUIT to mirror redis-cli behavior, then exit.
                 try {
-                    client.execute(Arrays.asList(b("QUIT")), config.timeoutMillis);
+                    try (RespFrame ignored = client.execute(Arrays.asList(b("QUIT")), config.timeoutMillis)) {
+                        // ignore
+                    }
                 } catch (Exception ignored) {
                 }
                 return;
@@ -77,8 +83,10 @@ public final class YierdisCli {
             }
 
             try {
-                RespObject resp = client.execute(cmd, config.timeoutMillis);
-                printResp(resp, config.hex);
+                try (RespFrame frame = client.execute(cmd, config.timeoutMillis)) {
+                    RespObject resp = RespObjectParser.parse(frame);
+                    printResp(resp, config.hex);
+                }
             } catch (Exception e) {
                 System.err.println("(error) " + e.getMessage());
             }

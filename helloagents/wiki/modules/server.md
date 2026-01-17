@@ -8,7 +8,7 @@
 
 - **Responsibility:** 端口监听、Pipeline 组装、定时任务（如 TTL 清理）的调度入口
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-16
+- **Last Updated:** 2026-01-17
 
 ## Specifications
 
@@ -35,6 +35,8 @@
 - 背压：采用“双约束”：per-connection pending **条数** + pending **bytes** 两套水位线（带滞回阈值 high/low），避免“少量大包积压”导致内存驻留不可解释
 - 公平性：支持连接级公平调度（per-channel queue + round-robin），避免热点连接长期挤占全局 backlog（可配置）
 - 连接关闭语义：`QUIT` 由命令层请求 close-after-reply，执行器在 flush 后关闭连接，并跳过该连接后续已入队命令（仅回收，不执行 DB），保证 pipeline 顺序与无副作用
+- 连接态 SSOT：连接级协议状态（RESP2/RESP3）、pending/backpressure/closing 与低开销统计均收敛到 `ConnectionContext`（`Channel.attr` 绑定），避免多处 attr 分散导致的语义漂移
+- 可观测性：提供 `INFO`/`STATS` 命令输出执行器/连接级统计摘要（队列、背压 enter/exit、reject、drain budget、close-after-reply 等），用于排障与容量评估
 
 #### Scenario: 高压 pipeline 下的 flush 合并与背压恢复
 - 当 backlog ≥ high watermark：服务端对该连接 `autoRead=false`，并可能返回 `-ERR busy`

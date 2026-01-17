@@ -1,9 +1,9 @@
 package yier.bubu.redis.db.offheap.netty;
 
 import io.netty.buffer.ByteBuf;
-import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
+import yier.bubu.redis.bytes.BytesSource;
 
-public final class YierdisNettyByteBufSource implements YierdisBytesSource {
+public final class YierdisNettyByteBufSource implements BytesSource {
     private final ByteBuf buf;
 
     public YierdisNettyByteBufSource(ByteBuf buf) {
@@ -35,9 +35,8 @@ public final class YierdisNettyByteBufSource implements YierdisBytesSource {
     @Override
     public long memoryAddress() {
         if (!buf.hasMemoryAddress()) {
-            return YierdisBytesSource.super.memoryAddress();
+            return BytesSource.super.memoryAddress();
         }
         return buf.memoryAddress();
     }
 }
-

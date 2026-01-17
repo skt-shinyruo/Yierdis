@@ -18,9 +18,6 @@ import java.util.List;
  * It avoids building generic {@link RespObject} trees.
  */
 public final class RespCommandDecoder extends ByteToMessageDecoder {
-    private static final byte CR = '\r';
-    private static final byte LF = '\n';
-
     // Hard upper bounds for user-controlled inputs (DoS protection).
     private static final int DEFAULT_MAX_BULK_BYTES = 64 * 1024 * 1024; // 64 MiB
     private static final int DEFAULT_MAX_ARGS = 1024;
@@ -35,9 +32,9 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
     }
 
     public RespCommandDecoder(int maxBulkBytes, int maxArgs, int maxLineBytes) {
-        this.maxBulkBytes = requirePositive(maxBulkBytes, "maxBulkBytes");
-        this.maxArgs = requirePositive(maxArgs, "maxArgs");
-        this.maxLineBytes = requirePositive(maxLineBytes, "maxLineBytes");
+        this.maxBulkBytes = RespDecodingSupport.requirePositive(maxBulkBytes, "maxBulkBytes");
+        this.maxArgs = RespDecodingSupport.requirePositive(maxArgs, "maxArgs");
+        this.maxLineBytes = RespDecodingSupport.requirePositive(maxLineBytes, "maxLineBytes");
     }
 
     @Override
@@ -74,7 +71,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
         in.readByte(); // consume '*'
 
         int argcLineStart = in.readerIndex();
-        int argcLineEnd = indexOfCrlf(in, argcLineStart, maxLineBytes);
+        int argcLineEnd = RespDecodingSupport.indexOfCrlf(in, argcLineStart, maxLineBytes);
         if (argcLineEnd < 0) {
             if (in.writerIndex() - argcLineStart > maxLineBytes + 2) {
                 throw new IllegalArgumentException("Protocol error: line too long");
@@ -83,7 +80,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
             return null;
         }
 
-        int argc = parseIntAscii(in, argcLineStart, argcLineEnd);
+        int argc = RespDecodingSupport.parseIntAscii(in, argcLineStart, argcLineEnd);
         if (argc < 0) {
             throw new IllegalArgumentException("Protocol error: invalid array length");
         }
@@ -108,7 +105,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
                 }
 
                 int lenLineStart = in.readerIndex();
-                int lenLineEnd = indexOfCrlf(in, lenLineStart, maxLineBytes);
+                int lenLineEnd = RespDecodingSupport.indexOfCrlf(in, lenLineStart, maxLineBytes);
                 if (lenLineEnd < 0) {
                     if (in.writerIndex() - lenLineStart > maxLineBytes + 2) {
                         throw new IllegalArgumentException("Protocol error: line too long");
@@ -118,7 +115,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
                     return null;
                 }
 
-                int len = parseIntAscii(in, lenLineStart, lenLineEnd);
+                int len = RespDecodingSupport.parseIntAscii(in, lenLineStart, lenLineEnd);
                 if (len == -1) {
                     // Null bulk string.
                     in.readerIndex(lenLineEnd + 2);
@@ -141,7 +138,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
                     return null;
                 }
 
-                if (in.getByte(dataEnd) != CR || in.getByte(dataEnd + 1) != LF) {
+                if (in.getByte(dataEnd) != RespDecodingSupport.CR || in.getByte(dataEnd + 1) != RespDecodingSupport.LF) {
                     throw new IllegalArgumentException("Protocol error: bad bulk string CRLF");
                 }
 
@@ -169,7 +166,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
     }
 
     private RespCommand decodeInlineCommand(ByteBuf in, int startIdx) {
-        int lineEnd = indexOfCrlf(in, startIdx, maxLineBytes);
+        int lineEnd = RespDecodingSupport.indexOfCrlf(in, startIdx, maxLineBytes);
         if (lineEnd < 0) {
             if (in.writerIndex() - startIdx > maxLineBytes + 2) {
                 throw new IllegalArgumentException("Protocol error: line too long");
@@ -207,63 +204,8 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
         return cmd;
     }
 
-    private static int indexOfCrlf(ByteBuf in, int start, int maxLineBytes) {
-        int maxCrlfStart = start + maxLineBytes;
-        int scanLimit = Math.min(in.writerIndex() - 1, maxCrlfStart + 1);
-        for (int i = start; i < scanLimit; i++) {
-            if (in.getByte(i) == CR && in.getByte(i + 1) == LF) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private static int parseIntAscii(ByteBuf in, int start, int end) {
-        int i = start;
-        while (i < end && isSpace(in.getByte(i))) {
-            i++;
-        }
-        int j = end;
-        while (j > i && isSpace(in.getByte(j - 1))) {
-            j--;
-        }
-        if (i >= j) {
-            throw new IllegalArgumentException("Protocol error: empty integer line");
-        }
-
-        boolean negative = false;
-        byte b = in.getByte(i);
-        if (b == '-' || b == '+') {
-            negative = b == '-';
-            i++;
-            if (i >= j) {
-                throw new IllegalArgumentException("Protocol error: invalid integer line");
-            }
-        }
-
-        int result = 0;
-        while (i < j) {
-            int digit = (in.getByte(i++) & 0xFF) - '0';
-            if (digit < 0 || digit > 9) {
-                throw new IllegalArgumentException("Protocol error: invalid integer line");
-            }
-            if (result > (Integer.MAX_VALUE - digit) / 10) {
-                throw new IllegalArgumentException("Protocol error: integer out of range");
-            }
-            result = result * 10 + digit;
-        }
-
-        return negative ? -result : result;
-    }
-
-    private static boolean isSpace(byte b) {
-        return b == ' ' || b == '\t';
-    }
-
+    // 兼容旧代码：将参数校验逻辑委托到公共工具类，避免 request/response 双轨漂移。
     private static int requirePositive(int value, String name) {
-        if (value <= 0) {
-            throw new IllegalArgumentException(name + " must be positive");
-        }
-        return value;
+        return RespDecodingSupport.requirePositive(value, name);
     }
 }

@@ -19,6 +19,7 @@ import java.util.RandomAccess;
  */
 final class CommandSupport {
     private final YierdisDb db;
+    private final ServerInfoProvider infoProvider;
 
     private final ByteArraySliceList slice = new ByteArraySliceList();
     private byte[][] argvScratch = new byte[16][];
@@ -26,11 +27,20 @@ final class CommandSupport {
     private final WriterBulkStringOutput bulkOut = new WriterBulkStringOutput();
 
     CommandSupport(YierdisDb db) {
+        this(db, null);
+    }
+
+    CommandSupport(YierdisDb db, ServerInfoProvider infoProvider) {
         this.db = db;
+        this.infoProvider = infoProvider;
     }
 
     YierdisDb db() {
         return db;
+    }
+
+    ServerInfoProvider infoProvider() {
+        return infoProvider;
     }
 
     YierdisBytesView argView(RespCommand cmd, int argIndex) {
@@ -376,4 +386,3 @@ final class CommandSupport {
         }
     }
 }
-

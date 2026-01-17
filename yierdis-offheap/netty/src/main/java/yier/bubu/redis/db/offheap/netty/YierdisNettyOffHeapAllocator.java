@@ -3,7 +3,6 @@ package yier.bubu.redis.db.offheap.netty;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
@@ -258,12 +257,8 @@ final class YierdisNettyOffHeapSlice implements YierdisOffHeapSlice {
             return;
         }
 
-        // Netty 写出 fast-path：优先识别 bytes-netty 的 sink（新边界），其次兼容旧的 offheap-netty sink。
+        // Netty 写出 fast-path：识别 bytes-netty 的 sink（边界 SSOT）。
         if (out instanceof NettyByteBufSink sink) {
-            sink.unwrap().writeBytes(owner.unwrap(), offset, len);
-            return;
-        }
-        if (out instanceof YierdisNettyByteBufSink sink) {
             sink.unwrap().writeBytes(owner.unwrap(), offset, len);
             return;
         }
@@ -278,10 +273,5 @@ final class YierdisNettyOffHeapSlice implements YierdisOffHeapSlice {
             srcIndex += chunk;
             remaining -= chunk;
         }
-    }
-
-    @Override
-    public void writeTo(YierdisBytesSink out) {
-        writeTo((BytesSink) out);
     }
 }

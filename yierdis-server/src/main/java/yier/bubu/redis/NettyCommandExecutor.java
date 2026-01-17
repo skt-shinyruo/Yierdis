@@ -4,8 +4,6 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.util.Attribute;
-import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.EventExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,8 +14,8 @@ import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespCommandBuilder;
 import yier.bubu.redis.protocol.RespFrame;
 import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.netty.ConnectionContext;
 import yier.bubu.redis.protocol.netty.NettyRespFrame;
-import yier.bubu.redis.protocol.netty.NettyRespSession;
 
 import java.util.IdentityHashMap;
 import java.util.Objects;
@@ -28,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * Netty-friendly single-thread command executor.
@@ -72,16 +71,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
         FAIR
     }
 
-    private static final AttributeKey<AtomicInteger> PENDING_PER_CHANNEL =
-            AttributeKey.valueOf("yierdis.exec.pending");
-    private static final AttributeKey<AtomicLong> PENDING_BYTES_PER_CHANNEL =
-            AttributeKey.valueOf("yierdis.exec.pendingBytes");
-    private static final AttributeKey<Boolean> AUTOREAD_DISABLED_BY_EXECUTOR =
-            AttributeKey.valueOf("yierdis.exec.autoreadDisabled");
-    private static final AttributeKey<ChannelState> CHANNEL_STATE =
-            AttributeKey.valueOf("yierdis.exec.state");
-    private static final AttributeKey<Boolean> CHANNEL_CLOSING =
-            AttributeKey.valueOf("yierdis.exec.closing");
+    // 连接态 SSOT：所有 per-channel 状态都收敛到 ConnectionContext（单一 Channel.attr）。
 
     // Compaction is intentionally conservative: only compact "small frames that retain too much memory" to reduce
     // the risk of copying large payloads.
@@ -101,6 +91,20 @@ public final class NettyCommandExecutor implements AutoCloseable {
     private final TaskQueue taskQueue;
     private final AtomicInteger queuedTasks = new AtomicInteger(0);
     private final AtomicLong queuedBytes = new AtomicLong(0);
+
+    // --- Observability (hot-path friendly counters) ---
+    private final LongAdder submitAccepted = new LongAdder();
+    private final LongAdder submitRejectedNotRunning = new LongAdder();
+    private final LongAdder submitRejectedQueueFull = new LongAdder();
+    private final LongAdder submitRejectedBytesBudget = new LongAdder();
+    private final LongAdder submitRejectedOfferFailed = new LongAdder();
+    private final LongAdder commandsExecuted = new LongAdder();
+    private final LongAdder commandsSkippedClosing = new LongAdder();
+    private final LongAdder closeAfterReply = new LongAdder();
+    private final LongAdder backpressureEnter = new LongAdder();
+    private final LongAdder backpressureExit = new LongAdder();
+    private final LongAdder drainLimitedByMaxCommands = new LongAdder();
+    private final LongAdder drainLimitedByTimeBudget = new LongAdder();
 
     private final int queueCapacity;
     private final long queueMaxBytes;
@@ -269,14 +273,16 @@ public final class NettyCommandExecutor implements AutoCloseable {
     public boolean trySubmit(ChannelHandlerContext ctx, RespCommand cmd) {
         Objects.requireNonNull(ctx, "ctx");
         Objects.requireNonNull(cmd, "cmd");
+        Channel ch = ctx.channel();
+        ConnectionContext conn = ConnectionContext.getOrCreate(ch);
         if (!running) {
+            submitRejectedNotRunning.increment();
+            conn.commandsRejectedCounter().incrementAndGet();
             return false;
         }
 
-        Channel ch = ctx.channel();
-
-        AtomicInteger pending = pendingCounter(ch);
-        AtomicLong pendingBytes = pendingBytesCounter(ch);
+        AtomicInteger pending = conn.pendingCounter();
+        AtomicLong pendingBytes = conn.pendingBytesCounter();
         if (isGlobalBackpressureHigh()) {
             disableAutoRead(ch);
         }
@@ -291,6 +297,8 @@ public final class NettyCommandExecutor implements AutoCloseable {
         if (!tryReserveQueueSlot()) {
             // Global queue full: apply backpressure to avoid busy storms.
             disableAutoRead(ch);
+            submitRejectedQueueFull.increment();
+            conn.commandsRejectedCounter().incrementAndGet();
             return false;
         }
         reservedSlot = true;
@@ -306,6 +314,8 @@ public final class NettyCommandExecutor implements AutoCloseable {
                     releaseQueueSlot();
                 }
                 disableAutoRead(ch);
+                submitRejectedBytesBudget.increment();
+                conn.commandsRejectedCounter().incrementAndGet();
                 return false;
             }
             reservedBytes = true;
@@ -317,9 +327,13 @@ public final class NettyCommandExecutor implements AutoCloseable {
                     releaseQueueSlot();
                 }
                 disableAutoRead(ch);
+                submitRejectedOfferFailed.increment();
+                conn.commandsRejectedCounter().incrementAndGet();
                 return false;
             }
 
+            submitAccepted.increment();
+            conn.commandsEnqueuedCounter().incrementAndGet();
             int now = pending.incrementAndGet();
             if (now >= backpressureHighWatermark) {
                 disableAutoRead(ch);
@@ -342,6 +356,8 @@ public final class NettyCommandExecutor implements AutoCloseable {
             if (reservedSlot) {
                 releaseQueueSlot();
             }
+            submitRejectedOfferFailed.increment();
+            conn.commandsRejectedCounter().incrementAndGet();
             log.debug("Failed to submit command", t);
             return false;
         }
@@ -381,15 +397,8 @@ public final class NettyCommandExecutor implements AutoCloseable {
         }
     }
 
-    private ChannelState channelState(Channel ch) {
-        Attribute<ChannelState> attr = ch.attr(CHANNEL_STATE);
-        ChannelState state = attr.get();
-        if (state != null) {
-            return state;
-        }
-        ChannelState created = new ChannelState();
-        ChannelState existing = attr.setIfAbsent(created);
-        return existing == null ? created : existing;
+    private static ConnectionContext.ExecutorState executorState(Channel ch) {
+        return ConnectionContext.getOrCreate(ch).executorState();
     }
 
     private void tryCompactFrameIfNeeded(ChannelHandlerContext ctx, RespCommand cmd) {
@@ -455,13 +464,17 @@ public final class NettyCommandExecutor implements AutoCloseable {
 
         long deadline = System.nanoTime() + drainTimeLimitNanos;
         int processed = 0;
+        boolean hitMaxDrainCommands = false;
+        boolean hitDrainTimeBudget = false;
 
         IdentityHashMap<Channel, ChannelHandlerContext> flushTargets = new IdentityHashMap<>();
         for (; ; ) {
             if (processed >= maxDrainCommands) {
+                hitMaxDrainCommands = true;
                 break;
             }
             if (System.nanoTime() >= deadline) {
+                hitDrainTimeBudget = true;
                 break;
             }
 
@@ -478,7 +491,16 @@ public final class NettyCommandExecutor implements AutoCloseable {
             safeFlush(ctx);
         }
 
-        if (hasPendingTasks()) {
+        boolean pendingAfterDrain = hasPendingTasks();
+        if (pendingAfterDrain) {
+            if (hitMaxDrainCommands) {
+                drainLimitedByMaxCommands.increment();
+            } else if (hitDrainTimeBudget) {
+                drainLimitedByTimeBudget.increment();
+            }
+        }
+
+        if (pendingAfterDrain) {
             executor.execute(this::drainLoop);
             return;
         }
@@ -504,24 +526,24 @@ public final class NettyCommandExecutor implements AutoCloseable {
                 return null;
             }
 
-            ChannelState state = channelState(ch);
-            Task task = state.queue.poll();
+            ConnectionContext.ExecutorState state = executorState(ch);
+            Task task = (Task) state.queue().poll();
             if (task == null) {
                 // The channel was scheduled but its queue is empty (may happen due to races). Unschedule it.
-                state.scheduled.set(false);
-                if (!state.queue.isEmpty() && state.scheduled.compareAndSet(false, true)) {
+                state.scheduled().set(false);
+                if (!state.queue().isEmpty() && state.scheduled().compareAndSet(false, true)) {
                     activeChannels.offer(ch);
                 }
                 continue;
             }
 
-            if (!state.queue.isEmpty()) {
+            if (!state.queue().isEmpty()) {
                 // More work for this channel: re-queue it for round-robin fairness.
                 activeChannels.offer(ch);
             } else {
                 // Try to unschedule; handle the race where a new task arrives while we're draining.
-                state.scheduled.set(false);
-                if (!state.queue.isEmpty() && state.scheduled.compareAndSet(false, true)) {
+                state.scheduled().set(false);
+                if (!state.queue().isEmpty() && state.scheduled().compareAndSet(false, true)) {
                     activeChannels.offer(ch);
                 }
             }
@@ -538,6 +560,9 @@ public final class NettyCommandExecutor implements AutoCloseable {
         }
         if (isChannelClosing(ctx.channel())) {
             // QUIT 之后：只回收已入队的命令帧与预算，不再执行，避免产生副作用。
+            ConnectionContext conn = ConnectionContext.getOrCreate(ctx.channel());
+            conn.commandsSkippedClosingCounter().incrementAndGet();
+            commandsSkippedClosing.increment();
             recycleAndRelease(task);
             return;
         }
@@ -546,11 +571,14 @@ public final class NettyCommandExecutor implements AutoCloseable {
             ByteBuf out = ctx.alloc().buffer();
             boolean ok = false;
             try {
-                RespWriter writer = new RespWriter(new NettyByteBufSink(out), new NettyRespSession(ctx.channel()));
+                ConnectionContext conn = ConnectionContext.getOrCreate(ctx.channel());
+                RespWriter writer = new RespWriter(new NettyByteBufSink(out), conn);
                 commandProcessor.execute(cmd, writer);
                 if (writer.closeAfterReplyRequested()) {
                     // close-after-reply：flush 后关闭连接，并标记该 channel 后续任务需要跳过。
-                    markChannelClosing(ctx.channel());
+                    conn.closeAfterReplyCounter().incrementAndGet();
+                    closeAfterReply.increment();
+                    conn.markClosing();
                     disableAutoRead(ctx.channel());
                     ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
                 } else {
@@ -569,7 +597,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
                 ByteBuf out = ctx.alloc().buffer();
                 boolean ok = false;
                 try {
-                    new RespWriter(new NettyByteBufSink(out), new NettyRespSession(ctx.channel())).error("ERR internal error");
+                    new RespWriter(new NettyByteBufSink(out), ConnectionContext.getOrCreate(ctx.channel())).error("ERR internal error");
                     ctx.write(out, ctx.voidPromise());
                     flushTargets.put(ctx.channel(), ctx);
                     ok = true;
@@ -588,14 +616,20 @@ public final class NettyCommandExecutor implements AutoCloseable {
             } catch (Throwable ignored) {
                 // ignore
             }
-            onCommandFinished(ctx.channel(), task.retainedBytes);
+            onCommandFinished(ctx.channel(), task.retainedBytes, true);
         }
     }
 
-    private void onCommandFinished(Channel ch, int retainedBytes) {
-        AtomicInteger pending = pendingCounter(ch);
+    private void onCommandFinished(Channel ch, int retainedBytes, boolean executed) {
+        ConnectionContext conn = ConnectionContext.getOrCreate(ch);
+        if (executed) {
+            conn.commandsExecutedCounter().incrementAndGet();
+            commandsExecuted.increment();
+        }
+
+        AtomicInteger pending = conn.pendingCounter();
         int now = pending.decrementAndGet();
-        AtomicLong pendingBytes = pendingBytesCounter(ch);
+        AtomicLong pendingBytes = conn.pendingBytesCounter();
         long bytesNow = pendingBytes.addAndGet(-retainedBytes);
         releaseQueuedBytes(retainedBytes);
         releaseQueueSlot();
@@ -623,37 +657,23 @@ public final class NettyCommandExecutor implements AutoCloseable {
     }
 
     private static AtomicInteger pendingCounter(Channel ch) {
-        Attribute<AtomicInteger> attr = ch.attr(PENDING_PER_CHANNEL);
-        AtomicInteger pending = attr.get();
-        if (pending != null) {
-            return pending;
-        }
-        AtomicInteger created = new AtomicInteger();
-        AtomicInteger existing = attr.setIfAbsent(created);
-        return existing == null ? created : existing;
+        return ConnectionContext.getOrCreate(ch).pendingCounter();
     }
 
     private static AtomicLong pendingBytesCounter(Channel ch) {
-        Attribute<AtomicLong> attr = ch.attr(PENDING_BYTES_PER_CHANNEL);
-        AtomicLong pending = attr.get();
-        if (pending != null) {
-            return pending;
-        }
-        AtomicLong created = new AtomicLong();
-        AtomicLong existing = attr.setIfAbsent(created);
-        return existing == null ? created : existing;
+        return ConnectionContext.getOrCreate(ch).pendingBytesCounter();
     }
 
     private void disableAutoRead(Channel ch) {
         if (ch == null) {
             return;
         }
-        Attribute<Boolean> disabledAttr = ch.attr(AUTOREAD_DISABLED_BY_EXECUTOR);
-        Boolean already = disabledAttr.get();
-        if (Boolean.TRUE.equals(already)) {
+        ConnectionContext ctx = ConnectionContext.getOrCreate(ch);
+        if (!ctx.markAutoReadDisabledByExecutor()) {
             return;
         }
-        disabledAttr.set(true);
+        ctx.backpressureEnterCounter().incrementAndGet();
+        backpressureEnter.increment();
         trackAutoReadDisabled(ch);
         ch.eventLoop().execute(() -> {
             try {
@@ -668,11 +688,15 @@ public final class NettyCommandExecutor implements AutoCloseable {
         if (ch == null) {
             return;
         }
-        Attribute<Boolean> disabledAttr = ch.attr(AUTOREAD_DISABLED_BY_EXECUTOR);
-        if (!Boolean.TRUE.equals(disabledAttr.get())) {
+        ConnectionContext ctx = ConnectionContext.getOrCreate(ch);
+        if (!ctx.autoReadDisabledByExecutor()) {
             return;
         }
-        disabledAttr.set(false);
+        if (!ctx.clearAutoReadDisabledByExecutor()) {
+            return;
+        }
+        ctx.backpressureExitCounter().incrementAndGet();
+        backpressureExit.increment();
         channelsWithAutoReadDisabled.remove(ch);
         ch.eventLoop().execute(() -> {
             try {
@@ -750,14 +774,14 @@ public final class NettyCommandExecutor implements AutoCloseable {
         if (ch == null) {
             return false;
         }
-        return Boolean.TRUE.equals(ch.attr(CHANNEL_CLOSING).get());
+        return ConnectionContext.getOrCreate(ch).isClosing();
     }
 
     private static void markChannelClosing(Channel ch) {
         if (ch == null) {
             return;
         }
-        ch.attr(CHANNEL_CLOSING).set(true);
+        ConnectionContext.getOrCreate(ch).markClosing();
     }
 
     private void drainLeftoverCommands() {
@@ -774,7 +798,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
             // ignore
         }
         if (t.ctx != null) {
-            onCommandFinished(t.ctx.channel(), t.retainedBytes);
+            onCommandFinished(t.ctx.channel(), t.retainedBytes, false);
             return;
         }
         releaseQueuedBytes(t.retainedBytes);
@@ -828,6 +852,130 @@ public final class NettyCommandExecutor implements AutoCloseable {
             // Best-effort: avoid underflow breaking future reservations.
             queuedBytes.set(0);
         }
+    }
+
+    public static final class StatsSnapshot {
+        public final int queuedTasks;
+        public final long queuedBytes;
+        public final int queueCapacity;
+        public final long queueMaxBytes;
+        public final SchedulingPolicy schedulingPolicy;
+        public final int backpressureHighWatermark;
+        public final int backpressureLowWatermark;
+        public final long backpressureBytesHighWatermark;
+        public final long backpressureBytesLowWatermark;
+        public final int globalBackpressureHighWatermark;
+        public final int globalBackpressureLowWatermark;
+        public final long globalBackpressureBytesHighWatermark;
+        public final long globalBackpressureBytesLowWatermark;
+        public final int maxDrainCommands;
+        public final long drainTimeLimitNanos;
+        public final int channelsAutoReadDisabled;
+        public final long submitAccepted;
+        public final long submitRejectedNotRunning;
+        public final long submitRejectedQueueFull;
+        public final long submitRejectedBytesBudget;
+        public final long submitRejectedOfferFailed;
+        public final long commandsExecuted;
+        public final long commandsSkippedClosing;
+        public final long closeAfterReply;
+        public final long backpressureEnter;
+        public final long backpressureExit;
+        public final long drainLimitedByMaxCommands;
+        public final long drainLimitedByTimeBudget;
+
+        private StatsSnapshot(
+                int queuedTasks,
+                long queuedBytes,
+                int queueCapacity,
+                long queueMaxBytes,
+                SchedulingPolicy schedulingPolicy,
+                int backpressureHighWatermark,
+                int backpressureLowWatermark,
+                long backpressureBytesHighWatermark,
+                long backpressureBytesLowWatermark,
+                int globalBackpressureHighWatermark,
+                int globalBackpressureLowWatermark,
+                long globalBackpressureBytesHighWatermark,
+                long globalBackpressureBytesLowWatermark,
+                int maxDrainCommands,
+                long drainTimeLimitNanos,
+                int channelsAutoReadDisabled,
+                long submitAccepted,
+                long submitRejectedNotRunning,
+                long submitRejectedQueueFull,
+                long submitRejectedBytesBudget,
+                long submitRejectedOfferFailed,
+                long commandsExecuted,
+                long commandsSkippedClosing,
+                long closeAfterReply,
+                long backpressureEnter,
+                long backpressureExit,
+                long drainLimitedByMaxCommands,
+                long drainLimitedByTimeBudget
+        ) {
+            this.queuedTasks = queuedTasks;
+            this.queuedBytes = queuedBytes;
+            this.queueCapacity = queueCapacity;
+            this.queueMaxBytes = queueMaxBytes;
+            this.schedulingPolicy = schedulingPolicy;
+            this.backpressureHighWatermark = backpressureHighWatermark;
+            this.backpressureLowWatermark = backpressureLowWatermark;
+            this.backpressureBytesHighWatermark = backpressureBytesHighWatermark;
+            this.backpressureBytesLowWatermark = backpressureBytesLowWatermark;
+            this.globalBackpressureHighWatermark = globalBackpressureHighWatermark;
+            this.globalBackpressureLowWatermark = globalBackpressureLowWatermark;
+            this.globalBackpressureBytesHighWatermark = globalBackpressureBytesHighWatermark;
+            this.globalBackpressureBytesLowWatermark = globalBackpressureBytesLowWatermark;
+            this.maxDrainCommands = maxDrainCommands;
+            this.drainTimeLimitNanos = drainTimeLimitNanos;
+            this.channelsAutoReadDisabled = channelsAutoReadDisabled;
+            this.submitAccepted = submitAccepted;
+            this.submitRejectedNotRunning = submitRejectedNotRunning;
+            this.submitRejectedQueueFull = submitRejectedQueueFull;
+            this.submitRejectedBytesBudget = submitRejectedBytesBudget;
+            this.submitRejectedOfferFailed = submitRejectedOfferFailed;
+            this.commandsExecuted = commandsExecuted;
+            this.commandsSkippedClosing = commandsSkippedClosing;
+            this.closeAfterReply = closeAfterReply;
+            this.backpressureEnter = backpressureEnter;
+            this.backpressureExit = backpressureExit;
+            this.drainLimitedByMaxCommands = drainLimitedByMaxCommands;
+            this.drainLimitedByTimeBudget = drainLimitedByTimeBudget;
+        }
+    }
+
+    public StatsSnapshot statsSnapshot() {
+        return new StatsSnapshot(
+                queuedTasks.get(),
+                queuedBytes.get(),
+                queueCapacity,
+                queueMaxBytes,
+                schedulingPolicy,
+                backpressureHighWatermark,
+                backpressureLowWatermark,
+                backpressureBytesHighWatermark,
+                backpressureBytesLowWatermark,
+                globalBackpressureHighWatermark,
+                globalBackpressureLowWatermark,
+                globalBackpressureBytesHighWatermark,
+                globalBackpressureBytesLowWatermark,
+                maxDrainCommands,
+                drainTimeLimitNanos,
+                channelsWithAutoReadDisabled.size(),
+                submitAccepted.sum(),
+                submitRejectedNotRunning.sum(),
+                submitRejectedQueueFull.sum(),
+                submitRejectedBytesBudget.sum(),
+                submitRejectedOfferFailed.sum(),
+                commandsExecuted.sum(),
+                commandsSkippedClosing.sum(),
+                closeAfterReply.sum(),
+                backpressureEnter.sum(),
+                backpressureExit.sum(),
+                drainLimitedByMaxCommands.sum(),
+                drainLimitedByTimeBudget.sum()
+        );
     }
 
     private static int safeRetainedBytes(RespCommand cmd) {
@@ -905,9 +1053,9 @@ public final class NettyCommandExecutor implements AutoCloseable {
             if (schedulingPolicy == SchedulingPolicy.GLOBAL) {
                 return queue.offer(task);
             }
-            ChannelState state = channelState(ch);
-            state.queue.offer(task);
-            if (state.scheduled.compareAndSet(false, true)) {
+            ConnectionContext.ExecutorState state = executorState(ch);
+            state.queue().offer(task);
+            if (state.scheduled().compareAndSet(false, true)) {
                 activeChannels.offer(ch);
             }
             return true;
@@ -938,19 +1086,14 @@ public final class NettyCommandExecutor implements AutoCloseable {
 
             Channel ch;
             while ((ch = activeChannels.poll()) != null) {
-                ChannelState state = channelState(ch);
+                ConnectionContext.ExecutorState state = executorState(ch);
                 Task t;
-                while ((t = state.queue.poll()) != null) {
+                while ((t = (Task) state.queue().poll()) != null) {
                     recycleAndRelease(t);
                 }
-                state.scheduled.set(false);
+                state.scheduled().set(false);
             }
         }
-    }
-
-    private static final class ChannelState {
-        private final ConcurrentLinkedQueue<Task> queue = new ConcurrentLinkedQueue<>();
-        private final AtomicBoolean scheduled = new AtomicBoolean(false);
     }
 
     private static final class Task {

@@ -35,9 +35,29 @@ final class ServerCommands {
         registry.register("ECHO", this::echo);
         registry.register("HELLO", this::hello);
         registry.register("COMMAND", (cmd, out) -> out.emptyArray());
+        registry.register("INFO", this::info);
+        registry.register("STATS", this::stats);
         registry.register("SELECT", this::select);
         registry.register("QUIT", this::quit);
         registry.register("FLUSHDB", this::flushdb);
+    }
+
+    private void info(RespCommand cmd, RespWriter out) {
+        ServerInfoProvider provider = support.infoProvider();
+        if (provider == null) {
+            out.error("ERR INFO not supported");
+            return;
+        }
+        provider.info(cmd, out);
+    }
+
+    private void stats(RespCommand cmd, RespWriter out) {
+        ServerInfoProvider provider = support.infoProvider();
+        if (provider == null) {
+            out.error("ERR STATS not supported");
+            return;
+        }
+        provider.stats(cmd, out);
     }
 
     private void ping(RespCommand cmd, RespWriter out) {

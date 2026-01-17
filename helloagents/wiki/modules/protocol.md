@@ -12,7 +12,7 @@
 
 - **Responsibility:** RESP 对象模型 + RESP2/RESP3 回复写出（连接级协议状态）+ `RespFrame/RespSession` 抽象
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-16
+- **Last Updated:** 2026-01-17
 
 ## Specifications
 
@@ -21,7 +21,7 @@
 
 为了让 `yierdis-core` 与 `yierdis-protocol` 不直接依赖 Netty，同时保留零拷贝与连接级协议状态：
 - `RespFrame` 负责承载命令参数的 bytes view，并提供可选的 memory address 能力（用于 off-heap fast-path）
-- `RespFrame` 继承自 `YierdisBytesSource`（定义于 `yierdis-offheap-api`），用于复用通用 bytes 视图抽象；这不等同于协议层依赖某个具体 off-heap 后端
+- `RespFrame` 继承自 `BytesSource`（定义于 `yierdis-bytes`），用于复用通用 bytes 视图抽象；这不等同于协议层依赖某个具体 off-heap 后端
 - `RespFrame.length()` 提供 frame 的稳定长度（逻辑长度）
 - `RespFrame.retainedBytes()` 提供更接近真实驻留内存的估算（用于 server backlog/backpressure 的 bytes 预算口径）
 - `RespSession` 负责承载连接级协议状态（RESP2/RESP3），供 `RespWriter` 在写出时选择对应编码
@@ -50,7 +50,7 @@
 
 ## Dependencies
 
-- `yierdis-offheap-api`（`YierdisBytesSource/YierdisBytesSink` 通用 bytes 抽象：用于 frame/写出路径的 zero-copy/低分配；不等同于依赖具体 off-heap 后端实现）
+- `yierdis-bytes`（`BytesSource/BytesSink/BytesSlice` 通用 bytes 抽象：用于 frame/写出路径的 zero-copy/低分配；不等同于依赖具体 off-heap 后端实现）
 
 ## Change History
 

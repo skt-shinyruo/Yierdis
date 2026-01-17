@@ -10,7 +10,7 @@ import org.slf4j.LoggerFactory;
 import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
-import yier.bubu.redis.protocol.netty.NettyRespSession;
+import yier.bubu.redis.protocol.netty.ConnectionContext;
 
 import java.util.Objects;
 
@@ -34,7 +34,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         // 队列满或服务关闭：返回 busy 错误并回收命令帧，避免积压导致 OOM。
         ByteBuf out = ctx.alloc().buffer();
         try {
-            new RespWriter(new NettyByteBufSink(out), new NettyRespSession(ctx.channel())).error("ERR busy");
+            new RespWriter(new NettyByteBufSink(out), ConnectionContext.getOrCreate(ctx.channel())).error("ERR busy");
             ctx.writeAndFlush(out);
             out = null;
         } finally {
@@ -68,7 +68,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
 
         ByteBuf out = ctx.alloc().buffer();
         try {
-            new RespWriter(new NettyByteBufSink(out), new NettyRespSession(ctx.channel())).error(err);
+            new RespWriter(new NettyByteBufSink(out), ConnectionContext.getOrCreate(ctx.channel())).error(err);
             ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
             out = null;
         } finally {

@@ -1,6 +1,7 @@
 package yier.bubu.redis.client;
 
 import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
@@ -10,11 +11,11 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespObject;
+import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.protocol.RespFrame;
+import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.netty.NettyRespFrame;
 import yier.bubu.redis.protocol.netty.RespDecoder;
-import yier.bubu.redis.protocol.netty.RespEncoder;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -26,12 +27,12 @@ import java.util.concurrent.TimeUnit;
 public final class YierdisClient implements AutoCloseable {
     private final EventLoopGroup group;
     private final Channel channel;
-    private final BlockingQueue<RespObject> responses;
+    private final BlockingQueue<NettyRespFrame> responses;
 
     private final Object requestLock = new Object();
     private volatile boolean closed;
 
-    private YierdisClient(EventLoopGroup group, Channel channel, BlockingQueue<RespObject> responses) {
+    private YierdisClient(EventLoopGroup group, Channel channel, BlockingQueue<NettyRespFrame> responses) {
         this.group = group;
         this.channel = channel;
         this.responses = responses;
@@ -41,7 +42,7 @@ public final class YierdisClient implements AutoCloseable {
         Objects.requireNonNull(host, "host");
 
         EventLoopGroup group = new NioEventLoopGroup(1);
-        BlockingQueue<RespObject> responses = new LinkedBlockingQueue<>();
+        BlockingQueue<NettyRespFrame> responses = new LinkedBlockingQueue<>();
 
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(group)
@@ -52,7 +53,6 @@ public final class YierdisClient implements AutoCloseable {
                     protected void initChannel(SocketChannel ch) {
                         ch.pipeline()
                                 .addLast("respDecoder", new RespDecoder())
-                                .addLast("respEncoder", new RespEncoder())
                                 .addLast("clientHandler", new ClientHandler(responses));
                     }
                 });
@@ -61,7 +61,7 @@ public final class YierdisClient implements AutoCloseable {
         return new YierdisClient(group, channel, responses);
     }
 
-    public RespObject execute(List<byte[]> args, long timeoutMillis) throws InterruptedException {
+    public RespFrame execute(List<byte[]> args, long timeoutMillis) throws InterruptedException {
         Objects.requireNonNull(args, "args");
         if (timeoutMillis <= 0) {
             throw new IllegalArgumentException("timeoutMillis must be > 0");
@@ -76,10 +76,25 @@ public final class YierdisClient implements AutoCloseable {
                 closed = true;
                 throw new IllegalStateException("Connection is not active");
             }
-            responses.clear();
-            channel.writeAndFlush(toRespCommand(args)).sync();
+            drainAndCloseResponses();
+            ByteBuf out = channel.alloc().buffer();
+            try {
+                ByteBuf buf = out;
+                BytesSink sink = (src, srcIndex, len) -> buf.writeBytes(src, srcIndex, len);
+                RespWriter w = new RespWriter(sink);
+                w.arrayHeader(args.size());
+                for (int i = 0; i < args.size(); i++) {
+                    w.bulkString(args.get(i));
+                }
+                channel.writeAndFlush(out).sync();
+                out = null;
+            } finally {
+                if (out != null) {
+                    out.release();
+                }
+            }
 
-            RespObject resp = responses.poll(timeoutMillis, TimeUnit.MILLISECONDS);
+            NettyRespFrame resp = responses.poll(timeoutMillis, TimeUnit.MILLISECONDS);
             if (resp == null) {
                 // RESP 是严格 FIFO 的 request/response 配对。超时意味着连接进入未知状态：
                 // 服务端可能稍后返回本次请求的响应，继续复用连接会导致后续请求响应错配。
@@ -90,22 +105,13 @@ public final class YierdisClient implements AutoCloseable {
         }
     }
 
-    public RespObject executeUtf8(List<String> args, long timeoutMillis) throws InterruptedException {
+    public RespFrame executeUtf8(List<String> args, long timeoutMillis) throws InterruptedException {
         Objects.requireNonNull(args, "args");
         List<byte[]> out = new ArrayList<>(args.size());
         for (String a : args) {
             out.add(a == null ? null : a.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
         return execute(out, timeoutMillis);
-    }
-
-    private static RespArray toRespCommand(List<byte[]> args) {
-        List<RespObject> items = new ArrayList<>(args.size());
-        for (byte[] a : args) {
-            // Commands are sent as array of bulk strings in RESP2.
-            items.add(RespBulkString.ofBytes(a));
-        }
-        return RespArray.of(items);
     }
 
     @Override
@@ -118,6 +124,7 @@ public final class YierdisClient implements AutoCloseable {
             return;
         }
         closed = true;
+        drainAndCloseResponses();
         try {
             if (channel != null) {
                 channel.close().syncUninterruptibly();
@@ -133,15 +140,29 @@ public final class YierdisClient implements AutoCloseable {
         }
     }
 
-    private static final class ClientHandler extends SimpleChannelInboundHandler<RespObject> {
-        private final BlockingQueue<RespObject> responses;
+    private void drainAndCloseResponses() {
+        for (; ; ) {
+            NettyRespFrame frame = responses.poll();
+            if (frame == null) {
+                return;
+            }
+            try {
+                frame.close();
+            } catch (Throwable ignored) {
+                // ignore
+            }
+        }
+    }
 
-        private ClientHandler(BlockingQueue<RespObject> responses) {
+    private static final class ClientHandler extends SimpleChannelInboundHandler<NettyRespFrame> {
+        private final BlockingQueue<NettyRespFrame> responses;
+
+        private ClientHandler(BlockingQueue<NettyRespFrame> responses) {
             this.responses = responses;
         }
 
         @Override
-        protected void channelRead0(ChannelHandlerContext ctx, RespObject msg) {
+        protected void channelRead0(ChannelHandlerContext ctx, NettyRespFrame msg) {
             responses.offer(msg);
         }
     }

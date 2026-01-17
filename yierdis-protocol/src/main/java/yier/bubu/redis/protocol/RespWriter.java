@@ -8,9 +8,9 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Writes RESP2/RESP3 responses into a {@link YierdisBytesSink}.
+ * 将 RESP2/RESP3 响应写入 {@link BytesSink}。
  * <p>
- * This is the server fast-path: it avoids building {@link RespObject} trees.
+ * 这是 server 的 fast-path：避免构建 {@link RespObject} 树。
  */
 public final class RespWriter {
     private static final byte CR = '\r';
@@ -49,6 +49,10 @@ public final class RespWriter {
 
     public RespProtocol protocol() {
         return protocol;
+    }
+
+    public RespSession session() {
+        return session;
     }
 
     public void setProtocol(RespProtocol protocol) {

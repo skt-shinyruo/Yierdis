@@ -1,8 +1,10 @@
 package yier.bubu.redis.db.offheap.api;
 
+import yier.bubu.redis.bytes.BytesSink;
+
 import java.util.Arrays;
 
-public final class YierdisByteArraySink implements YierdisBytesSink {
+public final class YierdisByteArraySink implements BytesSink {
     private byte[] buf;
     private int size;
 
@@ -65,4 +67,3 @@ public final class YierdisByteArraySink implements YierdisBytesSink {
         buf = Arrays.copyOf(buf, next);
     }
 }
-

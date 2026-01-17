@@ -3,28 +3,15 @@ package yier.bubu.redis.protocol.netty;
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.ByteToMessageDecoder;
 
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespMap;
-import yier.bubu.redis.protocol.RespNull;
-import yier.bubu.redis.protocol.RespObject;
-import yier.bubu.redis.protocol.RespSimpleString;
-
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A small RESP2 decoder for Redis clients.
+ * RESP reply decoder（frame/zero-copy 取向）。
  * <p>
- * It is intentionally minimal and focuses on correctness over extreme performance.
+ * 该 decoder 只负责“切帧”：从 ByteBuf 中定位一个完整的 RESP reply，并输出 {@link NettyRespFrame}。
+ * 语义解析（例如将 reply 转成 String/long/对象树）由上层按需完成，以减少分配与拷贝。
  */
 public final class RespDecoder extends ByteToMessageDecoder {
-    private static final byte CR = '\r';
-    private static final byte LF = '\n';
-
     // Hard upper bounds for user-controlled inputs (DoS protection).
     private static final int DEFAULT_MAX_BULK_BYTES = 64 * 1024 * 1024; // 64 MiB
     private static final int DEFAULT_MAX_ARRAY_LEN = 1024;
@@ -41,202 +28,227 @@ public final class RespDecoder extends ByteToMessageDecoder {
     }
 
     public RespDecoder(int maxBulkBytes, int maxArrayLen, int maxNestingDepth, int maxLineBytes) {
-        this.maxBulkBytes = requirePositive(maxBulkBytes, "maxBulkBytes");
-        this.maxArrayLen = requirePositive(maxArrayLen, "maxArrayLen");
-        this.maxNestingDepth = requirePositive(maxNestingDepth, "maxNestingDepth");
-        this.maxLineBytes = requirePositive(maxLineBytes, "maxLineBytes");
+        this.maxBulkBytes = RespDecodingSupport.requirePositive(maxBulkBytes, "maxBulkBytes");
+        this.maxArrayLen = RespDecodingSupport.requirePositive(maxArrayLen, "maxArrayLen");
+        this.maxNestingDepth = RespDecodingSupport.requirePositive(maxNestingDepth, "maxNestingDepth");
+        this.maxLineBytes = RespDecodingSupport.requirePositive(maxLineBytes, "maxLineBytes");
     }
 
     @Override
     protected void decode(io.netty.channel.ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
         for (; ; ) {
             int startIdx = in.readerIndex();
-            RespObject obj = tryDecodeOne(in, 0);
-            if (obj == null) {
+            int endIdx = trySkipOne(in, 0);
+            if (endIdx < 0) {
                 in.readerIndex(startIdx);
                 return;
             }
-            out.add(obj);
+
+            int len = endIdx - startIdx;
+            ByteBuf frameBuf = in.retainedSlice(startIdx, len);
+            out.add(new NettyRespFrame(frameBuf));
         }
     }
 
-    private RespObject tryDecodeOne(ByteBuf in, int nestingDepth) {
+    /**
+     * 尝试跳过一个完整 reply。
+     *
+     * @return reply 的 endIndex（absolute index），若数据不足则返回 -1（并将 readerIndex 回滚到 start）
+     */
+    private int trySkipOne(ByteBuf in, int nestingDepth) {
         int startIdx = in.readerIndex();
         if (!in.isReadable()) {
-            return null;
+            return -1;
         }
 
         byte prefix = in.readByte();
         switch (prefix) {
-            case '+': {
-                String line = readLine(in);
-                if (line == null) {
-                    in.readerIndex(startIdx);
-                    return null;
-                }
-                return RespSimpleString.of(line);
-            }
+            case '+':
             case '-': {
-                String line = readLine(in);
-                if (line == null) {
-                    in.readerIndex(startIdx);
-                    return null;
-                }
-                return RespError.of(line);
+                return trySkipLine(in, startIdx);
             }
             case ':': {
-                String line = readLine(in);
-                if (line == null) {
-                    in.readerIndex(startIdx);
-                    return null;
-                }
-                return RespInteger.of(Long.parseLong(line.trim()));
+                return trySkipInteger(in, startIdx);
             }
             case '$': {
-                String line = readLine(in);
-                if (line == null) {
-                    in.readerIndex(startIdx);
-                    return null;
-                }
-                int len = Integer.parseInt(line.trim());
-                if (len == -1) {
-                    return RespBulkString.nullString();
-                }
-                if (len < -1) {
-                    throw new IllegalArgumentException("Protocol error: invalid bulk length");
-                }
-                if (len > maxBulkBytes) {
-                    throw new IllegalArgumentException("Protocol error: bulk length too large");
-                }
-                if (in.readableBytes() < (long) len + 2) {
-                    in.readerIndex(startIdx);
-                    return null;
-                }
-                byte[] data = new byte[len];
-                in.readBytes(data);
-                if (in.readByte() != CR || in.readByte() != LF) {
-                    throw new IllegalArgumentException("Protocol error: bad bulk string CRLF");
-                }
-                return RespBulkString.ofBytes(data);
+                return trySkipBulkString(in, startIdx);
             }
             case '*': {
-                if (nestingDepth >= maxNestingDepth) {
-                    throw new IllegalArgumentException("Protocol error: nested arrays too deep");
-                }
-                String line = readLine(in);
-                if (line == null) {
-                    in.readerIndex(startIdx);
-                    return null;
-                }
-                int count = Integer.parseInt(line.trim());
-                if (count == -1) {
-                    return RespArray.nullArray();
-                }
-                if (count < -1) {
-                    throw new IllegalArgumentException("Protocol error: invalid array length");
-                }
-                if (count > maxArrayLen) {
-                    throw new IllegalArgumentException("Protocol error: array length too large");
-                }
-                List<RespObject> items = new ArrayList<>(Math.min(count, 16));
-                for (int i = 0; i < count; i++) {
-                    RespObject item = tryDecodeOne(in, nestingDepth + 1);
-                    if (item == null) {
-                        in.readerIndex(startIdx);
-                        return null;
-                    }
-                    items.add(item);
-                }
-                return RespArray.of(items);
+                return trySkipArray(in, startIdx, nestingDepth);
             }
             case '%': {
-                if (nestingDepth >= maxNestingDepth) {
-                    throw new IllegalArgumentException("Protocol error: nested maps too deep");
-                }
-                String line = readLine(in);
-                if (line == null) {
-                    in.readerIndex(startIdx);
-                    return null;
-                }
-                int pairs = Integer.parseInt(line.trim());
-                if (pairs < 0) {
-                    throw new IllegalArgumentException("Protocol error: invalid map length");
-                }
-                if (pairs > maxArrayLen) {
-                    throw new IllegalArgumentException("Protocol error: map length too large");
-                }
-                List<RespMap.Entry> entries = new ArrayList<>(Math.min(pairs, 16));
-                for (int i = 0; i < pairs; i++) {
-                    RespObject key = tryDecodeOne(in, nestingDepth + 1);
-                    if (key == null) {
-                        in.readerIndex(startIdx);
-                        return null;
-                    }
-                    RespObject value = tryDecodeOne(in, nestingDepth + 1);
-                    if (value == null) {
-                        in.readerIndex(startIdx);
-                        return null;
-                    }
-                    entries.add(new RespMap.Entry(key, value));
-                }
-                return RespMap.of(entries);
+                return trySkipMap(in, startIdx, nestingDepth);
             }
             case '_': {
                 // RESP3 null: "_\r\n"
                 if (in.readableBytes() < 2) {
                     in.readerIndex(startIdx);
-                    return null;
+                    return -1;
                 }
-                if (in.readByte() != CR || in.readByte() != LF) {
+                if (in.readByte() != RespDecodingSupport.CR || in.readByte() != RespDecodingSupport.LF) {
                     throw new IllegalArgumentException("Protocol error: bad null CRLF");
                 }
-                return RespNull.INSTANCE;
+                return in.readerIndex();
             }
             default:
                 throw new IllegalArgumentException("Protocol error: unknown RESP prefix: " + (char) prefix);
         }
     }
 
-    /**
-     * Reads a RESP line (up to CRLF) and returns it without CRLF.
-     */
-    private String readLine(ByteBuf in) {
-        int start = in.readerIndex();
-        int end = indexOfCrlf(in, maxLineBytes);
-        if (end < 0) {
-            if (in.writerIndex() - start > maxLineBytes + 2) {
+    private int trySkipLine(ByteBuf in, int startIdx) {
+        int lineStart = in.readerIndex();
+        int lineEnd = RespDecodingSupport.indexOfCrlf(in, lineStart, maxLineBytes);
+        if (lineEnd < 0) {
+            if (in.writerIndex() - lineStart > maxLineBytes + 2) {
                 throw new IllegalArgumentException("Protocol error: line too long");
             }
-            return null;
+            in.readerIndex(startIdx);
+            return -1;
         }
-
-        int len = end - start;
-        if (len > maxLineBytes) {
-            throw new IllegalArgumentException("Protocol error: line too long");
-        }
-        byte[] buf = new byte[len];
-        in.readBytes(buf);
-        // consume CRLF
-        in.skipBytes(2);
-        return new String(buf, StandardCharsets.UTF_8);
+        int end = lineEnd + 2;
+        in.readerIndex(end);
+        return end;
     }
 
-    private static int indexOfCrlf(ByteBuf in, int maxLineBytes) {
-        int start = in.readerIndex();
-        int maxCrlfStart = start + maxLineBytes;
-        int scanLimit = Math.min(in.writerIndex() - 1, maxCrlfStart + 1);
-        for (int i = start; i < scanLimit; i++) {
-            if (in.getByte(i) == CR && in.getByte(i + 1) == LF) {
-                return i;
+    private int trySkipInteger(ByteBuf in, int startIdx) {
+        int lineStart = in.readerIndex();
+        int lineEnd = RespDecodingSupport.indexOfCrlf(in, lineStart, maxLineBytes);
+        if (lineEnd < 0) {
+            if (in.writerIndex() - lineStart > maxLineBytes + 2) {
+                throw new IllegalArgumentException("Protocol error: line too long");
+            }
+            in.readerIndex(startIdx);
+            return -1;
+        }
+
+        // 校验语义：整数必须是合法的 long（保持与 server/client 的协议一致性）。
+        RespDecodingSupport.parseLongAscii(in, lineStart, lineEnd);
+
+        int end = lineEnd + 2;
+        in.readerIndex(end);
+        return end;
+    }
+
+    private int trySkipBulkString(ByteBuf in, int startIdx) {
+        int lenLineStart = in.readerIndex();
+        int lenLineEnd = RespDecodingSupport.indexOfCrlf(in, lenLineStart, maxLineBytes);
+        if (lenLineEnd < 0) {
+            if (in.writerIndex() - lenLineStart > maxLineBytes + 2) {
+                throw new IllegalArgumentException("Protocol error: line too long");
+            }
+            in.readerIndex(startIdx);
+            return -1;
+        }
+
+        int len = RespDecodingSupport.parseIntAscii(in, lenLineStart, lenLineEnd);
+        if (len == -1) {
+            int end = lenLineEnd + 2;
+            in.readerIndex(end);
+            return end;
+        }
+        if (len < -1) {
+            throw new IllegalArgumentException("Protocol error: invalid bulk length");
+        }
+        if (len > maxBulkBytes) {
+            throw new IllegalArgumentException("Protocol error: bulk length too large");
+        }
+
+        long dataStart = (long) lenLineEnd + 2;
+        long dataEnd = dataStart + (long) len;
+        long end = dataEnd + 2;
+        if (end > Integer.MAX_VALUE) {
+            in.readerIndex(startIdx);
+            return -1;
+        }
+        if (in.writerIndex() < end) {
+            in.readerIndex(startIdx);
+            return -1;
+        }
+
+        int dataEndIdx = (int) dataEnd;
+        if (in.getByte(dataEndIdx) != RespDecodingSupport.CR || in.getByte(dataEndIdx + 1) != RespDecodingSupport.LF) {
+            throw new IllegalArgumentException("Protocol error: bad bulk string CRLF");
+        }
+        int endIdx = (int) end;
+        in.readerIndex(endIdx);
+        return endIdx;
+    }
+
+    private int trySkipArray(ByteBuf in, int startIdx, int nestingDepth) {
+        if (nestingDepth >= maxNestingDepth) {
+            throw new IllegalArgumentException("Protocol error: nested arrays too deep");
+        }
+
+        int countLineStart = in.readerIndex();
+        int countLineEnd = RespDecodingSupport.indexOfCrlf(in, countLineStart, maxLineBytes);
+        if (countLineEnd < 0) {
+            if (in.writerIndex() - countLineStart > maxLineBytes + 2) {
+                throw new IllegalArgumentException("Protocol error: line too long");
+            }
+            in.readerIndex(startIdx);
+            return -1;
+        }
+
+        int count = RespDecodingSupport.parseIntAscii(in, countLineStart, countLineEnd);
+        if (count == -1) {
+            int end = countLineEnd + 2;
+            in.readerIndex(end);
+            return end;
+        }
+        if (count < -1) {
+            throw new IllegalArgumentException("Protocol error: invalid array length");
+        }
+        if (count > maxArrayLen) {
+            throw new IllegalArgumentException("Protocol error: array length too large");
+        }
+
+        in.readerIndex(countLineEnd + 2);
+        for (int i = 0; i < count; i++) {
+            int endIdx = trySkipOne(in, nestingDepth + 1);
+            if (endIdx < 0) {
+                in.readerIndex(startIdx);
+                return -1;
             }
         }
-        return -1;
+        return in.readerIndex();
     }
 
-    private static int requirePositive(int value, String name) {
-        if (value <= 0) {
-            throw new IllegalArgumentException(name + " must be positive");
+    private int trySkipMap(ByteBuf in, int startIdx, int nestingDepth) {
+        if (nestingDepth >= maxNestingDepth) {
+            throw new IllegalArgumentException("Protocol error: nested maps too deep");
         }
-        return value;
+
+        int pairsLineStart = in.readerIndex();
+        int pairsLineEnd = RespDecodingSupport.indexOfCrlf(in, pairsLineStart, maxLineBytes);
+        if (pairsLineEnd < 0) {
+            if (in.writerIndex() - pairsLineStart > maxLineBytes + 2) {
+                throw new IllegalArgumentException("Protocol error: line too long");
+            }
+            in.readerIndex(startIdx);
+            return -1;
+        }
+
+        int pairs = RespDecodingSupport.parseIntAscii(in, pairsLineStart, pairsLineEnd);
+        if (pairs < 0) {
+            throw new IllegalArgumentException("Protocol error: invalid map length");
+        }
+        if (pairs > maxArrayLen) {
+            throw new IllegalArgumentException("Protocol error: map length too large");
+        }
+
+        in.readerIndex(pairsLineEnd + 2);
+        for (int i = 0; i < pairs; i++) {
+            int endKey = trySkipOne(in, nestingDepth + 1);
+            if (endKey < 0) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+            int endVal = trySkipOne(in, nestingDepth + 1);
+            if (endVal < 0) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+        }
+        return in.readerIndex();
     }
 }

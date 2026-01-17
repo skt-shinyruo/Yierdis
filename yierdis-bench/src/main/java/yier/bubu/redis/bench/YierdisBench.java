@@ -7,14 +7,9 @@ import picocli.CommandLine;
 import picocli.CommandLine.ParameterException;
 import yier.bubu.redis.args.YierdisServerArgs;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespObject;
-import yier.bubu.redis.protocol.RespSimpleString;
-import yier.bubu.redis.protocol.RespType;
 import yier.bubu.redis.protocol.RespWriter;
 import yier.bubu.redis.protocol.netty.RespDecoder;
+import yier.bubu.redis.protocol.netty.NettyRespFrame;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -313,8 +308,12 @@ public final class YierdisBench {
                          RespReplyReader reader = new RespReplyReader(in)) {
                         w.writePing();
                         out.flush();
-                        reader.readKind();
-                        return true;
+                        NettyRespFrame frame = reader.readFrame();
+                        try {
+                            return RespReplyReader.kindOf(frame) != null;
+                        } finally {
+                            frame.close();
+                        }
                     }
                 }
             } catch (Exception ignored) {
@@ -530,31 +529,89 @@ public final class YierdisBench {
         System.out.println(s);
     }
 
-    private static boolean validateStrictReply(Workload workload, RespObject obj, int expectedDataSize) {
-        if (obj == null || workload == null) {
+    private static boolean validateStrictReply(Workload workload, NettyRespFrame frame, int expectedDataSize) {
+        if (frame == null || workload == null) {
             return false;
         }
+        ByteBuf buf = frame.unwrap();
+        int start = buf.readerIndex();
+        if (start >= buf.writerIndex()) {
+            return false;
+        }
+        byte prefix = buf.getByte(start);
         switch (workload) {
             case PING:
-                if (!(obj instanceof RespSimpleString)) {
-                    return false;
-                }
-                return "PONG".equals(((RespSimpleString) obj).value());
+                return prefix == '+' && matchesSimpleString(buf, start, "PONG");
             case SET_RANDOM:
             case SET_SEQUENTIAL:
-                if (!(obj instanceof RespSimpleString)) {
+                return prefix == '+' && matchesSimpleString(buf, start, "OK");
+            case GET_RANDOM:
+                if (prefix != '$') {
                     return false;
                 }
-                return "OK".equals(((RespSimpleString) obj).value());
-            case GET_RANDOM:
-                if (obj instanceof RespBulkString) {
-                    RespBulkString bs = (RespBulkString) obj;
-                    return bs.isNull() || (bs.data() != null && bs.data().length == expectedDataSize);
-                }
-                return false;
+                int bulkLen = parseBulkLen(buf, start);
+                return bulkLen == -1 || bulkLen == expectedDataSize;
             default:
                 return true;
         }
+    }
+
+    private static boolean matchesSimpleString(ByteBuf buf, int start, String expectedAscii) {
+        int i = start + 1;
+        int limit = buf.writerIndex() - 1;
+        for (; i < limit; i++) {
+            if (buf.getByte(i) == '\r' && buf.getByte(i + 1) == '\n') {
+                break;
+            }
+        }
+        if (i >= limit) {
+            return false;
+        }
+        int len = i - (start + 1);
+        if (len != expectedAscii.length()) {
+            return false;
+        }
+        for (int k = 0; k < expectedAscii.length(); k++) {
+            if (buf.getByte(start + 1 + k) != (byte) expectedAscii.charAt(k)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int parseBulkLen(ByteBuf buf, int start) {
+        int i = start + 1;
+        int limit = buf.writerIndex() - 1;
+        for (; i < limit; i++) {
+            if (buf.getByte(i) == '\r' && buf.getByte(i + 1) == '\n') {
+                break;
+            }
+        }
+        if (i >= limit) {
+            return Integer.MIN_VALUE;
+        }
+        int lenStart = start + 1;
+        int lenEnd = i;
+        boolean negative = false;
+        if (lenStart < lenEnd && buf.getByte(lenStart) == '-') {
+            negative = true;
+            lenStart++;
+        }
+        if (lenStart >= lenEnd) {
+            return Integer.MIN_VALUE;
+        }
+        int v = 0;
+        for (int p = lenStart; p < lenEnd; p++) {
+            int digit = (buf.getByte(p) & 0xFF) - '0';
+            if (digit < 0 || digit > 9) {
+                return Integer.MIN_VALUE;
+            }
+            if (v > (Integer.MAX_VALUE - digit) / 10) {
+                return Integer.MIN_VALUE;
+            }
+            v = v * 10 + digit;
+        }
+        return negative ? -v : v;
     }
 
     enum Workload {
@@ -884,12 +941,16 @@ public final class YierdisBench {
                             out.flush();
 
                             for (int i = 0; i < batch; i++) {
-                                RespObject reply = reader.readObject();
-                                ReplyKind kind = RespReplyReader.kindOf(reply);
-                                if (kind == ReplyKind.ERROR) {
-                                    errors++;
-                                } else if (strictReplies && (!workload.accepts(kind) || !validateStrictReply(workload, reply, value.length))) {
-                                    errors++;
+                                NettyRespFrame reply = reader.readFrame();
+                                try {
+                                    ReplyKind kind = RespReplyReader.kindOf(reply);
+                                    if (kind == ReplyKind.ERROR) {
+                                        errors++;
+                                    } else if (strictReplies && (!workload.accepts(kind) || !validateStrictReply(workload, reply, value.length))) {
+                                        errors++;
+                                    }
+                                } finally {
+                                    reply.close();
                                 }
                             }
 
@@ -964,12 +1025,16 @@ public final class YierdisBench {
                                     throw new IllegalStateException("unexpected workload: " + workload);
                             }
                             out.flush();
-                            RespObject reply = reader.readObject();
-                            ReplyKind kind = RespReplyReader.kindOf(reply);
-                            if (kind == ReplyKind.ERROR) {
-                                errors++;
-                            } else if (strictReplies && (!workload.accepts(kind) || !validateStrictReply(workload, reply, value.length))) {
-                                errors++;
+                            NettyRespFrame reply = reader.readFrame();
+                            try {
+                                ReplyKind kind = RespReplyReader.kindOf(reply);
+                                if (kind == ReplyKind.ERROR) {
+                                    errors++;
+                                } else if (strictReplies && (!workload.accepts(kind) || !validateStrictReply(workload, reply, value.length))) {
+                                    errors++;
+                                }
+                            } finally {
+                                reply.close();
                             }
                             long t1 = System.nanoTime();
                             samples[i] = t1 - t0;
@@ -1049,23 +1114,18 @@ public final class YierdisBench {
             this.decoder = new EmbeddedChannel(new RespDecoder());
         }
 
-        RespObject readObject() throws IOException {
+        NettyRespFrame readFrame() throws IOException {
             return readOne();
         }
 
-        ReplyKind readKind() throws IOException {
-            RespObject obj = readOne();
-            return kindOf(obj);
-        }
-
-        private RespObject readOne() throws IOException {
+        private NettyRespFrame readOne() throws IOException {
             while (true) {
                 Object msg = decoder.readInbound();
                 if (msg != null) {
-                    if (!(msg instanceof RespObject)) {
+                    if (!(msg instanceof NettyRespFrame)) {
                         throw new IOException("unexpected decoded type: " + msg.getClass().getName());
                     }
-                    return (RespObject) msg;
+                    return (NettyRespFrame) msg;
                 }
 
                 int n = in.read(readBuf);
@@ -1080,31 +1140,36 @@ public final class YierdisBench {
             }
         }
 
-        static ReplyKind kindOf(RespObject obj) {
-            if (obj == null) {
+        static ReplyKind kindOf(NettyRespFrame frame) {
+            if (frame == null) {
                 return null;
             }
-            RespType type = obj.type();
-            if (type == RespType.SIMPLE_STRING) {
-                return ReplyKind.SIMPLE_STRING;
+            ByteBuf buf = frame.unwrap();
+            int start = buf.readerIndex();
+            if (start >= buf.writerIndex()) {
+                return null;
             }
-            if (type == RespType.ERROR) {
-                return ReplyKind.ERROR;
+            byte prefix = buf.getByte(start);
+            switch (prefix) {
+                case '+':
+                    return ReplyKind.SIMPLE_STRING;
+                case '-':
+                    return ReplyKind.ERROR;
+                case ':':
+                    return ReplyKind.INTEGER;
+                case '$': {
+                    int len = parseBulkLen(buf, start);
+                    return len == -1 ? ReplyKind.NULL : ReplyKind.BULK_STRING;
+                }
+                case '*':
+                    return ReplyKind.ARRAY;
+                case '%':
+                    return ReplyKind.MAP;
+                case '_':
+                    return ReplyKind.NULL;
+                default:
+                    return null;
             }
-            if (type == RespType.INTEGER) {
-                return ReplyKind.INTEGER;
-            }
-            if (type == RespType.BULK_STRING) {
-                RespBulkString bs = (RespBulkString) obj;
-                return bs.isNull() ? ReplyKind.NULL : ReplyKind.BULK_STRING;
-            }
-            if (type == RespType.ARRAY) {
-                return ReplyKind.ARRAY;
-            }
-            if (type == RespType.NULL) {
-                return ReplyKind.NULL;
-            }
-            return null;
         }
 
         @Override

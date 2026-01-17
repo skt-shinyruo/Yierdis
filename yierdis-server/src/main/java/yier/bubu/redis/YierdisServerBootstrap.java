@@ -19,6 +19,7 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocators;
 import yier.bubu.redis.protocol.netty.RespCommandDecoder;
+import yier.bubu.redis.protocol.netty.ConnectionContext;
 
 import java.net.InetSocketAddress;
 import java.util.Locale;
@@ -120,7 +121,8 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         // From this point on, db.shutdown() is responsible for closing the allocator.
         earlyOffHeapAllocator = null;
 
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(config);
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db, infoProvider);
         commandGroup = new DefaultEventExecutorGroup(1);
         executor = new NettyCommandExecutor(
                 db,
@@ -139,6 +141,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 config.frameCompactionRatio,
                 config.frameCompactionMaxCopyBytes
         );
+        infoProvider.bindExecutor(executor);
 
         bossGroup = new NioEventLoopGroup(1);
         workerGroup = new NioEventLoopGroup(config.ioThreads);
@@ -166,6 +169,8 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
+                        // 连接态 SSOT：绑定 ConnectionContext，替代散落的 Channel.attr。
+                        ConnectionContext.getOrCreate(ch);
                         ch.pipeline()
                                 .addLast("respCommandDecoder", new RespCommandDecoder(
                                         config.protocolMaxBulkBytes,
@@ -251,4 +256,3 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         earlyOffHeapAllocator = null;
     }
 }
-

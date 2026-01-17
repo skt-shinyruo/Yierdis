@@ -10,7 +10,7 @@
 
 - **Responsibility:** 命令分发、参数解析、错误映射、性能优化（低分配写出路径）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-16
+- **Last Updated:** 2026-01-17
 
 ## Specifications
 
@@ -31,11 +31,12 @@
 ### Requirement: 命令表驱动路由
 **Module:** command
 命令路由通过 `CommandRegistry`（command name → handler）统一注册点完成，并按 domain 拆分为多个 `*Commands`：
-- `ServerCommands`：连接/通用命令（PING/ECHO/HELLO/SELECT/FLUSHDB/COMMAND）
+- `ServerCommands`：连接/通用命令（PING/ECHO/HELLO/INFO/STATS/SELECT/QUIT/FLUSHDB/COMMAND）
 - `KeyCommands`：key/TTL/诊断命令（TYPE/MEMORY/OBJECT/KEYS/DEL/EXISTS/EXPIRE/TTL）
 - `StringCommands` / `HllCommands` / `ListCommands` / `HashCommands` / `SetCommands` / `ZSetCommands`
 
 目的：扩展新命令/新类型时局部改动，不再“牵一发动全身”。
+补充：`CommandRegistry` 的查找已从线性扫描升级为开放寻址哈希索引（期望 O(1)），并保持运行时零分配。
 
 ### Requirement: BITMAP / HLL 命令族
 **Module:** command
@@ -55,3 +56,4 @@
 - 2026-01-07：支持 `HELLO 3` 切换 RESP3（最小子集），并在 RESP3 模式下按协议输出 null（`_`）。
 - 2026-01-08：写命令热路径减少不必要的 `toByteArray`：支持从 `RespCommand.frame()` 的参数 slice 直接写入/追加到最终 payload（heap/off-heap）。
 - 2026-01-14：新增 BITMAP/HLL 命令族（`SETBIT/GETBIT/BITCOUNT/PFADD/PFCOUNT/PFMERGE`），并补齐相关参数校验与 `maxmemory` 接入。
+- 2026-01-17：命令路由加速：`CommandRegistry` 从线性扫描升级为 O(1) 哈希索引；新增 `INFO/STATS` 作为可观测性入口（输出由 server 注入 provider）。

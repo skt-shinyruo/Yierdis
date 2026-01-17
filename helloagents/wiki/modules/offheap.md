@@ -8,7 +8,7 @@
 
 - **Responsibility:** 分配器 API、slice/buf 抽象、unsafe/netty/foreign 等后端
 - **Status:** 🚧In Development
-- **Last Updated:** 2026-01-16
+- **Last Updated:** 2026-01-17
 
 ## Specifications
 
@@ -18,7 +18,7 @@ bytes 抽象的 SSOT 已抽取到 `yierdis-bytes`（Netty-free）：
 - `BytesSource`：统一的只读 bytes view（可由 heap byte[]、Netty ByteBuf、off-heap slice 等实现）
 - `BytesSink/DirectBytesSink`：统一的写入目标（供 `RespWriter`、off-heap buf 写路径等复用）
 
-为保持历史包名稳定，`yierdis-offheap-api` 仍保留 `YierdisBytesSource/YierdisBytesSink` 作为 **兼容别名（Deprecated）**，但新代码应优先使用 `yierdis-bytes` 的接口；Netty 适配（`ByteBuf` sink/source）位于 `yierdis-bytes-netty`。
+`yierdis-offheap-api` 不再提供 bytes 兼容别名（Breaking）：所有 bytes 视图/写出接口以 `yierdis-bytes` 为 SSOT；Netty 适配（`ByteBuf` sink/source）位于 `yierdis-bytes-netty`。
 
 ### Requirement: 可选启用的堆外存储
 **Module:** offheap
@@ -53,12 +53,12 @@ bytes 抽象的 SSOT 已抽取到 `yierdis-bytes`（Netty-free）：
 
 ### Requirement: RESP frame slice 直接写入 off-heap（减少双拷贝）
 **Module:** offheap
-为了支持“端到端低分配”的写入路径，off-heap buf 提供从 `YierdisBytesSource` 写入的入口；当输入来自 Netty `ByteBuf` 时，通过 `yierdis-offheap-netty` 的 adapter 将其暴露为 `YierdisBytesSource`。
+为了支持“端到端低分配”的写入路径，off-heap buf 提供从 `BytesSource` 写入的入口；当输入来自 Netty `ByteBuf` 时，通常由 `RespFrame`（例如 `NettyRespFrame`）直接提供 `BytesSource` 视图，无需额外中转。
 
 #### Scenario: SET/APPEND 等写命令零中转写入
 条件：启用非 unsafe 的 off-heap backend（例如 `netty/foreign`），并使用 RESP bulk string 发送 value
-- 预期：服务端可调用 `YierdisOffHeapBuf#setBytes(int, YierdisBytesSource, int, int)` 将 value 写入 off-heap
-- 预期：当输入源是 Netty `ByteBuf` 时，通过 `yierdis-offheap-netty` 的 adapter 将其暴露为 `YierdisBytesSource`
+- 预期：服务端可调用 `YierdisOffHeapBuf#setBytes(int, BytesSource, int, int)` 将 value 写入 off-heap
+- 预期：当输入源是 Netty `ByteBuf` 时，直接使用 `RespFrame` 的 `BytesSource` 视图（避免 `ByteBuf → byte[] → off-heap` 的中转）
 - 预期：减少“RESP frame → heap byte[] → off-heap”的中间分配与额外拷贝
 
 ## Dependencies
@@ -74,7 +74,8 @@ bytes 抽象的 SSOT 已抽取到 `yierdis-bytes`（Netty-free）：
 
 - 2026-01-04：增加 off-heap allocator 泄漏回归测试（shutdown 后 usedBytes 回到基线/归零）。
 - 2026-01-08：写路径增强：支持“从输入源直接写入 off-heap”，减少写路径的 heap 中转分配。
-- 2026-01-14：offheap-api 去 Netty 依赖：以 `YierdisBytesSink/YierdisBytesSource` 替代 ByteBuf 直接依赖，Netty adapter 下沉到 offheap-netty 模块。
+- 2026-01-14：offheap-api 去 Netty 依赖：写出/适配边界收敛到 bytes 抽象，Netty 适配下沉到 adapter 模块（例如 bytes-netty/offheap-netty）。
+- 2026-01-17：Breaking：移除 deprecated bytes alias（`YierdisBytes*`），bytes SSOT 统一为 `yierdis-bytes`。
 - 2026-01-15：Unsafe 后端补齐 raw memory 访问封装（`YierdisUnsafeAccess`），并将 `PlatformDependent` 等 Netty internal 的使用限制在 off-heap/unsafe 后端实现内，降低依赖外溢风险。
 - 2026-01-16：capabilities 加固：引入 `YierdisOffHeapAddressAllocator/YierdisOffHeapBlock`，core 通过 capability 选择 keyspace/expires 的 off-heap 路径，避免对具体后端的 `instanceof` 耦合。
 - 2026-01-16：默认安全：keys/expires 的 off-heap 使用改为显式开关（`--offheapKeysEnabled`，仅允许 unsafe 后端）。

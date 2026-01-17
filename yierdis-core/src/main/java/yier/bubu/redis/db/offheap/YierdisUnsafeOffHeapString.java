@@ -1,7 +1,7 @@
 package yier.bubu.redis.db.offheap;
 
-import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
-import yier.bubu.redis.db.offheap.api.YierdisDirectBytesSink;
+import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.bytes.DirectBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
 
@@ -345,7 +345,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         }
 
         @Override
-        public void writeTo(YierdisBytesSink out) {
+        public void writeTo(BytesSink out) {
             owner.ensureOpen();
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
@@ -355,7 +355,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
             }
 
             long srcAddr = owner.dataAddress() + offset;
-            if (out instanceof YierdisDirectBytesSink directSink && directSink.hasMemoryAddress()) {
+            if (out instanceof DirectBytesSink directSink && directSink.hasMemoryAddress()) {
                 int before = directSink.writerIndex();
                 directSink.ensureWritable(len);
                 long dstAddr = directSink.memoryAddress() + before;

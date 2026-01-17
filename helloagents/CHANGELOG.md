@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Breaking
+- 移除 deprecated bytes alias（`YierdisBytesSink/YierdisBytesSource/YierdisDirectBytesSink` 等），bytes SSOT 统一为 `yierdis-bytes`。
+
 ### Added
 - 新增 `yierdis-bytes` 中立模块：承载 `BytesSource/BytesSink/BytesSlice` 抽象，供 protocol/off-heap/I/O 复用，避免 `yierdis-protocol` 通过 “off-heap” 命名模块复用 bytes 接口造成依赖误导。
 - 新增 `RespMap`（RESP3 map 最小对象模型）与 client 侧 RESP3 最小解码能力（`%` map、`_` null），用于覆盖 `HELLO 3` 分支。
@@ -13,7 +16,8 @@
 - 新增 `yierdis-protocol-netty`：承载 Netty codec/adapters（decoder/encoder/frame/session）；`yierdis-protocol` 收敛为 Netty-free SSOT（对象模型 + `RespWriter` + `RespFrame/RespSession` 抽象）。
 - 升级为 Netty 体系内单线程 `NettyCommandExecutor`（`DefaultEventExecutorGroup(1)`）：批量 `write` + 末尾 `flush` 合并、连接级 `autoRead` 背压（high/low 滞回阈值）、全局有界队列与 `-ERR busy` 保护。
 - 增加 off-heap allocator 泄漏回归测试，覆盖淘汰/删除/过期与 shutdown 释放路径。
-- off-heap API 升级：引入 `YierdisBytesSink/YierdisBytesSource` 抽象，`yierdis-offheap-api` 去 Netty 依赖；Netty 适配下沉到 `yierdis-offheap-netty`。
+- 新增 `ConnectionContext`（连接态 SSOT）：承载 RESP2/RESP3 协议状态 + executor pending/backpressure/closing + 低开销统计容器，替代散落的 `Channel.attr`。
+- 新增 `INFO`/`STATS` 命令（通过 `ServerInfoProvider` 由 server 注入实现），输出执行器/连接级统计摘要（队列/背压/关闭等）。
 - 增加纯 Java 压测工具模块 `yierdis-bench` 与一键脚本 `scripts/bench.sh`，用于对比 `none/netty/unsafe` 后端的吞吐与延迟分位数。
 - 支持最小 RESP3（`HELLO 3` 协商 + null 返回）与 inline command（调试用；支持单/双引号、反斜杠转义、`\\xHH`），提升常见 Redis 客户端兼容性。
 - bench 增强：吞吐/延迟统计加入 `errors` 计数，支持 `--strictReplies` 最小语义校验（PING/SET/GET），并复用 `yierdis-protocol-netty` 的 RESP codec。
@@ -29,11 +33,11 @@
 - 命令层拆分：引入 `CommandRegistry` 与 domain `*Commands`，降低新增命令的修改半径并提升可测试性。
 - off-heap 风险收敛：keys/expires 的 off-heap 使用改为显式开关（`--offheapKeysEnabled`，仅允许 unsafe 后端），默认安全。
 - off-heap 后端发现升级：引入 `YierdisOffHeapAllocatorProvider`（ServiceLoader），并在 server fat-jar（shade）场景合并 services 资源，提升可运维性与错误可读性。
-- 增加架构退化护栏测试：`CommandRegistryGuardTest`（最小命令集注册）、`NettyRespSessionIsolationTest`（连接级协议状态隔离）。
+- 增加架构退化护栏测试：`CommandRegistryGuardTest`（最小命令集注册）、`ConnectionContextIsolationTest`（连接级状态隔离）。
 - 新增 `yierdis-bytes-netty`：提供 `NettyByteBufSink` 适配器，收敛 ByteBuf↔bytes 写出边界，供 server/offheap-netty 复用。
 
 ### Changed
-- `yierdis-protocol` 依赖收敛：不再直接依赖 `yierdis-offheap-api`，改为依赖 `yierdis-bytes`；`yierdis-offheap-api` 保留兼容别名（deprecated）以降低迁移成本。
+- `yierdis-protocol` 依赖收敛：不再直接依赖 `yierdis-offheap-api`，改为依赖 `yierdis-bytes`；同时移除 `yierdis-offheap-api` 的 bytes 兼容别名，避免 SSOT 漂移。
 - bench/server 参数体系收敛：共享参数由 `yierdis-args` 解析与校验；bench 通过 `--` 透传 server 参数，避免维护两套默认值。
 - `maxmemoryBytes` 统计口径调整为“heap 估算 + off-heap allocator.usedBytes 实占”，并避免对 off-heap string payload 双计数。
 - 写命令热路径进一步减少不必要的 `byte[]` 物化：`SET/APPEND` 可从 `RespCommand.frame()` 的参数 slice 直接拷贝到最终 payload（off-heap 或 raw string）。
@@ -48,6 +52,9 @@
 - QUIT 行为收敛：`QUIT` 不再由 server handler 特判，改为 core 命令（通过 `RespWriter` 请求 close-after-reply），由执行器在 flush 后关闭连接并丢弃 post-QUIT backlog。
 - server 写回路径改用 `NettyByteBufSink`（bytes-netty），避免通用写出适配依赖 off-heap 后端模块；offheap-netty slice 写出 fast-path 同步支持该 sink。
 - client/CLI help 不再硬编码 jar 版本号，改为读取构建注入的 `yierdis-version.properties`。
+- 协议栈收敛：`RespDecoder` 仅切帧输出 `NettyRespFrame`（frame/zero-copy 取向），client/bench/CLI 统一走 frame；对象模型解析仅用于调试/输出（按需解析）。
+- 连接态收敛：移除 `NettyRespSession`，连接级协议状态/执行器状态统一到 `ConnectionContext`。
+- 命令路由加速：`CommandRegistry` 从线性扫描升级为开放寻址哈希索引（期望 O(1)，运行时零分配）。
 
 ### Fixed
 - bench 依赖更新：压测工具写请求时改用 `yierdis-bytes` 的 `BytesSink`（避免依赖已移除的包路径）。
@@ -57,6 +64,7 @@
 - server args 增强：新增 `--executorSchedulingPolicy`、`--frameCompaction*`、`--offheapKeysEnabled`，并在 args SSOT 层完成归一化与校验。
 - 修复 client 超时后继续复用连接可能导致的 RESP 响应错配：超时后关闭连接并标记不可复用。
 - 修复 pipeline 场景下 QUIT 可能破坏顺序语义/产生副作用：QUIT 后连接关闭并跳过该连接后续已入队命令（仅回收，不执行）。
+- 修复 `DirectBytesSink` 的 `memoryAddress()` 行为：当 `hasMemoryAddress()==false` 时，明确抛出 `UnsupportedOperationException`（避免错误的 `Interface.super` 调用）。
 
 ## [0.1.0-SNAPSHOT] - 2026-01-01
 

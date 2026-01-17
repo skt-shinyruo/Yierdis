@@ -15,10 +15,12 @@ import io.netty.util.ReferenceCountUtil;
 import yier.bubu.redis.YierdisServerBootstrap;
 import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.protocol.RespError;
+import yier.bubu.redis.protocol.RespFrame;
 import yier.bubu.redis.protocol.RespMap;
 import yier.bubu.redis.protocol.RespNull;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.protocol.RespObjectParser;
 
 import java.nio.charset.StandardCharsets;
 import java.net.InetSocketAddress;
@@ -29,9 +31,11 @@ public class YierdisClientTest {
     public void pingWorks() throws Exception {
         try (TestServer server = TestServer.start()) {
             try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                RespObject resp = client.execute(Arrays.asList(b("PING")), 1000);
-                Assert.assertTrue(resp instanceof RespSimpleString);
-                Assert.assertEquals("PONG", ((RespSimpleString) resp).value());
+                try (RespFrame frame = client.execute(Arrays.asList(b("PING")), 1000)) {
+                    RespObject resp = RespObjectParser.parse(frame);
+                    Assert.assertTrue(resp instanceof RespSimpleString);
+                    Assert.assertEquals("PONG", ((RespSimpleString) resp).value());
+                }
             }
         }
     }
@@ -40,9 +44,12 @@ public class YierdisClientTest {
     public void hello3ReturnsResp3MapAndNullIsDecoded() throws Exception {
         try (TestServer server = TestServer.start()) {
             try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                RespObject hello = client.execute(Arrays.asList(b("HELLO"), b("3")), 1000);
-                Assert.assertTrue(hello instanceof RespMap);
-                RespMap map = (RespMap) hello;
+                RespObject helloObj;
+                try (RespFrame frame = client.execute(Arrays.asList(b("HELLO"), b("3")), 1000)) {
+                    helloObj = RespObjectParser.parse(frame);
+                }
+                Assert.assertTrue(helloObj instanceof RespMap);
+                RespMap map = (RespMap) helloObj;
                 Assert.assertEquals(5, map.entries().size());
 
                 java.util.HashMap<String, String> kv = new java.util.HashMap<>();
@@ -55,8 +62,10 @@ public class YierdisClientTest {
                 Assert.assertEquals("master", kv.get("role"));
                 Assert.assertNotNull(kv.get("version"));
 
-                RespObject missing = client.execute(Arrays.asList(b("GET"), b("missing")), 1000);
-                Assert.assertTrue(missing instanceof RespNull);
+                try (RespFrame frame = client.execute(Arrays.asList(b("GET"), b("missing")), 1000)) {
+                    RespObject missing = RespObjectParser.parse(frame);
+                    Assert.assertTrue(missing instanceof RespNull);
+                }
             }
         }
     }
@@ -68,12 +77,16 @@ public class YierdisClientTest {
                 byte[] key = new byte[]{0, (byte) 0xFF, 'k'};
                 byte[] value = new byte[]{0, 1, (byte) 0xFF, '\n'};
 
-                RespObject set = client.execute(Arrays.asList(b("SET"), key, value), 1000);
-                Assert.assertTrue(set instanceof RespSimpleString);
+                try (RespFrame frame = client.execute(Arrays.asList(b("SET"), key, value), 1000)) {
+                    RespObject set = RespObjectParser.parse(frame);
+                    Assert.assertTrue(set instanceof RespSimpleString);
+                }
 
-                RespObject get = client.execute(Arrays.asList(b("GET"), key), 1000);
-                Assert.assertTrue(get instanceof RespBulkString);
-                Assert.assertArrayEquals(value, ((RespBulkString) get).data());
+                try (RespFrame frame = client.execute(Arrays.asList(b("GET"), key), 1000)) {
+                    RespObject get = RespObjectParser.parse(frame);
+                    Assert.assertTrue(get instanceof RespBulkString);
+                    Assert.assertArrayEquals(value, ((RespBulkString) get).data());
+                }
             }
         }
     }
@@ -82,9 +95,11 @@ public class YierdisClientTest {
     public void unknownCommandReturnsRespError() throws Exception {
         try (TestServer server = TestServer.start()) {
             try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                RespObject resp = client.execute(Arrays.asList(b("NOPE")), 1000);
-                Assert.assertTrue(resp instanceof RespError);
-                Assert.assertTrue(((RespError) resp).message().startsWith("ERR unknown command"));
+                try (RespFrame frame = client.execute(Arrays.asList(b("NOPE")), 1000)) {
+                    RespObject resp = RespObjectParser.parse(frame);
+                    Assert.assertTrue(resp instanceof RespError);
+                    Assert.assertTrue(((RespError) resp).message().startsWith("ERR unknown command"));
+                }
             }
         }
     }

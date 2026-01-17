@@ -4,13 +4,14 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
+import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.db.offheap.netty.YierdisNettyByteBufSink;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.RespObjectParser;
+import yier.bubu.redis.protocol.netty.NettyRespFrame;
 import yier.bubu.redis.protocol.netty.RespCommandDecoder;
-import yier.bubu.redis.protocol.netty.RespDecoder;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -45,7 +46,7 @@ public final class FastTestClient implements AutoCloseable {
 
         ByteBuf out = Unpooled.buffer();
         try {
-            processor.execute(cmd, new RespWriter(new YierdisNettyByteBufSink(out)));
+            processor.execute(cmd, new RespWriter(new NettyByteBufSink(out)));
             byte[] replyBytes = readAll(out);
             Assert.assertNotNull("expected reply", replyBytes);
             return decodeOne(replyBytes);
@@ -56,15 +57,11 @@ public final class FastTestClient implements AutoCloseable {
     }
 
     private static RespObject decodeOne(byte[] replyBytes) {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
+        NettyRespFrame frame = new NettyRespFrame(Unpooled.wrappedBuffer(replyBytes));
         try {
-            Assert.assertTrue(ch.writeInbound(Unpooled.wrappedBuffer(replyBytes)));
-            Object msg = ch.readInbound();
-            Assert.assertNotNull(msg);
-            Assert.assertTrue(msg instanceof RespObject);
-            return (RespObject) msg;
+            return RespObjectParser.parse(frame);
         } finally {
-            ch.finishAndReleaseAll();
+            frame.close();
         }
     }
 

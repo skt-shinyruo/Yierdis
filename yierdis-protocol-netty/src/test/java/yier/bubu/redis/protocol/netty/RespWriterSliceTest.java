@@ -4,8 +4,8 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
-import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 import yier.bubu.redis.protocol.RespWriter;
 
@@ -16,7 +16,7 @@ public class RespWriterSliceTest {
     public void bulkStringSupportsNullEmptyAndSlices() {
         ByteBuf buf = Unpooled.buffer();
         try {
-            YierdisBytesSink sink = (src, srcIndex, len) -> buf.writeBytes(src, srcIndex, len);
+            BytesSink sink = (src, srcIndex, len) -> buf.writeBytes(src, srcIndex, len);
             RespWriter w = new RespWriter(sink);
 
             w.bulkString((byte[]) null);
@@ -42,7 +42,7 @@ public class RespWriterSliceTest {
     public void bulkStringLongAsciiWritesCorrectFrame() {
         ByteBuf buf = Unpooled.buffer();
         try {
-            YierdisBytesSink sink = (src, srcIndex, len) -> buf.writeBytes(src, srcIndex, len);
+            BytesSink sink = (src, srcIndex, len) -> buf.writeBytes(src, srcIndex, len);
             RespWriter w = new RespWriter(sink);
             w.bulkStringLongAscii(0);
             w.bulkStringLongAscii(-123);
@@ -69,7 +69,7 @@ public class RespWriterSliceTest {
 
                 ByteBuf out = Unpooled.buffer();
                 try {
-                    YierdisBytesSink sink = (src, srcIndex, len) -> out.writeBytes(src, srcIndex, len);
+                    BytesSink sink = (src, srcIndex, len) -> out.writeBytes(src, srcIndex, len);
                     RespWriter w = new RespWriter(sink);
                     w.bulkString(buf.slice(1, 3)); // [1, 0xFF, 'a']
 
@@ -93,7 +93,7 @@ public class RespWriterSliceTest {
     public void errorSanitizesCrlfAndLimitsLength() {
         ByteBuf buf = Unpooled.buffer();
         try {
-            YierdisBytesSink sink = (src, srcIndex, len) -> buf.writeBytes(src, srcIndex, len);
+            BytesSink sink = (src, srcIndex, len) -> buf.writeBytes(src, srcIndex, len);
             RespWriter w = new RespWriter(sink);
             w.error("ERR oops\r\n+PONG\r\n");
 

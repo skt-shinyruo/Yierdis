@@ -1,8 +1,7 @@
 package yier.bubu.redis.db.offheap.unsafe;
 
 import io.netty.util.internal.PlatformDependent;
-import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
-import yier.bubu.redis.db.offheap.api.YierdisDirectBytesSink;
+import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBlock;
@@ -10,6 +9,7 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
 import yier.bubu.redis.bytes.BytesSource;
+import yier.bubu.redis.bytes.DirectBytesSink;
 
 /**
  * Unsafe-based off-heap allocator backed by Netty's {@link PlatformDependent} utilities.
@@ -639,7 +639,7 @@ final class YierdisUnsafeOffHeapSlice implements YierdisOffHeapSlice {
     }
 
     @Override
-    public void writeTo(YierdisBytesSink out) {
+    public void writeTo(BytesSink out) {
         owner.ensureOpen();
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
@@ -649,7 +649,7 @@ final class YierdisUnsafeOffHeapSlice implements YierdisOffHeapSlice {
         }
 
         long srcAddr = owner.address() + offset;
-        if (out instanceof YierdisDirectBytesSink directSink && directSink.hasMemoryAddress()) {
+        if (out instanceof DirectBytesSink directSink && directSink.hasMemoryAddress()) {
             int before = directSink.writerIndex();
             directSink.ensureWritable(len);
             long dstAddr = directSink.memoryAddress() + before;

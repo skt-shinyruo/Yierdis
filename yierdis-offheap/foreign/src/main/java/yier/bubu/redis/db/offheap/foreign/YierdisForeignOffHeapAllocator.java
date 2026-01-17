@@ -3,8 +3,7 @@ package yier.bubu.redis.db.offheap.foreign;
 import jdk.incubator.foreign.MemoryAccess;
 import jdk.incubator.foreign.MemorySegment;
 import jdk.incubator.foreign.ResourceScope;
-import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
-import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
+import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
@@ -281,7 +280,7 @@ public final class YierdisForeignOffHeapAllocator implements YierdisOffHeapAlloc
         }
 
         @Override
-        public void writeTo(YierdisBytesSink out) {
+        public void writeTo(BytesSink out) {
             owner.ensureOwnerOpen();
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");

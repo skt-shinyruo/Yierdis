@@ -128,9 +128,8 @@ sequenceDiagram
 ### 2) 可维护性（依赖/演进成本）
 
 - **避免 core 引入 Netty internal：**`io.netty.util.internal.PlatformDependent` 属于 Netty internal API，版本升级风险高、语义不稳定；目前 core 通过 `yierdis-offheap-api` 的 capability（`YierdisOffHeapAddressAllocator`）表达 raw memory 能力，具体实现留在后端模块中，便于替换与审计。
-- **bytes 抽象与 off-heap 能力的语义：**`yierdis-offheap-api` 同时承载（1）跨模块复用的 `YierdisBytesSource/YierdisBytesSink` 抽象（用于协议/写出/适配），以及（2）off-heap allocator/capability API（用于堆外后端）。因此 `yierdis-protocol` 依赖 `yierdis-offheap-api` 不代表协议层“绑定 off-heap”，只是复用 bytes 视图接口以避免重复定义与边界漂移。若未来团队认为模块命名造成长期误解，可评估抽取独立的 `bytes` 基础模块（属于后续演进，不在当前 SSOT 约束的必需范围内）。
-- **bytes 抽象与 off-heap 能力的语义：**bytes 抽象已迁移到 `yierdis-bytes`，off-heap allocator/capability API 继续留在 `yierdis-offheap-api`。这使协议层不再需要通过 “off-heap” 命名模块来复用 bytes 接口，依赖方向更直观，也降低误解成本。
-- **连接级协议状态：**RESP2/RESP3 协商属于连接级状态，必须与连接生命周期绑定；建议将状态存放在 `RespSession`（如 Netty 侧用 `Channel.attr`），并禁止通过静态变量/全局缓存共享，避免并发连接间状态串扰。
+- **bytes 抽象与 off-heap 能力的语义：**bytes 抽象已迁移到 `yierdis-bytes`（SSOT，Netty-free），off-heap allocator/capability API 继续留在 `yierdis-offheap-api`。协议层不再需要通过 “off-heap” 命名模块来复用 bytes 接口，依赖方向更直观，也降低误解成本。
+- **连接级协议/执行状态（SSOT）：**RESP2/RESP3 协商与执行器背压/closing 都属于连接级状态，必须与连接生命周期绑定；当前通过 `ConnectionContext`（实现 `RespSession`）收敛连接态，并在 Netty 侧以 `Channel.attr` 绑定，避免并发连接间状态串扰与 attr 分散导致的语义漂移。
 
 ### 3) 可插拔性（后端替换/灰度能力）
 

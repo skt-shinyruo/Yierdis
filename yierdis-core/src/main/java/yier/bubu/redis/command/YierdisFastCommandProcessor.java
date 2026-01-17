@@ -18,8 +18,12 @@ public final class YierdisFastCommandProcessor {
     private final CommandRegistry registry;
 
     public YierdisFastCommandProcessor(YierdisDb db) {
+        this(db, null);
+    }
+
+    public YierdisFastCommandProcessor(YierdisDb db, ServerInfoProvider infoProvider) {
         Objects.requireNonNull(db, "db");
-        CommandSupport support = new CommandSupport(db);
+        CommandSupport support = new CommandSupport(db, infoProvider);
         CommandRegistry registry = new CommandRegistry();
         new ServerCommands(support).register(registry);
         new KeyCommands(support).register(registry);
@@ -76,4 +80,3 @@ public final class YierdisFastCommandProcessor {
         }
     }
 }
-

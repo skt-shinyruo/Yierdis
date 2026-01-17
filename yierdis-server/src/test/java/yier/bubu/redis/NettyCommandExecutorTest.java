@@ -9,6 +9,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.protocol.netty.ConnectionContext;
 import yier.bubu.redis.protocol.netty.RespCommandDecoder;
 
 import java.nio.charset.StandardCharsets;
@@ -55,9 +56,16 @@ public class NettyCommandExecutorTest {
             byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
 
             ch.writeInbound(Unpooled.wrappedBuffer(ping));
+            ConnectionContext conn = ConnectionContext.getOrCreate(ch);
+            Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
+            Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
+            Assert.assertEquals(0L, conn.commandsRejectedCounter().get());
             Assert.assertNull("first command should be queued (no reply yet)", ch.readOutbound());
 
             ch.writeInbound(Unpooled.wrappedBuffer(ping));
+            Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
+            Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
+            Assert.assertEquals(1L, conn.commandsRejectedCounter().get());
             Assert.assertArrayEquals(ascii("-ERR busy\r\n"), readOutbound(ch));
         } finally {
             unblock.countDown();
@@ -110,6 +118,9 @@ public class NettyCommandExecutorTest {
             // Enqueue 2 commands while executor is blocked.
             ch.writeInbound(Unpooled.wrappedBuffer(ping));
             ch.writeInbound(Unpooled.wrappedBuffer(ping));
+            ConnectionContext conn = ConnectionContext.getOrCreate(ch);
+            Assert.assertEquals(2L, conn.commandsEnqueuedCounter().get());
+            Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
 
             // Queue a second blocker behind the first drain tick, so we can observe intermediate state.
             eventExecutor.submit(() -> {
@@ -125,12 +136,14 @@ public class NettyCommandExecutorTest {
             // Only the first command should have been processed in the first drain tick.
             byte[] r1 = awaitOutbound(ch, 1000);
             Assert.assertArrayEquals(ascii("+PONG\r\n"), r1);
+            Assert.assertEquals(1L, conn.commandsExecutedCounter().get());
             Assert.assertNull("second reply must wait for next drain tick", readOutbound(ch));
 
             // Allow the second drain tick to run and produce the second reply.
             unblock2.countDown();
             byte[] r2 = awaitOutbound(ch, 1000);
             Assert.assertArrayEquals(ascii("+PONG\r\n"), r2);
+            Assert.assertEquals(2L, conn.commandsExecutedCounter().get());
         } finally {
             unblock2.countDown();
             executor.shutdownGracefully().syncUninterruptibly();
@@ -177,9 +190,13 @@ public class NettyCommandExecutorTest {
 
             byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
             ch.writeInbound(Unpooled.wrappedBuffer(ping));
+            ConnectionContext conn = ConnectionContext.getOrCreate(ch);
+            Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
 
             ch.runPendingTasks();
             Assert.assertFalse("autoRead should be disabled after reaching high watermark", ch.config().isAutoRead());
+            Assert.assertEquals(1L, conn.backpressureEnterCounter().get());
+            Assert.assertEquals(0L, conn.backpressureExitCounter().get());
 
             unblock.countDown();
 
@@ -189,6 +206,77 @@ public class NettyCommandExecutorTest {
 
             ch.runPendingTasks();
             Assert.assertTrue("autoRead should be re-enabled after backlog drains", ch.config().isAutoRead());
+            Assert.assertEquals(1L, conn.backpressureEnterCounter().get());
+            Assert.assertEquals(1L, conn.backpressureExitCounter().get());
+            Assert.assertEquals(1L, conn.commandsExecutedCounter().get());
+        } finally {
+            unblock.countDown();
+            executor.shutdownGracefully().syncUninterruptibly();
+            executor.executor().submit(db::shutdown).syncUninterruptibly();
+            group.shutdownGracefully().syncUninterruptibly();
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void quitClosesConnectionAndSkipsFollowupCommands() throws Exception {
+        DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
+        EventExecutor eventExecutor = group.next();
+
+        YierdisDb db = new YierdisDb();
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        NettyCommandExecutor executor = new NettyCommandExecutor(
+                db,
+                processor,
+                eventExecutor,
+                1024,
+                0,
+                256,
+                128,
+                0,
+                0,
+                128,
+                10
+        );
+        executor.start();
+
+        CountDownLatch blockerStarted = new CountDownLatch(1);
+        CountDownLatch unblock = new CountDownLatch(1);
+        eventExecutor.submit(() -> {
+            blockerStarted.countDown();
+            unblock.await();
+            return null;
+        });
+        Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
+
+        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
+        try {
+            byte[] quit = ascii("*1\r\n$4\r\nQUIT\r\n");
+            byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
+
+            // Enqueue QUIT + PING while executor is blocked, so both are accepted.
+            ch.writeInbound(Unpooled.wrappedBuffer(quit));
+            ch.writeInbound(Unpooled.wrappedBuffer(ping));
+
+            ConnectionContext conn = ConnectionContext.getOrCreate(ch);
+            Assert.assertEquals(2L, conn.commandsEnqueuedCounter().get());
+            Assert.assertEquals(0L, conn.closeAfterReplyCounter().get());
+
+            unblock.countDown();
+
+            byte[] r1 = awaitOutbound(ch, 1000);
+            Assert.assertArrayEquals(ascii("+OK\r\n"), r1);
+
+            // No reply for the followup PING; it should be skipped after closing is requested.
+            Assert.assertNull(readOutbound(ch));
+
+            // Allow close/flush and any scheduled tasks to run.
+            ch.runPendingTasks();
+            ch.runScheduledPendingTasks();
+
+            Assert.assertEquals(1L, conn.closeAfterReplyCounter().get());
+            Assert.assertEquals(1L, conn.commandsExecutedCounter().get());
+            Assert.assertEquals(1L, conn.commandsSkippedClosingCounter().get());
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().syncUninterruptibly();

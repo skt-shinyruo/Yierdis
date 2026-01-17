@@ -8,9 +8,9 @@
 
 ## Module Overview
 
-- **Responsibility:** Netty codec（`RespCommandDecoder` / `RespDecoder` / `RespEncoder`）+ `RespFrame/RespSession` 的 Netty 实现（frame ownership / release）
+- **Responsibility:** Netty codec（`RespCommandDecoder` / `RespDecoder`）+ `RespFrame/RespSession` 的 Netty 实现（frame ownership / release）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-16
+- **Last Updated:** 2026-01-17
 
 ## Specifications
 
@@ -27,7 +27,7 @@
 **Module:** protocol-netty
 
 RESP2/RESP3 的协商属于连接级状态：
-- Netty 侧通过 `NettyRespSession(Channel)` 将状态绑定到连接（典型实现为 `Channel.attr`）
+- Netty 侧通过 `ConnectionContext`（实现 `RespSession`）将状态绑定到连接（典型实现为 `Channel.attr`）
 - SSOT 的 `RespWriter` 仅依赖 `RespSession` 抽象，不直接依赖 Netty
 
 ### Requirement: ByteBuf ownership/release（泄漏风险控制）

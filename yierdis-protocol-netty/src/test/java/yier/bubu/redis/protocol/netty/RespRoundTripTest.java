@@ -1,5 +1,7 @@
 package yier.bubu.redis.protocol.netty;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
@@ -14,7 +16,7 @@ import java.util.Arrays;
 
 public class RespRoundTripTest {
     @Test
-    public void encodeThenDecodeRoundTripNestedArrayAndBinaryBulk() {
+    public void encodeThenDecodeProducesSingleFrame() {
         byte[] binary = new byte[]{0, 1, (byte) 0xFF, '\n'};
 
         RespObject original = RespArray.of(Arrays.<RespObject>asList(
@@ -29,9 +31,9 @@ public class RespRoundTripTest {
         ));
 
         byte[] wire = encode(original);
-        RespObject decoded = decodeOne(wire);
+        byte[] decodedFrame = decodeOneFrame(wire);
 
-        assertRespEquals(original, decoded);
+        Assert.assertArrayEquals(wire, decodedFrame);
     }
 
     private static byte[] encode(RespObject obj) {
@@ -42,67 +44,33 @@ public class RespRoundTripTest {
         return out;
     }
 
-    private static RespObject decodeOne(byte[] bytes) {
+    private static byte[] decodeOneFrame(byte[] bytes) {
         EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
-        Assert.assertTrue(ch.writeInbound(io.netty.buffer.Unpooled.copiedBuffer(bytes)));
+        Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(bytes)));
         Object msg = ch.readInbound();
         Assert.assertNotNull(msg);
-        Assert.assertTrue(msg instanceof RespObject);
-        ch.finishAndReleaseAll();
-        return (RespObject) msg;
+        Assert.assertTrue(msg instanceof NettyRespFrame);
+        NettyRespFrame frame = (NettyRespFrame) msg;
+        try {
+            ByteBuf buf = frame.unwrap();
+            byte[] out = new byte[buf.readableBytes()];
+            buf.getBytes(buf.readerIndex(), out);
+            return out;
+        } finally {
+            frame.close();
+            ch.finishAndReleaseAll();
+        }
     }
 
     private static byte[] readBytes(EmbeddedChannel ch) {
         Object out = ch.readOutbound();
         Assert.assertNotNull(out);
-        Assert.assertTrue(out instanceof io.netty.buffer.ByteBuf);
-        io.netty.buffer.ByteBuf buf = (io.netty.buffer.ByteBuf) out;
+        Assert.assertTrue(out instanceof ByteBuf);
+        ByteBuf buf = (ByteBuf) out;
         byte[] b = new byte[buf.readableBytes()];
         buf.readBytes(b);
         buf.release();
         return b;
     }
-
-    private static void assertRespEquals(RespObject a, RespObject b) {
-        Assert.assertNotNull(a);
-        Assert.assertNotNull(b);
-        Assert.assertEquals(a.type(), b.type());
-
-        switch (a.type()) {
-            case SIMPLE_STRING:
-                Assert.assertEquals(((RespSimpleString) a).value(), ((RespSimpleString) b).value());
-                return;
-            case ERROR:
-                Assert.assertEquals(((RespError) a).message(), ((RespError) b).message());
-                return;
-            case INTEGER:
-                Assert.assertEquals(((RespInteger) a).value(), ((RespInteger) b).value());
-                return;
-            case BULK_STRING: {
-                RespBulkString aa = (RespBulkString) a;
-                RespBulkString bb = (RespBulkString) b;
-                Assert.assertEquals(aa.isNull(), bb.isNull());
-                if (!aa.isNull()) {
-                    Assert.assertArrayEquals(aa.data(), bb.data());
-                }
-                return;
-            }
-            case ARRAY: {
-                RespArray aa = (RespArray) a;
-                RespArray bb = (RespArray) b;
-                Assert.assertEquals(aa.isNull(), bb.isNull());
-                if (aa.isNull()) {
-                    return;
-                }
-                Assert.assertEquals(aa.values().size(), bb.values().size());
-                for (int i = 0; i < aa.values().size(); i++) {
-                    assertRespEquals(aa.values().get(i), bb.values().get(i));
-                }
-                return;
-            }
-            case NULL:
-            default:
-                return;
-        }
-    }
 }
+
