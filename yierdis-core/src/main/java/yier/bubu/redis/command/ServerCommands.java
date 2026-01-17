@@ -36,6 +36,7 @@ final class ServerCommands {
         registry.register("HELLO", this::hello);
         registry.register("COMMAND", (cmd, out) -> out.emptyArray());
         registry.register("SELECT", this::select);
+        registry.register("QUIT", this::quit);
         registry.register("FLUSHDB", this::flushdb);
     }
 
@@ -110,6 +111,16 @@ final class ServerCommands {
         out.error("ERR only DB 0 is supported");
     }
 
+    private void quit(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() != 1) {
+            CommandSupport.wrongArity(out, "quit");
+            return;
+        }
+        // Redis-compatible: reply OK, then close the connection.
+        out.simpleString("OK");
+        out.requestCloseAfterReply();
+    }
+
     private void flushdb(RespCommand cmd, RespWriter out) {
         support.db().flushDb();
         out.simpleString("OK");
@@ -132,4 +143,3 @@ final class ServerCommands {
         return version.getBytes(StandardCharsets.US_ASCII);
     }
 }
-

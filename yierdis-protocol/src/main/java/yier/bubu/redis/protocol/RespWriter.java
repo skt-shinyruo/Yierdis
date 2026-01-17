@@ -1,8 +1,7 @@
 package yier.bubu.redis.protocol;
 
-import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
-import yier.bubu.redis.db.offheap.api.YierdisDirectBytesSink;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.bytes.BytesSlice;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -31,15 +30,18 @@ public final class RespWriter {
 
     private static final ThreadLocal<byte[]> TL_NUM_BUF = ThreadLocal.withInitial(() -> new byte[32]);
 
-    private final YierdisBytesSink out;
+    private final BytesSink out;
     private final RespSession session;
     private RespProtocol protocol;
+    // 连接级控制：由命令层请求，transport 层（server/executor）负责落实。
+    // 该标志是“本次回复完成后关闭连接”的语义，不涉及协议层对 Netty 的依赖。
+    private boolean closeAfterReplyRequested;
 
-    public RespWriter(YierdisBytesSink out) {
+    public RespWriter(BytesSink out) {
         this(out, null);
     }
 
-    public RespWriter(YierdisBytesSink out, RespSession session) {
+    public RespWriter(BytesSink out, RespSession session) {
         this.out = Objects.requireNonNull(out, "out");
         this.session = session;
         this.protocol = session == null ? RespProtocol.RESP2 : normalizeProtocol(session.protocol());
@@ -55,6 +57,22 @@ public final class RespWriter {
         if (session != null) {
             session.setProtocol(next);
         }
+    }
+
+    /**
+     * 请求在当前 reply 写出后关闭连接（close-after-reply）。
+     * <p>
+     * 用途：例如 Redis 的 {@code QUIT} 命令。命令层仅表达意图，具体关闭动作由 server/executor 落实。
+     */
+    public void requestCloseAfterReply() {
+        this.closeAfterReplyRequested = true;
+    }
+
+    /**
+     * 是否请求在当前 reply 后关闭连接。
+     */
+    public boolean closeAfterReplyRequested() {
+        return closeAfterReplyRequested;
     }
 
     public void simpleString(String value) {
@@ -116,7 +134,7 @@ public final class RespWriter {
         out.writeBytes(CRLF, 0, CRLF.length);
     }
 
-    public void bulkString(YierdisOffHeapSlice slice) {
+    public void bulkString(BytesSlice slice) {
         if (slice == null) {
             nullValue();
             return;
@@ -188,7 +206,7 @@ public final class RespWriter {
         out.writeBytes(RESP2_NULL_BULK, 0, RESP2_NULL_BULK.length);
     }
 
-    static void writeLongAscii(YierdisBytesSink out, long value) {
+    static void writeLongAscii(BytesSink out, long value) {
         if (value == 0) {
             out.writeBytes(new byte[]{'0'}, 0, 1);
             return;

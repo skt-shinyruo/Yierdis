@@ -13,12 +13,12 @@
 ## Specifications
 
 ### Requirement: bytes 抽象（跨模块复用，不等同于“绑定 off-heap”）
-**Module:** offheap-api
-`yierdis-offheap-api` 除了 allocator/capability API 之外，还承载跨模块复用的通用 bytes 抽象：
-- `YierdisBytesSource`：统一的只读 bytes view（可由 heap byte[]、Netty ByteBuf、off-heap slice 等实现）
-- `YierdisBytesSink`：统一的写入目标（供 `RespWriter`、off-heap buf 写路径等复用）
+**Module:** bytes/offheap-api
+bytes 抽象的 SSOT 已抽取到 `yierdis-bytes`（Netty-free）：
+- `BytesSource`：统一的只读 bytes view（可由 heap byte[]、Netty ByteBuf、off-heap slice 等实现）
+- `BytesSink/DirectBytesSink`：统一的写入目标（供 `RespWriter`、off-heap buf 写路径等复用）
 
-这层抽象用于减少重复接口与边界漂移，且保持 Netty-free；因此 `yierdis-protocol` / `yierdis-core` 依赖 `yierdis-offheap-api` 并不意味着协议/核心必须启用 off-heap 后端。
+为保持历史包名稳定，`yierdis-offheap-api` 仍保留 `YierdisBytesSource/YierdisBytesSink` 作为 **兼容别名（Deprecated）**，但新代码应优先使用 `yierdis-bytes` 的接口；Netty 适配（`ByteBuf` sink/source）位于 `yierdis-bytes-netty`。
 
 ### Requirement: 可选启用的堆外存储
 **Module:** offheap
@@ -63,6 +63,8 @@
 
 ## Dependencies
 
+- `yierdis-bytes`：中立 bytes 抽象（SSOT，不依赖 Netty）
+- `yierdis-bytes-netty`：Netty 适配层（可选；依赖 Netty）
 - `yierdis-offheap-api`：核心 API（不依赖 Netty）
 - `yierdis-offheap-netty`：Netty 适配（可选；依赖 Netty）
 - `yierdis-offheap-unsafe`：Unsafe 后端（可选；通过 `sun.misc.Unsafe` 提供 raw memory 读写/copy）

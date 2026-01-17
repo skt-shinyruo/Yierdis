@@ -2,13 +2,15 @@ package yier.bubu.redis.db.offheap.netty;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
+import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
-import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.bytes.BytesSource;
+import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 
 public final class YierdisNettyOffHeapAllocator implements YierdisOffHeapAllocator {
     private final long maxBytes;
@@ -126,7 +128,7 @@ final class YierdisNettyOffHeapBuf implements YierdisOffHeapBuf {
     }
 
     @Override
-    public void setBytes(int index, YierdisBytesSource src, int srcIndex, int len) {
+    public void setBytes(int index, BytesSource src, int srcIndex, int len) {
         ensureOpen();
         if (src == null) {
             throw new IllegalArgumentException("src must not be null");
@@ -247,7 +249,7 @@ final class YierdisNettyOffHeapSlice implements YierdisOffHeapSlice {
     }
 
     @Override
-    public void writeTo(YierdisBytesSink out) {
+    public void writeTo(BytesSink out) {
         owner.ensureOpen();
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
@@ -256,6 +258,11 @@ final class YierdisNettyOffHeapSlice implements YierdisOffHeapSlice {
             return;
         }
 
+        // Netty 写出 fast-path：优先识别 bytes-netty 的 sink（新边界），其次兼容旧的 offheap-netty sink。
+        if (out instanceof NettyByteBufSink sink) {
+            sink.unwrap().writeBytes(owner.unwrap(), offset, len);
+            return;
+        }
         if (out instanceof YierdisNettyByteBufSink sink) {
             sink.unwrap().writeBytes(owner.unwrap(), offset, len);
             return;
@@ -271,5 +278,10 @@ final class YierdisNettyOffHeapSlice implements YierdisOffHeapSlice {
             srcIndex += chunk;
             remaining -= chunk;
         }
+    }
+
+    @Override
+    public void writeTo(YierdisBytesSink out) {
+        writeTo((BytesSink) out);
     }
 }

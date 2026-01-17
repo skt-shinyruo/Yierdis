@@ -7,8 +7,8 @@ import io.netty.handler.codec.ByteToMessageDecoder;
 
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespCommandBuilder;
+import yier.bubu.redis.protocol.RespInlineCommandParser;
 
-import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -97,7 +97,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
         try {
             for (int i = 0; i < argc; i++) {
                 if (!in.isReadable()) {
-                    cmd.recycle();
+                    cmd.close();
                     in.readerIndex(startIdx);
                     return null;
                 }
@@ -113,7 +113,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
                     if (in.writerIndex() - lenLineStart > maxLineBytes + 2) {
                         throw new IllegalArgumentException("Protocol error: line too long");
                     }
-                    cmd.recycle();
+                    cmd.close();
                     in.readerIndex(startIdx);
                     return null;
                 }
@@ -136,7 +136,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
                 int dataEnd = dataStart + len;
                 int end = dataEnd + 2;
                 if (in.writerIndex() < end) {
-                    cmd.recycle();
+                    cmd.close();
                     in.readerIndex(startIdx);
                     return null;
                 }
@@ -163,7 +163,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
             }
             return cmd;
         } catch (RuntimeException e) {
-            cmd.recycle();
+            cmd.close();
             throw e;
         }
     }
@@ -178,135 +178,22 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
             return null;
         }
 
-        // Inline command parsing follows Redis-like rules (sdssplitargs):
-        // - Split on space/tab
-        // - Supports double/single quotes inside tokens
-        // - Double quotes: backslash escapes + optional \\xHH hex byte escapes
-        // - Single quotes: supports escaping \\' only
-        //
+        // Inline command parsing follows Redis-like rules (sdssplitargs) and is shared with CLI parsing.
         // Since escapes require decoding, inline commands are materialized into a small heap buffer.
-        int[] offsets = new int[16];
-        int[] lengths = new int[16];
-        int argc = 0;
-
         int inputLen = lineEnd - startIdx;
-        byte[] decoded = new byte[inputLen];
-        int outPos = 0;
-
-        int p = startIdx;
-        while (true) {
-            while (p < lineEnd && isSpace(in.getByte(p))) {
-                p++;
-            }
-            if (p >= lineEnd) {
-                break;
-            }
-
-            boolean inq = false;
-            boolean insq = false;
-            int tokenStart = outPos;
-
-            while (p < lineEnd) {
-                byte b = in.getByte(p);
-                if (inq) {
-                    if (b == '\\'
-                            && p + 3 < lineEnd
-                            && in.getByte(p + 1) == 'x'
-                            && isHexDigit(in.getByte(p + 2))
-                            && isHexDigit(in.getByte(p + 3))) {
-                        decoded[outPos++] = (byte) ((hexDigitToInt(in.getByte(p + 2)) << 4)
-                                | hexDigitToInt(in.getByte(p + 3)));
-                        p += 4;
-                        continue;
-                    }
-                    if (b == '\\' && p + 1 < lineEnd) {
-                        p++;
-                        decoded[outPos++] = decodeEscapedChar(in.getByte(p));
-                        p++;
-                        continue;
-                    }
-                    if (b == '"') {
-                        // Closing quote must be followed by whitespace or end-of-line.
-                        if (p + 1 < lineEnd && !isSpace(in.getByte(p + 1))) {
-                            throw new IllegalArgumentException("Protocol error: invalid inline command");
-                        }
-                        inq = false;
-                        p++;
-                        break;
-                    }
-                    decoded[outPos++] = b;
-                    p++;
-                    continue;
-                }
-
-                if (insq) {
-                    if (b == '\\' && p + 1 < lineEnd && in.getByte(p + 1) == '\'') {
-                        decoded[outPos++] = (byte) '\'';
-                        p += 2;
-                        continue;
-                    }
-                    if (b == '\'') {
-                        // Closing quote must be followed by whitespace or end-of-line.
-                        if (p + 1 < lineEnd && !isSpace(in.getByte(p + 1))) {
-                            throw new IllegalArgumentException("Protocol error: invalid inline command");
-                        }
-                        insq = false;
-                        p++;
-                        break;
-                    }
-                    decoded[outPos++] = b;
-                    p++;
-                    continue;
-                }
-
-                if (isSpace(b)) {
-                    break;
-                }
-                if (b == '"') {
-                    inq = true;
-                    p++;
-                    continue;
-                }
-                if (b == '\'') {
-                    insq = true;
-                    p++;
-                    continue;
-                }
-                decoded[outPos++] = b;
-                p++;
-            }
-
-            if (inq || insq) {
-                throw new IllegalArgumentException("Protocol error: unbalanced quotes in inline command");
-            }
-
-            int len = outPos - tokenStart;
-            if (argc >= maxArgs) {
-                throw new IllegalArgumentException("Protocol error: array length too large");
-            }
-            if (argc == offsets.length) {
-                int next = offsets.length << 1;
-                offsets = Arrays.copyOf(offsets, next);
-                lengths = Arrays.copyOf(lengths, next);
-            }
-            offsets[argc] = tokenStart;
-            lengths[argc] = len;
-            argc++;
-        }
-
-        if (argc == 0) {
-            throw new IllegalArgumentException("Protocol error: empty inline command");
-        }
+        byte[] input = new byte[inputLen];
+        in.getBytes(startIdx, input);
+        RespInlineCommandParser.Decoded decoded = RespInlineCommandParser.parse(input, 0, inputLen, maxArgs);
 
         // Consume the line (+ CRLF) before we slice; this keeps the control flow aligned with the RESP path.
         in.readerIndex(lineEnd + 2);
 
-        RespCommand cmd = RespCommandBuilder.acquire(argc);
-        for (int arg = 0; arg < argc; arg++) {
-            RespCommandBuilder.setArgSlice(cmd, arg, offsets[arg], lengths[arg]);
+        RespCommand cmd = RespCommandBuilder.acquire(decoded.argc());
+        for (int arg = 0; arg < decoded.argc(); arg++) {
+            RespCommandBuilder.setArgSlice(cmd, arg, decoded.offset(arg), decoded.length(arg));
         }
 
-        ByteBuf frameBuf = Unpooled.wrappedBuffer(decoded, 0, outPos);
+        ByteBuf frameBuf = Unpooled.wrappedBuffer(decoded.decoded(), 0, decoded.decodedLen());
         NettyRespFrame frame = new NettyRespFrame(frameBuf);
         boolean ok = false;
         try {
@@ -371,36 +258,6 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
 
     private static boolean isSpace(byte b) {
         return b == ' ' || b == '\t';
-    }
-
-    private static byte decodeEscapedChar(byte b) {
-        return switch (b) {
-            case 'n' -> (byte) '\n';
-            case 'r' -> (byte) '\r';
-            case 't' -> (byte) '\t';
-            case 'b' -> (byte) '\b';
-            case 'a' -> (byte) '\u0007';
-            default -> b;
-        };
-    }
-
-    private static boolean isHexDigit(byte b) {
-        return (b >= '0' && b <= '9')
-                || (b >= 'a' && b <= 'f')
-                || (b >= 'A' && b <= 'F');
-    }
-
-    private static int hexDigitToInt(byte b) {
-        if (b >= '0' && b <= '9') {
-            return b - '0';
-        }
-        if (b >= 'a' && b <= 'f') {
-            return 10 + (b - 'a');
-        }
-        if (b >= 'A' && b <= 'F') {
-            return 10 + (b - 'A');
-        }
-        return 0;
     }
 
     private static int requirePositive(int value, String name) {

@@ -4,15 +4,21 @@ import yier.bubu.redis.protocol.RespArray;
 import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.protocol.RespError;
 import yier.bubu.redis.protocol.RespInteger;
+import yier.bubu.redis.protocol.RespMap;
+import yier.bubu.redis.protocol.RespNull;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.protocol.RespInlineCommandParser;
 
 import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Properties;
 
 public final class YierdisCli {
     public static void main(String[] args) throws Exception {
@@ -59,7 +65,13 @@ public final class YierdisCli {
                 return;
             }
 
-            List<byte[]> cmd = parseArgsToUtf8Bytes(line);
+            final List<byte[]> cmd;
+            try {
+                cmd = parseArgsToUtf8Bytes(line);
+            } catch (IllegalArgumentException e) {
+                System.err.println("(error) " + e.getMessage());
+                continue;
+            }
             if (cmd.isEmpty()) {
                 continue;
             }
@@ -74,8 +86,10 @@ public final class YierdisCli {
     }
 
     private static void printHelp() {
+        String version = loadVersion();
+        String jar = "yierdis-client-" + version + ".jar";
         System.out.println("Usage:");
-        System.out.println("  java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar [options] [COMMAND [ARG...]]");
+        System.out.println("  java -jar yierdis-client/target/" + jar + " [options] [COMMAND [ARG...]]");
         System.out.println();
         System.out.println("Options:");
         System.out.println("  --host <host>            Default: 127.0.0.1");
@@ -85,13 +99,30 @@ public final class YierdisCli {
         System.out.println("  -h, --help               Show help");
         System.out.println();
         System.out.println("Examples:");
-        System.out.println("  java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar PING");
-        System.out.println("  java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar SET a 1");
-        System.out.println("  java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar --port 6378 GET a");
+        System.out.println("  java -jar yierdis-client/target/" + jar + " PING");
+        System.out.println("  java -jar yierdis-client/target/" + jar + " SET a 1");
+        System.out.println("  java -jar yierdis-client/target/" + jar + " --port 6378 GET a");
+    }
+
+    private static String loadVersion() {
+        String version = "unknown";
+        try (InputStream in = YierdisCli.class.getResourceAsStream("/yierdis-version.properties")) {
+            if (in != null) {
+                Properties props = new Properties();
+                props.load(in);
+                String v = props.getProperty("version");
+                if (v != null && !v.isBlank()) {
+                    version = v.trim();
+                }
+            }
+        } catch (IOException ignored) {
+            // ignore
+        }
+        return version;
     }
 
     private static void printResp(RespObject obj, boolean hex) {
-        if (obj == null) {
+        if (obj == null || obj instanceof RespNull) {
             System.out.println("(nil)");
             return;
         }
@@ -137,12 +168,48 @@ public final class YierdisCli {
             }
             return;
         }
+        if (obj instanceof RespMap) {
+            RespMap map = (RespMap) obj;
+            if (map.entries().isEmpty()) {
+                System.out.println("(empty map)");
+                return;
+            }
+            int idx = 1;
+            for (RespMap.Entry e : map.entries()) {
+                System.out.print((idx++) + ") ");
+                printInline(e.key(), hex, 1);
+                System.out.print((idx++) + ") ");
+                printInline(e.value(), hex, 1);
+            }
+            return;
+        }
         System.out.println(obj.toHumanReadableString());
     }
 
     private static void printInline(RespObject obj, boolean hex, int indent) {
-        if (obj == null) {
+        if (obj == null || obj instanceof RespNull) {
             System.out.println("(nil)");
+            return;
+        }
+        if (obj instanceof RespMap) {
+            RespMap map = (RespMap) obj;
+            if (map.entries().isEmpty()) {
+                System.out.println("(empty map)");
+                return;
+            }
+            System.out.println();
+            for (int i = 0; i < map.entries().size(); i++) {
+                for (int j = 0; j < indent; j++) {
+                    System.out.print("  ");
+                }
+                System.out.print((i + 1) + ") ");
+                printInline(map.entries().get(i).key(), hex, indent + 1);
+                for (int j = 0; j < indent; j++) {
+                    System.out.print("  ");
+                }
+                System.out.print("-> ");
+                printInline(map.entries().get(i).value(), hex, indent + 1);
+            }
             return;
         }
         if (obj instanceof RespArray) {
@@ -203,56 +270,8 @@ public final class YierdisCli {
     }
 
     private static List<byte[]> parseArgsToUtf8Bytes(String line) {
-        List<String> parts = splitShellLike(line);
-        List<byte[]> out = new ArrayList<>(parts.size());
-        for (String p : parts) {
-            out.add(p.getBytes(StandardCharsets.UTF_8));
-        }
-        return out;
-    }
-
-    private static List<String> splitShellLike(String line) {
-        List<String> out = new ArrayList<>();
-        StringBuilder cur = new StringBuilder();
-        boolean inSingle = false;
-        boolean inDouble = false;
-        boolean escaping = false;
-
-        for (int i = 0; i < line.length(); i++) {
-            char c = line.charAt(i);
-            if (escaping) {
-                cur.append(c);
-                escaping = false;
-                continue;
-            }
-            if (c == '\\') {
-                escaping = true;
-                continue;
-            }
-            if (!inDouble && c == '\'' ) {
-                inSingle = !inSingle;
-                continue;
-            }
-            if (!inSingle && c == '"') {
-                inDouble = !inDouble;
-                continue;
-            }
-            if (!inSingle && !inDouble && Character.isWhitespace(c)) {
-                if (cur.length() > 0) {
-                    out.add(cur.toString());
-                    cur.setLength(0);
-                }
-                continue;
-            }
-            cur.append(c);
-        }
-        if (escaping) {
-            cur.append('\\');
-        }
-        if (cur.length() > 0) {
-            out.add(cur.toString());
-        }
-        return out;
+        // 保持与 server inline command 相同的解析规则（sdssplitargs 风格）。
+        return RespInlineCommandParser.splitUtf8(line, 1024);
     }
 
     private static final class Config {

@@ -2,7 +2,6 @@ package yier.bubu.redis.db.offheap.unsafe;
 
 import io.netty.util.internal.PlatformDependent;
 import yier.bubu.redis.db.offheap.api.YierdisBytesSink;
-import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
 import yier.bubu.redis.db.offheap.api.YierdisDirectBytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
@@ -10,6 +9,7 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapBlock;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.bytes.BytesSource;
 
 /**
  * Unsafe-based off-heap allocator backed by Netty's {@link PlatformDependent} utilities.
@@ -516,7 +516,7 @@ final class YierdisUnsafeOffHeapBuf implements YierdisOffHeapBuf {
     }
 
     @Override
-    public void setBytes(int index, YierdisBytesSource src, int srcIndex, int len) {
+    public void setBytes(int index, BytesSource src, int srcIndex, int len) {
         ensureOpen();
         if (src == null) {
             throw new IllegalArgumentException("src must not be null");

@@ -5,6 +5,10 @@
 ## [Unreleased]
 
 ### Added
+- 新增 `yierdis-bytes` 中立模块：承载 `BytesSource/BytesSink/BytesSlice` 抽象，供 protocol/off-heap/I/O 复用，避免 `yierdis-protocol` 通过 “off-heap” 命名模块复用 bytes 接口造成依赖误导。
+- 新增 `RespMap`（RESP3 map 最小对象模型）与 client 侧 RESP3 最小解码能力（`%` map、`_` null），用于覆盖 `HELLO 3` 分支。
+- 新增 `RespInlineCommandParser`（sdssplitargs 风格），server inline command 与 CLI REPL 共用同一套解析规则，避免规则漂移。
+- 新增 `YierdisServerBootstrap`：抽取 server 装配/生命周期管理，可在测试/工具中复用启动与关停逻辑。
 - Maven 多模块拆分：引入 `yierdis-protocol`（RESP SSOT）、`yierdis-core`（DB/命令 SSOT）、`yierdis-args`（参数 SSOT）、`yierdis-client`（client/CLI），并调整 `yierdis-server`/`yierdis-bench` 依赖方向。
 - 新增 `yierdis-protocol-netty`：承载 Netty codec/adapters（decoder/encoder/frame/session）；`yierdis-protocol` 收敛为 Netty-free SSOT（对象模型 + `RespWriter` + `RespFrame/RespSession` 抽象）。
 - 升级为 Netty 体系内单线程 `NettyCommandExecutor`（`DefaultEventExecutorGroup(1)`）：批量 `write` + 末尾 `flush` 合并、连接级 `autoRead` 背压（high/low 滞回阈值）、全局有界队列与 `-ERR busy` 保护。
@@ -26,8 +30,10 @@
 - off-heap 风险收敛：keys/expires 的 off-heap 使用改为显式开关（`--offheapKeysEnabled`，仅允许 unsafe 后端），默认安全。
 - off-heap 后端发现升级：引入 `YierdisOffHeapAllocatorProvider`（ServiceLoader），并在 server fat-jar（shade）场景合并 services 资源，提升可运维性与错误可读性。
 - 增加架构退化护栏测试：`CommandRegistryGuardTest`（最小命令集注册）、`NettyRespSessionIsolationTest`（连接级协议状态隔离）。
+- 新增 `yierdis-bytes-netty`：提供 `NettyByteBufSink` 适配器，收敛 ByteBuf↔bytes 写出边界，供 server/offheap-netty 复用。
 
 ### Changed
+- `yierdis-protocol` 依赖收敛：不再直接依赖 `yierdis-offheap-api`，改为依赖 `yierdis-bytes`；`yierdis-offheap-api` 保留兼容别名（deprecated）以降低迁移成本。
 - bench/server 参数体系收敛：共享参数由 `yierdis-args` 解析与校验；bench 通过 `--` 透传 server 参数，避免维护两套默认值。
 - `maxmemoryBytes` 统计口径调整为“heap 估算 + off-heap allocator.usedBytes 实占”，并避免对 off-heap string payload 双计数。
 - 写命令热路径进一步减少不必要的 `byte[]` 物化：`SET/APPEND` 可从 `RespCommand.frame()` 的参数 slice 直接拷贝到最终 payload（off-heap 或 raw string）。
@@ -37,12 +43,20 @@
 - protocol-netty：codec/adapters 迁移到独立包 `yier.bubu.redis.protocol.netty`，`yierdis-protocol` 独占 `yier.bubu.redis.protocol`（消除 split-package）。
 - off-heap：core 通过 `YierdisOffHeapAddressAllocator` capability 选择 keyspace/expires 的 off-heap 路径，避免对具体后端类型的 `instanceof` 耦合；`yierdis-core` 不再编译期依赖 `yierdis-offheap-unsafe`。
 - off-heap 可观测性增强：`YierdisOffHeapAllocators` 增加 ServiceLoader providers 发现摘要；server 启动期输出 backend/providers 诊断信息；缺失后端错误信息附带 discovered providers（摘要在失败路径懒加载，避免成功路径额外 ServiceLoader 扫描）。
+- 背压语义增强：在全局队列满/bytes 预算耗尽时，触发可恢复的全局 backpressure（禁读 + 滞回恢复），降低 busy 风暴与“禁读后无法恢复”的风险。
+- server args：`--port 0` 允许绑定随机端口（便于测试/开发避免端口冲突）。
+- QUIT 行为收敛：`QUIT` 不再由 server handler 特判，改为 core 命令（通过 `RespWriter` 请求 close-after-reply），由执行器在 flush 后关闭连接并丢弃 post-QUIT backlog。
+- server 写回路径改用 `NettyByteBufSink`（bytes-netty），避免通用写出适配依赖 off-heap 后端模块；offheap-netty slice 写出 fast-path 同步支持该 sink。
+- client/CLI help 不再硬编码 jar 版本号，改为读取构建注入的 `yierdis-version.properties`。
 
 ### Fixed
+- bench 依赖更新：压测工具写请求时改用 `yierdis-bytes` 的 `BytesSink`（避免依赖已移除的包路径）。
 - 修复协议错误与 `$-1`（null bulk string）参数导致的连接断开：现在会返回明确的 `ERR ...`（协议错误会关闭连接）。
 - RESP error 输出统一做 CR/LF 过滤与限长，降低 response splitting 风险。
 - unknown command 不再回显客户端输入。
 - server args 增强：新增 `--executorSchedulingPolicy`、`--frameCompaction*`、`--offheapKeysEnabled`，并在 args SSOT 层完成归一化与校验。
+- 修复 client 超时后继续复用连接可能导致的 RESP 响应错配：超时后关闭连接并标记不可复用。
+- 修复 pipeline 场景下 QUIT 可能破坏顺序语义/产生副作用：QUIT 后连接关闭并跳过该连接后续已入队命令（仅回收，不执行）。
 
 ## [0.1.0-SNAPSHOT] - 2026-01-01
 

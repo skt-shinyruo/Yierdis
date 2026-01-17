@@ -8,6 +8,7 @@ import yier.bubu.redis.protocol.RespArray;
 import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.protocol.RespError;
 import yier.bubu.redis.protocol.RespInteger;
+import yier.bubu.redis.protocol.RespMap;
 import yier.bubu.redis.protocol.RespNull;
 import yier.bubu.redis.protocol.RespSimpleString;
 
@@ -123,6 +124,35 @@ public class RespDecoderTest {
         Assert.assertTrue(msg instanceof RespArray);
         Assert.assertTrue(((RespArray) msg).isNull());
         Assert.assertNull(((RespArray) msg).values());
+
+        ch.finishAndReleaseAll();
+    }
+
+    @Test
+    public void decodeResp3Null() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
+        Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("_\r\n", StandardCharsets.US_ASCII)));
+
+        Object msg = ch.readInbound();
+        Assert.assertTrue(msg instanceof RespNull);
+
+        ch.finishAndReleaseAll();
+    }
+
+    @Test
+    public void decodeResp3Map() {
+        // %1 [$3 key] [$5 value]
+        String payload = "%1\r\n$3\r\nkey\r\n$5\r\nvalue\r\n";
+        EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
+        Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(payload, StandardCharsets.US_ASCII)));
+
+        Object msg = ch.readInbound();
+        Assert.assertTrue(msg instanceof RespMap);
+
+        RespMap map = (RespMap) msg;
+        Assert.assertEquals(1, map.entries().size());
+        Assert.assertEquals("key", ((RespBulkString) map.entries().get(0).key()).asString());
+        Assert.assertEquals("value", ((RespBulkString) map.entries().get(0).value()).asString());
 
         ch.finishAndReleaseAll();
     }

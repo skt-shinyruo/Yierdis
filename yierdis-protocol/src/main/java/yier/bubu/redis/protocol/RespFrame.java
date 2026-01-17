@@ -1,6 +1,6 @@
 package yier.bubu.redis.protocol;
 
-import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
+import yier.bubu.redis.bytes.BytesSource;
 
 /**
  * Backing bytes for a decoded RESP command.
@@ -8,7 +8,7 @@ import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
  * This abstraction allows the command decoder to be implemented on top of different I/O stacks
  * (e.g. Netty {@code ByteBuf}, heap byte arrays, etc.) while keeping {@link RespCommand} Netty-free.
  */
-public interface RespFrame extends YierdisBytesSource, AutoCloseable {
+public interface RespFrame extends BytesSource, AutoCloseable {
     /**
      * Returns the total length in bytes of this frame.
      * <p>

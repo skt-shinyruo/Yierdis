@@ -22,7 +22,7 @@ public class YierdisServerArgsTest {
 
     @Test
     public void invalidPortIsRejected() {
-        YierdisServerArgs args = parse("--port", "0");
+        YierdisServerArgs args = parse("--port", "-1");
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
     }
 

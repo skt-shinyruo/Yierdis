@@ -1,11 +1,11 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapString;
-import yier.bubu.redis.db.offheap.api.YierdisBytesSource;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.bytes.BytesSource;
 import yier.bubu.redis.protocol.RespCommand;
 
 import java.nio.charset.StandardCharsets;
@@ -115,7 +115,7 @@ final class YierdisObject {
                 YierdisOffHeapBuf buf = offHeapAllocator.allocate(len);
                 boolean ok = false;
                 try {
-                    YierdisBytesSource src = cmd.frame();
+                    BytesSource src = cmd.frame();
                     buf.setBytes(0, src, cmd.argOffset(argIndex), len);
                     payload = buf;
                     ok = true;
@@ -437,7 +437,7 @@ final class YierdisObject {
             }
 
             if (current.capacity() >= nextLen) {
-                YierdisBytesSource src = cmd.frame();
+                BytesSource src = cmd.frame();
                 current.setBytes(0, src, cmd.argOffset(argIndex), nextLen);
                 this.type = ValueType.STRING;
                 this.encoding = nextEnc;
@@ -455,7 +455,7 @@ final class YierdisObject {
                 YierdisOffHeapBuf nextBuf = offHeapAllocator.allocate(nextLen);
                 boolean ok = false;
                 try {
-                    YierdisBytesSource src = cmd.frame();
+                    BytesSource src = cmd.frame();
                     nextBuf.setBytes(0, src, cmd.argOffset(argIndex), nextLen);
                     nextPayload = nextBuf;
                     ok = true;
@@ -741,7 +741,7 @@ final class YierdisObject {
             return rawLen;
         }
         if (payload instanceof YierdisOffHeapBuf buf) {
-            YierdisBytesSource src = cmd.frame();
+            BytesSource src = cmd.frame();
             buf.setBytes(rawLen, src, cmd.argOffset(argIndex), len);
             rawLen += len;
             return rawLen;
@@ -1162,7 +1162,7 @@ final class YierdisObject {
             throw new IllegalArgumentException("dstAddress must be != 0");
         }
 
-        YierdisBytesSource frame = cmd.frame();
+        BytesSource frame = cmd.frame();
         int srcIndex = cmd.argOffset(argIndex);
         if (frame.hasMemoryAddress()) {
             allocator.copyMemory(frame.memoryAddress() + srcIndex, dstAddress, len);

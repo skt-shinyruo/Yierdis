@@ -10,6 +10,7 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.bytes.BytesSource;
 
 import java.nio.ByteBuffer;
 
@@ -157,7 +158,7 @@ public final class YierdisForeignOffHeapAllocator implements YierdisOffHeapAlloc
         }
 
         @Override
-        public void setBytes(int index, YierdisBytesSource src, int srcIndex, int len) {
+        public void setBytes(int index, BytesSource src, int srcIndex, int len) {
             ensureOpen();
             if (src == null) {
                 throw new IllegalArgumentException("src must not be null");

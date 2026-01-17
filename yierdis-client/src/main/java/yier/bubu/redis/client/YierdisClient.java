@@ -29,6 +29,7 @@ public final class YierdisClient implements AutoCloseable {
     private final BlockingQueue<RespObject> responses;
 
     private final Object requestLock = new Object();
+    private volatile boolean closed;
 
     private YierdisClient(EventLoopGroup group, Channel channel, BlockingQueue<RespObject> responses) {
         this.group = group;
@@ -68,12 +69,22 @@ public final class YierdisClient implements AutoCloseable {
 
         // Simple 1-at-a-time request/response model (no pipelining).
         synchronized (requestLock) {
+            if (closed) {
+                throw new IllegalStateException("Client is closed");
+            }
+            if (!channel.isActive()) {
+                closed = true;
+                throw new IllegalStateException("Connection is not active");
+            }
             responses.clear();
             channel.writeAndFlush(toRespCommand(args)).sync();
 
             RespObject resp = responses.poll(timeoutMillis, TimeUnit.MILLISECONDS);
             if (resp == null) {
-                throw new IllegalStateException("Timeout waiting for response");
+                // RESP 是严格 FIFO 的 request/response 配对。超时意味着连接进入未知状态：
+                // 服务端可能稍后返回本次请求的响应，继续复用连接会导致后续请求响应错配。
+                closeSilently();
+                throw new IllegalStateException("Timeout waiting for response (connection closed to prevent response desync)");
             }
             return resp;
         }
@@ -99,10 +110,26 @@ public final class YierdisClient implements AutoCloseable {
 
     @Override
     public void close() {
+        closeSilently();
+    }
+
+    private void closeSilently() {
+        if (closed) {
+            return;
+        }
+        closed = true;
         try {
-            channel.close().syncUninterruptibly();
+            if (channel != null) {
+                channel.close().syncUninterruptibly();
+            }
+        } catch (Throwable ignored) {
+            // ignore
         } finally {
-            group.shutdownGracefully();
+            try {
+                group.shutdownGracefully();
+            } catch (Throwable ignored) {
+                // ignore
+            }
         }
     }
 

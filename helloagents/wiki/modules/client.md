@@ -8,7 +8,7 @@
 
 - **Responsibility:** 连接管理、命令输入、RESP2 编解码（客户端侧）、输出显示（支持 hex）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-15
+- **Last Updated:** 2026-01-16
 
 ## Specifications
 
@@ -20,6 +20,11 @@
 条件：用户使用 `--hex`
 - 预期：bulk string 用 hex 输出，便于观察二进制数据结构（例如 bitmap/hll）
 
+### Requirement: 超时后连接不可复用（避免响应错配）
+**Module:** client
+由于 RESP 请求/响应是严格 FIFO 配对，若单次执行等待响应超时，连接会进入“响应可能延迟到达”的未知状态。
+因此 client 在超时后会关闭连接并标记不可复用，避免后续请求响应错配。
+
 ## Dependencies
 
 - `yierdis-protocol-netty`（客户端侧复用 RESP codec；对象模型由 `yierdis-protocol` 提供）
@@ -28,3 +33,4 @@
 ## Change History
 
 - 2026-01-15：依赖切换：RESP codec 下沉到 `yierdis-protocol-netty`，`yierdis-protocol` 保持 Netty-free SSOT。
+- 2026-01-16：行为加固：`execute()` 超时后关闭连接并标记 client 不可复用，避免 RESP FIFO 响应错配风险。

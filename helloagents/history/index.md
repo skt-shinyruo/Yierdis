@@ -19,6 +19,8 @@
 | 202601152357 | arch_hardening | Standard Development | ✅ Completed | helloagents/history/2026-01/202601152357_arch_hardening/ |
 | 202601161128 | arch_refactor | Standard Development | ✅ Completed | helloagents/history/2026-01/202601161128_arch_refactor/ |
 | 202601161551 | arch_guardrails | Standard Development | ✅ Completed | helloagents/history/2026-01/202601161551_arch_guardrails/ |
+| 202601161845 | arch_refactor_5issues | Standard Development | ✅ Completed | helloagents/history/2026-01/202601161845_arch_refactor_5issues/ |
+| 202601162335 | fix_arch_issues | Standard Development | ✅ Completed | helloagents/history/2026-01/202601162335_fix_arch_issues/ |
 
 ---
 
@@ -37,3 +39,5 @@
 - helloagents/history/2026-01/202601152357_arch_hardening/
 - helloagents/history/2026-01/202601161128_arch_refactor/
 - helloagents/history/2026-01/202601161551_arch_guardrails/
+- helloagents/history/2026-01/202601161845_arch_refactor_5issues/
+- helloagents/history/2026-01/202601162335_fix_arch_issues/

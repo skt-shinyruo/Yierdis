@@ -7,6 +7,7 @@ import yier.bubu.redis.protocol.RespArray;
 import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.protocol.RespError;
 import yier.bubu.redis.protocol.RespInteger;
+import yier.bubu.redis.protocol.RespMap;
 import yier.bubu.redis.protocol.RespNull;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespSimpleString;
@@ -147,6 +148,49 @@ public final class RespDecoder extends ByteToMessageDecoder {
                     items.add(item);
                 }
                 return RespArray.of(items);
+            }
+            case '%': {
+                if (nestingDepth >= maxNestingDepth) {
+                    throw new IllegalArgumentException("Protocol error: nested maps too deep");
+                }
+                String line = readLine(in);
+                if (line == null) {
+                    in.readerIndex(startIdx);
+                    return null;
+                }
+                int pairs = Integer.parseInt(line.trim());
+                if (pairs < 0) {
+                    throw new IllegalArgumentException("Protocol error: invalid map length");
+                }
+                if (pairs > maxArrayLen) {
+                    throw new IllegalArgumentException("Protocol error: map length too large");
+                }
+                List<RespMap.Entry> entries = new ArrayList<>(Math.min(pairs, 16));
+                for (int i = 0; i < pairs; i++) {
+                    RespObject key = tryDecodeOne(in, nestingDepth + 1);
+                    if (key == null) {
+                        in.readerIndex(startIdx);
+                        return null;
+                    }
+                    RespObject value = tryDecodeOne(in, nestingDepth + 1);
+                    if (value == null) {
+                        in.readerIndex(startIdx);
+                        return null;
+                    }
+                    entries.add(new RespMap.Entry(key, value));
+                }
+                return RespMap.of(entries);
+            }
+            case '_': {
+                // RESP3 null: "_\r\n"
+                if (in.readableBytes() < 2) {
+                    in.readerIndex(startIdx);
+                    return null;
+                }
+                if (in.readByte() != CR || in.readByte() != LF) {
+                    throw new IllegalArgumentException("Protocol error: bad null CRLF");
+                }
+                return RespNull.INSTANCE;
             }
             default:
                 throw new IllegalArgumentException("Protocol error: unknown RESP prefix: " + (char) prefix);

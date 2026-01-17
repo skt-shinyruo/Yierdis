@@ -19,6 +19,12 @@
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-bytes-netty</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-offheap-api</artifactId>
             <version>${project.version}</version>
         </dependency>

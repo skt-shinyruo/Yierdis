@@ -43,11 +43,70 @@ public class NettyCommandExecutorBackpressureTest {
             Assert.assertNull(ch.readOutbound());
 
             // 第二次入队失败，立刻返回 busy 错误。
-            ch.writeInbound(Unpooled.wrappedBuffer(ping));
+            ByteBuf second = Unpooled.wrappedBuffer(ping);
+            second.retain(); // keep our own reference to assert refCnt after handler rejects/recycles
+            ch.writeInbound(second);
             Assert.assertArrayEquals(ascii("-ERR busy\r\n"), readOutbound(ch));
+            Assert.assertEquals("busy path must release the retained command frame", 1, second.refCnt());
+            second.release();
         } finally {
             executor.close();
             ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void globalBackpressureRecoversAutoReadOnRejectedChannel() {
+        YierdisDb db = new YierdisDb();
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        NettyCommandExecutor executor = new NettyCommandExecutor(
+                db,
+                processor,
+                ImmediateEventExecutor.INSTANCE,
+                1,
+                0,
+                256,
+                128,
+                0,
+                0,
+                1024,
+                10
+        );
+
+        EmbeddedChannel ch1 = new EmbeddedChannel(
+                new RespCommandDecoder(),
+                new YierdisFastCommandHandler(executor)
+        );
+        EmbeddedChannel ch2 = new EmbeddedChannel(
+                new RespCommandDecoder(),
+                new YierdisFastCommandHandler(executor)
+        );
+        try {
+            Assert.assertTrue(ch1.config().isAutoRead());
+            Assert.assertTrue(ch2.config().isAutoRead());
+
+            byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
+
+            // Fill the global queue with ch1 while executor is not started (no drain).
+            ch1.writeInbound(Unpooled.wrappedBuffer(ping));
+            Assert.assertNull(ch1.readOutbound());
+
+            // ch2 is rejected: should return busy and enter backpressure (autoRead disabled).
+            ch2.writeInbound(Unpooled.wrappedBuffer(ping));
+            Assert.assertArrayEquals(ascii("-ERR busy\r\n"), readOutbound(ch2));
+            ch1.runPendingTasks();
+            ch2.runPendingTasks();
+            Assert.assertFalse(ch2.config().isAutoRead());
+
+            // Start draining: once the backlog clears, global recovery should re-enable autoRead for ch2.
+            executor.start();
+            ch1.runPendingTasks();
+            ch2.runPendingTasks();
+            Assert.assertTrue(ch2.config().isAutoRead());
+        } finally {
+            executor.close();
+            ch1.finishAndReleaseAll();
+            ch2.finishAndReleaseAll();
         }
     }
 

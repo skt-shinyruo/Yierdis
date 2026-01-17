@@ -168,8 +168,8 @@ public final class YierdisServerArgs {
             cleanupIntervalMillis = 0;
         }
 
-        if (port <= 0 || port > 65535) {
-            throw new IllegalArgumentException("port must be in range 1..65535");
+        if (port < 0 || port > 65535) {
+            throw new IllegalArgumentException("port must be in range 0..65535");
         }
         if (cleanupIntervalMillis < 0) {
             throw new IllegalArgumentException("cleanupIntervalMillis must be >= 0");

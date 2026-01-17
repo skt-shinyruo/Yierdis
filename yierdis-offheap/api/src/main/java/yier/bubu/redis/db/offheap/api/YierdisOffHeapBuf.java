@@ -1,5 +1,7 @@
 package yier.bubu.redis.db.offheap.api;
 
+import yier.bubu.redis.bytes.BytesSource;
+
 public interface YierdisOffHeapBuf extends AutoCloseable {
     int capacity();
 
@@ -11,7 +13,7 @@ public interface YierdisOffHeapBuf extends AutoCloseable {
 
     void setBytes(int index, byte[] src, int srcOff, int len);
 
-    void setBytes(int index, YierdisBytesSource src, int srcIndex, int len);
+    void setBytes(int index, BytesSource src, int srcIndex, int len);
 
     YierdisOffHeapSlice slice(int index, int len);
 

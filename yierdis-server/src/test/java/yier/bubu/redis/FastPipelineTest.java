@@ -248,6 +248,52 @@ public class FastPipelineTest {
         }
     }
 
+    @Test
+    public void pipelinePingThenQuitKeepsOrderAndCloses() {
+        try (TestEnv env = new TestEnv()) {
+            EmbeddedChannel ch = env.ch;
+
+            byte[] pipelined = concat(
+                    command(b("PING")),
+                    command(b("QUIT"))
+            );
+            ch.writeInbound(Unpooled.wrappedBuffer(pipelined));
+
+            Assert.assertArrayEquals(ascii("+PONG\r\n"), readOutbound(ch));
+            Assert.assertArrayEquals(ascii("+OK\r\n"), readOutbound(ch));
+
+            ch.runPendingTasks();
+            Assert.assertFalse(ch.isOpen());
+        }
+    }
+
+    @Test
+    public void quitSkipsSubsequentCommandsToAvoidSideEffects() {
+        try (TestEnv env = new TestEnv()) {
+            EmbeddedChannel ch = env.ch;
+
+            byte[] key = b("a");
+
+            byte[] pipelined = concat(
+                    command(b("SET"), key, b("1")),
+                    command(b("QUIT")),
+                    command(b("INCR"), key)
+            );
+            ch.writeInbound(Unpooled.wrappedBuffer(pipelined));
+
+            Assert.assertArrayEquals(ascii("+OK\r\n"), readOutbound(ch)); // SET
+            Assert.assertArrayEquals(ascii("+OK\r\n"), readOutbound(ch)); // QUIT
+
+            // QUIT 后连接关闭：后续命令不应被执行，也不应产生额外响应。
+            Assert.assertNull(ch.readOutbound());
+
+            ch.runPendingTasks();
+            Assert.assertFalse(ch.isOpen());
+
+            Assert.assertArrayEquals(b("1"), env.db.getStringBytes(key));
+        }
+    }
+
     private static final class TestEnv implements AutoCloseable {
         private final YierdisDb db;
         private final NettyCommandExecutor executor;

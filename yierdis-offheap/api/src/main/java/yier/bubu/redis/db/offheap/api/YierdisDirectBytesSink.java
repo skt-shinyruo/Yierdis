@@ -1,14 +1,8 @@
 package yier.bubu.redis.db.offheap.api;
 
-public interface YierdisDirectBytesSink extends YierdisBytesSink {
-    void ensureWritable(int len);
-
-    int writerIndex();
-
-    void writerIndex(int writerIndex);
-
-    boolean hasMemoryAddress();
-
-    long memoryAddress();
+/**
+ * Compatibility alias for {@link yier.bubu.redis.bytes.DirectBytesSink}.
+ */
+@Deprecated
+public interface YierdisDirectBytesSink extends yier.bubu.redis.bytes.DirectBytesSink, YierdisBytesSink {
 }
-

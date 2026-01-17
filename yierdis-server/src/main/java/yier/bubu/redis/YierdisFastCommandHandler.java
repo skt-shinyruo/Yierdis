@@ -5,7 +5,9 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.DecoderException;
-import yier.bubu.redis.db.offheap.netty.YierdisNettyByteBufSink;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
 import yier.bubu.redis.protocol.netty.NettyRespSession;
@@ -13,6 +15,8 @@ import yier.bubu.redis.protocol.netty.NettyRespSession;
 import java.util.Objects;
 
 public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler<RespCommand> {
+    private static final Logger log = LoggerFactory.getLogger(YierdisFastCommandHandler.class);
+
     private final NettyCommandExecutor nettyExecutor;
 
     public YierdisFastCommandHandler(NettyCommandExecutor executor) {
@@ -21,21 +25,6 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, RespCommand msg) {
-        if (msg.argc() == 1 && isQuit(msg)) {
-            ByteBuf out = ctx.alloc().buffer();
-            try {
-                new RespWriter(new YierdisNettyByteBufSink(out), new NettyRespSession(ctx.channel())).simpleString("OK");
-                ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
-                out = null;
-            } finally {
-                msg.recycle();
-                if (out != null) {
-                    out.release();
-                }
-            }
-            return;
-        }
-
         boolean accepted = nettyExecutor.trySubmit(ctx, msg);
         if (accepted) {
             // 执行器接管 msg 的生命周期，负责 recycle。
@@ -45,29 +34,15 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         // 队列满或服务关闭：返回 busy 错误并回收命令帧，避免积压导致 OOM。
         ByteBuf out = ctx.alloc().buffer();
         try {
-            new RespWriter(new YierdisNettyByteBufSink(out), new NettyRespSession(ctx.channel())).error("ERR busy");
+            new RespWriter(new NettyByteBufSink(out), new NettyRespSession(ctx.channel())).error("ERR busy");
             ctx.writeAndFlush(out);
             out = null;
         } finally {
-            msg.recycle();
+            msg.close();
             if (out != null) {
                 out.release();
             }
         }
-    }
-
-    private static boolean isQuit(RespCommand cmd) {
-        if (cmd.isNull(0) || cmd.len(0) != 4) {
-            return false;
-        }
-        byte b0 = cmd.byteAt(0, 0);
-        byte b1 = cmd.byteAt(0, 1);
-        byte b2 = cmd.byteAt(0, 2);
-        byte b3 = cmd.byteAt(0, 3);
-        return (b0 == 'Q' || b0 == 'q')
-                && (b1 == 'U' || b1 == 'u')
-                && (b2 == 'I' || b2 == 'i')
-                && (b3 == 'T' || b3 == 't');
     }
 
     @Override
@@ -79,13 +54,21 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         }
         Throwable root = unwrapDecoderException(cause);
         String message = safeErrorMessage(root);
+        String remote = String.valueOf(ctx.channel().remoteAddress());
         String err = message.startsWith("Protocol error")
                 ? "ERR " + message
                 : "ERR internal error";
 
+        if (message.startsWith("Protocol error")) {
+            // Protocol errors are often client-driven; keep logs low-noise by default.
+            log.debug("Protocol error from {}: {}", remote, message);
+        } else {
+            log.error("Internal error from {}: {}", remote, message, root);
+        }
+
         ByteBuf out = ctx.alloc().buffer();
         try {
-            new RespWriter(new YierdisNettyByteBufSink(out), new NettyRespSession(ctx.channel())).error(err);
+            new RespWriter(new NettyByteBufSink(out), new NettyRespSession(ctx.channel())).error(err);
             ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
             out = null;
         } finally {

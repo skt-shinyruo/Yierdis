@@ -46,7 +46,7 @@ printf "ECHO \"hello world\"\r\n" | nc 127.0.0.1 6378
 
 ## 客户端（CLI）
 
-项目内置一个极简的 RESP2 客户端，方便本地调试（默认连接 `127.0.0.1:6378`）。
+项目内置一个极简 client/CLI，方便本地调试（默认连接 `127.0.0.1:6378`）。
 
 ```bash
 # 单次执行
@@ -64,6 +64,12 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 - `--port <port>`
 - `--timeoutMillis <ms>`
 - `--hex`（bulk string 以 hex 输出，便于观察二进制数据）
+
+说明：
+
+- client 侧发送命令仍采用 RESP2 的 “array of bulk strings” 形式（与 Redis 客户端一致）。
+- 在执行 `HELLO 3` 之后，client/CLI 支持解析 RESP3 的最小子集：map（`%`）与 null（`_`），用于覆盖 server 的 RESP3 分支回归。
+- REPL 输入解析规则与 server inline command 解析保持一致（sdssplitargs 风格：支持单/双引号、反斜杠转义、`\\xHH` 十六进制转义）。
 
 ## 已实现命令（简化版）
 

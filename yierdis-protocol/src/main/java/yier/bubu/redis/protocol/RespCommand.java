@@ -7,7 +7,7 @@ import java.util.Arrays;
  * <p>
  * This is a deliberately minimal structure optimized for low allocation.
  */
-public final class RespCommand {
+public final class RespCommand implements AutoCloseable {
     private static final int DEFAULT_ARGV_CAPACITY = 16;
 
     private RespFrame frame;
@@ -136,6 +136,11 @@ public final class RespCommand {
         Arrays.fill(argOffsets, 0, argc, 0);
         Arrays.fill(argLengths, 0, argc, 0);
         argc = 0;
+    }
+
+    @Override
+    public void close() {
+        recycle();
     }
 
     private void ensureCapacity(int desired) {

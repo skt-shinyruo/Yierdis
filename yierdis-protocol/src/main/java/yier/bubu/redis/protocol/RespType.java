@@ -6,5 +6,6 @@ public enum RespType {
     INTEGER,
     BULK_STRING,
     ARRAY,
+    MAP,
     NULL
 }
