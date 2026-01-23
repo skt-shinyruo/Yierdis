@@ -10,7 +10,7 @@
 
 - **Responsibility:** 命令分发、参数解析、错误映射、性能优化（低分配写出路径）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-17
+- **Last Updated:** 2026-01-23
 
 ## Specifications
 
@@ -44,6 +44,25 @@
 - 参数校验与错误输出风格与 Redis 尽量一致
 - 写入命令接入 `maxmemory`（noeviction/eviction）防止不可控内存增长
 
+### Requirement: 写命令 reply 顺序与 maxmemory 语义（避免双 reply）
+**Module:** command/db
+写命令必须保证：任何可能抛错的 maxmemory 逻辑都发生在写 reply 之前（避免同一命令输出“正常 reply + error reply”导致协议损坏）。
+
+实现要点：
+- 写命令统一走 `db.prepareWrite(estimatedExtraBytes)` 做 preflight（含 cleanupExpired + 预淘汰/预检查）
+- 写入执行后仍调用 `db.enforceMaxmemory()`，但必须在写 reply 之前完成（确保错误只会产生单条 reply）
+
+#### Scenario: maxmemory 触发错误时不产生双 reply
+条件：写命令在 maxmemory 压力下触发 `-ERR OOM ...`
+- 预期：客户端只收到 **单条** error reply（不会出现 reply 拼接/response splitting）
+
+### Requirement: RESP3 友好集合回复（map/set）
+**Module:** command/protocol
+当连接协议为 RESP3（`HELLO 3`）时：
+- `HGETALL` 输出 RESP3 map（field -> value）
+- `MEMORY STATS` 输出 RESP3 map（key -> value；字段集合保持稳定）
+- `SMEMBERS` 输出 RESP3 set
+
 ## Dependencies
 
 - 外部：`yierdis-protocol`（`RespCommand`/`RespWriter` 等）
@@ -57,3 +76,4 @@
 - 2026-01-08：写命令热路径减少不必要的 `toByteArray`：支持从 `RespCommand.frame()` 的参数 slice 直接写入/追加到最终 payload（heap/off-heap）。
 - 2026-01-14：新增 BITMAP/HLL 命令族（`SETBIT/GETBIT/BITCOUNT/PFADD/PFCOUNT/PFMERGE`），并补齐相关参数校验与 `maxmemory` 接入。
 - 2026-01-17：命令路由加速：`CommandRegistry` 从线性扫描升级为 O(1) 哈希索引；新增 `INFO/STATS` 作为可观测性入口（输出由 server 注入 provider）。
+- 2026-01-23：写命令统一引入 write preflight（`prepareWrite`）并调整顺序为 preflight→执行→enforce→reply（避免双 reply）；RESP3 下 `HGETALL/MEMORY STATS/SMEMBERS` 改为 map/set；`KEYS` glob 兼容范围补齐（`[]`/否定/范围/转义）。

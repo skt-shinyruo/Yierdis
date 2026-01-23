@@ -43,11 +43,11 @@ final class ListCommands {
             CommandSupport.wrongArity(out, left ? "lpush" : "rpush");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + 16L;
+        long extra = (long) Math.max(0, cmd.len(1)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
         }
-        support.db().ensureWriteAllowed(extra);
+        support.db().prepareWrite(extra);
         int valuesLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, valuesLen);
         try {
@@ -107,4 +107,3 @@ final class ListCommands {
         out.bulkStringArray(popped);
     }
 }
-

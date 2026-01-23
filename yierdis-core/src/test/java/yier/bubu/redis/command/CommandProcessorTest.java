@@ -164,6 +164,64 @@ public class CommandProcessorTest {
     }
 
     @Test
+    public void keysGlobSupportsBracketsNegationRangesAndEscapes() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+
+            byte[] v = new byte[]{1};
+            byte[] ka1 = b("a1");
+            byte[] kb1 = b("b1");
+            byte[] kc1 = b("c1");
+            byte[] kStar = b("*");
+            byte[] kQ = b("?");
+            byte[] kLbracket = b("[");
+
+            client.execute(Arrays.asList(b("SET"), ka1, v));
+            client.execute(Arrays.asList(b("SET"), kb1, v));
+            client.execute(Arrays.asList(b("SET"), kc1, v));
+            client.execute(Arrays.asList(b("SET"), kStar, v));
+            client.execute(Arrays.asList(b("SET"), kQ, v));
+            client.execute(Arrays.asList(b("SET"), kLbracket, v));
+
+            RespArray ab = (RespArray) client.execute(cmd("KEYS", "[ab]*"));
+            Assert.assertEquals(2, ab.values().size());
+            Assert.assertTrue(containsBytes(ab, ka1));
+            Assert.assertTrue(containsBytes(ab, kb1));
+
+            RespArray aToC = (RespArray) client.execute(cmd("KEYS", "[a-c]*"));
+            Assert.assertEquals(3, aToC.values().size());
+            Assert.assertTrue(containsBytes(aToC, ka1));
+            Assert.assertTrue(containsBytes(aToC, kb1));
+            Assert.assertTrue(containsBytes(aToC, kc1));
+
+            RespArray notA = (RespArray) client.execute(cmd("KEYS", "[^a]*"));
+            Assert.assertTrue(containsBytes(notA, kb1));
+            Assert.assertTrue(containsBytes(notA, kc1));
+            Assert.assertFalse(containsBytes(notA, ka1));
+
+            // Escapes: "\*" "\?" "\[" should match literal '*', '?', '['.
+            RespArray stars = (RespArray) client.execute(cmd("KEYS", "\\*"));
+            Assert.assertEquals(1, stars.values().size());
+            Assert.assertTrue(containsBytes(stars, kStar));
+
+            RespArray qs = (RespArray) client.execute(cmd("KEYS", "\\?"));
+            Assert.assertEquals(1, qs.values().size());
+            Assert.assertTrue(containsBytes(qs, kQ));
+
+            RespArray lbrackets = (RespArray) client.execute(cmd("KEYS", "\\["));
+            Assert.assertEquals(1, lbrackets.values().size());
+            Assert.assertTrue(containsBytes(lbrackets, kLbracket));
+
+            // Unclosed character classes are treated as literal '['.
+            RespArray literalLbracket = (RespArray) client.execute(cmd("KEYS", "["));
+            Assert.assertEquals(1, literalLbracket.values().size());
+            Assert.assertTrue(containsBytes(literalLbracket, kLbracket));
+            }
+        });
+    }
+
+    @Test
     public void incrErrorsOnNonIntegerOrOverflow() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);

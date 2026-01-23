@@ -22,6 +22,7 @@ public final class RespWriter {
     private static final byte[] DOLLAR = new byte[]{'$'};
     private static final byte[] STAR = new byte[]{'*'};
     private static final byte[] PERCENT = new byte[]{'%'};
+    private static final byte[] TILDE = new byte[]{'~'};
     private static final byte[] RESP2_NULL_BULK = new byte[]{'$', '-', '1', CR, LF};
     private static final byte[] RESP2_NULL_ARRAY = new byte[]{'*', '-', '1', CR, LF};
     private static final byte[] RESP3_NULL = new byte[]{'_', CR, LF};
@@ -199,6 +200,15 @@ public final class RespWriter {
         }
         out.writeBytes(PERCENT, 0, 1);
         writeLongAscii(out, pairs);
+        out.writeBytes(CRLF, 0, CRLF.length);
+    }
+
+    public void setHeader(int count) {
+        if (protocol != RespProtocol.RESP3) {
+            throw new IllegalStateException("RESP3 set requires RESP3 protocol");
+        }
+        out.writeBytes(TILDE, 0, 1);
+        writeLongAscii(out, count);
         out.writeBytes(CRLF, 0, CRLF.length);
     }
 

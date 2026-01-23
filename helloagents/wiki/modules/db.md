@@ -10,7 +10,7 @@
 
 - **Responsibility:** Keyspace + 过期索引 + 值编码（string/list/set/hash/zset）+ maxmemory
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-16
+- **Last Updated:** 2026-01-23
 
 ## Specifications
 
@@ -49,8 +49,11 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 - `MEMORY STATS`：命令侧暴露预算分解（用于排障/教学；明确为估算）
 
 #### Contract: `MEMORY STATS` 输出字段（稳定性约束）
-`MEMORY STATS` 输出为 RESP2 兼容的 **扁平 key/value 数组**：
-- 总元素数固定为 **34**（17 对 key/value）
+`MEMORY STATS` 输出字段集合保持稳定，按连接协议版本返回不同容器类型：
+- RESP2：输出为 **扁平 key/value 数组**（总元素数固定为 **34**，即 17 对 key/value）
+- RESP3：输出为 **map**（总 pair 数固定为 **17**）
+
+字段编码约束：
 - key 均为 ASCII bulk string
 - value 均为十进制 ASCII bulk string（布尔值用 `0/1` 表示）
 
@@ -77,6 +80,11 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 - `enforceMaxmemory()`：新增 eviction 时间预算（避免高压下长时间同步淘汰导致 tail latency 放大）
 - `cleanupExpired()`：时间预算从固定值改为可配置（避免不同部署/负载下出现过期清理不稳定）
 
+#### Change: 写入 preflight（预淘汰/预检查）
+为降低“写入后才触发 OOM/淘汰失败”的概率，并从根源避免命令层双 reply：
+- `prepareWrite(estimatedExtraBytes)`：写入前进行 cleanupExpired + 预淘汰/预检查（noeviction 下严格拒写）
+- 命令层在写 reply 前必须完成 maxmemory 相关的可抛错逻辑（`prepareWrite/enforceMaxmemory`）
+
 #### Configuration: 相关启动参数
 - `--evictionTimeLimitMillis <ms>`：单次 maxmemory 淘汰循环的时间预算
 - `--expireCleanupTimeLimitMillis <ms>`：单次过期清理的时间预算
@@ -85,6 +93,16 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 条件：启用 off-heap 并持续写入直至达到 `maxmemoryBytes`
 - 预期：淘汰/拒写触发时机可解释（与 allocator.usedBytes 变化趋势一致）
 - 预期：当字符串 payload 存放在 off-heap 时，heap 估算不重复计入该 payload 长度（避免双计数）
+
+### Requirement: `KEYS` glob 语义（byte 级 Redis 风格）
+**Module:** db
+`KEYS` 的 glob 匹配必须按 raw bytes 执行（不进行 UTF-8 语义解码），并支持 Redis 风格的最小子集：
+- `*` 任意长度
+- `?` 单字节
+- `[]` 字符集合、范围（`a-z`）、否定（`^`/`!`）
+- `\\` 转义特殊字符（例如 `\\*`/`\\?`/`\\[`）
+
+对不完整 `[]`（未闭合）采取兼容策略：按字面量 `[` 匹配，避免越界与不可控解析复杂度。
 
 ## Dependencies
 
@@ -96,3 +114,4 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 - 2026-01-08：淘汰与过期清理增加“时间预算”并支持配置（`--evictionTimeLimitMillis` / `--expireCleanupTimeLimitMillis`），降低高压下维护任务放大 tail latency 的风险。
 - 2026-01-16：off-heap capabilities：core 通过 `YierdisOffHeapAddressAllocator` 显式判断 raw address 能力，避免对具体后端类型的 `instanceof` 耦合，并让依赖方向更符合“SSOT 仅依赖 API”的边界约束。
 - 2026-01-16：线程模型硬化：DB 未绑定或跨线程访问 fail-fast；keys/expires 的 off-heap 使用改为显式开关（默认安全）。
+- 2026-01-23：新增写入 preflight（`prepareWrite`）与可复用淘汰逻辑（evictUntilUnder），并补齐 `KEYS` glob（`[]`/范围/否定/转义）与 RESP3 `MEMORY STATS` map 输出约定。

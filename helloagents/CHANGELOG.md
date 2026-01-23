@@ -33,6 +33,7 @@
 - Version SSOT：构建时注入 `yierdis-version.properties`，`HELLO` 的 `version` 字段从资源读取，避免硬编码常量漂移。
 - 新增 `YierdisBuildInfo`（protocol SSOT）：收敛版本资源读取与 ASCII bytes 缓存，供 server/client/bench 复用一致的版本输出逻辑，避免多处复制漂移。
 - 新增 `MEMORY STATS`：输出 maxmemory/heap/off-heap/结构开销等预算分解（明确为估算），用于解释拒写/淘汰行为。
+- 新增 RESP3 set（`~`）最小子集支持：补齐 `RespType.SET`/`RespSet`/`RespWriter.setHeader` 与 `RespObjectParser` 对 `~` 的解析能力。
 - 命令层拆分：引入 `CommandRegistry` 与 domain `*Commands`，降低新增命令的修改半径并提升可测试性。
 - off-heap 风险收敛：keys/expires 的 off-heap 使用改为显式开关（`--offheapKeysEnabled`，仅允许 unsafe 后端），默认安全。
 - off-heap 后端发现升级：引入 `YierdisOffHeapAllocatorProvider`（ServiceLoader），并在 server fat-jar（shade）场景合并 services 资源，提升可运维性与错误可读性。
@@ -43,6 +44,10 @@
 - `yierdis-protocol` 依赖收敛：不再直接依赖 `yierdis-offheap-api`，改为依赖 `yierdis-bytes`；同时移除 `yierdis-offheap-api` 的 bytes 兼容别名，避免 SSOT 漂移。
 - bench/server 参数体系收敛：共享参数由 `yierdis-args` 解析与校验；bench 通过 `--` 透传 server 参数，避免维护两套默认值。
 - `maxmemoryBytes` 统计口径调整为“heap 估算 + off-heap allocator.usedBytes 实占”，并避免对 off-heap string payload 双计数。
+- 写命令执行顺序统一为 preflight（`prepareWrite`，含预淘汰/预检查）→执行→`enforceMaxmemory`→reply，避免 maxmemory 抛错导致的双 reply/协议损坏。
+- RESP3 连接下集合类回复更友好：`HGETALL`/`MEMORY STATS` 输出 map，`SMEMBERS` 输出 set；RESP2 行为保持不变。
+- `KEYS` glob 语义补齐至 Redis 风格最小子集：支持 `[]`/范围/否定/反斜杠转义，并保持 byte 级二进制安全匹配。
+- Hash(off-heap) 编码策略对齐 Redis：packed(listpack-like) 起步，按阈值/oversize 升级到 dict，并移除不可达分支。
 - 写命令热路径进一步减少不必要的 `byte[]` 物化：`SET/APPEND` 可从 `RespCommand.frame()` 的参数 slice 直接拷贝到最终 payload（off-heap 或 raw string）。
 - 命令执行路径收敛：以 `YierdisFastCommandProcessor` 为唯一权威实现（SSOT），测试主要覆盖 fast RESP pipeline。
 - 淘汰与过期清理加入可配置时间预算（`--evictionTimeLimitMillis` / `--expireCleanupTimeLimitMillis`），并将维护调度迁移到执行器线程，降低高压下维护任务的 tail latency 风险。
@@ -73,6 +78,7 @@
 - client 加固：response queue 边界化（有界队列 + 溢出关闭 + close/exception 唤醒），避免 flood/OOM 与无意义超时等待。
 - 修复 pipeline 场景下 QUIT 可能破坏顺序语义/产生副作用：QUIT 后连接关闭并跳过该连接后续已入队命令（仅回收，不执行）。
 - 修复 `DirectBytesSink` 的 `memoryAddress()` 行为：当 `hasMemoryAddress()==false` 时，明确抛出 `UnsupportedOperationException`（避免错误的 `Interface.super` 调用）。
+- 修复多处写命令在写出 reply 后再执行 `enforceMaxmemory()` 可能产生的“双 reply”（正常 reply + error reply）问题。
 
 ## [0.1.0-SNAPSHOT] - 2026-01-01
 

@@ -3,6 +3,7 @@ package yier.bubu.redis.command;
 import yier.bubu.redis.db.ValueType;
 import yier.bubu.redis.db.YierdisMemoryStats;
 import yier.bubu.redis.protocol.RespCommand;
+import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespWriter;
 
 import java.nio.charset.StandardCharsets;
@@ -86,8 +87,12 @@ final class KeyCommands {
             }
 
             YierdisMemoryStats s = support.db().memoryStats();
-            // RESP2-compatible flat array of key/value pairs.
-            out.arrayHeader(34);
+            // RESP2-compatible flat array of key/value pairs; in RESP3 emit a map for friendlier clients.
+            if (out.protocol() == RespProtocol.RESP3) {
+                out.mapHeader(17);
+            } else {
+                out.arrayHeader(34);
+            }
 
             out.bulkString(MEMORY_STATS_MAXMEMORY_BYTES);
             out.bulkStringLongAscii(s.maxmemoryBytes());
@@ -216,4 +221,3 @@ final class KeyCommands {
         out.integer(support.db().ttlSeconds(support.argView(cmd, 1)));
     }
 }
-

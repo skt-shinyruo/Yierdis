@@ -4,6 +4,7 @@ import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Objects;
@@ -90,6 +91,23 @@ final class CommandRegistry {
             }
             idx = (idx + 1) & mask;
         }
+    }
+
+    int commandCount() {
+        return namesUpper.size();
+    }
+
+    boolean containsUpperName(String nameUpper) {
+        if (nameUpper == null || nameUpper.isBlank()) {
+            return false;
+        }
+        return namesUpper.contains(nameUpper.trim().toUpperCase(Locale.ROOT));
+    }
+
+    String[] upperNamesSorted() {
+        String[] out = namesUpper.toArray(new String[0]);
+        Arrays.sort(out);
+        return out;
     }
 
     private void insert(Entry entry) {

@@ -7,5 +7,6 @@ public enum RespType {
     BULK_STRING,
     ARRAY,
     MAP,
+    SET,
     NULL
 }

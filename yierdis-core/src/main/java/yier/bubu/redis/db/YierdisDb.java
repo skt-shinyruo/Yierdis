@@ -28,7 +28,10 @@ public final class YierdisDb {
     private final YierdisOffHeapAllocator offHeapAllocator;
     private final boolean keysStoredOffHeap;
 
-    private static final int ENTRY_OVERHEAD_BYTES = 16;
+    // Best-effort per-entry overhead estimate.
+    // In Java, the real overhead (object headers / references / alignment) is much higher than the raw payload bytes.
+    // We intentionally use a conservative constant here to make maxmemory enforcement closer to real heap pressure.
+    private static final int ENTRY_OVERHEAD_BYTES = 64;
     private static final String OOM_ERR = "OOM command not allowed when used memory > 'maxmemory'.";
 
     private final long maxmemoryBytes;
@@ -137,6 +140,47 @@ public final class YierdisDb {
         }
     }
 
+    /**
+     * Best-effort write preflight:
+     * <ul>
+     *   <li>Under pressure, it first reclaims expired keys.</li>
+     *   <li>If maxmemory is enabled, it attempts to evict enough keys <b>before</b> the write to reserve space.</li>
+     *   <li>For {@code noeviction}, it rejects the write when the estimated extra bytes would exceed the limit.</li>
+     * </ul>
+     * <p>
+     * This method exists to reduce "write succeeded but later returned OOM" scenarios and to ensure any
+     * maxmemory errors happen before writing the RESP reply (avoiding double replies / protocol corruption).
+     *
+     * @param estimatedExtraBytes best-effort upper bound of the additional bytes the write may consume.
+     */
+    public void prepareWrite(long estimatedExtraBytes) {
+        checkThread();
+        if (maxmemoryBytes <= 0) {
+            return;
+        }
+
+        // Best-effort: try to reclaim expired keys first (Redis does this too under pressure).
+        cleanupExpired();
+
+        long extra = Math.max(0, estimatedExtraBytes);
+        long limit = maxmemoryBytes - extra;
+        if (limit < 0) {
+            limit = 0;
+        }
+        if (usedBytesForMaxmemory() <= limit) {
+            return;
+        }
+
+        if (maxmemoryPolicy == MaxmemoryPolicy.NOEVICTION) {
+            throw new YierdisCommandException(OOM_ERR);
+        }
+
+        evictUntilUnder(limit);
+        if (usedBytesForMaxmemory() > limit) {
+            throw new YierdisCommandException(OOM_ERR);
+        }
+    }
+
     public void enforceMaxmemory() {
         checkThread();
         if (maxmemoryBytes <= 0) {
@@ -154,11 +198,25 @@ public final class YierdisDb {
             throw new YierdisCommandException(OOM_ERR);
         }
 
+        evictUntilUnder(maxmemoryBytes);
+        if (usedBytesForMaxmemory() > maxmemoryBytes) {
+            throw new YierdisCommandException(OOM_ERR);
+        }
+    }
+
+    private void evictUntilUnder(long limitBytes) {
+        if (limitBytes < 0) {
+            limitBytes = 0;
+        }
+        if (usedBytesForMaxmemory() <= limitBytes) {
+            return;
+        }
+
         int attempts = 0;
         int maxAttempts = Math.max(64, store.size() * 2);
         long nowMillis = System.currentTimeMillis();
         long deadline = System.nanoTime() + evictionTimeLimitNanos;
-        while (usedBytesForMaxmemory() > maxmemoryBytes && attempts++ < maxAttempts) {
+        while (usedBytesForMaxmemory() > limitBytes && attempts++ < maxAttempts) {
             if (System.nanoTime() >= deadline) {
                 break;
             }
@@ -178,10 +236,6 @@ public final class YierdisDb {
                 e.releasePayloadIfAny();
                 usedBytes -= e.estimatedBytes;
             }
-        }
-
-        if (usedBytesForMaxmemory() > maxmemoryBytes) {
-            throw new YierdisCommandException(OOM_ERR);
         }
     }
 
@@ -2045,32 +2099,182 @@ public final class YierdisDb {
     }
 
     private static boolean globMatches(byte[] pattern, byte[] text) {
+        if (pattern == null || text == null) {
+            return false;
+        }
+
         int p = 0;
         int t = 0;
         int star = -1;
-        int match = 0;
+        int starText = 0;
+
         while (t < text.length) {
-            if (p < pattern.length && (pattern[p] == '?' || pattern[p] == text[t])) {
-                p++;
-                t++;
-                continue;
+            if (p < pattern.length) {
+                byte pc = pattern[p];
+
+                if (pc == '*') {
+                    star = p++;
+                    starText = t;
+                    continue;
+                }
+
+                if (pc == '?') {
+                    p++;
+                    t++;
+                    continue;
+                }
+
+                if (pc == '\\') {
+                    if (p + 1 < pattern.length) {
+                        byte literal = pattern[p + 1];
+                        if (literal == text[t]) {
+                            p += 2;
+                            t++;
+                            continue;
+                        }
+                    } else {
+                        // Trailing "\" is treated as a literal backslash.
+                        if (text[t] == '\\') {
+                            p++;
+                            t++;
+                            continue;
+                        }
+                    }
+                } else if (pc == '[') {
+                    int end = findGlobClassEnd(pattern, p + 1);
+                    if (end >= 0) {
+                        if (globClassMatches(pattern, p + 1, end, text[t])) {
+                            p = end + 1;
+                            t++;
+                            continue;
+                        }
+                    } else {
+                        // Unclosed "[]" is treated as a literal '['.
+                        if (text[t] == '[') {
+                            p++;
+                            t++;
+                            continue;
+                        }
+                    }
+                } else if (pc == text[t]) {
+                    p++;
+                    t++;
+                    continue;
+                }
             }
-            if (p < pattern.length && pattern[p] == '*') {
-                star = p++;
-                match = t;
-                continue;
-            }
-            if (star != -1) {
+
+            if (star >= 0) {
+                // Backtrack: let '*' absorb one more byte.
                 p = star + 1;
-                t = ++match;
+                t = ++starText;
                 continue;
             }
             return false;
         }
+
+        // Remaining pattern must be empty or only "*" wildcards.
         while (p < pattern.length && pattern[p] == '*') {
             p++;
         }
         return p == pattern.length;
+    }
+
+    private static int findGlobClassEnd(byte[] pattern, int start) {
+        if (pattern == null) {
+            return -1;
+        }
+        int len = pattern.length;
+        if (start >= len) {
+            return -1;
+        }
+
+        int i = start;
+        // Optional negation marker.
+        if (i < len && (pattern[i] == '^' || pattern[i] == '!')) {
+            i++;
+        }
+
+        boolean first = true;
+        while (i < len) {
+            byte c = pattern[i];
+            if (c == '\\') {
+                // Escaped byte inside the class.
+                i += i + 1 < len ? 2 : 1;
+                first = false;
+                continue;
+            }
+            if (c == ']' && !first) {
+                return i;
+            }
+            i++;
+            first = false;
+        }
+        return -1;
+    }
+
+    private static boolean globClassMatches(byte[] pattern, int start, int end, byte target) {
+        if (pattern == null) {
+            return false;
+        }
+        if (start < 0 || end < start || end >= pattern.length) {
+            return false;
+        }
+
+        int i = start;
+        boolean negate = false;
+        if (i < end && (pattern[i] == '^' || pattern[i] == '!')) {
+            negate = true;
+            i++;
+        }
+
+        int tb = target & 0xff;
+        boolean matched = false;
+
+        // ']' can be included as a literal if it's the first char (after optional negation).
+        if (i < end && pattern[i] == ']') {
+            if (tb == (']' & 0xff)) {
+                matched = true;
+            }
+            i++;
+        }
+
+        while (i < end) {
+            int c1;
+            if (pattern[i] == '\\' && i + 1 < end) {
+                c1 = pattern[i + 1] & 0xff;
+                i += 2;
+            } else {
+                c1 = pattern[i] & 0xff;
+                i++;
+            }
+
+            // Range: "a-z" (only if '-' is not the last char in the class)
+            if (i < end - 1 && pattern[i] == '-') {
+                int j = i + 1;
+                int c2;
+                if (pattern[j] == '\\' && j + 1 < end) {
+                    c2 = pattern[j + 1] & 0xff;
+                    j += 2;
+                } else {
+                    c2 = pattern[j] & 0xff;
+                    j++;
+                }
+
+                int lo = Math.min(c1, c2);
+                int hi = Math.max(c1, c2);
+                if (tb >= lo && tb <= hi) {
+                    matched = true;
+                }
+                i = j;
+                continue;
+            }
+
+            if (tb == c1) {
+                matched = true;
+            }
+        }
+
+        return negate ? !matched : matched;
     }
 
     public enum SetMode {

@@ -148,14 +148,27 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         executor.start();
 
         if (config.expirationCleanupIntervalMillis > 0) {
+            // 关键点：
+            // 1) 使用 worker event loop 作为“定时器线程”，避免 command executor 忙碌导致定时器自身无法触发。
+            // 2) 通过 executeMaintenance 让 cleanup 在 DB 绑定线程中执行。
+            // 3) 通过 coalesce 避免在高压下积累多个 cleanup 请求（fixed-rate catch-up storm）。
             long period = config.expirationCleanupIntervalMillis;
             YierdisDb dbForTask = db;
-            cleanupFuture = executor.executor().scheduleAtFixedRate(() -> {
-                try {
-                    dbForTask.cleanupExpired();
-                } catch (Exception e) {
-                    log.debug("Expiration cleanup error", e);
+            NettyCommandExecutor exForTask = executor;
+            java.util.concurrent.atomic.AtomicBoolean cleanupPending = new java.util.concurrent.atomic.AtomicBoolean(false);
+            cleanupFuture = workerGroup.next().scheduleWithFixedDelay(() -> {
+                if (!cleanupPending.compareAndSet(false, true)) {
+                    return;
                 }
+                exForTask.executeMaintenance(() -> {
+                    try {
+                        dbForTask.cleanupExpired();
+                    } catch (Exception e) {
+                        log.debug("Expiration cleanup error", e);
+                    } finally {
+                        cleanupPending.set(false);
+                    }
+                });
             }, period, period, TimeUnit.MILLISECONDS);
         }
 

@@ -242,6 +242,68 @@ public final class NettyCommandExecutor implements AutoCloseable {
     }
 
     /**
+     * Disables Netty autoRead for the given channel using the same mechanism as executor backlog backpressure.
+     * <p>
+     * This is used by I/O handlers (e.g. writability changed) to stop reading when the outbound buffer is full.
+     */
+    void disableAutoRead(Channel ch) {
+        backpressureController.disableAutoRead(ch);
+    }
+
+    /**
+     * Called when a channel becomes writable again (outbound buffer drained below low watermark).
+     * <p>
+     * This triggers a best-effort re-check of backpressure conditions and may re-enable autoRead if appropriate.
+     */
+    void onChannelWritable(Channel ch) {
+        if (ch == null) {
+            return;
+        }
+        if (!running) {
+            return;
+        }
+        if (executor.inEventLoop()) {
+            maybeEnableAutoReadAfterWritable(ch);
+            return;
+        }
+        executor.execute(() -> maybeEnableAutoReadAfterWritable(ch));
+    }
+
+    private void maybeEnableAutoReadAfterWritable(Channel ch) {
+        if (ch == null) {
+            return;
+        }
+        if (!running) {
+            return;
+        }
+        if (!ch.isActive()) {
+            return;
+        }
+        if (isChannelClosing(ch)) {
+            return;
+        }
+        if (!ch.isWritable()) {
+            // Still not writable; keep autoRead disabled.
+            return;
+        }
+
+        ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
+        int pending = conn.pendingCounter().get();
+        long pendingBytes = conn.pendingBytesCounter().get();
+
+        boolean pendingOk = pending <= backpressureLowWatermark;
+        boolean bytesOk = backpressureBytesHighWatermark <= 0 || pendingBytes <= backpressureBytesLowWatermark;
+        boolean globalOk = backlogBudget.isGlobalBackpressureCleared();
+
+        if (pendingOk && bytesOk && globalOk) {
+            backpressureController.enableAutoReadIfWeDisabled(ch);
+        }
+        if (globalOk) {
+            backpressureController.scheduleGlobalRecovery();
+        }
+    }
+
+    /**
      * Binds the DB to the executor thread (single-thread semantics).
      */
     public void start() {

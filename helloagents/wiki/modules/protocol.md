@@ -12,7 +12,7 @@
 
 - **Responsibility:** RESP 对象模型 + RESP2/RESP3 回复写出（连接级协议状态）+ `RespFrame/RespSession` 抽象
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-17
+- **Last Updated:** 2026-01-23
 
 ## Specifications
 
@@ -47,6 +47,18 @@
 条件：连接已处于 RESP3，且命令返回 nil（例如 `GET missing`）
 - 预期：服务端返回 RESP3 null（`_`），而不是 RESP2 的 `$-1`
 
+### Requirement: RESP3 map/set 类型（最小建模 + 解析 + 写出）
+**Module:** protocol
+为支持 RESP3 友好的集合类返回，协议层补齐最小类型建模与写出能力：
+- `RespMap`：RESP3 map（`%`）
+- `RespSet`：RESP3 set（`~`）
+- `RespWriter`：支持 `mapHeader(...)` 与 `setHeader(...)`（RESP3-only）
+- `RespObjectParser`：支持解析 `%` 与 `~`（用于测试/CLI/调试）
+
+#### Scenario: set reply 形态稳定
+条件：连接处于 RESP3，命令返回 set
+- 预期：按 `~<count>\\r\\n` + `<count>` 个元素的顺序输出（元素本身仍复用 bulk string 等基础类型）
+
 ### Requirement: RESP error 输出安全净化
 **Module:** protocol
 所有 `-ERR ...` 输出必须防御 CRLF 注入导致的响应拆分（response splitting），并限制 error 文本长度，避免异常信息导致大响应/日志污染。
@@ -68,3 +80,4 @@
 - 2026-01-08：inline command 解析增强：支持单/双引号、反斜杠转义与 `\\xHH` 十六进制转义。
 - 2026-01-15：拆分 `yierdis-protocol-netty` 承载 Netty codec/adapters；`yierdis-protocol` 收敛为 Netty-free SSOT（对象模型 + `RespWriter` + `RespFrame/RespSession` 抽象）。
 - 2026-01-17：新增 `RespLimits` 作为协议默认安全上限 SSOT，并将默认值在 parser/decoder/args 之间收敛。
+- 2026-01-23：补齐 RESP3 set（`~`）类型建模与写出/解析（`RespSet` + `RespWriter.setHeader` + `RespObjectParser`），供集合类命令在 RESP3 下返回 map/set。

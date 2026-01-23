@@ -15,7 +15,9 @@ import java.util.Arrays;
 import java.util.List;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
+import static yier.bubu.redis.testutil.TestBytes.cmd;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
+import static yier.bubu.redis.testutil.TestDbs.runUnsafeOffHeap;
 
 public class HashCommandTest {
     @Test
@@ -122,6 +124,33 @@ public class HashCommandTest {
             Assert.assertEquals(0L, updated.value());
             RespBulkString v0New = (RespBulkString) client.execute(Arrays.asList(b("HGET"), key, b("f0")));
             Assert.assertEquals("v0-new", v0New.asString());
+            }
+        });
+    }
+
+    @Test
+    public void offHeapHashStartsAsListpackAndUpgradesToHashtableAfterThreshold() {
+        runUnsafeOffHeap(db -> {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                // 512 is YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES (kept package-private).
+                int threshold = 512;
+
+                Assert.assertTrue(client.execute(cmd("HSET", "h", "f0", "v0")) instanceof RespInteger);
+                Assert.assertEquals("listpack", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "h"))).value());
+
+                for (int i = 1; i < threshold; i++) {
+                    Assert.assertTrue(client.execute(cmd("HSET", "h", "f" + i, "v" + i)) instanceof RespInteger);
+                }
+                Assert.assertEquals("listpack", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "h"))).value());
+
+                // Updating an existing field at the threshold should NOT trigger an upgrade.
+                Assert.assertTrue(client.execute(cmd("HSET", "h", "f0", "v0-new")) instanceof RespInteger);
+                Assert.assertEquals("listpack", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "h"))).value());
+
+                // Adding a new field beyond the threshold should upgrade to hashtable.
+                Assert.assertTrue(client.execute(cmd("HSET", "h", "fx", "vx")) instanceof RespInteger);
+                Assert.assertEquals("hashtable", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "h"))).value());
             }
         });
     }

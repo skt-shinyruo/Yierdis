@@ -65,7 +65,7 @@ public final class YierdisFastCommandProcessor {
         try {
             CommandRegistry.CommandHandler handler = registry.find(cmd);
             if (handler == null) {
-                out.error("ERR unknown command");
+                out.error(unknownCommandMessage(cmd));
                 return;
             }
             handler.execute(cmd, out);
@@ -78,5 +78,25 @@ public final class YierdisFastCommandProcessor {
         } catch (IllegalArgumentException e) {
             out.error("ERR " + e.getMessage());
         }
+    }
+
+    private static String unknownCommandMessage(RespCommand cmd) {
+        if (cmd == null || cmd.argc() <= 0 || cmd.isNull(0) || cmd.len(0) <= 0) {
+            return "ERR unknown command";
+        }
+        int len = cmd.len(0);
+        int printable = 0;
+        for (int i = 0; i < len; i++) {
+            int b = cmd.byteAt(0, i) & 0xFF;
+            if (b >= 0x20 && b <= 0x7E && b != '\'' && b != '\\') {
+                printable++;
+            }
+        }
+        if (printable == len && len <= 64) {
+            byte[] name = cmd.toByteArray(0);
+            String s = name == null ? "" : new String(name, java.nio.charset.StandardCharsets.US_ASCII);
+            return "ERR unknown command '" + s + "'";
+        }
+        return "ERR unknown command";
     }
 }

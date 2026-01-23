@@ -29,16 +29,17 @@ final class ZSetCommands {
             CommandSupport.wrongArity(out, "zadd");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + 16L;
+        long extra = (long) Math.max(0, cmd.len(1)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
         }
-        support.db().ensureWriteAllowed(extra);
+        support.db().prepareWrite(extra);
         int pairsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, pairsLen);
         try {
-            out.integer(support.db().zadd(cmd.toByteArray(1), support.slice()));
+            long added = support.db().zadd(cmd.toByteArray(1), support.slice());
             support.db().enforceMaxmemory();
+            out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
         }
@@ -267,4 +268,3 @@ final class ZSetCommands {
         }
     }
 }
-

@@ -70,8 +70,8 @@ final class StringCommands {
             willSet = support.db().existsKey(support.argView(cmd, 1));
         }
         if (willSet) {
-            long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + 16L;
-            support.db().ensureWriteAllowed(extra);
+            long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
+            support.db().prepareWrite(extra);
         }
 
         boolean ok = support.db().setString(key, cmd, 2, mode, expire);
@@ -104,10 +104,11 @@ final class StringCommands {
             CommandSupport.wrongArity(out, "append");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + 16L;
-        support.db().ensureWriteAllowed(extra);
-        out.integer(support.db().append(cmd.toByteArray(1), cmd, 2));
+        long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
+        support.db().prepareWrite(extra);
+        long len = support.db().append(cmd.toByteArray(1), cmd, 2);
         support.db().enforceMaxmemory();
+        out.integer(len);
     }
 
     private void setbit(RespCommand cmd, RespWriter out) {
@@ -129,8 +130,8 @@ final class StringCommands {
             return;
         }
         long growth = Math.max(0L, requiredBytes - (long) currentLen);
-        long extra = (long) Math.max(0, cmd.len(1)) + growth + 16L;
-        support.db().ensureWriteAllowed(extra);
+        long extra = (long) Math.max(0, cmd.len(1)) + growth + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
+        support.db().prepareWrite(extra);
 
         int old = support.db().setBit(cmd.toByteArray(1), offset, (int) v);
         support.db().enforceMaxmemory();
@@ -173,10 +174,10 @@ final class StringCommands {
             CommandSupport.wrongArity(out, delta > 0 ? "incr" : "decr");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + 16L;
-        support.db().ensureWriteAllowed(extra);
-        out.integer(support.db().incrBy(cmd.toByteArray(1), delta));
+        long extra = (long) Math.max(0, cmd.len(1)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
+        support.db().prepareWrite(extra);
+        long value = support.db().incrBy(cmd.toByteArray(1), delta);
         support.db().enforceMaxmemory();
+        out.integer(value);
     }
 }
-

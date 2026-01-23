@@ -18,6 +18,11 @@ import java.util.RandomAccess;
  * This object is <b>not</b> thread-safe and is intended to be used from the single command executor thread.
  */
 final class CommandSupport {
+    /**
+     * Best-effort per-entry overhead estimate (must be aligned with DB accounting to avoid prepareWrite underestimation).
+     */
+    static final long ENTRY_OVERHEAD_ESTIMATE_BYTES = 64L;
+
     private final YierdisDb db;
     private final ServerInfoProvider infoProvider;
 

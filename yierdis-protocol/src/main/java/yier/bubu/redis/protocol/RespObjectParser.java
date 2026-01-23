@@ -140,6 +140,21 @@ public final class RespObjectParser {
                 }
                 return RespMap.of(entries);
             }
+            case '~': {
+                String line = readLineAscii();
+                int count = Integer.parseInt(line.trim());
+                if (count < 0) {
+                    throw new IllegalArgumentException("Protocol error: invalid set length");
+                }
+                if (count > maxArrayLen) {
+                    throw new IllegalArgumentException("Protocol error: set length too large");
+                }
+                List<RespObject> items = new ArrayList<>(Math.min(count, 16));
+                for (int i = 0; i < count; i++) {
+                    items.add(parseOne(nestingDepth + 1));
+                }
+                return RespSet.of(items);
+            }
             case '_': {
                 // RESP3 null: "_\r\n"
                 expectCrlf();

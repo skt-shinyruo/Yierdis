@@ -1,6 +1,7 @@
 package yier.bubu.redis.command;
 
 import yier.bubu.redis.protocol.RespCommand;
+import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespWriter;
 
 import java.util.Objects;
@@ -26,16 +27,17 @@ final class HashCommands {
             CommandSupport.wrongArity(out, "hset");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + 16L;
+        long extra = (long) Math.max(0, cmd.len(1)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
         }
-        support.db().ensureWriteAllowed(extra);
+        support.db().prepareWrite(extra);
         int pairsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, pairsLen);
         try {
-            out.integer(support.db().hset(cmd.toByteArray(1), support.slice()));
+            long added = support.db().hset(cmd.toByteArray(1), support.slice());
             support.db().enforceMaxmemory();
+            out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
         }
@@ -57,7 +59,11 @@ final class HashCommands {
 
         byte[] key = cmd.toByteArray(1);
         int count = support.db().hgetallReplyCount(key);
-        out.arrayHeader(count);
+        if (out.protocol() == RespProtocol.RESP3) {
+            out.mapHeader(count / 2);
+        } else {
+            out.arrayHeader(count);
+        }
         if (count == 0) {
             return;
         }
@@ -86,4 +92,3 @@ final class HashCommands {
         }
     }
 }
-

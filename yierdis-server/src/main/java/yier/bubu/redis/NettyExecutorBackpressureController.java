@@ -74,6 +74,10 @@ final class NettyExecutorBackpressureController {
         if (ch == null) {
             return;
         }
+        // If the channel is not writable, keep autoRead disabled to avoid reading more requests than we can reply.
+        if (!ch.isWritable()) {
+            return;
+        }
         ServerConnectionState ctx = ServerConnectionState.getOrCreate(ch);
         if (!ctx.autoReadDisabledByExecutor()) {
             return;

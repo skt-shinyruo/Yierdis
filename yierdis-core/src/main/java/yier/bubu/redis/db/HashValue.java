@@ -32,7 +32,7 @@ final class HashValue implements YierdisValue {
 
     HashValue(YierdisOffHeapAddressAllocator allocator) {
         this.offHeapAllocator = allocator;
-        this.dict = new YierdisUnsafeOffHeapDictLong(allocator);
+        this.packedOffHeap = new YierdisUnsafeOffHeapListpack(allocator);
     }
 
     @Override
@@ -65,7 +65,16 @@ final class HashValue implements YierdisValue {
         if (offHeapAllocator != null) {
             if (dict != null) {
                 long nextValue = value == null ? 0L : YierdisUnsafeOffHeapSds.allocate(offHeapAllocator, value, 0, value.length);
-                long old = dict.put(field, nextValue);
+                boolean ok = false;
+                long old;
+                try {
+                    old = dict.put(field, nextValue);
+                    ok = true;
+                } finally {
+                    if (!ok) {
+                        YierdisUnsafeOffHeapSds.free(offHeapAllocator, nextValue);
+                    }
+                }
                 if (old == 0L) {
                     rawBytes += (long) field.length + (value == null ? 0 : value.length);
                     return 1;
@@ -76,15 +85,22 @@ final class HashValue implements YierdisValue {
                 return 0;
             }
 
-            if (shouldConvertToHashMap(field, value)) {
-                convertToDict();
-                return hset(field, value);
-            }
-
             int pairIndex = indexOfFieldPairOffHeap(field);
             if (pairIndex >= 0) {
+                if (isOversize(value)) {
+                    convertToDict();
+                    return hset(field, value);
+                }
                 packedOffHeap.set(pairIndex + 1, value);
                 return 0;
+            }
+
+            // New field: only entry-count based upgrades should consider the insertion.
+            if (packedOffHeap.size() / 2 >= YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES
+                    || isOversize(field)
+                    || isOversize(value)) {
+                convertToDict();
+                return hset(field, value);
             }
 
             packedOffHeap.addLast(field);
@@ -106,16 +122,23 @@ final class HashValue implements YierdisValue {
             return 0;
         }
 
-        if (shouldConvertToHashMap(field, value)) {
-            convertToHashMap();
-            return hset(field, value);
-        }
-
         int pairIndex = indexOfFieldPair(field);
         if (pairIndex >= 0) {
+            if (isOversize(value)) {
+                convertToHashMap();
+                return hset(field, value);
+            }
             // Replace value at (pairIndex + 1).
             packed.set(pairIndex + 1, value);
             return 0;
+        }
+
+        // New field: only entry-count based upgrades should consider the insertion.
+        if (packed.size() / 2 >= YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES
+                || isOversize(field)
+                || isOversize(value)) {
+            convertToHashMap();
+            return hset(field, value);
         }
 
         packed.addLast(field);
@@ -369,19 +392,6 @@ final class HashValue implements YierdisValue {
         }
     }
 
-    private boolean shouldConvertToHashMap(byte[] field, byte[] value) {
-        if (packedOffHeap != null) {
-            if (packedOffHeap.size() / 2 >= YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES) {
-                return true;
-            }
-            return isOversize(field) || isOversize(value);
-        }
-        if (packed.size() / 2 >= YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES) {
-            return true;
-        }
-        return isOversize(field) || isOversize(value);
-    }
-
     private int indexOfFieldPairOffHeap(byte[] field) {
         int idx = 0;
         YierdisUnsafeOffHeapListpack.Cursor c = packedOffHeap.cursor();
@@ -399,19 +409,41 @@ final class HashValue implements YierdisValue {
             return;
         }
         YierdisUnsafeOffHeapDictLong out = new YierdisUnsafeOffHeapDictLong(offHeapAllocator);
-        for (int i = 0; i + 1 < packedOffHeap.size(); i += 2) {
-            byte[] field = packedOffHeap.get(i);
-            byte[] value = packedOffHeap.get(i + 1);
-            long valueAddr = value == null ? 0L : YierdisUnsafeOffHeapSds.allocate(offHeapAllocator, value, 0, value.length);
-            out.put(field, valueAddr);
+        long nextRawBytes = 0;
+        boolean ok = false;
+        try {
+            for (int i = 0; i + 1 < packedOffHeap.size(); i += 2) {
+                byte[] field = packedOffHeap.get(i);
+                byte[] value = packedOffHeap.get(i + 1);
+                long valueAddr = value == null ? 0L : YierdisUnsafeOffHeapSds.allocate(offHeapAllocator, value, 0, value.length);
+                long old;
+                try {
+                    old = out.put(field, valueAddr);
+                } catch (RuntimeException e) {
+                    YierdisUnsafeOffHeapSds.free(offHeapAllocator, valueAddr);
+                    throw e;
+                }
+                if (old != 0L) {
+                    // Should not happen because packed stores unique field/value pairs, but keep it leak-safe.
+                    YierdisUnsafeOffHeapSds.free(offHeapAllocator, old);
+                }
+                nextRawBytes += (long) field.length + (value == null ? 0 : value.length);
+            }
+            ok = true;
+        } finally {
+            if (!ok) {
+                out.forEach((keyPtr, keyLen, valueAddr) -> {
+                    if (valueAddr != 0L) {
+                        YierdisUnsafeOffHeapSds.free(offHeapAllocator, valueAddr);
+                    }
+                });
+                out.close();
+            }
         }
+
         packedOffHeap.close();
         packedOffHeap = null;
-        rawBytes = 0;
-        out.forEach((keyPtr, keyLen, valueAddr) -> {
-            int vlen = valueAddr == 0L ? 0 : YierdisUnsafeOffHeapSds.len(offHeapAllocator, valueAddr);
-            rawBytes += (long) keyLen + vlen;
-        });
+        rawBytes = nextRawBytes;
         dict = out;
     }
 }

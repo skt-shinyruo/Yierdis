@@ -1,6 +1,7 @@
 package yier.bubu.redis.command;
 
 import yier.bubu.redis.protocol.RespCommand;
+import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespWriter;
 
 import java.util.Objects;
@@ -26,16 +27,17 @@ final class SetCommands {
             CommandSupport.wrongArity(out, "sadd");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + 16L;
+        long extra = (long) Math.max(0, cmd.len(1)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
         }
-        support.db().ensureWriteAllowed(extra);
+        support.db().prepareWrite(extra);
         int membersLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, membersLen);
         try {
-            out.integer(support.db().sadd(cmd.toByteArray(1), support.slice()));
+            long added = support.db().sadd(cmd.toByteArray(1), support.slice());
             support.db().enforceMaxmemory();
+            out.integer(added);
         } finally {
             support.clearScratch(membersLen);
         }
@@ -63,7 +65,11 @@ final class SetCommands {
 
         byte[] key = cmd.toByteArray(1);
         int count = support.db().smembersReplyCount(key);
-        out.arrayHeader(count);
+        if (out.protocol() == RespProtocol.RESP3) {
+            out.setHeader(count);
+        } else {
+            out.arrayHeader(count);
+        }
         if (count == 0) {
             return;
         }
@@ -86,4 +92,3 @@ final class SetCommands {
         out.integer(support.db().scard(cmd.toByteArray(1)));
     }
 }
-

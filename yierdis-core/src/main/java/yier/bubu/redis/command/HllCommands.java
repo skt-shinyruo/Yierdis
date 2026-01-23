@@ -26,10 +26,11 @@ final class HllCommands {
             CommandSupport.wrongArity(out, "pfadd");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + 16L;
-        support.db().ensureWriteAllowed(extra);
-        out.integer(support.db().pfadd(cmd.toByteArray(1), cmd, 2));
+        long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
+        support.db().prepareWrite(extra);
+        long changed = support.db().pfadd(cmd.toByteArray(1), cmd, 2);
         support.db().enforceMaxmemory();
+        out.integer(changed);
     }
 
     private void pfcount(RespCommand cmd, RespWriter out) {
@@ -51,8 +52,8 @@ final class HllCommands {
             CommandSupport.wrongArity(out, "pfmerge");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + 16L;
-        support.db().ensureWriteAllowed(extra);
+        long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
+        support.db().prepareWrite(extra);
 
         int sourcesLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, sourcesLen);
@@ -65,4 +66,3 @@ final class HllCommands {
         out.simpleString("OK");
     }
 }
-
