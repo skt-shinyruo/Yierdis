@@ -75,6 +75,9 @@
 - 命令路由加速：`CommandRegistry` 从线性扫描升级为开放寻址哈希索引（期望 O(1)，运行时零分配）。
 
 ### Fixed
+- 修复 server 参数校验失败静默退出：现在会输出明确错误信息 + usage，并保持退出码稳定（exit=2）。
+- off-heap foreign 可用性探测增强：默认构建选择 `--offheapBackend foreign` 时给出 profile/JVM 参数指引并以可预期配置错误退出（避免长堆栈淹没关键信息）。
+- 安全性/可调试性平衡：仅对“可预期配置错误”做友好提示与稳定退出码处理；未知异常保留堆栈便于定位真实 bug。
 - bench 依赖更新：压测工具写请求时改用 `yierdis-bytes` 的 `BytesSink`（避免依赖已移除的包路径）。
 - 修复协议错误与 `$-1`（null bulk string）参数导致的连接断开：现在会返回明确的 `ERR ...`（协议错误会关闭连接）。
 - RESP error 输出统一做 CR/LF 过滤与限长，降低 response splitting 风险。

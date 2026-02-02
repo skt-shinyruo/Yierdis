@@ -14,6 +14,7 @@ public final class YierdisOffHeapAllocators {
             "yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator";
     private static final String FOREIGN_ALLOCATOR_CLASS =
             "yier.bubu.redis.db.offheap.foreign.YierdisForeignOffHeapAllocator";
+    private static final String FOREIGN_MODULE_NAME = "jdk.incubator.foreign";
 
     private YierdisOffHeapAllocators() {
     }
@@ -148,24 +149,53 @@ public final class YierdisOffHeapAllocators {
 
     private static YierdisOffHeapAllocator createNetty(long maxBytes) {
         return createByReflection(NETTY_ALLOCATOR_CLASS, maxBytes, () ->
-                "Netty off-heap backend is not available in this build. " +
-                        "Add the dependency 'yierdis-offheap-netty'. " +
-                        "Discovered providers: " + availableProvidersSummary());
+                "Netty off-heap 后端在当前构建中不可用。请确认已引入依赖 'yierdis-offheap-netty'。"
+                        + "已发现 providers: " + availableProvidersSummary());
     }
 
     private static YierdisOffHeapAllocator createForeign(long maxBytes) {
-        return createByReflection(FOREIGN_ALLOCATOR_CLASS, maxBytes, () ->
-                "Foreign Memory backend is not available in this build. " +
-                        "Build with the Maven profile 'foreign-memory' and run with " +
-                        "--add-modules jdk.incubator.foreign (Java 17). " +
-                        "Discovered providers: " + availableProvidersSummary());
+        // 先做构建能力探测：默认构建未包含 foreign 模块（需 -Pforeign-memory）。
+        try {
+            Class.forName(FOREIGN_ALLOCATOR_CLASS, false, YierdisOffHeapAllocators.class.getClassLoader());
+        } catch (ClassNotFoundException e) {
+            throw new YierdisOffHeapBackendUnavailableException(
+                    "Foreign Memory 后端在当前构建中不可用。请使用 Maven profile 'foreign-memory' 重新构建（例如：mvn -Pforeign-memory package）。"
+                            + "运行时还需要添加：--add-modules " + FOREIGN_MODULE_NAME + "（Java 17）。"
+                            + "已发现 providers: " + availableProvidersSummary(),
+                    e);
+        } catch (LinkageError e) {
+            // foreign 类已存在但无法链接，通常意味着运行时未启用 incubator 模块（或 JVM 环境不支持）。
+            throw new YierdisOffHeapBackendUnavailableException(
+                    "Foreign Memory 后端需要在运行时启用 incubator 模块：请使用 'java --add-modules "
+                            + FOREIGN_MODULE_NAME
+                            + " -jar ... --offheapBackend foreign' 运行（Java 17）。",
+                    e);
+        }
+
+        if (!isModulePresent(FOREIGN_MODULE_NAME)) {
+            throw new YierdisOffHeapBackendUnavailableException(
+                    "Foreign Memory 后端需要在运行时启用 incubator 模块：请使用 'java --add-modules "
+                            + FOREIGN_MODULE_NAME
+                            + " -jar ... --offheapBackend foreign' 运行（Java 17）。");
+        }
+
+        try {
+            return createByReflection(FOREIGN_ALLOCATOR_CLASS, maxBytes, () ->
+                    "Foreign Memory 后端初始化失败（已编译进构建，但运行环境不满足要求）。"
+                            + "请确认已使用 --add-modules " + FOREIGN_MODULE_NAME + "（Java 17）。");
+        } catch (LinkageError e) {
+            throw new YierdisOffHeapBackendUnavailableException(
+                    "Foreign Memory 后端需要在运行时启用 incubator 模块：请使用 'java --add-modules "
+                            + FOREIGN_MODULE_NAME
+                            + " -jar ... --offheapBackend foreign' 运行（Java 17）。",
+                    e);
+        }
     }
 
     private static YierdisOffHeapAllocator createUnsafe(long maxBytes) {
         return createByReflection(UNSAFE_ALLOCATOR_CLASS, maxBytes, () ->
-                "Unsafe off-heap backend is not available in this build. " +
-                        "Add the dependency 'yierdis-offheap-unsafe'. " +
-                        "Discovered providers: " + availableProvidersSummary());
+                "Unsafe off-heap 后端在当前构建中不可用。请确认已引入依赖 'yierdis-offheap-unsafe'。"
+                        + "已发现 providers: " + availableProvidersSummary());
     }
 
     private static YierdisOffHeapAllocator createByReflection(String allocatorClass,
@@ -177,9 +207,17 @@ public final class YierdisOffHeapAllocators {
             Object instance = ctor.newInstance(maxBytes);
             return (YierdisOffHeapAllocator) instance;
         } catch (ClassNotFoundException e) {
-            throw new IllegalArgumentException(missingMessageSupplier.get(), e);
+            throw new YierdisOffHeapBackendUnavailableException(missingMessageSupplier.get(), e);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Failed to initialize off-heap backend: " + allocatorClass, e);
+        }
+    }
+
+    private static boolean isModulePresent(String moduleName) {
+        try {
+            return ModuleLayer.boot().findModule(moduleName).isPresent();
+        } catch (Throwable ignored) {
+            return false;
         }
     }
 }

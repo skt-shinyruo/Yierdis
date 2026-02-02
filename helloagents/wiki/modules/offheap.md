@@ -8,7 +8,7 @@
 
 - **Responsibility:** 分配器 API、slice/buf 抽象、unsafe/netty/foreign 等后端
 - **Status:** 🚧In Development
-- **Last Updated:** 2026-01-23
+- **Last Updated:** 2026-02-02
 
 ## Specifications
 
@@ -49,6 +49,7 @@ bytes 抽象的 SSOT 已抽取到 `yierdis-bytes`（Netty-free）：
 - 优先通过 `ServiceLoader` 发现 `YierdisOffHeapAllocatorProvider`（netty/unsafe/foreign 各自注册）
 - 在 server fat-jar（shade）场景下，使用 `ServicesResourceTransformer` 合并 `META-INF/services`，确保多后端可同时发现
 - 若指定后端不可用，启动期直接抛出明确错误（提示缺失依赖/需要的 profile），避免运行中才暴露
+- `foreign` 后端需要 Maven profile `foreign-memory` 编译进产物，并要求运行时启用 incubator 模块（`--add-modules jdk.incubator.foreign`）；不满足时返回可预期的配置错误提示（避免长堆栈淹没关键信息）
 - 建议在 server 启动时输出“可发现的 providers / 最终选择结果”，提升可运维性与排障效率
 
 ### Requirement: RESP frame slice 直接写入 off-heap（减少双拷贝）

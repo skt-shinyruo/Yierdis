@@ -12,8 +12,8 @@ Yierdis 是一个“教学/演示导向”的简化版 Redis 兼容服务端：�
 
 ### 范围
 
-- **包含（In scope）**：内存数据结构、基础命令集、TTL（惰性删除 + 可选后台清理）、maxmemory（教学简化版）
-- **不包含（Out of scope）**：AOF/RDB 持久化、复制、集群、事务、Lua、ACL、TLS 等
+- **包含（In scope）**：内存数据结构、基础命令集、TTL（惰性删除 + 可选后台清理）、maxmemory（教学简化版）、最小事务子集（`MULTI/EXEC/DISCARD`）
+- **不包含（Out of scope）**：AOF/RDB 持久化、复制、集群、Lua、ACL、TLS 等
 
 ---
 

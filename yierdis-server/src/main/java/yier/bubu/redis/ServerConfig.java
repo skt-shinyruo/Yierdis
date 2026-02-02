@@ -1,6 +1,7 @@
 package yier.bubu.redis;
 
 import picocli.CommandLine;
+import yier.bubu.redis.args.YierdisCliException;
 import yier.bubu.redis.args.YierdisServerArgs;
 
 final class ServerConfig {
@@ -98,7 +99,7 @@ final class ServerConfig {
         } catch (CommandLine.ParameterException e) {
             System.err.println(e.getMessage());
             cmd.usage(System.err);
-            throw new IllegalArgumentException(e.getMessage(), e);
+            throw YierdisCliException.usageError(e.getMessage(), e);
         }
 
         if (parsed.help) {
@@ -106,7 +107,13 @@ final class ServerConfig {
             return null;
         }
 
-        parsed.normalizeAndValidate();
+        try {
+            parsed.normalizeAndValidate();
+        } catch (IllegalArgumentException e) {
+            System.err.println(e.getMessage());
+            cmd.usage(System.err);
+            throw YierdisCliException.usageError(e.getMessage(), e);
+        }
 
         NettyCommandExecutor.SchedulingPolicy schedulingPolicy =
                 "global".equals(parsed.executorSchedulingPolicy)

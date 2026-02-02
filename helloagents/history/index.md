@@ -27,6 +27,7 @@
 | 202601231314 | resp3_glob_hash_refactor | Standard Development | ✅ Completed | helloagents/history/2026-01/202601231314_resp3_glob_hash_refactor/ |
 | 202602011923 | redis_compat_extended | Execution Command | ⚠️ Partial | helloagents/history/2026-02/202602011923_redis_compat_extended/ |
 | 202602020852 | redis_compat_milestones2 | Execution Command | ⚠️ Partial | helloagents/history/2026-02/202602020852_redis_compat_milestones2/ |
+| 202602021230 | cli_error_model_capability_probe | Standard Development | ✅ Completed | helloagents/history/2026-02/202602021230_cli_error_model_capability_probe/ |
 
 ---
 
@@ -56,6 +57,7 @@
 
 - helloagents/history/2026-02/202602011923_redis_compat_extended/
 - helloagents/history/2026-02/202602020852_redis_compat_milestones2/
+- helloagents/history/2026-02/202602021230_cli_error_model_capability_probe/
 
 ## 2026-01
 - 202601172157_executor_modularize - 执行器组件化与不变量测试补齐

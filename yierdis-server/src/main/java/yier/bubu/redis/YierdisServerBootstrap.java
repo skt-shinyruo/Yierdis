@@ -13,12 +13,14 @@ import io.netty.util.concurrent.EventExecutorGroup;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import yier.bubu.redis.args.YierdisCliException;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocators;
+import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackendUnavailableException;
 import yier.bubu.redis.protocol.RespServerSession;
 import yier.bubu.redis.protocol.RespWriter;
 
@@ -103,6 +105,10 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
         try {
             offHeapAllocator = YierdisOffHeapAllocators.create(backend, config.offheapMaxBytes);
+        } catch (YierdisOffHeapBackendUnavailableException e) {
+            // 可预期配置错误：避免输出长堆栈，由 CLI 统一以稳定退出码退出。
+            log.error("Failed to initialize off-heap backend '{}': {}", backend, e.getMessage());
+            throw YierdisCliException.userError(e.getMessage(), e);
         } catch (RuntimeException e) {
             log.error("Failed to initialize off-heap backend '{}': {}", backend, e.getMessage());
             throw e;

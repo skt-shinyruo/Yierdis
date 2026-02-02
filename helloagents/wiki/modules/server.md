@@ -8,7 +8,7 @@
 
 - **Responsibility:** 端口监听、Pipeline 组装、定时任务（如 TTL 清理）的调度入口
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-01
+- **Last Updated:** 2026-02-02
 
 ## Specifications
 
@@ -65,6 +65,7 @@
 - `--executorMaxDrain <n>` / `--executorDrainMillis <ms>`：单次 drain 批量/时间预算（避免维护任务饥饿）
 - `--protocolMaxBulkBytes <bytes>` / `--protocolMaxArgs <n>` / `--protocolMaxLineBytes <bytes>`：协议输入上限（DoS 防护；与 protocol-netty decoder 对齐）
 - `--databases <n>`：逻辑 DB 数量（`SELECT 0..n-1`；默认 16）
+- 启动参数错误（解析失败/校验失败）会输出错误信息 + usage，并使用稳定退出码（exit=2），便于脚本集成与排障
 
 #### Scenario: 多 worker I/O + 单线程执行
 条件：`--ioThreads > 1` 且多个连接并发请求

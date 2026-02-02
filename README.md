@@ -104,6 +104,18 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 - `APPEND key value`
 - `STRLEN key`
 
+### Bitmap
+
+- `SETBIT key offset value`
+- `GETBIT key offset`
+- `BITCOUNT key [start end]`
+
+### HLL
+
+- `PFADD key element [element ...]`
+- `PFCOUNT key [key ...]`
+- `PFMERGE destkey sourcekey [sourcekey ...]`
+
 ### List
 
 - `LPUSH key value [value ...]`
@@ -138,9 +150,16 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 - `ZREMRANGEBYSCORE key min max`
 - `ZREM key member [member ...]`
 
+### Transaction（最小子集）
+
+- `MULTI`
+- `EXEC`
+- `DISCARD`
+
 ## 说明
 
-- 这是一个 **单机内存版** 实现：不包含 AOF/RDB 持久化、复制、集群、事务、Lua、ACL 等复杂功能。
+- 这是一个 **单机内存版** 实现：不包含 AOF/RDB 持久化、复制、集群、Lua、ACL、TLS 等复杂功能。
+- 事务仅支持最小子集：`MULTI/EXEC/DISCARD`（不包含 WATCH 等）。
 - 协议层默认 RESP2，并支持最小 RESP3（`HELLO 3` 协商后切换；nil 返回使用 RESP3 null），以及 inline command（仅用于调试，支持引号/转义/`\\xHH`）。
 - TTL 采用“访问时惰性删除”，并带一个轻量级后台清理任务（可关）。
 
