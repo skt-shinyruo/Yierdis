@@ -23,6 +23,9 @@ redis-cli -p 6378 get a
 redis-cli -p 6378 incr a
 redis-cli -p 6378 expire a 10
 redis-cli -p 6378 ttl a
+redis-cli -p 6378 info
+redis-cli -p 6378 info yierdis
+redis-cli -p 6378 stats
 ```
 
 如果需要显式指定协议版本：
@@ -68,7 +71,7 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 说明：
 
 - client 侧发送命令仍采用 RESP2 的 “array of bulk strings” 形式（与 Redis 客户端一致）。
-- 在执行 `HELLO 3` 之后，client/CLI 支持解析 RESP3 的最小子集：map（`%`）与 null（`_`），用于覆盖 server 的 RESP3 分支回归。
+- 在执行 `HELLO 3` 之后，client/CLI 支持解析 RESP3 的最小子集：map（`%`）、set（`~`）、null（`_`）以及常见标量类型（integer/boolean/double），用于覆盖 server 的 RESP3 分支回归。
 - REPL 输入解析规则与 server inline command 解析保持一致（sdssplitargs 风格：支持单/双引号、反斜杠转义、`\\xHH` 十六进制转义）。
 
 ## 已实现命令（简化版）
@@ -78,8 +81,8 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 - `PING [message]`
 - `ECHO <message>`
 - `HELLO [2|3]`（支持 2/3；`HELLO 3` 会切换连接为 RESP3）
-- `COMMAND`（返回空数组，方便部分客户端探测）
-- `SELECT 0`
+- `COMMAND`（最小子集：`COMMAND`/`COMMAND COUNT`/`COMMAND INFO <name ...>`）
+- `SELECT <index>`（默认支持 `0..15`；可通过 `--databases` 调整）
 - `QUIT`
 
 ### Key/TTL
@@ -90,7 +93,7 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 - `EXISTS key [key ...]`
 - `EXPIRE key seconds`
 - `TTL key`
-- `KEYS pattern`（仅支持 `*` 和简单 glob）
+- `KEYS pattern`（支持 Redis 风格最小 glob 子集：`*`/`?`/`[]` 范围与否定/反斜杠转义；按 byte 匹配）
 - `TYPE key`
 - `FLUSHDB`
 
@@ -166,6 +169,8 @@ java -jar yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar \
 
 - `OBJECT ENCODING <key>`
 - `MEMORY USAGE <key>`
+- `MEMORY STATS`
+- `INFO` / `INFO YIERDIS` / `STATS`
 
 ## 协议上限与反压（推荐）
 

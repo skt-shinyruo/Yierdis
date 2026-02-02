@@ -12,7 +12,7 @@
 
 - **Responsibility:** RESP 对象模型 + RESP2/RESP3 回复写出（连接级协议状态）+ `RespFrame/RespSession` 抽象
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-23
+- **Last Updated:** 2026-02-01
 
 ## Specifications
 
@@ -59,6 +59,14 @@
 条件：连接处于 RESP3，命令返回 set
 - 预期：按 `~<count>\\r\\n` + `<count>` 个元素的顺序输出（元素本身仍复用 bulk string 等基础类型）
 
+### Requirement: RESP3 扩展回复类型（互操作必需最小集合）
+**Module:** protocol
+为提升 RESP3 客户端互操作性，并为后续 push/订阅等能力铺路，补齐 RESP3 常见类型的最小写出/解析支持：
+- `RespWriter`：新增/补齐 `booleanValue`（`#t/#f`）、`doubleValue`（`,`）、`bigNumberAscii`（`(`）、`verbatimString`（`=`）、`blobError`（`!`）、`attributeHeader`（`|`）、`pushHeader`（`>`）
+- `RespObjectParser`：同步支持上述类型的解析，用于测试断言与 CLI/调试
+
+说明：request 侧仍以 RESP2 array-of-bulk-strings 为主路径；RESP3 扩展主要体现在 reply 侧类型覆盖与互操作一致性。
+
 ### Requirement: RESP error 输出安全净化
 **Module:** protocol
 所有 `-ERR ...` 输出必须防御 CRLF 注入导致的响应拆分（response splitting），并限制 error 文本长度，避免异常信息导致大响应/日志污染。
@@ -81,3 +89,4 @@
 - 2026-01-15：拆分 `yierdis-protocol-netty` 承载 Netty codec/adapters；`yierdis-protocol` 收敛为 Netty-free SSOT（对象模型 + `RespWriter` + `RespFrame/RespSession` 抽象）。
 - 2026-01-17：新增 `RespLimits` 作为协议默认安全上限 SSOT，并将默认值在 parser/decoder/args 之间收敛。
 - 2026-01-23：补齐 RESP3 set（`~`）类型建模与写出/解析（`RespSet` + `RespWriter.setHeader` + `RespObjectParser`），供集合类命令在 RESP3 下返回 map/set。
+- 2026-02-01：RESP3 reply 类型覆盖扩展：补齐 boolean/double/big number/verbatim/blob error/attribute/push 等最小集合，并在 `RespWriter` 中引入连接级 session 访问与 close-after-reply 请求标志（由 server/executor 落实连接关闭）。

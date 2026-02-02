@@ -19,7 +19,8 @@ final class DbMemoryAccounting {
             YierdisOffHeapAllocator offHeapAllocator,
             YierdisKeyspace<?> store,
             YierdisExpireIndex expires,
-            boolean keysStoredOffHeap
+            boolean keysStoredOffHeap,
+            boolean includeOffHeapInMaxmemory
     ) {
         long offHeapUsedBytes = safeOffHeapUsedBytes(offHeapAllocator);
 
@@ -51,7 +52,7 @@ final class DbMemoryAccounting {
             expireValueObjects = estimateLongObjectBytes(expireCount);
         }
 
-        long usedBytesForMaxmemory = heapDataBytesEstimate + offHeapUsedBytes;
+        long usedBytesForMaxmemory = heapDataBytesEstimate + (includeOffHeapInMaxmemory ? offHeapUsedBytes : 0);
         long totalEstimatedBytes =
                 heapDataBytesEstimate
                         + offHeapUsedBytes
@@ -103,4 +104,3 @@ final class DbMemoryAccounting {
         return (bytes + 7L) & ~7L;
     }
 }
-

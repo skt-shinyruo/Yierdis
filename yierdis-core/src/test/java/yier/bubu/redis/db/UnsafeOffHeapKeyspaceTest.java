@@ -4,8 +4,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
 
-import java.util.concurrent.TimeUnit;
-
 import static yier.bubu.redis.testutil.TestBytes.b;
 
 public class UnsafeOffHeapKeyspaceTest {
@@ -15,7 +13,7 @@ public class UnsafeOffHeapKeyspaceTest {
         YierdisDb db = new YierdisDb(allocator);
         try {
             db.bindToCurrentThread();
-            db.setString(b("k"), b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 0));
+            db.setString(b("k"), b("v"), YierdisDb.SetMode.NORMAL, YierdisDb.ExpireOption.px(0));
             Assert.assertEquals(1, db.size());
             Assert.assertTrue(allocator.usedBytes() > 0);
 

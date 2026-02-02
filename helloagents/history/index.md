@@ -25,6 +25,8 @@
 | 202601171535 | arch_deep_refactor | Standard Development | ✅ Completed | helloagents/history/2026-01/202601171535_arch_deep_refactor/ |
 | 202601171846 | arch_deep_refactor | Standard Development | ⚠️ Partial | helloagents/history/2026-01/202601171846_arch_deep_refactor/ |
 | 202601231314 | resp3_glob_hash_refactor | Standard Development | ✅ Completed | helloagents/history/2026-01/202601231314_resp3_glob_hash_refactor/ |
+| 202602011923 | redis_compat_extended | Execution Command | ⚠️ Partial | helloagents/history/2026-02/202602011923_redis_compat_extended/ |
+| 202602020852 | redis_compat_milestones2 | Execution Command | ⚠️ Partial | helloagents/history/2026-02/202602020852_redis_compat_milestones2/ |
 
 ---
 
@@ -49,6 +51,11 @@
 - helloagents/history/2026-01/202601171535_arch_deep_refactor/
 - helloagents/history/2026-01/202601171846_arch_deep_refactor/
 - helloagents/history/2026-01/202601231314_resp3_glob_hash_refactor/
+
+### 2026-02
+
+- helloagents/history/2026-02/202602011923_redis_compat_extended/
+- helloagents/history/2026-02/202602020852_redis_compat_milestones2/
 
 ## 2026-01
 - 202601172157_executor_modularize - 执行器组件化与不变量测试补齐

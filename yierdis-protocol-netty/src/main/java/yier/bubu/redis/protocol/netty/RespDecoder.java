@@ -65,7 +65,22 @@ public final class RespDecoder extends ByteToMessageDecoder {
             case ':': {
                 return trySkipInteger(in, startIdx);
             }
+            case '#': {
+                return trySkipBoolean(in, startIdx);
+            }
+            case ',': {
+                return trySkipLine(in, startIdx);
+            }
+            case '(': {
+                return trySkipLine(in, startIdx);
+            }
             case '$': {
+                return trySkipBulkString(in, startIdx);
+            }
+            case '!': {
+                return trySkipBulkString(in, startIdx);
+            }
+            case '=': {
                 return trySkipBulkString(in, startIdx);
             }
             case '*': {
@@ -73,6 +88,25 @@ public final class RespDecoder extends ByteToMessageDecoder {
             }
             case '%': {
                 return trySkipMap(in, startIdx, nestingDepth);
+            }
+            case '~': {
+                return trySkipSet(in, startIdx, nestingDepth);
+            }
+            case '>': {
+                return trySkipPush(in, startIdx, nestingDepth);
+            }
+            case '|': {
+                // RESP3 attribute: skip the attributes map AND the following reply as one logical frame.
+                int endAttrs = trySkipAttributeMap(in, startIdx, nestingDepth);
+                if (endAttrs < 0) {
+                    return -1;
+                }
+                int endValue = trySkipOne(in, nestingDepth + 1);
+                if (endValue < 0) {
+                    in.readerIndex(startIdx);
+                    return -1;
+                }
+                return endValue;
             }
             case '_': {
                 // RESP3 null: "_\r\n"
@@ -88,6 +122,21 @@ public final class RespDecoder extends ByteToMessageDecoder {
             default:
                 throw new IllegalArgumentException("Protocol error: unknown RESP prefix: " + (char) prefix);
         }
+    }
+
+    private int trySkipBoolean(ByteBuf in, int startIdx) {
+        if (in.readableBytes() < 3) {
+            in.readerIndex(startIdx);
+            return -1;
+        }
+        byte v = in.readByte();
+        if (v != 't' && v != 'f') {
+            throw new IllegalArgumentException("Protocol error: invalid boolean value");
+        }
+        if (in.readByte() != RespDecodingSupport.CR || in.readByte() != RespDecodingSupport.LF) {
+            throw new IllegalArgumentException("Protocol error: bad boolean CRLF");
+        }
+        return in.readerIndex();
     }
 
     private int trySkipLine(ByteBuf in, int startIdx) {
@@ -229,6 +278,113 @@ public final class RespDecoder extends ByteToMessageDecoder {
         }
         if (pairs > maxArrayLen) {
             throw new IllegalArgumentException("Protocol error: map length too large");
+        }
+
+        in.readerIndex(pairsLineEnd + 2);
+        for (int i = 0; i < pairs; i++) {
+            int endKey = trySkipOne(in, nestingDepth + 1);
+            if (endKey < 0) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+            int endVal = trySkipOne(in, nestingDepth + 1);
+            if (endVal < 0) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+        }
+        return in.readerIndex();
+    }
+
+    private int trySkipSet(ByteBuf in, int startIdx, int nestingDepth) {
+        if (nestingDepth >= maxNestingDepth) {
+            throw new IllegalArgumentException("Protocol error: nested sets too deep");
+        }
+
+        int countLineStart = in.readerIndex();
+        int countLineEnd = RespDecodingSupport.indexOfCrlf(in, countLineStart, maxLineBytes);
+        if (countLineEnd < 0) {
+            if (in.writerIndex() - countLineStart > maxLineBytes + 2) {
+                throw new IllegalArgumentException("Protocol error: line too long");
+            }
+            in.readerIndex(startIdx);
+            return -1;
+        }
+
+        int count = RespDecodingSupport.parseIntAscii(in, countLineStart, countLineEnd);
+        if (count < 0) {
+            throw new IllegalArgumentException("Protocol error: invalid set length");
+        }
+        if (count > maxArrayLen) {
+            throw new IllegalArgumentException("Protocol error: set length too large");
+        }
+
+        in.readerIndex(countLineEnd + 2);
+        for (int i = 0; i < count; i++) {
+            int endIdx = trySkipOne(in, nestingDepth + 1);
+            if (endIdx < 0) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+        }
+        return in.readerIndex();
+    }
+
+    private int trySkipPush(ByteBuf in, int startIdx, int nestingDepth) {
+        if (nestingDepth >= maxNestingDepth) {
+            throw new IllegalArgumentException("Protocol error: nested push messages too deep");
+        }
+
+        int countLineStart = in.readerIndex();
+        int countLineEnd = RespDecodingSupport.indexOfCrlf(in, countLineStart, maxLineBytes);
+        if (countLineEnd < 0) {
+            if (in.writerIndex() - countLineStart > maxLineBytes + 2) {
+                throw new IllegalArgumentException("Protocol error: line too long");
+            }
+            in.readerIndex(startIdx);
+            return -1;
+        }
+
+        int count = RespDecodingSupport.parseIntAscii(in, countLineStart, countLineEnd);
+        if (count < 0) {
+            throw new IllegalArgumentException("Protocol error: invalid push length");
+        }
+        if (count > maxArrayLen) {
+            throw new IllegalArgumentException("Protocol error: push length too large");
+        }
+
+        in.readerIndex(countLineEnd + 2);
+        for (int i = 0; i < count; i++) {
+            int endIdx = trySkipOne(in, nestingDepth + 1);
+            if (endIdx < 0) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+        }
+        return in.readerIndex();
+    }
+
+    private int trySkipAttributeMap(ByteBuf in, int startIdx, int nestingDepth) {
+        if (nestingDepth >= maxNestingDepth) {
+            throw new IllegalArgumentException("Protocol error: nested attributes too deep");
+        }
+
+        int pairsLineStart = in.readerIndex();
+        int pairsLineEnd = RespDecodingSupport.indexOfCrlf(in, pairsLineStart, maxLineBytes);
+        if (pairsLineEnd < 0) {
+            if (in.writerIndex() - pairsLineStart > maxLineBytes + 2) {
+                throw new IllegalArgumentException("Protocol error: line too long");
+            }
+            in.readerIndex(startIdx);
+            return -1;
+        }
+
+        int pairs = RespDecodingSupport.parseIntAscii(in, pairsLineStart, pairsLineEnd);
+        if (pairs < 0) {
+            throw new IllegalArgumentException("Protocol error: invalid attribute length");
+        }
+        if (pairs > maxArrayLen) {
+            throw new IllegalArgumentException("Protocol error: attribute length too large");
         }
 
         in.readerIndex(pairsLineEnd + 2);

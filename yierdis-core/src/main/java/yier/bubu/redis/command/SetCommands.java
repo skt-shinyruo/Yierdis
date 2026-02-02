@@ -1,5 +1,7 @@
 package yier.bubu.redis.command;
 
+import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.db.DbMemoryConstants;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespWriter;
@@ -27,16 +29,17 @@ final class SetCommands {
             CommandSupport.wrongArity(out, "sadd");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
+        YierdisDb db = support.db(out);
+        long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
         }
-        support.db().prepareWrite(extra);
+        db.prepareWrite(extra);
         int membersLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, membersLen);
         try {
-            long added = support.db().sadd(cmd.toByteArray(1), support.slice());
-            support.db().enforceMaxmemory();
+            long added = db.sadd(cmd.toByteArray(1), support.slice());
+            db.enforceMaxmemory();
             out.integer(added);
         } finally {
             support.clearScratch(membersLen);
@@ -51,7 +54,7 @@ final class SetCommands {
         int membersLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, membersLen);
         try {
-            out.integer(support.db().srem(cmd.toByteArray(1), support.slice()));
+            out.integer(support.db(out).srem(cmd.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(membersLen);
         }
@@ -64,7 +67,7 @@ final class SetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        int count = support.db().smembersReplyCount(key);
+        int count = support.db(out).smembersReplyCount(key);
         if (out.protocol() == RespProtocol.RESP3) {
             out.setHeader(count);
         } else {
@@ -73,7 +76,7 @@ final class SetCommands {
         if (count == 0) {
             return;
         }
-        support.db().smembersReplyInto(key, support.bulkOut(out));
+        support.db(out).smembersReplyInto(key, support.bulkOut(out));
     }
 
     private void sismember(RespCommand cmd, RespWriter out) {
@@ -81,7 +84,7 @@ final class SetCommands {
             CommandSupport.wrongArity(out, "sismember");
             return;
         }
-        out.integer(support.db().sismember(cmd.toByteArray(1), cmd.toByteArray(2)) ? 1 : 0);
+        out.integer(support.db(out).sismember(cmd.toByteArray(1), cmd.toByteArray(2)) ? 1 : 0);
     }
 
     private void scard(RespCommand cmd, RespWriter out) {
@@ -89,6 +92,6 @@ final class SetCommands {
             CommandSupport.wrongArity(out, "scard");
             return;
         }
-        out.integer(support.db().scard(cmd.toByteArray(1)));
+        out.integer(support.db(out).scard(cmd.toByteArray(1)));
     }
 }

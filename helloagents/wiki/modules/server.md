@@ -8,7 +8,7 @@
 
 - **Responsibility:** 端口监听、Pipeline 组装、定时任务（如 TTL 清理）的调度入口
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-17
+- **Last Updated:** 2026-02-01
 
 ## Specifications
 
@@ -25,7 +25,16 @@
 #### Scenario: 协议错误（非法 RESP）
 条件：客户端发送非法请求（解码阶段抛出 `Protocol error: ...`）
 - 预期：服务端返回 `ERR Protocol error: ...` 并关闭连接
-- 说明：连接关闭是“协议层错误”的默认策略，避免解码状态不一致影响后续请求
+- 说明：连接关闭是“协议层错误”的默认策略，避免解码状态不一致影响后续请求；同时 server 会将该连接标记为 closing，确保已入队 backlog 命令不会继续执行产生副作用（仅回收 frame/预算）
+
+### Requirement: 多 DB（DB0..N-1）与连接级 DB 路由
+**Module:** server
+为提升 Redis 生态兼容性，server 支持多逻辑 DB：
+- 通过 `--databases <n>` 配置 DB 数量（默认 16）
+- 连接级维护 `dbIndex`（默认 0），由 `SELECT <index>` 修改
+- 执行器线程绑定多个 `YierdisDb` 实例（DB0..N-1），命令执行时按连接态路由到目标 DB
+
+说明：多 DB 仍保持“单线程命令语义”（所有 DB 绑定同一 executor 线程），避免引入跨线程并发复杂度。
 
 ### Requirement: I/O 与命令执行解耦（单线程命令语义）
 **Module:** yierdis-server
@@ -37,6 +46,8 @@
 - 连接关闭语义：`QUIT` 由命令层请求 close-after-reply，执行器在 flush 后关闭连接，并跳过该连接后续已入队命令（仅回收，不执行 DB），保证 pipeline 顺序与无副作用
 - 连接态二分：`ConnectionContext`（protocol-netty）仅承载连接级协议会话（RESP2/RESP3，`Channel.attr` 绑定）；`ServerConnectionState`（server 私有）承载 pending/backpressure/closing 与低开销统计；执行器调度 state（per-channel queue + scheduled 标志）收敛到 server 私有 `NettyExecutorChannelState`（`Channel.attr` 绑定），避免 protocol 模块携带 server 语义与调度细节
 - 可观测性：提供 `INFO`/`STATS` 命令输出执行器/连接级统计摘要（队列、背压 enter/exit、reject、drain budget、close-after-reply 等），用于排障与容量评估
+  - `INFO`：Redis 兼容 bulk string（文本分节）
+  - `INFO YIERDIS` / `STATS`：保留结构化输出（RESP2 array / RESP3 map），用于教学与排障
 
 #### Scenario: 高压 pipeline 下的 flush 合并与背压恢复
 - 当 backlog ≥ high watermark：服务端对该连接 `autoRead=false`，并可能返回 `-ERR busy`
@@ -53,6 +64,7 @@
 - `--backpressureBytesHigh <bytes>` / `--backpressureBytesLow <bytes>`：连接级 bytes 背压滞回阈值（0 表示禁用）
 - `--executorMaxDrain <n>` / `--executorDrainMillis <ms>`：单次 drain 批量/时间预算（避免维护任务饥饿）
 - `--protocolMaxBulkBytes <bytes>` / `--protocolMaxArgs <n>` / `--protocolMaxLineBytes <bytes>`：协议输入上限（DoS 防护；与 protocol-netty decoder 对齐）
+- `--databases <n>`：逻辑 DB 数量（`SELECT 0..n-1`；默认 16）
 
 #### Scenario: 多 worker I/O + 单线程执行
 条件：`--ioThreads > 1` 且多个连接并发请求
@@ -89,3 +101,4 @@
 - 2026-01-16：执行模型硬化：DB owner-thread 语义 fail-fast；server 侧仅保留“走执行器”的 handler 入口，避免绕过 executor 直接访问 DB。
 - 2026-01-16：连接生命周期收敛：`QUIT` 纳入 core 命令；执行器支持 close-after-reply，并在 QUIT 后丢弃该连接后续 backlog 命令（仅回收，不执行）。
 - 2026-01-17：server 装配与边界收敛：Pipeline 装配下沉到 `YierdisServerChannelInitializer`；连接态二分（`ConnectionContext` 仅协议会话，运行时连接状态迁移到 `ServerConnectionState`）；执行器调度 state 下沉为 server 私有 `NettyExecutorChannelState`；协议 request 解码严格化（reply/非法前缀判为 protocol error 并关闭连接）。
+- 2026-02-01：多 DB 支持：新增 `--databases`，bootstrap 装配 DB0..N-1 并按连接态路由；INFO 形态对齐 Redis（bulk string），保留 `INFO YIERDIS`/`STATS` 结构化指标；连接关闭语义加固：连接关闭/协议错误会标记 closing，执行器跳过该连接后续 backlog（仅回收不执行），避免副作用与资源浪费。

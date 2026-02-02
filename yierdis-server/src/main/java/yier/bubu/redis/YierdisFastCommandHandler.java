@@ -51,6 +51,11 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         if (ctx == null) {
             return;
         }
+        // 标记该连接进入 closing：避免 protocol/internal error 触发 close 后，已入队命令仍在 executor 中继续执行产生副作用。
+        ServerConnectionState conn = ServerConnectionState.getOrCreate(ctx.channel());
+        conn.markClosing();
+        nettyExecutor.disableAutoRead(ctx.channel());
+
         Throwable root = unwrapDecoderException(cause);
         String message = safeErrorMessage(root);
         String remote = String.valueOf(ctx.channel().remoteAddress());

@@ -18,12 +18,7 @@ import java.util.RandomAccess;
  * This object is <b>not</b> thread-safe and is intended to be used from the single command executor thread.
  */
 final class CommandSupport {
-    /**
-     * Best-effort per-entry overhead estimate (must be aligned with DB accounting to avoid prepareWrite underestimation).
-     */
-    static final long ENTRY_OVERHEAD_ESTIMATE_BYTES = 64L;
-
-    private final YierdisDb db;
+    private final YierdisDbRouter dbRouter;
     private final ServerInfoProvider infoProvider;
 
     private final ByteArraySliceList slice = new ByteArraySliceList();
@@ -32,16 +27,24 @@ final class CommandSupport {
     private final WriterBulkStringOutput bulkOut = new WriterBulkStringOutput();
 
     CommandSupport(YierdisDb db) {
-        this(db, null);
+        this(singleDbRouter(db), null);
     }
 
     CommandSupport(YierdisDb db, ServerInfoProvider infoProvider) {
-        this.db = db;
+        this(singleDbRouter(db), infoProvider);
+    }
+
+    CommandSupport(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider) {
+        this.dbRouter = java.util.Objects.requireNonNull(dbRouter, "dbRouter");
         this.infoProvider = infoProvider;
     }
 
-    YierdisDb db() {
-        return db;
+    YierdisDb db(RespWriter out) {
+        return dbRouter.dbFor(out);
+    }
+
+    int databases() {
+        return dbRouter.databases();
     }
 
     ServerInfoProvider infoProvider() {
@@ -94,6 +97,21 @@ final class CommandSupport {
             next <<= 1;
         }
         argvScratch = Arrays.copyOf(argvScratch, next);
+    }
+
+    private static YierdisDbRouter singleDbRouter(YierdisDb db) {
+        YierdisDb fixed = java.util.Objects.requireNonNull(db, "db");
+        return new YierdisDbRouter() {
+            @Override
+            public YierdisDb dbFor(RespWriter out) {
+                return fixed;
+            }
+
+            @Override
+            public int databases() {
+                return 1;
+            }
+        };
     }
 
     static void wrongArity(RespWriter out, String cmdLower) {
@@ -192,7 +210,7 @@ final class CommandSupport {
     static long parseNonNegativeLong(RespCommand cmd, int argIndex, String label) {
         long v = parseLong(cmd, argIndex, label);
         if (v < 0) {
-            throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+            throw new IllegalArgumentException("value is not an integer or out of range");
         }
         return v;
     }
@@ -210,7 +228,7 @@ final class CommandSupport {
 
     static long parseLong(byte[] s, String label) {
         if (s == null || s.length == 0) {
-            throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+            throw new IllegalArgumentException("value is not an integer or out of range");
         }
 
         int i = 0;
@@ -220,7 +238,7 @@ final class CommandSupport {
             negative = first == '-';
             i = 1;
             if (i == s.length) {
-                throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+                throw new IllegalArgumentException("value is not an integer or out of range");
             }
         }
 
@@ -231,14 +249,14 @@ final class CommandSupport {
         while (i < s.length) {
             int digit = s[i++] - '0';
             if (digit < 0 || digit > 9) {
-                throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+                throw new IllegalArgumentException("value is not an integer or out of range");
             }
             if (result < multMin) {
-                throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+                throw new IllegalArgumentException("value is not an integer or out of range");
             }
             result *= 10;
             if (result < limit + digit) {
-                throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+                throw new IllegalArgumentException("value is not an integer or out of range");
             }
             result -= digit;
         }
@@ -249,7 +267,7 @@ final class CommandSupport {
     static long parseNonNegativeLong(byte[] s, String label) {
         long v = parseLong(s, label);
         if (v < 0) {
-            throw new IllegalArgumentException("value is not an integer or out of range: " + label);
+            throw new IllegalArgumentException("value is not an integer or out of range");
         }
         return v;
     }

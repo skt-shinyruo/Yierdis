@@ -1,5 +1,7 @@
 package yier.bubu.redis.command;
 
+import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.db.DbMemoryConstants;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
 
@@ -43,18 +45,19 @@ final class ListCommands {
             CommandSupport.wrongArity(out, left ? "lpush" : "rpush");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
+        YierdisDb db = support.db(out);
+        long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
         }
-        support.db().prepareWrite(extra);
+        db.prepareWrite(extra);
         int valuesLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, valuesLen);
         try {
             int len = left
-                    ? support.db().lpush(cmd.toByteArray(1), support.slice())
-                    : support.db().rpush(cmd.toByteArray(1), support.slice());
-            support.db().enforceMaxmemory();
+                    ? db.lpush(cmd.toByteArray(1), support.slice())
+                    : db.rpush(cmd.toByteArray(1), support.slice());
+            db.enforceMaxmemory();
             out.integer(len);
         } finally {
             support.clearScratch(valuesLen);
@@ -70,12 +73,12 @@ final class ListCommands {
         int stop = CommandSupport.parseIntClamped(cmd, 3, "stop");
 
         byte[] key = cmd.toByteArray(1);
-        int count = support.db().lrangeReplyCount(key, start, stop);
+        int count = support.db(out).lrangeReplyCount(key, start, stop);
         out.arrayHeader(count);
         if (count == 0) {
             return;
         }
-        support.db().lrangeReplyInto(key, start, stop, support.bulkOut(out));
+        support.db(out).lrangeReplyInto(key, start, stop, support.bulkOut(out));
     }
 
     private void pop(RespCommand cmd, RespWriter out, boolean left) {
@@ -86,22 +89,34 @@ final class ListCommands {
         int count = 1;
         boolean hasCount = cmd.argc() == 3;
         if (hasCount) {
-            count = CommandSupport.parseIntClamped(cmd, 2, "count");
+            long v = CommandSupport.parseLong(cmd, 2, "count");
+            if (v < 0) {
+                throw new IllegalArgumentException("value is not an integer or out of range");
+            }
+            if (v > Integer.MAX_VALUE) {
+                count = Integer.MAX_VALUE;
+            } else {
+                count = (int) v;
+            }
         }
 
         List<byte[]> popped = left
-                ? support.db().lpop(cmd.toByteArray(1), count)
-                : support.db().rpop(cmd.toByteArray(1), count);
+                ? support.db(out).lpop(cmd.toByteArray(1), count)
+                : support.db(out).rpop(cmd.toByteArray(1), count);
         popResponse(out, popped, hasCount);
     }
 
     private static void popResponse(RespWriter out, List<byte[]> popped, boolean hasCount) {
         if (!hasCount) {
-            if (popped.isEmpty()) {
+            if (popped == null || popped.isEmpty()) {
                 out.bulkString((byte[]) null);
                 return;
             }
             out.bulkString(popped.get(0));
+            return;
+        }
+        if (popped == null) {
+            out.nullArray();
             return;
         }
         out.bulkStringArray(popped);

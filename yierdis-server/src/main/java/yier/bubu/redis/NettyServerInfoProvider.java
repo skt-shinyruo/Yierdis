@@ -3,6 +3,8 @@ package yier.bubu.redis;
 // INFO/STATS 提供器：基于执行器统计与连接态（ServerConnectionState）输出可观测性摘要，避免在热路径做额外分配。
 
 import yier.bubu.redis.command.ServerInfoProvider;
+import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.db.YierdisMemoryStats;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespSession;
@@ -10,6 +12,7 @@ import yier.bubu.redis.protocol.RespWriter;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -69,6 +72,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private final ServerConfig config;
     private final long startedMillis;
     private volatile NettyCommandExecutor executor;
+    private volatile YierdisDb[] dbs;
 
     NettyServerInfoProvider(ServerConfig config) {
         this.config = Objects.requireNonNull(config, "config");
@@ -77,6 +81,10 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
     void bindExecutor(NettyCommandExecutor executor) {
         this.executor = Objects.requireNonNull(executor, "executor");
+    }
+
+    void bindDbs(YierdisDb[] dbs) {
+        this.dbs = dbs;
     }
 
     @Override
@@ -88,29 +96,13 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             return;
         }
 
-        NettyCommandExecutor.StatsSnapshot s = ex.statsSnapshot();
-        long nowMillis = System.currentTimeMillis();
-        long uptimeMillis = Math.max(0, nowMillis - startedMillis);
-        long drainMillis = TimeUnit.NANOSECONDS.toMillis(s.drainTimeLimitNanos);
+        String section = cmd != null && cmd.argc() == 2 ? asciiLower(cmd, 1) : null;
+        if ("yierdis".equals(section)) {
+            writeYierdisStructuredInfo(out, ex);
+            return;
+        }
 
-        int pairs = 15;
-        writeHeader(out, pairs);
-
-        writePair(out, KEY_SERVER, VALUE_SERVER);
-        writePair(out, KEY_VERSION, VALUE_VERSION);
-        writePair(out, KEY_PORT, config.port);
-        writePair(out, KEY_IO_THREADS, config.ioThreads);
-        writePair(out, KEY_EXECUTOR_POLICY, ascii(String.valueOf(s.schedulingPolicy)));
-        writePair(out, KEY_EXECUTOR_QUEUE_CAPACITY, s.queueCapacity);
-        writePair(out, KEY_EXECUTOR_QUEUE_MAX_BYTES, s.queueMaxBytes);
-        writePair(out, KEY_BACKPRESSURE_HIGH, s.backpressureHighWatermark);
-        writePair(out, KEY_BACKPRESSURE_LOW, s.backpressureLowWatermark);
-        writePair(out, KEY_BACKPRESSURE_BYTES_HIGH, s.backpressureBytesHighWatermark);
-        writePair(out, KEY_BACKPRESSURE_BYTES_LOW, s.backpressureBytesLowWatermark);
-        writePair(out, KEY_EXECUTOR_MAX_DRAIN, s.maxDrainCommands);
-        writePair(out, KEY_EXECUTOR_DRAIN_MILLIS, drainMillis);
-        writePair(out, KEY_STARTED_MILLIS, startedMillis);
-        writePair(out, KEY_UPTIME_MILLIS, uptimeMillis);
+        out.bulkString(buildRedisInfo(section, ex).getBytes(StandardCharsets.UTF_8));
     }
 
     @Override
@@ -161,6 +153,164 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_CONN_BACKPRESSURE_EXIT, conn.backpressureExitCounter().get());
     }
 
+    private void writeYierdisStructuredInfo(RespWriter out, NettyCommandExecutor ex) {
+        NettyCommandExecutor.StatsSnapshot s = ex.statsSnapshot();
+        long nowMillis = System.currentTimeMillis();
+        long uptimeMillis = Math.max(0, nowMillis - startedMillis);
+        long drainMillis = TimeUnit.NANOSECONDS.toMillis(s.drainTimeLimitNanos);
+
+        int pairs = 15;
+        writeHeader(out, pairs);
+
+        writePair(out, KEY_SERVER, VALUE_SERVER);
+        writePair(out, KEY_VERSION, VALUE_VERSION);
+        writePair(out, KEY_PORT, config.port);
+        writePair(out, KEY_IO_THREADS, config.ioThreads);
+        writePair(out, KEY_EXECUTOR_POLICY, ascii(String.valueOf(s.schedulingPolicy)));
+        writePair(out, KEY_EXECUTOR_QUEUE_CAPACITY, s.queueCapacity);
+        writePair(out, KEY_EXECUTOR_QUEUE_MAX_BYTES, s.queueMaxBytes);
+        writePair(out, KEY_BACKPRESSURE_HIGH, s.backpressureHighWatermark);
+        writePair(out, KEY_BACKPRESSURE_LOW, s.backpressureLowWatermark);
+        writePair(out, KEY_BACKPRESSURE_BYTES_HIGH, s.backpressureBytesHighWatermark);
+        writePair(out, KEY_BACKPRESSURE_BYTES_LOW, s.backpressureBytesLowWatermark);
+        writePair(out, KEY_EXECUTOR_MAX_DRAIN, s.maxDrainCommands);
+        writePair(out, KEY_EXECUTOR_DRAIN_MILLIS, drainMillis);
+        writePair(out, KEY_STARTED_MILLIS, startedMillis);
+        writePair(out, KEY_UPTIME_MILLIS, uptimeMillis);
+    }
+
+    private String buildRedisInfo(String section, NettyCommandExecutor ex) {
+        NettyCommandExecutor.StatsSnapshot s = ex.statsSnapshot();
+        long nowMillis = System.currentTimeMillis();
+        long uptimeMillis = Math.max(0, nowMillis - startedMillis);
+        long uptimeSeconds = Math.max(0, uptimeMillis / 1000L);
+
+        boolean all = section == null || section.isBlank() || "default".equals(section) || "all".equals(section);
+        boolean server = all || "server".equals(section);
+        boolean clients = all || "clients".equals(section);
+        boolean memory = all || "memory".equals(section);
+        boolean stats = all || "stats".equals(section);
+        boolean keyspace = all || "keyspace".equals(section);
+
+        StringBuilder sb = new StringBuilder(512);
+
+        if (server) {
+            sb.append("# Server\r\n");
+            sb.append("redis_version:").append(YierdisBuildInfo.version()).append("\r\n");
+            sb.append("tcp_port:").append(config.port).append("\r\n");
+            sb.append("uptime_in_seconds:").append(uptimeSeconds).append("\r\n");
+            sb.append("uptime_in_milliseconds:").append(uptimeMillis).append("\r\n");
+            sb.append("\r\n");
+        }
+
+        if (clients) {
+            sb.append("# Clients\r\n");
+            sb.append("connected_clients:0\r\n");
+            sb.append("blocked_clients:0\r\n");
+            sb.append("\r\n");
+        }
+
+        if (memory) {
+            MemorySummary m = memorySummary();
+            sb.append("# Memory\r\n");
+            sb.append("used_memory:").append(m.usedMemoryBytes).append("\r\n");
+            sb.append("used_memory_dataset:").append(m.heapDataBytesEstimate).append("\r\n");
+            sb.append("used_memory_overhead:").append(m.overheadBytesEstimate).append("\r\n");
+            sb.append("maxmemory:").append(config.maxmemoryBytes).append("\r\n");
+            sb.append("maxmemory_policy:").append(config.maxmemoryPolicy).append("\r\n");
+            sb.append("yierdis_offheap_used_bytes:").append(m.offHeapUsedBytes).append("\r\n");
+            sb.append("yierdis_offheap_max_bytes:").append(config.offheapMaxBytes).append("\r\n");
+            sb.append("\r\n");
+        }
+
+        if (stats) {
+            sb.append("# Stats\r\n");
+            sb.append("total_commands_processed:").append(s.commandsExecuted).append("\r\n");
+            sb.append("rejected_connections:0\r\n");
+            sb.append("total_connections_received:0\r\n");
+            sb.append("instantaneous_ops_per_sec:0\r\n");
+            sb.append("yierdis_queued_tasks:").append(s.queuedTasks).append("\r\n");
+            sb.append("yierdis_queued_bytes:").append(s.queuedBytes).append("\r\n");
+            sb.append("\r\n");
+        }
+
+        if (keyspace) {
+            sb.append("# Keyspace\r\n");
+            appendKeyspace(sb);
+            sb.append("\r\n");
+        }
+
+        return sb.toString();
+    }
+
+    private void appendKeyspace(StringBuilder sb) {
+        YierdisDb[] local = dbs;
+        if (local == null || local.length == 0) {
+            return;
+        }
+        for (int i = 0; i < local.length; i++) {
+            YierdisDb db = local[i];
+            if (db == null) {
+                continue;
+            }
+            YierdisMemoryStats s = db.memoryStats();
+            int keys = s.keyCount();
+            int expires = s.expireCount();
+            if (keys <= 0 && expires <= 0) {
+                continue;
+            }
+            sb.append("db").append(i)
+                    .append(":keys=").append(keys)
+                    .append(",expires=").append(expires)
+                    .append("\r\n");
+        }
+    }
+
+    private MemorySummary memorySummary() {
+        YierdisDb[] local = dbs;
+        if (local == null || local.length == 0) {
+            return new MemorySummary(0, 0, 0, 0);
+        }
+        long heap = 0;
+        long keyspaceOverhead = 0;
+        long expireOverhead = 0;
+        long expireValueObjects = 0;
+        long offHeap = 0;
+
+        for (int i = 0; i < local.length; i++) {
+            YierdisDb db = local[i];
+            if (db == null) {
+                continue;
+            }
+            YierdisMemoryStats s = db.memoryStats();
+            heap += s.heapDataBytesEstimate();
+            keyspaceOverhead += s.keyspaceTableOverheadBytesEstimate();
+            expireOverhead += s.expireTableOverheadBytesEstimate();
+            expireValueObjects += s.expireValueObjectsBytesEstimate();
+            if (i == 0) {
+                offHeap = s.offHeapUsedBytes();
+            }
+        }
+
+        long overhead = keyspaceOverhead + expireOverhead + expireValueObjects;
+        long used = heap + offHeap;
+        return new MemorySummary(used, heap, offHeap, overhead);
+    }
+
+    private static final class MemorySummary {
+        final long usedMemoryBytes;
+        final long heapDataBytesEstimate;
+        final long offHeapUsedBytes;
+        final long overheadBytesEstimate;
+
+        private MemorySummary(long usedMemoryBytes, long heapDataBytesEstimate, long offHeapUsedBytes, long overheadBytesEstimate) {
+            this.usedMemoryBytes = usedMemoryBytes;
+            this.heapDataBytesEstimate = heapDataBytesEstimate;
+            this.offHeapUsedBytes = offHeapUsedBytes;
+            this.overheadBytesEstimate = overheadBytesEstimate;
+        }
+    }
+
     private static ServerConnectionState connectionState(RespWriter out) {
         RespSession session = out.session();
         if (session instanceof ServerConnectionState ctx) {
@@ -186,6 +336,17 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private static void writePair(RespWriter out, byte[] key, long value) {
         out.bulkString(key);
         out.integer(value);
+    }
+
+    private static String asciiLower(RespCommand cmd, int argIndex) {
+        if (cmd == null || argIndex < 0 || argIndex >= cmd.argc() || cmd.isNull(argIndex) || cmd.len(argIndex) <= 0) {
+            return null;
+        }
+        byte[] raw = cmd.toByteArray(argIndex);
+        if (raw == null || raw.length == 0) {
+            return null;
+        }
+        return new String(raw, StandardCharsets.US_ASCII).trim().toLowerCase(Locale.ROOT);
     }
 
     private static byte[] ascii(String s) {

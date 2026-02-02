@@ -7,8 +7,12 @@ import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
 import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespSession;
+import yier.bubu.redis.protocol.RespServerSession;
+import yier.bubu.redis.protocol.RespTransactionState;
 import yier.bubu.redis.protocol.netty.ConnectionContext;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -21,9 +25,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * pending/backpressure/closing/counters 等。协议协商状态（RESP2/RESP3）通过委托 {@link RespSession}
  * 获取与设置，避免 protocol-netty adapter 携带 server 语义。
  */
-final class ServerConnectionState implements RespSession {
+final class ServerConnectionState implements RespServerSession {
     private static final AttributeKey<ServerConnectionState> KEY =
             AttributeKey.valueOf("yierdis.serverConnectionState");
+    private static final java.util.concurrent.atomic.AtomicLong NEXT_CLIENT_ID = new java.util.concurrent.atomic.AtomicLong(1);
 
     static ServerConnectionState getOrCreate(Channel channel) {
         Objects.requireNonNull(channel, "channel");
@@ -50,6 +55,13 @@ final class ServerConnectionState implements RespSession {
     }
 
     private volatile RespSession session;
+
+    // --- Redis-like connection state (跨模块可见，通过 RespServerSession 暴露给命令层) ---
+    private final long clientId = NEXT_CLIENT_ID.getAndIncrement();
+    private final AtomicInteger dbIndex = new AtomicInteger(0);
+    private volatile String clientName;
+    private final AtomicBoolean authenticated = new AtomicBoolean(false);
+    private final TransactionState transaction = new TransactionState();
 
     // --- Executor / backpressure (跨线程读写，使用原子类型) ---
     private final AtomicInteger pending = new AtomicInteger(0);
@@ -95,6 +107,53 @@ final class ServerConnectionState implements RespSession {
         s.setProtocol(protocol);
     }
 
+    @Override
+    public int dbIndex() {
+        return dbIndex.get();
+    }
+
+    @Override
+    public void setDbIndex(int dbIndex) {
+        this.dbIndex.set(Math.max(0, dbIndex));
+    }
+
+    @Override
+    public long clientId() {
+        return clientId;
+    }
+
+    @Override
+    public String clientName() {
+        return clientName;
+    }
+
+    @Override
+    public void setClientName(String clientName) {
+        String name = clientName;
+        if (name != null) {
+            name = name.trim();
+            if (name.isEmpty()) {
+                name = null;
+            }
+        }
+        this.clientName = name;
+    }
+
+    @Override
+    public boolean authenticated() {
+        return authenticated.get();
+    }
+
+    @Override
+    public void setAuthenticated(boolean authenticated) {
+        this.authenticated.set(authenticated);
+    }
+
+    @Override
+    public RespTransactionState transaction() {
+        return transaction;
+    }
+
     AtomicInteger pendingCounter() {
         return pending;
     }
@@ -121,6 +180,8 @@ final class ServerConnectionState implements RespSession {
 
     void markClosing() {
         closing.set(true);
+        // 连接关闭时清理连接态资源，避免悬挂引用/内存驻留。
+        transaction.discard();
     }
 
     AtomicLong commandsEnqueuedCounter() {
@@ -150,5 +211,47 @@ final class ServerConnectionState implements RespSession {
     AtomicLong backpressureExitCounter() {
         return backpressureExit;
     }
-}
 
+    private static final class TransactionState implements RespTransactionState {
+        private boolean active;
+        private final ArrayList<byte[][]> queue = new ArrayList<>();
+
+        @Override
+        public synchronized boolean active() {
+            return active;
+        }
+
+        @Override
+        public synchronized void begin() {
+            active = true;
+            queue.clear();
+        }
+
+        @Override
+        public synchronized void discard() {
+            active = false;
+            queue.clear();
+        }
+
+        @Override
+        public synchronized void enqueue(byte[][] argv) {
+            if (argv == null) {
+                return;
+            }
+            queue.add(argv);
+        }
+
+        @Override
+        public synchronized int size() {
+            return queue.size();
+        }
+
+        @Override
+        public synchronized List<byte[][]> drain() {
+            ArrayList<byte[][]> out = new ArrayList<>(queue);
+            queue.clear();
+            active = false;
+            return out;
+        }
+    }
+}

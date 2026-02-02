@@ -74,7 +74,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
     // the risk of copying large payloads.
     private static final int DEFAULT_FRAME_COMPACTION_MAX_COPY_BYTES = 1024 * 1024; // 1 MiB
 
-    private final YierdisDb db;
+    private final Runnable bindToCurrentThread;
     private final YierdisFastCommandProcessor commandProcessor;
     private final EventExecutor executor;
 
@@ -127,7 +127,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
             long drainTimeLimitMillis
     ) {
         this(
-                db,
+                Objects.requireNonNull(db, "db")::bindToCurrentThread,
                 commandProcessor,
                 executor,
                 queueCapacity,
@@ -162,7 +162,43 @@ public final class NettyCommandExecutor implements AutoCloseable {
             double frameCompactionRatio,
             int frameCompactionMaxCopyBytes
     ) {
-        this.db = Objects.requireNonNull(db, "db");
+        this(
+                Objects.requireNonNull(db, "db")::bindToCurrentThread,
+                commandProcessor,
+                executor,
+                queueCapacity,
+                queueMaxBytes,
+                backpressureHighWatermark,
+                backpressureLowWatermark,
+                backpressureBytesHighWatermark,
+                backpressureBytesLowWatermark,
+                maxDrainCommands,
+                drainTimeLimitMillis,
+                schedulingPolicy,
+                frameCompactionThresholdBytes,
+                frameCompactionRatio,
+                frameCompactionMaxCopyBytes
+        );
+    }
+
+    public NettyCommandExecutor(
+            Runnable bindToCurrentThread,
+            YierdisFastCommandProcessor commandProcessor,
+            EventExecutor executor,
+            int queueCapacity,
+            long queueMaxBytes,
+            int backpressureHighWatermark,
+            int backpressureLowWatermark,
+            long backpressureBytesHighWatermark,
+            long backpressureBytesLowWatermark,
+            int maxDrainCommands,
+            long drainTimeLimitMillis,
+            SchedulingPolicy schedulingPolicy,
+            long frameCompactionThresholdBytes,
+            double frameCompactionRatio,
+            int frameCompactionMaxCopyBytes
+    ) {
+        this.bindToCurrentThread = Objects.requireNonNull(bindToCurrentThread, "bindToCurrentThread");
         this.commandProcessor = Objects.requireNonNull(commandProcessor, "commandProcessor");
         this.executor = Objects.requireNonNull(executor, "executor");
         this.schedulingPolicy = schedulingPolicy == null ? SchedulingPolicy.FAIR : schedulingPolicy;
@@ -307,7 +343,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
      * Binds the DB to the executor thread (single-thread semantics).
      */
     public void start() {
-        executor.submit(db::bindToCurrentThread).syncUninterruptibly();
+        executor.submit(bindToCurrentThread).syncUninterruptibly();
         started.set(true);
         scheduleDrain();
     }
@@ -497,9 +533,10 @@ public final class NettyCommandExecutor implements AutoCloseable {
         if (ctx == null || cmd == null) {
             return;
         }
-        if (isChannelClosing(ctx.channel())) {
-            // QUIT 之后：只回收已入队的命令帧与预算，不再执行，避免产生副作用。
-            ServerConnectionState conn = ServerConnectionState.getOrCreate(ctx.channel());
+        Channel ch = ctx.channel();
+        if (ch == null || !ch.isActive() || isChannelClosing(ch)) {
+            // 连接已关闭或标记为 closing：只回收已入队的命令帧与预算，不再执行，避免产生副作用。
+            ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
             conn.commandsSkippedClosingCounter().incrementAndGet();
             commandsSkippedClosing.increment();
             recycleAndRelease(task);
@@ -510,7 +547,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
             ByteBuf out = ctx.alloc().buffer();
             boolean ok = false;
             try {
-                ServerConnectionState conn = ServerConnectionState.getOrCreate(ctx.channel());
+                ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
                 RespWriter writer = new RespWriter(new NettyByteBufSink(out), conn);
                 commandProcessor.execute(cmd, writer);
                 if (writer.closeAfterReplyRequested()) {
@@ -536,7 +573,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
                 ByteBuf out = ctx.alloc().buffer();
                 boolean ok = false;
                 try {
-                    new RespWriter(new NettyByteBufSink(out), ServerConnectionState.getOrCreate(ctx.channel())).error("ERR internal error");
+                    new RespWriter(new NettyByteBufSink(out), ServerConnectionState.getOrCreate(ch)).error("ERR internal error");
                     ctx.write(out, ctx.voidPromise());
                     flushTargets.put(ctx.channel(), ctx);
                     ok = true;

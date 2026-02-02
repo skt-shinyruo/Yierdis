@@ -8,7 +8,6 @@ import yier.bubu.redis.db.offheap.netty.YierdisNettyOffHeapAllocator;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
 
@@ -44,7 +43,7 @@ public class OffHeapStringStorageTest {
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
-            db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 0));
+            db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, YierdisDb.ExpireOption.px(0));
             Assert.assertTrue(allocator.usedBytes() > 0);
 
             db.cleanupExpired();
@@ -62,7 +61,7 @@ public class OffHeapStringStorageTest {
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
-            db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 0));
+            db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, YierdisDb.ExpireOption.px(0));
             Assert.assertTrue(allocator.usedBytes() > 0);
 
             db.lpush(key, List.of(b("a")));

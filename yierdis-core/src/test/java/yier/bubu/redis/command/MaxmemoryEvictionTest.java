@@ -95,23 +95,23 @@ public class MaxmemoryEvictionTest {
             try (FastTestClient client = new FastTestClient(processor)) {
 
         Assert.assertTrue(client.execute(cmd("SET", "k", "1")) instanceof RespSimpleString);
-        Assert.assertEquals("int", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "k"))).value());
+        Assert.assertEquals("int", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "k"))).asString());
         Assert.assertTrue(client.execute(cmd("MEMORY", "USAGE", "k")) instanceof RespInteger);
 
         Assert.assertTrue(client.execute(cmd("SET", "k", "abc")) instanceof RespSimpleString);
-        Assert.assertEquals("embstr", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "k"))).value());
+        Assert.assertEquals("embstr", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "k"))).asString());
 
         Assert.assertTrue(client.execute(List.of(b("SET"), b("k"), repeat((byte) 'x', 50))) instanceof RespSimpleString);
-        Assert.assertEquals("raw", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "k"))).value());
+        Assert.assertEquals("raw", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "k"))).asString());
 
         // Collection encodings.
         Assert.assertTrue(client.execute(cmd("LPUSH", "l", "a")) instanceof RespInteger);
-        Assert.assertEquals("listpack", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "l"))).value());
+        Assert.assertEquals("listpack", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "l"))).asString());
 
         Assert.assertTrue(client.execute(cmd("SADD", "s", "1", "2")) instanceof RespInteger);
-        Assert.assertEquals("intset", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "s"))).value());
+        Assert.assertEquals("intset", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "s"))).asString());
         Assert.assertTrue(client.execute(cmd("SADD", "s", "x")) instanceof RespInteger);
-        Assert.assertEquals("hashtable", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "s"))).value());
+        Assert.assertEquals("hashtable", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "s"))).asString());
 
         // Missing keys return nil.
         RespObject missing = client.execute(cmd("OBJECT", "ENCODING", "missing"));

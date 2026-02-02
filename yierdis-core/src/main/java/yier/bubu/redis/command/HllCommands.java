@@ -1,5 +1,7 @@
 package yier.bubu.redis.command;
 
+import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.db.DbMemoryConstants;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
 
@@ -26,10 +28,11 @@ final class HllCommands {
             CommandSupport.wrongArity(out, "pfadd");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
-        support.db().prepareWrite(extra);
-        long changed = support.db().pfadd(cmd.toByteArray(1), cmd, 2);
-        support.db().enforceMaxmemory();
+        YierdisDb db = support.db(out);
+        long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+        db.prepareWrite(extra);
+        long changed = db.pfadd(cmd.toByteArray(1), cmd, 2);
+        db.enforceMaxmemory();
         out.integer(changed);
     }
 
@@ -41,7 +44,7 @@ final class HllCommands {
         int len = cmd.argc() - 1;
         support.sliceResetFromCommand(cmd, 1, len);
         try {
-            out.integer(support.db().pfcount(support.slice()));
+            out.integer(support.db(out).pfcount(support.slice()));
         } finally {
             support.clearScratch(len);
         }
@@ -52,17 +55,18 @@ final class HllCommands {
             CommandSupport.wrongArity(out, "pfmerge");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
-        support.db().prepareWrite(extra);
+        long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+        YierdisDb db = support.db(out);
+        db.prepareWrite(extra);
 
         int sourcesLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, sourcesLen);
         try {
-            support.db().pfmerge(cmd.toByteArray(1), support.slice());
+            db.pfmerge(cmd.toByteArray(1), support.slice());
         } finally {
             support.clearScratch(sourcesLen);
         }
-        support.db().enforceMaxmemory();
+        db.enforceMaxmemory();
         out.simpleString("OK");
     }
 }

@@ -8,7 +8,7 @@
 
 - **Responsibility:** 连接管理、命令输入、回复解码（frame-based）、输出显示（支持 hex；按需解析）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-17
+- **Last Updated:** 2026-02-02
 
 ## Specifications
 
@@ -32,6 +32,15 @@ client 采用“单请求-单响应”模型（不支持 pipelining），但仍�
 - 当队列溢出：立即关闭连接，并向等待线程投递 terminal 信号（避免一直阻塞到超时）
 - 当连接断开/异常：同样投递 terminal 信号，确保 `execute()` 能尽快返回错误
 
+### Requirement: RESP3 reply 解码兼容（最小集合）
+**Module:** client
+client/CLI 基于 `yierdis-protocol-netty` 的 frame decoder 解析 server reply，为了对齐 Redis 生态工具链（以及测试断言），需要识别 RESP3 常见 reply 前缀的最小集合：
+- collection：`%`（map）、`~`（set）、`>`（push）、`|`（attribute）
+- scalar：`#`（boolean）、`,`（double）、`(`（big number）、`=`（verbatim string）、`!`（blob error）
+
+已知限制：
+- client 仍然是“单请求-单响应”模型，**不支持 PubSub/订阅模式**；即使 decoder 能识别 `>` push，仍可能出现“push 抢占 reply/响应错配”的语义问题，需要在后续里程碑引入 push 分流与 subscribe API。
+
 ## Dependencies
 
 - `yierdis-protocol-netty`（客户端侧复用 RESP codec；回复解码输出 `RespFrame`）
@@ -44,3 +53,4 @@ client 采用“单请求-单响应”模型（不支持 pipelining），但仍�
 - 2026-01-16：行为加固：`execute()` 超时后关闭连接并标记 client 不可复用，避免 RESP FIFO 响应错配风险。
 - 2026-01-17：协议栈收敛：client/CLI 收敛为 frame-based 回复（`RespDecoder` 输出 frame）；对象模型解析仅用于输出/调试（例如 CLI 展示）。
 - 2026-01-17：CLI 参数解析收敛到 picocli；response queue 边界化（有界队列 + 溢出关闭 + close/exception 唤醒）。
+- 2026-02-02：RESP3 reply 扩展：decoder/解析器补齐 map/set/push 等常见类型，提升生态兼容与测试可观测性（client 仍保持单请求-单响应）。

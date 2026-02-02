@@ -2,6 +2,7 @@ package yier.bubu.redis.args;
 
 public final class YierdisServerArgNames {
     public static final String PORT = "--port";
+    public static final String DATABASES = "--databases";
     public static final String CLEANUP_INTERVAL_MILLIS = "--cleanupIntervalMillis";
     public static final String NO_CLEANUP = "--noCleanup";
     public static final String IO_THREADS = "--ioThreads";

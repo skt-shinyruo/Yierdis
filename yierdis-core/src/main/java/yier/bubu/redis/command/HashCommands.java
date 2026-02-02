@@ -1,5 +1,7 @@
 package yier.bubu.redis.command;
 
+import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.db.DbMemoryConstants;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespWriter;
@@ -27,16 +29,17 @@ final class HashCommands {
             CommandSupport.wrongArity(out, "hset");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
+        YierdisDb db = support.db(out);
+        long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
         }
-        support.db().prepareWrite(extra);
+        db.prepareWrite(extra);
         int pairsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, pairsLen);
         try {
-            long added = support.db().hset(cmd.toByteArray(1), support.slice());
-            support.db().enforceMaxmemory();
+            long added = db.hset(cmd.toByteArray(1), support.slice());
+            db.enforceMaxmemory();
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
@@ -48,7 +51,7 @@ final class HashCommands {
             CommandSupport.wrongArity(out, "hget");
             return;
         }
-        out.bulkString(support.db().hget(cmd.toByteArray(1), cmd.toByteArray(2)));
+        out.bulkString(support.db(out).hget(cmd.toByteArray(1), cmd.toByteArray(2)));
     }
 
     private void hgetall(RespCommand cmd, RespWriter out) {
@@ -58,7 +61,7 @@ final class HashCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        int count = support.db().hgetallReplyCount(key);
+        int count = support.db(out).hgetallReplyCount(key);
         if (out.protocol() == RespProtocol.RESP3) {
             out.mapHeader(count / 2);
         } else {
@@ -67,7 +70,7 @@ final class HashCommands {
         if (count == 0) {
             return;
         }
-        support.db().hgetallReplyInto(key, support.bulkOut(out));
+        support.db(out).hgetallReplyInto(key, support.bulkOut(out));
     }
 
     private void hlen(RespCommand cmd, RespWriter out) {
@@ -75,7 +78,7 @@ final class HashCommands {
             CommandSupport.wrongArity(out, "hlen");
             return;
         }
-        out.integer(support.db().hlen(cmd.toByteArray(1)));
+        out.integer(support.db(out).hlen(cmd.toByteArray(1)));
     }
 
     private void hdel(RespCommand cmd, RespWriter out) {
@@ -86,7 +89,7 @@ final class HashCommands {
         int fieldsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, fieldsLen);
         try {
-            out.integer(support.db().hdel(cmd.toByteArray(1), support.slice()));
+            out.integer(support.db(out).hdel(cmd.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(fieldsLen);
         }

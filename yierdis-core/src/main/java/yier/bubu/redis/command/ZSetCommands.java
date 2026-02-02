@@ -1,5 +1,7 @@
 package yier.bubu.redis.command;
 
+import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.db.DbMemoryConstants;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
 
@@ -29,16 +31,17 @@ final class ZSetCommands {
             CommandSupport.wrongArity(out, "zadd");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
+        YierdisDb db = support.db(out);
+        long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
         }
-        support.db().prepareWrite(extra);
+        db.prepareWrite(extra);
         int pairsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, pairsLen);
         try {
-            long added = support.db().zadd(cmd.toByteArray(1), support.slice());
-            support.db().enforceMaxmemory();
+            long added = db.zadd(cmd.toByteArray(1), support.slice());
+            db.enforceMaxmemory();
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
@@ -70,16 +73,16 @@ final class ZSetCommands {
 
         byte[] key = cmd.toByteArray(1);
         int count = rev
-                ? support.db().zrevrangeReplyCount(key, start, stop, withScores)
-                : support.db().zrangeReplyCount(key, start, stop, withScores);
+                ? support.db(out).zrevrangeReplyCount(key, start, stop, withScores)
+                : support.db(out).zrangeReplyCount(key, start, stop, withScores);
         out.arrayHeader(count);
         if (count == 0) {
             return;
         }
         if (rev) {
-            support.db().zrevrangeReplyInto(key, start, stop, withScores, support.bulkOut(out));
+            support.db(out).zrevrangeReplyInto(key, start, stop, withScores, support.bulkOut(out));
         } else {
-            support.db().zrangeReplyInto(key, start, stop, withScores, support.bulkOut(out));
+            support.db(out).zrangeReplyInto(key, start, stop, withScores, support.bulkOut(out));
         }
     }
 
@@ -101,12 +104,12 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        int count = support.db().zrevrangeReplyCount(key, start, stop, withScores);
+        int count = support.db(out).zrevrangeReplyCount(key, start, stop, withScores);
         out.arrayHeader(count);
         if (count == 0) {
             return;
         }
-        support.db().zrevrangeReplyInto(key, start, stop, withScores, support.bulkOut(out));
+        support.db(out).zrevrangeReplyInto(key, start, stop, withScores, support.bulkOut(out));
     }
 
     private void zrangebyscore(RespCommand cmd, RespWriter out) {
@@ -144,7 +147,7 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        int replyCount = support.db().zrangeByScoreReplyCount(
+        int replyCount = support.db(out).zrangeByScoreReplyCount(
                 key,
                 min.value,
                 min.exclusive,
@@ -158,7 +161,7 @@ final class ZSetCommands {
         if (replyCount == 0) {
             return;
         }
-        support.db().zrangeByScoreReplyInto(
+        support.db(out).zrangeByScoreReplyInto(
                 key,
                 min.value,
                 min.exclusive,
@@ -179,7 +182,7 @@ final class ZSetCommands {
 
         CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(cmd.toByteArray(2));
         CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(cmd.toByteArray(3));
-        out.integer(support.db().zremrangeByScore(cmd.toByteArray(1), min.value, min.exclusive, max.value, max.exclusive));
+        out.integer(support.db(out).zremrangeByScore(cmd.toByteArray(1), min.value, min.exclusive, max.value, max.exclusive));
     }
 
     private void zrevrangebyscore(RespCommand cmd, RespWriter out) {
@@ -217,7 +220,7 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        int replyCount = support.db().zrevrangeByScoreReplyCount(
+        int replyCount = support.db(out).zrevrangeByScoreReplyCount(
                 key,
                 min.value,
                 min.exclusive,
@@ -231,7 +234,7 @@ final class ZSetCommands {
         if (replyCount == 0) {
             return;
         }
-        support.db().zrevrangeByScoreReplyInto(
+        support.db(out).zrevrangeByScoreReplyInto(
                 key,
                 min.value,
                 min.exclusive,
@@ -251,7 +254,7 @@ final class ZSetCommands {
         }
         long start = CommandSupport.parseLong(cmd, 2, "start");
         long stop = CommandSupport.parseLong(cmd, 3, "stop");
-        out.integer(support.db().zremrangeByRank(cmd.toByteArray(1), start, stop));
+        out.integer(support.db(out).zremrangeByRank(cmd.toByteArray(1), start, stop));
     }
 
     private void zrem(RespCommand cmd, RespWriter out) {
@@ -262,7 +265,7 @@ final class ZSetCommands {
         int membersLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, membersLen);
         try {
-            out.integer(support.db().zrem(cmd.toByteArray(1), support.slice()));
+            out.integer(support.db(out).zrem(cmd.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(membersLen);
         }

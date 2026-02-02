@@ -1,11 +1,12 @@
 package yier.bubu.redis.command;
 
 import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.db.DbMemoryConstants;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
 
+import java.util.Arrays;
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 
 final class StringCommands {
     private static final long MAX_STRING_BYTES = 512L * 1024 * 1024;
@@ -36,27 +37,117 @@ final class StringCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
+        YierdisDb db = support.db(out);
 
         YierdisDb.SetMode mode = YierdisDb.SetMode.NORMAL;
         YierdisDb.ExpireOption expire = null;
+        boolean getOld = false;
 
         for (int i = 3; i < cmd.argc(); i++) {
             if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "NX")) {
+                if (mode == YierdisDb.SetMode.XX) {
+                    out.error("ERR syntax error");
+                    return;
+                }
+                if (mode == YierdisDb.SetMode.NX) {
+                    out.error("ERR syntax error");
+                    return;
+                }
                 mode = YierdisDb.SetMode.NX;
                 continue;
             }
             if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "XX")) {
+                if (mode == YierdisDb.SetMode.NX) {
+                    out.error("ERR syntax error");
+                    return;
+                }
+                if (mode == YierdisDb.SetMode.XX) {
+                    out.error("ERR syntax error");
+                    return;
+                }
                 mode = YierdisDb.SetMode.XX;
                 continue;
             }
-            if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "EX") && i + 1 < cmd.argc()) {
-                long seconds = CommandSupport.parseLong(cmd, ++i, "seconds");
-                expire = new YierdisDb.ExpireOption(TimeUnit.SECONDS, seconds);
+            if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "GET")) {
+                if (getOld) {
+                    out.error("ERR syntax error");
+                    return;
+                }
+                getOld = true;
                 continue;
             }
-            if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "PX") && i + 1 < cmd.argc()) {
+            if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "KEEPTTL")) {
+                if (expire != null) {
+                    out.error("ERR syntax error");
+                    return;
+                }
+                expire = YierdisDb.ExpireOption.keepTtl();
+                continue;
+            }
+            if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "EX")) {
+                if (expire != null || i + 1 >= cmd.argc()) {
+                    out.error("ERR syntax error");
+                    return;
+                }
+                long seconds = CommandSupport.parseLong(cmd, ++i, "seconds");
+                if (seconds <= 0) {
+                    out.error("ERR invalid expire time in 'set' command");
+                    return;
+                }
+                expire = YierdisDb.ExpireOption.ex(seconds);
+                continue;
+            }
+            if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "PX")) {
+                if (expire != null || i + 1 >= cmd.argc()) {
+                    out.error("ERR syntax error");
+                    return;
+                }
                 long millis = CommandSupport.parseLong(cmd, ++i, "milliseconds");
-                expire = new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, millis);
+                if (millis <= 0) {
+                    out.error("ERR invalid expire time in 'set' command");
+                    return;
+                }
+                expire = YierdisDb.ExpireOption.px(millis);
+                continue;
+            }
+            if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "EXAT")) {
+                if (expire != null || i + 1 >= cmd.argc()) {
+                    out.error("ERR syntax error");
+                    return;
+                }
+                long unixSeconds = CommandSupport.parseLong(cmd, ++i, "seconds");
+                if (unixSeconds <= 0) {
+                    out.error("ERR invalid expire time in 'set' command");
+                    return;
+                }
+                long expireAtMillis;
+                try {
+                    expireAtMillis = Math.multiplyExact(unixSeconds, 1000L);
+                } catch (ArithmeticException e) {
+                    expireAtMillis = Long.MAX_VALUE;
+                }
+                if (expireAtMillis <= System.currentTimeMillis()) {
+                    out.error("ERR invalid expire time in 'set' command");
+                    return;
+                }
+                expire = YierdisDb.ExpireOption.exAt(unixSeconds);
+                continue;
+            }
+            if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "PXAT")) {
+                if (expire != null || i + 1 >= cmd.argc()) {
+                    out.error("ERR syntax error");
+                    return;
+                }
+                long unixMillis = CommandSupport.parseLong(cmd, ++i, "milliseconds");
+                if (unixMillis <= 0) {
+                    out.error("ERR invalid expire time in 'set' command");
+                    return;
+                }
+                if (unixMillis <= System.currentTimeMillis()) {
+                    out.error("ERR invalid expire time in 'set' command");
+                    return;
+                }
+                expire = YierdisDb.ExpireOption.pxAt(unixMillis);
                 continue;
             }
             out.error("ERR syntax error");
@@ -65,21 +156,34 @@ final class StringCommands {
 
         boolean willSet = true;
         if (mode == YierdisDb.SetMode.NX) {
-            willSet = !support.db().existsKey(support.argView(cmd, 1));
+            willSet = !db.existsKey(support.argView(cmd, 1));
         } else if (mode == YierdisDb.SetMode.XX) {
-            willSet = support.db().existsKey(support.argView(cmd, 1));
-        }
-        if (willSet) {
-            long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
-            support.db().prepareWrite(extra);
+            willSet = db.existsKey(support.argView(cmd, 1));
         }
 
-        boolean ok = support.db().setString(key, cmd, 2, mode, expire);
+        byte[] oldValueForGet = null;
+        if (getOld && willSet) {
+            byte[] old = db.getStringBytes(key);
+            if (old != null) {
+                oldValueForGet = Arrays.copyOf(old, old.length);
+            }
+        }
+
+        if (willSet) {
+            long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+            db.prepareWrite(extra);
+        }
+
+        boolean ok = db.setString(key, cmd, 2, mode, expire);
         if (!ok) {
             out.bulkString((byte[]) null);
             return;
         }
-        support.db().enforceMaxmemory();
+        db.enforceMaxmemory();
+        if (getOld) {
+            out.bulkString(oldValueForGet);
+            return;
+        }
         out.simpleString("OK");
     }
 
@@ -88,7 +192,7 @@ final class StringCommands {
             CommandSupport.wrongArity(out, "get");
             return;
         }
-        support.db().getStringForReply(support.argView(cmd, 1), support.bulkOut(out));
+        support.db(out).getStringForReply(support.argView(cmd, 1), support.bulkOut(out));
     }
 
     private void strlen(RespCommand cmd, RespWriter out) {
@@ -96,7 +200,7 @@ final class StringCommands {
             CommandSupport.wrongArity(out, "strlen");
             return;
         }
-        out.integer(support.db().strlen(support.argView(cmd, 1)));
+        out.integer(support.db(out).strlen(support.argView(cmd, 1)));
     }
 
     private void append(RespCommand cmd, RespWriter out) {
@@ -104,10 +208,11 @@ final class StringCommands {
             CommandSupport.wrongArity(out, "append");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
-        support.db().prepareWrite(extra);
-        long len = support.db().append(cmd.toByteArray(1), cmd, 2);
-        support.db().enforceMaxmemory();
+        YierdisDb db = support.db(out);
+        long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+        db.prepareWrite(extra);
+        long len = db.append(cmd.toByteArray(1), cmd, 2);
+        db.enforceMaxmemory();
         out.integer(len);
     }
 
@@ -116,6 +221,7 @@ final class StringCommands {
             CommandSupport.wrongArity(out, "setbit");
             return;
         }
+        YierdisDb db = support.db(out);
         long offset = CommandSupport.parseNonNegativeLong(cmd, 2, "offset");
         long v = CommandSupport.parseLong(cmd, 3, "value");
         if (v != 0 && v != 1) {
@@ -123,18 +229,18 @@ final class StringCommands {
             return;
         }
 
-        int currentLen = support.db().strlen(support.argView(cmd, 1));
+        int currentLen = db.strlen(support.argView(cmd, 1));
         long requiredBytes = (offset >>> 3) + 1;
         if (requiredBytes > MAX_STRING_BYTES) {
             out.error("ERR string exceeds maximum allowed size");
             return;
         }
         long growth = Math.max(0L, requiredBytes - (long) currentLen);
-        long extra = (long) Math.max(0, cmd.len(1)) + growth + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
-        support.db().prepareWrite(extra);
+        long extra = (long) Math.max(0, cmd.len(1)) + growth + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+        db.prepareWrite(extra);
 
-        int old = support.db().setBit(cmd.toByteArray(1), offset, (int) v);
-        support.db().enforceMaxmemory();
+        int old = db.setBit(cmd.toByteArray(1), offset, (int) v);
+        db.enforceMaxmemory();
         out.integer(old);
     }
 
@@ -144,7 +250,7 @@ final class StringCommands {
             return;
         }
         long offset = CommandSupport.parseNonNegativeLong(cmd, 2, "offset");
-        out.integer(support.db().getBit(support.argView(cmd, 1), offset));
+        out.integer(support.db(out).getBit(support.argView(cmd, 1), offset));
     }
 
     private void bitcount(RespCommand cmd, RespWriter out) {
@@ -153,12 +259,12 @@ final class StringCommands {
             return;
         }
         if (cmd.argc() == 2) {
-            out.integer(support.db().bitcount(support.argView(cmd, 1)));
+            out.integer(support.db(out).bitcount(support.argView(cmd, 1)));
             return;
         }
         long start = CommandSupport.parseLong(cmd, 2, "start");
         long end = CommandSupport.parseLong(cmd, 3, "end");
-        out.integer(support.db().bitcount(support.argView(cmd, 1), start, end));
+        out.integer(support.db(out).bitcount(support.argView(cmd, 1), start, end));
     }
 
     private void incr(RespCommand cmd, RespWriter out) {
@@ -174,10 +280,11 @@ final class StringCommands {
             CommandSupport.wrongArity(out, delta > 0 ? "incr" : "decr");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + CommandSupport.ENTRY_OVERHEAD_ESTIMATE_BYTES;
-        support.db().prepareWrite(extra);
-        long value = support.db().incrBy(cmd.toByteArray(1), delta);
-        support.db().enforceMaxmemory();
+        YierdisDb db = support.db(out);
+        long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+        db.prepareWrite(extra);
+        long value = db.incrBy(cmd.toByteArray(1), delta);
+        db.enforceMaxmemory();
         out.integer(value);
     }
 }

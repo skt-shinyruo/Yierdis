@@ -10,7 +10,7 @@
 
 - **Responsibility:** 命令分发、参数解析、错误映射、性能优化（低分配写出路径）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-23
+- **Last Updated:** 2026-02-01
 
 ## Specifications
 
@@ -22,6 +22,7 @@
 条件：用户传入错误参数或对错误类型 key 操作
 - 预期：返回 `ERR ...` 或 `WRONGTYPE ...`，并尽量与 Redis 的错误风格一致
   - 说明：当连接处于 RESP3 时，nil 使用 RESP3 null（`_`）返回；其余基础类型尽量保持 RESP2 可解析子集
+  - 变更：整数解析错误统一为 Redis 风格（`ERR value is not an integer or out of range`），避免携带参数 label 导致生态工具/测试字符串匹配失败
 
 #### Scenario: null bulk string 参数（`$-1`）
 条件：客户端发送包含 `$-1`（null bulk string）的命令参数
@@ -60,8 +61,9 @@
 **Module:** command/protocol
 当连接协议为 RESP3（`HELLO 3`）时：
 - `HGETALL` 输出 RESP3 map（field -> value）
-- `MEMORY STATS` 输出 RESP3 map（key -> value；字段集合保持稳定）
+- `MEMORY STATS` 输出 RESP3 map（key -> value；字段集合保持稳定，数值字段使用 integer 类型）
 - `SMEMBERS` 输出 RESP3 set
+补充：`OBJECT ENCODING` 返回 bulk string（非状态类字符串），缺失 key 返回 nil。
 
 ## Dependencies
 
@@ -77,3 +79,4 @@
 - 2026-01-14：新增 BITMAP/HLL 命令族（`SETBIT/GETBIT/BITCOUNT/PFADD/PFCOUNT/PFMERGE`），并补齐相关参数校验与 `maxmemory` 接入。
 - 2026-01-17：命令路由加速：`CommandRegistry` 从线性扫描升级为 O(1) 哈希索引；新增 `INFO/STATS` 作为可观测性入口（输出由 server 注入 provider）。
 - 2026-01-23：写命令统一引入 write preflight（`prepareWrite`）并调整顺序为 preflight→执行→enforce→reply（避免双 reply）；RESP3 下 `HGETALL/MEMORY STATS/SMEMBERS` 改为 map/set；`KEYS` glob 兼容范围补齐（`[]`/否定/范围/转义）。
+- 2026-02-01：多 DB 路由接入命令层（通过 `RespWriter.session` 访问连接态 `dbIndex`）；`INFO` 输出形态对齐 Redis（bulk string，结构化指标迁移到 `INFO YIERDIS`/`STATS`）；`MEMORY STATS` 数值字段类型对齐为 integer；`OBJECT ENCODING` 回复类型对齐为 bulk string。

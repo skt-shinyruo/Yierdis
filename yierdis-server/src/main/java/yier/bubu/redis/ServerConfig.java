@@ -5,6 +5,7 @@ import yier.bubu.redis.args.YierdisServerArgs;
 
 final class ServerConfig {
     final int port;
+    final int databases;
     final long expirationCleanupIntervalMillis;
     final int ioThreads;
     final int executorQueueCapacity;
@@ -33,6 +34,7 @@ final class ServerConfig {
 
     private ServerConfig(
             int port,
+            int databases,
             long expirationCleanupIntervalMillis,
             int ioThreads,
             int executorQueueCapacity,
@@ -60,6 +62,7 @@ final class ServerConfig {
             long expireCleanupTimeLimitMillis
     ) {
         this.port = port;
+        this.databases = databases;
         this.expirationCleanupIntervalMillis = expirationCleanupIntervalMillis;
         this.ioThreads = ioThreads;
         this.executorQueueCapacity = executorQueueCapacity;
@@ -112,6 +115,7 @@ final class ServerConfig {
 
         return new ServerConfig(
                 parsed.port,
+                parsed.databases,
                 parsed.cleanupIntervalMillis,
                 parsed.ioThreads,
                 parsed.executorQueueCapacity,

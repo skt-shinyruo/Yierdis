@@ -3,6 +3,8 @@ package yier.bubu.redis.command;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.protocol.RespCommand;
+import yier.bubu.redis.protocol.RespServerSession;
+import yier.bubu.redis.protocol.RespTransactionState;
 import yier.bubu.redis.protocol.RespWriter;
 
 import java.util.Objects;
@@ -22,9 +24,14 @@ public final class YierdisFastCommandProcessor {
     }
 
     public YierdisFastCommandProcessor(YierdisDb db, ServerInfoProvider infoProvider) {
-        Objects.requireNonNull(db, "db");
-        CommandSupport support = new CommandSupport(db, infoProvider);
+        this(singleDbRouter(db), infoProvider);
+    }
+
+    public YierdisFastCommandProcessor(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider) {
+        Objects.requireNonNull(dbRouter, "dbRouter");
+        CommandSupport support = new CommandSupport(dbRouter, infoProvider);
         CommandRegistry registry = new CommandRegistry();
+        new TransactionCommands(support, this).register(registry);
         new ServerCommands(support).register(registry);
         new KeyCommands(support).register(registry);
         new StringCommands(support).register(registry);
@@ -62,6 +69,21 @@ public final class YierdisFastCommandProcessor {
             return;
         }
 
+        RespTransactionState tx = null;
+        if (out.session() instanceof RespServerSession s) {
+            tx = s.transaction();
+        }
+        if (tx != null && tx.active()) {
+            boolean isMulti = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "MULTI");
+            boolean isExec = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "EXEC");
+            boolean isDiscard = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "DISCARD");
+            if (!isMulti && !isExec && !isDiscard) {
+                tx.enqueue(copyArgv(cmd));
+                out.simpleString("QUEUED");
+                return;
+            }
+        }
+
         try {
             CommandRegistry.CommandHandler handler = registry.find(cmd);
             if (handler == null) {
@@ -78,6 +100,15 @@ public final class YierdisFastCommandProcessor {
         } catch (IllegalArgumentException e) {
             out.error("ERR " + e.getMessage());
         }
+    }
+
+    private static byte[][] copyArgv(RespCommand cmd) {
+        int argc = cmd == null ? 0 : cmd.argc();
+        byte[][] argv = new byte[argc][];
+        for (int i = 0; i < argc; i++) {
+            argv[i] = cmd.toByteArray(i);
+        }
+        return argv;
     }
 
     private static String unknownCommandMessage(RespCommand cmd) {
@@ -98,5 +129,20 @@ public final class YierdisFastCommandProcessor {
             return "ERR unknown command '" + s + "'";
         }
         return "ERR unknown command";
+    }
+
+    private static YierdisDbRouter singleDbRouter(YierdisDb db) {
+        YierdisDb fixed = Objects.requireNonNull(db, "db");
+        return new YierdisDbRouter() {
+            @Override
+            public YierdisDb dbFor(RespWriter out) {
+                return fixed;
+            }
+
+            @Override
+            public int databases() {
+                return 1;
+            }
+        };
     }
 }

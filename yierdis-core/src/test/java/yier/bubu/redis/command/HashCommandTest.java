@@ -137,20 +137,20 @@ public class HashCommandTest {
                 int threshold = 512;
 
                 Assert.assertTrue(client.execute(cmd("HSET", "h", "f0", "v0")) instanceof RespInteger);
-                Assert.assertEquals("listpack", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "h"))).value());
+                Assert.assertEquals("listpack", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "h"))).asString());
 
                 for (int i = 1; i < threshold; i++) {
                     Assert.assertTrue(client.execute(cmd("HSET", "h", "f" + i, "v" + i)) instanceof RespInteger);
                 }
-                Assert.assertEquals("listpack", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "h"))).value());
+                Assert.assertEquals("listpack", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "h"))).asString());
 
                 // Updating an existing field at the threshold should NOT trigger an upgrade.
                 Assert.assertTrue(client.execute(cmd("HSET", "h", "f0", "v0-new")) instanceof RespInteger);
-                Assert.assertEquals("listpack", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "h"))).value());
+                Assert.assertEquals("listpack", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "h"))).asString());
 
                 // Adding a new field beyond the threshold should upgrade to hashtable.
                 Assert.assertTrue(client.execute(cmd("HSET", "h", "fx", "vx")) instanceof RespInteger);
-                Assert.assertEquals("hashtable", ((RespSimpleString) client.execute(cmd("OBJECT", "ENCODING", "h"))).value());
+                Assert.assertEquals("hashtable", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "h"))).asString());
             }
         });
     }

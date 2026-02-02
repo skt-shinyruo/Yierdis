@@ -8,6 +8,7 @@
 - 移除 deprecated bytes alias（`YierdisBytesSink/YierdisBytesSource/YierdisDirectBytesSink` 等），bytes SSOT 统一为 `yierdis-bytes`。
 
 ### Added
+- 多 DB 支持：新增 `--databases`（默认 16），并在连接态维护 `dbIndex`，支持 `SELECT 0..N-1` 与按连接路由到目标 DB。
 - 新增 `yierdis-bytes` 中立模块：承载 `BytesSource/BytesSink/BytesSlice` 抽象，供 protocol/off-heap/I/O 复用，避免 `yierdis-protocol` 通过 “off-heap” 命名模块复用 bytes 接口造成依赖误导。
 - 新增 `RespMap`（RESP3 map 最小对象模型）与 client 侧 RESP3 最小解码能力（`%` map、`_` null），用于覆盖 `HELLO 3` 分支。
 - 新增 `RespInlineCommandParser`（sdssplitargs 风格），server inline command 与 CLI REPL 共用同一套解析规则，避免规则漂移。
@@ -39,6 +40,7 @@
 - off-heap 后端发现升级：引入 `YierdisOffHeapAllocatorProvider`（ServiceLoader），并在 server fat-jar（shade）场景合并 services 资源，提升可运维性与错误可读性。
 - 增加架构退化护栏测试：`CommandRegistryGuardTest`（最小命令集注册）、`ConnectionContextIsolationTest`（连接级状态隔离）。
 - 新增 `yierdis-bytes-netty`：提供 `NettyByteBufSink` 适配器，收敛 ByteBuf↔bytes 写出边界，供 server/offheap-netty 复用。
+- INFO 生态对齐：`INFO` 输出调整为 Redis 兼容的 bulk string（文本分节），保留 `INFO YIERDIS`/`STATS` 的结构化指标输出用于教学与排障。
 
 ### Changed
 - `yierdis-protocol` 依赖收敛：不再直接依赖 `yierdis-offheap-api`，改为依赖 `yierdis-bytes`；同时移除 `yierdis-offheap-api` 的 bytes 兼容别名，避免 SSOT 漂移。
@@ -47,6 +49,10 @@
 - 写命令执行顺序统一为 preflight（`prepareWrite`，含预淘汰/预检查）→执行→`enforceMaxmemory`→reply，避免 maxmemory 抛错导致的双 reply/协议损坏。
 - RESP3 连接下集合类回复更友好：`HGETALL`/`MEMORY STATS` 输出 map，`SMEMBERS` 输出 set；RESP2 行为保持不变。
 - `KEYS` glob 语义补齐至 Redis 风格最小子集：支持 `[]`/范围/否定/反斜杠转义，并保持 byte 级二进制安全匹配。
+- `MEMORY STATS` 数值字段类型对齐为 integer（RESP2/RESP3 一致）。
+- `OBJECT ENCODING` 的非状态类字符串输出类型对齐为 bulk string（缺失 key 仍返回 nil）。
+- `EXPIRE seconds<=0` 对齐为“立即删除”（返回 1 表示 key 存在并删除，0 表示不存在）。
+- 整数解析错误文本对齐 Redis：统一为 `ERR value is not an integer or out of range`（不再携带参数 label）。
 - Hash(off-heap) 编码策略对齐 Redis：packed(listpack-like) 起步，按阈值/oversize 升级到 dict，并移除不可达分支。
 - 写命令热路径进一步减少不必要的 `byte[]` 物化：`SET/APPEND` 可从 `RespCommand.frame()` 的参数 slice 直接拷贝到最终 payload（off-heap 或 raw string）。
 - 命令执行路径收敛：以 `YierdisFastCommandProcessor` 为唯一权威实现（SSOT），测试主要覆盖 fast RESP pipeline。

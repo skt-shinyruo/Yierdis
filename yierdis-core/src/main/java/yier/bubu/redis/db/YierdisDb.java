@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 public final class YierdisDb {
@@ -26,12 +27,9 @@ public final class YierdisDb {
     private final YierdisKeyspace<YierdisObject> store;
     private final YierdisExpireIndex expires;
     private final YierdisOffHeapAllocator offHeapAllocator;
+    private final boolean ownsOffHeapAllocator;
     private final boolean keysStoredOffHeap;
 
-    // Best-effort per-entry overhead estimate.
-    // In Java, the real overhead (object headers / references / alignment) is much higher than the raw payload bytes.
-    // We intentionally use a conservative constant here to make maxmemory enforcement closer to real heap pressure.
-    private static final int ENTRY_OVERHEAD_BYTES = 64;
     private static final String OOM_ERR = "OOM command not allowed when used memory > 'maxmemory'.";
 
     private final long maxmemoryBytes;
@@ -74,7 +72,21 @@ public final class YierdisDb {
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
+        this(offHeapAllocator, true, offHeapKeysEnabled, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+    }
+
+    public YierdisDb(
+            YierdisOffHeapAllocator offHeapAllocator,
+            boolean ownsOffHeapAllocator,
+            boolean offHeapKeysEnabled,
+            long maxmemoryBytes,
+            String maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis
+    ) {
         this.offHeapAllocator = offHeapAllocator;
+        this.ownsOffHeapAllocator = ownsOffHeapAllocator;
         if (offHeapKeysEnabled && !(offHeapAllocator instanceof YierdisOffHeapAddressAllocator)) {
             throw new IllegalArgumentException("offHeapKeysEnabled requires an address allocator (unsafe off-heap backend)");
         }
@@ -375,11 +387,17 @@ public final class YierdisDb {
     }
 
     private long usedBytesForMaxmemory() {
-        long offHeapUsed = 0;
-        if (offHeapAllocator != null) {
-            offHeapUsed = offHeapAllocator.usedBytes();
+        // maxmemory 是 best-effort 预算：当 off-heap allocator 由当前 DB 所拥有时，将堆外 used bytes 也计入预算。
+        // 对于 server 的多 DB 场景（allocator 共享且 ownsOffHeapAllocator=false），避免将同一 allocator.usedBytes() 重复计入每个 DB。
+        long offHeapUsedBytes = 0;
+        if (ownsOffHeapAllocator && offHeapAllocator != null) {
+            try {
+                offHeapUsedBytes = Math.max(0L, offHeapAllocator.usedBytes());
+            } catch (Throwable ignored) {
+                offHeapUsedBytes = 0;
+            }
         }
-        return usedBytes + offHeapUsed;
+        return usedBytes + offHeapUsedBytes;
     }
 
     private void touch(YierdisObject e) {
@@ -435,7 +453,7 @@ public final class YierdisDb {
         store.clear();
         expires.clear();
         usedBytes = 0;
-        if (offHeapAllocator != null) {
+        if (ownsOffHeapAllocator && offHeapAllocator != null) {
             offHeapAllocator.close();
         }
     }
@@ -466,7 +484,8 @@ public final class YierdisDb {
                 offHeapAllocator,
                 store,
                 expires,
-                keysStoredOffHeap
+                keysStoredOffHeap,
+                ownsOffHeapAllocator
         );
     }
 
@@ -475,7 +494,7 @@ public final class YierdisDb {
             return 0;
         }
         int keyBytesCost = keysStoredOffHeap ? 0 : keyBytes.length;
-        return ENTRY_OVERHEAD_BYTES + keyBytesCost + estimateValueBytes(e);
+        return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + keyBytesCost + estimateValueBytes(e);
     }
 
     private long estimateValueBytes(YierdisObject e) {
@@ -582,7 +601,17 @@ public final class YierdisDb {
         if (e == null) {
             return false;
         }
-        long expireAtMillis = System.currentTimeMillis() + Math.max(0, seconds) * 1000L;
+        if (seconds <= 0) {
+            // Redis-compatible: seconds<=0 means the key is deleted immediately (if it exists).
+            removeExpire(keyBytes);
+            if (store.remove(keyBytes, e)) {
+                e.releasePayloadIfAny();
+                usedBytes -= e.estimatedBytes;
+            }
+            return true;
+        }
+
+        long expireAtMillis = safeExpireAtMillis(System.currentTimeMillis(), seconds);
         setExpireAtMillis(keyBytes, expireAtMillis);
         return true;
     }
@@ -594,6 +623,132 @@ public final class YierdisDb {
             return false;
         }
         return expire(canonical, seconds);
+    }
+
+    private static long safeExpireAtMillis(long nowMillis, long seconds) {
+        // Saturating math to avoid long overflow: expire time is best-effort and must never wrap negative.
+        long deltaMillis;
+        try {
+            deltaMillis = Math.multiplyExact(seconds, 1000L);
+        } catch (ArithmeticException e) {
+            return Long.MAX_VALUE;
+        }
+        try {
+            return Math.addExact(nowMillis, deltaMillis);
+        } catch (ArithmeticException e) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    private static long safeAddMillis(long nowMillis, long deltaMillis) {
+        try {
+            return Math.addExact(nowMillis, deltaMillis);
+        } catch (ArithmeticException e) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    public boolean pexpire(byte[] keyBytes, long milliseconds) {
+        checkThread();
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
+        if (e == null) {
+            return false;
+        }
+        if (milliseconds <= 0) {
+            // Redis-compatible: milliseconds<=0 means the key is deleted immediately (if it exists).
+            removeExpire(keyBytes);
+            if (store.remove(keyBytes, e)) {
+                e.releasePayloadIfAny();
+                usedBytes -= e.estimatedBytes;
+            }
+            return true;
+        }
+
+        long expireAtMillis = safeAddMillis(System.currentTimeMillis(), milliseconds);
+        setExpireAtMillis(keyBytes, expireAtMillis);
+        return true;
+    }
+
+    public boolean pexpire(YierdisBytesView keyView, long milliseconds) {
+        checkThread();
+        byte[] canonical = store.canonicalKey(keyView);
+        if (canonical == null) {
+            return false;
+        }
+        return pexpire(canonical, milliseconds);
+    }
+
+    public boolean expireAtSeconds(byte[] keyBytes, long unixSeconds) {
+        checkThread();
+        long expireAtMillis;
+        try {
+            expireAtMillis = Math.multiplyExact(unixSeconds, 1000L);
+        } catch (ArithmeticException e) {
+            expireAtMillis = Long.MAX_VALUE;
+        }
+        return expireAtMillis(keyBytes, expireAtMillis);
+    }
+
+    public boolean expireAtSeconds(YierdisBytesView keyView, long unixSeconds) {
+        checkThread();
+        byte[] canonical = store.canonicalKey(keyView);
+        if (canonical == null) {
+            return false;
+        }
+        return expireAtSeconds(canonical, unixSeconds);
+    }
+
+    public boolean expireAtMillis(byte[] keyBytes, long unixMillis) {
+        checkThread();
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
+        if (e == null) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        if (unixMillis <= now) {
+            // 过期时间在过去/现在：按 Redis 语义立刻删除 key（如果存在）。
+            removeExpire(keyBytes);
+            if (store.remove(keyBytes, e)) {
+                e.releasePayloadIfAny();
+                usedBytes -= e.estimatedBytes;
+            }
+            return true;
+        }
+        setExpireAtMillis(keyBytes, unixMillis);
+        return true;
+    }
+
+    public boolean expireAtMillis(YierdisBytesView keyView, long unixMillis) {
+        checkThread();
+        byte[] canonical = store.canonicalKey(keyView);
+        if (canonical == null) {
+            return false;
+        }
+        return expireAtMillis(canonical, unixMillis);
+    }
+
+    public boolean persist(byte[] keyBytes) {
+        checkThread();
+        YierdisObject e = getObjectIfNotExpired(keyBytes);
+        if (e == null) {
+            return false;
+        }
+        Long expireAtMillis = expires.get(keyBytes);
+        if (expireAtMillis == null) {
+            return false;
+        }
+        removeExpire(keyBytes);
+        touch(e);
+        return true;
+    }
+
+    public boolean persist(YierdisBytesView keyView) {
+        checkThread();
+        byte[] canonical = store.canonicalKey(keyView);
+        if (canonical == null) {
+            return false;
+        }
+        return persist(canonical);
     }
 
     public long ttlSeconds(byte[] keyBytes) {
@@ -616,6 +771,26 @@ public final class YierdisDb {
         return remainingMillis <= 0 ? -2 : remainingMillis / 1000L;
     }
 
+    public long ttlMillis(byte[] keyBytes) {
+        checkThread();
+        YierdisObject e = store.get(keyBytes);
+        if (e == null) {
+            return -2;
+        }
+        long now = System.currentTimeMillis();
+        if (removeIfExpired(keyBytes, e, now)) {
+            return -2;
+        }
+        touch(e);
+
+        Long expireAtMillis = expires.get(keyBytes);
+        if (expireAtMillis == null) {
+            return -1;
+        }
+        long remainingMillis = expireAtMillis - now;
+        return remainingMillis <= 0 ? -2 : remainingMillis;
+    }
+
     public long ttlSeconds(YierdisBytesView keyView) {
         checkThread();
         byte[] canonical = store.canonicalKey(keyView);
@@ -623,6 +798,15 @@ public final class YierdisDb {
             return -2;
         }
         return ttlSeconds(canonical);
+    }
+
+    public long ttlMillis(YierdisBytesView keyView) {
+        checkThread();
+        byte[] canonical = store.canonicalKey(keyView);
+        if (canonical == null) {
+            return -2;
+        }
+        return ttlMillis(canonical);
     }
 
     public List<byte[]> keys(byte[] globPattern) {
@@ -655,12 +839,116 @@ public final class YierdisDb {
         return out;
     }
 
+    private static final class StopScan extends RuntimeException {
+        static final StopScan INSTANCE = new StopScan();
+
+        private StopScan() {
+        }
+
+        @Override
+        public synchronized Throwable fillInStackTrace() {
+            return this;
+        }
+    }
+
+    /**
+     * Redis-compatible SCAN（best-effort）。
+     * <p>
+     * 该实现以“遍历顺序中的偏移量”作为游标含义，支持 MATCH glob 与 COUNT hint。
+     * 在数据集变化（写入/删除/过期清理）情况下不保证强一致，但尽量做到“可推进、可终止、不阻塞太久”。
+     *
+     * @param cursor      游标（{@code 0} 表示从头开始）
+     * @param globPattern glob 过滤（可为 null 表示不过滤）
+     * @param count       期望返回的最大 key 数（Redis 中 COUNT 是 hint，这里按上限处理；必须 > 0）
+     * @param out         输出容器（追加写入）
+     * @return 下一次扫描的游标；返回 {@code 0} 表示扫描结束
+     */
+    public ScanCursor scan(ScanCursor cursor, byte[] globPattern, int count, List<byte[]> out) {
+        checkThread();
+        Objects.requireNonNull(out, "out");
+        if (count <= 0) {
+            throw new IllegalArgumentException("count must be > 0");
+        }
+
+        long start = cursor == null ? 0L : cursor.value();
+        if (start < 0) {
+            throw new IllegalArgumentException("cursor must be >= 0");
+        }
+        int total = store.size();
+        if (total == 0) {
+            return ScanCursor.start();
+        }
+        if (start >= (long) total) {
+            return ScanCursor.start();
+        }
+
+        long now = System.currentTimeMillis();
+        List<byte[]> expiredKeys = new ArrayList<>();
+        List<YierdisObject> expiredValues = new ArrayList<>();
+
+        // COUNT 在 Redis 里是 hint：为了避免 MATCH 过滤导致“单次扫描跑完整个 keyspace”，加一个步数上限。
+        int maxSteps = Math.max(64, count * 10);
+
+        final long[] pos = new long[]{0L};
+        final int[] steps = new int[]{0};
+        final long[] nextCursor = new long[]{0L};
+
+        try {
+            store.forEach((k, e) -> {
+                if (pos[0] < start) {
+                    pos[0]++;
+                    return;
+                }
+                if (steps[0]++ >= maxSteps) {
+                    nextCursor[0] = pos[0];
+                    throw StopScan.INSTANCE;
+                }
+
+                pos[0]++;
+
+                if (isKeyExpired(k, now)) {
+                    expiredKeys.add(k);
+                    expiredValues.add(e);
+                    return;
+                }
+                if (globPattern == null || globMatches(globPattern, k)) {
+                    out.add(k);
+                    if (out.size() >= count) {
+                        nextCursor[0] = pos[0];
+                        throw StopScan.INSTANCE;
+                    }
+                }
+            });
+            // 扫到结尾：按 Redis 语义返回 cursor=0 表示结束。
+            nextCursor[0] = 0L;
+        } catch (StopScan ignored) {
+            // best-effort：如果游标已经越过当前 key 数，则直接结束。
+            if (pos[0] >= (long) store.size()) {
+                nextCursor[0] = 0L;
+            }
+        }
+
+        // 清理本轮遍历过程中发现的过期 key（与 KEYS 类似的“顺手清理”语义）。
+        for (int i = 0; i < expiredKeys.size(); i++) {
+            byte[] key = expiredKeys.get(i);
+            removeExpire(key);
+            if (store.remove(key, expiredValues.get(i))) {
+                expiredValues.get(i).releasePayloadIfAny();
+                usedBytes -= expiredValues.get(i).estimatedBytes;
+            }
+        }
+
+        return ScanCursor.of(nextCursor[0]);
+    }
+
     public boolean setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption) {
         checkThread();
         long now = System.currentTimeMillis();
-        Long expireAtMillis = expireOption == null ? null : expireOption.toExpireAtMillis(now);
+        boolean keepTtl = expireOption != null && expireOption.isKeepTtl();
+        Long expireAtMillis = (expireOption == null || keepTtl) ? null : expireOption.toExpireAtMillis(now);
 
         final boolean[] didSet = new boolean[]{false};
+        final boolean[] existed = new boolean[]{false};
         final long[] deltaBytes = new long[]{0};
         try {
             store.compute(keyBytes, (k, old) -> {
@@ -672,6 +960,7 @@ public final class YierdisDb {
                     old = null;
                     oldEstimate = 0;
                 }
+                existed[0] = old != null;
                 if (mode == SetMode.NX && old != null) {
                     touch(old);
                     return old;
@@ -700,11 +989,15 @@ public final class YierdisDb {
         }
         usedBytes += deltaBytes[0];
         if (didSet[0]) {
+            if (keepTtl && existed[0]) {
+                // KEEPTTL：覆盖写入但保留原有过期时间（仅当 key 原先存在时有意义）。
+                return true;
+            }
             if (expireAtMillis != null) {
                 setExpireAtMillis(keyBytes, expireAtMillis);
-            } else {
-                removeExpire(keyBytes);
+                return true;
             }
+            removeExpire(keyBytes);
         }
         return didSet[0];
     }
@@ -715,9 +1008,11 @@ public final class YierdisDb {
             throw new IllegalArgumentException("cmd must not be null");
         }
         long now = System.currentTimeMillis();
-        Long expireAtMillis = expireOption == null ? null : expireOption.toExpireAtMillis(now);
+        boolean keepTtl = expireOption != null && expireOption.isKeepTtl();
+        Long expireAtMillis = (expireOption == null || keepTtl) ? null : expireOption.toExpireAtMillis(now);
 
         final boolean[] didSet = new boolean[]{false};
+        final boolean[] existed = new boolean[]{false};
         final long[] deltaBytes = new long[]{0};
         try {
             store.compute(keyBytes, (k, old) -> {
@@ -729,6 +1024,7 @@ public final class YierdisDb {
                     old = null;
                     oldEstimate = 0;
                 }
+                existed[0] = old != null;
                 if (mode == SetMode.NX && old != null) {
                     touch(old);
                     return old;
@@ -757,11 +1053,15 @@ public final class YierdisDb {
         }
         usedBytes += deltaBytes[0];
         if (didSet[0]) {
+            if (keepTtl && existed[0]) {
+                // KEEPTTL：覆盖写入但保留原有过期时间（仅当 key 原先存在时有意义）。
+                return true;
+            }
             if (expireAtMillis != null) {
                 setExpireAtMillis(keyBytes, expireAtMillis);
-            } else {
-                removeExpire(keyBytes);
+                return true;
             }
+            removeExpire(keyBytes);
         }
         return didSet[0];
     }
@@ -1373,8 +1673,11 @@ public final class YierdisDb {
     }
 
     private List<byte[]> popInternal(byte[] keyBytes, int count, boolean left) {
-        if (count <= 0) {
-            return new ArrayList<>();
+        if (count == 0) {
+            return Collections.emptyList();
+        }
+        if (count < 0) {
+            throw new IllegalArgumentException("count must be >= 0");
         }
         long now = System.currentTimeMillis();
         final List<byte[]>[] popped = new List[]{null};
@@ -1384,7 +1687,6 @@ public final class YierdisDb {
             if (isKeyExpired(k, now)) {
                 old.releasePayloadIfAny();
                 removeExpire(k);
-                popped[0] = new ArrayList<>();
                 deltaBytes[0] -= oldEstimate;
                 return null;
             }
@@ -1406,7 +1708,7 @@ public final class YierdisDb {
             return old;
         });
         usedBytes += deltaBytes[0];
-        return popped[0] == null ? new ArrayList<>() : popped[0];
+        return popped[0];
     }
 
     public int hset(byte[] keyBytes, List<byte[]> fieldValuePairs) {
@@ -2284,20 +2586,82 @@ public final class YierdisDb {
     }
 
     public static final class ExpireOption {
-        final TimeUnit unit;
-        final long duration;
+        public enum Kind {
+            KEEP_TTL,
+            EX,
+            PX,
+            EXAT,
+            PXAT
+        }
 
-        public ExpireOption(TimeUnit unit, long duration) {
-            this.unit = unit;
-            this.duration = duration;
+        final Kind kind;
+        final long value;
+
+        private ExpireOption(Kind kind, long value) {
+            this.kind = Objects.requireNonNull(kind, "kind");
+            this.value = value;
+        }
+
+        public static ExpireOption keepTtl() {
+            return new ExpireOption(Kind.KEEP_TTL, 0L);
+        }
+
+        public static ExpireOption ex(long seconds) {
+            return new ExpireOption(Kind.EX, seconds);
+        }
+
+        public static ExpireOption px(long milliseconds) {
+            return new ExpireOption(Kind.PX, milliseconds);
+        }
+
+        public static ExpireOption exAt(long unixSeconds) {
+            return new ExpireOption(Kind.EXAT, unixSeconds);
+        }
+
+        public static ExpireOption pxAt(long unixMilliseconds) {
+            return new ExpireOption(Kind.PXAT, unixMilliseconds);
+        }
+
+        boolean isKeepTtl() {
+            return kind == Kind.KEEP_TTL;
         }
 
         long toExpireAtMillis(long nowMillis) {
-            long ms = unit.toMillis(duration);
-            if (ms <= 0) {
+            return switch (kind) {
+                case KEEP_TTL -> throw new IllegalStateException("KEEP_TTL has no expireAtMillis");
+                case EX -> safeExpireRelativeMillis(nowMillis, value, TimeUnit.SECONDS);
+                case PX -> safeExpireRelativeMillis(nowMillis, value, TimeUnit.MILLISECONDS);
+                case EXAT -> safeExpireAbsoluteMillis(value, TimeUnit.SECONDS);
+                case PXAT -> safeExpireAbsoluteMillis(value, TimeUnit.MILLISECONDS);
+            };
+        }
+
+        private static long safeExpireRelativeMillis(long nowMillis, long duration, TimeUnit unit) {
+            if (duration <= 0) {
                 return nowMillis;
             }
-            return nowMillis + ms;
+            long deltaMillis;
+            try {
+                deltaMillis = Math.multiplyExact(duration, unit == TimeUnit.SECONDS ? 1000L : 1L);
+            } catch (ArithmeticException e) {
+                return Long.MAX_VALUE;
+            }
+            try {
+                return Math.addExact(nowMillis, deltaMillis);
+            } catch (ArithmeticException e) {
+                return Long.MAX_VALUE;
+            }
+        }
+
+        private static long safeExpireAbsoluteMillis(long value, TimeUnit unit) {
+            if (unit == TimeUnit.MILLISECONDS) {
+                return value;
+            }
+            try {
+                return Math.multiplyExact(value, 1000L);
+            } catch (ArithmeticException e) {
+                return Long.MAX_VALUE;
+            }
         }
     }
 

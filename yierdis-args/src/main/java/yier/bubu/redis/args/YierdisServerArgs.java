@@ -31,6 +31,13 @@ public final class YierdisServerArgs {
     public int port = 6378;
 
     @Option(
+            names = YierdisServerArgNames.DATABASES,
+            defaultValue = "16",
+            description = "Number of logical databases (SELECT 0..N-1)."
+    )
+    public int databases = 16;
+
+    @Option(
             names = YierdisServerArgNames.CLEANUP_INTERVAL_MILLIS,
             defaultValue = "1000",
             description = "Expiration cleanup interval in milliseconds (0 disables cleanup)."
@@ -172,6 +179,12 @@ public final class YierdisServerArgs {
         if (port < 0 || port > 65535) {
             throw new IllegalArgumentException("port must be in range 0..65535");
         }
+        if (databases <= 0) {
+            throw new IllegalArgumentException("databases must be > 0");
+        }
+        if (databases > 1024) {
+            throw new IllegalArgumentException("databases must be <= 1024");
+        }
         if (cleanupIntervalMillis < 0) {
             throw new IllegalArgumentException("cleanupIntervalMillis must be >= 0");
         }
@@ -282,6 +295,7 @@ public final class YierdisServerArgs {
         YierdisServerArgs out = new YierdisServerArgs();
         out.help = help;
         out.port = port;
+        out.databases = databases;
         out.cleanupIntervalMillis = cleanupIntervalMillis;
         out.noCleanup = noCleanup;
         out.ioThreads = ioThreads;
@@ -325,6 +339,9 @@ public final class YierdisServerArgs {
 
         out.add(YierdisServerArgNames.PORT);
         out.add(Integer.toString(port));
+
+        out.add(YierdisServerArgNames.DATABASES);
+        out.add(Integer.toString(databases));
 
         if (noCleanup) {
             out.add(YierdisServerArgNames.NO_CLEANUP);

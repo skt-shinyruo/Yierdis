@@ -9,6 +9,7 @@ import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.protocol.RespBulkString;
+import yier.bubu.redis.protocol.RespInteger;
 import yier.bubu.redis.protocol.RespMap;
 import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.protocol.RespObjectParser;
@@ -83,18 +84,18 @@ public class Resp3CollectionReplyTest {
             )));
             RespObject stats = parseReply(readOutbound(ch));
             Assert.assertTrue(stats instanceof RespMap);
-            Map<String, String> map = toStringMap((RespMap) stats);
+            Map<String, RespObject> map = toObjectMap((RespMap) stats);
             Assert.assertTrue(map.containsKey("maxmemory_bytes"));
             Assert.assertTrue(map.containsKey("used_bytes_for_maxmemory"));
             Assert.assertTrue(map.containsKey("heap_data_bytes_estimate"));
             Assert.assertTrue(map.containsKey("offheap_used_bytes"));
             Assert.assertTrue(map.containsKey("total_estimated_bytes"));
 
-            assertLong(map.get("maxmemory_bytes"));
-            assertLong(map.get("used_bytes_for_maxmemory"));
-            assertLong(map.get("heap_data_bytes_estimate"));
-            assertLong(map.get("offheap_used_bytes"));
-            assertLong(map.get("total_estimated_bytes"));
+            assertLongValue(map.get("maxmemory_bytes"));
+            assertLongValue(map.get("used_bytes_for_maxmemory"));
+            assertLongValue(map.get("heap_data_bytes_estimate"));
+            assertLongValue(map.get("offheap_used_bytes"));
+            assertLongValue(map.get("total_estimated_bytes"));
         }
     }
 
@@ -134,19 +135,26 @@ public class Resp3CollectionReplyTest {
         }
     }
 
-    private static Map<String, String> toStringMap(RespMap map) {
-        Map<String, String> out = new HashMap<>();
+    private static Map<String, RespObject> toObjectMap(RespMap map) {
+        Map<String, RespObject> out = new HashMap<>();
         for (RespMap.Entry e : map.entries()) {
             Assert.assertTrue(e.key() instanceof RespBulkString);
-            Assert.assertTrue(e.value() instanceof RespBulkString);
-            out.put(((RespBulkString) e.key()).asString(), ((RespBulkString) e.value()).asString());
+            out.put(((RespBulkString) e.key()).asString(), e.value());
         }
         return out;
     }
 
-    private static void assertLong(String s) {
-        Assert.assertNotNull(s);
-        Long.parseLong(s);
+    private static void assertLongValue(RespObject obj) {
+        Assert.assertNotNull(obj);
+        if (obj instanceof RespInteger i) {
+            // ok
+            return;
+        }
+        if (obj instanceof RespBulkString bs) {
+            Long.parseLong(bs.asString());
+            return;
+        }
+        Assert.fail("expected integer-like reply, got: " + obj.getClass().getSimpleName());
     }
 
     private static RespObject parseReply(byte[] replyBytes) {
@@ -198,4 +206,3 @@ public class Resp3CollectionReplyTest {
         return out;
     }
 }
-

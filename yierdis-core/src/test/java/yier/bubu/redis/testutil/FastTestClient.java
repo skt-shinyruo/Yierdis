@@ -8,6 +8,7 @@ import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespObject;
+import yier.bubu.redis.protocol.RespSession;
 import yier.bubu.redis.protocol.RespWriter;
 import yier.bubu.redis.protocol.RespObjectParser;
 import yier.bubu.redis.protocol.netty.NettyRespFrame;
@@ -26,10 +27,16 @@ import java.util.Objects;
 public final class FastTestClient implements AutoCloseable {
     private final YierdisFastCommandProcessor processor;
     private final EmbeddedChannel decodeChannel;
+    private final RespSession session;
 
     public FastTestClient(YierdisFastCommandProcessor processor) {
+        this(processor, null);
+    }
+
+    public FastTestClient(YierdisFastCommandProcessor processor, RespSession session) {
         Objects.requireNonNull(processor, "processor");
         this.processor = processor;
+        this.session = session;
         this.decodeChannel = new EmbeddedChannel(new RespCommandDecoder());
     }
 
@@ -46,7 +53,7 @@ public final class FastTestClient implements AutoCloseable {
 
         ByteBuf out = Unpooled.buffer();
         try {
-            processor.execute(cmd, new RespWriter(new NettyByteBufSink(out)));
+            processor.execute(cmd, new RespWriter(new NettyByteBufSink(out), session));
             byte[] replyBytes = readAll(out);
             Assert.assertNotNull("expected reply", replyBytes);
             return decodeOne(replyBytes);

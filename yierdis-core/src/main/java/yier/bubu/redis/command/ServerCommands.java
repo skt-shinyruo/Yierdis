@@ -4,6 +4,7 @@ package yier.bubu.redis.command;
 
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespProtocol;
+import yier.bubu.redis.protocol.RespServerSession;
 import yier.bubu.redis.protocol.RespWriter;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
 
@@ -46,6 +47,10 @@ final class ServerCommands {
         ServerInfoProvider provider = support.infoProvider();
         if (provider == null) {
             out.error("ERR INFO not supported");
+            return;
+        }
+        if (cmd.argc() != 1 && cmd.argc() != 2) {
+            CommandSupport.wrongArity(out, "info");
             return;
         }
         provider.info(cmd, out);
@@ -124,11 +129,36 @@ final class ServerCommands {
             CommandSupport.wrongArity(out, "select");
             return;
         }
-        if (!cmd.isNull(1) && cmd.len(1) == 1 && cmd.byteAt(1, 0) == '0') {
-            out.simpleString("OK");
+        long idx;
+        try {
+            idx = CommandSupport.parseLong(cmd, 1, "index");
+        } catch (IllegalArgumentException e) {
+            out.error("ERR value is not an integer or out of range");
             return;
         }
-        out.error("ERR only DB 0 is supported");
+        int dbIndex;
+        if (idx < Integer.MIN_VALUE) {
+            dbIndex = Integer.MIN_VALUE;
+        } else if (idx > Integer.MAX_VALUE) {
+            dbIndex = Integer.MAX_VALUE;
+        } else {
+            dbIndex = (int) idx;
+        }
+
+        int databases = support.databases();
+        if (dbIndex < 0 || dbIndex >= databases) {
+            out.error("ERR DB index is out of range");
+            return;
+        }
+
+        if (out.session() instanceof RespServerSession s) {
+            s.setDbIndex(dbIndex);
+        } else if (dbIndex != 0) {
+            // 在没有连接态的场景（例如部分单元测试）下，仅允许 DB0。
+            out.error("ERR DB index is out of range");
+            return;
+        }
+        out.simpleString("OK");
     }
 
     private void quit(RespCommand cmd, RespWriter out) {
@@ -142,7 +172,19 @@ final class ServerCommands {
     }
 
     private void flushdb(RespCommand cmd, RespWriter out) {
-        support.db().flushDb();
+        if (cmd.argc() != 1 && cmd.argc() != 2) {
+            CommandSupport.wrongArity(out, "flushdb");
+            return;
+        }
+        if (cmd.argc() == 2) {
+            // Redis 生态兼容：接受 SYNC/ASYNC（本实现为单线程执行器，二者语义等价）。
+            if (!CommandSupport.asciiEqualsIgnoreCase(cmd, 1, "SYNC")
+                    && !CommandSupport.asciiEqualsIgnoreCase(cmd, 1, "ASYNC")) {
+                out.error("ERR syntax error");
+                return;
+            }
+        }
+        support.db(out).flushDb();
         out.simpleString("OK");
     }
 

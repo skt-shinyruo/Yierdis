@@ -254,7 +254,7 @@ public class RespDecoderTest {
     public void decodeRejectsUnknownPrefix() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespDecoder());
         try {
-            ch.writeInbound(Unpooled.copiedBuffer(new byte[]{','}));
+            ch.writeInbound(Unpooled.copiedBuffer(new byte[]{'@'}));
             Assert.fail("Expected IllegalArgumentException");
         } catch (DecoderException e) {
             Throwable cause = unwrapDecoderCause(e);
@@ -345,4 +345,3 @@ public class RespDecoderTest {
         }
     }
 }
-

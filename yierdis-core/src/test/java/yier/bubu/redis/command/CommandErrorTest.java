@@ -105,7 +105,7 @@ public class CommandErrorTest {
             Assert.assertEquals("ERR syntax error", zrangeSyntax.message());
 
             RespError setBadInt = (RespError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("EX"), b("abc")));
-            Assert.assertEquals("ERR value is not an integer or out of range: seconds", setBadInt.message());
+            Assert.assertEquals("ERR value is not an integer or out of range", setBadInt.message());
 
             }
         });
@@ -130,13 +130,13 @@ public class CommandErrorTest {
             Assert.assertEquals("ERR syntax error", limitMissingCount.message());
 
             RespError negativeOffset = (RespError) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0"), b("1"), b("LIMIT"), b("-1"), b("1")));
-            Assert.assertEquals("ERR value is not an integer or out of range: offset", negativeOffset.message());
+            Assert.assertEquals("ERR value is not an integer or out of range", negativeOffset.message());
 
             RespError negativeCount = (RespError) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0"), b("-1")));
-            Assert.assertEquals("ERR value is not an integer or out of range: count", negativeCount.message());
+            Assert.assertEquals("ERR value is not an integer or out of range", negativeCount.message());
 
             RespError badCount = (RespError) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0"), b("x")));
-            Assert.assertEquals("ERR value is not an integer or out of range: count", badCount.message());
+            Assert.assertEquals("ERR value is not an integer or out of range", badCount.message());
 
             }
         });

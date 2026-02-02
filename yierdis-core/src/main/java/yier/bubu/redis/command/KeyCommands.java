@@ -2,11 +2,14 @@ package yier.bubu.redis.command;
 
 import yier.bubu.redis.db.ValueType;
 import yier.bubu.redis.db.YierdisMemoryStats;
+import yier.bubu.redis.db.ScanCursor;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespWriter;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
@@ -41,10 +44,16 @@ final class KeyCommands {
         registry.register("MEMORY", this::memory);
         registry.register("OBJECT", this::object);
         registry.register("KEYS", this::keys);
+        registry.register("SCAN", this::scan);
         registry.register("DEL", this::del);
         registry.register("EXISTS", this::exists);
         registry.register("EXPIRE", this::expire);
+        registry.register("PEXPIRE", this::pexpire);
+        registry.register("EXPIREAT", this::expireat);
+        registry.register("PEXPIREAT", this::pexpireat);
+        registry.register("PERSIST", this::persist);
         registry.register("TTL", this::ttl);
+        registry.register("PTTL", this::pttl);
     }
 
     private void type(RespCommand cmd, RespWriter out) {
@@ -52,7 +61,7 @@ final class KeyCommands {
             CommandSupport.wrongArity(out, "type");
             return;
         }
-        ValueType t = support.db().typeOf(support.argView(cmd, 1));
+        ValueType t = support.db(out).typeOf(support.argView(cmd, 1));
         if (t == null) {
             out.simpleString("none");
             return;
@@ -71,7 +80,7 @@ final class KeyCommands {
                 CommandSupport.wrongArity(out, "memory");
                 return;
             }
-            long bytes = support.db().memoryUsage(support.argView(cmd, 2));
+            long bytes = support.db(out).memoryUsage(support.argView(cmd, 2));
             if (bytes < 0) {
                 out.bulkString((byte[]) null);
                 return;
@@ -86,7 +95,7 @@ final class KeyCommands {
                 return;
             }
 
-            YierdisMemoryStats s = support.db().memoryStats();
+            YierdisMemoryStats s = support.db(out).memoryStats();
             // RESP2-compatible flat array of key/value pairs; in RESP3 emit a map for friendlier clients.
             if (out.protocol() == RespProtocol.RESP3) {
                 out.mapHeader(17);
@@ -95,55 +104,55 @@ final class KeyCommands {
             }
 
             out.bulkString(MEMORY_STATS_MAXMEMORY_BYTES);
-            out.bulkStringLongAscii(s.maxmemoryBytes());
+            out.integer(s.maxmemoryBytes());
 
             out.bulkString(MEMORY_STATS_USED_BYTES_FOR_MAXMEMORY);
-            out.bulkStringLongAscii(s.usedBytesForMaxmemory());
+            out.integer(s.usedBytesForMaxmemory());
 
             out.bulkString(MEMORY_STATS_HEAP_DATA_BYTES_ESTIMATE);
-            out.bulkStringLongAscii(s.heapDataBytesEstimate());
+            out.integer(s.heapDataBytesEstimate());
 
             out.bulkString(MEMORY_STATS_OFFHEAP_USED_BYTES);
-            out.bulkStringLongAscii(s.offHeapUsedBytes());
+            out.integer(s.offHeapUsedBytes());
 
             out.bulkString(MEMORY_STATS_KEYSPACE_TABLE_OVERHEAD_BYTES_ESTIMATE);
-            out.bulkStringLongAscii(s.keyspaceTableOverheadBytesEstimate());
+            out.integer(s.keyspaceTableOverheadBytesEstimate());
 
             out.bulkString(MEMORY_STATS_EXPIRE_TABLE_OVERHEAD_BYTES_ESTIMATE);
-            out.bulkStringLongAscii(s.expireTableOverheadBytesEstimate());
+            out.integer(s.expireTableOverheadBytesEstimate());
 
             out.bulkString(MEMORY_STATS_EXPIRE_VALUE_OBJECTS_BYTES_ESTIMATE);
-            out.bulkStringLongAscii(s.expireValueObjectsBytesEstimate());
+            out.integer(s.expireValueObjectsBytesEstimate());
 
             out.bulkString(MEMORY_STATS_TOTAL_ESTIMATED_BYTES);
-            out.bulkStringLongAscii(s.totalEstimatedBytes());
+            out.integer(s.totalEstimatedBytes());
 
             out.bulkString(MEMORY_STATS_KEYS_STORED_OFFHEAP);
-            out.bulkStringLongAscii(s.keysStoredOffHeap() ? 1 : 0);
+            out.integer(s.keysStoredOffHeap() ? 1 : 0);
 
             out.bulkString(MEMORY_STATS_KEY_COUNT);
-            out.bulkStringLongAscii(s.keyCount());
+            out.integer(s.keyCount());
 
             out.bulkString(MEMORY_STATS_EXPIRE_COUNT);
-            out.bulkStringLongAscii(s.expireCount());
+            out.integer(s.expireCount());
 
             out.bulkString(MEMORY_STATS_KEYSPACE_REHASHING);
-            out.bulkStringLongAscii(s.keyspaceRehashing() ? 1 : 0);
+            out.integer(s.keyspaceRehashing() ? 1 : 0);
 
             out.bulkString(MEMORY_STATS_KEYSPACE_TABLE0_CAPACITY);
-            out.bulkStringLongAscii(s.keyspaceTable0Capacity());
+            out.integer(s.keyspaceTable0Capacity());
 
             out.bulkString(MEMORY_STATS_KEYSPACE_TABLE1_CAPACITY);
-            out.bulkStringLongAscii(s.keyspaceTable1Capacity());
+            out.integer(s.keyspaceTable1Capacity());
 
             out.bulkString(MEMORY_STATS_EXPIRE_REHASHING);
-            out.bulkStringLongAscii(s.expireRehashing() ? 1 : 0);
+            out.integer(s.expireRehashing() ? 1 : 0);
 
             out.bulkString(MEMORY_STATS_EXPIRE_TABLE0_CAPACITY);
-            out.bulkStringLongAscii(s.expireTable0Capacity());
+            out.integer(s.expireTable0Capacity());
 
             out.bulkString(MEMORY_STATS_EXPIRE_TABLE1_CAPACITY);
-            out.bulkStringLongAscii(s.expireTable1Capacity());
+            out.integer(s.expireTable1Capacity());
             return;
         }
 
@@ -159,12 +168,12 @@ final class KeyCommands {
             out.error("ERR syntax error");
             return;
         }
-        String enc = support.db().objectEncoding(support.argView(cmd, 2));
+        String enc = support.db(out).objectEncoding(support.argView(cmd, 2));
         if (enc == null) {
             out.bulkString((byte[]) null);
             return;
         }
-        out.simpleString(enc);
+        out.bulkString(enc.getBytes(StandardCharsets.US_ASCII));
     }
 
     private void keys(RespCommand cmd, RespWriter out) {
@@ -172,7 +181,50 @@ final class KeyCommands {
             CommandSupport.wrongArity(out, "keys");
             return;
         }
-        out.bulkStringArray(support.db().keys(cmd.toByteArray(1)));
+        out.bulkStringArray(support.db(out).keys(cmd.toByteArray(1)));
+    }
+
+    private void scan(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() < 2) {
+            CommandSupport.wrongArity(out, "scan");
+            return;
+        }
+        long cursor = CommandSupport.parseNonNegativeLong(cmd, 1, "cursor");
+
+        byte[] match = null;
+        int count = 10;
+        for (int i = 2; i < cmd.argc(); i++) {
+            if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "MATCH")) {
+                if (i + 1 >= cmd.argc()) {
+                    out.error("ERR syntax error");
+                    return;
+                }
+                match = cmd.toByteArray(++i);
+                continue;
+            }
+            if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "COUNT")) {
+                if (i + 1 >= cmd.argc()) {
+                    out.error("ERR syntax error");
+                    return;
+                }
+                long v = CommandSupport.parseNonNegativeLong(cmd, ++i, "count");
+                if (v <= 0 || v > Integer.MAX_VALUE) {
+                    throw new IllegalArgumentException("value is not an integer or out of range");
+                }
+                count = (int) v;
+                continue;
+            }
+            out.error("ERR syntax error");
+            return;
+        }
+
+        List<byte[]> keys = new ArrayList<>();
+        ScanCursor next = support.db(out).scan(ScanCursor.of(cursor), match, count, keys);
+
+        // Redis-compatible: reply is [cursor, keys].
+        out.arrayHeader(2);
+        out.bulkString(next.toBulkStringAscii());
+        out.bulkStringArray(keys);
     }
 
     private void del(RespCommand cmd, RespWriter out) {
@@ -183,7 +235,7 @@ final class KeyCommands {
         int len = cmd.argc() - 1;
         support.sliceResetFromCommand(cmd, 1, len);
         try {
-            out.integer(support.db().del(support.slice()));
+            out.integer(support.db(out).del(support.slice()));
         } finally {
             support.clearScratch(len);
         }
@@ -197,7 +249,7 @@ final class KeyCommands {
 
         long count = 0;
         for (int i = 1; i < cmd.argc(); i++) {
-            if (support.db().existsKey(support.argView(cmd, i))) {
+            if (support.db(out).existsKey(support.argView(cmd, i))) {
                 count++;
             }
         }
@@ -210,7 +262,42 @@ final class KeyCommands {
             return;
         }
         long seconds = CommandSupport.parseLong(cmd, 2, "seconds");
-        out.integer(support.db().expire(support.argView(cmd, 1), seconds) ? 1 : 0);
+        out.integer(support.db(out).expire(support.argView(cmd, 1), seconds) ? 1 : 0);
+    }
+
+    private void pexpire(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() != 3) {
+            CommandSupport.wrongArity(out, "pexpire");
+            return;
+        }
+        long millis = CommandSupport.parseLong(cmd, 2, "milliseconds");
+        out.integer(support.db(out).pexpire(support.argView(cmd, 1), millis) ? 1 : 0);
+    }
+
+    private void expireat(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() != 3) {
+            CommandSupport.wrongArity(out, "expireat");
+            return;
+        }
+        long seconds = CommandSupport.parseLong(cmd, 2, "seconds");
+        out.integer(support.db(out).expireAtSeconds(support.argView(cmd, 1), seconds) ? 1 : 0);
+    }
+
+    private void pexpireat(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() != 3) {
+            CommandSupport.wrongArity(out, "pexpireat");
+            return;
+        }
+        long millis = CommandSupport.parseLong(cmd, 2, "milliseconds");
+        out.integer(support.db(out).expireAtMillis(support.argView(cmd, 1), millis) ? 1 : 0);
+    }
+
+    private void persist(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() != 2) {
+            CommandSupport.wrongArity(out, "persist");
+            return;
+        }
+        out.integer(support.db(out).persist(support.argView(cmd, 1)) ? 1 : 0);
     }
 
     private void ttl(RespCommand cmd, RespWriter out) {
@@ -218,6 +305,14 @@ final class KeyCommands {
             CommandSupport.wrongArity(out, "ttl");
             return;
         }
-        out.integer(support.db().ttlSeconds(support.argView(cmd, 1)));
+        out.integer(support.db(out).ttlSeconds(support.argView(cmd, 1)));
+    }
+
+    private void pttl(RespCommand cmd, RespWriter out) {
+        if (cmd.argc() != 2) {
+            CommandSupport.wrongArity(out, "pttl");
+            return;
+        }
+        out.integer(support.db(out).ttlMillis(support.argView(cmd, 1)));
     }
 }

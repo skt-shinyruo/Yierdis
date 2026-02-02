@@ -14,10 +14,13 @@ import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocators;
+import yier.bubu.redis.protocol.RespServerSession;
+import yier.bubu.redis.protocol.RespWriter;
 
 import java.net.InetSocketAddress;
 import java.util.Locale;
@@ -38,14 +41,12 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     private ScheduledFuture<?> cleanupFuture;
 
     // Core resources (closed in reverse order).
-    private YierdisDb db;
+    private YierdisDb[] dbs;
+    private YierdisOffHeapAllocator offHeapAllocator;
     private NettyCommandExecutor executor;
     private EventExecutorGroup commandGroup;
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
-
-    // Only used for early failures before DB takes ownership.
-    private YierdisOffHeapAllocator earlyOffHeapAllocator;
 
     private YierdisServerBootstrap(ServerConfig config) {
         this.config = Objects.requireNonNull(config, "config");
@@ -101,29 +102,79 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         log.info("off-heap providers: {}", YierdisOffHeapAllocators.availableProvidersSummary());
 
         try {
-            earlyOffHeapAllocator = YierdisOffHeapAllocators.create(backend, config.offheapMaxBytes);
+            offHeapAllocator = YierdisOffHeapAllocators.create(backend, config.offheapMaxBytes);
         } catch (RuntimeException e) {
             log.error("Failed to initialize off-heap backend '{}': {}", backend, e.getMessage());
             throw e;
         }
 
-        db = new YierdisDb(
-                earlyOffHeapAllocator,
-                config.offheapKeysEnabled,
-                config.maxmemoryBytes,
-                config.maxmemoryPolicy,
-                config.maxmemorySamples,
-                config.evictionTimeLimitMillis,
-                config.expireCleanupTimeLimitMillis
-        );
-        // From this point on, db.shutdown() is responsible for closing the allocator.
-        earlyOffHeapAllocator = null;
+        int databases = Math.max(1, config.databases);
+        dbs = new YierdisDb[databases];
+        long perDbMaxmemory = 0;
+        long remainder = 0;
+        if (config.maxmemoryBytes > 0) {
+            perDbMaxmemory = config.maxmemoryBytes / (long) databases;
+            remainder = config.maxmemoryBytes - perDbMaxmemory * (long) databases;
+            if (remainder < 0) {
+                remainder = 0;
+            }
+        }
+        for (int i = 0; i < databases; i++) {
+            long dbMax = perDbMaxmemory;
+            if (remainder > 0) {
+                dbMax++;
+                remainder--;
+            }
+            dbs[i] = new YierdisDb(
+                    offHeapAllocator,
+                    false,
+                    config.offheapKeysEnabled,
+                    dbMax,
+                    config.maxmemoryPolicy,
+                    config.maxmemorySamples,
+                    config.evictionTimeLimitMillis,
+                    config.expireCleanupTimeLimitMillis
+            );
+        }
+
+        YierdisDbRouter router = new YierdisDbRouter() {
+            @Override
+            public YierdisDb dbFor(RespWriter out) {
+                if (dbs == null || dbs.length == 0) {
+                    throw new IllegalStateException("no dbs");
+                }
+                int idx = 0;
+                if (out != null && out.session() instanceof RespServerSession s) {
+                    idx = s.dbIndex();
+                }
+                if (idx < 0 || idx >= dbs.length) {
+                    idx = 0;
+                }
+                return dbs[idx];
+            }
+
+            @Override
+            public int databases() {
+                return dbs == null ? 1 : Math.max(1, dbs.length);
+            }
+        };
 
         NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(config);
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db, infoProvider);
+        infoProvider.bindDbs(dbs);
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(router, infoProvider);
         commandGroup = new DefaultEventExecutorGroup(1);
         executor = new NettyCommandExecutor(
-                db,
+                () -> {
+                    if (dbs == null) {
+                        return;
+                    }
+                    for (YierdisDb d : dbs) {
+                        if (d == null) {
+                            continue;
+                        }
+                        d.bindToCurrentThread();
+                    }
+                },
                 processor,
                 commandGroup.next(),
                 config.executorQueueCapacity,
@@ -153,7 +204,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             // 2) 通过 executeMaintenance 让 cleanup 在 DB 绑定线程中执行。
             // 3) 通过 coalesce 避免在高压下积累多个 cleanup 请求（fixed-rate catch-up storm）。
             long period = config.expirationCleanupIntervalMillis;
-            YierdisDb dbForTask = db;
+            YierdisDb[] dbsForTask = dbs;
             NettyCommandExecutor exForTask = executor;
             java.util.concurrent.atomic.AtomicBoolean cleanupPending = new java.util.concurrent.atomic.AtomicBoolean(false);
             cleanupFuture = workerGroup.next().scheduleWithFixedDelay(() -> {
@@ -162,7 +213,14 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 }
                 exForTask.executeMaintenance(() -> {
                     try {
-                        dbForTask.cleanupExpired();
+                        if (dbsForTask != null) {
+                            for (YierdisDb d : dbsForTask) {
+                                if (d == null) {
+                                    continue;
+                                }
+                                d.cleanupExpired();
+                            }
+                        }
                     } catch (Exception e) {
                         log.debug("Expiration cleanup error", e);
                     } finally {
@@ -210,19 +268,39 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             }
         }
 
-        YierdisDb d = db;
-        if (d != null) {
+        YierdisDb[] localDbs = dbs;
+        if (localDbs != null) {
             try {
                 if (ex != null) {
-                    ex.executor().submit(d::shutdown).syncUninterruptibly();
+                    ex.executor().submit(() -> {
+                        for (YierdisDb d : localDbs) {
+                            if (d == null) {
+                                continue;
+                            }
+                            try {
+                                d.shutdown();
+                            } catch (Throwable ignored) {
+                                // ignore
+                            }
+                        }
+                    }).syncUninterruptibly();
                 } else {
-                    d.shutdown();
+                    for (YierdisDb d : localDbs) {
+                        if (d == null) {
+                            continue;
+                        }
+                        try {
+                            d.shutdown();
+                        } catch (Throwable ignored) {
+                            // ignore
+                        }
+                    }
                 }
             } catch (Throwable ignored) {
                 // ignore
             }
         }
-        db = null;
+        dbs = null;
         executor = null;
 
         EventExecutorGroup cg = commandGroup;
@@ -243,7 +321,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         }
         workerGroup = null;
 
-        YierdisOffHeapAllocator allocator = earlyOffHeapAllocator;
+        YierdisOffHeapAllocator allocator = offHeapAllocator;
         if (allocator != null) {
             try {
                 allocator.close();
@@ -251,6 +329,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 // ignore
             }
         }
-        earlyOffHeapAllocator = null;
+        offHeapAllocator = null;
     }
 }

@@ -10,7 +10,7 @@
 
 - **Responsibility:** Keyspace + 过期索引 + 值编码（string/list/set/hash/zset）+ maxmemory
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-23
+- **Last Updated:** 2026-02-01
 
 ## Specifications
 
@@ -42,7 +42,11 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 
 ### Requirement: maxmemory 统计口径可解释（heap + off-heap）
 **Module:** db
-`maxmemoryBytes` 的触发依据统一为“heap 侧元数据估算 + off-heap allocator 实占”的总和，避免 off-heap 模式下漏计或明显双计数。
+`maxmemoryBytes` 的触发依据以“可解释的 best-effort 预算口径”为主：heap 侧元数据估算为基础，并在可行时叠加 off-heap allocator 的实占 used bytes。
+
+⚠️ 兼容性说明（多 DB + shared allocator）：
+- 当 off-heap allocator 由单个 DB 所拥有（`ownsOffHeapAllocator=true`）时：`usedBytesForMaxmemory = heap_estimate + offheap_used`，更接近“总预算”的直觉。
+- 当 server 多 DB 共享同一个 off-heap allocator（`ownsOffHeapAllocator=false`）时：为避免同一 `allocator.usedBytes()` 被每个 DB 重复计入导致过度淘汰，DB 侧 `usedBytesForMaxmemory` 仅使用 heap 估算；off-heap 总量由 `--offheapMaxBytes` 单独约束，并通过 `MEMORY STATS`/`INFO` 输出可观测。
 
 为提升“为什么拒写/为什么淘汰”的可解释性，补充预算分解输出：
 - `YierdisDb.memoryStats()`：输出 heap/off-heap/结构开销等分解估算
@@ -55,7 +59,7 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 
 字段编码约束：
 - key 均为 ASCII bulk string
-- value 均为十进制 ASCII bulk string（布尔值用 `0/1` 表示）
+- value 均为 integer（RESP2/RESP3 一致；布尔值用 `0/1` 表示）
 
 字段含义（口径：估算/预算优先，可解释性优先）：
 - `maxmemory_bytes`：配置的 maxmemory 上限（0 表示不启用淘汰/拒写）
@@ -115,3 +119,4 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 - 2026-01-16：off-heap capabilities：core 通过 `YierdisOffHeapAddressAllocator` 显式判断 raw address 能力，避免对具体后端类型的 `instanceof` 耦合，并让依赖方向更符合“SSOT 仅依赖 API”的边界约束。
 - 2026-01-16：线程模型硬化：DB 未绑定或跨线程访问 fail-fast；keys/expires 的 off-heap 使用改为显式开关（默认安全）。
 - 2026-01-23：新增写入 preflight（`prepareWrite`）与可复用淘汰逻辑（evictUntilUnder），并补齐 `KEYS` glob（`[]`/范围/否定/转义）与 RESP3 `MEMORY STATS` map 输出约定。
+- 2026-02-01：`EXPIRE seconds<=0` 对齐为“立即删除”；`MEMORY STATS` 的数值字段对齐为 integer；entry overhead 估算常量收敛为单点定义（避免命令层/DB 双口径漂移），并对多 DB + shared allocator 场景明确 maxmemory/off-heap 的口径边界。

@@ -3,8 +3,6 @@ package yier.bubu.redis.db;
 import org.junit.Assert;
 import org.junit.Test;
 
-import java.util.concurrent.TimeUnit;
-
 import static yier.bubu.redis.testutil.TestBytes.b;
 
 public class ExpireIndexTest {
@@ -14,7 +12,7 @@ public class ExpireIndexTest {
         db.bindToCurrentThread();
 
         byte[] key = b("k");
-        db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 0));
+        db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, YierdisDb.ExpireOption.px(0));
         Assert.assertEquals(1, db.size());
 
         db.cleanupExpired();
@@ -29,7 +27,7 @@ public class ExpireIndexTest {
         db.bindToCurrentThread();
 
         byte[] key = b("k");
-        db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 0));
+        db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, YierdisDb.ExpireOption.px(0));
         db.setString(key, b("v2"), YierdisDb.SetMode.NORMAL, null);
 
         db.cleanupExpired();
@@ -48,7 +46,7 @@ public class ExpireIndexTest {
         int n = 200;
         for (int i = 0; i < n; i++) {
             byte[] key = b("k" + i);
-            db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 0));
+            db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, YierdisDb.ExpireOption.px(0));
         }
         Assert.assertEquals(n, db.size());
 
@@ -66,7 +64,7 @@ public class ExpireIndexTest {
         db.bindToCurrentThread();
 
         byte[] key = b("k");
-        db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, new YierdisDb.ExpireOption(TimeUnit.MILLISECONDS, 60_000));
+        db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, YierdisDb.ExpireOption.px(60_000));
 
         db.cleanupExpired();
 

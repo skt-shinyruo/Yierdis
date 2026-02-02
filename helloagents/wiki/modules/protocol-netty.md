@@ -10,7 +10,7 @@
 
 - **Responsibility:** Netty codec（`RespCommandDecoder` / `RespDecoder`）+ `RespFrame/RespSession` 的 Netty 实现（frame ownership / release）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-01-17
+- **Last Updated:** 2026-02-01
 
 ## Specifications
 
@@ -62,3 +62,4 @@ RESP2/RESP3 的协商属于连接级状态：
 - 2026-01-15：边界加固：netty codec/adapters 迁移到独立包 `yier.bubu.redis.protocol.netty`，`yierdis-protocol` 独占 `yier.bubu.redis.protocol`（消除 split-package）。
 - 2026-01-16：增加 `RespFrame.retainedBytes()` 口径与 `RespCommandBuilder.replaceFrame(...)`，为执行器 bytes 预算与 compaction 提供协议层支撑。
 - 2026-01-17：request 解码严格化：明确允许集合（array + inline），对 RESP reply/非法前缀统一 protocol error；连接态二分：`ConnectionContext` 仅表达协议会话，server 运行时连接状态迁移到 `ServerConnectionState`；`RespEncoder` 写出语义收敛为 `RespWriter`。
+- 2026-02-01：reply 切帧 decoder（`RespDecoder`）扩展 RESP3 前缀覆盖（set/push/attribute/boolean/double/verbatim/blob error 等），与 `RespWriter/RespObjectParser` 的类型集合保持一致；同时补齐“把 reply 前缀当成 inline request”这一类误用的协议错误测试用例。

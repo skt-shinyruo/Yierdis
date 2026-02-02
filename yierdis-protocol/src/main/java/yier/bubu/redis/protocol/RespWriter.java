@@ -19,15 +19,26 @@ public final class RespWriter {
     private static final byte[] PLUS = new byte[]{'+'};
     private static final byte[] MINUS = new byte[]{'-'};
     private static final byte[] COLON = new byte[]{':'};
+    private static final byte[] HASH = new byte[]{'#'};
+    private static final byte[] COMMA = new byte[]{','};
+    private static final byte[] LPAREN = new byte[]{'('};
     private static final byte[] DOLLAR = new byte[]{'$'};
     private static final byte[] STAR = new byte[]{'*'};
     private static final byte[] PERCENT = new byte[]{'%'};
     private static final byte[] TILDE = new byte[]{'~'};
+    private static final byte[] GT = new byte[]{'>'};
+    private static final byte[] EQUAL = new byte[]{'='};
+    private static final byte[] BANG = new byte[]{'!'};
+    private static final byte[] PIPE = new byte[]{'|'};
+    private static final byte[] RESP3_BOOL_TRUE = new byte[]{'t'};
+    private static final byte[] RESP3_BOOL_FALSE = new byte[]{'f'};
+    private static final byte[] COLON_BYTE = new byte[]{':'};
     private static final byte[] RESP2_NULL_BULK = new byte[]{'$', '-', '1', CR, LF};
     private static final byte[] RESP2_NULL_ARRAY = new byte[]{'*', '-', '1', CR, LF};
     private static final byte[] RESP3_NULL = new byte[]{'_', CR, LF};
 
     private static final int MAX_ERROR_MESSAGE_CHARS = 256;
+    private static final int MAX_BLOB_ERROR_CHARS = 256;
 
     private static final ThreadLocal<byte[]> TL_NUM_BUF = ThreadLocal.withInitial(() -> new byte[32]);
 
@@ -108,6 +119,57 @@ public final class RespWriter {
     public void integer(long value) {
         out.writeBytes(COLON, 0, 1);
         writeLongAscii(out, value);
+        out.writeBytes(CRLF, 0, CRLF.length);
+    }
+
+    /**
+     * Writes a Redis-style boolean.
+     * <p>
+     * RESP3 uses {@code #t/#f}. RESP2 falls back to {@code :1/:0}.
+     */
+    public void booleanValue(boolean value) {
+        if (protocol == RespProtocol.RESP3) {
+            out.writeBytes(HASH, 0, 1);
+            out.writeBytes(value ? RESP3_BOOL_TRUE : RESP3_BOOL_FALSE, 0, 1);
+            out.writeBytes(CRLF, 0, CRLF.length);
+            return;
+        }
+        integer(value ? 1 : 0);
+    }
+
+    /**
+     * Writes a RESP3 double ({@code ,<double>\r\n}).
+     * <p>
+     * In RESP2, this falls back to a bulk string containing the ASCII double (best-effort).
+     */
+    public void doubleValue(double value) {
+        if (Double.isNaN(value) || Double.isInfinite(value)) {
+            throw new IllegalArgumentException("double must be finite");
+        }
+        if (protocol == RespProtocol.RESP3) {
+            out.writeBytes(COMMA, 0, 1);
+            byte[] bytes = Double.toString(value).getBytes(StandardCharsets.US_ASCII);
+            out.writeBytes(bytes, 0, bytes.length);
+            out.writeBytes(CRLF, 0, CRLF.length);
+            return;
+        }
+        byte[] bytes = Double.toString(value).getBytes(StandardCharsets.US_ASCII);
+        bulkString(bytes);
+    }
+
+    /**
+     * Writes a RESP3 big number ({@code (<number>\r\n}).
+     */
+    public void bigNumberAscii(String value) {
+        if (protocol != RespProtocol.RESP3) {
+            throw new IllegalStateException("RESP3 big number requires RESP3 protocol");
+        }
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("value must not be blank");
+        }
+        out.writeBytes(LPAREN, 0, 1);
+        byte[] bytes = value.trim().getBytes(StandardCharsets.US_ASCII);
+        out.writeBytes(bytes, 0, bytes.length);
         out.writeBytes(CRLF, 0, CRLF.length);
     }
 
@@ -209,6 +271,72 @@ public final class RespWriter {
         }
         out.writeBytes(TILDE, 0, 1);
         writeLongAscii(out, count);
+        out.writeBytes(CRLF, 0, CRLF.length);
+    }
+
+    public void pushHeader(int count) {
+        if (protocol != RespProtocol.RESP3) {
+            throw new IllegalStateException("RESP3 push requires RESP3 protocol");
+        }
+        out.writeBytes(GT, 0, 1);
+        writeLongAscii(out, count);
+        out.writeBytes(CRLF, 0, CRLF.length);
+    }
+
+    public void attributeHeader(int pairs) {
+        if (protocol != RespProtocol.RESP3) {
+            throw new IllegalStateException("RESP3 attribute requires RESP3 protocol");
+        }
+        out.writeBytes(PIPE, 0, 1);
+        writeLongAscii(out, pairs);
+        out.writeBytes(CRLF, 0, CRLF.length);
+    }
+
+    public void verbatimString(String format, byte[] data) {
+        if (protocol != RespProtocol.RESP3) {
+            throw new IllegalStateException("RESP3 verbatim string requires RESP3 protocol");
+        }
+        if (format == null || format.length() != 3) {
+            throw new IllegalArgumentException("format must be 3 chars");
+        }
+        byte[] fmt = format.getBytes(StandardCharsets.US_ASCII);
+        int dataLen = data == null ? 0 : data.length;
+        int payloadLen = 4 + dataLen; // "fmt:" + payload
+
+        out.writeBytes(EQUAL, 0, 1);
+        writeLongAscii(out, payloadLen);
+        out.writeBytes(CRLF, 0, CRLF.length);
+        out.writeBytes(fmt, 0, fmt.length);
+        out.writeBytes(COLON_BYTE, 0, 1);
+        if (dataLen > 0) {
+            out.writeBytes(data, 0, dataLen);
+        }
+        out.writeBytes(CRLF, 0, CRLF.length);
+    }
+
+    public void blobError(String message) {
+        if (protocol != RespProtocol.RESP3) {
+            // RESP2 生态里没有 blob error；退化为普通 error，保持可用性。
+            error(message);
+            return;
+        }
+        String msg = message;
+        if (msg == null || msg.isBlank()) {
+            msg = "ERR internal error";
+        }
+        // blob error 是 length-delimited，但仍做一次净化，避免日志/复制时混入控制字符。
+        msg = msg.replace('\r', ' ').replace('\n', ' ');
+        if (msg.length() > MAX_BLOB_ERROR_CHARS) {
+            msg = msg.substring(0, MAX_BLOB_ERROR_CHARS);
+        }
+        byte[] bytes = msg.getBytes(StandardCharsets.UTF_8);
+
+        out.writeBytes(BANG, 0, 1);
+        writeLongAscii(out, bytes.length);
+        out.writeBytes(CRLF, 0, CRLF.length);
+        if (bytes.length > 0) {
+            out.writeBytes(bytes, 0, bytes.length);
+        }
         out.writeBytes(CRLF, 0, CRLF.length);
     }
 

@@ -155,6 +155,97 @@ public final class RespObjectParser {
                 }
                 return RespSet.of(items);
             }
+            case '#': {
+                String line = readLineAscii();
+                if ("t".equals(line)) {
+                    return RespBoolean.of(true);
+                }
+                if ("f".equals(line)) {
+                    return RespBoolean.of(false);
+                }
+                throw new IllegalArgumentException("Protocol error: invalid boolean value");
+            }
+            case ',': {
+                String line = readLineAscii();
+                double v;
+                try {
+                    v = Double.parseDouble(line.trim());
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("Protocol error: invalid double value");
+                }
+                if (Double.isNaN(v) || Double.isInfinite(v)) {
+                    throw new IllegalArgumentException("Protocol error: invalid double value");
+                }
+                return RespDouble.of(v);
+            }
+            case '(': {
+                String line = readLineAscii();
+                String s = line.trim();
+                if (s.isEmpty()) {
+                    throw new IllegalArgumentException("Protocol error: invalid big number");
+                }
+                return RespBigNumber.of(s);
+            }
+            case '!': {
+                int len = readBulkLen();
+                if (len < 0) {
+                    throw new IllegalArgumentException("Protocol error: invalid blob error length");
+                }
+                byte[] data = readFixedBytes(len);
+                expectCrlf();
+                return RespBlobError.ofBytes(data);
+            }
+            case '=': {
+                int len = readBulkLen();
+                if (len < 0) {
+                    throw new IllegalArgumentException("Protocol error: invalid verbatim string length");
+                }
+                byte[] raw = readFixedBytes(len);
+                expectCrlf();
+                if (raw.length < 4 || raw[3] != (byte) ':') {
+                    throw new IllegalArgumentException("Protocol error: invalid verbatim string payload");
+                }
+                String format = new String(raw, 0, 3, StandardCharsets.US_ASCII);
+                byte[] data = new byte[raw.length - 4];
+                if (data.length > 0) {
+                    System.arraycopy(raw, 4, data, 0, data.length);
+                }
+                return RespVerbatimString.ofBytes(format, data);
+            }
+            case '>': {
+                String line = readLineAscii();
+                int count = Integer.parseInt(line.trim());
+                if (count < 0) {
+                    throw new IllegalArgumentException("Protocol error: invalid push length");
+                }
+                if (count > maxArrayLen) {
+                    throw new IllegalArgumentException("Protocol error: push length too large");
+                }
+                List<RespObject> items = new ArrayList<>(Math.min(count, 16));
+                for (int i = 0; i < count; i++) {
+                    items.add(parseOne(nestingDepth + 1));
+                }
+                return RespPush.of(items);
+            }
+            case '|': {
+                String line = readLineAscii();
+                int pairs = Integer.parseInt(line.trim());
+                if (pairs < 0) {
+                    throw new IllegalArgumentException("Protocol error: invalid attribute length");
+                }
+                if (pairs > maxArrayLen) {
+                    throw new IllegalArgumentException("Protocol error: attribute length too large");
+                }
+                List<RespMap.Entry> entries = new ArrayList<>(Math.min(pairs, 16));
+                for (int i = 0; i < pairs; i++) {
+                    RespObject key = parseOne(nestingDepth + 1);
+                    RespObject value = parseOne(nestingDepth + 1);
+                    entries.add(new RespMap.Entry(key, value));
+                }
+                RespMap attrs = RespMap.of(entries);
+                RespObject value = parseOne(nestingDepth + 1);
+                return RespAttribute.of(attrs, value);
+            }
             case '_': {
                 // RESP3 null: "_\r\n"
                 expectCrlf();
@@ -209,5 +300,34 @@ public final class RespObjectParser {
             throw new IllegalArgumentException("Protocol error: bad CRLF");
         }
         index += 2;
+    }
+
+    private int readBulkLen() {
+        String line = readLineAscii();
+        int len;
+        try {
+            len = Integer.parseInt(line.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Protocol error: invalid bulk length");
+        }
+        if (len > maxBulkBytes) {
+            throw new IllegalArgumentException("Protocol error: bulk length too large");
+        }
+        return len;
+    }
+
+    private byte[] readFixedBytes(int len) {
+        if (len < 0) {
+            throw new IllegalArgumentException("Protocol error: invalid bulk length");
+        }
+        if (index + len + 2 > frame.length()) {
+            throw new IllegalArgumentException("Protocol error: truncated bulk string");
+        }
+        byte[] data = new byte[len];
+        if (len > 0) {
+            frame.getBytes(index, data, 0, len);
+        }
+        index += len;
+        return data;
     }
 }
