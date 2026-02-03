@@ -19,6 +19,9 @@ public final class YierdisServerArgNames {
     public static final String EXECUTOR_MAX_DRAIN = "--executorMaxDrain";
     public static final String EXECUTOR_DRAIN_MILLIS = "--executorDrainMillis";
 
+    public static final String TRANSACTION_QUEUE_MAX_COMMANDS = "--transactionQueueMaxCommands";
+    public static final String TRANSACTION_QUEUE_MAX_BYTES = "--transactionQueueMaxBytes";
+
     public static final String PROTOCOL_MAX_BULK_BYTES = "--protocolMaxBulkBytes";
     public static final String PROTOCOL_MAX_ARGS = "--protocolMaxArgs";
     public static final String PROTOCOL_MAX_LINE_BYTES = "--protocolMaxLineBytes";
@@ -27,6 +30,7 @@ public final class YierdisServerArgNames {
     public static final String OFFHEAP_MAX_BYTES = "--offheapMaxBytes";
     public static final String OFFHEAP_KEYS_ENABLED = "--offheapKeysEnabled";
     public static final String MAXMEMORY_BYTES = "--maxmemoryBytes";
+    public static final String MAXMEMORY_SCOPE = "--maxmemoryScope";
     public static final String MAXMEMORY_POLICY = "--maxmemoryPolicy";
     public static final String MAXMEMORY_SAMPLES = "--maxmemorySamples";
     public static final String EVICTION_TIME_LIMIT_MILLIS = "--evictionTimeLimitMillis";

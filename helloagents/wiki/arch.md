@@ -118,6 +118,22 @@ sequenceDiagram
 | ADR-20260117-01 | server pipeline 内聚与执行器组件化落地 | 2026-01-17 | ✅ Accepted | yierdis-server | pipeline 装配下沉到 initializer；执行器拆分预算/compaction 等组件，降低单类复杂度并便于测试 |
 | ADR-20260117-02 | ConnectionContext 仅表达协议会话，执行器调度状态归属 server | 2026-01-17 | ✅ Accepted | yierdis-protocol-netty,yierdis-server | 连接级协议会话收敛到 `ConnectionContext`；server 运行时连接状态（pending/backpressure/closing/counters）收敛到 `ServerConnectionState`；per-channel 调度（队列+scheduled 标志）下沉到 server 私有 `NettyExecutorChannelState`（`Channel.attr`） |
 | ADR-20260117-03 | 请求解码严格化：保留 inline，拒绝 RESP reply/非法前缀 | 2026-01-17 | ✅ Accepted | yierdis-protocol-netty,yierdis-server | decoder 明确允许集合（array + inline），对 RESP reply/RESP3 前缀与控制字符统一 protocol error，并在 handler 中返回错误并关闭连接 |
+| ADR-20260202-01 | RespWriter 作为 RESP2/RESP3 reply 写出 SSOT（含 encoder 对齐） | 2026-02-02 | ✅ Accepted | yierdis-protocol,yierdis-protocol-netty,yierdis-server | 统一 `RespWriter/RespObject/RespEncoder` 的 RESP3 类型集合与写出语义；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-001 |
+| ADR-20260202-02 | MULTI 入队错误采用 Redis 风格 EXECABORT（事务队列有界） | 2026-02-02 | ✅ Accepted | yierdis-core,yierdis-server,yierdis-args | 事务队列新增 commands/bytes 上限并对齐 EXECABORT；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-002 |
+| ADR-20260202-03 | maxmemory scope 升级为 global（保留 per-db 兼容开关） | 2026-02-02 | ✅ Accepted | yierdis-core,yierdis-server,yierdis-args,helloagents/wiki | 默认 global 更贴近 Redis 全实例预算；per-db 保留旧行为；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-003 |
+| ADR-20260202-04 | busy 错误保持兼容形态但增强原因表达 | 2026-02-02 | ✅ Accepted | yierdis-server,helloagents/wiki | `-ERR busy <reason>` + `STATS` 映射，提升排障能力；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-004 |
+
+## Security Check（2026-02-02）
+
+本轮变更按 G9 对以下高风险点做了“硬限制/净化/可观测”收敛，并补齐文档说明：
+
+- **输入上限（DoS 防护）**：request 解码上限由 `RespLimits` 作为 SSOT，并通过 server 参数 `--protocolMaxBulkBytes/--protocolMaxArgs/--protocolMaxLineBytes` 显式可配。
+- **事务队列上限（OOM 风险）**：MULTI 事务队列新增 `--transactionQueueMaxCommands/--transactionQueueMaxBytes` 两条硬上限；触达上限会触发入队错误并进入 aborted，后续 EXEC 返回 `EXECABORT` 并丢弃队列。
+- **错误消息净化（response splitting 风险）**：RESP error 写出统一做 CR/LF 过滤与限长；拒绝/忙错误的 reason 为固定枚举码，不携带客户端原始输入。
+- **拒绝路径资源回收（泄漏风险）**：busy/拒绝路径会回收 `RespCommand/RespFrame`（避免 ByteBuf 驻留或泄漏），并通过回归测试锁定。
+- **off-heap 上限不“隐式无限”**：maxmemory 与 off-heap 是两套约束；当启用 off-heap 后端但 `--offheapMaxBytes=0` 时，server 启动会给出显式风险提示，避免误以为 maxmemory 具备硬上限语义。
+
+结论：上述风险点均已具备“可配置硬上限/错误净化/回归测试 + 文档解释”，未发现需要阻断发布的高风险缺口。
 
 ## 架构风险评审（DB/Off-heap 重点）
 

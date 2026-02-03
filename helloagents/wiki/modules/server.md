@@ -50,7 +50,7 @@
   - `INFO YIERDIS` / `STATS`：保留结构化输出（RESP2 array / RESP3 map），用于教学与排障
 
 #### Scenario: 高压 pipeline 下的 flush 合并与背压恢复
-- 当 backlog ≥ high watermark：服务端对该连接 `autoRead=false`，并可能返回 `-ERR busy`
+- 当 backlog ≥ high watermark：服务端对该连接 `autoRead=false`，并可能返回 `-ERR busy <reason>`
 - 当 backlog ≤ low watermark：服务端恢复 `autoRead=true`，连接继续读入并保持响应顺序一致
 
 #### Configuration: 相关启动参数
@@ -65,6 +65,8 @@
 - `--executorMaxDrain <n>` / `--executorDrainMillis <ms>`：单次 drain 批量/时间预算（避免维护任务饥饿）
 - `--protocolMaxBulkBytes <bytes>` / `--protocolMaxArgs <n>` / `--protocolMaxLineBytes <bytes>`：协议输入上限（DoS 防护；与 protocol-netty decoder 对齐）
 - `--databases <n>`：逻辑 DB 数量（`SELECT 0..n-1`；默认 16）
+- `--maxmemoryScope global|per-db`：maxmemory 预算口径（`global` 更贴近 Redis；`per-db` 为兼容模式）
+- `--transactionQueueMaxCommands <n>` / `--transactionQueueMaxBytes <bytes>`：事务队列硬上限（连接级，避免 OOM）
 - 启动参数错误（解析失败/校验失败）会输出错误信息 + usage，并使用稳定退出码（exit=2），便于脚本集成与排障
 
 #### Scenario: 多 worker I/O + 单线程执行
@@ -74,7 +76,26 @@
 
 #### Scenario: 执行队列满（背压）
 条件：全局执行队列达到 `--executorQueueCapacity`
-- 预期：服务端立即返回 `-ERR busy`，避免请求无界堆积导致 OOM/延迟雪崩
+- 预期：服务端立即返回 `-ERR busy <reason>`，避免请求无界堆积导致 OOM/延迟雪崩
+
+#### Diagnostic: busy 原因码与 STATS 计数器映射（排障）
+
+当投递被拒绝时，server 会返回 `-ERR busy <reason>`；同时 `STATS` 会输出对应的全局计数器，便于定位主因：
+
+| busy reason | 含义（典型） | `STATS` 计数器 |
+|------------|--------------|----------------|
+| `not_running` | 执行器未启动/正在关闭 | `submit_rejected_not_running_total` |
+| `queue_full` | 全局队列已满（条数） | `submit_rejected_queue_full_total` |
+| `bytes_budget` | 全局 queued-bytes 预算耗尽 | `submit_rejected_bytes_budget_total` |
+| `offer_failed` | 入队失败（通常是竞态/关闭路径） | `submit_rejected_offer_failed_total` |
+
+补充：
+- `INFO`（Redis bulk string 形态）只会输出 `yierdis_queued_tasks/yierdis_queued_bytes` 的即时快照；若需要“拒绝原因”与累计值，请使用 `STATS`。
+- `STATS` 还会输出连接级 `conn_commands_rejected`（总拒绝次数，不区分原因），用于判断是否为单连接热点导致。
+
+示例（redis-cli 排障）：
+- 当客户端看到 `-ERR busy queue_full`：执行 `redis-cli -p 6378 --resp3 STATS`，观察 `submit_rejected_queue_full_total` 是否持续增长（表明全局队列条数是主因）。
+- 若只需要查看“当前 backlog 即时快照”：执行 `redis-cli -p 6378 INFO stats`，观察 `yierdis_queued_tasks/yierdis_queued_bytes`。
 
 ### Requirement: 优雅关停（Graceful Shutdown）
 **Module:** server

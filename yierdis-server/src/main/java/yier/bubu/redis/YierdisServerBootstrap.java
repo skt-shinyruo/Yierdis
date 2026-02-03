@@ -105,6 +105,11 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
         try {
             offHeapAllocator = YierdisOffHeapAllocators.create(backend, config.offheapMaxBytes);
+            if (backend != YierdisOffHeapBackend.NONE && config.offheapMaxBytes == 0) {
+                log.warn("off-heap backend '{}' is enabled but offheapMaxBytes=0 (no hard cap). "
+                                + "If you rely on maxmemoryBytes, consider setting --offheapMaxBytes to avoid surprises.",
+                        backend.name().toLowerCase(Locale.ROOT));
+            }
         } catch (YierdisOffHeapBackendUnavailableException e) {
             // 可预期配置错误：避免输出长堆栈，由 CLI 统一以稳定退出码退出。
             log.error("Failed to initialize off-heap backend '{}': {}", backend, e.getMessage());
@@ -116,9 +121,11 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
         int databases = Math.max(1, config.databases);
         dbs = new YierdisDb[databases];
+
         long perDbMaxmemory = 0;
         long remainder = 0;
-        if (config.maxmemoryBytes > 0) {
+        boolean perDbScope = config.maxmemoryScope == ServerConfig.MaxmemoryScope.PER_DB;
+        if (perDbScope && config.maxmemoryBytes > 0) {
             perDbMaxmemory = config.maxmemoryBytes / (long) databases;
             remainder = config.maxmemoryBytes - perDbMaxmemory * (long) databases;
             if (remainder < 0) {
@@ -126,10 +133,13 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             }
         }
         for (int i = 0; i < databases; i++) {
-            long dbMax = perDbMaxmemory;
-            if (remainder > 0) {
-                dbMax++;
-                remainder--;
+            long dbMax = config.maxmemoryBytes;
+            if (perDbScope) {
+                dbMax = perDbMaxmemory;
+                if (remainder > 0) {
+                    dbMax++;
+                    remainder--;
+                }
             }
             dbs[i] = new YierdisDb(
                     offHeapAllocator,
@@ -140,6 +150,16 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                     config.maxmemorySamples,
                     config.evictionTimeLimitMillis,
                     config.expireCleanupTimeLimitMillis
+            );
+        }
+        if (!perDbScope && config.maxmemoryBytes > 0) {
+            YierdisDb.enableGlobalMaxmemory(
+                    dbs,
+                    offHeapAllocator,
+                    config.maxmemoryBytes,
+                    config.maxmemoryPolicy,
+                    config.maxmemorySamples,
+                    config.evictionTimeLimitMillis
             );
         }
 

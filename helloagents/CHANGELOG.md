@@ -8,6 +8,9 @@
 - 移除 deprecated bytes alias（`YierdisBytesSink/YierdisBytesSource/YierdisDirectBytesSink` 等），bytes SSOT 统一为 `yierdis-bytes`。
 
 ### Added
+- 新增事务队列硬上限：`--transactionQueueMaxCommands/--transactionQueueMaxBytes`，防止 MULTI 大事务/大参数导致 OOM。
+- 新增 maxmemory 预算口径参数：`--maxmemoryScope global|per-db`（默认 global，更贴近 Redis 全实例口径；保留 per-db 兼容模式）。
+- RESP3 reply 互操作增强：补齐 `RespEncoder` 对 RESP3 扩展类型写出覆盖，并增强 CLI 对 set/boolean/double/bignum/verbatim/blob error/push/attribute 等类型的展示与回归测试。
 - 多 DB 支持：新增 `--databases`（默认 16），并在连接态维护 `dbIndex`，支持 `SELECT 0..N-1` 与按连接路由到目标 DB。
 - 新增 `yierdis-bytes` 中立模块：承载 `BytesSource/BytesSink/BytesSlice` 抽象，供 protocol/off-heap/I/O 复用，避免 `yierdis-protocol` 通过 “off-heap” 命名模块复用 bytes 接口造成依赖误导。
 - 新增 `RespMap`（RESP3 map 最小对象模型）与 client 侧 RESP3 最小解码能力（`%` map、`_` null），用于覆盖 `HELLO 3` 分支。
@@ -43,6 +46,9 @@
 - INFO 生态对齐：`INFO` 输出调整为 Redis 兼容的 bulk string（文本分节），保留 `INFO YIERDIS`/`STATS` 的结构化指标输出用于教学与排障。
 
 ### Changed
+- maxmemory 默认口径升级为 global（跨 DB 全局预算协调器）；并在 `INFO memory` 中增加 `yierdis_maxmemory_scope` 与 per-db 分摊诊断字段（便于排障与口径解释）。
+- busy 拒绝增强为 `-ERR busy <reason>`，并通过 `STATS` 暴露原因计数器（not_running/queue_full/bytes_budget/offer_failed），提升可诊断性。
+- 事务边界行为对齐 Redis：MULTI 入队阶段触发错误（例如触达队列上限）会进入 aborted，后续 EXEC 返回 `EXECABORT` 并丢弃事务队列。
 - `yierdis-protocol` 依赖收敛：不再直接依赖 `yierdis-offheap-api`，改为依赖 `yierdis-bytes`；同时移除 `yierdis-offheap-api` 的 bytes 兼容别名，避免 SSOT 漂移。
 - bench/server 参数体系收敛：共享参数由 `yierdis-args` 解析与校验；bench 通过 `--` 透传 server 参数，避免维护两套默认值。
 - `maxmemoryBytes` 统计口径调整为“heap 估算 + off-heap allocator.usedBytes 实占”，并避免对 off-heap string payload 双计数。
@@ -75,6 +81,10 @@
 - 命令路由加速：`CommandRegistry` 从线性扫描升级为开放寻址哈希索引（期望 O(1)，运行时零分配）。
 
 ### Fixed
+- protocol-netty：RESP3 全覆盖加固：request decoder 支持 `|` attributes + 标量参数 + `$?` streamed blob string + `*?` streamed command array；reply 切帧 decoder 支持 `$?`/`*?/%?/~?` streamed；client 支持 push 分流（避免 request/response 错配）
+- RespObject/文档注释对齐：RESP3 支持范围与对象模型一致，避免“注释仍写 RESP2 types”造成误解。
+- 修复事务场景下 `HELLO` 可被入队导致 `EXEC` reply 混入 RESP3 map（`%`）前缀、破坏 RESP2 客户端解析的问题：MULTI 模式下禁止 `HELLO`，并触发 `EXECABORT`（协议安全护栏）。
+- 修复知识库漂移：同步更新 `helloagents/wiki/api.md` 与 `helloagents/wiki/overview.md`，使命令清单与边界说明与代码实现一致（以代码为准）。
 - 修复 server 参数校验失败静默退出：现在会输出明确错误信息 + usage，并保持退出码稳定（exit=2）。
 - off-heap foreign 可用性探测增强：默认构建选择 `--offheapBackend foreign` 时给出 profile/JVM 参数指引并以可预期配置错误退出（避免长堆栈淹没关键信息）。
 - 安全性/可调试性平衡：仅对“可预期配置错误”做友好提示与稳定退出码处理；未知异常保留堆栈便于定位真实 bug。

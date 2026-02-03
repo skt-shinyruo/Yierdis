@@ -23,7 +23,12 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
         // 协议会话 SSOT（RESP2/RESP3 协商等）
         ConnectionContext session = ConnectionContext.getOrCreate(ch);
         // server 连接运行时状态（背压/统计/closing 等）
-        ServerConnectionState.getOrCreate(ch, session);
+        ServerConnectionState.getOrCreate(
+                ch,
+                session,
+                config.transactionQueueMaxCommands,
+                config.transactionQueueMaxBytes
+        );
         // 执行器调度状态（server 私有，避免放入 ConnectionContext）
         NettyExecutorChannelState.getOrCreate(ch);
 

@@ -1,18 +1,31 @@
 package yier.bubu.redis.protocol.netty;
 
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.buffer.Unpooled;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.protocol.RespArray;
+import yier.bubu.redis.protocol.RespAttribute;
+import yier.bubu.redis.protocol.RespBigNumber;
+import yier.bubu.redis.protocol.RespBlobError;
+import yier.bubu.redis.protocol.RespBoolean;
 import yier.bubu.redis.protocol.RespBulkString;
+import yier.bubu.redis.protocol.RespDouble;
 import yier.bubu.redis.protocol.RespError;
 import yier.bubu.redis.protocol.RespInteger;
+import yier.bubu.redis.protocol.RespMap;
 import yier.bubu.redis.protocol.RespNull;
 import yier.bubu.redis.protocol.RespObject;
+import yier.bubu.redis.protocol.RespProtocol;
+import yier.bubu.redis.protocol.RespPush;
+import yier.bubu.redis.protocol.RespSet;
 import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.protocol.RespVerbatimString;
+import yier.bubu.redis.protocol.RespObjectParser;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
 
 public class RespEncoderTest {
     @Test
@@ -103,6 +116,81 @@ public class RespEncoderTest {
         Assert.assertArrayEquals(expected, out);
 
         ch.finishAndReleaseAll();
+    }
+
+    @Test
+    public void encodeResp3ExtendedTypesThenDecodeAndParse() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespEncoder());
+        ConnectionContext.getOrCreate(ch).setProtocol(RespProtocol.RESP3);
+
+        RespObject reply = RespArray.of(Arrays.<RespObject>asList(
+                RespNull.INSTANCE,
+                RespBoolean.of(true),
+                RespDouble.of(1.25d),
+                RespBigNumber.of("12345678901234567890"),
+                RespVerbatimString.ofBytes("txt", "hello".getBytes(StandardCharsets.UTF_8)),
+                RespBlobError.ofBytes("ERR boom".getBytes(StandardCharsets.UTF_8)),
+                RespSet.of(Arrays.<RespObject>asList(
+                        RespBulkString.ofString("a"),
+                        RespBulkString.ofString("b")
+                )),
+                RespMap.of(List.of(
+                        new RespMap.Entry(RespBulkString.ofString("k"), RespBulkString.ofString("v"))
+                )),
+                RespPush.of(Arrays.<RespObject>asList(
+                        RespSimpleString.of("msg"),
+                        RespBulkString.ofString("x")
+                )),
+                RespAttribute.of(
+                        RespMap.of(List.of(
+                                new RespMap.Entry(RespBulkString.ofString("attr"), RespBulkString.ofString("1"))
+                        )),
+                        RespBulkString.ofString("value")
+                )
+        ));
+
+        Assert.assertTrue(ch.writeOutbound(reply));
+        byte[] wire = readBytes(ch);
+        ch.finishAndReleaseAll();
+
+        EmbeddedChannel in = new EmbeddedChannel(new RespDecoder());
+        Assert.assertTrue(in.writeInbound(Unpooled.wrappedBuffer(wire)));
+        Object msg = in.readInbound();
+        Assert.assertNotNull(msg);
+        Assert.assertTrue(msg instanceof NettyRespFrame);
+        NettyRespFrame frame = (NettyRespFrame) msg;
+        try {
+            RespObject parsed = RespObjectParser.parse(frame);
+            Assert.assertTrue(parsed instanceof RespArray);
+            RespArray arr = (RespArray) parsed;
+            Assert.assertNotNull(arr.values());
+            Assert.assertEquals(10, arr.values().size());
+
+            Assert.assertTrue(arr.values().get(0) instanceof RespNull);
+            Assert.assertTrue(arr.values().get(1) instanceof RespBoolean);
+            Assert.assertTrue(((RespBoolean) arr.values().get(1)).value());
+            Assert.assertTrue(arr.values().get(2) instanceof RespDouble);
+            Assert.assertEquals(1.25d, ((RespDouble) arr.values().get(2)).value(), 0.0000001);
+            Assert.assertTrue(arr.values().get(3) instanceof RespBigNumber);
+            Assert.assertEquals("12345678901234567890", ((RespBigNumber) arr.values().get(3)).value());
+            Assert.assertTrue(arr.values().get(4) instanceof RespVerbatimString);
+            Assert.assertEquals("txt", ((RespVerbatimString) arr.values().get(4)).format());
+            Assert.assertEquals("hello", ((RespVerbatimString) arr.values().get(4)).asString());
+            Assert.assertTrue(arr.values().get(5) instanceof RespBlobError);
+            Assert.assertEquals("ERR boom", ((RespBlobError) arr.values().get(5)).asString());
+            Assert.assertTrue(arr.values().get(6) instanceof RespSet);
+            Assert.assertEquals(2, ((RespSet) arr.values().get(6)).values().size());
+            Assert.assertTrue(arr.values().get(7) instanceof RespMap);
+            Assert.assertEquals(1, ((RespMap) arr.values().get(7)).entries().size());
+            Assert.assertTrue(arr.values().get(8) instanceof RespPush);
+            Assert.assertEquals(2, ((RespPush) arr.values().get(8)).values().size());
+            Assert.assertTrue(arr.values().get(9) instanceof RespAttribute);
+            RespAttribute attr = (RespAttribute) arr.values().get(9);
+            Assert.assertEquals(1, attr.attributes().entries().size());
+        } finally {
+            frame.close();
+            in.finishAndReleaseAll();
+        }
     }
 
     private static byte[] readBytes(EmbeddedChannel ch) {

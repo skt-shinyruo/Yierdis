@@ -8,7 +8,7 @@
 
 - **Responsibility:** 连接管理、命令输入、回复解码（frame-based）、输出显示（支持 hex；按需解析）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-02
+- **Last Updated:** 2026-02-03
 
 ## Specifications
 
@@ -38,8 +38,15 @@ client/CLI 基于 `yierdis-protocol-netty` 的 frame decoder 解析 server reply
 - collection：`%`（map）、`~`（set）、`>`（push）、`|`（attribute）
 - scalar：`#`（boolean）、`,`（double）、`(`（big number）、`=`（verbatim string）、`!`（blob error）
 
-已知限制：
-- client 仍然是“单请求-单响应”模型，**不支持 PubSub/订阅模式**；即使 decoder 能识别 `>` push，仍可能出现“push 抢占 reply/响应错配”的语义问题，需要在后续里程碑引入 push 分流与 subscribe API。
+### Requirement: RESP3 push 分流（避免响应错配）
+**Module:** client
+
+RESP3 push（`>`）是 out-of-band 消息，不参与 request/response FIFO 配对。为避免 “push 抢占 reply 导致错配”，client 在接收侧将 push 与普通 reply 分流：
+- 普通 reply：进入 response queue，供 `execute()` 严格 FIFO 等待
+- push（含 attributes 包裹 push）：进入独立 push queue，并通过 `pollPush(...)` API 暴露
+
+说明：
+- client 依然不支持 PubSub/订阅命令语义（out-of-scope），但协议层与工具链已具备“push 不破坏请求响应”的基础设施。
 
 ## Dependencies
 

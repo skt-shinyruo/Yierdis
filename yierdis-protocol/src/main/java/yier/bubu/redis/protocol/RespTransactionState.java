@@ -33,6 +33,44 @@ public interface RespTransactionState {
     void enqueue(byte[][] argv);
 
     /**
+     * 事务是否已进入“不可执行”状态（Redis 语义中的 EXECABORT）。
+     * <p>
+     * 典型触发条件：
+     * - MULTI 队列超限（条数/bytes）
+     * - 命令入队阶段发生可恢复错误（例如参数校验失败）并决定中止事务
+     */
+    default boolean aborted() {
+        return false;
+    }
+
+    /**
+     * 将事务标记为 aborted（后续 {@code EXEC} 返回 {@code EXECABORT} 并丢弃队列）。
+     * <p>
+     * 使用场景：
+     * - 入队阶段发生错误（例如参数校验失败、队列超限）
+     * - 禁止在 MULTI 中出现的“连接级/协议级”命令（例如会改变连接协议或 reply 容器语义的命令）
+     * <p>
+     * 默认实现为 no-op，用于兼容不支持 aborted 的实现；server 侧实现应覆盖该方法。
+     */
+    default void markAborted() {
+        // no-op
+    }
+
+    /**
+     * 尝试入队一个命令，并返回入队错误信息（如果有）。
+     * <p>
+     * 返回值约定：
+     * - 返回 {@code null}：入队成功
+     * - 返回非 {@code null}：入队失败，且实现方应在内部标记 {@link #aborted()}
+     * <p>
+     * 默认实现会直接调用 {@link #enqueue(byte[][])} 并视为成功，用于兼容没有超限保护的实现。
+     */
+    default String tryEnqueue(byte[][] argv) {
+        enqueue(argv);
+        return null;
+    }
+
+    /**
      * 当前队列长度（best-effort）。
      */
     int size();
@@ -42,4 +80,3 @@ public interface RespTransactionState {
      */
     List<byte[][]> drain();
 }
-

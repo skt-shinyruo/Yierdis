@@ -1,5 +1,6 @@
 package yier.bubu.redis.protocol;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -84,7 +85,11 @@ public final class RespObjectParser {
             }
             case '$': {
                 String line = readLineAscii();
-                int len = Integer.parseInt(line.trim());
+                String s = line.trim();
+                if ("?".equals(s)) {
+                    return parseStreamedBlobString();
+                }
+                int len = Integer.parseInt(s);
                 if (len == -1) {
                     return RespBulkString.nullString();
                 }
@@ -107,7 +112,11 @@ public final class RespObjectParser {
             }
             case '*': {
                 String line = readLineAscii();
-                int count = Integer.parseInt(line.trim());
+                String s = line.trim();
+                if ("?".equals(s)) {
+                    return parseStreamedArray(nestingDepth);
+                }
+                int count = Integer.parseInt(s);
                 if (count == -1) {
                     return RespArray.nullArray();
                 }
@@ -125,7 +134,11 @@ public final class RespObjectParser {
             }
             case '%': {
                 String line = readLineAscii();
-                int pairs = Integer.parseInt(line.trim());
+                String s = line.trim();
+                if ("?".equals(s)) {
+                    return parseStreamedMap(nestingDepth);
+                }
+                int pairs = Integer.parseInt(s);
                 if (pairs < 0) {
                     throw new IllegalArgumentException("Protocol error: invalid map length");
                 }
@@ -142,7 +155,11 @@ public final class RespObjectParser {
             }
             case '~': {
                 String line = readLineAscii();
-                int count = Integer.parseInt(line.trim());
+                String s = line.trim();
+                if ("?".equals(s)) {
+                    return parseStreamedSet(nestingDepth);
+                }
+                int count = Integer.parseInt(s);
                 if (count < 0) {
                     throw new IllegalArgumentException("Protocol error: invalid set length");
                 }
@@ -254,6 +271,110 @@ public final class RespObjectParser {
             default:
                 throw new IllegalArgumentException("Protocol error: unknown RESP prefix: " + (char) prefix);
         }
+    }
+
+    private RespBulkString parseStreamedBlobString() {
+        // Streamed blob string: "$?\r\n" + ( ";"<len>\r\n<payload>\r\n )* + ";0\r\n"
+        int total = 0;
+        ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(256, maxBulkBytes));
+        for (; ; ) {
+            if (index >= frame.length()) {
+                throw new IllegalArgumentException("Protocol error: truncated streamed blob string");
+            }
+            byte chunkPrefix = frame.getByte(index++);
+            if (chunkPrefix != ';') {
+                throw new IllegalArgumentException("Protocol error: invalid streamed blob chunk prefix");
+            }
+            String line = readLineAscii();
+            int len;
+            try {
+                len = Integer.parseInt(line.trim());
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Protocol error: invalid streamed blob chunk length");
+            }
+            if (len < 0) {
+                throw new IllegalArgumentException("Protocol error: invalid streamed blob chunk length");
+            }
+            if (len == 0) {
+                break;
+            }
+            if (total > maxBulkBytes - len) {
+                throw new IllegalArgumentException("Protocol error: bulk length too large");
+            }
+            byte[] data = readFixedBytes(len);
+            expectCrlf();
+            out.write(data, 0, data.length);
+            total += len;
+        }
+        return RespBulkString.ofBytes(out.toByteArray());
+    }
+
+    private RespArray parseStreamedArray(int nestingDepth) {
+        if (nestingDepth >= maxNestingDepth) {
+            throw new IllegalArgumentException("Protocol error: nested arrays too deep");
+        }
+        List<RespObject> items = new ArrayList<>();
+        for (; ; ) {
+            if (consumeStreamedEndMarker()) {
+                break;
+            }
+            if (items.size() >= maxArrayLen) {
+                throw new IllegalArgumentException("Protocol error: array length too large");
+            }
+            items.add(parseOne(nestingDepth + 1));
+        }
+        return RespArray.of(items);
+    }
+
+    private RespSet parseStreamedSet(int nestingDepth) {
+        if (nestingDepth >= maxNestingDepth) {
+            throw new IllegalArgumentException("Protocol error: nested sets too deep");
+        }
+        List<RespObject> items = new ArrayList<>();
+        for (; ; ) {
+            if (consumeStreamedEndMarker()) {
+                break;
+            }
+            if (items.size() >= maxArrayLen) {
+                throw new IllegalArgumentException("Protocol error: set length too large");
+            }
+            items.add(parseOne(nestingDepth + 1));
+        }
+        return RespSet.of(items);
+    }
+
+    private RespMap parseStreamedMap(int nestingDepth) {
+        if (nestingDepth >= maxNestingDepth) {
+            throw new IllegalArgumentException("Protocol error: nested maps too deep");
+        }
+        List<RespMap.Entry> entries = new ArrayList<>();
+        for (; ; ) {
+            if (consumeStreamedEndMarker()) {
+                break;
+            }
+            if (entries.size() >= maxArrayLen) {
+                throw new IllegalArgumentException("Protocol error: map length too large");
+            }
+            RespObject key = parseOne(nestingDepth + 1);
+            if (consumeStreamedEndMarker()) {
+                throw new IllegalArgumentException("Protocol error: missing map value before end marker");
+            }
+            RespObject value = parseOne(nestingDepth + 1);
+            entries.add(new RespMap.Entry(key, value));
+        }
+        return RespMap.of(entries);
+    }
+
+    private boolean consumeStreamedEndMarker() {
+        if (index >= frame.length()) {
+            throw new IllegalArgumentException("Protocol error: truncated frame");
+        }
+        if (frame.getByte(index) != '.') {
+            return false;
+        }
+        index++;
+        expectCrlf();
+        return true;
     }
 
     private String readLineUtf8() {

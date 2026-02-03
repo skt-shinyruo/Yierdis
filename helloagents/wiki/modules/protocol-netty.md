@@ -10,7 +10,7 @@
 
 - **Responsibility:** Netty codec（`RespCommandDecoder` / `RespDecoder`）+ `RespFrame/RespSession` 的 Netty 实现（frame ownership / release）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-01
+- **Last Updated:** 2026-02-03
 
 ## Specifications
 
@@ -18,11 +18,32 @@
 **Module:** protocol-netty
 
 将 Netty `ByteBuf` 字节流解码为 `RespCommand`：
-- 支持 RESP2 multi-bulk（`*<argc> ...`）作为主路径
+- 支持 RESP2 multi-bulk（`*<argc> ...`）作为主路径（Redis 生态最常见请求形态）
 - 支持 inline command（调试用，兼容 `sdssplitargs` 风格：引号/转义/`\\xHH`）
-- 严格区分 request/reply：仅接受 `*` multi-bulk 与 inline command；对 RESP reply（含常见 RESP3 类型前缀）与控制字符前缀统一判为 `Protocol error`，避免误路由为 inline 导致执行层状态错乱
+- 兼容 RESP3 request（严格命令形态）：
+  - 允许在命令前携带 `|` attributes（忽略 attributes map，仅解析其后真实命令）
+  - 允许在 `*` 命令数组内使用部分 RESP3 标量类型（例如 `+`/`:`/`_`/`#`/`,`/`(`/`=`）作为参数，并映射为 argv bytes view（保持二进制安全）
+  - 支持 `$?` streamed blob string 作为参数（chunk 非连续时会 materialize 为连续 argv bytes）
+  - 支持 `*?` streamed array 作为命令容器（直到 `.` END；受 `maxArgs` 上限保护）
+- top-level 仍严格区分 request/reply：命令必须是 `*` multi-bulk 或 inline；对 RESP reply（含常见 RESP3 类型前缀）与控制字符前缀统一判为 `Protocol error`，避免误路由为 inline 导致执行层状态错乱
 - 保持参数 **二进制安全**：bulk string 不强制 UTF-8 解码
 - 支持输入上限参数化：`maxBulkBytes/maxArgs/maxLineBytes`（与 server args SSOT 对齐，避免 DoS 风险）
+ - attributes 跳过路径额外受嵌套深度限制（`RespLimits.DEFAULT_MAX_NESTING_DEPTH`），避免恶意构造的深层结构体导致 decode 长尾
+
+### Requirement: reply 切帧（RespDecoder）支持 streamed
+**Module:** protocol-netty
+
+`RespDecoder` 的职责是“切帧而非语义解析”：从 ByteBuf 中定位一个完整 RESP reply，并输出 `NettyRespFrame`（zero-copy slice）。
+
+为实现 RESP3 全覆盖并适配生态代理/客户端的边界输入，reply 侧切帧补齐 streamed 类型：
+- streamed blob string：`$? ... ;0`
+- streamed aggregates：`*?/%?/~? ... .`
+- attributes（`|...`）依旧被视为“attributes + 后续 reply”组成的一个逻辑 frame（避免上层将 attributes 与真实 reply 错配）
+
+严格性与安全约束：
+- 半包/粘包场景下必须可回滚并等待更多数据（不允许误吞字节导致后续错帧）
+- streamed 累计长度/元素数/嵌套深度受 `maxBulkBytes/maxArrayLen/maxNestingDepth` 保护
+- 协议错误统一抛出 `Protocol error: ...` 由 server handler 返回 `-ERR ...` 并关闭连接（Redis 风格）
 
 ### Requirement: 连接级 RESP2/RESP3 协议状态（session）
 **Module:** protocol-netty
@@ -38,6 +59,7 @@ RESP2/RESP3 的协商属于连接级状态：
 为避免 server fast-path（`RespWriter`）与 Netty codec（`RespEncoder`）的输出行为漂移：
 - `RespEncoder` 仅作为 Netty adapter：写出时内部调用 `RespWriter`（通过 `NettyByteBufSink` 适配到 `ByteBuf`）
 - CR/LF 净化与限长等安全语义以 `RespWriter` 为唯一权威
+ - `RespEncoder` 的类型覆盖必须与 `RespObject`/`RespWriter` 保持一致（含 RESP3 扩展类型），并通过单测锁定
 
 ### Requirement: ByteBuf ownership/release（泄漏风险控制）
 **Module:** protocol-netty
@@ -63,3 +85,4 @@ RESP2/RESP3 的协商属于连接级状态：
 - 2026-01-16：增加 `RespFrame.retainedBytes()` 口径与 `RespCommandBuilder.replaceFrame(...)`，为执行器 bytes 预算与 compaction 提供协议层支撑。
 - 2026-01-17：request 解码严格化：明确允许集合（array + inline），对 RESP reply/非法前缀统一 protocol error；连接态二分：`ConnectionContext` 仅表达协议会话，server 运行时连接状态迁移到 `ServerConnectionState`；`RespEncoder` 写出语义收敛为 `RespWriter`。
 - 2026-02-01：reply 切帧 decoder（`RespDecoder`）扩展 RESP3 前缀覆盖（set/push/attribute/boolean/double/verbatim/blob error 等），与 `RespWriter/RespObjectParser` 的类型集合保持一致；同时补齐“把 reply 前缀当成 inline request”这一类误用的协议错误测试用例。
+- 2026-02-03：request decoder 兼容扩展：支持 RESP3 `|` attributes 前缀（忽略 metadata）与 `*` 命令数组内的部分 RESP3 标量类型参数（提升对 Redis/代理的 request 兼容性）。

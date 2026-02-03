@@ -75,6 +75,11 @@ final class TransactionCommands {
             out.error("ERR EXEC without MULTI");
             return;
         }
+        if (tx.aborted()) {
+            tx.discard();
+            out.error("EXECABORT Transaction discarded because of previous errors.");
+            return;
+        }
 
         List<byte[][]> queued = tx.drain();
         out.arrayHeader(queued.size());

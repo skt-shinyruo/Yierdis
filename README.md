@@ -2,6 +2,15 @@
 
 一个简化版的 Yierdis Server（兼容 Redis），适合用来学习/演示 Netty 网络编程与 Redis 协议。
 
+## 定位与兼容性边界（重要）
+
+Yierdis 的目标是 **教学/演示**：可以用 `redis-cli` 做交互学习、用最小命令集理解数据结构/协议/背压/淘汰等思路。
+
+但它不是 Redis 的 drop-in replacement（README 明确将不少能力定义为 out-of-scope），并且即便是已实现命令，也有不少“刻意简化/最小子集”的语义差异（例如 TTL 清理、`KEYS` glob 覆盖范围、事务边界行为等）。
+
+- **包含（In scope）**：单机内存版数据结构、基础命令子集、TTL（惰性删除 + 轻量后台清理）、maxmemory（教学口径的估算 + 近似淘汰）、最小事务子集（`MULTI/EXEC/DISCARD`）、RESP2 + RESP3（request + reply，含 push/attributes/streamed）、`INFO/STATS/MEMORY STATS` 可观测性
+- **不包含（Out of scope）**：AOF/RDB 持久化、复制/集群、Lua、ACL/TLS、PubSub/订阅模式、完整的模块化运维能力
+
 ## 环境
 
 - JDK 17
@@ -40,6 +49,11 @@ redis-cli -p 6378 --resp3 ping
 
 `HELLO` 返回的 `version` 字段来自构建版本（`project.version` 资源注入），用于保证对外版本输出与构建产物一致（避免硬编码常量漂移）。
 
+RESP3 说明（重要）：
+
+- reply 侧：在 `HELLO 3` 后，服务端切换为 RESP3 回复，并尽量以 RESP3 类型返回集合与标量（`%` map、`~` set、`_` null、`#` boolean、`,` double、`(` big number、`=` verbatim string、`!` blob error、`>` push、`|` attribute）；同时 codec/parser 支持 streamed strings（`$? ... ;0`）与 streamed aggregates（`*?/%?/~? ... .`）以提升互操作性。
+- request 侧：主路径仍是 RESP2 的 “array of bulk strings”（与 Redis 客户端一致），但 server 的 request decoder 支持 RESP3 `|` attributes 前缀、命令数组内的 RESP3 标量参数，以及 `$?` streamed blob string 与 `*?` streamed array（严格要求 top-level 为 array/inline；不支持将 map/set 等聚合类型作为命令参数）。
+
 也支持 inline command（便于 telnet/nc 调试；兼容 Redis `sdssplitargs` 风格：支持单/双引号、反斜杠转义、`\\xHH` 十六进制转义）：
 
 ```bash
@@ -71,7 +85,8 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 说明：
 
 - client 侧发送命令仍采用 RESP2 的 “array of bulk strings” 形式（与 Redis 客户端一致）。
-- 在执行 `HELLO 3` 之后，client/CLI 支持解析 RESP3 的最小子集：map（`%`）、set（`~`）、null（`_`）以及常见标量类型（integer/boolean/double），用于覆盖 server 的 RESP3 分支回归。
+- 在执行 `HELLO 3` 之后，client/CLI 可解析 RESP3 reply 的常见类型（map/set/push/attribute/标量），并支持 streamed 类型的切帧与对象树解析，便于回归与排障。
+- client 侧对 RESP3 push（含 attributes 包裹 push）做了分流：push 不会破坏 `execute()` 的 request/response 配对，可通过 `YierdisClient.pollPush(...)` 获取。
 - REPL 输入解析规则与 server inline command 解析保持一致（sdssplitargs 风格：支持单/双引号、反斜杠转义、`\\xHH` 十六进制转义）。
 
 ## 已实现命令（简化版）
@@ -156,6 +171,13 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 - `EXEC`
 - `DISCARD`
 
+事务边界与上限（重要）：
+
+- 事务队列是连接级状态：为避免大事务/大参数导致 JVM OOM，server 提供硬上限保护：
+  - `--transactionQueueMaxCommands <n>`：事务队列最大命令数（0 表示不限制）
+  - `--transactionQueueMaxBytes <bytes>`：事务队列最大参数 bytes（按入队参数拷贝估算；0 表示不限制）
+- 当 MULTI 模式入队阶段触发上述上限时：该连接事务会被标记为 aborted；后续 `EXEC` 会返回 Redis 风格 `EXECABORT` 并丢弃队列（对齐 Redis 的“入队阶段出错 → EXEC 终止”语义）。
+
 ## 说明
 
 - 这是一个 **单机内存版** 实现：不包含 AOF/RDB 持久化、复制、集群、Lua、ACL、TLS 等复杂功能。
@@ -168,6 +190,7 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 Yierdis 提供一个“Redis 风格、但刻意简化”的 maxmemory/淘汰机制，方便演示：
 
 - `--maxmemoryBytes <bytes>`：启用最大内存预算（默认 `0` 表示不限制）。
+- `--maxmemoryScope global|per-db`：maxmemory 预算口径（默认 `global`，更贴近 Redis “全实例 maxmemory”；`per-db` 为兼容模式：将 `maxmemoryBytes` 按 DB 数量硬分摊）。
 - `--maxmemoryPolicy noeviction|allkeys-random|allkeys-lru`：淘汰策略（默认 `noeviction`）。
   - `noeviction`：不淘汰，写入会返回 OOM 错误。
   - `allkeys-random`：随机淘汰任意 key。
@@ -180,6 +203,7 @@ Yierdis 提供一个“Redis 风格、但刻意简化”的 maxmemory/淘汰机�
 java -jar yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar \
   --port 6378 \
   --maxmemoryBytes 10485760 \
+  --maxmemoryScope global \
   --maxmemoryPolicy allkeys-lru \
   --maxmemorySamples 5
 ```
@@ -200,6 +224,15 @@ java -jar yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar \
 - `--executorQueueMaxBytes <bytes>`：全局执行队列 bytes 上限（`0` 表示禁用）
 - `--backpressureHigh/--backpressureLow`：连接级条数背压水位线（滞回）
 - `--backpressureBytesHigh/--backpressureBytesLow`：连接级 bytes 背压水位线（滞回；`0` 表示禁用）
+
+busy 可诊断性（排障）：
+
+- 当投递被拒绝时，server 会返回 `-ERR busy <reason>`（保持 RESP error 形态兼容；`reason` 用于人类排障）：
+  - `not_running`：执行器未启动或正在关闭
+  - `queue_full`：全局队列已满
+  - `bytes_budget`：全局 queued-bytes 预算耗尽
+  - `offer_failed`：入队失败（通常是竞态/关闭路径）
+- `STATS` 会输出对应计数器，便于定位 busy 的主因（例如 `submit_rejected_queue_full_total` 等）。
 
 ## Off-heap（实验）
 
@@ -237,6 +270,8 @@ java --add-modules jdk.incubator.foreign -jar yierdis-server/target/yierdis-0.1.
 
 - `--offheapBackend none|netty|unsafe|foreign`（默认 `none`）
 - `--offheapMaxBytes <bytes>`（默认 `0` 表示不限制；>0 时作为硬限制，超限命令返回 OOM 错误）
+
+⚠️ 重要提示：如果启用了 off-heap 后端但未配置 `--offheapMaxBytes`（保持 0），off-heap 会表现为“无限上限”；此时即使配置了 `--maxmemoryBytes`，也可能出现“以为有硬限制但 off-heap 仍持续增长”的误解。建议在容器/受限环境中总是显式配置 `--offheapMaxBytes`。
 
 ## 压力测试（可重复）
 

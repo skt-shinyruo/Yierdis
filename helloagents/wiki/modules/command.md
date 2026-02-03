@@ -10,7 +10,7 @@
 
 - **Responsibility:** 命令分发、参数解析、错误映射、性能优化（低分配写出路径）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-01
+- **Last Updated:** 2026-02-02
 
 ## Specifications
 
@@ -65,6 +65,24 @@
 - `SMEMBERS` 输出 RESP3 set
 补充：`OBJECT ENCODING` 返回 bulk string（非状态类字符串），缺失 key 返回 nil。
 
+### Requirement: Transaction（MULTI/EXEC/DISCARD）边界与上限（对齐 Redis 行为）
+**Module:** command/server
+
+事务实现为“最小子集”，但需要在 **资源安全** 与 **Redis 生态兼容性** 上对齐关键边界：
+
+- 事务队列为连接级状态（MULTI 模式下入队，EXEC 重放执行）
+- 事务队列必须是 **有界** 的：避免大事务/大参数在入队阶段导致 JVM OOM
+- 当入队阶段发生错误（例如触达队列上限）时，后续 `EXEC` 必须返回 Redis 风格 `EXECABORT` 并丢弃事务队列（对齐 Redis “入队阶段出错 → EXEC 终止” 语义）
+- MULTI 模式下禁止 `HELLO`（连接级协议协商命令）：避免在 `EXEC` reply 中混入不同协议类型前缀导致客户端解析失败
+
+相关 server 启动参数（硬上限）：
+- `--transactionQueueMaxCommands <n>`：最大入队命令数（0 表示不限制）
+- `--transactionQueueMaxBytes <bytes>`：最大入队参数 bytes（按入队拷贝估算；0 表示不限制）
+
+已知限制（仍属于 out-of-scope）：
+- 不支持 `WATCH/UNWATCH` 与乐观锁语义
+- 不保证与 Redis 在所有边界行为上完全一致（以教学/可解释性为优先）
+
 ## Dependencies
 
 - 外部：`yierdis-protocol`（`RespCommand`/`RespWriter` 等）
@@ -80,3 +98,4 @@
 - 2026-01-17：命令路由加速：`CommandRegistry` 从线性扫描升级为 O(1) 哈希索引；新增 `INFO/STATS` 作为可观测性入口（输出由 server 注入 provider）。
 - 2026-01-23：写命令统一引入 write preflight（`prepareWrite`）并调整顺序为 preflight→执行→enforce→reply（避免双 reply）；RESP3 下 `HGETALL/MEMORY STATS/SMEMBERS` 改为 map/set；`KEYS` glob 兼容范围补齐（`[]`/否定/范围/转义）。
 - 2026-02-01：多 DB 路由接入命令层（通过 `RespWriter.session` 访问连接态 `dbIndex`）；`INFO` 输出形态对齐 Redis（bulk string，结构化指标迁移到 `INFO YIERDIS`/`STATS`）；`MEMORY STATS` 数值字段类型对齐为 integer；`OBJECT ENCODING` 回复类型对齐为 bulk string。
+- 2026-02-03：事务协议护栏：MULTI 模式下禁止 `HELLO`，避免 `EXEC` reply 混入 RESP3 map（`%`）前缀导致 RESP2 客户端解析失败。

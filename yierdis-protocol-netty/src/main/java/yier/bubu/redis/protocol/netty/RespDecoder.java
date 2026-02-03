@@ -184,6 +184,11 @@ public final class RespDecoder extends ByteToMessageDecoder {
             return -1;
         }
 
+        if (RespDecodingSupport.isSingleCharLine(in, lenLineStart, lenLineEnd, (byte) '?')) {
+            in.readerIndex(lenLineEnd + 2);
+            return trySkipStreamedBlobString(in, startIdx);
+        }
+
         int len = RespDecodingSupport.parseIntAscii(in, lenLineStart, lenLineEnd);
         if (len == -1) {
             int end = lenLineEnd + 2;
@@ -218,6 +223,70 @@ public final class RespDecoder extends ByteToMessageDecoder {
         return endIdx;
     }
 
+    private int trySkipStreamedBlobString(ByteBuf in, int startIdx) {
+        // Streamed blob string: "$?\r\n" + ( ";"<len>\r\n<payload>\r\n )* + ";0\r\n"
+        int total = 0;
+        for (; ; ) {
+            if (!in.isReadable()) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+            byte chunkPrefix = in.readByte();
+            if (chunkPrefix != ';') {
+                throw new IllegalArgumentException("Protocol error: invalid streamed blob chunk prefix");
+            }
+
+            int lenLineStart = in.readerIndex();
+            int lenLineEnd = RespDecodingSupport.indexOfCrlf(in, lenLineStart, maxLineBytes);
+            if (lenLineEnd < 0) {
+                if (in.writerIndex() - lenLineStart > maxLineBytes + 2) {
+                    throw new IllegalArgumentException("Protocol error: line too long");
+                }
+                in.readerIndex(startIdx);
+                return -1;
+            }
+
+            int len;
+            try {
+                len = RespDecodingSupport.parseIntAscii(in, lenLineStart, lenLineEnd);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("Protocol error: invalid streamed blob chunk length");
+            }
+            if (len < 0) {
+                throw new IllegalArgumentException("Protocol error: invalid streamed blob chunk length");
+            }
+
+            in.readerIndex(lenLineEnd + 2);
+            if (len == 0) {
+                return in.readerIndex();
+            }
+
+            if (total > maxBulkBytes - len) {
+                throw new IllegalArgumentException("Protocol error: bulk length too large");
+            }
+
+            long dataStart = (long) in.readerIndex();
+            long dataEnd = dataStart + (long) len;
+            long end = dataEnd + 2;
+            if (end > Integer.MAX_VALUE) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+            if (in.writerIndex() < end) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+
+            int dataEndIdx = (int) dataEnd;
+            if (in.getByte(dataEndIdx) != RespDecodingSupport.CR || in.getByte(dataEndIdx + 1) != RespDecodingSupport.LF) {
+                throw new IllegalArgumentException("Protocol error: bad bulk string CRLF");
+            }
+            int endIdx = (int) end;
+            in.readerIndex(endIdx);
+            total += len;
+        }
+    }
+
     private int trySkipArray(ByteBuf in, int startIdx, int nestingDepth) {
         if (nestingDepth >= maxNestingDepth) {
             throw new IllegalArgumentException("Protocol error: nested arrays too deep");
@@ -231,6 +300,11 @@ public final class RespDecoder extends ByteToMessageDecoder {
             }
             in.readerIndex(startIdx);
             return -1;
+        }
+
+        if (RespDecodingSupport.isSingleCharLine(in, countLineStart, countLineEnd, (byte) '?')) {
+            in.readerIndex(countLineEnd + 2);
+            return trySkipStreamedArray(in, startIdx, nestingDepth);
         }
 
         int count = RespDecodingSupport.parseIntAscii(in, countLineStart, countLineEnd);
@@ -257,6 +331,43 @@ public final class RespDecoder extends ByteToMessageDecoder {
         return in.readerIndex();
     }
 
+    private int trySkipStreamedArray(ByteBuf in, int startIdx, int nestingDepth) {
+        if (nestingDepth >= maxNestingDepth) {
+            throw new IllegalArgumentException("Protocol error: nested arrays too deep");
+        }
+
+        int count = 0;
+        for (; ; ) {
+            if (!in.isReadable()) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+
+            byte next = in.getByte(in.readerIndex());
+            if (next == '.') {
+                if (in.readableBytes() < 3) {
+                    in.readerIndex(startIdx);
+                    return -1;
+                }
+                in.readByte();
+                if (in.readByte() != RespDecodingSupport.CR || in.readByte() != RespDecodingSupport.LF) {
+                    throw new IllegalArgumentException("Protocol error: bad streamed aggregate end marker");
+                }
+                return in.readerIndex();
+            }
+
+            if (count >= maxArrayLen) {
+                throw new IllegalArgumentException("Protocol error: array length too large");
+            }
+            int endIdx = trySkipOne(in, nestingDepth + 1);
+            if (endIdx < 0) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+            count++;
+        }
+    }
+
     private int trySkipMap(ByteBuf in, int startIdx, int nestingDepth) {
         if (nestingDepth >= maxNestingDepth) {
             throw new IllegalArgumentException("Protocol error: nested maps too deep");
@@ -270,6 +381,11 @@ public final class RespDecoder extends ByteToMessageDecoder {
             }
             in.readerIndex(startIdx);
             return -1;
+        }
+
+        if (RespDecodingSupport.isSingleCharLine(in, pairsLineStart, pairsLineEnd, (byte) '?')) {
+            in.readerIndex(pairsLineEnd + 2);
+            return trySkipStreamedMap(in, startIdx, nestingDepth);
         }
 
         int pairs = RespDecodingSupport.parseIntAscii(in, pairsLineStart, pairsLineEnd);
@@ -296,6 +412,61 @@ public final class RespDecoder extends ByteToMessageDecoder {
         return in.readerIndex();
     }
 
+    private int trySkipStreamedMap(ByteBuf in, int startIdx, int nestingDepth) {
+        if (nestingDepth >= maxNestingDepth) {
+            throw new IllegalArgumentException("Protocol error: nested maps too deep");
+        }
+
+        int pairs = 0;
+        for (; ; ) {
+            if (!in.isReadable()) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+            byte next = in.getByte(in.readerIndex());
+            if (next == '.') {
+                if (in.readableBytes() < 3) {
+                    in.readerIndex(startIdx);
+                    return -1;
+                }
+                in.readByte();
+                if (in.readByte() != RespDecodingSupport.CR || in.readByte() != RespDecodingSupport.LF) {
+                    throw new IllegalArgumentException("Protocol error: bad streamed aggregate end marker");
+                }
+                return in.readerIndex();
+            }
+
+            if (pairs >= maxArrayLen) {
+                throw new IllegalArgumentException("Protocol error: map length too large");
+            }
+            int endKey = trySkipOne(in, nestingDepth + 1);
+            if (endKey < 0) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+
+            if (!in.isReadable()) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+            byte maybeEnd = in.getByte(in.readerIndex());
+            if (maybeEnd == '.') {
+                if (in.readableBytes() < 3) {
+                    in.readerIndex(startIdx);
+                    return -1;
+                }
+                throw new IllegalArgumentException("Protocol error: missing map value before end marker");
+            }
+
+            int endVal = trySkipOne(in, nestingDepth + 1);
+            if (endVal < 0) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+            pairs++;
+        }
+    }
+
     private int trySkipSet(ByteBuf in, int startIdx, int nestingDepth) {
         if (nestingDepth >= maxNestingDepth) {
             throw new IllegalArgumentException("Protocol error: nested sets too deep");
@@ -309,6 +480,11 @@ public final class RespDecoder extends ByteToMessageDecoder {
             }
             in.readerIndex(startIdx);
             return -1;
+        }
+
+        if (RespDecodingSupport.isSingleCharLine(in, countLineStart, countLineEnd, (byte) '?')) {
+            in.readerIndex(countLineEnd + 2);
+            return trySkipStreamedSet(in, startIdx, nestingDepth);
         }
 
         int count = RespDecodingSupport.parseIntAscii(in, countLineStart, countLineEnd);
@@ -328,6 +504,42 @@ public final class RespDecoder extends ByteToMessageDecoder {
             }
         }
         return in.readerIndex();
+    }
+
+    private int trySkipStreamedSet(ByteBuf in, int startIdx, int nestingDepth) {
+        if (nestingDepth >= maxNestingDepth) {
+            throw new IllegalArgumentException("Protocol error: nested sets too deep");
+        }
+
+        int count = 0;
+        for (; ; ) {
+            if (!in.isReadable()) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+            byte next = in.getByte(in.readerIndex());
+            if (next == '.') {
+                if (in.readableBytes() < 3) {
+                    in.readerIndex(startIdx);
+                    return -1;
+                }
+                in.readByte();
+                if (in.readByte() != RespDecodingSupport.CR || in.readByte() != RespDecodingSupport.LF) {
+                    throw new IllegalArgumentException("Protocol error: bad streamed aggregate end marker");
+                }
+                return in.readerIndex();
+            }
+
+            if (count >= maxArrayLen) {
+                throw new IllegalArgumentException("Protocol error: set length too large");
+            }
+            int endIdx = trySkipOne(in, nestingDepth + 1);
+            if (endIdx < 0) {
+                in.readerIndex(startIdx);
+                return -1;
+            }
+            count++;
+        }
     }
 
     private int trySkipPush(ByteBuf in, int startIdx, int nestingDepth) {

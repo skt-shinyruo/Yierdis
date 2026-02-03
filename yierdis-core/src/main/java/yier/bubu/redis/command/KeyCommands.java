@@ -95,7 +95,14 @@ final class KeyCommands {
                 return;
             }
 
-            YierdisMemoryStats s = support.db(out).memoryStats();
+            YierdisMemoryStats s = null;
+            ServerInfoProvider infoProvider = support.infoProvider();
+            if (infoProvider != null) {
+                s = infoProvider.memoryStats(out);
+            }
+            if (s == null) {
+                s = support.db(out).memoryStats();
+            }
             // RESP2-compatible flat array of key/value pairs; in RESP3 emit a map for friendlier clients.
             if (out.protocol() == RespProtocol.RESP3) {
                 out.mapHeader(17);

@@ -6,13 +6,21 @@ import io.netty.handler.codec.MessageToByteEncoder;
 
 import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.protocol.RespArray;
+import yier.bubu.redis.protocol.RespAttribute;
+import yier.bubu.redis.protocol.RespBigNumber;
+import yier.bubu.redis.protocol.RespBlobError;
+import yier.bubu.redis.protocol.RespBoolean;
 import yier.bubu.redis.protocol.RespBulkString;
+import yier.bubu.redis.protocol.RespDouble;
 import yier.bubu.redis.protocol.RespError;
 import yier.bubu.redis.protocol.RespInteger;
 import yier.bubu.redis.protocol.RespMap;
 import yier.bubu.redis.protocol.RespNull;
 import yier.bubu.redis.protocol.RespObject;
+import yier.bubu.redis.protocol.RespPush;
+import yier.bubu.redis.protocol.RespSet;
 import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.protocol.RespVerbatimString;
 import java.util.List;
 
 public final class RespEncoder extends MessageToByteEncoder<RespObject> {
@@ -51,14 +59,43 @@ public final class RespEncoder extends MessageToByteEncoder<RespObject> {
                 case INTEGER:
                     writer.integer(((RespInteger) obj).value());
                     return;
+                case BOOLEAN:
+                    writer.booleanValue(((RespBoolean) obj).value());
+                    return;
+                case DOUBLE:
+                    writer.doubleValue(((RespDouble) obj).value());
+                    return;
+                case BIG_NUMBER:
+                    writer.bigNumberAscii(((RespBigNumber) obj).value());
+                    return;
                 case BULK_STRING:
                     writer.bulkString(((RespBulkString) obj).data());
                     return;
+                case VERBATIM_STRING: {
+                    RespVerbatimString v = (RespVerbatimString) obj;
+                    writer.verbatimString(v.format(), v.data());
+                    return;
+                }
+                case BLOB_ERROR: {
+                    RespBlobError e = (RespBlobError) obj;
+                    // RESP2 fallback behavior is handled by RespWriter.blobError(...).
+                    writer.blobError(e.asString());
+                    return;
+                }
                 case ARRAY:
                     writeArray(writer, (RespArray) obj);
                     return;
                 case MAP:
                     writeMap(writer, (RespMap) obj);
+                    return;
+                case SET:
+                    writeSet(writer, (RespSet) obj);
+                    return;
+                case PUSH:
+                    writePush(writer, (RespPush) obj);
+                    return;
+                case ATTRIBUTE:
+                    writeAttribute(writer, (RespAttribute) obj);
                     return;
                 case NULL:
                 default:
@@ -97,6 +134,62 @@ public final class RespEncoder extends MessageToByteEncoder<RespObject> {
                 writeObject(writer, e.key());
                 writeObject(writer, e.value());
             }
+        }
+
+        private static void writeSet(yier.bubu.redis.protocol.RespWriter writer, RespSet set) {
+            if (set == null) {
+                writer.nullValue();
+                return;
+            }
+            List<RespObject> values = set.values();
+            if (values == null) {
+                writer.nullValue();
+                return;
+            }
+            writer.setHeader(values.size());
+            for (RespObject v : values) {
+                writeObject(writer, v);
+            }
+        }
+
+        private static void writePush(yier.bubu.redis.protocol.RespWriter writer, RespPush push) {
+            if (push == null) {
+                writer.nullValue();
+                return;
+            }
+            List<RespObject> values = push.values();
+            if (values == null) {
+                writer.nullValue();
+                return;
+            }
+            writer.pushHeader(values.size());
+            for (RespObject v : values) {
+                writeObject(writer, v);
+            }
+        }
+
+        private static void writeAttribute(yier.bubu.redis.protocol.RespWriter writer, RespAttribute attr) {
+            if (attr == null) {
+                writer.nullValue();
+                return;
+            }
+            RespMap attrs = attr.attributes();
+            RespObject value = attr.value();
+            if (attrs == null || value == null) {
+                writer.nullValue();
+                return;
+            }
+            List<RespMap.Entry> entries = attrs.entries();
+            if (entries == null) {
+                writer.nullValue();
+                return;
+            }
+            writer.attributeHeader(entries.size());
+            for (RespMap.Entry e : entries) {
+                writeObject(writer, e.key());
+                writeObject(writer, e.value());
+            }
+            writeObject(writer, value);
         }
     }
 }

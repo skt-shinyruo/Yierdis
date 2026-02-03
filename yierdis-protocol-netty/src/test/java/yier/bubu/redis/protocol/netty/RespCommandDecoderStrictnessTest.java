@@ -21,8 +21,7 @@ public class RespCommandDecoderStrictnessTest {
                 '~', // set（RESP3）
                 '>', // push（RESP3）
                 '=', // verbatim（RESP3）
-                '!', // blob error（RESP3）
-                '|'  // attribute（RESP3）
+                '!'  // blob error（RESP3）
         };
 
         for (byte p : prefixes) {
@@ -39,6 +38,18 @@ public class RespCommandDecoderStrictnessTest {
             } finally {
                 finishQuietly(ch);
             }
+        }
+    }
+
+    @Test
+    public void resp3AttributesPrefixAloneWaitsForMoreDataInsteadOfThrowing() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder());
+        try {
+            boolean produced = ch.writeInbound(Unpooled.wrappedBuffer(new byte[]{'|'}));
+            Assert.assertFalse(produced);
+            Assert.assertNull(ch.readInbound());
+        } finally {
+            finishQuietly(ch);
         }
     }
 

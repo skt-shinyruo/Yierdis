@@ -41,6 +41,18 @@ final class RespDecodingSupport {
         return -1;
     }
 
+    static boolean isSingleCharLine(ByteBuf in, int start, int end, byte expected) {
+        int i = start;
+        while (i < end && isSpace(in.getByte(i))) {
+            i++;
+        }
+        int j = end;
+        while (j > i && isSpace(in.getByte(j - 1))) {
+            j--;
+        }
+        return (j - i) == 1 && in.getByte(i) == expected;
+    }
+
     static int parseIntAscii(ByteBuf in, int start, int end) {
         int i = start;
         while (i < end && isSpace(in.getByte(i))) {

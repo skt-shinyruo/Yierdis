@@ -20,6 +20,8 @@ public final class YierdisServerArgs {
     private static final int DEFAULT_PROTOCOL_MAX_LINE_BYTES = RespLimits.DEFAULT_MAX_LINE_BYTES;
 
     private static final long DEFAULT_EXECUTOR_QUEUE_MAX_BYTES = 64L * 1024 * 1024; // 64 MiB
+    private static final int DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS = 1024;
+    private static final long DEFAULT_TRANSACTION_QUEUE_MAX_BYTES = DEFAULT_EXECUTOR_QUEUE_MAX_BYTES;
     private static final long DEFAULT_BACKPRESSURE_BYTES_HIGH = 16L * 1024 * 1024; // 16 MiB
     private static final long DEFAULT_BACKPRESSURE_BYTES_LOW = 8L * 1024 * 1024; // 8 MiB
     private static final int DEFAULT_FRAME_COMPACTION_MAX_COPY_BYTES = 1024 * 1024; // 1 MiB
@@ -119,6 +121,20 @@ public final class YierdisServerArgs {
     public long executorDrainTimeLimitMillis = 2;
 
     @Option(
+            names = YierdisServerArgNames.TRANSACTION_QUEUE_MAX_COMMANDS,
+            defaultValue = "" + DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS,
+            description = "Transaction queue max commands for MULTI (0 disables)."
+    )
+    public int transactionQueueMaxCommands = DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS;
+
+    @Option(
+            names = YierdisServerArgNames.TRANSACTION_QUEUE_MAX_BYTES,
+            defaultValue = "" + DEFAULT_TRANSACTION_QUEUE_MAX_BYTES,
+            description = "Transaction queue max bytes for MULTI (0 disables)."
+    )
+    public long transactionQueueMaxBytes = DEFAULT_TRANSACTION_QUEUE_MAX_BYTES;
+
+    @Option(
             names = YierdisServerArgNames.PROTOCOL_MAX_BULK_BYTES,
             defaultValue = "" + DEFAULT_PROTOCOL_MAX_BULK_BYTES,
             description = "Protocol max bulk string bytes."
@@ -158,6 +174,13 @@ public final class YierdisServerArgs {
 
     @Option(names = YierdisServerArgNames.MAXMEMORY_BYTES, defaultValue = "0", description = "Maxmemory in bytes (0 disables eviction).")
     public long maxmemoryBytes = 0;
+
+    @Option(
+            names = YierdisServerArgNames.MAXMEMORY_SCOPE,
+            defaultValue = "global",
+            description = "Maxmemory scope: global|per-db."
+    )
+    public String maxmemoryScope = "global";
 
     @Option(names = YierdisServerArgNames.MAXMEMORY_POLICY, defaultValue = "noeviction", description = "Maxmemory policy string.")
     public String maxmemoryPolicy = "noeviction";
@@ -241,6 +264,12 @@ public final class YierdisServerArgs {
         if (executorDrainTimeLimitMillis <= 0) {
             throw new IllegalArgumentException("executorDrainTimeLimitMillis must be > 0");
         }
+        if (transactionQueueMaxCommands < 0) {
+            throw new IllegalArgumentException("transactionQueueMaxCommands must be >= 0");
+        }
+        if (transactionQueueMaxBytes < 0) {
+            throw new IllegalArgumentException("transactionQueueMaxBytes must be >= 0");
+        }
         if (protocolMaxBulkBytes <= 0) {
             throw new IllegalArgumentException("protocolMaxBulkBytes must be > 0");
         }
@@ -272,6 +301,17 @@ public final class YierdisServerArgs {
         if (maxmemoryBytes < 0) {
             throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
         }
+        if (maxmemoryScope == null || maxmemoryScope.isBlank()) {
+            throw new IllegalArgumentException("maxmemoryScope must not be blank");
+        }
+        String scope = maxmemoryScope.trim().toLowerCase(Locale.ROOT).replace('_', '-');
+        if ("perdb".equals(scope)) {
+            scope = "per-db";
+        }
+        if (!scope.equals("global") && !scope.equals("per-db")) {
+            throw new IllegalArgumentException("unsupported maxmemoryScope: " + maxmemoryScope);
+        }
+        maxmemoryScope = scope;
         if (maxmemoryPolicy == null || maxmemoryPolicy.isBlank()) {
             throw new IllegalArgumentException("maxmemoryPolicy must not be blank");
         }
@@ -311,6 +351,8 @@ public final class YierdisServerArgs {
         out.backpressureBytesLowWatermark = backpressureBytesLowWatermark;
         out.executorMaxDrainCommands = executorMaxDrainCommands;
         out.executorDrainTimeLimitMillis = executorDrainTimeLimitMillis;
+        out.transactionQueueMaxCommands = transactionQueueMaxCommands;
+        out.transactionQueueMaxBytes = transactionQueueMaxBytes;
         out.protocolMaxBulkBytes = protocolMaxBulkBytes;
         out.protocolMaxArgs = protocolMaxArgs;
         out.protocolMaxLineBytes = protocolMaxLineBytes;
@@ -318,6 +360,7 @@ public final class YierdisServerArgs {
         out.offheapMaxBytes = offheapMaxBytes;
         out.offheapKeysEnabled = offheapKeysEnabled;
         out.maxmemoryBytes = maxmemoryBytes;
+        out.maxmemoryScope = maxmemoryScope;
         out.maxmemoryPolicy = maxmemoryPolicy;
         out.maxmemorySamples = maxmemorySamples;
         out.evictionTimeLimitMillis = evictionTimeLimitMillis;
@@ -378,6 +421,11 @@ public final class YierdisServerArgs {
         out.add(YierdisServerArgNames.EXECUTOR_DRAIN_MILLIS);
         out.add(Long.toString(executorDrainTimeLimitMillis));
 
+        out.add(YierdisServerArgNames.TRANSACTION_QUEUE_MAX_COMMANDS);
+        out.add(Integer.toString(transactionQueueMaxCommands));
+        out.add(YierdisServerArgNames.TRANSACTION_QUEUE_MAX_BYTES);
+        out.add(Long.toString(transactionQueueMaxBytes));
+
         out.add(YierdisServerArgNames.PROTOCOL_MAX_BULK_BYTES);
         out.add(Integer.toString(protocolMaxBulkBytes));
         out.add(YierdisServerArgNames.PROTOCOL_MAX_ARGS);
@@ -395,6 +443,8 @@ public final class YierdisServerArgs {
 
         out.add(YierdisServerArgNames.MAXMEMORY_BYTES);
         out.add(Long.toString(maxmemoryBytes));
+        out.add(YierdisServerArgNames.MAXMEMORY_SCOPE);
+        out.add(maxmemoryScope);
         out.add(YierdisServerArgNames.MAXMEMORY_POLICY);
         out.add(maxmemoryPolicy);
         out.add(YierdisServerArgNames.MAXMEMORY_SAMPLES);

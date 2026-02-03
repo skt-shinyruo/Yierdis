@@ -28,6 +28,10 @@
 | 202602011923 | redis_compat_extended | Execution Command | ⚠️ Partial | helloagents/history/2026-02/202602011923_redis_compat_extended/ |
 | 202602020852 | redis_compat_milestones2 | Execution Command | ⚠️ Partial | helloagents/history/2026-02/202602020852_redis_compat_milestones2/ |
 | 202602021230 | cli_error_model_capability_probe | Standard Development | ✅ Completed | helloagents/history/2026-02/202602021230_cli_error_model_capability_probe/ |
+| 202602022147 | redis_compat_alignment | Execution Command | ✅ Completed | helloagents/history/2026-02/202602022147_redis_compat_alignment/ |
+| 202602031053 | tx_hello_protocol_fix | Standard Development | ✅ Completed | helloagents/history/2026-02/202602031053_tx_hello_protocol_fix/ |
+| 202602031225 | resp3_request_compat | Standard Development | ✅ Completed | helloagents/history/2026-02/202602031225_resp3_request_compat/ |
+| 202602031537 | resp3_full_coverage | Standard Development | ✅ Completed | helloagents/history/2026-02/202602031537_resp3_full_coverage/ |
 
 ---
 
@@ -58,6 +62,10 @@
 - helloagents/history/2026-02/202602011923_redis_compat_extended/
 - helloagents/history/2026-02/202602020852_redis_compat_milestones2/
 - helloagents/history/2026-02/202602021230_cli_error_model_capability_probe/
+- helloagents/history/2026-02/202602022147_redis_compat_alignment/
+- helloagents/history/2026-02/202602031053_tx_hello_protocol_fix/
+- helloagents/history/2026-02/202602031225_resp3_request_compat/
+- helloagents/history/2026-02/202602031537_resp3_full_coverage/
 
 ## 2026-01
 - 202601172157_executor_modularize - 执行器组件化与不变量测试补齐

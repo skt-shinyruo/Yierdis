@@ -14,6 +14,10 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.protocol.RespFrame;
 import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.RespAttribute;
+import yier.bubu.redis.protocol.RespObject;
+import yier.bubu.redis.protocol.RespObjectParser;
+import yier.bubu.redis.protocol.RespPush;
 import yier.bubu.redis.protocol.netty.NettyRespFrame;
 import yier.bubu.redis.protocol.netty.RespDecoder;
 
@@ -28,10 +32,12 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class YierdisClient implements AutoCloseable {
     private static final int DEFAULT_RESPONSE_QUEUE_CAPACITY = 16;
+    private static final int DEFAULT_PUSH_QUEUE_CAPACITY = 16;
 
     private final EventLoopGroup group;
     private final Channel channel;
     private final BlockingQueue<ResponseEvent> responses;
+    private final BlockingQueue<NettyRespFrame> pushes;
     private final AtomicReference<Throwable> terminalError;
 
     private final Object requestLock = new Object();
@@ -41,11 +47,13 @@ public final class YierdisClient implements AutoCloseable {
             EventLoopGroup group,
             Channel channel,
             BlockingQueue<ResponseEvent> responses,
+            BlockingQueue<NettyRespFrame> pushes,
             AtomicReference<Throwable> terminalError
     ) {
         this.group = group;
         this.channel = channel;
         this.responses = responses;
+        this.pushes = pushes;
         this.terminalError = terminalError;
     }
 
@@ -54,6 +62,7 @@ public final class YierdisClient implements AutoCloseable {
 
         EventLoopGroup group = new NioEventLoopGroup(1);
         BlockingQueue<ResponseEvent> responses = new LinkedBlockingQueue<>(DEFAULT_RESPONSE_QUEUE_CAPACITY);
+        BlockingQueue<NettyRespFrame> pushes = new LinkedBlockingQueue<>(DEFAULT_PUSH_QUEUE_CAPACITY);
         AtomicReference<Throwable> terminalError = new AtomicReference<>(null);
         AtomicBoolean terminalEnqueued = new AtomicBoolean(false);
 
@@ -66,12 +75,12 @@ public final class YierdisClient implements AutoCloseable {
                     protected void initChannel(SocketChannel ch) {
                         ch.pipeline()
                                 .addLast("respDecoder", new RespDecoder())
-                                .addLast("clientHandler", new ClientHandler(responses, terminalError, terminalEnqueued));
+                                .addLast("clientHandler", new ClientHandler(responses, pushes, terminalError, terminalEnqueued));
                     }
                 });
 
         Channel channel = bootstrap.connect(host, port).sync().channel();
-        return new YierdisClient(group, channel, responses, terminalError);
+        return new YierdisClient(group, channel, responses, pushes, terminalError);
     }
 
     public RespFrame execute(List<byte[]> args, long timeoutMillis) throws InterruptedException {
@@ -140,6 +149,34 @@ public final class YierdisClient implements AutoCloseable {
         return execute(out, timeoutMillis);
     }
 
+    /**
+     * Polls an out-of-band RESP3 push message.
+     * <p>
+     * Push messages may arrive at any time and do not participate in request/response FIFO pairing.
+     *
+     * @return the received push frame, or {@code null} if timed out
+     */
+    public RespFrame pollPush(long timeoutMillis) throws InterruptedException {
+        if (timeoutMillis <= 0) {
+            throw new IllegalArgumentException("timeoutMillis must be > 0");
+        }
+        if (closed) {
+            throw new IllegalStateException("Client is closed");
+        }
+        Throwable terminal = terminalError.get();
+        if (terminal != null) {
+            closeSilently();
+            throw new IllegalStateException("Connection is closed", terminal);
+        }
+        if (!channel.isActive()) {
+            closed = true;
+            throw new IllegalStateException("Connection is not active");
+        }
+
+        NettyRespFrame frame = pushes.poll(timeoutMillis, TimeUnit.MILLISECONDS);
+        return frame;
+    }
+
     @Override
     public void close() {
         closeSilently();
@@ -151,6 +188,7 @@ public final class YierdisClient implements AutoCloseable {
         }
         closed = true;
         drainAndCloseResponses();
+        drainAndClosePushes();
         try {
             if (channel != null) {
                 channel.close().syncUninterruptibly();
@@ -177,6 +215,20 @@ public final class YierdisClient implements AutoCloseable {
             }
             try {
                 event.frame().close();
+            } catch (Throwable ignored) {
+                // ignore
+            }
+        }
+    }
+
+    private void drainAndClosePushes() {
+        for (; ; ) {
+            NettyRespFrame frame = pushes.poll();
+            if (frame == null) {
+                return;
+            }
+            try {
+                frame.close();
             } catch (Throwable ignored) {
                 // ignore
             }
@@ -216,15 +268,18 @@ public final class YierdisClient implements AutoCloseable {
 
     private static final class ClientHandler extends SimpleChannelInboundHandler<NettyRespFrame> {
         private final BlockingQueue<ResponseEvent> responses;
+        private final BlockingQueue<NettyRespFrame> pushes;
         private final AtomicReference<Throwable> terminalError;
         private final AtomicBoolean terminalEnqueued;
 
         private ClientHandler(
                 BlockingQueue<ResponseEvent> responses,
+                BlockingQueue<NettyRespFrame> pushes,
                 AtomicReference<Throwable> terminalError,
                 AtomicBoolean terminalEnqueued
         ) {
             this.responses = responses;
+            this.pushes = pushes;
             this.terminalError = terminalError;
             this.terminalEnqueued = terminalEnqueued;
         }
@@ -232,6 +287,13 @@ public final class YierdisClient implements AutoCloseable {
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, NettyRespFrame msg) {
             if (msg == null) {
+                return;
+            }
+            if (isPushFrame(msg)) {
+                if (!pushes.offer(msg)) {
+                    // Drop push messages when the push queue is full; avoid ByteBuf leaks.
+                    closeFrameQuietly(msg);
+                }
                 return;
             }
             if (!responses.offer(ResponseEvent.frame(msg))) {
@@ -272,6 +334,43 @@ public final class YierdisClient implements AutoCloseable {
                 closeFrameQuietly(dropped.frame());
             }
             responses.offer(ResponseEvent.terminal(err));
+        }
+
+        private static boolean isPushFrame(NettyRespFrame frame) {
+            if (frame == null) {
+                return false;
+            }
+            io.netty.buffer.ByteBuf buf;
+            try {
+                buf = frame.unwrap();
+            } catch (Throwable ignored) {
+                buf = null;
+            }
+            if (buf != null) {
+                int i = buf.readerIndex();
+                if (i >= 0 && i < buf.writerIndex()) {
+                    byte first = buf.getByte(i);
+                    if (first == '>') {
+                        return true;
+                    }
+                    if (first != '|') {
+                        return false;
+                    }
+                }
+            }
+            try {
+                RespObject obj = RespObjectParser.parse(frame);
+                if (obj instanceof RespPush) {
+                    return true;
+                }
+                if (obj instanceof RespAttribute attr) {
+                    return attr.value() instanceof RespPush;
+                }
+                return false;
+            } catch (RuntimeException e) {
+                // Best-effort: if we cannot parse the frame, treat it as a normal response and let callers decide.
+                return false;
+            }
         }
 
         private static void closeFrameQuietly(NettyRespFrame frame) {

@@ -4,7 +4,14 @@ import picocli.CommandLine;
 import yier.bubu.redis.args.YierdisCliException;
 import yier.bubu.redis.args.YierdisServerArgs;
 
+import java.util.Objects;
+
 final class ServerConfig {
+    enum MaxmemoryScope {
+        GLOBAL,
+        PER_DB
+    }
+
     final int port;
     final int databases;
     final long expirationCleanupIntervalMillis;
@@ -21,6 +28,8 @@ final class ServerConfig {
     final long backpressureBytesLowWatermark;
     final int executorMaxDrainCommands;
     final long executorDrainTimeLimitMillis;
+    final int transactionQueueMaxCommands;
+    final long transactionQueueMaxBytes;
     final int protocolMaxBulkBytes;
     final int protocolMaxArgs;
     final int protocolMaxLineBytes;
@@ -28,6 +37,7 @@ final class ServerConfig {
     final long offheapMaxBytes;
     final boolean offheapKeysEnabled;
     final long maxmemoryBytes;
+    final MaxmemoryScope maxmemoryScope;
     final String maxmemoryPolicy;
     final int maxmemorySamples;
     final long evictionTimeLimitMillis;
@@ -50,6 +60,8 @@ final class ServerConfig {
             long backpressureBytesLowWatermark,
             int executorMaxDrainCommands,
             long executorDrainTimeLimitMillis,
+            int transactionQueueMaxCommands,
+            long transactionQueueMaxBytes,
             int protocolMaxBulkBytes,
             int protocolMaxArgs,
             int protocolMaxLineBytes,
@@ -57,6 +69,7 @@ final class ServerConfig {
             long offheapMaxBytes,
             boolean offheapKeysEnabled,
             long maxmemoryBytes,
+            MaxmemoryScope maxmemoryScope,
             String maxmemoryPolicy,
             int maxmemorySamples,
             long evictionTimeLimitMillis,
@@ -78,6 +91,8 @@ final class ServerConfig {
         this.backpressureBytesLowWatermark = backpressureBytesLowWatermark;
         this.executorMaxDrainCommands = executorMaxDrainCommands;
         this.executorDrainTimeLimitMillis = executorDrainTimeLimitMillis;
+        this.transactionQueueMaxCommands = transactionQueueMaxCommands;
+        this.transactionQueueMaxBytes = transactionQueueMaxBytes;
         this.protocolMaxBulkBytes = protocolMaxBulkBytes;
         this.protocolMaxArgs = protocolMaxArgs;
         this.protocolMaxLineBytes = protocolMaxLineBytes;
@@ -85,6 +100,7 @@ final class ServerConfig {
         this.offheapMaxBytes = offheapMaxBytes;
         this.offheapKeysEnabled = offheapKeysEnabled;
         this.maxmemoryBytes = maxmemoryBytes;
+        this.maxmemoryScope = Objects.requireNonNull(maxmemoryScope, "maxmemoryScope");
         this.maxmemoryPolicy = maxmemoryPolicy;
         this.maxmemorySamples = maxmemorySamples;
         this.evictionTimeLimitMillis = evictionTimeLimitMillis;
@@ -120,6 +136,9 @@ final class ServerConfig {
                         ? NettyCommandExecutor.SchedulingPolicy.GLOBAL
                         : NettyCommandExecutor.SchedulingPolicy.FAIR;
 
+        MaxmemoryScope maxmemoryScope =
+                "per-db".equals(parsed.maxmemoryScope) ? MaxmemoryScope.PER_DB : MaxmemoryScope.GLOBAL;
+
         return new ServerConfig(
                 parsed.port,
                 parsed.databases,
@@ -137,6 +156,8 @@ final class ServerConfig {
                 parsed.backpressureBytesLowWatermark,
                 parsed.executorMaxDrainCommands,
                 parsed.executorDrainTimeLimitMillis,
+                parsed.transactionQueueMaxCommands,
+                parsed.transactionQueueMaxBytes,
                 parsed.protocolMaxBulkBytes,
                 parsed.protocolMaxArgs,
                 parsed.protocolMaxLineBytes,
@@ -144,6 +165,7 @@ final class ServerConfig {
                 parsed.offheapMaxBytes,
                 parsed.offheapKeysEnabled,
                 parsed.maxmemoryBytes,
+                maxmemoryScope,
                 parsed.maxmemoryPolicy,
                 parsed.maxmemorySamples,
                 parsed.evictionTimeLimitMillis,

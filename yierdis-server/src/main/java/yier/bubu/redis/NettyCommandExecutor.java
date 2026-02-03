@@ -355,6 +355,27 @@ public final class NettyCommandExecutor implements AutoCloseable {
      * Failure: the caller retains ownership and MUST recycle().
      */
     public boolean trySubmit(ChannelHandlerContext ctx, RespCommand cmd) {
+        return trySubmitWithReason(ctx, cmd) == null;
+    }
+
+    enum SubmitRejectReason {
+        NOT_RUNNING("not_running"),
+        QUEUE_FULL("queue_full"),
+        BYTES_BUDGET("bytes_budget"),
+        OFFER_FAILED("offer_failed");
+
+        private final String code;
+
+        SubmitRejectReason(String code) {
+            this.code = code == null ? "unknown" : code;
+        }
+
+        String code() {
+            return code;
+        }
+    }
+
+    SubmitRejectReason trySubmitWithReason(ChannelHandlerContext ctx, RespCommand cmd) {
         Objects.requireNonNull(ctx, "ctx");
         Objects.requireNonNull(cmd, "cmd");
         Channel ch = ctx.channel();
@@ -362,7 +383,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
         if (!running) {
             submitRejectedNotRunning.increment();
             conn.commandsRejectedCounter().incrementAndGet();
-            return false;
+            return SubmitRejectReason.NOT_RUNNING;
         }
 
         AtomicInteger pending = conn.pendingCounter();
@@ -383,7 +404,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
             backpressureController.disableAutoRead(ch);
             submitRejectedQueueFull.increment();
             conn.commandsRejectedCounter().incrementAndGet();
-            return false;
+            return SubmitRejectReason.QUEUE_FULL;
         }
         reservedSlot = true;
 
@@ -400,7 +421,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
                 backpressureController.disableAutoRead(ch);
                 submitRejectedBytesBudget.increment();
                 conn.commandsRejectedCounter().incrementAndGet();
-                return false;
+                return SubmitRejectReason.BYTES_BUDGET;
             }
             reservedBytes = true;
 
@@ -413,7 +434,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
                 backpressureController.disableAutoRead(ch);
                 submitRejectedOfferFailed.increment();
                 conn.commandsRejectedCounter().incrementAndGet();
-                return false;
+                return SubmitRejectReason.OFFER_FAILED;
             }
 
             submitAccepted.increment();
@@ -432,7 +453,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
             }
 
             scheduleDrain();
-            return accepted;
+            return null;
         } catch (Throwable t) {
             if (reservedBytes) {
                 backlogBudget.releaseQueuedBytes(retainedBytes);
@@ -443,7 +464,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
             submitRejectedOfferFailed.increment();
             conn.commandsRejectedCounter().incrementAndGet();
             log.debug("Failed to submit command", t);
-            return false;
+            return SubmitRejectReason.OFFER_FAILED;
         }
     }
 

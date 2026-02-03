@@ -10,7 +10,7 @@
 
 - **Responsibility:** Keyspace + 过期索引 + 值编码（string/list/set/hash/zset）+ maxmemory
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-01
+- **Last Updated:** 2026-02-02
 
 ## Specifications
 
@@ -43,6 +43,19 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 ### Requirement: maxmemory 统计口径可解释（heap + off-heap）
 **Module:** db
 `maxmemoryBytes` 的触发依据以“可解释的 best-effort 预算口径”为主：heap 侧元数据估算为基础，并在可行时叠加 off-heap allocator 的实占 used bytes。
+
+#### Compatibility: maxmemory scope（global vs per-db）
+
+Redis 的 `maxmemory` 口径是“全实例预算”；在多 DB（`SELECT`）场景下，淘汰/拒写的决策不应被硬拆分到每个 DB。
+
+Yierdis 提供 `--maxmemoryScope` 来明确预算口径：
+
+- `--maxmemoryScope global`（默认，更贴近 Redis）：
+  - `maxmemoryBytes` 视为全实例预算；淘汰可跨 DB 进行（allkeys-*）
+  - `MEMORY STATS`（RESP3 map / RESP2 扁平 kv array）输出 **全局口径**（汇总所有 DB）
+- `--maxmemoryScope per-db`（兼容模式）：
+  - 将 `maxmemoryBytes` 按 DB 数量做硬分摊（`maxmemoryBytes / databases`），各 DB 独立执行淘汰/拒写
+  - 行为更像“每个逻辑 DB 一个预算”，与 Redis 的全实例口径不同，但便于教学/隔离
 
 ⚠️ 兼容性说明（多 DB + shared allocator）：
 - 当 off-heap allocator 由单个 DB 所拥有（`ownsOffHeapAllocator=true`）时：`usedBytesForMaxmemory = heap_estimate + offheap_used`，更接近“总预算”的直觉。
@@ -92,6 +105,7 @@ key 以 `byte[]` 存储并按内容比较，支持增量 rehash 以减少延迟�
 #### Configuration: 相关启动参数
 - `--evictionTimeLimitMillis <ms>`：单次 maxmemory 淘汰循环的时间预算
 - `--expireCleanupTimeLimitMillis <ms>`：单次过期清理的时间预算
+- `--maxmemoryScope global|per-db`：maxmemory 预算口径（默认 `global`）
 
 #### Scenario: off-heap 启用时触顶行为可预测
 条件：启用 off-heap 并持续写入直至达到 `maxmemoryBytes`

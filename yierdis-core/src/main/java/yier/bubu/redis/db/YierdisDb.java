@@ -43,6 +43,7 @@ public final class YierdisDb {
     private long lruClock;
 
     private final DbThreadGuard threadGuard = new DbThreadGuard();
+    private volatile GlobalMaxmemoryCoordinator globalMaxmemory;
 
     public YierdisDb() {
         this(null, false, 0, "noeviction", 5, 5, 5);
@@ -138,8 +139,56 @@ public final class YierdisDb {
         }
     }
 
+    /**
+     * 为 server 多 DB 场景启用“实例级 maxmemory”模式：跨 DB 执行近似淘汰，并将共享 off-heap used bytes 只计一次。
+     * <p>
+     * 设计意图：
+     * - 默认更贴近 Redis：maxmemory 是实例级预算，而不是按 DB 平均分摊
+     * - 兼容：通过 server 参数可切回 per-db 口径
+     */
+    public static void enableGlobalMaxmemory(
+            YierdisDb[] dbs,
+            YierdisOffHeapAllocator offHeapAllocator,
+            long maxmemoryBytes,
+            String maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis
+    ) {
+        Objects.requireNonNull(dbs, "dbs");
+        if (maxmemoryBytes <= 0 || dbs.length == 0) {
+            return;
+        }
+        if (maxmemorySamples <= 0) {
+            throw new IllegalArgumentException("maxmemorySamples must be > 0");
+        }
+        if (evictionTimeLimitMillis <= 0) {
+            throw new IllegalArgumentException("evictionTimeLimitMillis must be > 0");
+        }
+
+        GlobalMaxmemoryCoordinator coordinator = new GlobalMaxmemoryCoordinator(
+                dbs,
+                offHeapAllocator,
+                maxmemoryBytes,
+                parseMaxmemoryPolicy(maxmemoryPolicy),
+                maxmemorySamples,
+                TimeUnit.MILLISECONDS.toNanos(evictionTimeLimitMillis)
+        );
+        for (int i = 0; i < dbs.length; i++) {
+            YierdisDb db = dbs[i];
+            if (db == null) {
+                continue;
+            }
+            db.globalMaxmemory = coordinator;
+        }
+    }
+
     public void ensureWriteAllowed(long additionalBytes) {
         checkThread();
+        GlobalMaxmemoryCoordinator global = globalMaxmemory;
+        if (global != null) {
+            global.ensureWriteAllowed(additionalBytes);
+            return;
+        }
         if (maxmemoryBytes <= 0) {
             return;
         }
@@ -167,6 +216,11 @@ public final class YierdisDb {
      */
     public void prepareWrite(long estimatedExtraBytes) {
         checkThread();
+        GlobalMaxmemoryCoordinator global = globalMaxmemory;
+        if (global != null) {
+            global.prepareWrite(estimatedExtraBytes);
+            return;
+        }
         if (maxmemoryBytes <= 0) {
             return;
         }
@@ -195,6 +249,11 @@ public final class YierdisDb {
 
     public void enforceMaxmemory() {
         checkThread();
+        GlobalMaxmemoryCoordinator global = globalMaxmemory;
+        if (global != null) {
+            global.enforceMaxmemory();
+            return;
+        }
         if (maxmemoryBytes <= 0) {
             return;
         }
@@ -247,6 +306,287 @@ public final class YierdisDb {
             if (store.remove(victim, e)) {
                 e.releasePayloadIfAny();
                 usedBytes -= e.estimatedBytes;
+            }
+        }
+    }
+
+    private static final class GlobalMaxmemoryCoordinator {
+        private final YierdisDb[] dbs;
+        private final YierdisOffHeapAllocator offHeapAllocator;
+        private final long maxmemoryBytes;
+        private final MaxmemoryPolicy policy;
+        private final int samples;
+        private final long evictionTimeLimitNanos;
+        private final java.util.concurrent.atomic.AtomicLong globalLruClock = new java.util.concurrent.atomic.AtomicLong(0);
+
+        private GlobalMaxmemoryCoordinator(
+                YierdisDb[] dbs,
+                YierdisOffHeapAllocator offHeapAllocator,
+                long maxmemoryBytes,
+                MaxmemoryPolicy policy,
+                int samples,
+                long evictionTimeLimitNanos
+        ) {
+            this.dbs = Objects.requireNonNull(dbs, "dbs");
+            this.offHeapAllocator = offHeapAllocator;
+            this.maxmemoryBytes = Math.max(0, maxmemoryBytes);
+            this.policy = policy == null ? MaxmemoryPolicy.NOEVICTION : policy;
+            this.samples = Math.max(1, samples);
+            this.evictionTimeLimitNanos = Math.max(0, evictionTimeLimitNanos);
+        }
+
+        long nextLruClock() {
+            return globalLruClock.incrementAndGet();
+        }
+
+        void ensureWriteAllowed(long additionalBytes) {
+            if (maxmemoryBytes <= 0) {
+                return;
+            }
+            if (policy != MaxmemoryPolicy.NOEVICTION) {
+                return;
+            }
+            long extra = Math.max(0, additionalBytes);
+            if (globalUsedBytesForMaxmemory() + extra > maxmemoryBytes) {
+                throw new YierdisCommandException(OOM_ERR);
+            }
+        }
+
+        void prepareWrite(long estimatedExtraBytes) {
+            if (maxmemoryBytes <= 0) {
+                return;
+            }
+
+            // Best-effort: try to reclaim expired keys first (Redis does this too under pressure).
+            cleanupExpiredAll();
+
+            long extra = Math.max(0, estimatedExtraBytes);
+            long limit = maxmemoryBytes - extra;
+            if (limit < 0) {
+                limit = 0;
+            }
+            if (globalUsedBytesForMaxmemory() <= limit) {
+                return;
+            }
+
+            if (policy == MaxmemoryPolicy.NOEVICTION) {
+                throw new YierdisCommandException(OOM_ERR);
+            }
+
+            evictUntilUnder(limit);
+            if (globalUsedBytesForMaxmemory() > limit) {
+                throw new YierdisCommandException(OOM_ERR);
+            }
+        }
+
+        void enforceMaxmemory() {
+            if (maxmemoryBytes <= 0) {
+                return;
+            }
+
+            // Best-effort: try to reclaim expired keys first (Redis does this too under pressure).
+            cleanupExpiredAll();
+
+            if (globalUsedBytesForMaxmemory() <= maxmemoryBytes) {
+                return;
+            }
+
+            if (policy == MaxmemoryPolicy.NOEVICTION) {
+                throw new YierdisCommandException(OOM_ERR);
+            }
+
+            evictUntilUnder(maxmemoryBytes);
+            if (globalUsedBytesForMaxmemory() > maxmemoryBytes) {
+                throw new YierdisCommandException(OOM_ERR);
+            }
+        }
+
+        private void cleanupExpiredAll() {
+            for (int i = 0; i < dbs.length; i++) {
+                YierdisDb db = dbs[i];
+                if (db == null) {
+                    continue;
+                }
+                db.cleanupExpired();
+            }
+        }
+
+        private long globalUsedBytesForMaxmemory() {
+            long heap = 0;
+            for (int i = 0; i < dbs.length; i++) {
+                YierdisDb db = dbs[i];
+                if (db == null) {
+                    continue;
+                }
+                heap += Math.max(0L, db.usedBytes);
+            }
+
+            long offHeap = 0;
+            if (offHeapAllocator != null) {
+                try {
+                    offHeap = Math.max(0L, offHeapAllocator.usedBytes());
+                } catch (Throwable ignored) {
+                    offHeap = 0;
+                }
+            }
+            return heap + offHeap;
+        }
+
+        private int globalKeyCount() {
+            int total = 0;
+            for (int i = 0; i < dbs.length; i++) {
+                YierdisDb db = dbs[i];
+                if (db == null) {
+                    continue;
+                }
+                int size = 0;
+                try {
+                    size = db.store.size();
+                } catch (Throwable ignored) {
+                    size = 0;
+                }
+                if (size <= 0) {
+                    continue;
+                }
+                if (Integer.MAX_VALUE - total < size) {
+                    return Integer.MAX_VALUE;
+                }
+                total += size;
+            }
+            return total;
+        }
+
+        private void evictUntilUnder(long limitBytes) {
+            if (limitBytes < 0) {
+                limitBytes = 0;
+            }
+            if (globalUsedBytesForMaxmemory() <= limitBytes) {
+                return;
+            }
+
+            int totalKeys = globalKeyCount();
+            int maxAttempts = Math.max(64, totalKeys * 2);
+
+            long nowMillis = System.currentTimeMillis();
+            long deadline = System.nanoTime() + evictionTimeLimitNanos;
+            int attempts = 0;
+            while (globalUsedBytesForMaxmemory() > limitBytes && attempts++ < maxAttempts) {
+                if (evictionTimeLimitNanos > 0 && System.nanoTime() >= deadline) {
+                    break;
+                }
+                Candidate victim = pickVictim(nowMillis, totalKeys);
+                if (victim == null) {
+                    break;
+                }
+                evictCandidate(victim, nowMillis);
+            }
+        }
+
+        private Candidate pickVictim(long nowMillis, int totalKeys) {
+            if (policy == MaxmemoryPolicy.ALLKEYS_RANDOM) {
+                return sampleAnyKey(nowMillis);
+            }
+            if (policy != MaxmemoryPolicy.ALLKEYS_LRU) {
+                return null;
+            }
+
+            // 如果 samples >= 全局 key 数量，则使用确定性全扫描（减少测试抖动）。
+            if (totalKeys > 0 && samples >= totalKeys) {
+                final Candidate[] bestRef = new Candidate[1];
+                for (int i = 0; i < dbs.length; i++) {
+                    YierdisDb db = dbs[i];
+                    if (db == null) {
+                        continue;
+                    }
+                    db.store.forEach((k, e) -> {
+                        if (k == null || e == null) {
+                            return;
+                        }
+                        if (db.isKeyExpired(k, nowMillis)) {
+                            return;
+                        }
+                        long lru = e.lruClock;
+                        Candidate best = bestRef[0];
+                        if (best == null || lru < best.lruClock) {
+                            bestRef[0] = new Candidate(db, k, lru);
+                        }
+                    });
+                }
+                return bestRef[0];
+            }
+
+            Candidate best = null;
+            for (int i = 0; i < samples; i++) {
+                Candidate c = sampleAnyKey(nowMillis);
+                if (c == null) {
+                    continue;
+                }
+                if (best == null || c.lruClock < best.lruClock) {
+                    best = c;
+                }
+            }
+            return best;
+        }
+
+        private Candidate sampleAnyKey(long nowMillis) {
+            if (dbs.length == 0) {
+                return null;
+            }
+
+            int start = java.util.concurrent.ThreadLocalRandom.current().nextInt(dbs.length);
+            for (int i = 0; i < dbs.length; i++) {
+                YierdisDb db = dbs[(start + i) % dbs.length];
+                if (db == null || db.store.size() == 0) {
+                    continue;
+                }
+                byte[] k = db.store.randomKey();
+                if (k == null) {
+                    continue;
+                }
+                YierdisObject e = db.store.get(k);
+                if (e == null) {
+                    continue;
+                }
+                if (db.isKeyExpired(k, nowMillis)) {
+                    continue;
+                }
+                return new Candidate(db, k, e.lruClock);
+            }
+            return null;
+        }
+
+        private void evictCandidate(Candidate victim, long nowMillis) {
+            if (victim == null || victim.db == null || victim.key == null) {
+                return;
+            }
+            YierdisDb db = victim.db;
+            byte[] key = victim.key;
+            YierdisObject e = db.store.get(key);
+            if (e == null) {
+                return;
+            }
+            if (db.removeIfExpired(key, e, nowMillis)) {
+                return;
+            }
+            db.removeExpire(key);
+            if (db.store.remove(key, e)) {
+                e.releasePayloadIfAny();
+                db.usedBytes -= e.estimatedBytes;
+                if (db.usedBytes < 0) {
+                    db.usedBytes = 0;
+                }
+            }
+        }
+
+        private static final class Candidate {
+            final YierdisDb db;
+            final byte[] key;
+            final long lruClock;
+
+            private Candidate(YierdisDb db, byte[] key, long lruClock) {
+                this.db = db;
+                this.key = key;
+                this.lruClock = lruClock;
             }
         }
     }
@@ -402,6 +742,11 @@ public final class YierdisDb {
 
     private void touch(YierdisObject e) {
         if (!lruEnabled || e == null) {
+            return;
+        }
+        GlobalMaxmemoryCoordinator global = globalMaxmemory;
+        if (global != null) {
+            e.lruClock = global.nextLruClock();
             return;
         }
         e.lruClock = ++lruClock;

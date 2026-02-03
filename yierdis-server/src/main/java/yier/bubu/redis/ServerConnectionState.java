@@ -29,6 +29,8 @@ final class ServerConnectionState implements RespServerSession {
     private static final AttributeKey<ServerConnectionState> KEY =
             AttributeKey.valueOf("yierdis.serverConnectionState");
     private static final java.util.concurrent.atomic.AtomicLong NEXT_CLIENT_ID = new java.util.concurrent.atomic.AtomicLong(1);
+    private static final int DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS = 1024;
+    private static final long DEFAULT_TRANSACTION_QUEUE_MAX_BYTES = 64L * 1024 * 1024; // 64 MiB
 
     static ServerConnectionState getOrCreate(Channel channel) {
         Objects.requireNonNull(channel, "channel");
@@ -37,6 +39,20 @@ final class ServerConnectionState implements RespServerSession {
     }
 
     static ServerConnectionState getOrCreate(Channel channel, RespSession session) {
+        return getOrCreate(
+                channel,
+                session,
+                DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS,
+                DEFAULT_TRANSACTION_QUEUE_MAX_BYTES
+        );
+    }
+
+    static ServerConnectionState getOrCreate(
+            Channel channel,
+            RespSession session,
+            int transactionQueueMaxCommands,
+            long transactionQueueMaxBytes
+    ) {
         Objects.requireNonNull(channel, "channel");
         Objects.requireNonNull(session, "session");
         Attribute<ServerConnectionState> attr = channel.attr(KEY);
@@ -45,7 +61,11 @@ final class ServerConnectionState implements RespServerSession {
             existing.bindSessionIfAbsent(session);
             return existing;
         }
-        ServerConnectionState created = new ServerConnectionState(session);
+        ServerConnectionState created = new ServerConnectionState(
+                session,
+                Math.max(0, transactionQueueMaxCommands),
+                Math.max(0, transactionQueueMaxBytes)
+        );
         ServerConnectionState raced = attr.setIfAbsent(created);
         if (raced == null) {
             return created;
@@ -61,7 +81,7 @@ final class ServerConnectionState implements RespServerSession {
     private final AtomicInteger dbIndex = new AtomicInteger(0);
     private volatile String clientName;
     private final AtomicBoolean authenticated = new AtomicBoolean(false);
-    private final TransactionState transaction = new TransactionState();
+    private final TransactionState transaction;
 
     // --- Executor / backpressure (跨线程读写，使用原子类型) ---
     private final AtomicInteger pending = new AtomicInteger(0);
@@ -78,8 +98,9 @@ final class ServerConnectionState implements RespServerSession {
     private final AtomicLong backpressureEnter = new AtomicLong(0);
     private final AtomicLong backpressureExit = new AtomicLong(0);
 
-    private ServerConnectionState(RespSession session) {
+    private ServerConnectionState(RespSession session, int transactionQueueMaxCommands, long transactionQueueMaxBytes) {
         this.session = Objects.requireNonNull(session, "session");
+        this.transaction = new TransactionState(transactionQueueMaxCommands, transactionQueueMaxBytes);
     }
 
     private void bindSessionIfAbsent(RespSession session) {
@@ -213,8 +234,17 @@ final class ServerConnectionState implements RespServerSession {
     }
 
     private static final class TransactionState implements RespTransactionState {
+        private final int maxQueuedCommands;
+        private final long maxQueuedBytes;
         private boolean active;
+        private boolean aborted;
+        private long queuedBytes;
         private final ArrayList<byte[][]> queue = new ArrayList<>();
+
+        private TransactionState(int maxQueuedCommands, long maxQueuedBytes) {
+            this.maxQueuedCommands = Math.max(0, maxQueuedCommands);
+            this.maxQueuedBytes = Math.max(0, maxQueuedBytes);
+        }
 
         @Override
         public synchronized boolean active() {
@@ -222,23 +252,55 @@ final class ServerConnectionState implements RespServerSession {
         }
 
         @Override
+        public synchronized boolean aborted() {
+            return aborted;
+        }
+
+        @Override
+        public synchronized void markAborted() {
+            aborted = true;
+        }
+
+        @Override
         public synchronized void begin() {
             active = true;
+            aborted = false;
+            queuedBytes = 0;
             queue.clear();
         }
 
         @Override
         public synchronized void discard() {
             active = false;
+            aborted = false;
+            queuedBytes = 0;
             queue.clear();
         }
 
         @Override
         public synchronized void enqueue(byte[][] argv) {
+            tryEnqueue(argv);
+        }
+
+        @Override
+        public synchronized String tryEnqueue(byte[][] argv) {
             if (argv == null) {
-                return;
+                return null;
             }
+            if (maxQueuedCommands > 0 && queue.size() >= maxQueuedCommands) {
+                aborted = true;
+                return "ERR Transaction queue is full";
+            }
+
+            long argvBytes = estimateArgvBytes(argv);
+            if (maxQueuedBytes > 0 && queuedBytes + argvBytes > maxQueuedBytes) {
+                aborted = true;
+                return "ERR Transaction queue is full";
+            }
+
             queue.add(argv);
+            queuedBytes += argvBytes;
+            return null;
         }
 
         @Override
@@ -251,7 +313,23 @@ final class ServerConnectionState implements RespServerSession {
             ArrayList<byte[][]> out = new ArrayList<>(queue);
             queue.clear();
             active = false;
+            aborted = false;
+            queuedBytes = 0;
             return out;
+        }
+
+        private static long estimateArgvBytes(byte[][] argv) {
+            if (argv == null) {
+                return 0;
+            }
+            long total = 0;
+            for (int i = 0; i < argv.length; i++) {
+                byte[] arg = argv[i];
+                if (arg != null) {
+                    total += arg.length;
+                }
+            }
+            return total;
         }
     }
 }

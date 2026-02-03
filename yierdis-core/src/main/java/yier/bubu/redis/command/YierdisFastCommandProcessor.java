@@ -78,7 +78,20 @@ public final class YierdisFastCommandProcessor {
             boolean isExec = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "EXEC");
             boolean isDiscard = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "DISCARD");
             if (!isMulti && !isExec && !isDiscard) {
-                tx.enqueue(copyArgv(cmd));
+                // HELLO 属于连接级协议协商命令（RESP2/RESP3 握手）。
+                // 将其允许在 MULTI/EXEC 中执行会破坏 reply 流：
+                // 例如 EXEC 的外层 reply 仍是 RESP2 array（'*'），但 HELLO 3 会在数组元素里写出 RESP3 map（'%'），
+                // 导致 RESP2 客户端解析失败。
+                if (CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "HELLO")) {
+                    tx.markAborted();
+                    out.error("ERR HELLO is not allowed in MULTI");
+                    return;
+                }
+                String enqueueErr = tx.tryEnqueue(copyArgv(cmd));
+                if (enqueueErr != null) {
+                    out.error(enqueueErr);
+                    return;
+                }
                 out.simpleString("QUEUED");
                 return;
             }

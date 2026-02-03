@@ -24,8 +24,8 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, RespCommand msg) {
-        boolean accepted = nettyExecutor.trySubmit(ctx, msg);
-        if (accepted) {
+        NettyCommandExecutor.SubmitRejectReason reject = nettyExecutor.trySubmitWithReason(ctx, msg);
+        if (reject == null) {
             // 执行器接管 msg 的生命周期，负责 recycle。
             return;
         }
@@ -33,7 +33,9 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         // 队列满或服务关闭：返回 busy 错误并回收命令帧，避免积压导致 OOM。
         ByteBuf out = ctx.alloc().buffer();
         try {
-            new RespWriter(new NettyByteBufSink(out), ServerConnectionState.getOrCreate(ctx.channel())).error("ERR busy");
+            String err = "ERR busy";
+            err += " " + reject.code();
+            new RespWriter(new NettyByteBufSink(out), ServerConnectionState.getOrCreate(ctx.channel())).error(err);
             ctx.writeAndFlush(out);
             out = null;
         } finally {

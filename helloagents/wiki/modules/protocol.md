@@ -12,7 +12,7 @@
 
 - **Responsibility:** RESP 对象模型 + RESP2/RESP3 回复写出（连接级协议状态）+ `RespFrame/RespSession` 抽象
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-01
+- **Last Updated:** 2026-02-03
 
 ## Specifications
 
@@ -66,6 +66,21 @@
 - `RespObjectParser`：同步支持上述类型的解析，用于测试断言与 CLI/调试
 
 说明：request 侧仍以 RESP2 array-of-bulk-strings 为主路径；RESP3 扩展主要体现在 reply 侧类型覆盖与互操作一致性。
+
+一致性约束（避免“协议/对象层漂移”）：
+- `RespWriter` 作为 reply 写出语义 SSOT
+- Netty adapter `RespEncoder` 必须覆盖 `RespObject` 已建模的 RESP3 类型，并通过 round-trip 测试锁定（避免未来 pipeline 直接使用 encoder 时出现“编码不符合预期”的一致性坑）
+
+### Requirement: RESP3 streamed strings / streamed aggregates 解析（全覆盖）
+**Module:** protocol
+
+为提升对 RESP3 规范与生态代理（proxy）/客户端的互操作性，协议层补齐 streamed 类型的对象树解析能力（用于 CLI/测试/调试断言）：
+- streamed blob string：`$? ... ;0`（chunk 由 `;len` 声明），解析为等价的 `RespBulkString`（按累计长度受 `maxBulkBytes` 限制）
+- streamed aggregates：`*?/%?/~? ... .`（以 `.` END），解析为等价的 `RespArray/RespMap/RespSet`
+  - map 保持严格：元素必须成对（key/value），遇到 end marker 时若缺 value → protocol error
+  - streamed 与非 streamed 可以嵌套，但受 `maxNestingDepth` 限制，避免恶意深度导致 DoS
+
+说明：`RespWriter` 仍以固定长度的非 streamed 形式写出（因为 streaming 并非所有生态工具都会使用/期望）；streamed 支持的核心目标是“能切帧、能解析、能严格报错”。
 
 ### Requirement: RESP error 输出安全净化
 **Module:** protocol

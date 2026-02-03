@@ -65,7 +65,7 @@ public class NettyCommandExecutorTest {
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
             Assert.assertEquals(1L, conn.commandsRejectedCounter().get());
-            Assert.assertArrayEquals(ascii("-ERR busy\r\n"), readOutbound(ch));
+            Assert.assertArrayEquals(ascii("-ERR busy queue_full\r\n"), readOutbound(ch));
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().syncUninterruptibly();
@@ -259,7 +259,7 @@ public class NettyCommandExecutorTest {
             Assert.assertTrue("expected queued bytes > 0 when queueMaxBytes is enabled", s1.queuedBytes > 0);
 
             ch.writeInbound(Unpooled.wrappedBuffer(pingInline));
-            Assert.assertArrayEquals(ascii("-ERR busy\r\n"), readOutbound(ch));
+            Assert.assertArrayEquals(ascii("-ERR busy bytes_budget\r\n"), readOutbound(ch));
 
             NettyCommandExecutor.StatsSnapshot s2 = executor.statsSnapshot();
             Assert.assertEquals("reject path must not leak queued bytes", s1.queuedBytes, s2.queuedBytes);

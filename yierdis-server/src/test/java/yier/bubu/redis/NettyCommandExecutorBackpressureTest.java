@@ -46,7 +46,7 @@ public class NettyCommandExecutorBackpressureTest {
             ByteBuf second = Unpooled.wrappedBuffer(ping);
             second.retain(); // keep our own reference to assert refCnt after handler rejects/recycles
             ch.writeInbound(second);
-            Assert.assertArrayEquals(ascii("-ERR busy\r\n"), readOutbound(ch));
+            Assert.assertArrayEquals(ascii("-ERR busy queue_full\r\n"), readOutbound(ch));
             Assert.assertEquals("busy path must release the retained command frame", 1, second.refCnt());
             second.release();
         } finally {
@@ -93,7 +93,7 @@ public class NettyCommandExecutorBackpressureTest {
 
             // ch2 is rejected: should return busy and enter backpressure (autoRead disabled).
             ch2.writeInbound(Unpooled.wrappedBuffer(ping));
-            Assert.assertArrayEquals(ascii("-ERR busy\r\n"), readOutbound(ch2));
+            Assert.assertArrayEquals(ascii("-ERR busy queue_full\r\n"), readOutbound(ch2));
             ch1.runPendingTasks();
             ch2.runPendingTasks();
             Assert.assertFalse(ch2.config().isAutoRead());

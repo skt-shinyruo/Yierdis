@@ -153,6 +153,96 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_CONN_BACKPRESSURE_EXIT, conn.backpressureExitCounter().get());
     }
 
+    @Override
+    public YierdisMemoryStats memoryStats(RespWriter out) {
+        if (config.maxmemoryScope != ServerConfig.MaxmemoryScope.GLOBAL) {
+            return null;
+        }
+
+        YierdisDb[] local = dbs;
+        if (local == null || local.length == 0) {
+            return new YierdisMemoryStats(
+                    config.maxmemoryBytes,
+                    0,
+                    0,
+                    0,
+                    false,
+                    0,
+                    0,
+                    false,
+                    0,
+                    0,
+                    0,
+                    false,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+            );
+        }
+
+        long heap = 0;
+        long keyspaceOverhead = 0;
+        long expireOverhead = 0;
+        long expireValueObjects = 0;
+        long offHeap = 0;
+        int keyCount = 0;
+        int expireCount = 0;
+        boolean keysStoredOffHeap = false;
+        boolean keyspaceRehashing = false;
+        boolean expireRehashing = false;
+        int keyspaceCap0 = 0;
+        int keyspaceCap1 = 0;
+        int expireCap0 = 0;
+        int expireCap1 = 0;
+
+        for (int i = 0; i < local.length; i++) {
+            YierdisDb db = local[i];
+            if (db == null) {
+                continue;
+            }
+            YierdisMemoryStats s = db.memoryStats();
+            heap += s.heapDataBytesEstimate();
+            keyspaceOverhead += s.keyspaceTableOverheadBytesEstimate();
+            expireOverhead += s.expireTableOverheadBytesEstimate();
+            expireValueObjects += s.expireValueObjectsBytesEstimate();
+            keyCount += s.keyCount();
+            expireCount += s.expireCount();
+            keysStoredOffHeap |= s.keysStoredOffHeap();
+            keyspaceRehashing |= s.keyspaceRehashing();
+            expireRehashing |= s.expireRehashing();
+            keyspaceCap0 += s.keyspaceTable0Capacity();
+            keyspaceCap1 += s.keyspaceTable1Capacity();
+            expireCap0 += s.expireTable0Capacity();
+            expireCap1 += s.expireTable1Capacity();
+            offHeap = Math.max(offHeap, s.offHeapUsedBytes());
+        }
+
+        long usedBytesForMaxmemory = heap + offHeap;
+        long totalEstimatedBytes = heap + offHeap + keyspaceOverhead + expireOverhead + expireValueObjects;
+
+        return new YierdisMemoryStats(
+                config.maxmemoryBytes,
+                usedBytesForMaxmemory,
+                heap,
+                offHeap,
+                keysStoredOffHeap,
+                keyCount,
+                expireCount,
+                keyspaceRehashing,
+                keyspaceCap0,
+                keyspaceCap1,
+                keyspaceOverhead,
+                expireRehashing,
+                expireCap0,
+                expireCap1,
+                expireOverhead,
+                expireValueObjects,
+                totalEstimatedBytes
+        );
+    }
+
     private void writeYierdisStructuredInfo(RespWriter out, NettyCommandExecutor ex) {
         NettyCommandExecutor.StatsSnapshot s = ex.statsSnapshot();
         long nowMillis = System.currentTimeMillis();
@@ -218,6 +308,13 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             sb.append("used_memory_overhead:").append(m.overheadBytesEstimate).append("\r\n");
             sb.append("maxmemory:").append(config.maxmemoryBytes).append("\r\n");
             sb.append("maxmemory_policy:").append(config.maxmemoryPolicy).append("\r\n");
+            sb.append("yierdis_maxmemory_scope:")
+                    .append(config.maxmemoryScope == ServerConfig.MaxmemoryScope.PER_DB ? "per-db" : "global")
+                    .append("\r\n");
+            if (config.maxmemoryScope == ServerConfig.MaxmemoryScope.PER_DB && config.maxmemoryBytes > 0) {
+                long perDb = config.maxmemoryBytes / Math.max(1L, (long) config.databases);
+                sb.append("yierdis_maxmemory_per_db_bytes:").append(perDb).append("\r\n");
+            }
             sb.append("yierdis_offheap_used_bytes:").append(m.offHeapUsedBytes).append("\r\n");
             sb.append("yierdis_offheap_max_bytes:").append(config.offheapMaxBytes).append("\r\n");
             sb.append("\r\n");

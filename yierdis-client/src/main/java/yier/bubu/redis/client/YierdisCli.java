@@ -1,8 +1,15 @@
 package yier.bubu.redis.client;
 
+// CLI：提供简易的 redis-cli 风格交互，支持 RESP2/RESP3 回复的可读展示。
+
 import picocli.CommandLine;
+import yier.bubu.redis.protocol.RespAttribute;
 import yier.bubu.redis.protocol.RespArray;
+import yier.bubu.redis.protocol.RespBigNumber;
+import yier.bubu.redis.protocol.RespBlobError;
+import yier.bubu.redis.protocol.RespBoolean;
 import yier.bubu.redis.protocol.RespBulkString;
+import yier.bubu.redis.protocol.RespDouble;
 import yier.bubu.redis.protocol.RespError;
 import yier.bubu.redis.protocol.RespFrame;
 import yier.bubu.redis.protocol.RespInteger;
@@ -10,9 +17,12 @@ import yier.bubu.redis.protocol.RespLimits;
 import yier.bubu.redis.protocol.RespMap;
 import yier.bubu.redis.protocol.RespNull;
 import yier.bubu.redis.protocol.RespObject;
+import yier.bubu.redis.protocol.RespPush;
+import yier.bubu.redis.protocol.RespSet;
 import yier.bubu.redis.protocol.RespSimpleString;
 import yier.bubu.redis.protocol.RespInlineCommandParser;
 import yier.bubu.redis.protocol.RespObjectParser;
+import yier.bubu.redis.protocol.RespVerbatimString;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -109,21 +119,53 @@ public final class YierdisCli {
         }
     }
 
-    private static void printResp(RespObject obj, boolean hex) {
+    static void printResp(RespObject obj, boolean hex) {
         if (obj == null || obj instanceof RespNull) {
             System.out.println("(nil)");
+            return;
+        }
+        if (obj instanceof RespAttribute) {
+            RespAttribute a = (RespAttribute) obj;
+            RespMap attrs = a.attributes();
+            if (attrs != null && !attrs.entries().isEmpty()) {
+                System.out.println("(attributes)");
+                printInline(attrs, hex, 1);
+            }
+            printResp(a.value(), hex);
             return;
         }
         if (obj instanceof RespSimpleString) {
             System.out.println(((RespSimpleString) obj).value());
             return;
         }
+        if (obj instanceof RespBoolean) {
+            System.out.println(((RespBoolean) obj).value() ? "(true)" : "(false)");
+            return;
+        }
         if (obj instanceof RespError) {
             System.out.println("(error) " + ((RespError) obj).message());
             return;
         }
+        if (obj instanceof RespBlobError) {
+            RespBlobError be = (RespBlobError) obj;
+            if (hex) {
+                System.out.println("(error) " + (be.data() == null ? "(nil)" : toHex(be.data())));
+                return;
+            }
+            String s = be.asString();
+            System.out.println("(error) " + (s == null ? "(nil)" : s));
+            return;
+        }
         if (obj instanceof RespInteger) {
             System.out.println("(integer) " + ((RespInteger) obj).value());
+            return;
+        }
+        if (obj instanceof RespDouble) {
+            System.out.println("(double) " + ((RespDouble) obj).value());
+            return;
+        }
+        if (obj instanceof RespBigNumber) {
+            System.out.println("(big number) " + ((RespBigNumber) obj).value());
             return;
         }
         if (obj instanceof RespBulkString) {
@@ -139,6 +181,17 @@ public final class YierdisCli {
             System.out.println(b.asString());
             return;
         }
+        if (obj instanceof RespVerbatimString) {
+            RespVerbatimString v = (RespVerbatimString) obj;
+            if (hex) {
+                byte[] data = v.data();
+                System.out.println(v.format() + ":" + (data == null ? "(nil)" : toHex(data)));
+                return;
+            }
+            String s = v.asString();
+            System.out.println(v.format() + ":" + (s == null ? "(nil)" : s));
+            return;
+        }
         if (obj instanceof RespArray) {
             RespArray arr = (RespArray) obj;
             if (arr.isNull()) {
@@ -148,6 +201,32 @@ public final class YierdisCli {
             List<RespObject> values = arr.values();
             if (values == null || values.isEmpty()) {
                 System.out.println("(empty array)");
+                return;
+            }
+            for (int i = 0; i < values.size(); i++) {
+                System.out.print((i + 1) + ") ");
+                printInline(values.get(i), hex, 1);
+            }
+            return;
+        }
+        if (obj instanceof RespSet) {
+            RespSet set = (RespSet) obj;
+            List<RespObject> values = set.values();
+            if (values == null || values.isEmpty()) {
+                System.out.println("(empty set)");
+                return;
+            }
+            for (int i = 0; i < values.size(); i++) {
+                System.out.print((i + 1) + ") ");
+                printInline(values.get(i), hex, 1);
+            }
+            return;
+        }
+        if (obj instanceof RespPush) {
+            RespPush push = (RespPush) obj;
+            List<RespObject> values = push.values();
+            if (values == null || values.isEmpty()) {
+                System.out.println("(empty push)");
                 return;
             }
             for (int i = 0; i < values.size(); i++) {
@@ -177,6 +256,10 @@ public final class YierdisCli {
     private static void printInline(RespObject obj, boolean hex, int indent) {
         if (obj == null || obj instanceof RespNull) {
             System.out.println("(nil)");
+            return;
+        }
+        if (obj instanceof RespAttribute) {
+            printInline(((RespAttribute) obj).value(), hex, indent);
             return;
         }
         if (obj instanceof RespMap) {
@@ -216,6 +299,40 @@ public final class YierdisCli {
             }
             return;
         }
+        if (obj instanceof RespSet) {
+            RespSet set = (RespSet) obj;
+            List<RespObject> values = set.values();
+            if (values == null || values.isEmpty()) {
+                System.out.println("(empty set)");
+                return;
+            }
+            System.out.println();
+            for (int i = 0; i < values.size(); i++) {
+                for (int j = 0; j < indent; j++) {
+                    System.out.print("  ");
+                }
+                System.out.print((i + 1) + ") ");
+                printInline(values.get(i), hex, indent + 1);
+            }
+            return;
+        }
+        if (obj instanceof RespPush) {
+            RespPush push = (RespPush) obj;
+            List<RespObject> values = push.values();
+            if (values == null || values.isEmpty()) {
+                System.out.println("(empty push)");
+                return;
+            }
+            System.out.println();
+            for (int i = 0; i < values.size(); i++) {
+                for (int j = 0; j < indent; j++) {
+                    System.out.print("  ");
+                }
+                System.out.print((i + 1) + ") ");
+                printInline(values.get(i), hex, indent + 1);
+            }
+            return;
+        }
         if (obj instanceof RespBulkString) {
             RespBulkString b = (RespBulkString) obj;
             if (b.isNull()) {
@@ -229,12 +346,45 @@ public final class YierdisCli {
             System.out.println(((RespSimpleString) obj).value());
             return;
         }
+        if (obj instanceof RespBoolean) {
+            System.out.println(((RespBoolean) obj).value() ? "(true)" : "(false)");
+            return;
+        }
         if (obj instanceof RespError) {
             System.out.println("(error) " + ((RespError) obj).message());
             return;
         }
+        if (obj instanceof RespBlobError) {
+            RespBlobError be = (RespBlobError) obj;
+            if (hex) {
+                System.out.println("(error) " + (be.data() == null ? "(nil)" : toHex(be.data())));
+                return;
+            }
+            String s = be.asString();
+            System.out.println("(error) " + (s == null ? "(nil)" : s));
+            return;
+        }
         if (obj instanceof RespInteger) {
             System.out.println("(integer) " + ((RespInteger) obj).value());
+            return;
+        }
+        if (obj instanceof RespDouble) {
+            System.out.println("(double) " + ((RespDouble) obj).value());
+            return;
+        }
+        if (obj instanceof RespBigNumber) {
+            System.out.println("(big number) " + ((RespBigNumber) obj).value());
+            return;
+        }
+        if (obj instanceof RespVerbatimString) {
+            RespVerbatimString v = (RespVerbatimString) obj;
+            if (hex) {
+                byte[] data = v.data();
+                System.out.println(v.format() + ":" + (data == null ? "(nil)" : toHex(data)));
+                return;
+            }
+            String s = v.asString();
+            System.out.println(v.format() + ":" + (s == null ? "(nil)" : s));
             return;
         }
         System.out.println(obj.toHumanReadableString());
