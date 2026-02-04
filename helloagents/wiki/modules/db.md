@@ -10,9 +10,57 @@
 
 - **Responsibility:** Keyspace + 过期索引 + 值编码（string/list/set/hash/zset）+ maxmemory
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-02
+- **Last Updated:** 2026-02-04
 
 ## Specifications
+
+### Contracts（SSOT 冻结契约）
+**Module:** db
+
+为避免后续补齐生产能力（持久化/复制/ACL/模块/多核扩展）时倒逼“推倒重写”，db 模块冻结以下内部契约作为 SSOT：
+
+#### Contract: KeyHandle（key identity SSOT）
+- SSOT 类型：`yier.bubu.redis.db.key.KeyHandle`
+- 不可变语义：
+  - 提供 `len + byteAt` 的只读 bytes view（统一 heap/off-heap/bytesview 来源）
+  - 可携带 `dictHash`（用于 keyspace 索引，可能包含 per-dict seed；不要求跨实例一致）
+  - equality/hashCode 语义以 bytes 内容为准（跨后端一致）
+- 现状：
+  - keyspace / expire index / scan 已全链路落地 handle；热路径禁止隐式 canonical heap copy（以回归与 diagnostics 计数锚定）
+
+#### Contract: MemoryLedger（maxmemory SSOT）
+- SSOT 类型：`yier.bubu.redis.db.memory.MemoryLedger`
+- 不可变语义：
+  - `reserve → commit/rollback` 两阶段写入语义（异常路径可 rollback）
+  - 预算判定的拒写点可复现、可回归；不允许出现负数/下溢
+  - OOM message 对齐 Redis：`OOM command not allowed when used memory > 'maxmemory'.`
+- 口径（SSOT）：
+  - `usedBytes`/`ledger_used_bytes`：DB 数据集的 best-effort heap 估算（包含 entry overhead；heap key bytes 在 keys-on-heap 时计入；off-heap payload 不重复计入）
+  - `offheap_used_bytes`：allocator 的 best-effort used bytes（用于解释与泄漏锚点）
+  - `used_bytes_for_maxmemory`：用于 maxmemory 判定的统一口径（是否包含 off-heap 由 `offheap_included_in_maxmemory` 明确）
+  - `reservedBytes`：本次命令 reserve 尚未 commit 的预留值（用于 explain/防漂移；异常路径必须 rollback）
+- 现状：
+  - 写路径已落地 `prepareWrite → ledger.reserve`；mutate 内部负责 commit/rollback；`enforceMaxmemory()` 作为后台维护入口（server 维护 tick 触发）
+
+#### Contract: ScanCursorV2（SCAN cursor SSOT）
+- SSOT 类型：`yier.bubu.redis.db.ScanCursorV2`
+- 不可变语义：
+  - cursor 为 RESP bulk string 的数字字符串；`0` 表示扫描结束
+  - best-effort：不保证强一致，但必须“可推进、可终止”；rehash/插入/删除/过期并发下仍可 make progress
+  - `COUNT` 为 hint，不得导致死循环或单次扫描跑完整个 keyspace
+- 现状：
+  - cursor v1 已移除；`SCAN` 统一基于 keyspace iterator + cursor v2（rehash-aware）
+
+#### Contract: Snapshot / ChangeEvent（生产扩展护栏）
+- SSOT 接口：
+  - 快照：`yier.bubu.redis.db.YierdisSnapshot` / `YierdisSnapshotEntry`
+  - 事件：`yier.bubu.redis.runtime.YierdisChangeSink` / `YierdisChangeEvent`
+- 不可变语义：
+  - snapshot 基于 `ScanCursorV2` 做 time-slice（`count + cursor` 分批推进），不得暴露/依赖 keyspace 内部结构
+  - change event 不携带 DB 内部对象引用或 raw address（避免消费者误用导致泄漏/越界）
+  - 消费者不得跨线程直接触达 `YierdisDb`；需要执行命令必须回到 owner thread（instance/executor 调度）
+- 现状：
+  - core 已提供最小接口与回归测试锚点，用于后续 RDB/AOF/replication/审计能力接入
 
 ### Requirement: DB 单线程语义硬化（fail-fast）
 **Module:** db
@@ -57,6 +105,10 @@ Yierdis 提供 `--maxmemoryScope` 来明确预算口径：
   - 将 `maxmemoryBytes` 按 DB 数量做硬分摊（`maxmemoryBytes / databases`），各 DB 独立执行淘汰/拒写
   - 行为更像“每个逻辑 DB 一个预算”，与 Redis 的全实例口径不同，但便于教学/隔离
 
+实现约束（SSOT）：
+- global 口径的“实例级协调”由 core 内部协调器承担（`YierdisGlobalMaxmemoryCoordinator`），避免将实例职责耦合进单 DB 引擎逻辑。
+- core 提供 Netty-free 的 embedded instance API：`yier.bubu.redis.runtime.YierdisInstance`，可在 server/bench/工具/测试中复用“多 DB 装配 + 路由 + 生命周期”语义，减少装配重复与行为漂移。
+
 ⚠️ 兼容性说明（多 DB + shared allocator）：
 - 当 off-heap allocator 由单个 DB 所拥有（`ownsOffHeapAllocator=true`）时：`usedBytesForMaxmemory = heap_estimate + offheap_used`，更接近“总预算”的直觉。
 - 当 server 多 DB 共享同一个 off-heap allocator（`ownsOffHeapAllocator=false`）时：为避免同一 `allocator.usedBytes()` 被每个 DB 重复计入导致过度淘汰，DB 侧 `usedBytesForMaxmemory` 仅使用 heap 估算；off-heap 总量由 `--offheapMaxBytes` 单独约束，并通过 `MEMORY STATS`/`INFO` 输出可观测。
@@ -67,8 +119,8 @@ Yierdis 提供 `--maxmemoryScope` 来明确预算口径：
 
 #### Contract: `MEMORY STATS` 输出字段（稳定性约束）
 `MEMORY STATS` 输出字段集合保持稳定，按连接协议版本返回不同容器类型：
-- RESP2：输出为 **扁平 key/value 数组**（总元素数固定为 **34**，即 17 对 key/value）
-- RESP3：输出为 **map**（总 pair 数固定为 **17**）
+- RESP2：输出为 **扁平 key/value 数组**（总元素数固定为 **40**，即 20 对 key/value）
+- RESP3：输出为 **map**（总 pair 数固定为 **20**）
 
 字段编码约束：
 - key 均为 ASCII bulk string
@@ -76,9 +128,12 @@ Yierdis 提供 `--maxmemoryScope` 来明确预算口径：
 
 字段含义（口径：估算/预算优先，可解释性优先）：
 - `maxmemory_bytes`：配置的 maxmemory 上限（0 表示不启用淘汰/拒写）
-- `used_bytes_for_maxmemory`：用于 maxmemory 判定的“统一口径已用 bytes”（heap 估算 + off-heap usedBytes 实占）
-- `heap_data_bytes_estimate`：heap 侧数据与元数据的估算值（不等同于 JVM/GC 视角真实 heap）
+- `used_bytes_for_maxmemory`：用于 maxmemory 判定的“统一口径已用 bytes”（是否包含 off-heap 由 `offheap_included_in_maxmemory` 明确）
+- `effective_used_bytes_for_maxmemory`：`used_bytes_for_maxmemory + ledger_reserved_bytes`（用于 explain reserve 阶段的瞬时压力）
+- `ledger_used_bytes`：DB 数据集的 heap 侧估算（不等同于 JVM/GC 视角真实 heap）
 - `offheap_used_bytes`：off-heap allocator 的实占 `usedBytes()`（可作为泄漏回归锚点）
+- `ledger_reserved_bytes`：当前命令 reserve 尚未 commit 的预留值（异常路径必须 rollback）
+- `offheap_included_in_maxmemory`：off-heap used bytes 是否计入 maxmemory 判定（`0/1`）
 - `keyspace_table_overhead_bytes_estimate`：keyspace hash table 结构开销估算
 - `expire_table_overhead_bytes_estimate`：expire index hash table 结构开销估算
 - `expire_value_objects_bytes_estimate`：TTL 元数据/对象估算（不含 key/value payload）
@@ -94,13 +149,13 @@ Yierdis 提供 `--maxmemoryScope` 来明确预算口径：
 > 注意：以上统计口径属于“可解释的估算/预算”，并不等同于 JVM `Runtime.totalMemory()` 或 GC 视角的真实 heap 使用量；其目标是让 maxmemory/淘汰/拒写行为在不同后端下保持一致且可推导。
 
 #### Change: 淘汰与过期清理的时间预算可配置
-- `enforceMaxmemory()`：新增 eviction 时间预算（避免高压下长时间同步淘汰导致 tail latency 放大）
+- maxmemory eviction：提供 eviction 时间预算（避免高压下长时间同步淘汰导致 tail latency 放大）
 - `cleanupExpired()`：时间预算从固定值改为可配置（避免不同部署/负载下出现过期清理不稳定）
 
 #### Change: 写入 preflight（预淘汰/预检查）
 为降低“写入后才触发 OOM/淘汰失败”的概率，并从根源避免命令层双 reply：
 - `prepareWrite(estimatedExtraBytes)`：写入前进行 cleanupExpired + 预淘汰/预检查（noeviction 下严格拒写）
-- 命令层在写 reply 前必须完成 maxmemory 相关的可抛错逻辑（`prepareWrite/enforceMaxmemory`）
+- 命令层在写 reply 前必须完成可抛错的 maxmemory preflight（即 `prepareWrite`）；后续淘汰作为 best-effort 维护，不参与命令错误语义
 
 #### Configuration: 相关启动参数
 - `--evictionTimeLimitMillis <ms>`：单次 maxmemory 淘汰循环的时间预算
@@ -134,3 +189,4 @@ Yierdis 提供 `--maxmemoryScope` 来明确预算口径：
 - 2026-01-16：线程模型硬化：DB 未绑定或跨线程访问 fail-fast；keys/expires 的 off-heap 使用改为显式开关（默认安全）。
 - 2026-01-23：新增写入 preflight（`prepareWrite`）与可复用淘汰逻辑（evictUntilUnder），并补齐 `KEYS` glob（`[]`/范围/否定/转义）与 RESP3 `MEMORY STATS` map 输出约定。
 - 2026-02-01：`EXPIRE seconds<=0` 对齐为“立即删除”；`MEMORY STATS` 的数值字段对齐为 integer；entry overhead 估算常量收敛为单点定义（避免命令层/DB 双口径漂移），并对多 DB + shared allocator 场景明确 maxmemory/off-heap 的口径边界。
+- 2026-02-04：实例语义收敛：抽离 global maxmemory 协调器并引入 core 的 `YierdisInstance`（embedded instance API），为 server/bench/测试复用 instance 装配与生命周期语义提供基座。

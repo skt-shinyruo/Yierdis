@@ -20,6 +20,7 @@ import java.util.RandomAccess;
 final class CommandSupport {
     private final YierdisDbRouter dbRouter;
     private final ServerInfoProvider infoProvider;
+    private final SlowCommandGovernor slowGovernor;
 
     private final ByteArraySliceList slice = new ByteArraySliceList();
     private byte[][] argvScratch = new byte[16][];
@@ -27,16 +28,21 @@ final class CommandSupport {
     private final WriterBulkStringOutput bulkOut = new WriterBulkStringOutput();
 
     CommandSupport(YierdisDb db) {
-        this(singleDbRouter(db), null);
+        this(singleDbRouter(db), null, SlowCommandGovernor.DEFAULT);
     }
 
     CommandSupport(YierdisDb db, ServerInfoProvider infoProvider) {
-        this(singleDbRouter(db), infoProvider);
+        this(singleDbRouter(db), infoProvider, SlowCommandGovernor.DEFAULT);
     }
 
     CommandSupport(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider) {
+        this(dbRouter, infoProvider, SlowCommandGovernor.DEFAULT);
+    }
+
+    CommandSupport(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider, SlowCommandGovernor slowGovernor) {
         this.dbRouter = java.util.Objects.requireNonNull(dbRouter, "dbRouter");
         this.infoProvider = infoProvider;
+        this.slowGovernor = slowGovernor == null ? SlowCommandGovernor.DEFAULT : slowGovernor;
     }
 
     YierdisDb db(RespWriter out) {
@@ -49,6 +55,10 @@ final class CommandSupport {
 
     ServerInfoProvider infoProvider() {
         return infoProvider;
+    }
+
+    SlowCommandGovernor slowGovernor() {
+        return slowGovernor;
     }
 
     YierdisBytesView argView(RespCommand cmd, int argIndex) {

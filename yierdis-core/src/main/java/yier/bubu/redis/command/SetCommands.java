@@ -38,8 +38,7 @@ final class SetCommands {
         int membersLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, membersLen);
         try {
-            long added = db.sadd(cmd.toByteArray(1), support.slice());
-            db.enforceMaxmemory();
+            long added = db.values().sets().sadd(cmd.toByteArray(1), support.slice());
             out.integer(added);
         } finally {
             support.clearScratch(membersLen);
@@ -54,7 +53,8 @@ final class SetCommands {
         int membersLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, membersLen);
         try {
-            out.integer(support.db(out).srem(cmd.toByteArray(1), support.slice()));
+            YierdisDb db = support.db(out);
+            out.integer(db.values().sets().srem(cmd.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(membersLen);
         }
@@ -67,7 +67,8 @@ final class SetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        int count = support.db(out).smembersReplyCount(key);
+        YierdisDb db = support.db(out);
+        int count = db.values().sets().smembersReplyCount(key);
         if (out.protocol() == RespProtocol.RESP3) {
             out.setHeader(count);
         } else {
@@ -76,7 +77,7 @@ final class SetCommands {
         if (count == 0) {
             return;
         }
-        support.db(out).smembersReplyInto(key, support.bulkOut(out));
+        db.values().sets().smembersReplyInto(key, support.bulkOut(out));
     }
 
     private void sismember(RespCommand cmd, RespWriter out) {
@@ -84,7 +85,8 @@ final class SetCommands {
             CommandSupport.wrongArity(out, "sismember");
             return;
         }
-        out.integer(support.db(out).sismember(cmd.toByteArray(1), cmd.toByteArray(2)) ? 1 : 0);
+        YierdisDb db = support.db(out);
+        out.integer(db.values().sets().sismember(cmd.toByteArray(1), cmd.toByteArray(2)) ? 1 : 0);
     }
 
     private void scard(RespCommand cmd, RespWriter out) {
@@ -92,6 +94,7 @@ final class SetCommands {
             CommandSupport.wrongArity(out, "scard");
             return;
         }
-        out.integer(support.db(out).scard(cmd.toByteArray(1)));
+        YierdisDb db = support.db(out);
+        out.integer(db.values().sets().scard(cmd.toByteArray(1)));
     }
 }

@@ -32,9 +32,14 @@
 为提升 Redis 生态兼容性，server 支持多逻辑 DB：
 - 通过 `--databases <n>` 配置 DB 数量（默认 16）
 - 连接级维护 `dbIndex`（默认 0），由 `SELECT <index>` 修改
-- 执行器线程绑定多个 `YierdisDb` 实例（DB0..N-1），命令执行时按连接态路由到目标 DB
+- server 通过 core 的 `YierdisInstance` 装配多个 `YierdisDb`（DB0..N-1）与路由（`YierdisDbRouter`），命令执行时按连接态路由到目标 DB
+- 执行器线程在启动阶段调用 `instance.bindToCurrentThread()` 完成 owner-thread 绑定（保持单线程命令语义）
 
 说明：多 DB 仍保持“单线程命令语义”（所有 DB 绑定同一 executor 线程），避免引入跨线程并发复杂度。
+
+扩展边界（冻结约定）：
+- 路由扩展点在 core 的 `YierdisInstance`/router；server 不实现 shard 逻辑。
+- 若未来引入 key-hash shard：跨 shard 的多 key 命令默认应返回确定性的错误（类似 CROSSSLOT），避免部分成功造成一致性不可解释。
 
 ### Requirement: I/O 与命令执行解耦（单线程命令语义）
 **Module:** yierdis-server
@@ -97,13 +102,32 @@
 - 当客户端看到 `-ERR busy queue_full`：执行 `redis-cli -p 6378 --resp3 STATS`，观察 `submit_rejected_queue_full_total` 是否持续增长（表明全局队列条数是主因）。
 - 若只需要查看“当前 backlog 即时快照”：执行 `redis-cli -p 6378 INFO stats`，观察 `yierdis_queued_tasks/yierdis_queued_bytes`。
 
+### Requirement: 慢命令治理（KEYS / 全表扫描隔离）
+**Module:** yierdis-core（SSOT） + yierdis-server（配置注入）
+
+`KEYS` 属于“潜在全表扫描”命令：在大数据集/rehash/过期清理叠加时，容易长时间占用 executor，导致整体 tail latency 飙升甚至触发 backpressure。
+
+本项目的治理策略是“保守预算 + fail-fast + 推荐 SCAN”：
+- core 提供 `SlowCommandGovernor` 作为治理 SSOT：定义 `KEYS` 的时间预算与结果上限（两者都可配置）。
+- server 仅负责将启动参数注入到 command processor（embedded 场景也可直接注入自定义 governor）。
+- 语义选择：当预算耗尽或结果超过上限时，**返回错误并不给出部分结果**（避免调用方误以为拿到完整集），并提示使用 `SCAN`。
+
+#### Configuration: 相关启动参数
+- `--keysTimeBudgetMillis <ms>`：`KEYS` 的时间预算（0 表示不限制；默认 20ms）
+- `--keysMaxResults <n>`：`KEYS` 结果上限（0 表示禁用 `KEYS`；默认无限制）
+
+#### Scenario: KEYS 超时/超量时 fail-fast
+- 条件：大数据集下执行 `KEYS *`
+- 预期：当超出 `--keysTimeBudgetMillis` 时返回 `ERR KEYS time budget exceeded (use SCAN)`
+- 预期：当达到 `--keysMaxResults` 但扫描未结束时返回 `ERR KEYS result limit exceeded (use SCAN)`
+
 ### Requirement: 优雅关停（Graceful Shutdown）
 **Module:** server
 
 服务端关闭时需避免竞态：
 - 不出现“执行器仍在处理命令，但 DB/off-heap 已关闭”的情况
 - backlog 中的命令在关闭时可被 drain（释放 `RespFrame/ByteBuf`），避免泄漏
-- DB 的 `shutdown()` 固定在执行器线程内执行（保持 owner-thread 语义）
+- DB/instance 的 `close()/shutdown()` 固定在执行器线程内执行（保持 owner-thread 语义）
 
 ## Dependencies
 
@@ -124,3 +148,4 @@
 - 2026-01-16：连接生命周期收敛：`QUIT` 纳入 core 命令；执行器支持 close-after-reply，并在 QUIT 后丢弃该连接后续 backlog 命令（仅回收，不执行）。
 - 2026-01-17：server 装配与边界收敛：Pipeline 装配下沉到 `YierdisServerChannelInitializer`；连接态二分（`ConnectionContext` 仅协议会话，运行时连接状态迁移到 `ServerConnectionState`）；执行器调度 state 下沉为 server 私有 `NettyExecutorChannelState`；协议 request 解码严格化（reply/非法前缀判为 protocol error 并关闭连接）。
 - 2026-02-01：多 DB 支持：新增 `--databases`，bootstrap 装配 DB0..N-1 并按连接态路由；INFO 形态对齐 Redis（bulk string），保留 `INFO YIERDIS`/`STATS` 结构化指标；连接关闭语义加固：连接关闭/协议错误会标记 closing，执行器跳过该连接后续 backlog（仅回收不执行），避免副作用与资源浪费。
+- 2026-02-04：bootstrap 装配收敛：server 改为使用 core 的 `YierdisInstance` 统一 DB/路由/生命周期装配语义，为 bench/工具/嵌入式用法提供可复用基座。

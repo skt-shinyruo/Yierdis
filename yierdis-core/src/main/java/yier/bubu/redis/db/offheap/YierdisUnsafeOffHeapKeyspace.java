@@ -2,6 +2,9 @@ package yier.bubu.redis.db.offheap;
 
 import yier.bubu.redis.db.YierdisBytesView;
 import yier.bubu.redis.db.YierdisKeyspace;
+import yier.bubu.redis.db.ScanCursorV2;
+import yier.bubu.redis.db.key.KeyHandle;
+import yier.bubu.redis.db.key.KeyHandleAccess;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBlock;
 
@@ -97,6 +100,62 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
         Table t1 = table1;
         if (t1 != null) {
             idx = findIndex(t1, key, h);
+            if (idx >= 0) {
+                @SuppressWarnings("unchecked")
+                V v = (V) t1.values[idx];
+                return v;
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public V get(KeyHandle keyHandle) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        Table t0 = table0;
+        if (t0 == null) {
+            return null;
+        }
+        rehashStep();
+
+        int h = keyHandle.dictHash();
+        int keyLen = keyHandle.len();
+        if (keyLen < 0) {
+            throw new IllegalArgumentException("key length must be non-negative");
+        }
+
+        if (KeyHandleAccess.isOffHeap(keyHandle)) {
+            if (KeyHandleAccess.offHeapAllocator(keyHandle) != allocator) {
+                throw new IllegalArgumentException("key allocator mismatch: expected shared allocator");
+            }
+            long keyPtr = KeyHandleAccess.offHeapAddress(keyHandle);
+            int idx = findIndexByPtr(t0, keyPtr, keyLen, h);
+            if (idx >= 0) {
+                @SuppressWarnings("unchecked")
+                V v = (V) t0.values[idx];
+                return v;
+            }
+            Table t1 = table1;
+            if (t1 != null) {
+                idx = findIndexByPtr(t1, keyPtr, keyLen, h);
+                if (idx >= 0) {
+                    @SuppressWarnings("unchecked")
+                    V v = (V) t1.values[idx];
+                    return v;
+                }
+            }
+            return null;
+        }
+
+        int idx = findIndex(t0, keyHandle, h);
+        if (idx >= 0) {
+            @SuppressWarnings("unchecked")
+            V v = (V) t0.values[idx];
+            return v;
+        }
+        Table t1 = table1;
+        if (t1 != null) {
+            idx = findIndex(t1, keyHandle, h);
             if (idx >= 0) {
                 @SuppressWarnings("unchecked")
                 V v = (V) t1.values[idx];
@@ -232,6 +291,100 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
     }
 
     @Override
+    public V computeWithHandle(byte[] key, BiFunction<? super KeyHandle, ? super V, ? extends V> remappingFunction) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(remappingFunction, "remappingFunction");
+
+        ensureTable0();
+        rehashStep();
+        maybeStartRehashForInsert();
+
+        int h = hash(key);
+        Location loc = findLocation(key, h);
+        if (loc == null) {
+            int keyLen = key.length;
+            long keyPtr = 0L;
+            if (keyLen > 0) {
+                keyPtr = allocator.allocateAddress(keyLen);
+                try {
+                    allocator.copyMemory(key, 0, keyPtr, keyLen);
+                } catch (RuntimeException e) {
+                    allocator.freeAddress(keyPtr, keyLen);
+                    throw e;
+                }
+            }
+
+            KeyHandle handle = KeyHandle.forOffHeap(allocator, keyPtr, keyLen, h);
+            V newValue;
+            try {
+                newValue = remappingFunction.apply(handle, null);
+            } catch (RuntimeException e) {
+                if (keyLen > 0) {
+                    allocator.freeAddress(keyPtr, keyLen);
+                }
+                throw e;
+            }
+
+            if (newValue == null) {
+                if (keyLen > 0) {
+                    allocator.freeAddress(keyPtr, keyLen);
+                }
+                return null;
+            }
+
+            insertNew(keyPtr, keyLen, h, newValue);
+            return newValue;
+        }
+
+        V oldValue = loc.getValue();
+        Table t = loc.table == 0 ? table0 : table1;
+        long keyPtr = getLong(t.keyPtrAddr, loc.index);
+        int keyLen = getInt(t.keyLenAddr, loc.index);
+        int storedHash = getInt(t.hashesAddr, loc.index);
+        KeyHandle handle = KeyHandle.forOffHeap(allocator, keyPtr, keyLen, storedHash);
+
+        V newValue = remappingFunction.apply(handle, oldValue);
+        if (newValue == null) {
+            loc.removeAndFreeKey();
+            return null;
+        }
+        loc.setValue(newValue);
+        return newValue;
+    }
+
+    @Override
+    public V computeIfPresentWithHandle(byte[] key, BiFunction<? super KeyHandle, ? super V, ? extends V> remappingFunction) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(remappingFunction, "remappingFunction");
+
+        Table t0 = table0;
+        if (t0 == null) {
+            return null;
+        }
+
+        rehashStep();
+        int h = hash(key);
+        Location loc = findLocation(key, h);
+        if (loc == null) {
+            return null;
+        }
+
+        Table t = loc.table == 0 ? table0 : table1;
+        long keyPtr = getLong(t.keyPtrAddr, loc.index);
+        int keyLen = getInt(t.keyLenAddr, loc.index);
+        int storedHash = getInt(t.hashesAddr, loc.index);
+        KeyHandle handle = KeyHandle.forOffHeap(allocator, keyPtr, keyLen, storedHash);
+
+        V newValue = remappingFunction.apply(handle, loc.getValue());
+        if (newValue == null) {
+            loc.removeAndFreeKey();
+            return null;
+        }
+        loc.setValue(newValue);
+        return newValue;
+    }
+
+    @Override
     public boolean remove(byte[] key, V expectedValue) {
         Objects.requireNonNull(key, "key");
         Table t0 = table0;
@@ -242,6 +395,64 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
 
         int h = hash(key);
         Location loc = findLocation(key, h);
+        if (loc == null) {
+            return false;
+        }
+        if (loc.getValue() != expectedValue) {
+            return false;
+        }
+        loc.removeAndFreeKey();
+        return true;
+    }
+
+    @Override
+    public boolean remove(KeyHandle keyHandle, V expectedValue) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        Table t0 = table0;
+        if (t0 == null) {
+            return false;
+        }
+        rehashStep();
+
+        int h = keyHandle.dictHash();
+        int keyLen = keyHandle.len();
+        if (keyLen < 0) {
+            throw new IllegalArgumentException("key length must be non-negative");
+        }
+
+        Location loc = null;
+        if (KeyHandleAccess.isOffHeap(keyHandle)) {
+            if (KeyHandleAccess.offHeapAllocator(keyHandle) != allocator) {
+                throw new IllegalArgumentException("key allocator mismatch: expected shared allocator");
+            }
+            long keyPtr = KeyHandleAccess.offHeapAddress(keyHandle);
+            int idx0 = findIndexByPtr(t0, keyPtr, keyLen, h);
+            if (idx0 >= 0) {
+                loc = new Location(0, idx0);
+            } else {
+                Table t1 = table1;
+                if (t1 != null) {
+                    int idx1 = findIndexByPtr(t1, keyPtr, keyLen, h);
+                    if (idx1 >= 0) {
+                        loc = new Location(1, idx1);
+                    }
+                }
+            }
+        } else {
+            int idx0 = findIndex(t0, keyHandle, h);
+            if (idx0 >= 0) {
+                loc = new Location(0, idx0);
+            } else {
+                Table t1 = table1;
+                if (t1 != null) {
+                    int idx1 = findIndex(t1, keyHandle, h);
+                    if (idx1 >= 0) {
+                        loc = new Location(1, idx1);
+                    }
+                }
+            }
+        }
+
         if (loc == null) {
             return false;
         }
@@ -284,6 +495,104 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
     }
 
     @Override
+    public void forEachKeyHandle(BiConsumer<KeyHandle, V> consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        Table t0 = table0;
+        if (t0 == null) {
+            return;
+        }
+        forEachKeyHandleTable(t0, consumer);
+        Table t1 = table1;
+        if (t1 != null) {
+            forEachKeyHandleTable(t1, consumer);
+        }
+    }
+
+    @Override
+    public ScanCursorV2 scan(ScanCursorV2 cursor, int maxSteps, ScanConsumer<V> consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        if (maxSteps <= 0) {
+            throw new IllegalArgumentException("maxSteps must be > 0");
+        }
+
+        Table t0 = table0;
+        if (t0 == null || size() == 0) {
+            return ScanCursorV2.start();
+        }
+
+        int phase = cursor == null ? 0 : cursor.phase();
+        long posLong = cursor == null ? 0L : cursor.position();
+        int pos = posLong <= 0 ? 0 : (posLong >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) posLong);
+
+        int steps = 0;
+        while (steps++ < maxSteps) {
+            if (phase == 0) {
+                if (pos >= t0.capacity) {
+                    Table t1 = table1;
+                    if (t1 == null) {
+                        return ScanCursorV2.start();
+                    }
+                    phase = 1;
+                    pos = 0;
+                    continue;
+                }
+                if (getByte(t0.statesAddr, pos) == STATE_FILLED) {
+                    @SuppressWarnings("unchecked")
+                    V v = (V) t0.values[pos];
+                    int h = getInt(t0.hashesAddr, pos);
+                    long keyPtr = getLong(t0.keyPtrAddr, pos);
+                    int keyLen = getInt(t0.keyLenAddr, pos);
+                    if (keyLen < 0) {
+                        keyLen = 0;
+                    }
+                    pos++;
+                    if (!(keyPtr == 0 && keyLen > 0)) {
+                        if (!consumer.accept(KeyHandle.forOffHeap(allocator, keyPtr, keyLen, h), v)) {
+                            return ScanCursorV2.ofPhaseAndPosition(phase, pos);
+                        }
+                    }
+                    continue;
+                }
+                pos++;
+                continue;
+            }
+
+            if (phase == 1) {
+                Table t1 = table1;
+                if (t1 == null) {
+                    return ScanCursorV2.start();
+                }
+                if (pos >= t1.capacity) {
+                    return ScanCursorV2.start();
+                }
+                if (getByte(t1.statesAddr, pos) == STATE_FILLED) {
+                    @SuppressWarnings("unchecked")
+                    V v = (V) t1.values[pos];
+                    int h = getInt(t1.hashesAddr, pos);
+                    long keyPtr = getLong(t1.keyPtrAddr, pos);
+                    int keyLen = getInt(t1.keyLenAddr, pos);
+                    if (keyLen < 0) {
+                        keyLen = 0;
+                    }
+                    pos++;
+                    if (!(keyPtr == 0 && keyLen > 0)) {
+                        if (!consumer.accept(KeyHandle.forOffHeap(allocator, keyPtr, keyLen, h), v)) {
+                            return ScanCursorV2.ofPhaseAndPosition(phase, pos);
+                        }
+                    }
+                    continue;
+                }
+                pos++;
+                continue;
+            }
+
+            return ScanCursorV2.start();
+        }
+
+        return ScanCursorV2.ofPhaseAndPosition(phase, pos);
+    }
+
+    @Override
     public byte[] randomKey() {
         Table t0 = table0;
         if (t0 == null) {
@@ -308,7 +617,8 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
         return r < t0.size ? randomKeyFromTable(t1) : randomKeyFromTable(t0);
     }
 
-    KeyHandle keyHandle(byte[] keyBytes) {
+    @Override
+    public KeyHandle keyHandle(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         Table t0 = table0;
         if (t0 == null) {
@@ -318,13 +628,36 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
         int h = hash(keyBytes);
         int idx = findIndex(t0, keyBytes, h);
         if (idx >= 0) {
-            return new KeyHandle(getLong(t0.keyPtrAddr, idx), getInt(t0.keyLenAddr, idx), h);
+            return KeyHandle.forOffHeap(allocator, getLong(t0.keyPtrAddr, idx), getInt(t0.keyLenAddr, idx), h);
         }
         Table t1 = table1;
         if (t1 != null) {
             idx = findIndex(t1, keyBytes, h);
             if (idx >= 0) {
-                return new KeyHandle(getLong(t1.keyPtrAddr, idx), getInt(t1.keyLenAddr, idx), h);
+                return KeyHandle.forOffHeap(allocator, getLong(t1.keyPtrAddr, idx), getInt(t1.keyLenAddr, idx), h);
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public KeyHandle keyHandle(YierdisBytesView keyView) {
+        Objects.requireNonNull(keyView, "keyView");
+        Table t0 = table0;
+        if (t0 == null) {
+            return null;
+        }
+        rehashStep();
+        int h = hash(keyView);
+        int idx = findIndex(t0, keyView, h);
+        if (idx >= 0) {
+            return KeyHandle.forOffHeap(allocator, getLong(t0.keyPtrAddr, idx), getInt(t0.keyLenAddr, idx), h);
+        }
+        Table t1 = table1;
+        if (t1 != null) {
+            idx = findIndex(t1, keyView, h);
+            if (idx >= 0) {
+                return KeyHandle.forOffHeap(allocator, getLong(t1.keyPtrAddr, idx), getInt(t1.keyLenAddr, idx), h);
             }
         }
         return null;
@@ -368,6 +701,26 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
         }
     }
 
+    private void forEachKeyHandleTable(Table t, BiConsumer<KeyHandle, V> consumer) {
+        for (int i = 0; i < t.capacity; i++) {
+            if (getByte(t.statesAddr, i) != STATE_FILLED) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            V v = (V) t.values[i];
+            int h = getInt(t.hashesAddr, i);
+            long keyPtr = getLong(t.keyPtrAddr, i);
+            int keyLen = getInt(t.keyLenAddr, i);
+            if (keyLen < 0) {
+                keyLen = 0;
+            }
+            if (keyPtr == 0 && keyLen > 0) {
+                continue;
+            }
+            consumer.accept(KeyHandle.forOffHeap(allocator, keyPtr, keyLen, h), v);
+        }
+    }
+
     private byte[] randomKeyFromTable(Table t) {
         int len = t.capacity;
         if (len == 0) {
@@ -399,6 +752,7 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
         if (keyLen <= 0 || keyPtr == 0) {
             return new byte[0];
         }
+        OffHeapKeyCopyDiagnostics.onHeapKeyCopy();
         byte[] out = new byte[keyLen];
         allocator.copyMemory(keyPtr, out, 0, keyLen);
         return out;
@@ -640,6 +994,23 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
         }
     }
 
+    private int findIndexByPtr(Table t, long keyPtr, int keyLen, int hash) {
+        int mask = t.capacity - 1;
+        int idx = hash & mask;
+        while (true) {
+            byte state = getByte(t.statesAddr, idx);
+            if (state == STATE_EMPTY) {
+                return -1;
+            }
+            if (state == STATE_FILLED && getInt(t.hashesAddr, idx) == hash) {
+                if (getLong(t.keyPtrAddr, idx) == keyPtr && getInt(t.keyLenAddr, idx) == keyLen) {
+                    return idx;
+                }
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+
     private int findOrInsertLocation(Table t, long keyPtr, int keyLen, int hash) {
         int mask = t.capacity - 1;
         int idx = hash & mask;
@@ -791,18 +1162,6 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
         allocator.putByte(addr + 5, (byte) (value >>> 40));
         allocator.putByte(addr + 6, (byte) (value >>> 48));
         allocator.putByte(addr + 7, (byte) (value >>> 56));
-    }
-
-    public static final class KeyHandle {
-        public final long keyPtr;
-        public final int keyLen;
-        public final int hash;
-
-        KeyHandle(long keyPtr, int keyLen, int hash) {
-            this.keyPtr = keyPtr;
-            this.keyLen = keyLen;
-            this.hash = hash;
-        }
     }
 
     private final class Location {

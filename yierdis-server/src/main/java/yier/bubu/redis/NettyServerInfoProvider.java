@@ -166,6 +166,9 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                     0,
                     0,
                     0,
+                    0,
+                    0,
+                    true,
                     false,
                     0,
                     0,
@@ -187,6 +190,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         long expireOverhead = 0;
         long expireValueObjects = 0;
         long offHeap = 0;
+        long reserved = 0;
         int keyCount = 0;
         int expireCount = 0;
         boolean keysStoredOffHeap = false;
@@ -209,6 +213,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             expireValueObjects += s.expireValueObjectsBytesEstimate();
             keyCount += s.keyCount();
             expireCount += s.expireCount();
+            reserved += s.reservedBytes();
             keysStoredOffHeap |= s.keysStoredOffHeap();
             keyspaceRehashing |= s.keyspaceRehashing();
             expireRehashing |= s.expireRehashing();
@@ -220,6 +225,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         long usedBytesForMaxmemory = heap + offHeap;
+        long effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + Math.max(0L, reserved);
         long totalEstimatedBytes = heap + offHeap + keyspaceOverhead + expireOverhead + expireValueObjects;
 
         return new YierdisMemoryStats(
@@ -227,6 +233,9 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                 usedBytesForMaxmemory,
                 heap,
                 offHeap,
+                reserved,
+                effectiveUsedBytesForMaxmemory,
+                true,
                 keysStoredOffHeap,
                 keyCount,
                 expireCount,
@@ -302,6 +311,33 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
         if (memory) {
             MemorySummary m = memorySummary();
+            long ledgerReservedBytes = 0;
+            long maxmemoryUsedBytes = 0;
+            long maxmemoryEffectiveUsedBytes = 0;
+            boolean offHeapIncludedInMaxmemory = config.maxmemoryScope == ServerConfig.MaxmemoryScope.GLOBAL;
+            if (config.maxmemoryScope == ServerConfig.MaxmemoryScope.GLOBAL) {
+                YierdisMemoryStats memStats = memoryStats(null);
+                if (memStats != null) {
+                    ledgerReservedBytes = memStats.reservedBytes();
+                    maxmemoryUsedBytes = memStats.usedBytesForMaxmemory();
+                    maxmemoryEffectiveUsedBytes = memStats.effectiveUsedBytesForMaxmemory();
+                    offHeapIncludedInMaxmemory = memStats.offHeapIncludedInMaxmemory();
+                }
+            } else {
+                YierdisDb[] local = dbs;
+                if (local != null) {
+                    for (int i = 0; i < local.length; i++) {
+                        YierdisDb db = local[i];
+                        if (db == null) {
+                            continue;
+                        }
+                        YierdisMemoryStats dbStats = db.memoryStats();
+                        ledgerReservedBytes += dbStats.reservedBytes();
+                        maxmemoryUsedBytes += dbStats.usedBytesForMaxmemory();
+                        maxmemoryEffectiveUsedBytes += dbStats.effectiveUsedBytesForMaxmemory();
+                    }
+                }
+            }
             sb.append("# Memory\r\n");
             sb.append("used_memory:").append(m.usedMemoryBytes).append("\r\n");
             sb.append("used_memory_dataset:").append(m.heapDataBytesEstimate).append("\r\n");
@@ -315,6 +351,12 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                 long perDb = config.maxmemoryBytes / Math.max(1L, (long) config.databases);
                 sb.append("yierdis_maxmemory_per_db_bytes:").append(perDb).append("\r\n");
             }
+            sb.append("yierdis_ledger_used_bytes:").append(m.heapDataBytesEstimate).append("\r\n");
+            sb.append("yierdis_ledger_reserved_bytes:").append(ledgerReservedBytes).append("\r\n");
+            sb.append("yierdis_ledger_effective_used_bytes:").append(m.heapDataBytesEstimate + ledgerReservedBytes).append("\r\n");
+            sb.append("yierdis_maxmemory_used_bytes:").append(maxmemoryUsedBytes).append("\r\n");
+            sb.append("yierdis_maxmemory_effective_used_bytes:").append(maxmemoryEffectiveUsedBytes).append("\r\n");
+            sb.append("yierdis_offheap_included_in_maxmemory:").append(offHeapIncludedInMaxmemory ? 1 : 0).append("\r\n");
             sb.append("yierdis_offheap_used_bytes:").append(m.offHeapUsedBytes).append("\r\n");
             sb.append("yierdis_offheap_max_bytes:").append(config.offheapMaxBytes).append("\r\n");
             sb.append("\r\n");

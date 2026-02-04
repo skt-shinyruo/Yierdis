@@ -2,6 +2,7 @@ package yier.bubu.redis.command;
 
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.DbMemoryConstants;
+import yier.bubu.redis.ops.StringOps;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespWriter;
 
@@ -174,12 +175,12 @@ final class StringCommands {
             db.prepareWrite(extra);
         }
 
-        boolean ok = db.setString(key, cmd, 2, mode, expire);
+        StringOps strings = db.values().strings();
+        boolean ok = strings.setString(key, cmd, 2, mode, expire);
         if (!ok) {
             out.bulkString((byte[]) null);
             return;
         }
-        db.enforceMaxmemory();
         if (getOld) {
             out.bulkString(oldValueForGet);
             return;
@@ -192,7 +193,8 @@ final class StringCommands {
             CommandSupport.wrongArity(out, "get");
             return;
         }
-        support.db(out).getStringForReply(support.argView(cmd, 1), support.bulkOut(out));
+        YierdisDb db = support.db(out);
+        db.values().strings().getStringForReply(support.argView(cmd, 1), support.bulkOut(out));
     }
 
     private void strlen(RespCommand cmd, RespWriter out) {
@@ -200,7 +202,8 @@ final class StringCommands {
             CommandSupport.wrongArity(out, "strlen");
             return;
         }
-        out.integer(support.db(out).strlen(support.argView(cmd, 1)));
+        YierdisDb db = support.db(out);
+        out.integer(db.values().strings().strlen(support.argView(cmd, 1)));
     }
 
     private void append(RespCommand cmd, RespWriter out) {
@@ -211,8 +214,7 @@ final class StringCommands {
         YierdisDb db = support.db(out);
         long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         db.prepareWrite(extra);
-        long len = db.append(cmd.toByteArray(1), cmd, 2);
-        db.enforceMaxmemory();
+        long len = db.values().strings().append(cmd.toByteArray(1), cmd, 2);
         out.integer(len);
     }
 
@@ -239,8 +241,7 @@ final class StringCommands {
         long extra = (long) Math.max(0, cmd.len(1)) + growth + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         db.prepareWrite(extra);
 
-        int old = db.setBit(cmd.toByteArray(1), offset, (int) v);
-        db.enforceMaxmemory();
+        int old = db.values().strings().setBit(cmd.toByteArray(1), offset, (int) v);
         out.integer(old);
     }
 
@@ -250,7 +251,8 @@ final class StringCommands {
             return;
         }
         long offset = CommandSupport.parseNonNegativeLong(cmd, 2, "offset");
-        out.integer(support.db(out).getBit(support.argView(cmd, 1), offset));
+        YierdisDb db = support.db(out);
+        out.integer(db.values().strings().getBit(support.argView(cmd, 1), offset));
     }
 
     private void bitcount(RespCommand cmd, RespWriter out) {
@@ -259,12 +261,14 @@ final class StringCommands {
             return;
         }
         if (cmd.argc() == 2) {
-            out.integer(support.db(out).bitcount(support.argView(cmd, 1)));
+            YierdisDb db = support.db(out);
+            out.integer(db.values().strings().bitcount(support.argView(cmd, 1)));
             return;
         }
         long start = CommandSupport.parseLong(cmd, 2, "start");
         long end = CommandSupport.parseLong(cmd, 3, "end");
-        out.integer(support.db(out).bitcount(support.argView(cmd, 1), start, end));
+        YierdisDb db = support.db(out);
+        out.integer(db.values().strings().bitcount(support.argView(cmd, 1), start, end));
     }
 
     private void incr(RespCommand cmd, RespWriter out) {
@@ -283,8 +287,7 @@ final class StringCommands {
         YierdisDb db = support.db(out);
         long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         db.prepareWrite(extra);
-        long value = db.incrBy(cmd.toByteArray(1), delta);
-        db.enforceMaxmemory();
+        long value = db.values().strings().incrBy(cmd.toByteArray(1), delta);
         out.integer(value);
     }
 }

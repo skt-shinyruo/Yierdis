@@ -194,6 +194,20 @@ public final class YierdisServerArgs {
     @Option(names = YierdisServerArgNames.EXPIRE_CLEANUP_TIME_LIMIT_MILLIS, defaultValue = "5", description = "Expire cleanup time budget per tick in milliseconds.")
     public long expireCleanupTimeLimitMillis = 5;
 
+    @Option(
+            names = YierdisServerArgNames.KEYS_TIME_BUDGET_MILLIS,
+            defaultValue = "20",
+            description = "KEYS time budget in milliseconds (0 disables; use SCAN for large datasets)."
+    )
+    public long keysTimeBudgetMillis = 20;
+
+    @Option(
+            names = YierdisServerArgNames.KEYS_MAX_RESULTS,
+            defaultValue = "" + Integer.MAX_VALUE,
+            description = "KEYS max results (0 disables KEYS; default unlimited)."
+    )
+    public int keysMaxResults = Integer.MAX_VALUE;
+
     public void normalizeAndValidate() {
         if (noCleanup) {
             cleanupIntervalMillis = 0;
@@ -329,6 +343,12 @@ public final class YierdisServerArgs {
         if (expireCleanupTimeLimitMillis <= 0) {
             throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be > 0");
         }
+        if (keysTimeBudgetMillis < 0) {
+            throw new IllegalArgumentException("keysTimeBudgetMillis must be >= 0");
+        }
+        if (keysMaxResults < 0) {
+            throw new IllegalArgumentException("keysMaxResults must be >= 0");
+        }
     }
 
     public YierdisServerArgs copy() {
@@ -365,6 +385,8 @@ public final class YierdisServerArgs {
         out.maxmemorySamples = maxmemorySamples;
         out.evictionTimeLimitMillis = evictionTimeLimitMillis;
         out.expireCleanupTimeLimitMillis = expireCleanupTimeLimitMillis;
+        out.keysTimeBudgetMillis = keysTimeBudgetMillis;
+        out.keysMaxResults = keysMaxResults;
         return out;
     }
 
@@ -454,6 +476,11 @@ public final class YierdisServerArgs {
         out.add(Long.toString(evictionTimeLimitMillis));
         out.add(YierdisServerArgNames.EXPIRE_CLEANUP_TIME_LIMIT_MILLIS);
         out.add(Long.toString(expireCleanupTimeLimitMillis));
+
+        out.add(YierdisServerArgNames.KEYS_TIME_BUDGET_MILLIS);
+        out.add(Long.toString(keysTimeBudgetMillis));
+        out.add(YierdisServerArgNames.KEYS_MAX_RESULTS);
+        out.add(Integer.toString(keysMaxResults));
 
         return out;
     }

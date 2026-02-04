@@ -8,6 +8,14 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapExpireIndex;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapKeyspace;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapString;
+import yier.bubu.redis.db.key.KeyHandle;
+import yier.bubu.redis.db.memory.MemoryLedger;
+import yier.bubu.redis.db.memory.MemoryLedgerOutOfMemoryException;
+import yier.bubu.redis.db.memory.MemoryReservation;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.EvictionCoordinator;
+import yier.bubu.redis.ops.ExpirationManager;
+import yier.bubu.redis.ops.ValueOps;
 import yier.bubu.redis.protocol.RespCommand;
 
 import java.util.ArrayList;
@@ -17,20 +25,20 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
-public final class YierdisDb {
+public final class YierdisDb implements YierdisSnapshot, DbEngine {
     public enum MaxmemoryPolicy {
         NOEVICTION,
         ALLKEYS_RANDOM,
         ALLKEYS_LRU
     }
 
-    private final YierdisKeyspace<YierdisObject> store;
-    private final YierdisExpireIndex expires;
-    private final YierdisOffHeapAllocator offHeapAllocator;
+    final YierdisKeyspace<YierdisObject> store;
+    final YierdisExpireIndex expires;
+    final YierdisOffHeapAllocator offHeapAllocator;
     private final boolean ownsOffHeapAllocator;
     private final boolean keysStoredOffHeap;
 
-    private static final String OOM_ERR = "OOM command not allowed when used memory > 'maxmemory'.";
+    static final String OOM_ERR = "OOM command not allowed when used memory > 'maxmemory'.";
 
     private final long maxmemoryBytes;
     private final MaxmemoryPolicy maxmemoryPolicy;
@@ -39,11 +47,18 @@ public final class YierdisDb {
     private final long evictionTimeLimitNanos;
     private final long expireCleanupTimeLimitNanos;
 
-    private long usedBytes;
+    long usedBytes;
+    long reservedBytes;
     private long lruClock;
 
     private final DbThreadGuard threadGuard = new DbThreadGuard();
-    private volatile GlobalMaxmemoryCoordinator globalMaxmemory;
+    private volatile YierdisGlobalMaxmemoryCoordinator globalMaxmemory;
+    private final MemoryLedger ledger;
+    private MemoryReservation activeReservation;
+
+    private final ValueOps values;
+    private final ExpirationManager expirationManager;
+    private final EvictionCoordinator evictionCoordinator;
 
     public YierdisDb() {
         this(null, false, 0, "noeviction", 5, 5, 5);
@@ -119,7 +134,26 @@ public final class YierdisDb {
         this.lruEnabled = maxmemoryBytes > 0 && this.maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_LRU;
         this.evictionTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(evictionTimeLimitMillis);
         this.expireCleanupTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(expireCleanupTimeLimitMillis);
+        this.ledger = new DbMemoryLedger();
+        this.values = new YierdisDbValueOps(this);
+        this.expirationManager = new YierdisDbExpirationManager(this);
+        this.evictionCoordinator = new YierdisDbEvictionCoordinator(this);
         // Scheduling (if any) is done by the Netty event loop in YierdisServer, not by a dedicated thread.
+    }
+
+    @Override
+    public ValueOps values() {
+        return values;
+    }
+
+    @Override
+    public ExpirationManager expiration() {
+        return expirationManager;
+    }
+
+    @Override
+    public EvictionCoordinator eviction() {
+        return evictionCoordinator;
     }
 
     private static MaxmemoryPolicy parseMaxmemoryPolicy(String policy) {
@@ -165,7 +199,7 @@ public final class YierdisDb {
             throw new IllegalArgumentException("evictionTimeLimitMillis must be > 0");
         }
 
-        GlobalMaxmemoryCoordinator coordinator = new GlobalMaxmemoryCoordinator(
+        YierdisGlobalMaxmemoryCoordinator coordinator = new YierdisGlobalMaxmemoryCoordinator(
                 dbs,
                 offHeapAllocator,
                 maxmemoryBytes,
@@ -184,7 +218,7 @@ public final class YierdisDb {
 
     public void ensureWriteAllowed(long additionalBytes) {
         checkThread();
-        GlobalMaxmemoryCoordinator global = globalMaxmemory;
+        YierdisGlobalMaxmemoryCoordinator global = globalMaxmemory;
         if (global != null) {
             global.ensureWriteAllowed(additionalBytes);
             return;
@@ -216,61 +250,48 @@ public final class YierdisDb {
      */
     public void prepareWrite(long estimatedExtraBytes) {
         checkThread();
-        GlobalMaxmemoryCoordinator global = globalMaxmemory;
-        if (global != null) {
-            global.prepareWrite(estimatedExtraBytes);
-            return;
+        if (activeReservation != null) {
+            throw new IllegalStateException("prepareWrite called with an active reservation");
         }
-        if (maxmemoryBytes <= 0) {
-            return;
-        }
-
-        // Best-effort: try to reclaim expired keys first (Redis does this too under pressure).
-        cleanupExpired();
-
-        long extra = Math.max(0, estimatedExtraBytes);
-        long limit = maxmemoryBytes - extra;
-        if (limit < 0) {
-            limit = 0;
-        }
-        if (usedBytesForMaxmemory() <= limit) {
-            return;
-        }
-
-        if (maxmemoryPolicy == MaxmemoryPolicy.NOEVICTION) {
-            throw new YierdisCommandException(OOM_ERR);
-        }
-
-        evictUntilUnder(limit);
-        if (usedBytesForMaxmemory() > limit) {
+        try {
+            activeReservation = ledger.reserve(Math.max(0L, estimatedExtraBytes));
+        } catch (MemoryLedgerOutOfMemoryException e) {
             throw new YierdisCommandException(OOM_ERR);
         }
     }
 
+    public void rollbackWriteReservationIfAny() {
+        checkThread();
+        if (activeReservation == null) {
+            return;
+        }
+        rollbackWrite();
+    }
+
+    void commitWrite(long actualDeltaBytes) {
+        MemoryReservation reservation = activeReservation;
+        activeReservation = null;
+        ledger.commit(reservation, actualDeltaBytes);
+    }
+
+    void rollbackWrite() {
+        MemoryReservation reservation = activeReservation;
+        activeReservation = null;
+        ledger.rollback(reservation);
+    }
+
+    void adjustUsedBytes(long deltaBytes) {
+        ledger.commit(null, deltaBytes);
+    }
+
     public void enforceMaxmemory() {
         checkThread();
-        GlobalMaxmemoryCoordinator global = globalMaxmemory;
-        if (global != null) {
-            global.enforceMaxmemory();
-            return;
-        }
-        if (maxmemoryBytes <= 0) {
-            return;
-        }
-
-        // Best-effort: try to reclaim expired keys first (Redis does this too under pressure).
-        cleanupExpired();
-
-        if (usedBytesForMaxmemory() <= maxmemoryBytes) {
-            return;
-        }
-
-        if (maxmemoryPolicy == MaxmemoryPolicy.NOEVICTION) {
-            throw new YierdisCommandException(OOM_ERR);
-        }
-
-        evictUntilUnder(maxmemoryBytes);
-        if (usedBytesForMaxmemory() > maxmemoryBytes) {
+        // Best-effort background enforcement: rely on ledger SSOT for eviction/cleanup.
+        // Note: This method intentionally does not throw on "noeviction" when already above maxmemory;
+        // writes are rejected at reserve-time when they are expected to increase memory.
+        try {
+            ledger.reserve(0);
+        } catch (MemoryLedgerOutOfMemoryException e) {
             throw new YierdisCommandException(OOM_ERR);
         }
     }
@@ -305,308 +326,48 @@ public final class YierdisDb {
             removeExpire(victim);
             if (store.remove(victim, e)) {
                 e.releasePayloadIfAny();
-                usedBytes -= e.estimatedBytes;
+                adjustUsedBytes(-e.estimatedBytes);
             }
         }
     }
 
-    private static final class GlobalMaxmemoryCoordinator {
-        private final YierdisDb[] dbs;
-        private final YierdisOffHeapAllocator offHeapAllocator;
-        private final long maxmemoryBytes;
-        private final MaxmemoryPolicy policy;
-        private final int samples;
-        private final long evictionTimeLimitNanos;
-        private final java.util.concurrent.atomic.AtomicLong globalLruClock = new java.util.concurrent.atomic.AtomicLong(0);
-
-        private GlobalMaxmemoryCoordinator(
-                YierdisDb[] dbs,
-                YierdisOffHeapAllocator offHeapAllocator,
-                long maxmemoryBytes,
-                MaxmemoryPolicy policy,
-                int samples,
-                long evictionTimeLimitNanos
-        ) {
-            this.dbs = Objects.requireNonNull(dbs, "dbs");
-            this.offHeapAllocator = offHeapAllocator;
-            this.maxmemoryBytes = Math.max(0, maxmemoryBytes);
-            this.policy = policy == null ? MaxmemoryPolicy.NOEVICTION : policy;
-            this.samples = Math.max(1, samples);
-            this.evictionTimeLimitNanos = Math.max(0, evictionTimeLimitNanos);
+    private static byte[] toByteArray(YierdisBytesView view) {
+        if (view == null) {
+            throw new IllegalArgumentException("view must not be null");
         }
-
-        long nextLruClock() {
-            return globalLruClock.incrementAndGet();
-        }
-
-        void ensureWriteAllowed(long additionalBytes) {
-            if (maxmemoryBytes <= 0) {
-                return;
-            }
-            if (policy != MaxmemoryPolicy.NOEVICTION) {
-                return;
-            }
-            long extra = Math.max(0, additionalBytes);
-            if (globalUsedBytesForMaxmemory() + extra > maxmemoryBytes) {
-                throw new YierdisCommandException(OOM_ERR);
-            }
-        }
-
-        void prepareWrite(long estimatedExtraBytes) {
-            if (maxmemoryBytes <= 0) {
-                return;
-            }
-
-            // Best-effort: try to reclaim expired keys first (Redis does this too under pressure).
-            cleanupExpiredAll();
-
-            long extra = Math.max(0, estimatedExtraBytes);
-            long limit = maxmemoryBytes - extra;
-            if (limit < 0) {
-                limit = 0;
-            }
-            if (globalUsedBytesForMaxmemory() <= limit) {
-                return;
-            }
-
-            if (policy == MaxmemoryPolicy.NOEVICTION) {
-                throw new YierdisCommandException(OOM_ERR);
-            }
-
-            evictUntilUnder(limit);
-            if (globalUsedBytesForMaxmemory() > limit) {
-                throw new YierdisCommandException(OOM_ERR);
-            }
-        }
-
-        void enforceMaxmemory() {
-            if (maxmemoryBytes <= 0) {
-                return;
-            }
-
-            // Best-effort: try to reclaim expired keys first (Redis does this too under pressure).
-            cleanupExpiredAll();
-
-            if (globalUsedBytesForMaxmemory() <= maxmemoryBytes) {
-                return;
-            }
-
-            if (policy == MaxmemoryPolicy.NOEVICTION) {
-                throw new YierdisCommandException(OOM_ERR);
-            }
-
-            evictUntilUnder(maxmemoryBytes);
-            if (globalUsedBytesForMaxmemory() > maxmemoryBytes) {
-                throw new YierdisCommandException(OOM_ERR);
-            }
-        }
-
-        private void cleanupExpiredAll() {
-            for (int i = 0; i < dbs.length; i++) {
-                YierdisDb db = dbs[i];
-                if (db == null) {
-                    continue;
-                }
-                db.cleanupExpired();
-            }
-        }
-
-        private long globalUsedBytesForMaxmemory() {
-            long heap = 0;
-            for (int i = 0; i < dbs.length; i++) {
-                YierdisDb db = dbs[i];
-                if (db == null) {
-                    continue;
-                }
-                heap += Math.max(0L, db.usedBytes);
-            }
-
-            long offHeap = 0;
-            if (offHeapAllocator != null) {
-                try {
-                    offHeap = Math.max(0L, offHeapAllocator.usedBytes());
-                } catch (Throwable ignored) {
-                    offHeap = 0;
-                }
-            }
-            return heap + offHeap;
-        }
-
-        private int globalKeyCount() {
-            int total = 0;
-            for (int i = 0; i < dbs.length; i++) {
-                YierdisDb db = dbs[i];
-                if (db == null) {
-                    continue;
-                }
-                int size = 0;
-                try {
-                    size = db.store.size();
-                } catch (Throwable ignored) {
-                    size = 0;
-                }
-                if (size <= 0) {
-                    continue;
-                }
-                if (Integer.MAX_VALUE - total < size) {
-                    return Integer.MAX_VALUE;
-                }
-                total += size;
-            }
-            return total;
-        }
-
-        private void evictUntilUnder(long limitBytes) {
-            if (limitBytes < 0) {
-                limitBytes = 0;
-            }
-            if (globalUsedBytesForMaxmemory() <= limitBytes) {
-                return;
-            }
-
-            int totalKeys = globalKeyCount();
-            int maxAttempts = Math.max(64, totalKeys * 2);
-
-            long nowMillis = System.currentTimeMillis();
-            long deadline = System.nanoTime() + evictionTimeLimitNanos;
-            int attempts = 0;
-            while (globalUsedBytesForMaxmemory() > limitBytes && attempts++ < maxAttempts) {
-                if (evictionTimeLimitNanos > 0 && System.nanoTime() >= deadline) {
-                    break;
-                }
-                Candidate victim = pickVictim(nowMillis, totalKeys);
-                if (victim == null) {
-                    break;
-                }
-                evictCandidate(victim, nowMillis);
-            }
-        }
-
-        private Candidate pickVictim(long nowMillis, int totalKeys) {
-            if (policy == MaxmemoryPolicy.ALLKEYS_RANDOM) {
-                return sampleAnyKey(nowMillis);
-            }
-            if (policy != MaxmemoryPolicy.ALLKEYS_LRU) {
-                return null;
-            }
-
-            // 如果 samples >= 全局 key 数量，则使用确定性全扫描（减少测试抖动）。
-            if (totalKeys > 0 && samples >= totalKeys) {
-                final Candidate[] bestRef = new Candidate[1];
-                for (int i = 0; i < dbs.length; i++) {
-                    YierdisDb db = dbs[i];
-                    if (db == null) {
-                        continue;
-                    }
-                    db.store.forEach((k, e) -> {
-                        if (k == null || e == null) {
-                            return;
-                        }
-                        if (db.isKeyExpired(k, nowMillis)) {
-                            return;
-                        }
-                        long lru = e.lruClock;
-                        Candidate best = bestRef[0];
-                        if (best == null || lru < best.lruClock) {
-                            bestRef[0] = new Candidate(db, k, lru);
-                        }
-                    });
-                }
-                return bestRef[0];
-            }
-
-            Candidate best = null;
-            for (int i = 0; i < samples; i++) {
-                Candidate c = sampleAnyKey(nowMillis);
-                if (c == null) {
-                    continue;
-                }
-                if (best == null || c.lruClock < best.lruClock) {
-                    best = c;
-                }
-            }
-            return best;
-        }
-
-        private Candidate sampleAnyKey(long nowMillis) {
-            if (dbs.length == 0) {
-                return null;
-            }
-
-            int start = java.util.concurrent.ThreadLocalRandom.current().nextInt(dbs.length);
-            for (int i = 0; i < dbs.length; i++) {
-                YierdisDb db = dbs[(start + i) % dbs.length];
-                if (db == null || db.store.size() == 0) {
-                    continue;
-                }
-                byte[] k = db.store.randomKey();
-                if (k == null) {
-                    continue;
-                }
-                YierdisObject e = db.store.get(k);
-                if (e == null) {
-                    continue;
-                }
-                if (db.isKeyExpired(k, nowMillis)) {
-                    continue;
-                }
-                return new Candidate(db, k, e.lruClock);
-            }
+        int len = view.len();
+        if (len < 0) {
             return null;
         }
-
-        private void evictCandidate(Candidate victim, long nowMillis) {
-            if (victim == null || victim.db == null || victim.key == null) {
-                return;
-            }
-            YierdisDb db = victim.db;
-            byte[] key = victim.key;
-            YierdisObject e = db.store.get(key);
-            if (e == null) {
-                return;
-            }
-            if (db.removeIfExpired(key, e, nowMillis)) {
-                return;
-            }
-            db.removeExpire(key);
-            if (db.store.remove(key, e)) {
-                e.releasePayloadIfAny();
-                db.usedBytes -= e.estimatedBytes;
-                if (db.usedBytes < 0) {
-                    db.usedBytes = 0;
-                }
-            }
+        if (len == 0) {
+            return new byte[0];
         }
-
-        private static final class Candidate {
-            final YierdisDb db;
-            final byte[] key;
-            final long lruClock;
-
-            private Candidate(YierdisDb db, byte[] key, long lruClock) {
-                this.db = db;
-                this.key = key;
-                this.lruClock = lruClock;
-            }
+        byte[] out = new byte[len];
+        for (int i = 0; i < len; i++) {
+            out[i] = view.byteAt(i);
         }
+        return out;
+    }
+
+    YierdisObject getObjectIfNotExpired(YierdisBytesView keyView) {
+        KeyHandle handle = store.keyHandle(keyView);
+        if (handle == null) {
+            return null;
+        }
+        return getObjectIfNotExpired(handle);
     }
 
     public long memoryUsage(YierdisBytesView keyView) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
-            return -1;
-        }
-        YierdisObject e = store.get(canonical);
+        YierdisObject e = getObjectIfNotExpired(keyView);
         if (e == null) {
             return -1;
         }
-        long now = System.currentTimeMillis();
-        if (removeIfExpired(canonical, e, now)) {
-            return -1;
+        long keyLen = 0;
+        if (keyView != null) {
+            keyLen = Math.max(0L, (long) keyView.len());
         }
-        touch(e);
-        return e.estimatedBytes + estimateOffHeapBytesForMemoryUsage(canonical, e);
+        return e.estimatedBytes + estimateOffHeapBytesForMemoryUsage(keyLen, e);
     }
 
     public long memoryUsage(byte[] keyBytes) {
@@ -618,16 +379,16 @@ public final class YierdisDb {
         if (e == null) {
             return -1;
         }
-        return e.estimatedBytes + estimateOffHeapBytesForMemoryUsage(keyBytes, e);
+        return e.estimatedBytes + estimateOffHeapBytesForMemoryUsage(keyBytes.length, e);
     }
 
-    private long estimateOffHeapBytesForMemoryUsage(byte[] keyBytes, YierdisObject e) {
+    private long estimateOffHeapBytesForMemoryUsage(long keyLen, YierdisObject e) {
         if (offHeapAllocator == null || e == null) {
             return 0;
         }
         long extra = 0;
-        if (keysStoredOffHeap && keyBytes != null) {
-            extra += keyBytes.length;
+        if (keysStoredOffHeap && keyLen > 0) {
+            extra += keyLen;
         }
         if (e.type == ValueType.STRING) {
             if (e.payload instanceof YierdisOffHeapBuf buf) {
@@ -641,19 +402,10 @@ public final class YierdisDb {
 
     public String objectEncoding(YierdisBytesView keyView) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
-            return null;
-        }
-        YierdisObject e = store.get(canonical);
+        YierdisObject e = getObjectIfNotExpired(keyView);
         if (e == null) {
             return null;
         }
-        long now = System.currentTimeMillis();
-        if (removeIfExpired(canonical, e, now)) {
-            return null;
-        }
-        touch(e);
         return encodingName(e.encoding);
     }
 
@@ -726,7 +478,7 @@ public final class YierdisDb {
         return bestKey;
     }
 
-    private long usedBytesForMaxmemory() {
+    long usedBytesForMaxmemory() {
         // maxmemory 是 best-effort 预算：当 off-heap allocator 由当前 DB 所拥有时，将堆外 used bytes 也计入预算。
         // 对于 server 的多 DB 场景（allocator 共享且 ownsOffHeapAllocator=false），避免将同一 allocator.usedBytes() 重复计入每个 DB。
         long offHeapUsedBytes = 0;
@@ -740,11 +492,11 @@ public final class YierdisDb {
         return usedBytes + offHeapUsedBytes;
     }
 
-    private void touch(YierdisObject e) {
+    void touch(YierdisObject e) {
         if (!lruEnabled || e == null) {
             return;
         }
-        GlobalMaxmemoryCoordinator global = globalMaxmemory;
+        YierdisGlobalMaxmemoryCoordinator global = globalMaxmemory;
         if (global != null) {
             e.lruClock = global.nextLruClock();
             return;
@@ -785,7 +537,7 @@ public final class YierdisDb {
         threadGuard.bindToCurrentThread();
     }
 
-    private void checkThread() {
+    void checkThread() {
         threadGuard.checkThread();
     }
 
@@ -798,6 +550,8 @@ public final class YierdisDb {
         store.clear();
         expires.clear();
         usedBytes = 0;
+        reservedBytes = 0;
+        activeReservation = null;
         if (ownsOffHeapAllocator && offHeapAllocator != null) {
             offHeapAllocator.close();
         }
@@ -809,6 +563,8 @@ public final class YierdisDb {
         store.clear();
         expires.clear();
         usedBytes = 0;
+        reservedBytes = 0;
+        activeReservation = null;
     }
 
     public int size() {
@@ -826,6 +582,7 @@ public final class YierdisDb {
         return DbMemoryAccounting.snapshot(
                 maxmemoryBytes,
                 usedBytes,
+                reservedBytes,
                 offHeapAllocator,
                 store,
                 expires,
@@ -839,6 +596,15 @@ public final class YierdisDb {
             return 0;
         }
         int keyBytesCost = keysStoredOffHeap ? 0 : keyBytes.length;
+        return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + keyBytesCost + estimateValueBytes(e);
+    }
+
+    private long estimateEntryBytes(KeyHandle keyHandle, YierdisObject e) {
+        if (keyHandle == null || e == null) {
+            return 0;
+        }
+        int keyLen = Math.max(0, keyHandle.len());
+        int keyBytesCost = keysStoredOffHeap ? 0 : keyLen;
         return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + keyBytesCost + estimateValueBytes(e);
     }
 
@@ -873,11 +639,18 @@ public final class YierdisDb {
         return 0;
     }
 
-    private void refreshEstimatedBytes(byte[] keyBytes, YierdisObject e) {
+    void refreshEstimatedBytes(byte[] keyBytes, YierdisObject e) {
         if (e == null) {
             return;
         }
         e.estimatedBytes = estimateEntryBytes(keyBytes, e);
+    }
+
+    void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject e) {
+        if (e == null) {
+            return;
+        }
+        e.estimatedBytes = estimateEntryBytes(keyHandle, e);
     }
 
     public long del(Collection<byte[]> keys) {
@@ -895,7 +668,7 @@ public final class YierdisDb {
             removeExpire(keyBytes);
             if (store.remove(keyBytes, e)) {
                 e.releasePayloadIfAny();
-                usedBytes -= e.estimatedBytes;
+                adjustUsedBytes(-e.estimatedBytes);
                 removed++;
             }
         }
@@ -904,11 +677,7 @@ public final class YierdisDb {
 
     public boolean existsKey(YierdisBytesView keyView) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
-            return false;
-        }
-        return getObjectIfNotExpired(canonical) != null;
+        return getObjectIfNotExpired(keyView) != null;
     }
 
     public long exists(Collection<byte[]> keys) {
@@ -924,11 +693,11 @@ public final class YierdisDb {
 
     public ValueType typeOf(YierdisBytesView keyView) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        YierdisObject e = getObjectIfNotExpired(keyView);
+        if (e == null) {
             return null;
         }
-        return typeOf(canonical);
+        return e.type;
     }
 
     public ValueType typeOf(byte[] keyBytes) {
@@ -942,32 +711,62 @@ public final class YierdisDb {
 
     public boolean expire(byte[] keyBytes, long seconds) {
         checkThread();
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
+        KeyHandle handle = store.keyHandle(keyBytes);
+        if (handle == null) {
+            return false;
+        }
+        YierdisObject e = store.get(handle);
         if (e == null) {
+            return false;
+        }
+        long nowMillis = System.currentTimeMillis();
+        if (removeIfExpired(handle, e, nowMillis)) {
             return false;
         }
         if (seconds <= 0) {
             // Redis-compatible: seconds<=0 means the key is deleted immediately (if it exists).
-            removeExpire(keyBytes);
-            if (store.remove(keyBytes, e)) {
+            removeExpire(handle);
+            if (store.remove(handle, e)) {
                 e.releasePayloadIfAny();
-                usedBytes -= e.estimatedBytes;
+                adjustUsedBytes(-e.estimatedBytes);
             }
             return true;
         }
 
-        long expireAtMillis = safeExpireAtMillis(System.currentTimeMillis(), seconds);
-        setExpireAtMillis(keyBytes, expireAtMillis);
+        long expireAtMillis = safeExpireAtMillis(nowMillis, seconds);
+        setExpireAtMillis(handle, expireAtMillis);
+        touch(e);
         return true;
     }
 
     public boolean expire(YierdisBytesView keyView, long seconds) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        KeyHandle handle = store.keyHandle(keyView);
+        if (handle == null) {
             return false;
         }
-        return expire(canonical, seconds);
+        YierdisObject e = store.get(handle);
+        if (e == null) {
+            return false;
+        }
+        long nowMillis = System.currentTimeMillis();
+        if (removeIfExpired(handle, e, nowMillis)) {
+            return false;
+        }
+        if (seconds <= 0) {
+            // Redis-compatible: seconds<=0 means the key is deleted immediately (if it exists).
+            removeExpire(handle);
+            if (store.remove(handle, e)) {
+                e.releasePayloadIfAny();
+                adjustUsedBytes(-e.estimatedBytes);
+            }
+            return true;
+        }
+
+        long expireAtMillis = safeExpireAtMillis(nowMillis, seconds);
+        setExpireAtMillis(handle, expireAtMillis);
+        touch(e);
+        return true;
     }
 
     private static long safeExpireAtMillis(long nowMillis, long seconds) {
@@ -1004,7 +803,7 @@ public final class YierdisDb {
             removeExpire(keyBytes);
             if (store.remove(keyBytes, e)) {
                 e.releasePayloadIfAny();
-                usedBytes -= e.estimatedBytes;
+                adjustUsedBytes(-e.estimatedBytes);
             }
             return true;
         }
@@ -1016,11 +815,20 @@ public final class YierdisDb {
 
     public boolean pexpire(YierdisBytesView keyView, long milliseconds) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        YierdisObject e = store.get(keyView);
+        if (e == null) {
             return false;
         }
-        return pexpire(canonical, milliseconds);
+        long nowMillis = System.currentTimeMillis();
+        Long expireAtMillis = expires.get(keyView);
+        if (expireAtMillis != null && expireAtMillis <= nowMillis) {
+            return false;
+        }
+        byte[] keyBytes = toByteArray(keyView);
+        if (keyBytes == null) {
+            return false;
+        }
+        return pexpire(keyBytes, milliseconds);
     }
 
     public boolean expireAtSeconds(byte[] keyBytes, long unixSeconds) {
@@ -1036,11 +844,20 @@ public final class YierdisDb {
 
     public boolean expireAtSeconds(YierdisBytesView keyView, long unixSeconds) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        YierdisObject e = store.get(keyView);
+        if (e == null) {
             return false;
         }
-        return expireAtSeconds(canonical, unixSeconds);
+        long nowMillis = System.currentTimeMillis();
+        Long expireAtMillis = expires.get(keyView);
+        if (expireAtMillis != null && expireAtMillis <= nowMillis) {
+            return false;
+        }
+        byte[] keyBytes = toByteArray(keyView);
+        if (keyBytes == null) {
+            return false;
+        }
+        return expireAtSeconds(keyBytes, unixSeconds);
     }
 
     public boolean expireAtMillis(byte[] keyBytes, long unixMillis) {
@@ -1055,7 +872,7 @@ public final class YierdisDb {
             removeExpire(keyBytes);
             if (store.remove(keyBytes, e)) {
                 e.releasePayloadIfAny();
-                usedBytes -= e.estimatedBytes;
+                adjustUsedBytes(-e.estimatedBytes);
             }
             return true;
         }
@@ -1065,11 +882,20 @@ public final class YierdisDb {
 
     public boolean expireAtMillis(YierdisBytesView keyView, long unixMillis) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        YierdisObject e = store.get(keyView);
+        if (e == null) {
             return false;
         }
-        return expireAtMillis(canonical, unixMillis);
+        long nowMillis = System.currentTimeMillis();
+        Long expireAtMillis = expires.get(keyView);
+        if (expireAtMillis != null && expireAtMillis <= nowMillis) {
+            return false;
+        }
+        byte[] keyBytes = toByteArray(keyView);
+        if (keyBytes == null) {
+            return false;
+        }
+        return expireAtMillis(keyBytes, unixMillis);
     }
 
     public boolean persist(byte[] keyBytes) {
@@ -1089,11 +915,23 @@ public final class YierdisDb {
 
     public boolean persist(YierdisBytesView keyView) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        YierdisObject e = store.get(keyView);
+        if (e == null) {
             return false;
         }
-        return persist(canonical);
+        long nowMillis = System.currentTimeMillis();
+        Long expireAtMillis = expires.get(keyView);
+        if (expireAtMillis == null) {
+            return false;
+        }
+        if (expireAtMillis <= nowMillis) {
+            return false;
+        }
+        byte[] keyBytes = toByteArray(keyView);
+        if (keyBytes == null) {
+            return false;
+        }
+        return persist(keyBytes);
     }
 
     public long ttlSeconds(byte[] keyBytes) {
@@ -1138,68 +976,141 @@ public final class YierdisDb {
 
     public long ttlSeconds(YierdisBytesView keyView) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        YierdisObject e = store.get(keyView);
+        if (e == null) {
             return -2;
         }
-        return ttlSeconds(canonical);
+        long now = System.currentTimeMillis();
+        Long expireAtMillis = expires.get(keyView);
+        if (expireAtMillis == null) {
+            touch(e);
+            return -1;
+        }
+        long remainingMillis = expireAtMillis - now;
+        if (remainingMillis <= 0) {
+            return -2;
+        }
+        touch(e);
+        return remainingMillis / 1000L;
     }
 
     public long ttlMillis(YierdisBytesView keyView) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        YierdisObject e = store.get(keyView);
+        if (e == null) {
             return -2;
         }
-        return ttlMillis(canonical);
+        long now = System.currentTimeMillis();
+        Long expireAtMillis = expires.get(keyView);
+        if (expireAtMillis == null) {
+            touch(e);
+            return -1;
+        }
+        long remainingMillis = expireAtMillis - now;
+        if (remainingMillis <= 0) {
+            return -2;
+        }
+        touch(e);
+        return remainingMillis;
     }
 
     public List<byte[]> keys(byte[] globPattern) {
+        return keys(globPattern, Integer.MAX_VALUE, 0L);
+    }
+
+    public List<byte[]> keys(byte[] globPattern, int maxMatches, long timeBudgetNanos) {
         checkThread();
         if (globPattern == null) {
             return Collections.emptyList();
         }
-        long now = System.currentTimeMillis();
+        int limit = maxMatches <= 0 ? 0 : maxMatches;
+        if (limit == 0) {
+            return Collections.emptyList();
+        }
+
+        long deadlineNanos = Long.MAX_VALUE;
+        if (timeBudgetNanos > 0) {
+            long nowNanos = System.nanoTime();
+            try {
+                deadlineNanos = Math.addExact(nowNanos, timeBudgetNanos);
+            } catch (ArithmeticException e) {
+                deadlineNanos = Long.MAX_VALUE;
+            }
+        }
+        final long deadline = deadlineNanos;
+
+        long nowMillis = System.currentTimeMillis();
         List<byte[]> out = new ArrayList<>();
-        List<byte[]> expiredKeys = new ArrayList<>();
+        List<KeyHandle> expiredKeys = new ArrayList<>();
         List<YierdisObject> expiredValues = new ArrayList<>();
-        store.forEach((k, e) -> {
-            if (isKeyExpired(k, now)) {
-                expiredKeys.add(k);
-                expiredValues.add(e);
-                return;
+        final boolean[] timedOut = new boolean[]{false};
+
+        ScanCursorV2 cursor = ScanCursorV2.start();
+        boolean done = false;
+        int guard = 0;
+        while (true) {
+            if (System.nanoTime() >= deadline) {
+                timedOut[0] = true;
+                break;
             }
-            if (globMatches(globPattern, k)) {
-                out.add(k);
+            ScanCursorV2 next = store.scan(cursor, 1024, (k, e) -> {
+                if (k == null || e == null) {
+                    return true;
+                }
+                if (isKeyExpired(k, nowMillis)) {
+                    expiredKeys.add(k);
+                    expiredValues.add(e);
+                    return true;
+                }
+                if (globMatches(globPattern, k)) {
+                    out.add(toByteArray(k));
+                    if (out.size() >= limit) {
+                        return false;
+                    }
+                }
+                if (System.nanoTime() >= deadline) {
+                    timedOut[0] = true;
+                    return false;
+                }
+                return true;
+            });
+            cursor = next;
+            if (cursor.value() == 0) {
+                done = true;
+                break;
             }
-        });
+            if (out.size() >= limit || timedOut[0]) {
+                break;
+            }
+            // 防御：避免意外 bug 导致死循环（例如 cursor 不前进）。
+            if (++guard > 1_000_000) {
+                throw new IllegalStateException("KEYS scan did not make progress");
+            }
+        }
+
+        // KEYS 的历史行为：顺手清理扫描过程中发现的过期 key（best-effort）。
         for (int i = 0; i < expiredKeys.size(); i++) {
-            byte[] key = expiredKeys.get(i);
+            KeyHandle key = expiredKeys.get(i);
             removeExpire(key);
             if (store.remove(key, expiredValues.get(i))) {
                 expiredValues.get(i).releasePayloadIfAny();
-                usedBytes -= expiredValues.get(i).estimatedBytes;
+                adjustUsedBytes(-expiredValues.get(i).estimatedBytes);
             }
         }
+
+        if (timedOut[0]) {
+            throw new YierdisCommandException("ERR KEYS time budget exceeded (use SCAN)");
+        }
+        if (!done) {
+            throw new YierdisCommandException("ERR KEYS result limit exceeded (use SCAN)");
+        }
         return out;
-    }
-
-    private static final class StopScan extends RuntimeException {
-        static final StopScan INSTANCE = new StopScan();
-
-        private StopScan() {
-        }
-
-        @Override
-        public synchronized Throwable fillInStackTrace() {
-            return this;
-        }
     }
 
     /**
      * Redis-compatible SCAN（best-effort）。
      * <p>
-     * 该实现以“遍历顺序中的偏移量”作为游标含义，支持 MATCH glob 与 COUNT hint。
+     * v2 游标通过 keyspace 层 iterator 实现 rehash-aware；仍保持 bulk string 数字兼容（{@code 0} 表示结束）。
      * 在数据集变化（写入/删除/过期清理）情况下不保证强一致，但尽量做到“可推进、可终止、不阻塞太久”。
      *
      * @param cursor      游标（{@code 0} 表示从头开始）
@@ -1208,82 +1119,86 @@ public final class YierdisDb {
      * @param out         输出容器（追加写入）
      * @return 下一次扫描的游标；返回 {@code 0} 表示扫描结束
      */
-    public ScanCursor scan(ScanCursor cursor, byte[] globPattern, int count, List<byte[]> out) {
+    public ScanCursorV2 scan(ScanCursorV2 cursor, byte[] globPattern, int count, List<byte[]> out) {
         checkThread();
         Objects.requireNonNull(out, "out");
         if (count <= 0) {
             throw new IllegalArgumentException("count must be > 0");
         }
 
-        long start = cursor == null ? 0L : cursor.value();
-        if (start < 0) {
-            throw new IllegalArgumentException("cursor must be >= 0");
-        }
-        int total = store.size();
-        if (total == 0) {
-            return ScanCursor.start();
-        }
-        if (start >= (long) total) {
-            return ScanCursor.start();
-        }
-
         long now = System.currentTimeMillis();
-        List<byte[]> expiredKeys = new ArrayList<>();
+        List<KeyHandle> expiredKeys = new ArrayList<>();
         List<YierdisObject> expiredValues = new ArrayList<>();
 
         // COUNT 在 Redis 里是 hint：为了避免 MATCH 过滤导致“单次扫描跑完整个 keyspace”，加一个步数上限。
         int maxSteps = Math.max(64, count * 10);
+        final int[] remaining = new int[]{count};
 
-        final long[] pos = new long[]{0L};
-        final int[] steps = new int[]{0};
-        final long[] nextCursor = new long[]{0L};
-
-        try {
-            store.forEach((k, e) -> {
-                if (pos[0] < start) {
-                    pos[0]++;
-                    return;
-                }
-                if (steps[0]++ >= maxSteps) {
-                    nextCursor[0] = pos[0];
-                    throw StopScan.INSTANCE;
-                }
-
-                pos[0]++;
-
-                if (isKeyExpired(k, now)) {
-                    expiredKeys.add(k);
-                    expiredValues.add(e);
-                    return;
-                }
-                if (globPattern == null || globMatches(globPattern, k)) {
-                    out.add(k);
-                    if (out.size() >= count) {
-                        nextCursor[0] = pos[0];
-                        throw StopScan.INSTANCE;
-                    }
-                }
-            });
-            // 扫到结尾：按 Redis 语义返回 cursor=0 表示结束。
-            nextCursor[0] = 0L;
-        } catch (StopScan ignored) {
-            // best-effort：如果游标已经越过当前 key 数，则直接结束。
-            if (pos[0] >= (long) store.size()) {
-                nextCursor[0] = 0L;
+        ScanCursorV2 next = store.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, e) -> {
+            if (k == null || e == null) {
+                return true;
             }
-        }
+            if (isKeyExpired(k, now)) {
+                expiredKeys.add(k);
+                expiredValues.add(e);
+                return true;
+            }
+            if (globPattern == null || globMatches(globPattern, k)) {
+                out.add(toByteArray(k));
+                remaining[0]--;
+                if (remaining[0] <= 0) {
+                    return false;
+                }
+            }
+            return true;
+        });
 
         // 清理本轮遍历过程中发现的过期 key（与 KEYS 类似的“顺手清理”语义）。
         for (int i = 0; i < expiredKeys.size(); i++) {
-            byte[] key = expiredKeys.get(i);
+            KeyHandle key = expiredKeys.get(i);
             removeExpire(key);
             if (store.remove(key, expiredValues.get(i))) {
                 expiredValues.get(i).releasePayloadIfAny();
-                usedBytes -= expiredValues.get(i).estimatedBytes;
+                adjustUsedBytes(-expiredValues.get(i).estimatedBytes);
             }
         }
+        return next;
+    }
 
-        return ScanCursor.of(nextCursor[0]);
+    @Override
+    public ScanCursorV2 snapshot(ScanCursorV2 cursor, int count, List<YierdisSnapshotEntry> out) {
+        checkThread();
+        Objects.requireNonNull(out, "out");
+        if (count <= 0) {
+            throw new IllegalArgumentException("count must be > 0");
+        }
+
+        long now = System.currentTimeMillis();
+        int maxSteps = Math.max(64, count * 10);
+        final int[] remaining = new int[]{count};
+
+        // 约束：快照读取不应产生副作用；过期 key 仅跳过，不在此处执行删除（删除由读/写/维护路径推进）。
+        return store.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, e) -> {
+            if (k == null || e == null) {
+                return true;
+            }
+            if (isKeyExpired(k, now)) {
+                return true;
+            }
+
+            byte[] keyBytes = toByteArray(k);
+            ValueType type = e.type;
+            byte[] stringValue = null;
+            if (type == ValueType.STRING) {
+                byte[] view = e.stringBytesView();
+                stringValue = view == null ? null : java.util.Arrays.copyOf(view, view.length);
+            }
+            Long expireAtMillis = expires.get(k);
+            out.add(new YierdisSnapshotEntry(keyBytes, type, stringValue, expireAtMillis));
+
+            remaining[0]--;
+            return remaining[0] > 0;
+        });
     }
 
     public boolean setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption) {
@@ -1294,9 +1209,11 @@ public final class YierdisDb {
 
         final boolean[] didSet = new boolean[]{false};
         final boolean[] existed = new boolean[]{false};
+        final KeyHandle[] handleRef = new KeyHandle[]{null};
         final long[] deltaBytes = new long[]{0};
         try {
-            store.compute(keyBytes, (k, old) -> {
+            store.computeWithHandle(keyBytes, (k, old) -> {
+                handleRef[0] = k;
                 long oldEstimate = old == null ? 0 : old.estimatedBytes;
                 if (old != null && isKeyExpired(k, now)) {
                     old.releasePayloadIfAny();
@@ -1330,19 +1247,20 @@ public final class YierdisDb {
                 return old;
             });
         } catch (YierdisOffHeapOutOfMemoryException e) {
+            rollbackWrite();
             throw new YierdisCommandException("OOM off-heap memory limit exceeded");
         }
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         if (didSet[0]) {
             if (keepTtl && existed[0]) {
                 // KEEPTTL：覆盖写入但保留原有过期时间（仅当 key 原先存在时有意义）。
                 return true;
             }
             if (expireAtMillis != null) {
-                setExpireAtMillis(keyBytes, expireAtMillis);
+                setExpireAtMillis(handleRef[0], expireAtMillis);
                 return true;
             }
-            removeExpire(keyBytes);
+            removeExpire(handleRef[0]);
         }
         return didSet[0];
     }
@@ -1358,9 +1276,11 @@ public final class YierdisDb {
 
         final boolean[] didSet = new boolean[]{false};
         final boolean[] existed = new boolean[]{false};
+        final KeyHandle[] handleRef = new KeyHandle[]{null};
         final long[] deltaBytes = new long[]{0};
         try {
-            store.compute(keyBytes, (k, old) -> {
+            store.computeWithHandle(keyBytes, (k, old) -> {
+                handleRef[0] = k;
                 long oldEstimate = old == null ? 0 : old.estimatedBytes;
                 if (old != null && isKeyExpired(k, now)) {
                     old.releasePayloadIfAny();
@@ -1394,19 +1314,20 @@ public final class YierdisDb {
                 return old;
             });
         } catch (YierdisOffHeapOutOfMemoryException e) {
+            rollbackWrite();
             throw new YierdisCommandException("OOM off-heap memory limit exceeded");
         }
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         if (didSet[0]) {
             if (keepTtl && existed[0]) {
                 // KEEPTTL：覆盖写入但保留原有过期时间（仅当 key 原先存在时有意义）。
                 return true;
             }
             if (expireAtMillis != null) {
-                setExpireAtMillis(keyBytes, expireAtMillis);
+                setExpireAtMillis(handleRef[0], expireAtMillis);
                 return true;
             }
-            removeExpire(keyBytes);
+            removeExpire(handleRef[0]);
         }
         return didSet[0];
     }
@@ -1429,12 +1350,26 @@ public final class YierdisDb {
             throw new IllegalArgumentException("out must not be null");
         }
 
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        YierdisObject e = getObjectIfNotExpired(keyView);
+        if (e == null) {
             out.bulkStringNull();
             return;
         }
-        getStringForReply(canonical, out);
+        if (e.type != ValueType.STRING) {
+            throw new WrongTypeException();
+        }
+
+        if (e.encoding == ValueEncoding.STRING_INT) {
+            out.bulkStringLongAscii(e.intValue);
+            return;
+        }
+        YierdisOffHeapSlice slice = e.stringOffHeapSlice();
+        if (slice != null) {
+            out.bulkString(slice);
+            return;
+        }
+        byte[] buf = (byte[]) e.payload;
+        out.bulkString(buf, 0, e.rawLen);
     }
 
     public void getStringForReply(byte[] keyBytes, YierdisBulkStringOutput out) {
@@ -1479,11 +1414,14 @@ public final class YierdisDb {
 
     public int strlen(YierdisBytesView keyView) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        YierdisObject e = getObjectIfNotExpired(keyView);
+        if (e == null) {
             return 0;
         }
-        return strlen(canonical);
+        if (e.type != ValueType.STRING) {
+            throw new WrongTypeException();
+        }
+        return e.stringByteLength();
     }
 
     public int append(byte[] keyBytes, byte[] appendValue) {
@@ -1492,7 +1430,7 @@ public final class YierdisDb {
         final int[] newLen = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         try {
-            store.compute(keyBytes, (k, old) -> {
+            store.computeWithHandle(keyBytes, (k, old) -> {
                 long oldEstimate = old == null ? 0 : old.estimatedBytes;
                 if (old != null && isKeyExpired(k, now)) {
                     old.releasePayloadIfAny();
@@ -1521,9 +1459,10 @@ public final class YierdisDb {
                 return old;
             });
         } catch (YierdisOffHeapOutOfMemoryException e) {
+            rollbackWrite();
             throw new YierdisCommandException("OOM off-heap memory limit exceeded");
         }
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return newLen[0];
     }
 
@@ -1536,7 +1475,7 @@ public final class YierdisDb {
         final int[] newLen = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         try {
-            store.compute(keyBytes, (k, old) -> {
+            store.computeWithHandle(keyBytes, (k, old) -> {
                 long oldEstimate = old == null ? 0 : old.estimatedBytes;
                 if (old != null && isKeyExpired(k, now)) {
                     old.releasePayloadIfAny();
@@ -1565,19 +1504,23 @@ public final class YierdisDb {
                 return old;
             });
         } catch (YierdisOffHeapOutOfMemoryException e) {
+            rollbackWrite();
             throw new YierdisCommandException("OOM off-heap memory limit exceeded");
         }
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return newLen[0];
     }
 
     public int getBit(YierdisBytesView keyView, long offset) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        YierdisObject e = getObjectIfNotExpired(keyView);
+        if (e == null) {
             return 0;
         }
-        return getBit(canonical, offset);
+        if (e.type != ValueType.STRING) {
+            throw new WrongTypeException();
+        }
+        return e.stringGetBit(offset);
     }
 
     public int getBit(byte[] keyBytes, long offset) {
@@ -1598,7 +1541,7 @@ public final class YierdisDb {
         final int[] oldBit = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         try {
-            store.compute(keyBytes, (k, old) -> {
+            store.computeWithHandle(keyBytes, (k, old) -> {
                 long oldEstimate = old == null ? 0 : old.estimatedBytes;
                 if (old != null && isKeyExpired(k, now)) {
                     old.releasePayloadIfAny();
@@ -1625,19 +1568,28 @@ public final class YierdisDb {
                 return old;
             });
         } catch (YierdisOffHeapOutOfMemoryException e) {
+            rollbackWrite();
             throw new YierdisCommandException("OOM off-heap memory limit exceeded");
         }
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return oldBit[0];
     }
 
     public long bitcount(YierdisBytesView keyView) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        YierdisObject e = getObjectIfNotExpired(keyView);
+        if (e == null) {
             return 0L;
         }
-        return bitcount(canonical);
+        if (e.type != ValueType.STRING) {
+            throw new WrongTypeException();
+        }
+
+        int len = e.stringByteLength();
+        if (len <= 0) {
+            return 0L;
+        }
+        return bitcountRange(e, 0, len - 1);
     }
 
     public long bitcount(byte[] keyBytes) {
@@ -1659,11 +1611,42 @@ public final class YierdisDb {
 
     public long bitcount(YierdisBytesView keyView, long start, long end) {
         checkThread();
-        byte[] canonical = store.canonicalKey(keyView);
-        if (canonical == null) {
+        YierdisObject e = getObjectIfNotExpired(keyView);
+        if (e == null) {
             return 0L;
         }
-        return bitcount(canonical, start, end);
+        if (e.type != ValueType.STRING) {
+            throw new WrongTypeException();
+        }
+        int len = e.stringByteLength();
+        if (len <= 0) {
+            return 0L;
+        }
+
+        long s = start;
+        long ed = end;
+        if (s < 0) {
+            s = len + s;
+        }
+        if (ed < 0) {
+            ed = len + ed;
+        }
+        if (s < 0) {
+            s = 0;
+        }
+        if (ed < 0) {
+            return 0L;
+        }
+        if (s >= len) {
+            return 0L;
+        }
+        if (ed >= len) {
+            ed = len - 1L;
+        }
+        if (s > ed) {
+            return 0L;
+        }
+        return bitcountRange(e, (int) s, (int) ed);
     }
 
     public long bitcount(byte[] keyBytes, long start, long end) {
@@ -1753,7 +1736,7 @@ public final class YierdisDb {
         final boolean[] changed = new boolean[]{false};
         final long[] deltaBytes = new long[]{0};
         try {
-            store.compute(keyBytes, (k, old) -> {
+            store.computeWithHandle(keyBytes, (k, old) -> {
                 long oldEstimate = old == null ? 0 : old.estimatedBytes;
                 if (old != null && isKeyExpired(k, now)) {
                     old.releasePayloadIfAny();
@@ -1781,9 +1764,10 @@ public final class YierdisDb {
                 return old;
             });
         } catch (YierdisOffHeapOutOfMemoryException e) {
+            rollbackWrite();
             throw new YierdisCommandException("OOM off-heap memory limit exceeded");
         }
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return changed[0] ? 1 : 0;
     }
 
@@ -1835,7 +1819,7 @@ public final class YierdisDb {
         long now = System.currentTimeMillis();
         final long[] deltaBytes = new long[]{0};
         try {
-            store.compute(destKeyBytes, (k, old) -> {
+            store.computeWithHandle(destKeyBytes, (k, old) -> {
                 long oldEstimate = old == null ? 0 : old.estimatedBytes;
                 if (old != null && isKeyExpired(k, now)) {
                     old.releasePayloadIfAny();
@@ -1861,9 +1845,10 @@ public final class YierdisDb {
                 return old;
             });
         } catch (YierdisOffHeapOutOfMemoryException e) {
+            rollbackWrite();
             throw new YierdisCommandException("OOM off-heap memory limit exceeded");
         }
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         // 与 SET 类似：PFMERGE 结果写入后应清除 destKey 的 TTL。
         removeExpire(destKeyBytes);
     }
@@ -1873,7 +1858,7 @@ public final class YierdisDb {
         long now = System.currentTimeMillis();
         final long[] result = new long[]{0L};
         final long[] deltaBytes = new long[]{0};
-        store.compute(keyBytes, (k, old) -> {
+        store.computeWithHandle(keyBytes, (k, old) -> {
             long oldEstimate = old == null ? 0 : old.estimatedBytes;
             if (old != null && isKeyExpired(k, now)) {
                 old.releasePayloadIfAny();
@@ -1902,7 +1887,7 @@ public final class YierdisDb {
             deltaBytes[0] += old.estimatedBytes;
             return old;
         });
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return result[0];
     }
 
@@ -1922,7 +1907,7 @@ public final class YierdisDb {
                 offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
         final int[] len = new int[]{0};
         final long[] deltaBytes = new long[]{0};
-        store.compute(keyBytes, (k, old) -> {
+        store.computeWithHandle(keyBytes, (k, old) -> {
             long oldEstimate = old == null ? 0 : old.estimatedBytes;
             if (old != null && isKeyExpired(k, now)) {
                 old.releasePayloadIfAny();
@@ -1963,7 +1948,7 @@ public final class YierdisDb {
             deltaBytes[0] += old.estimatedBytes;
             return old;
         });
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return len[0];
     }
 
@@ -2027,7 +2012,7 @@ public final class YierdisDb {
         long now = System.currentTimeMillis();
         final List<byte[]>[] popped = new List[]{null};
         final long[] deltaBytes = new long[]{0};
-        store.computeIfPresent(keyBytes, (k, old) -> {
+        store.computeIfPresentWithHandle(keyBytes, (k, old) -> {
             long oldEstimate = old.estimatedBytes;
             if (isKeyExpired(k, now)) {
                 old.releasePayloadIfAny();
@@ -2052,7 +2037,7 @@ public final class YierdisDb {
             deltaBytes[0] += old.estimatedBytes - oldEstimate;
             return old;
         });
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return popped[0];
     }
 
@@ -2066,7 +2051,7 @@ public final class YierdisDb {
                 offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
         final int[] added = new int[]{0};
         final long[] deltaBytes = new long[]{0};
-        store.compute(keyBytes, (k, old) -> {
+        store.computeWithHandle(keyBytes, (k, old) -> {
             long oldEstimate = old == null ? 0 : old.estimatedBytes;
             if (old != null && isKeyExpired(k, now)) {
                 old.releasePayloadIfAny();
@@ -2095,7 +2080,7 @@ public final class YierdisDb {
             deltaBytes[0] += old.estimatedBytes;
             return old;
         });
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return added[0];
     }
 
@@ -2168,7 +2153,7 @@ public final class YierdisDb {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
         final long[] deltaBytes = new long[]{0};
-        store.computeIfPresent(keyBytes, (k, old) -> {
+        store.computeIfPresentWithHandle(keyBytes, (k, old) -> {
             long oldEstimate = old.estimatedBytes;
             if (isKeyExpired(k, now)) {
                 old.releasePayloadIfAny();
@@ -2193,7 +2178,7 @@ public final class YierdisDb {
             deltaBytes[0] += old.estimatedBytes - oldEstimate;
             return old;
         });
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return removed[0];
     }
 
@@ -2204,7 +2189,7 @@ public final class YierdisDb {
                 offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
         final int[] added = new int[]{0};
         final long[] deltaBytes = new long[]{0};
-        store.compute(keyBytes, (k, old) -> {
+        store.computeWithHandle(keyBytes, (k, old) -> {
             long oldEstimate = old == null ? 0 : old.estimatedBytes;
             if (old != null && isKeyExpired(k, now)) {
                 old.releasePayloadIfAny();
@@ -2233,7 +2218,7 @@ public final class YierdisDb {
             deltaBytes[0] += old.estimatedBytes;
             return old;
         });
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return added[0];
     }
 
@@ -2242,7 +2227,7 @@ public final class YierdisDb {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
         final long[] deltaBytes = new long[]{0};
-        store.computeIfPresent(keyBytes, (k, old) -> {
+        store.computeIfPresentWithHandle(keyBytes, (k, old) -> {
             long oldEstimate = old.estimatedBytes;
             if (isKeyExpired(k, now)) {
                 old.releasePayloadIfAny();
@@ -2267,7 +2252,7 @@ public final class YierdisDb {
             deltaBytes[0] += old.estimatedBytes - oldEstimate;
             return old;
         });
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return removed[0];
     }
 
@@ -2345,7 +2330,7 @@ public final class YierdisDb {
                 offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
         final int[] added = new int[]{0};
         final long[] deltaBytes = new long[]{0};
-        store.compute(keyBytes, (k, old) -> {
+        store.computeWithHandle(keyBytes, (k, old) -> {
             long oldEstimate = old == null ? 0 : old.estimatedBytes;
             if (old != null && isKeyExpired(k, now)) {
                 old.releasePayloadIfAny();
@@ -2379,7 +2364,7 @@ public final class YierdisDb {
             deltaBytes[0] += old.estimatedBytes;
             return old;
         });
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return added[0];
     }
 
@@ -2548,7 +2533,7 @@ public final class YierdisDb {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
         final long[] deltaBytes = new long[]{0};
-        store.computeIfPresent(keyBytes, (k, old) -> {
+        store.computeIfPresentWithHandle(keyBytes, (k, old) -> {
             long oldEstimate = old.estimatedBytes;
             if (isKeyExpired(k, now)) {
                 old.releasePayloadIfAny();
@@ -2573,7 +2558,7 @@ public final class YierdisDb {
             deltaBytes[0] += old.estimatedBytes - oldEstimate;
             return old;
         });
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return removed[0];
     }
 
@@ -2582,7 +2567,7 @@ public final class YierdisDb {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
         final long[] deltaBytes = new long[]{0};
-        store.computeIfPresent(keyBytes, (k, old) -> {
+        store.computeIfPresentWithHandle(keyBytes, (k, old) -> {
             long oldEstimate = old.estimatedBytes;
             if (isKeyExpired(k, now)) {
                 old.releasePayloadIfAny();
@@ -2607,7 +2592,7 @@ public final class YierdisDb {
             deltaBytes[0] += old.estimatedBytes - oldEstimate;
             return old;
         });
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return removed[0];
     }
 
@@ -2616,7 +2601,7 @@ public final class YierdisDb {
         long now = System.currentTimeMillis();
         final int[] removed = new int[]{0};
         final long[] deltaBytes = new long[]{0};
-        store.computeIfPresent(keyBytes, (k, old) -> {
+        store.computeIfPresentWithHandle(keyBytes, (k, old) -> {
             long oldEstimate = old.estimatedBytes;
             if (isKeyExpired(k, now)) {
                 old.releasePayloadIfAny();
@@ -2641,7 +2626,7 @@ public final class YierdisDb {
             deltaBytes[0] += old.estimatedBytes - oldEstimate;
             return old;
         });
-        usedBytes += deltaBytes[0];
+        commitWrite(deltaBytes[0]);
         return removed[0];
     }
 
@@ -2666,6 +2651,35 @@ public final class YierdisDb {
             long nowMillis = System.currentTimeMillis();
 
             for (int i = 0; i < samples; i++) {
+                if (keysStoredOffHeap) {
+                    KeyHandle keyHandle = expires.randomKeyHandle();
+                    if (keyHandle == null) {
+                        break;
+                    }
+
+                    Long expireAtMillis = expires.get(keyHandle);
+                    if (expireAtMillis == null) {
+                        removeExpire(keyHandle);
+                        continue;
+                    }
+
+                    YierdisObject e = store.get(keyHandle);
+                    if (e == null) {
+                        removeExpire(keyHandle);
+                        continue;
+                    }
+
+                    if (expireAtMillis <= nowMillis) {
+                        removeExpire(keyHandle);
+                        if (store.remove(keyHandle, e)) {
+                            e.releasePayloadIfAny();
+                            adjustUsedBytes(-e.estimatedBytes);
+                        }
+                        expired++;
+                    }
+                    continue;
+                }
+
                 byte[] keyBytes = expires.randomKey();
                 if (keyBytes == null) {
                     break;
@@ -2687,7 +2701,7 @@ public final class YierdisDb {
                     removeExpire(keyBytes);
                     if (store.remove(keyBytes, e)) {
                         e.releasePayloadIfAny();
-                        usedBytes -= e.estimatedBytes;
+                        adjustUsedBytes(-e.estimatedBytes);
                     }
                     expired++;
                 }
@@ -2706,43 +2720,87 @@ public final class YierdisDb {
         }
     }
 
-    private YierdisObject getObjectIfNotExpired(byte[] keyBytes) {
-        YierdisObject e = store.get(keyBytes);
+    YierdisObject getObjectIfNotExpired(byte[] keyBytes) {
+        KeyHandle handle = store.keyHandle(keyBytes);
+        if (handle == null) {
+            return null;
+        }
+        return getObjectIfNotExpired(handle);
+    }
+
+    boolean removeIfExpired(byte[] keyBytes, YierdisObject e, long nowMillis) {
+        KeyHandle handle = store.keyHandle(keyBytes);
+        if (handle == null) {
+            return false;
+        }
+        return removeIfExpired(handle, e, nowMillis);
+    }
+
+    YierdisObject getObjectIfNotExpired(KeyHandle keyHandle) {
+        YierdisObject e = store.get(keyHandle);
         if (e == null) {
             return null;
         }
-        if (removeIfExpired(keyBytes, e, System.currentTimeMillis())) {
+        if (removeIfExpired(keyHandle, e, System.currentTimeMillis())) {
             return null;
         }
         touch(e);
         return e;
     }
 
-    private boolean removeIfExpired(byte[] keyBytes, YierdisObject e, long nowMillis) {
-        Long expireAtMillis = expires.get(keyBytes);
+    boolean removeIfExpired(KeyHandle keyHandle, YierdisObject e, long nowMillis) {
+        Long expireAtMillis = expires.get(keyHandle);
         if (expireAtMillis == null || expireAtMillis > nowMillis) {
             return false;
         }
-        removeExpire(keyBytes);
-        if (store.remove(keyBytes, e)) {
+        removeExpire(keyHandle);
+        if (store.remove(keyHandle, e)) {
             e.releasePayloadIfAny();
-            usedBytes -= e.estimatedBytes;
+            adjustUsedBytes(-e.estimatedBytes);
             return true;
         }
         return false;
     }
 
-    private boolean isKeyExpired(byte[] keyBytes, long nowMillis) {
-        Long expireAtMillis = expires.get(keyBytes);
+    boolean isKeyExpired(byte[] keyBytes, long nowMillis) {
+        KeyHandle handle = store.keyHandle(keyBytes);
+        if (handle == null) {
+            return false;
+        }
+        return isKeyExpired(handle, nowMillis);
+    }
+
+    boolean isKeyExpired(KeyHandle keyHandle, long nowMillis) {
+        Long expireAtMillis = expires.get(keyHandle);
         return expireAtMillis != null && expireAtMillis <= nowMillis;
     }
 
-    private void setExpireAtMillis(byte[] keyBytes, long expireAtMillis) {
+    void setExpireAtMillis(byte[] keyBytes, long expireAtMillis) {
+        KeyHandle handle = store.keyHandle(keyBytes);
+        if (handle != null) {
+            expires.setExpireAtMillis(handle, expireAtMillis);
+            return;
+        }
         expires.setExpireAtMillis(keyBytes, expireAtMillis, store);
     }
 
-    private void removeExpire(byte[] keyBytes) {
-        expires.removeExpire(keyBytes);
+    void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
+        expires.setExpireAtMillis(keyHandle, expireAtMillis);
+    }
+
+    void removeExpire(byte[] keyBytes) {
+        KeyHandle handle = store.keyHandle(keyBytes);
+        if (handle != null) {
+            removeExpire(handle);
+            return;
+        }
+        if (!keysStoredOffHeap) {
+            expires.removeExpire(keyBytes);
+        }
+    }
+
+    void removeExpire(KeyHandle keyHandle) {
+        expires.removeExpire(keyHandle);
     }
 
     private static boolean globMatches(byte[] pattern, byte[] text) {
@@ -2804,6 +2862,92 @@ public final class YierdisDb {
                         }
                     }
                 } else if (pc == text[t]) {
+                    p++;
+                    t++;
+                    continue;
+                }
+            }
+
+            if (star >= 0) {
+                // Backtrack: let '*' absorb one more byte.
+                p = star + 1;
+                t = ++starText;
+                continue;
+            }
+            return false;
+        }
+
+        // Remaining pattern must be empty or only "*" wildcards.
+        while (p < pattern.length && pattern[p] == '*') {
+            p++;
+        }
+        return p == pattern.length;
+    }
+
+    private static boolean globMatches(byte[] pattern, YierdisBytesView text) {
+        if (pattern == null || text == null) {
+            return false;
+        }
+        int textLen = text.len();
+        if (textLen < 0) {
+            return false;
+        }
+
+        int p = 0;
+        int t = 0;
+        int star = -1;
+        int starText = 0;
+
+        while (t < textLen) {
+            byte tb = text.byteAt(t);
+            if (p < pattern.length) {
+                byte pc = pattern[p];
+
+                if (pc == '*') {
+                    star = p++;
+                    starText = t;
+                    continue;
+                }
+
+                if (pc == '?') {
+                    p++;
+                    t++;
+                    continue;
+                }
+
+                if (pc == '\\') {
+                    if (p + 1 < pattern.length) {
+                        byte literal = pattern[p + 1];
+                        if (literal == tb) {
+                            p += 2;
+                            t++;
+                            continue;
+                        }
+                    } else {
+                        // Trailing "\" is treated as a literal backslash.
+                        if (tb == '\\') {
+                            p++;
+                            t++;
+                            continue;
+                        }
+                    }
+                } else if (pc == '[') {
+                    int end = findGlobClassEnd(pattern, p + 1);
+                    if (end >= 0) {
+                        if (globClassMatches(pattern, p + 1, end, tb)) {
+                            p = end + 1;
+                            t++;
+                            continue;
+                        }
+                    } else {
+                        // Unclosed "[]" is treated as a literal '['.
+                        if (tb == '[') {
+                            p++;
+                            t++;
+                            continue;
+                        }
+                    }
+                } else if (pc == tb) {
                     p++;
                     t++;
                     continue;
@@ -2928,6 +3072,164 @@ public final class YierdisDb {
         NORMAL,
         NX,
         XX
+    }
+
+    private final class DbMemoryLedger implements MemoryLedger {
+        @Override
+        public long limitBytes() {
+            return Math.max(0L, maxmemoryBytes);
+        }
+
+        @Override
+        public long usedBytes() {
+            return usedBytes;
+        }
+
+        @Override
+        public long reservedBytes() {
+            return reservedBytes;
+        }
+
+        @Override
+        public MemoryReservation reserve(long estimatedExtraBytes) {
+            if (estimatedExtraBytes < 0) {
+                throw new IllegalArgumentException("estimatedExtraBytes must be >= 0");
+            }
+
+            YierdisGlobalMaxmemoryCoordinator global = globalMaxmemory;
+            if (global != null) {
+                try {
+                    global.prepareWrite(estimatedExtraBytes);
+                } catch (YierdisCommandException e) {
+                    throw new MemoryLedgerOutOfMemoryException();
+                }
+                if (estimatedExtraBytes == 0) {
+                    return NoopReservation.INSTANCE;
+                }
+                reservedBytes += estimatedExtraBytes;
+                return new ReservationToken(this, estimatedExtraBytes);
+            }
+
+            if (maxmemoryBytes > 0) {
+                // Best-effort: reclaim expired keys first (align with Redis behavior under pressure).
+                cleanupExpired();
+
+                if (estimatedExtraBytes > 0 && estimatedExtraBytes > maxmemoryBytes) {
+                    // The write cannot fit even if we evict everything; fail-fast for stable OOM semantics.
+                    throw new MemoryLedgerOutOfMemoryException();
+                }
+
+                long limit = maxmemoryBytes - estimatedExtraBytes;
+                if (limit < 0) {
+                    limit = 0;
+                }
+                if (usedBytesForMaxmemory() > limit) {
+                    if (maxmemoryPolicy == MaxmemoryPolicy.NOEVICTION) {
+                        if (estimatedExtraBytes > 0) {
+                            throw new MemoryLedgerOutOfMemoryException();
+                        }
+                        // estimatedExtraBytes == 0: allow "no growth" operations even when already above maxmemory.
+                        // (Redis-style behavior: reject only when the write is expected to increase memory.)
+                        return NoopReservation.INSTANCE;
+                    }
+                    evictUntilUnder(limit);
+                    if (usedBytesForMaxmemory() > limit) {
+                        if (estimatedExtraBytes > 0) {
+                            throw new MemoryLedgerOutOfMemoryException();
+                        }
+                        // Best-effort enforcement: if we cannot evict enough, still allow "no growth" reservations.
+                        return NoopReservation.INSTANCE;
+                    }
+                }
+            }
+
+            if (estimatedExtraBytes == 0) {
+                return NoopReservation.INSTANCE;
+            }
+            reservedBytes += estimatedExtraBytes;
+            return new ReservationToken(this, estimatedExtraBytes);
+        }
+
+        @Override
+        public void commit(MemoryReservation reservation, long actualDeltaBytes) {
+            ReservationToken token = ReservationToken.validate(reservation, this);
+            if (token != null) {
+                token.finish();
+                reservedBytes -= token.reservedBytes;
+                if (reservedBytes < 0) {
+                    throw new IllegalStateException("reservedBytes underflow");
+                }
+            }
+
+            if (actualDeltaBytes == 0) {
+                return;
+            }
+            usedBytes += actualDeltaBytes;
+            if (usedBytes < 0) {
+                throw new IllegalStateException("usedBytes underflow");
+            }
+        }
+
+        @Override
+        public void rollback(MemoryReservation reservation) {
+            ReservationToken token = ReservationToken.validate(reservation, this);
+            if (token == null) {
+                return;
+            }
+            token.finish();
+            reservedBytes -= token.reservedBytes;
+            if (reservedBytes < 0) {
+                throw new IllegalStateException("reservedBytes underflow");
+            }
+        }
+
+        private enum NoopReservation implements MemoryReservation {
+            INSTANCE;
+
+            @Override
+            public long reservedBytes() {
+                return 0;
+            }
+        }
+
+        private static final class ReservationToken implements MemoryReservation {
+            private final DbMemoryLedger owner;
+            private final long reservedBytes;
+            private boolean finished;
+
+            private ReservationToken(DbMemoryLedger owner, long reservedBytes) {
+                this.owner = Objects.requireNonNull(owner, "owner");
+                this.reservedBytes = reservedBytes;
+            }
+
+            @Override
+            public long reservedBytes() {
+                return reservedBytes;
+            }
+
+            private void finish() {
+                if (finished) {
+                    throw new IllegalStateException("reservation already finished");
+                }
+                finished = true;
+            }
+
+            private static ReservationToken validate(MemoryReservation reservation, DbMemoryLedger expectedOwner) {
+                if (reservation == null) {
+                    return null;
+                }
+                if (reservation instanceof NoopReservation) {
+                    return null;
+                }
+                if (!(reservation instanceof ReservationToken token)) {
+                    throw new IllegalArgumentException("unknown reservation type: " + reservation.getClass().getName());
+                }
+                if (token.owner != expectedOwner) {
+                    throw new IllegalArgumentException("reservation does not belong to this ledger");
+                }
+                return token;
+            }
+        }
     }
 
     public static final class ExpireOption {

@@ -6,6 +6,7 @@
 
 ### Breaking
 - 移除 deprecated bytes alias（`YierdisBytesSink/YierdisBytesSource/YierdisDirectBytesSink` 等），bytes SSOT 统一为 `yierdis-bytes`。
+- 删除 legacy 模式：移除 SCAN cursor v1（`ScanCursor`）与相关开关/兼容路径，统一为 `ScanCursorV2`（rehash-aware + 可 time-slice）。
 
 ### Added
 - 新增事务队列硬上限：`--transactionQueueMaxCommands/--transactionQueueMaxBytes`，防止 MULTI 大事务/大参数导致 OOM。
@@ -16,6 +17,13 @@
 - 新增 `RespMap`（RESP3 map 最小对象模型）与 client 侧 RESP3 最小解码能力（`%` map、`_` null），用于覆盖 `HELLO 3` 分支。
 - 新增 `RespInlineCommandParser`（sdssplitargs 风格），server inline command 与 CLI REPL 共用同一套解析规则，避免规则漂移。
 - 新增 `YierdisServerBootstrap`：抽取 server 装配/生命周期管理，可在测试/工具中复用启动与关停逻辑。
+- 新增 core 可嵌入 instance API：`yier.bubu.redis.runtime.YierdisInstance`（Netty-free），统一多 DB 装配/路由/生命周期语义；server bootstrap 迁移为复用该 SSOT，减少装配重复与行为漂移。
+- 新增内核契约（SSOT）基座：`KeyHandle`（`yier.bubu.redis.db.key.KeyHandle`）与 `MemoryLedger`（`yier.bubu.redis.db.memory.MemoryLedger`）的最小类型/不变量测试，并补齐 SCAN cursor/TTL/maxmemory 的契约级 smoke 覆盖，为后续渐进迁移与灰度开关落地提供稳定边界。
+- 新增 SCAN cursor v2 SSOT：`ScanCursorV2`（rehash-aware）+ keyspace time-slice scan，SCAN 默认使用 v2 并以“数字 bulk string”保持生态兼容。
+- 新增慢命令治理 SSOT：`SlowCommandGovernor` + `--keysTimeBudgetMillis/--keysMaxResults`，KEYS 在预算/上限触达时 fail-fast（提示使用 SCAN）。
+- 新增生产能力扩展前置接口：`YierdisChangeSink`（事件流）与 `YierdisSnapshot`（time-slice 快照），作为 AOF/RDB/replication/ACL/modules 的 guardrails 基座（本版本不启用真实持久化）。
+- DB core 组件化拆分：引入 `yier.bubu.redis.ops.*`（`DbEngine/ValueOps/*Ops/ExpirationManager/EvictionCoordinator`）并迁移命令层调用，降低存储-命令耦合与修改半径。
+- 新增 off-heap keys 零 canonical heap copy 回归：`OffHeapKeyCopyDiagnostics` + `OffHeapKeysZeroCopyReadPathTest`，锁定 `GET/EXISTS/TYPE/TTL` 热路径不触发 heap key 拷贝。
 - Maven 多模块拆分：引入 `yierdis-protocol`（RESP SSOT）、`yierdis-core`（DB/命令 SSOT）、`yierdis-args`（参数 SSOT）、`yierdis-client`（client/CLI），并调整 `yierdis-server`/`yierdis-bench` 依赖方向。
 - 新增 `yierdis-protocol-netty`：承载 Netty codec/adapters（decoder/encoder/frame/session）；`yierdis-protocol` 收敛为 Netty-free SSOT（对象模型 + `RespWriter` + `RespFrame/RespSession` 抽象）。
 - 升级为 Netty 体系内单线程 `NettyCommandExecutor`（`DefaultEventExecutorGroup(1)`）：批量 `write` + 末尾 `flush` 合并、连接级 `autoRead` 背压（high/low 滞回阈值）、全局有界队列与 `-ERR busy` 保护。

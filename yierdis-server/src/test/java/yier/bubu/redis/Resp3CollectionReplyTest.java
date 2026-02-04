@@ -87,13 +87,18 @@ public class Resp3CollectionReplyTest {
             Map<String, RespObject> map = toObjectMap((RespMap) stats);
             Assert.assertTrue(map.containsKey("maxmemory_bytes"));
             Assert.assertTrue(map.containsKey("used_bytes_for_maxmemory"));
-            Assert.assertTrue(map.containsKey("heap_data_bytes_estimate"));
+            Assert.assertTrue(map.containsKey("effective_used_bytes_for_maxmemory"));
+            Assert.assertTrue(map.containsKey("ledger_used_bytes"));
+            Assert.assertTrue(map.containsKey("ledger_reserved_bytes"));
             Assert.assertTrue(map.containsKey("offheap_used_bytes"));
+            Assert.assertTrue(map.containsKey("offheap_included_in_maxmemory"));
             Assert.assertTrue(map.containsKey("total_estimated_bytes"));
 
             assertLongValue(map.get("maxmemory_bytes"));
             assertLongValue(map.get("used_bytes_for_maxmemory"));
-            assertLongValue(map.get("heap_data_bytes_estimate"));
+            assertLongValue(map.get("effective_used_bytes_for_maxmemory"));
+            assertLongValue(map.get("ledger_used_bytes"));
+            assertLongValue(map.get("ledger_reserved_bytes"));
             assertLongValue(map.get("offheap_used_bytes"));
             assertLongValue(map.get("total_estimated_bytes"));
         }

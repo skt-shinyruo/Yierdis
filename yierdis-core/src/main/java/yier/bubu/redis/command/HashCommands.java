@@ -38,8 +38,7 @@ final class HashCommands {
         int pairsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, pairsLen);
         try {
-            long added = db.hset(cmd.toByteArray(1), support.slice());
-            db.enforceMaxmemory();
+            long added = db.values().hashes().hset(cmd.toByteArray(1), support.slice());
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
@@ -51,7 +50,8 @@ final class HashCommands {
             CommandSupport.wrongArity(out, "hget");
             return;
         }
-        out.bulkString(support.db(out).hget(cmd.toByteArray(1), cmd.toByteArray(2)));
+        YierdisDb db = support.db(out);
+        out.bulkString(db.values().hashes().hget(cmd.toByteArray(1), cmd.toByteArray(2)));
     }
 
     private void hgetall(RespCommand cmd, RespWriter out) {
@@ -61,7 +61,8 @@ final class HashCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        int count = support.db(out).hgetallReplyCount(key);
+        YierdisDb db = support.db(out);
+        int count = db.values().hashes().hgetallReplyCount(key);
         if (out.protocol() == RespProtocol.RESP3) {
             out.mapHeader(count / 2);
         } else {
@@ -70,7 +71,7 @@ final class HashCommands {
         if (count == 0) {
             return;
         }
-        support.db(out).hgetallReplyInto(key, support.bulkOut(out));
+        db.values().hashes().hgetallReplyInto(key, support.bulkOut(out));
     }
 
     private void hlen(RespCommand cmd, RespWriter out) {
@@ -78,7 +79,8 @@ final class HashCommands {
             CommandSupport.wrongArity(out, "hlen");
             return;
         }
-        out.integer(support.db(out).hlen(cmd.toByteArray(1)));
+        YierdisDb db = support.db(out);
+        out.integer(db.values().hashes().hlen(cmd.toByteArray(1)));
     }
 
     private void hdel(RespCommand cmd, RespWriter out) {
@@ -89,7 +91,8 @@ final class HashCommands {
         int fieldsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, fieldsLen);
         try {
-            out.integer(support.db(out).hdel(cmd.toByteArray(1), support.slice()));
+            YierdisDb db = support.db(out);
+            out.integer(db.values().hashes().hdel(cmd.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(fieldsLen);
         }

@@ -35,6 +35,8 @@ public final class YierdisServerArgNames {
     public static final String MAXMEMORY_SAMPLES = "--maxmemorySamples";
     public static final String EVICTION_TIME_LIMIT_MILLIS = "--evictionTimeLimitMillis";
     public static final String EXPIRE_CLEANUP_TIME_LIMIT_MILLIS = "--expireCleanupTimeLimitMillis";
+    public static final String KEYS_TIME_BUDGET_MILLIS = "--keysTimeBudgetMillis";
+    public static final String KEYS_MAX_RESULTS = "--keysMaxResults";
 
     private YierdisServerArgNames() {
     }

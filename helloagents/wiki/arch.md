@@ -10,10 +10,10 @@
 - `yierdis-bytes-netty`：`yierdis-bytes` 的 Netty 适配层（`ByteBuf` ↔ `DirectBytesSink/BytesSource`），为 server/off-heap 提供 fast-path（adapter）
 - `yierdis-protocol`：RESP 对象模型 + fast-path `RespWriter` + `RespFrame/RespSession` 抽象（SSOT，**Netty-free**）
 - `yierdis-protocol-netty`：Netty codec（decoder/encoder）+ `RespFrame/RespSession` 的 Netty 适配实现（adapter，可复用）
-- `yierdis-core`：DB/Keyspace/Value/TTL/maxmemory/命令处理（SSOT），**不依赖 Netty**
+- `yierdis-core`：DB/Keyspace/Value/TTL/maxmemory/命令处理（SSOT）+ embedded instance/runtime（`YierdisInstance`：多 DB 装配/路由/生命周期，Netty-free），**不依赖 Netty**
 - `yierdis-args`：server 参数模型与校验（picocli，SSOT），供 server/bench 复用
 - `yierdis-client`：Netty client + CLI（调试工具），依赖 `yierdis-protocol-netty`
-- `yierdis-server`：Netty server bootstrap + pipeline + executor（只做适配与装配）
+- `yierdis-server`：Netty server bootstrap + pipeline + executor（只做执行/治理与装配；DB/instance 装配语义由 core SSOT 提供）
 - `yierdis-bench`：纯 Java benchmark 工具（socket + shared codec），依赖 `yierdis-protocol-netty`
 - `yierdis-offheap-*`：off-heap API 与后端实现（API 不依赖 Netty；netty/unsafe/foreign 分模块）
 
@@ -75,6 +75,30 @@ flowchart LR
 
 > 说明：通用 bytes 抽象已抽取到 `yierdis-bytes`（中立模块）。`yierdis-protocol` 与 `yierdis-offheap-api` 都依赖该模块，但这不等同于“协议层依赖某个具体 off-heap 后端”，后端选择仍由 server bootstrap 层负责。
 
+## 内核契约（SSOT Contracts）
+
+为避免“补齐生产能力时倒逼大改”，Yierdis 将以下内部契约作为演进边界冻结（以代码实现为准）：
+
+- **KeyHandle（key identity SSOT）**
+  - 代码：`yierdis-core` 中 `yier.bubu.redis.db.key.KeyHandle`
+  - 目标：统一 heap/off-heap/bytesview 的 key 表示，支持未来 keyspace/expires/scan 的零拷贝落地
+  - 现状：keyspace/expire/scan 已完成 handle 全链路落地；热路径禁止隐式 canonical heap key copy（以回归与 diagnostics 计数锚定）
+- **MemoryLedger（maxmemory SSOT）**
+  - 代码：`yierdis-core` 中 `yier.bubu.redis.db.memory.MemoryLedger`
+  - 目标：将预算判定/拒写点/淘汰触发收敛到单点，并以 reserve→commit/rollback 保障异常路径一致性
+  - 现状：写路径已落地 `reserve → commit/rollback`；`prepareWrite` 作为命令 preflight 入口；`enforceMaxmemory` 仅作为后台维护入口（server 维护 tick 触发）
+- **ScanCursorV2（SCAN cursor SSOT）**
+  - 代码：`yierdis-core` 中 `yier.bubu.redis.db.ScanCursorV2`
+  - 目标：锁定 cursor 的“可推进/可终止”语义；cursor v2 为 rehash-aware，并保持“数字 bulk string”生态兼容
+- **Instance / 执行模型（SSOT）**
+  - 代码：`yierdis-core` 中 `yier.bubu.redis.runtime.YierdisInstance` / `YierdisInstanceConfig`
+  - 目标：保持 DB 单线程语义不变，将“多 DB 装配/路由/global maxmemory/allocator 生命周期”上移到 instance；server/bench/测试统一复用
+  - 现状：server/embedded 场景都通过 instance 装配 DB；未绑定或跨线程访问会 fail-fast（避免静默竞态）
+- **SlowCommandGovernor（慢命令治理 SSOT）**
+  - 代码：`yierdis-core` 中 `yier.bubu.redis.command.SlowCommandGovernor`
+  - 目标：为 `KEYS` 等潜在全表扫描命令提供“时间预算/结果上限”，避免极端情况下阻塞 executor；小数据集下尽量保持 Redis 语义
+  - 现状：server 通过启动参数下发；embedded 可注入自定义 governor
+
 ## 核心调用链（请求/响应）
 
 ```mermaid
@@ -97,6 +121,42 @@ sequenceDiagram
   Processor->>Writer: write reply (RESP2/RESP3 by connection state)
   Writer-->>Client: TCP bytes (RESP2/RESP3 reply)
 ```
+
+## 执行模型与扩展策略（冻结）
+
+> 本节是“生产能力扩展”的前置护栏：明确哪些语义固定不变，扩展点在哪里，以及未来 shard/router 的演进边界。
+
+- **单线程 DB 语义（SSOT）**
+  - 每个 `YierdisDb` 必须绑定到唯一 owner thread；所有读写/维护逻辑都在该线程上执行。
+  - 未绑定或跨线程访问直接 fail-fast（以错误暴露误用，而不是默默竞态）。
+- **扩展点：instance 层（现状）**
+  - `YierdisInstance` 负责装配多 DB、选择路由策略、管理共享 allocator 生命周期，以及启用 global maxmemory 协调器。
+  - 当前路由维度为“逻辑 DB”（RESP session 的 `dbIndex()`，由 `SELECT` 设置）；server 只做会话管理与调度，不承担 DB 语义。
+- **未来 shard/router（策略冻结）**
+  - 默认保持 **single-shard**（一个 instance 即一组 DB，不做 key hash 分片）。
+  - 若未来引入 key-hash shard：
+    - 单 key 命令按 key→shard 路由，仍保持每 shard 内单线程 DB 语义不变。
+    - **跨 shard 多 key 命令不默认支持**：当一个命令涉及多个 key 且落在不同 shard 时，应返回确定性的错误（例如类似 Redis Cluster 的 CROSSSLOT 语义），避免“部分成功/部分失败”导致一致性不可解释。
+      - 典型多 key 命令：`EXISTS k1 k2 ...`、`DEL k1 k2 ...`、`PFCOUNT k1 k2 ...`、`PFMERGE dest src1 src2 ...`
+      - 若未来需要支持：应以“显式 fan-out + 明确失败语义 + 可观测”推进，而不是隐式跨 shard 聚合。
+    - 需要全量遍历的命令（`KEYS`/`SCAN`）应被视为“每 shard 一份”的能力；instance 级聚合需明确成本与背压策略，否则不提供。
+- **慢命令治理（现状 + 边界）**
+  - 慢命令治理的 SSOT 在 core（`SlowCommandGovernor`），server 只负责从启动参数注入配置。
+  - 原则：预算耗尽应尽量 fail-fast（减少 executor 被长时间占用），并在文档/可观测中明确推荐用 `SCAN` 做分页遍历。
+
+## 生产能力扩展前置条件（Guardrails）
+
+> 目标：在“加能力”（RDB/AOF/复制/ACL/模块）时，避免倒逼大改 DB 内核契约。
+
+- **持久化/复制必须走冻结契约**
+  - 快照读取：只能通过 `YierdisSnapshot`（基于 `ScanCursorV2` 的 time-slice snapshot），不得读取/遍历 keyspace 内部结构。
+  - 变更事件：只能消费 `YierdisChangeSink` 的事件流，不得在命令层/存储层绕开统一出口“偷写日志”。
+- **不得绕开 ledger/maxmemory SSOT**
+  - 任何写入路径都必须遵守 `MemoryLedger.reserve → commit/rollback` 的两阶段语义；禁止在扩展模块中直接修改 `usedBytes` 等内部字段。
+- **off-heap 生命周期必须显式可审计**
+  - 扩展模块不得持有 raw address/allocator slice 超过命令边界；若需要缓存，必须明确 copy 策略与释放时机。
+- **ACL/模块接入的线程语义**
+  - ACL/模块执行不得跨线程直接触达 `YierdisDb`；必须通过 instance/processor 在 owner thread 上执行，或将操作显式调度到 executor。
 
 ## Major Architecture Decisions（摘要）
 
@@ -122,6 +182,7 @@ sequenceDiagram
 | ADR-20260202-02 | MULTI 入队错误采用 Redis 风格 EXECABORT（事务队列有界） | 2026-02-02 | ✅ Accepted | yierdis-core,yierdis-server,yierdis-args | 事务队列新增 commands/bytes 上限并对齐 EXECABORT；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-002 |
 | ADR-20260202-03 | maxmemory scope 升级为 global（保留 per-db 兼容开关） | 2026-02-02 | ✅ Accepted | yierdis-core,yierdis-server,yierdis-args,helloagents/wiki | 默认 global 更贴近 Redis 全实例预算；per-db 保留旧行为；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-003 |
 | ADR-20260202-04 | busy 错误保持兼容形态但增强原因表达 | 2026-02-02 | ✅ Accepted | yierdis-server,helloagents/wiki | `-ERR busy <reason>` + `STATS` 映射，提升排障能力；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-004 |
+| ADR-20260204-01 | core 暴露 Netty-free embedded instance API（YierdisInstance） | 2026-02-04 | ✅ Accepted | yierdis-core,yierdis-server | 统一 instance 装配语义并支持 bench/工具/测试嵌入使用；details: helloagents/history/2026-02/202602041128_core_embedded_instance_runtime_api/how.md#adr-001-place-embedded-instance-api-in-yierdis-core-netty-free |
 
 ## Security Check（2026-02-02）
 

@@ -16,6 +16,7 @@ final class DbMemoryAccounting {
     static YierdisMemoryStats snapshot(
             long maxmemoryBytes,
             long heapDataBytesEstimate,
+            long reservedBytes,
             YierdisOffHeapAllocator offHeapAllocator,
             YierdisKeyspace<?> store,
             YierdisExpireIndex expires,
@@ -53,6 +54,7 @@ final class DbMemoryAccounting {
         }
 
         long usedBytesForMaxmemory = heapDataBytesEstimate + (includeOffHeapInMaxmemory ? offHeapUsedBytes : 0);
+        long effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + Math.max(0L, reservedBytes);
         long totalEstimatedBytes =
                 heapDataBytesEstimate
                         + offHeapUsedBytes
@@ -65,6 +67,9 @@ final class DbMemoryAccounting {
                 usedBytesForMaxmemory,
                 heapDataBytesEstimate,
                 offHeapUsedBytes,
+                reservedBytes,
+                effectiveUsedBytesForMaxmemory,
+                includeOffHeapInMaxmemory,
                 keysStoredOffHeap,
                 keyCount,
                 expireCount,

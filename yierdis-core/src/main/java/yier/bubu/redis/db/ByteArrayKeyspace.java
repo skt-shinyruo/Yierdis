@@ -1,5 +1,7 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.db.key.KeyHandle;
+
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiConsumer;
@@ -167,6 +169,64 @@ final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
     }
 
     @Override
+    public V get(KeyHandle keyHandle) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        rehashStep();
+        int h = keyHandle.dictHash();
+        int idx = findIndex(keys0, hashes0, states0, keyHandle, h);
+        if (idx >= 0) {
+            @SuppressWarnings("unchecked")
+            V v = (V) values0[idx];
+            return v;
+        }
+        if (keys1 != null) {
+            idx = findIndex(keys1, hashes1, states1, keyHandle, h);
+            if (idx >= 0) {
+                @SuppressWarnings("unchecked")
+                V v = (V) values1[idx];
+                return v;
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public KeyHandle keyHandle(byte[] key) {
+        Objects.requireNonNull(key, "key");
+        rehashStep();
+        int h = hash(key);
+        int idx = findIndex(keys0, hashes0, states0, key, h);
+        if (idx >= 0) {
+            return KeyHandle.forHeap(keys0[idx], hashes0[idx]);
+        }
+        if (keys1 != null) {
+            idx = findIndex(keys1, hashes1, states1, key, h);
+            if (idx >= 0) {
+                return KeyHandle.forHeap(keys1[idx], hashes1[idx]);
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public KeyHandle keyHandle(YierdisBytesView key) {
+        Objects.requireNonNull(key, "key");
+        rehashStep();
+        int h = hash(key);
+        int idx = findIndex(keys0, hashes0, states0, key, h);
+        if (idx >= 0) {
+            return KeyHandle.forHeap(keys0[idx], hashes0[idx]);
+        }
+        if (keys1 != null) {
+            idx = findIndex(keys1, hashes1, states1, key, h);
+            if (idx >= 0) {
+                return KeyHandle.forHeap(keys1[idx], hashes1[idx]);
+            }
+        }
+        return null;
+    }
+
+    @Override
     public byte[] canonicalKey(byte[] key) {
         Objects.requireNonNull(key, "key");
         rehashStep();
@@ -253,6 +313,68 @@ final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
     }
 
     @Override
+    public V computeWithHandle(byte[] key, BiFunction<? super KeyHandle, ? super V, ? extends V> remappingFunction) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(remappingFunction, "remappingFunction");
+        rehashStep();
+        maybeStartRehashForInsert();
+
+        int h = hash(key);
+        Location loc = findLocation(key, h);
+        V oldValue = loc == null ? null : loc.getValue();
+
+        KeyHandle handle;
+        if (loc == null) {
+            handle = KeyHandle.forHeap(key, h);
+        } else if (loc.table == 0) {
+            handle = KeyHandle.forHeap(keys0[loc.index], hashes0[loc.index]);
+        } else {
+            handle = KeyHandle.forHeap(keys1[loc.index], hashes1[loc.index]);
+        }
+
+        V newValue = remappingFunction.apply(handle, oldValue);
+        if (newValue == null) {
+            if (loc != null) {
+                loc.remove();
+            }
+            return null;
+        }
+
+        if (loc != null) {
+            loc.setValue(newValue);
+            return newValue;
+        }
+
+        insertNew(key, h, newValue);
+        return newValue;
+    }
+
+    @Override
+    public V computeIfPresentWithHandle(byte[] key, BiFunction<? super KeyHandle, ? super V, ? extends V> remappingFunction) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(remappingFunction, "remappingFunction");
+        rehashStep();
+
+        int h = hash(key);
+        Location loc = findLocation(key, h);
+        if (loc == null) {
+            return null;
+        }
+
+        KeyHandle handle = loc.table == 0
+                ? KeyHandle.forHeap(keys0[loc.index], hashes0[loc.index])
+                : KeyHandle.forHeap(keys1[loc.index], hashes1[loc.index]);
+
+        V newValue = remappingFunction.apply(handle, loc.getValue());
+        if (newValue == null) {
+            loc.remove();
+            return null;
+        }
+        loc.setValue(newValue);
+        return newValue;
+    }
+
+    @Override
     public boolean remove(byte[] key, V expectedValue) {
         Objects.requireNonNull(key, "key");
         rehashStep();
@@ -267,6 +389,39 @@ final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
         }
         loc.remove();
         return true;
+    }
+
+    @Override
+    public boolean remove(KeyHandle keyHandle, V expectedValue) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        rehashStep();
+
+        int h = keyHandle.dictHash();
+        int idx0 = findIndex(keys0, hashes0, states0, keyHandle, h);
+        if (idx0 >= 0) {
+            @SuppressWarnings("unchecked")
+            V v = (V) values0[idx0];
+            if (v != expectedValue) {
+                return false;
+            }
+            new Location(0, idx0).remove();
+            return true;
+        }
+
+        if (keys1 != null) {
+            int idx1 = findIndex(keys1, hashes1, states1, keyHandle, h);
+            if (idx1 >= 0) {
+                @SuppressWarnings("unchecked")
+                V v = (V) values1[idx1];
+                if (v != expectedValue) {
+                    return false;
+                }
+                new Location(1, idx1).remove();
+                return true;
+            }
+        }
+
+        return false;
     }
 
     @Override
@@ -290,6 +445,84 @@ final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
         if (keys1 != null) {
             forEachTable(keys1, states1, values1, consumer);
         }
+    }
+
+    @Override
+    public void forEachKeyHandle(BiConsumer<KeyHandle, V> consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        // Intentionally does not call rehashStep(): iteration should not mutate structure.
+        forEachKeyHandleTable(keys0, hashes0, states0, values0, consumer);
+        if (keys1 != null) {
+            forEachKeyHandleTable(keys1, hashes1, states1, values1, consumer);
+        }
+    }
+
+    @Override
+    public ScanCursorV2 scan(ScanCursorV2 cursor, int maxSteps, ScanConsumer<V> consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        if (maxSteps <= 0) {
+            throw new IllegalArgumentException("maxSteps must be > 0");
+        }
+
+        if (size() == 0) {
+            return ScanCursorV2.start();
+        }
+
+        int phase = cursor == null ? 0 : cursor.phase();
+        long posLong = cursor == null ? 0L : cursor.position();
+        int pos = posLong <= 0 ? 0 : (posLong >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) posLong);
+
+        int steps = 0;
+        while (steps++ < maxSteps) {
+            if (phase == 0) {
+                if (pos >= states0.length) {
+                    if (keys1 == null) {
+                        return ScanCursorV2.start();
+                    }
+                    phase = 1;
+                    pos = 0;
+                    continue;
+                }
+                if (states0[pos] == STATE_FILLED) {
+                    @SuppressWarnings("unchecked")
+                    V v = (V) values0[pos];
+                    KeyHandle handle = KeyHandle.forHeap(keys0[pos], hashes0[pos]);
+                    pos++;
+                    if (!consumer.accept(handle, v)) {
+                        return ScanCursorV2.ofPhaseAndPosition(phase, pos);
+                    }
+                    continue;
+                }
+                pos++;
+                continue;
+            }
+
+            if (phase == 1) {
+                if (keys1 == null || states1 == null) {
+                    return ScanCursorV2.start();
+                }
+                if (pos >= states1.length) {
+                    return ScanCursorV2.start();
+                }
+                if (states1[pos] == STATE_FILLED) {
+                    @SuppressWarnings("unchecked")
+                    V v = (V) values1[pos];
+                    KeyHandle handle = KeyHandle.forHeap(keys1[pos], hashes1[pos]);
+                    pos++;
+                    if (!consumer.accept(handle, v)) {
+                        return ScanCursorV2.ofPhaseAndPosition(phase, pos);
+                    }
+                    continue;
+                }
+                pos++;
+                continue;
+            }
+
+            // Unknown phase: best-effort reset/terminate.
+            return ScanCursorV2.start();
+        }
+
+        return ScanCursorV2.ofPhaseAndPosition(phase, pos);
     }
 
     @Override
@@ -348,6 +581,17 @@ final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
             @SuppressWarnings("unchecked")
             V v = (V) values[i];
             consumer.accept(keys[i], v);
+        }
+    }
+
+    private void forEachKeyHandleTable(byte[][] keys, int[] hashes, byte[] states, Object[] values, BiConsumer<KeyHandle, V> consumer) {
+        for (int i = 0; i < states.length; i++) {
+            if (states[i] != STATE_FILLED) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            V v = (V) values[i];
+            consumer.accept(KeyHandle.forHeap(keys[i], hashes[i]), v);
         }
     }
 

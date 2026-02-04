@@ -32,6 +32,9 @@
 | 202602031053 | tx_hello_protocol_fix | Standard Development | ✅ Completed | helloagents/history/2026-02/202602031053_tx_hello_protocol_fix/ |
 | 202602031225 | resp3_request_compat | Standard Development | ✅ Completed | helloagents/history/2026-02/202602031225_resp3_request_compat/ |
 | 202602031537 | resp3_full_coverage | Standard Development | ✅ Completed | helloagents/history/2026-02/202602031537_resp3_full_coverage/ |
+| 202602031814 | db_prod_arch_contracts | Execution Command | ⚠️ Partial | helloagents/history/2026-02/202602031814_db_prod_arch_contracts/ |
+| 202602041128 | core_embedded_instance_runtime_api | Standard Development | ✅ Completed | helloagents/history/2026-02/202602041128_core_embedded_instance_runtime_api/ |
+| 202602041630 | db_prod_arch_contracts_full_newimpl | Standard Development | ✅ Completed | helloagents/history/2026-02/202602041630_db_prod_arch_contracts_full_newimpl/ |
 
 ---
 
@@ -66,6 +69,9 @@
 - helloagents/history/2026-02/202602031053_tx_hello_protocol_fix/
 - helloagents/history/2026-02/202602031225_resp3_request_compat/
 - helloagents/history/2026-02/202602031537_resp3_full_coverage/
+- helloagents/history/2026-02/202602031814_db_prod_arch_contracts/
+- helloagents/history/2026-02/202602041128_core_embedded_instance_runtime_api/
+- helloagents/history/2026-02/202602041630_db_prod_arch_contracts_full_newimpl/
 
 ## 2026-01
 - 202601172157_executor_modularize - 执行器组件化与不变量测试补齐

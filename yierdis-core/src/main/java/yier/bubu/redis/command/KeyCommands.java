@@ -2,7 +2,7 @@ package yier.bubu.redis.command;
 
 import yier.bubu.redis.db.ValueType;
 import yier.bubu.redis.db.YierdisMemoryStats;
-import yier.bubu.redis.db.ScanCursor;
+import yier.bubu.redis.db.ScanCursorV2;
 import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespProtocol;
 import yier.bubu.redis.protocol.RespWriter;
@@ -16,8 +16,11 @@ import java.util.Objects;
 final class KeyCommands {
     private static final byte[] MEMORY_STATS_MAXMEMORY_BYTES = "maxmemory_bytes".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_USED_BYTES_FOR_MAXMEMORY = "used_bytes_for_maxmemory".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] MEMORY_STATS_HEAP_DATA_BYTES_ESTIMATE = "heap_data_bytes_estimate".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] MEMORY_STATS_EFFECTIVE_USED_BYTES_FOR_MAXMEMORY = "effective_used_bytes_for_maxmemory".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] MEMORY_STATS_LEDGER_USED_BYTES = "ledger_used_bytes".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] MEMORY_STATS_LEDGER_RESERVED_BYTES = "ledger_reserved_bytes".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_OFFHEAP_USED_BYTES = "offheap_used_bytes".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] MEMORY_STATS_OFFHEAP_INCLUDED_IN_MAXMEMORY = "offheap_included_in_maxmemory".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_KEYSPACE_TABLE_OVERHEAD_BYTES_ESTIMATE = "keyspace_table_overhead_bytes_estimate".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_EXPIRE_TABLE_OVERHEAD_BYTES_ESTIMATE = "expire_table_overhead_bytes_estimate".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_EXPIRE_VALUE_OBJECTS_BYTES_ESTIMATE = "expire_value_objects_bytes_estimate".getBytes(StandardCharsets.US_ASCII);
@@ -105,9 +108,9 @@ final class KeyCommands {
             }
             // RESP2-compatible flat array of key/value pairs; in RESP3 emit a map for friendlier clients.
             if (out.protocol() == RespProtocol.RESP3) {
-                out.mapHeader(17);
+                out.mapHeader(20);
             } else {
-                out.arrayHeader(34);
+                out.arrayHeader(40);
             }
 
             out.bulkString(MEMORY_STATS_MAXMEMORY_BYTES);
@@ -116,11 +119,20 @@ final class KeyCommands {
             out.bulkString(MEMORY_STATS_USED_BYTES_FOR_MAXMEMORY);
             out.integer(s.usedBytesForMaxmemory());
 
-            out.bulkString(MEMORY_STATS_HEAP_DATA_BYTES_ESTIMATE);
+            out.bulkString(MEMORY_STATS_EFFECTIVE_USED_BYTES_FOR_MAXMEMORY);
+            out.integer(s.effectiveUsedBytesForMaxmemory());
+
+            out.bulkString(MEMORY_STATS_LEDGER_USED_BYTES);
             out.integer(s.heapDataBytesEstimate());
 
             out.bulkString(MEMORY_STATS_OFFHEAP_USED_BYTES);
             out.integer(s.offHeapUsedBytes());
+
+            out.bulkString(MEMORY_STATS_LEDGER_RESERVED_BYTES);
+            out.integer(s.reservedBytes());
+
+            out.bulkString(MEMORY_STATS_OFFHEAP_INCLUDED_IN_MAXMEMORY);
+            out.integer(s.offHeapIncludedInMaxmemory() ? 1 : 0);
 
             out.bulkString(MEMORY_STATS_KEYSPACE_TABLE_OVERHEAD_BYTES_ESTIMATE);
             out.integer(s.keyspaceTableOverheadBytesEstimate());
@@ -188,7 +200,12 @@ final class KeyCommands {
             CommandSupport.wrongArity(out, "keys");
             return;
         }
-        out.bulkStringArray(support.db(out).keys(cmd.toByteArray(1)));
+        SlowCommandGovernor governor = support.slowGovernor();
+        out.bulkStringArray(support.db(out).keys(
+                cmd.toByteArray(1),
+                governor.keysMaxResults(out),
+                governor.keysTimeBudgetNanos(out)
+        ));
     }
 
     private void scan(RespCommand cmd, RespWriter out) {
@@ -226,7 +243,7 @@ final class KeyCommands {
         }
 
         List<byte[]> keys = new ArrayList<>();
-        ScanCursor next = support.db(out).scan(ScanCursor.of(cursor), match, count, keys);
+        ScanCursorV2 next = support.db(out).scan(ScanCursorV2.of(cursor), match, count, keys);
 
         // Redis-compatible: reply is [cursor, keys].
         out.arrayHeader(2);

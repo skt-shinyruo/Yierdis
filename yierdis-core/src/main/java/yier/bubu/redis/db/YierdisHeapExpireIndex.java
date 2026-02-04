@@ -1,5 +1,8 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.db.key.KeyHandle;
+import yier.bubu.redis.db.key.KeyHandleAccess;
+
 import java.util.Objects;
 
 /**
@@ -27,8 +30,25 @@ final class YierdisHeapExpireIndex implements YierdisExpireIndex {
     }
 
     @Override
+    public Long get(KeyHandle keyHandle) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        // Important: expires uses its own per-table seed, so we must not use keyHandle.dictHash() for indexing.
+        return expires.get((YierdisBytesView) keyHandle);
+    }
+
+    @Override
     public byte[] randomKey() {
         return expires.randomKey();
+    }
+
+    @Override
+    public KeyHandle randomKeyHandle() {
+        byte[] k = expires.randomKey();
+        if (k == null) {
+            return null;
+        }
+        // dictHash is best-effort here: heap backend callers can still use the returned bytes without copying.
+        return KeyHandle.forHeap(k, 1);
     }
 
     @Override
@@ -59,13 +79,42 @@ final class YierdisHeapExpireIndex implements YierdisExpireIndex {
     }
 
     @Override
+    public void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        byte[] canonical = KeyHandleAccess.heapBytesOrNull(keyHandle);
+        if (canonical == null) {
+            throw new IllegalArgumentException("expected a heap KeyHandle");
+        }
+
+        // Preserve canonical key sharing semantics: ensure the expires key is stored under the canonical key instance.
+        byte[] expiresKey = expires.canonicalKey(canonical);
+        if (expiresKey != null && expiresKey != canonical) {
+            Long current = expires.get(canonical);
+            if (current != null) {
+                expires.remove(canonical, current);
+            }
+        }
+
+        expires.compute(canonical, (k, old) -> expireAtMillis);
+    }
+
+    @Override
     public void removeExpire(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         expires.computeIfPresent(keyBytes, (k, old) -> null);
+    }
+
+    @Override
+    public void removeExpire(KeyHandle keyHandle) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        byte[] canonical = KeyHandleAccess.heapBytesOrNull(keyHandle);
+        if (canonical == null) {
+            throw new IllegalArgumentException("expected a heap KeyHandle");
+        }
+        expires.computeIfPresent(canonical, (k, old) -> null);
     }
 
     ByteArrayKeyspace<Long> rawKeyspace() {
         return expires;
     }
 }
-

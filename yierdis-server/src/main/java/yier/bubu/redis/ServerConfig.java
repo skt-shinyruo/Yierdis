@@ -42,6 +42,8 @@ final class ServerConfig {
     final int maxmemorySamples;
     final long evictionTimeLimitMillis;
     final long expireCleanupTimeLimitMillis;
+    final long keysTimeBudgetMillis;
+    final int keysMaxResults;
 
     private ServerConfig(
             int port,
@@ -73,7 +75,9 @@ final class ServerConfig {
             String maxmemoryPolicy,
             int maxmemorySamples,
             long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
+            long expireCleanupTimeLimitMillis,
+            long keysTimeBudgetMillis,
+            int keysMaxResults
     ) {
         this.port = port;
         this.databases = databases;
@@ -105,6 +109,8 @@ final class ServerConfig {
         this.maxmemorySamples = maxmemorySamples;
         this.evictionTimeLimitMillis = evictionTimeLimitMillis;
         this.expireCleanupTimeLimitMillis = expireCleanupTimeLimitMillis;
+        this.keysTimeBudgetMillis = keysTimeBudgetMillis;
+        this.keysMaxResults = keysMaxResults;
     }
 
     static ServerConfig fromArgs(String[] args) {
@@ -169,7 +175,9 @@ final class ServerConfig {
                 parsed.maxmemoryPolicy,
                 parsed.maxmemorySamples,
                 parsed.evictionTimeLimitMillis,
-                parsed.expireCleanupTimeLimitMillis
+                parsed.expireCleanupTimeLimitMillis,
+                parsed.keysTimeBudgetMillis,
+                parsed.keysMaxResults
         );
     }
 }

@@ -10,6 +10,9 @@ public record YierdisMemoryStats(
         long usedBytesForMaxmemory,
         long heapDataBytesEstimate,
         long offHeapUsedBytes,
+        long reservedBytes,
+        long effectiveUsedBytesForMaxmemory,
+        boolean offHeapIncludedInMaxmemory,
         boolean keysStoredOffHeap,
         int keyCount,
         int expireCount,
@@ -25,4 +28,3 @@ public record YierdisMemoryStats(
         long totalEstimatedBytes
 ) {
 }
-

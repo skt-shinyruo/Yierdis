@@ -10,7 +10,7 @@
 
 - **Responsibility:** 命令分发、参数解析、错误映射、性能优化（低分配写出路径）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-02
+- **Last Updated:** 2026-02-04
 
 ## Specifications
 
@@ -51,7 +51,8 @@
 
 实现要点：
 - 写命令统一走 `db.prepareWrite(estimatedExtraBytes)` 做 preflight（含 cleanupExpired + 预淘汰/预检查）
-- 写入执行后仍调用 `db.enforceMaxmemory()`，但必须在写 reply 之前完成（确保错误只会产生单条 reply）
+- DB 写入实现必须在 mutate 成功/失败路径完成 reservation 的 commit/rollback；处理器在 finally 做防御性 rollback，避免“上一个命令泄漏 reservation 影响下一个命令”
+- `enforceMaxmemory()` 仅作为**后台/周期性维护**的 best-effort 手段（server 侧维护 tick 触发），命令 handler 不再在写入后显式调用
 
 #### Scenario: maxmemory 触发错误时不产生双 reply
 条件：写命令在 maxmemory 压力下触发 `-ERR OOM ...`
@@ -99,3 +100,4 @@
 - 2026-01-23：写命令统一引入 write preflight（`prepareWrite`）并调整顺序为 preflight→执行→enforce→reply（避免双 reply）；RESP3 下 `HGETALL/MEMORY STATS/SMEMBERS` 改为 map/set；`KEYS` glob 兼容范围补齐（`[]`/否定/范围/转义）。
 - 2026-02-01：多 DB 路由接入命令层（通过 `RespWriter.session` 访问连接态 `dbIndex`）；`INFO` 输出形态对齐 Redis（bulk string，结构化指标迁移到 `INFO YIERDIS`/`STATS`）；`MEMORY STATS` 数值字段类型对齐为 integer；`OBJECT ENCODING` 回复类型对齐为 bulk string。
 - 2026-02-03：事务协议护栏：MULTI 模式下禁止 `HELLO`，避免 `EXEC` reply 混入 RESP3 map（`%`）前缀导致 RESP2 客户端解析失败。
+- 2026-02-04：maxmemory 语义收敛：写命令不再在 handler 中调用 enforce（以 `ledger.reserve` 作为拒写点），server 维护 tick 做 best-effort enforce；`MEMORY STATS` 字段升级为 `ledger_*` 口径。

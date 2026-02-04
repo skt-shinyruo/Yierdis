@@ -98,11 +98,14 @@ public class MaxmemoryScopeTest {
 
                 HashMap<String, Long> stats = parseMemoryStats(execute(client, b("MEMORY"), b("STATS")));
                 long used = stats.getOrDefault("used_bytes_for_maxmemory", -1L);
-                long heap = stats.getOrDefault("heap_data_bytes_estimate", -1L);
+                long ledgerUsed = stats.getOrDefault("ledger_used_bytes", -1L);
                 long offHeap = stats.getOrDefault("offheap_used_bytes", -1L);
+                long offHeapIncluded = stats.getOrDefault("offheap_included_in_maxmemory", -1L);
 
                 Assert.assertTrue("offheap_used_bytes should be > 0 when offheapBackend=netty", offHeap > 0);
-                Assert.assertEquals("used_bytes_for_maxmemory should equal heap + offheap in global mode", heap + offHeap, used);
+                Assert.assertEquals("offheap_included_in_maxmemory should be 1 in global mode", 1L, offHeapIncluded);
+                Assert.assertEquals("used_bytes_for_maxmemory should equal ledger_used_bytes + offheap_used_bytes when included",
+                        ledgerUsed + offHeap, used);
             }
         }
     }
@@ -173,4 +176,3 @@ public class MaxmemoryScopeTest {
         }
     }
 }
-

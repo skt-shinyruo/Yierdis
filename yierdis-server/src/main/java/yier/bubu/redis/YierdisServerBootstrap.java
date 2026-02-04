@@ -14,15 +14,15 @@ import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.args.YierdisCliException;
+import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocators;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackendUnavailableException;
-import yier.bubu.redis.protocol.RespServerSession;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.runtime.YierdisInstance;
+import yier.bubu.redis.runtime.YierdisInstanceConfig;
 
 import java.net.InetSocketAddress;
 import java.util.Locale;
@@ -43,6 +43,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     private ScheduledFuture<?> cleanupFuture;
 
     // Core resources (closed in reverse order).
+    private YierdisInstance instance;
     private YierdisDb[] dbs;
     private YierdisOffHeapAllocator offHeapAllocator;
     private NettyCommandExecutor executor;
@@ -119,86 +120,48 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             throw e;
         }
 
-        int databases = Math.max(1, config.databases);
-        dbs = new YierdisDb[databases];
-
-        long perDbMaxmemory = 0;
-        long remainder = 0;
         boolean perDbScope = config.maxmemoryScope == ServerConfig.MaxmemoryScope.PER_DB;
-        if (perDbScope && config.maxmemoryBytes > 0) {
-            perDbMaxmemory = config.maxmemoryBytes / (long) databases;
-            remainder = config.maxmemoryBytes - perDbMaxmemory * (long) databases;
-            if (remainder < 0) {
-                remainder = 0;
-            }
-        }
-        for (int i = 0; i < databases; i++) {
-            long dbMax = config.maxmemoryBytes;
-            if (perDbScope) {
-                dbMax = perDbMaxmemory;
-                if (remainder > 0) {
-                    dbMax++;
-                    remainder--;
-                }
-            }
-            dbs[i] = new YierdisDb(
-                    offHeapAllocator,
-                    false,
-                    config.offheapKeysEnabled,
-                    dbMax,
-                    config.maxmemoryPolicy,
-                    config.maxmemorySamples,
-                    config.evictionTimeLimitMillis,
-                    config.expireCleanupTimeLimitMillis
-            );
-        }
-        if (!perDbScope && config.maxmemoryBytes > 0) {
-            YierdisDb.enableGlobalMaxmemory(
-                    dbs,
-                    offHeapAllocator,
-                    config.maxmemoryBytes,
-                    config.maxmemoryPolicy,
-                    config.maxmemorySamples,
-                    config.evictionTimeLimitMillis
-            );
-        }
-
-        YierdisDbRouter router = new YierdisDbRouter() {
-            @Override
-            public YierdisDb dbFor(RespWriter out) {
-                if (dbs == null || dbs.length == 0) {
-                    throw new IllegalStateException("no dbs");
-                }
-                int idx = 0;
-                if (out != null && out.session() instanceof RespServerSession s) {
-                    idx = s.dbIndex();
-                }
-                if (idx < 0 || idx >= dbs.length) {
-                    idx = 0;
-                }
-                return dbs[idx];
-            }
-
-            @Override
-            public int databases() {
-                return dbs == null ? 1 : Math.max(1, dbs.length);
-            }
-        };
+        int databases = Math.max(1, config.databases);
+        YierdisInstanceConfig.MaxmemoryScope scope =
+                perDbScope ? YierdisInstanceConfig.MaxmemoryScope.PER_DB : YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
+        instance = YierdisInstance.create(YierdisInstanceConfig.builder()
+                .databases(databases)
+                .offHeapAllocator(offHeapAllocator)
+                .ownsOffHeapAllocator(false)
+                .offHeapKeysEnabled(config.offheapKeysEnabled)
+                .maxmemoryBytes(config.maxmemoryBytes)
+                .maxmemoryScope(scope)
+                .maxmemoryPolicy(config.maxmemoryPolicy)
+                .maxmemorySamples(config.maxmemorySamples)
+                .evictionTimeLimitMillis(config.evictionTimeLimitMillis)
+                .expireCleanupTimeLimitMillis(config.expireCleanupTimeLimitMillis)
+                .build());
+        dbs = instance.dbs();
 
         NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(config);
         infoProvider.bindDbs(dbs);
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(router, infoProvider);
+        SlowCommandGovernor slowGovernor = new SlowCommandGovernor() {
+            private final long timeBudgetNanos = config.keysTimeBudgetMillis <= 0
+                    ? 0
+                    : TimeUnit.MILLISECONDS.toNanos(config.keysTimeBudgetMillis);
+
+            @Override
+            public long keysTimeBudgetNanos(yier.bubu.redis.protocol.RespWriter out) {
+                return timeBudgetNanos;
+            }
+
+            @Override
+            public int keysMaxResults(yier.bubu.redis.protocol.RespWriter out) {
+                return config.keysMaxResults;
+            }
+        };
+        YierdisFastCommandProcessor processor = instance.newCommandProcessor(infoProvider, slowGovernor);
         commandGroup = new DefaultEventExecutorGroup(1);
         executor = new NettyCommandExecutor(
                 () -> {
-                    if (dbs == null) {
-                        return;
-                    }
-                    for (YierdisDb d : dbs) {
-                        if (d == null) {
-                            continue;
-                        }
-                        d.bindToCurrentThread();
+                    YierdisInstance inst = instance;
+                    if (inst != null) {
+                        inst.bindToCurrentThread();
                     }
                 },
                 processor,
@@ -240,11 +203,21 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 exForTask.executeMaintenance(() -> {
                     try {
                         if (dbsForTask != null) {
+                            YierdisDb firstDb = null;
                             for (YierdisDb d : dbsForTask) {
                                 if (d == null) {
                                     continue;
                                 }
+                                if (firstDb == null) {
+                                    firstDb = d;
+                                }
                                 d.cleanupExpired();
+                                if (config.maxmemoryBytes > 0 && config.maxmemoryScope == ServerConfig.MaxmemoryScope.PER_DB) {
+                                    d.enforceMaxmemory();
+                                }
+                            }
+                            if (config.maxmemoryBytes > 0 && config.maxmemoryScope == ServerConfig.MaxmemoryScope.GLOBAL && firstDb != null) {
+                                firstDb.enforceMaxmemory();
                             }
                         }
                     } catch (Exception e) {
@@ -294,38 +267,19 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             }
         }
 
-        YierdisDb[] localDbs = dbs;
-        if (localDbs != null) {
+        YierdisInstance inst = instance;
+        if (inst != null) {
             try {
                 if (ex != null) {
-                    ex.executor().submit(() -> {
-                        for (YierdisDb d : localDbs) {
-                            if (d == null) {
-                                continue;
-                            }
-                            try {
-                                d.shutdown();
-                            } catch (Throwable ignored) {
-                                // ignore
-                            }
-                        }
-                    }).syncUninterruptibly();
+                    ex.executor().submit(inst::close).syncUninterruptibly();
                 } else {
-                    for (YierdisDb d : localDbs) {
-                        if (d == null) {
-                            continue;
-                        }
-                        try {
-                            d.shutdown();
-                        } catch (Throwable ignored) {
-                            // ignore
-                        }
-                    }
+                    inst.close();
                 }
             } catch (Throwable ignored) {
                 // ignore
             }
         }
+        instance = null;
         dbs = null;
         executor = null;
 

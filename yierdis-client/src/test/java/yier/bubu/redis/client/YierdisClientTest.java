@@ -119,7 +119,8 @@ public class YierdisClientTest {
                     RespArray arr = (RespArray) obj;
                     Assert.assertFalse(arr.isNull());
                     Assert.assertNotNull(arr.values());
-                    Assert.assertEquals(34, arr.values().size());
+                    // 20 key/value pairs (RESP2 flat array => 40 elements).
+                    Assert.assertEquals(40, arr.values().size());
 
                     HashSet<String> keys = new HashSet<>();
                     for (int i = 0; i < arr.values().size(); i += 2) {
@@ -128,9 +129,15 @@ public class YierdisClientTest {
 
                     Assert.assertTrue(keys.contains("maxmemory_bytes"));
                     Assert.assertTrue(keys.contains("used_bytes_for_maxmemory"));
-                    Assert.assertTrue(keys.contains("heap_data_bytes_estimate"));
+                    Assert.assertTrue(keys.contains("effective_used_bytes_for_maxmemory"));
+                    Assert.assertTrue(keys.contains("ledger_used_bytes"));
+                    Assert.assertTrue(keys.contains("ledger_reserved_bytes"));
                     Assert.assertTrue(keys.contains("offheap_used_bytes"));
+                    Assert.assertTrue(keys.contains("offheap_included_in_maxmemory"));
                     Assert.assertTrue(keys.contains("total_estimated_bytes"));
+                    Assert.assertTrue(keys.contains("keyspace_rehashing"));
+                    Assert.assertTrue(keys.contains("keyspace_table0_capacity"));
+                    Assert.assertTrue(keys.contains("expire_rehashing"));
                     Assert.assertTrue(keys.contains("key_count"));
                     Assert.assertTrue(keys.contains("expire_count"));
                 }

@@ -25,13 +25,16 @@ public class MemoryStatsCommandTest {
                 Assert.assertTrue(resp instanceof RespArray);
                 List<RespObject> values = ((RespArray) resp).values();
                 Assert.assertNotNull(values);
-                Assert.assertEquals(34, values.size());
+                Assert.assertEquals(40, values.size());
 
                 Map<String, RespObject> map = toObjectMap(values);
                 Assert.assertTrue(map.containsKey("maxmemory_bytes"));
                 Assert.assertTrue(map.containsKey("used_bytes_for_maxmemory"));
-                Assert.assertTrue(map.containsKey("heap_data_bytes_estimate"));
+                Assert.assertTrue(map.containsKey("effective_used_bytes_for_maxmemory"));
+                Assert.assertTrue(map.containsKey("ledger_used_bytes"));
+                Assert.assertTrue(map.containsKey("ledger_reserved_bytes"));
                 Assert.assertTrue(map.containsKey("offheap_used_bytes"));
+                Assert.assertTrue(map.containsKey("offheap_included_in_maxmemory"));
                 Assert.assertTrue(map.containsKey("total_estimated_bytes"));
                 Assert.assertTrue(map.containsKey("keyspace_rehashing"));
                 Assert.assertTrue(map.containsKey("keyspace_table0_capacity"));
@@ -39,7 +42,9 @@ public class MemoryStatsCommandTest {
 
                 assertLongValue(map.get("maxmemory_bytes"));
                 assertLongValue(map.get("used_bytes_for_maxmemory"));
-                assertLongValue(map.get("heap_data_bytes_estimate"));
+                assertLongValue(map.get("effective_used_bytes_for_maxmemory"));
+                assertLongValue(map.get("ledger_used_bytes"));
+                assertLongValue(map.get("ledger_reserved_bytes"));
                 assertLongValue(map.get("offheap_used_bytes"));
                 assertLongValue(map.get("total_estimated_bytes"));
                 assertLongValue(map.get("key_count"));

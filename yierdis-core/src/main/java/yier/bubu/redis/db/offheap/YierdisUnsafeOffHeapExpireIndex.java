@@ -3,6 +3,8 @@ package yier.bubu.redis.db.offheap;
 import yier.bubu.redis.db.YierdisBytesView;
 import yier.bubu.redis.db.YierdisExpireIndex;
 import yier.bubu.redis.db.YierdisKeyspace;
+import yier.bubu.redis.db.key.KeyHandle;
+import yier.bubu.redis.db.key.KeyHandleAccess;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBlock;
 
@@ -29,7 +31,6 @@ public final class YierdisUnsafeOffHeapExpireIndex implements YierdisExpireIndex
             ThreadLocal.withInitial(() -> new byte[ZERO_CHUNK_BYTES]);
 
     private final YierdisOffHeapAddressAllocator allocator;
-    private final int seed;
 
     private Table table0;
     private Table table1;
@@ -37,7 +38,6 @@ public final class YierdisUnsafeOffHeapExpireIndex implements YierdisExpireIndex
 
     public YierdisUnsafeOffHeapExpireIndex(YierdisOffHeapAddressAllocator allocator) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
-        this.seed = ThreadLocalRandom.current().nextInt();
     }
 
     @Override
@@ -58,19 +58,12 @@ public final class YierdisUnsafeOffHeapExpireIndex implements YierdisExpireIndex
             return null;
         }
         rehashStep();
-        int h = hash(keyBytes);
-        int idx = findIndex(t0, keyBytes, h);
-        if (idx >= 0) {
-            return getLong(t0.expireAtAddr, idx);
+        Location loc = findLocationByContent(keyBytes);
+        if (loc == null) {
+            return null;
         }
-        Table t1 = table1;
-        if (t1 != null) {
-            idx = findIndex(t1, keyBytes, h);
-            if (idx >= 0) {
-                return getLong(t1.expireAtAddr, idx);
-            }
-        }
-        return null;
+        Table t = loc.table == 0 ? table0 : table1;
+        return getLong(t.expireAtAddr, loc.index);
     }
 
     @Override
@@ -81,14 +74,41 @@ public final class YierdisUnsafeOffHeapExpireIndex implements YierdisExpireIndex
             return null;
         }
         rehashStep();
-        int h = hash(keyView);
-        int idx = findIndex(t0, keyView, h);
+        Location loc = findLocationByContent(keyView);
+        if (loc == null) {
+            return null;
+        }
+        Table t = loc.table == 0 ? table0 : table1;
+        return getLong(t.expireAtAddr, loc.index);
+    }
+
+    @Override
+    public Long get(KeyHandle keyHandle) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        if (!KeyHandleAccess.isOffHeap(keyHandle)) {
+            throw new IllegalArgumentException("expected an off-heap KeyHandle");
+        }
+        if (KeyHandleAccess.offHeapAllocator(keyHandle) != allocator) {
+            throw new IllegalArgumentException("key allocator mismatch: expected shared allocator");
+        }
+
+        Table t0 = table0;
+        if (t0 == null) {
+            return null;
+        }
+        rehashStep();
+
+        int h = keyHandle.dictHash();
+        int keyLen = keyHandle.len();
+        long keyPtr = KeyHandleAccess.offHeapAddress(keyHandle);
+
+        int idx = findIndexByPtr(t0, keyPtr, keyLen, h);
         if (idx >= 0) {
             return getLong(t0.expireAtAddr, idx);
         }
         Table t1 = table1;
         if (t1 != null) {
-            idx = findIndex(t1, keyView, h);
+            idx = findIndexByPtr(t1, keyPtr, keyLen, h);
             if (idx >= 0) {
                 return getLong(t1.expireAtAddr, idx);
             }
@@ -122,6 +142,31 @@ public final class YierdisUnsafeOffHeapExpireIndex implements YierdisExpireIndex
     }
 
     @Override
+    public KeyHandle randomKeyHandle() {
+        Table t0 = table0;
+        if (t0 == null) {
+            return null;
+        }
+        rehashStep();
+        int total = size();
+        if (total == 0) {
+            return null;
+        }
+
+        Table t1 = table1;
+        if (t1 == null) {
+            return randomKeyHandleFromTable(t0);
+        }
+
+        int r = ThreadLocalRandom.current().nextInt(total);
+        KeyHandle k = r < t0.size ? randomKeyHandleFromTable(t0) : randomKeyHandleFromTable(t1);
+        if (k != null) {
+            return k;
+        }
+        return r < t0.size ? randomKeyHandleFromTable(t1) : randomKeyHandleFromTable(t0);
+    }
+
+    @Override
     public void clear() {
         Table t0 = table0;
         if (t0 != null) {
@@ -145,18 +190,37 @@ public final class YierdisUnsafeOffHeapExpireIndex implements YierdisExpireIndex
             throw new IllegalArgumentException("store must be YierdisUnsafeOffHeapKeyspace");
         }
 
-        YierdisUnsafeOffHeapKeyspace.KeyHandle handle = unsafeStore.keyHandle(keyBytes);
+        KeyHandle handle = unsafeStore.keyHandle(keyBytes);
         if (handle == null) {
             return;
+        }
+        if (!KeyHandleAccess.isOffHeap(handle)) {
+            throw new IllegalArgumentException("expected an off-heap KeyHandle from off-heap keyspace");
+        }
+        if (KeyHandleAccess.offHeapAllocator(handle) != allocator) {
+            throw new IllegalArgumentException("key allocator mismatch: expected shared allocator");
+        }
+
+        setExpireAtMillis(handle, expireAtMillis);
+    }
+
+    @Override
+    public void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        if (!KeyHandleAccess.isOffHeap(keyHandle)) {
+            throw new IllegalArgumentException("expected an off-heap KeyHandle");
+        }
+        if (KeyHandleAccess.offHeapAllocator(keyHandle) != allocator) {
+            throw new IllegalArgumentException("key allocator mismatch: expected shared allocator");
         }
 
         ensureTable0();
         rehashStep();
         maybeStartRehashForInsert();
 
-        int h = hash(keyBytes);
-        long keyPtr = handle.keyPtr;
-        int keyLen = handle.keyLen;
+        int h = keyHandle.dictHash();
+        long keyPtr = KeyHandleAccess.offHeapAddress(keyHandle);
+        int keyLen = keyHandle.len();
 
         int idx = findIndexByPtr(table0, keyPtr, keyLen, h);
         if (idx >= 0) {
@@ -191,12 +255,45 @@ public final class YierdisUnsafeOffHeapExpireIndex implements YierdisExpireIndex
             return;
         }
         rehashStep();
-        int h = hash(keyBytes);
-        Location loc = findLocation(keyBytes, h);
+        Location loc = findLocationByContent(keyBytes);
         if (loc == null) {
             return;
         }
         loc.remove();
+    }
+
+    @Override
+    public void removeExpire(KeyHandle keyHandle) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        if (!KeyHandleAccess.isOffHeap(keyHandle)) {
+            throw new IllegalArgumentException("expected an off-heap KeyHandle");
+        }
+        if (KeyHandleAccess.offHeapAllocator(keyHandle) != allocator) {
+            throw new IllegalArgumentException("key allocator mismatch: expected shared allocator");
+        }
+
+        Table t0 = table0;
+        if (t0 == null) {
+            return;
+        }
+        rehashStep();
+
+        int h = keyHandle.dictHash();
+        long keyPtr = KeyHandleAccess.offHeapAddress(keyHandle);
+        int keyLen = keyHandle.len();
+
+        int idx0 = findIndexByPtr(t0, keyPtr, keyLen, h);
+        if (idx0 >= 0) {
+            new Location(0, idx0).remove();
+            return;
+        }
+        Table t1 = table1;
+        if (t1 != null) {
+            int idx1 = findIndexByPtr(t1, keyPtr, keyLen, h);
+            if (idx1 >= 0) {
+                new Location(1, idx1).remove();
+            }
+        }
     }
 
     private void ensureTable0() {
@@ -206,17 +303,64 @@ public final class YierdisUnsafeOffHeapExpireIndex implements YierdisExpireIndex
         table0 = new Table(MIN_CAPACITY);
     }
 
-    private Location findLocation(byte[] keyBytes, int hash) {
+    private Location findLocationByContent(byte[] keyBytes) {
         Table t0 = table0;
-        int idx0 = findIndex(t0, keyBytes, hash);
-        if (idx0 >= 0) {
-            return new Location(0, idx0);
+        if (t0 == null) {
+            return null;
+        }
+        int keyLen = keyBytes.length;
+        for (int i = 0; i < t0.capacity; i++) {
+            if (getByte(t0.statesAddr, i) != STATE_FILLED) {
+                continue;
+            }
+            int storedLen = getInt(t0.keyLenAddr, i);
+            if (storedLen == keyLen && equalsKey(getLong(t0.keyPtrAddr, i), keyBytes, keyLen)) {
+                return new Location(0, i);
+            }
         }
         Table t1 = table1;
         if (t1 != null) {
-            int idx1 = findIndex(t1, keyBytes, hash);
-            if (idx1 >= 0) {
-                return new Location(1, idx1);
+            for (int i = 0; i < t1.capacity; i++) {
+                if (getByte(t1.statesAddr, i) != STATE_FILLED) {
+                    continue;
+                }
+                int storedLen = getInt(t1.keyLenAddr, i);
+                if (storedLen == keyLen && equalsKey(getLong(t1.keyPtrAddr, i), keyBytes, keyLen)) {
+                    return new Location(1, i);
+                }
+            }
+        }
+        return null;
+    }
+
+    private Location findLocationByContent(YierdisBytesView keyView) {
+        Table t0 = table0;
+        if (t0 == null) {
+            return null;
+        }
+        int keyLen = keyView.len();
+        if (keyLen < 0) {
+            throw new IllegalArgumentException("key length must be non-negative");
+        }
+        for (int i = 0; i < t0.capacity; i++) {
+            if (getByte(t0.statesAddr, i) != STATE_FILLED) {
+                continue;
+            }
+            int storedLen = getInt(t0.keyLenAddr, i);
+            if (storedLen == keyLen && equalsKey(getLong(t0.keyPtrAddr, i), keyView, keyLen)) {
+                return new Location(0, i);
+            }
+        }
+        Table t1 = table1;
+        if (t1 != null) {
+            for (int i = 0; i < t1.capacity; i++) {
+                if (getByte(t1.statesAddr, i) != STATE_FILLED) {
+                    continue;
+                }
+                int storedLen = getInt(t1.keyLenAddr, i);
+                if (storedLen == keyLen && equalsKey(getLong(t1.keyPtrAddr, i), keyView, keyLen)) {
+                    return new Location(1, i);
+                }
             }
         }
         return null;
@@ -247,12 +391,51 @@ public final class YierdisUnsafeOffHeapExpireIndex implements YierdisExpireIndex
         return null;
     }
 
+    private KeyHandle randomKeyHandleFromTable(Table t) {
+        int len = t.capacity;
+        if (len == 0) {
+            return null;
+        }
+        int mask = len - 1;
+        int start = ThreadLocalRandom.current().nextInt(len);
+
+        int quickSteps = Math.min(16, len);
+        for (int i = 0; i < quickSteps; i++) {
+            int idx = (start + i) & mask;
+            if (getByte(t.statesAddr, idx) == STATE_FILLED) {
+                return keyHandleFromSlot(t, idx);
+            }
+        }
+
+        for (int i = 0; i < len; i++) {
+            int idx = (start + i) & mask;
+            if (getByte(t.statesAddr, idx) == STATE_FILLED) {
+                return keyHandleFromSlot(t, idx);
+            }
+        }
+        return null;
+    }
+
+    private KeyHandle keyHandleFromSlot(Table t, int index) {
+        int keyLen = getInt(t.keyLenAddr, index);
+        long keyPtr = getLong(t.keyPtrAddr, index);
+        int h = getInt(t.hashesAddr, index);
+        if (keyLen < 0) {
+            keyLen = 0;
+        }
+        if (keyPtr == 0 && keyLen > 0) {
+            return null;
+        }
+        return KeyHandle.forOffHeap(allocator, keyPtr, keyLen, h);
+    }
+
     private byte[] copyKeyBytes(Table t, int index) {
         int keyLen = getInt(t.keyLenAddr, index);
         long keyPtr = getLong(t.keyPtrAddr, index);
         if (keyLen <= 0 || keyPtr == 0) {
             return new byte[0];
         }
+        OffHeapKeyCopyDiagnostics.onHeapKeyCopy();
         byte[] out = new byte[keyLen];
         allocator.copyMemory(keyPtr, out, 0, keyLen);
         return out;
@@ -522,35 +705,6 @@ public final class YierdisUnsafeOffHeapExpireIndex implements YierdisExpireIndex
             }
         }
         return true;
-    }
-
-    private int hash(byte[] key) {
-        int h = java.util.Arrays.hashCode(key) ^ seed;
-        h ^= (h >>> 16);
-        h *= 0x7feb352d;
-        h ^= (h >>> 15);
-        h *= 0x846ca68b;
-        h ^= (h >>> 16);
-        return h == 0 ? 1 : h;
-    }
-
-    private int hash(YierdisBytesView key) {
-        int len = key.len();
-        if (len < 0) {
-            throw new IllegalArgumentException("key length must be non-negative");
-        }
-        int base = 1;
-        for (int i = 0; i < len; i++) {
-            base = 31 * base + key.byteAt(i);
-        }
-
-        int h = base ^ seed;
-        h ^= (h >>> 16);
-        h *= 0x7feb352d;
-        h ^= (h >>> 15);
-        h *= 0x846ca68b;
-        h ^= (h >>> 16);
-        return h == 0 ? 1 : h;
     }
 
     private static int tableSizeFor(int expectedSize, float loadFactor) {

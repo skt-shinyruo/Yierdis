@@ -54,10 +54,9 @@ final class ListCommands {
         int valuesLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, valuesLen);
         try {
-            int len = left
-                    ? db.lpush(cmd.toByteArray(1), support.slice())
-                    : db.rpush(cmd.toByteArray(1), support.slice());
-            db.enforceMaxmemory();
+            long len = left
+                    ? db.values().lists().lpush(cmd.toByteArray(1), support.slice())
+                    : db.values().lists().rpush(cmd.toByteArray(1), support.slice());
             out.integer(len);
         } finally {
             support.clearScratch(valuesLen);
@@ -73,12 +72,13 @@ final class ListCommands {
         int stop = CommandSupport.parseIntClamped(cmd, 3, "stop");
 
         byte[] key = cmd.toByteArray(1);
-        int count = support.db(out).lrangeReplyCount(key, start, stop);
+        YierdisDb db = support.db(out);
+        int count = db.values().lists().lrangeReplyCount(key, start, stop);
         out.arrayHeader(count);
         if (count == 0) {
             return;
         }
-        support.db(out).lrangeReplyInto(key, start, stop, support.bulkOut(out));
+        db.values().lists().lrangeReplyInto(key, start, stop, support.bulkOut(out));
     }
 
     private void pop(RespCommand cmd, RespWriter out, boolean left) {
@@ -100,9 +100,10 @@ final class ListCommands {
             }
         }
 
+        YierdisDb db = support.db(out);
         List<byte[]> popped = left
-                ? support.db(out).lpop(cmd.toByteArray(1), count)
-                : support.db(out).rpop(cmd.toByteArray(1), count);
+                ? db.values().lists().lpop(cmd.toByteArray(1), count)
+                : db.values().lists().rpop(cmd.toByteArray(1), count);
         popResponse(out, popped, hasCount);
     }
 

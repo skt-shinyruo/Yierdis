@@ -41,7 +41,6 @@ final class ZSetCommands {
         support.sliceResetFromCommand(cmd, 2, pairsLen);
         try {
             long added = db.zadd(cmd.toByteArray(1), support.slice());
-            db.enforceMaxmemory();
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);

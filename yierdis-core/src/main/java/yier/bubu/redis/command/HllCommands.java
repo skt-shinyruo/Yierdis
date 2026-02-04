@@ -32,7 +32,6 @@ final class HllCommands {
         long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         db.prepareWrite(extra);
         long changed = db.pfadd(cmd.toByteArray(1), cmd, 2);
-        db.enforceMaxmemory();
         out.integer(changed);
     }
 
@@ -66,7 +65,6 @@ final class HllCommands {
         } finally {
             support.clearScratch(sourcesLen);
         }
-        db.enforceMaxmemory();
         out.simpleString("OK");
     }
 }

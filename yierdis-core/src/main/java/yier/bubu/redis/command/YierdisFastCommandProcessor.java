@@ -6,6 +6,8 @@ import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespServerSession;
 import yier.bubu.redis.protocol.RespTransactionState;
 import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.runtime.YierdisChangeEvent;
+import yier.bubu.redis.runtime.YierdisChangeSink;
 
 import java.util.Objects;
 
@@ -18,18 +20,46 @@ public final class YierdisFastCommandProcessor {
     private static final String NULL_BULK_STRING_ERR = "ERR Protocol error: null bulk string";
 
     private final CommandRegistry registry;
+    private final YierdisDbRouter dbRouter;
+    private final YierdisChangeSink changeSink;
 
     public YierdisFastCommandProcessor(YierdisDb db) {
-        this(db, null);
+        this(db, null, YierdisChangeSink.NOOP, null);
     }
 
     public YierdisFastCommandProcessor(YierdisDb db, ServerInfoProvider infoProvider) {
-        this(singleDbRouter(db), infoProvider);
+        this(db, infoProvider, YierdisChangeSink.NOOP, null);
+    }
+
+    public YierdisFastCommandProcessor(YierdisDb db, ServerInfoProvider infoProvider, YierdisChangeSink changeSink) {
+        this(db, infoProvider, changeSink, null);
+    }
+
+    public YierdisFastCommandProcessor(YierdisDb db, ServerInfoProvider infoProvider, SlowCommandGovernor slowGovernor) {
+        this(db, infoProvider, YierdisChangeSink.NOOP, slowGovernor);
+    }
+
+    public YierdisFastCommandProcessor(YierdisDb db, ServerInfoProvider infoProvider, YierdisChangeSink changeSink, SlowCommandGovernor slowGovernor) {
+        this(singleDbRouter(db), infoProvider, changeSink, slowGovernor);
     }
 
     public YierdisFastCommandProcessor(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider) {
+        this(dbRouter, infoProvider, YierdisChangeSink.NOOP, null);
+    }
+
+    public YierdisFastCommandProcessor(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider, YierdisChangeSink changeSink) {
+        this(dbRouter, infoProvider, changeSink, null);
+    }
+
+    public YierdisFastCommandProcessor(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider, SlowCommandGovernor slowGovernor) {
+        this(dbRouter, infoProvider, YierdisChangeSink.NOOP, slowGovernor);
+    }
+
+    public YierdisFastCommandProcessor(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider, YierdisChangeSink changeSink, SlowCommandGovernor slowGovernor) {
         Objects.requireNonNull(dbRouter, "dbRouter");
-        CommandSupport support = new CommandSupport(dbRouter, infoProvider);
+        this.dbRouter = dbRouter;
+        this.changeSink = changeSink == null ? YierdisChangeSink.NOOP : changeSink;
+        CommandSupport support = new CommandSupport(dbRouter, infoProvider, slowGovernor);
         CommandRegistry registry = new CommandRegistry();
         new TransactionCommands(support, this).register(registry);
         new ServerCommands(support).register(registry);
@@ -97,6 +127,7 @@ public final class YierdisFastCommandProcessor {
             }
         }
 
+        YierdisDb db = null;
         try {
             CommandRegistry.CommandHandler handler = registry.find(cmd);
             if (handler == null) {
@@ -104,6 +135,19 @@ public final class YierdisFastCommandProcessor {
                 return;
             }
             handler.execute(cmd, out);
+
+            // 变更事件：仅在命令执行成功后触发，并尽量避免对读命令做额外分配。
+            if (changeSink != YierdisChangeSink.NOOP && isWriteCommand(cmd)) {
+                int dbIndex = 0;
+                if (out != null && out.session() instanceof RespServerSession s) {
+                    dbIndex = Math.max(0, s.dbIndex());
+                }
+                try {
+                    changeSink.onChange(new YierdisChangeEvent(dbIndex, copyArgv(cmd)));
+                } catch (Throwable ignored) {
+                    // best-effort: 事件消费失败不应影响主命令执行路径
+                }
+            }
         } catch (YierdisDb.WrongTypeException e) {
             out.error(e.getMessage());
         } catch (YierdisDb.YierdisCommandException e) {
@@ -112,7 +156,49 @@ public final class YierdisFastCommandProcessor {
             out.error("OOM off-heap memory limit exceeded");
         } catch (IllegalArgumentException e) {
             out.error("ERR " + e.getMessage());
+        } finally {
+            // Ensure a command never leaks a pending maxmemory reservation to the next command.
+            // Command implementations are expected to finish (commit/rollback) their own reservations,
+            // but this is a defensive last line to keep invariants stable.
+            try {
+                db = dbRouter.dbFor(out);
+                if (db != null) {
+                    db.rollbackWriteReservationIfAny();
+                }
+            } catch (Throwable ignored) {
+                // best-effort
+            }
         }
+    }
+
+    private static boolean isWriteCommand(RespCommand cmd) {
+        // 约定：事件流用于 AOF/replication 等外部能力，因此以“可能改变状态”的命令集合为准。
+        // 这里不在核心层做“是否真实发生变更”的判定（例如 DEL 0 / SET NX 未写入等）。
+        return CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "SET")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "APPEND")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "SETBIT")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "INCR")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "DECR")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "PFADD")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "LPUSH")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "RPUSH")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "LPOP")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "RPOP")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "HSET")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "HDEL")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "SADD")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "SREM")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "ZADD")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "ZREM")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "ZREMRANGEBYSCORE")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "ZREMRANGEBYRANK")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "DEL")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "EXPIRE")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "PEXPIRE")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "EXPIREAT")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "PEXPIREAT")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "PERSIST")
+                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "FLUSHDB");
     }
 
     private static byte[][] copyArgv(RespCommand cmd) {
