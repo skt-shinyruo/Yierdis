@@ -105,7 +105,7 @@ public class HelloInMultiProtocolGuardTest {
                 bulk(ascii("version")),
                 bulk(ascii(loadVersion())),
                 bulk(ascii("proto")),
-                bulk(ascii("3")),
+                ascii(":3\r\n"),
                 bulk(ascii("mode")),
                 bulk(ascii("standalone")),
                 bulk(ascii("role")),

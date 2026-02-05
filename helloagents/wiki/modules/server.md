@@ -107,19 +107,19 @@
 
 `KEYS` 属于“潜在全表扫描”命令：在大数据集/rehash/过期清理叠加时，容易长时间占用 executor，导致整体 tail latency 飙升甚至触发 backpressure。
 
-本项目的治理策略是“保守预算 + fail-fast + 推荐 SCAN”：
+本项目的治理策略是“保守预算 + 结果截断 + 推荐 SCAN”：
 - core 提供 `SlowCommandGovernor` 作为治理 SSOT：定义 `KEYS` 的时间预算与结果上限（两者都可配置）。
 - server 仅负责将启动参数注入到 command processor（embedded 场景也可直接注入自定义 governor）。
-- 语义选择：当预算耗尽或结果超过上限时，**返回错误并不给出部分结果**（避免调用方误以为拿到完整集），并提示使用 `SCAN`。
+- 语义选择：当预算耗尽或结果超过上限时，**返回已收集的部分结果（可能被截断）**，不再直接报错（提升脚本/客户端的兼容直觉）；若需要可证明的完整遍历，请使用 `SCAN`。
 
 #### Configuration: 相关启动参数
 - `--keysTimeBudgetMillis <ms>`：`KEYS` 的时间预算（0 表示不限制；默认 20ms）
 - `--keysMaxResults <n>`：`KEYS` 结果上限（0 表示禁用 `KEYS`；默认无限制）
 
-#### Scenario: KEYS 超时/超量时 fail-fast
+#### Scenario: KEYS 超时/超量时返回部分结果
 - 条件：大数据集下执行 `KEYS *`
-- 预期：当超出 `--keysTimeBudgetMillis` 时返回 `ERR KEYS time budget exceeded (use SCAN)`
-- 预期：当达到 `--keysMaxResults` 但扫描未结束时返回 `ERR KEYS result limit exceeded (use SCAN)`
+- 预期：当超出 `--keysTimeBudgetMillis` 时仍返回 bulk string array（可能为空/不完整），不再返回错误
+- 预期：当达到 `--keysMaxResults` 但扫描未结束时返回前 N 个匹配 key（不完整），不再返回错误
 
 ### Requirement: 优雅关停（Graceful Shutdown）
 **Module:** server
@@ -148,4 +148,5 @@
 - 2026-01-16：连接生命周期收敛：`QUIT` 纳入 core 命令；执行器支持 close-after-reply，并在 QUIT 后丢弃该连接后续 backlog 命令（仅回收，不执行）。
 - 2026-01-17：server 装配与边界收敛：Pipeline 装配下沉到 `YierdisServerChannelInitializer`；连接态二分（`ConnectionContext` 仅协议会话，运行时连接状态迁移到 `ServerConnectionState`）；执行器调度 state 下沉为 server 私有 `NettyExecutorChannelState`；协议 request 解码严格化（reply/非法前缀判为 protocol error 并关闭连接）。
 - 2026-02-01：多 DB 支持：新增 `--databases`，bootstrap 装配 DB0..N-1 并按连接态路由；INFO 形态对齐 Redis（bulk string），保留 `INFO YIERDIS`/`STATS` 结构化指标；连接关闭语义加固：连接关闭/协议错误会标记 closing，执行器跳过该连接后续 backlog（仅回收不执行），避免副作用与资源浪费。
+- 2026-02-05：兼容性语义调整：`KEYS` 在时间预算/结果上限触达时改为返回部分结果（不再 fail-fast 抛错）；request 解码更贴近 Redis（top-level 非 array 按 inline 处理，不再因为 RESP reply 前缀直接 `expected array`）；`HELLO 3` 回复中 `proto` 字段改为整数类型。
 - 2026-02-04：bootstrap 装配收敛：server 改为使用 core 的 `YierdisInstance` 统一 DB/路由/生命周期装配语义，为 bench/工具/嵌入式用法提供可复用基座。

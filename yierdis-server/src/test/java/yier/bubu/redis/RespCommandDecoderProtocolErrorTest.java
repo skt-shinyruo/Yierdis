@@ -14,15 +14,15 @@ import java.nio.charset.StandardCharsets;
 
 public class RespCommandDecoderProtocolErrorTest {
     @Test
-    public void decoderRejectsRespReplyPrefixInsteadOfTreatingAsInlineCommand() {
+    public void decoderTreatsRespTypePrefixesAsInlineCommandInsteadOfProtocolError() {
         try (TestEnv env = new TestEnv()) {
             EmbeddedChannel ch = env.ch;
 
-            // RESP3 map reply prefix: must be rejected as protocol error (requests must be arrays or inline).
+            // Redis-like behavior: top-level non-array is parsed as inline command.
             ch.writeInbound(Unpooled.wrappedBuffer(ascii("%0\r\n")));
 
-            Assert.assertArrayEquals(ascii("-ERR Protocol error: expected array\r\n"), readOutbound(ch));
-            Assert.assertFalse("protocol error must close the connection", ch.isActive());
+            Assert.assertArrayEquals(ascii("-ERR unknown command '%0'\r\n"), readOutbound(ch));
+            Assert.assertTrue("unknown command must keep the connection open", ch.isActive());
         }
     }
 
@@ -92,4 +92,3 @@ public class RespCommandDecoderProtocolErrorTest {
         return s.getBytes(StandardCharsets.US_ASCII);
     }
 }
-

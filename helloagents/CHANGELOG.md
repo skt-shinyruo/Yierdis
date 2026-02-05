@@ -20,7 +20,7 @@
 - 新增 core 可嵌入 instance API：`yier.bubu.redis.runtime.YierdisInstance`（Netty-free），统一多 DB 装配/路由/生命周期语义；server bootstrap 迁移为复用该 SSOT，减少装配重复与行为漂移。
 - 新增内核契约（SSOT）基座：`KeyHandle`（`yier.bubu.redis.db.key.KeyHandle`）与 `MemoryLedger`（`yier.bubu.redis.db.memory.MemoryLedger`）的最小类型/不变量测试，并补齐 SCAN cursor/TTL/maxmemory 的契约级 smoke 覆盖，为后续渐进迁移与灰度开关落地提供稳定边界。
 - 新增 SCAN cursor v2 SSOT：`ScanCursorV2`（rehash-aware）+ keyspace time-slice scan，SCAN 默认使用 v2 并以“数字 bulk string”保持生态兼容。
-- 新增慢命令治理 SSOT：`SlowCommandGovernor` + `--keysTimeBudgetMillis/--keysMaxResults`，KEYS 在预算/上限触达时 fail-fast（提示使用 SCAN）。
+- 新增慢命令治理 SSOT：`SlowCommandGovernor` + `--keysTimeBudgetMillis/--keysMaxResults`，KEYS 在预算/上限触达时返回部分结果（推荐使用 SCAN 做完整遍历）。
 - 新增生产能力扩展前置接口：`YierdisChangeSink`（事件流）与 `YierdisSnapshot`（time-slice 快照），作为 AOF/RDB/replication/ACL/modules 的 guardrails 基座（本版本不启用真实持久化）。
 - DB core 组件化拆分：引入 `yier.bubu.redis.ops.*`（`DbEngine/ValueOps/*Ops/ExpirationManager/EvictionCoordinator`）并迁移命令层调用，降低存储-命令耦合与修改半径。
 - 新增 off-heap keys 零 canonical heap copy 回归：`OffHeapKeyCopyDiagnostics` + `OffHeapKeysZeroCopyReadPathTest`，锁定 `GET/EXISTS/TYPE/TTL` 热路径不触发 heap key 拷贝。
@@ -85,10 +85,11 @@
 - server bootstrap 内聚：pipeline 组装下沉到 `YierdisServerChannelInitializer`，bootstrap 聚焦启动与生命周期管理，降低装配逻辑分散与测试成本。
 - 协议栈收敛：`RespDecoder` 仅切帧输出 `NettyRespFrame`（frame/zero-copy 取向），client/bench/CLI 统一走 frame；对象模型解析仅用于调试/输出（按需解析）。
 - 连接态二分：`ConnectionContext` 仅表达连接级协议会话（RESP2/RESP3）；pending/backpressure/closing/counters 迁移到 server 私有 `ServerConnectionState`；执行器调度 state（per-channel queue + scheduled 标志）继续收敛到 `NettyExecutorChannelState`（`Channel.attr`），避免 protocol 模块携带 server 语义与调度实现细节。
-- request 解码严格化：明确允许集合（array + inline），对 RESP reply/RESP3 前缀与控制字符前缀统一 protocol error，并由 server 返回错误后关闭连接，避免状态错乱。
+- request 解码语义对齐 Redis：明确允许集合（array + inline），top-level 非 array 按 inline 处理；控制字符/结构性错误仍作为 protocol error，并由 server 返回错误后关闭连接，避免状态错乱。
 - 命令路由加速：`CommandRegistry` 从线性扫描升级为开放寻址哈希索引（期望 O(1)，运行时零分配）。
 
 ### Fixed
+- HELLO 回复类型对齐：`HELLO 3` 的 RESP3 map 中 `proto` 字段改为整数（`:3`），`HELLO 2` 的数组回复中 `proto` 改为整数（`:2`），更贴近 Redis/RESP3 语义。
 - protocol-netty：RESP3 全覆盖加固：request decoder 支持 `|` attributes + 标量参数 + `$?` streamed blob string + `*?` streamed command array；reply 切帧 decoder 支持 `$?`/`*?/%?/~?` streamed；client 支持 push 分流（避免 request/response 错配）
 - RespObject/文档注释对齐：RESP3 支持范围与对象模型一致，避免“注释仍写 RESP2 types”造成误解。
 - 修复事务场景下 `HELLO` 可被入队导致 `EXEC` reply 混入 RESP3 map（`%`）前缀、破坏 RESP2 客户端解析的问题：MULTI 模式下禁止 `HELLO`，并触发 `EXECABORT`（协议安全护栏）。

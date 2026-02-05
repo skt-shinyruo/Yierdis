@@ -1,6 +1,6 @@
 package yier.bubu.redis.protocol.netty;
 
-// RESP 请求解码器：支持 RESP2 array-of-bulk-strings 与 inline command，并显式拒绝 reply 前缀以避免误解析。
+// RESP 请求解码器：支持 RESP2 array-of-bulk-strings 与 inline command（更贴近 Redis：非 '*' 前缀按 inline 处理）。
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -75,44 +75,12 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
         if (first == '*') {
             return decodeCommandArray(in, cmdStartIdx);
         }
-        // 严格区分 request 与 reply：禁止将 RESP reply（含 RESP3 类型前缀）误判为 inline command。
-        // 允许的 request：
-        // 1) RESP2 array-of-bulk-strings（以 '*' 开头）
-        // 2) inline command（用于调试；sdssplitargs 风格）
-        if (isRespReplyPrefix(first)) {
-            throw new IllegalArgumentException("Protocol error: expected array");
-        }
+        // Redis 兼容：top-level 非 array 的输入按 inline command 解析（sdssplitargs 风格）。
+        // 说明：这会使得某些“非标准 RESP frame”（例如误把 reply 前缀当 request）更像 unknown command，而不是直接 fail-fast。
         if (isInvalidRequestPrefix(first)) {
             throw new IllegalArgumentException("Protocol error: invalid request");
         }
         return decodeInlineCommand(in, cmdStartIdx);
-    }
-
-    private static boolean isRespReplyPrefix(byte b) {
-        // RESP2 reply:
-        // + simple string, - error, : integer, $ bulk string, * array
-        // RESP3 types we may see from buggy clients:
-        // _ null, % map, # boolean, , double, ( big number, ~ set, > push, = verbatim, ! blob error, | attribute
-        // 说明：这里不需要覆盖全部 RESP3 类型，但覆盖常见前缀可以避免误路由为 inline command。
-        switch (b) {
-            case '+':
-            case '-':
-            case ':':
-            case '$':
-            case '*':
-            case '_':
-            case '%':
-            case '#':
-            case ',':
-            case '(':
-            case '~':
-            case '>':
-            case '=':
-            case '!':
-                return true;
-            default:
-                return false;
-        }
     }
 
     private static boolean isInvalidRequestPrefix(byte b) {
@@ -180,6 +148,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
                         break;
                     }
                     case '+':
+                    case '-':
                     case ':':
                     case ',':
                     case '(': {
@@ -192,6 +161,14 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
                     }
                     case '#': {
                         if (!tryDecodeBooleanArg(in, startIdx, cmd, i)) {
+                            cmd.close();
+                            in.readerIndex(startIdx);
+                            return null;
+                        }
+                        break;
+                    }
+                    case '!': {
+                        if (!tryDecodeBlobErrorArg(in, startIdx, cmd, i)) {
                             cmd.close();
                             in.readerIndex(startIdx);
                             return null;
@@ -466,6 +443,7 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
                 return len;
             }
             case '+':
+            case '-':
             case ':':
             case ',':
             case '(': {
@@ -486,6 +464,46 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
                     outBuf.writeBytes(in, lineStart, len);
                 }
                 in.readerIndex(lineEnd + 2);
+                return len;
+            }
+            case '!': {
+                int lenLineStart = in.readerIndex();
+                int lenLineEnd = RespDecodingSupport.indexOfCrlf(in, lenLineStart, maxLineBytes);
+                if (lenLineEnd < 0) {
+                    if (in.writerIndex() - lenLineStart > maxLineBytes + 2) {
+                        throw new IllegalArgumentException("Protocol error: line too long");
+                    }
+                    in.readerIndex(startIdx);
+                    return Integer.MIN_VALUE;
+                }
+
+                if (RespDecodingSupport.isSingleCharLine(in, lenLineStart, lenLineEnd, (byte) '?')) {
+                    throw new IllegalArgumentException("Protocol error: invalid blob error length");
+                }
+
+                int len = RespDecodingSupport.parseIntAscii(in, lenLineStart, lenLineEnd);
+                if (len < 0) {
+                    throw new IllegalArgumentException("Protocol error: invalid blob error length");
+                }
+                if (len > maxBulkBytes) {
+                    throw new IllegalArgumentException("Protocol error: bulk length too large");
+                }
+
+                int dataStart = lenLineEnd + 2;
+                int dataEnd = dataStart + len;
+                int end = dataEnd + 2;
+                if (in.writerIndex() < end) {
+                    in.readerIndex(startIdx);
+                    return Integer.MIN_VALUE;
+                }
+                if (in.getByte(dataEnd) != RespDecodingSupport.CR || in.getByte(dataEnd + 1) != RespDecodingSupport.LF) {
+                    throw new IllegalArgumentException("Protocol error: bad bulk string CRLF");
+                }
+
+                if (len > 0) {
+                    outBuf.writeBytes(in, dataStart, len);
+                }
+                in.readerIndex(end);
                 return len;
             }
             case '#': {
@@ -1260,6 +1278,48 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
         }
         if (len < -1) {
             throw new IllegalArgumentException("Protocol error: invalid bulk length");
+        }
+        if (len > maxBulkBytes) {
+            throw new IllegalArgumentException("Protocol error: bulk length too large");
+        }
+
+        int dataStart = lenLineEnd + 2;
+        int dataEnd = dataStart + len;
+        int end = dataEnd + 2;
+        if (in.writerIndex() < end) {
+            in.readerIndex(startIdx);
+            return false;
+        }
+
+        if (in.getByte(dataEnd) != RespDecodingSupport.CR || in.getByte(dataEnd + 1) != RespDecodingSupport.LF) {
+            throw new IllegalArgumentException("Protocol error: bad bulk string CRLF");
+        }
+
+        RespCommandBuilder.setArgSlice(cmd, argIndex, dataStart - frameStartIdx, len);
+        in.readerIndex(end);
+        return true;
+    }
+
+    private boolean tryDecodeBlobErrorArg(ByteBuf in, int frameStartIdx, RespCommand cmd, int argIndex) {
+        int startIdx = in.readerIndex() - 1;
+
+        int lenLineStart = in.readerIndex();
+        int lenLineEnd = RespDecodingSupport.indexOfCrlf(in, lenLineStart, maxLineBytes);
+        if (lenLineEnd < 0) {
+            if (in.writerIndex() - lenLineStart > maxLineBytes + 2) {
+                throw new IllegalArgumentException("Protocol error: line too long");
+            }
+            in.readerIndex(startIdx);
+            return false;
+        }
+
+        if (RespDecodingSupport.isSingleCharLine(in, lenLineStart, lenLineEnd, (byte) '?')) {
+            throw new IllegalArgumentException("Protocol error: invalid blob error length");
+        }
+
+        int len = RespDecodingSupport.parseIntAscii(in, lenLineStart, lenLineEnd);
+        if (len < 0) {
+            throw new IllegalArgumentException("Protocol error: invalid blob error length");
         }
         if (len > maxBulkBytes) {
             throw new IllegalArgumentException("Protocol error: bulk length too large");

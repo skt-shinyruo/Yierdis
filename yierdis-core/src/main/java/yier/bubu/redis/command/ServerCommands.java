@@ -17,8 +17,6 @@ final class ServerCommands {
     private static final byte[] HELLO_VERSION_KEY = "version".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_VERSION_VALUE = YierdisBuildInfo.versionAsciiBytes();
     private static final byte[] HELLO_PROTO_KEY = "proto".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] HELLO_PROTO_VALUE = "2".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] HELLO_PROTO_VALUE_RESP3 = "3".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_MODE_KEY = "mode".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_MODE_VALUE = "standalone".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] HELLO_ROLE_KEY = "role".getBytes(StandardCharsets.US_ASCII);
@@ -97,7 +95,7 @@ final class ServerCommands {
             out.bulkString(HELLO_VERSION_KEY);
             out.bulkString(HELLO_VERSION_VALUE);
             out.bulkString(HELLO_PROTO_KEY);
-            out.bulkString(HELLO_PROTO_VALUE_RESP3);
+            out.integer(3);
             out.bulkString(HELLO_MODE_KEY);
             out.bulkString(HELLO_MODE_VALUE);
             out.bulkString(HELLO_ROLE_KEY);
@@ -117,7 +115,7 @@ final class ServerCommands {
         out.bulkString(HELLO_VERSION_KEY);
         out.bulkString(HELLO_VERSION_VALUE);
         out.bulkString(HELLO_PROTO_KEY);
-        out.bulkString(HELLO_PROTO_VALUE);
+        out.integer(2);
         out.bulkString(HELLO_MODE_KEY);
         out.bulkString(HELLO_MODE_VALUE);
         out.bulkString(HELLO_ROLE_KEY);

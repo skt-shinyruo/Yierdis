@@ -1046,7 +1046,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         final boolean[] timedOut = new boolean[]{false};
 
         ScanCursorV2 cursor = ScanCursorV2.start();
-        boolean done = false;
         int guard = 0;
         while (true) {
             if (System.nanoTime() >= deadline) {
@@ -1076,7 +1075,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
             });
             cursor = next;
             if (cursor.value() == 0) {
-                done = true;
                 break;
             }
             if (out.size() >= limit || timedOut[0]) {
@@ -1098,12 +1096,8 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
             }
         }
 
-        if (timedOut[0]) {
-            throw new YierdisCommandException("ERR KEYS time budget exceeded (use SCAN)");
-        }
-        if (!done) {
-            throw new YierdisCommandException("ERR KEYS result limit exceeded (use SCAN)");
-        }
+        // Redis 生态兼容：当时间预算耗尽或结果达到上限时，返回已收集到的部分结果（可能被截断），不再 fail-fast 抛错。
+        // 若调用方需要可证明的完整遍历，请使用 SCAN。
         return out;
     }
 

@@ -18,6 +18,7 @@ import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.protocol.RespArray;
 import yier.bubu.redis.protocol.RespError;
 import yier.bubu.redis.protocol.RespFrame;
+import yier.bubu.redis.protocol.RespInteger;
 import yier.bubu.redis.protocol.RespMap;
 import yier.bubu.redis.protocol.RespNull;
 import yier.bubu.redis.protocol.RespObject;
@@ -57,14 +58,14 @@ public class YierdisClientTest {
                 RespMap map = (RespMap) helloObj;
                 Assert.assertEquals(5, map.entries().size());
 
-                java.util.HashMap<String, String> kv = new java.util.HashMap<>();
+                java.util.HashMap<String, RespObject> kv = new java.util.HashMap<>();
                 for (RespMap.Entry e : map.entries()) {
-                    kv.put(bulkUtf8(e.key()), bulkUtf8(e.value()));
+                    kv.put(bulkUtf8(e.key()), e.value());
                 }
-                Assert.assertEquals("yierdis", kv.get("server"));
-                Assert.assertEquals("3", kv.get("proto"));
-                Assert.assertEquals("standalone", kv.get("mode"));
-                Assert.assertEquals("master", kv.get("role"));
+                Assert.assertEquals("yierdis", bulkUtf8(kv.get("server")));
+                Assert.assertEquals(3, integerValue(kv.get("proto")));
+                Assert.assertEquals("standalone", bulkUtf8(kv.get("mode")));
+                Assert.assertEquals("master", bulkUtf8(kv.get("role")));
                 Assert.assertNotNull(kv.get("version"));
 
                 try (RespFrame frame = client.execute(Arrays.asList(b("GET"), b("missing")), 1000)) {
@@ -226,6 +227,11 @@ public class YierdisClientTest {
         RespBulkString bulk = (RespBulkString) obj;
         Assert.assertFalse(bulk.isNull());
         return bulk.asString();
+    }
+
+    private static long integerValue(RespObject obj) {
+        Assert.assertTrue(obj instanceof RespInteger);
+        return ((RespInteger) obj).value();
     }
 
     private static final class TestServer implements AutoCloseable {

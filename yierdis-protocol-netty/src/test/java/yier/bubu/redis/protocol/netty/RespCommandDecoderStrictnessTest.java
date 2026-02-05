@@ -11,30 +11,29 @@ import java.nio.charset.StandardCharsets;
 
 public class RespCommandDecoderStrictnessTest {
     @Test
-    public void rejectsResp3TypePrefixesAsProtocolErrorInsteadOfInlineCommand() {
-        byte[] prefixes = new byte[]{
-                '_', // null（RESP3）
-                '%', // map（RESP3）
-                '#', // boolean（RESP3）
-                ',', // double（RESP3）
-                '(', // big number（RESP3）
-                '~', // set（RESP3）
-                '>', // push（RESP3）
-                '=', // verbatim（RESP3）
-                '!'  // blob error（RESP3）
+    public void resp3TypePrefixesAreParsedAsInlineCommandInsteadOfProtocolError() {
+        // Redis 兼容：top-level 非 array 会按 inline command 解析，因此这些前缀不应再触发 "expected array"。
+        String[] lines = new String[]{
+                "_\r\n",     // null（RESP3）
+                "%0\r\n",    // map（RESP3）
+                "#t\r\n",    // boolean（RESP3）
+                ",3.14\r\n", // double（RESP3）
+                "(123\r\n",  // big number（RESP3）
+                "~0\r\n",    // set（RESP3）
+                ">0\r\n",    // push（RESP3）
+                "=0\r\n",    // verbatim（RESP3）
+                "!0\r\n"     // blob error（RESP3）
         };
 
-        for (byte p : prefixes) {
+        for (String s : lines) {
             EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder());
             try {
-                try {
-                    ch.writeInbound(Unpooled.wrappedBuffer(new byte[]{p}));
-                    Assert.fail("expected decoder to reject prefix: " + (char) p);
-                } catch (Throwable t) {
-                    String msg = unwrapMessage(t);
-                    Assert.assertNotNull(msg);
-                    Assert.assertTrue("message must be protocol error, got: " + msg, msg.startsWith("Protocol error"));
-                }
+                ch.writeInbound(Unpooled.wrappedBuffer(ascii(s)));
+                RespCommand cmd = ch.readInbound();
+                Assert.assertNotNull("expected a decoded inline command", cmd);
+                Assert.assertEquals(1, cmd.argc());
+                Assert.assertArrayEquals(ascii(s.trim()), cmd.toByteArray(0));
+                cmd.recycle();
             } finally {
                 finishQuietly(ch);
             }
