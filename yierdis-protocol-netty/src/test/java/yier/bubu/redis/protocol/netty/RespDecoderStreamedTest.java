@@ -40,6 +40,12 @@ public class RespDecoderStreamedTest {
     }
 
     @Test
+    public void decodeAttributesWrappingStreamedValueFrame() {
+        assertOneFrame("|1\r\n+meta\r\n:1\r\n$?\r\n;5\r\nhello\r\n;0\r\n");
+        assertOneFrame("|0\r\n*?\r\n:1\r\n.\r\n");
+    }
+
+    @Test
     public void decodeRejectsStreamedMapMissingValueBeforeEndMarker() {
         assertDecoderThrows("%?\r\n+key\r\n.\r\n", "missing map value");
     }

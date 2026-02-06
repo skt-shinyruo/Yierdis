@@ -98,6 +98,11 @@ public class RespDecoderTest {
     }
 
     @Test
+    public void decodeResp3AttributesWrapperFrame() {
+        assertOneFrame("|1\r\n+meta\r\n:123\r\n+OK\r\n");
+    }
+
+    @Test
     public void decodeRejectsInvalidNegativeArrayLength() {
         assertDecoderThrows("*-2\r\n", IllegalArgumentException.class);
     }

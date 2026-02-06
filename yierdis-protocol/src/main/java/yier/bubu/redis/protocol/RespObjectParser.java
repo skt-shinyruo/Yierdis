@@ -400,12 +400,9 @@ public final class RespObjectParser {
     }
 
     private int indexOfCrlf(int start) {
-        int maxCrlfStart = start + maxLineBytes;
-        int scanLimit = Math.min(frame.length() - 1, maxCrlfStart + 1);
-        for (int i = start; i < scanLimit; i++) {
-            if (frame.getByte(i) == '\r' && frame.getByte(i + 1) == '\n') {
-                return i;
-            }
+        int end = RespWireSupport.indexOfCrlf(frame, start, frame.length(), maxLineBytes);
+        if (end >= 0) {
+            return end;
         }
         if (frame.length() - start > maxLineBytes + 2) {
             throw new IllegalArgumentException("Protocol error: line too long");

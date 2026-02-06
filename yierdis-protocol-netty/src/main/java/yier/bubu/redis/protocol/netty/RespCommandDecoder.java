@@ -11,6 +11,7 @@ import yier.bubu.redis.protocol.RespCommand;
 import yier.bubu.redis.protocol.RespCommandBuilder;
 import yier.bubu.redis.protocol.RespInlineCommandParser;
 import yier.bubu.redis.protocol.RespLimits;
+import yier.bubu.redis.protocol.RespWireSkipper;
 
 import java.util.List;
 
@@ -648,44 +649,25 @@ public final class RespCommandDecoder extends ByteToMessageDecoder {
 
     private boolean trySkipAttributeMap(ByteBuf in) {
         int startIdx = in.readerIndex();
-        if (!in.isReadable()) {
+        int available = in.writerIndex() - startIdx;
+        if (available <= 0) {
             return false;
         }
-        if (in.readByte() != '|') {
-            throw new IllegalStateException("expected attribute prefix");
-        }
 
-        int pairsLineStart = in.readerIndex();
-        int pairsLineEnd = RespDecodingSupport.indexOfCrlf(in, pairsLineStart, maxLineBytes);
-        if (pairsLineEnd < 0) {
-            if (in.writerIndex() - pairsLineStart > maxLineBytes + 2) {
-                throw new IllegalArgumentException("Protocol error: line too long");
-            }
+        int endOffset = RespWireSkipper.trySkipAttributeMapOnly(
+                new NettyBytesSource(in, startIdx),
+                0,
+                available,
+                maxBulkBytes,
+                maxArgs,
+                maxNestingDepth,
+                maxLineBytes
+        );
+        if (endOffset < 0) {
             in.readerIndex(startIdx);
             return false;
         }
-
-        int pairs = RespDecodingSupport.parseIntAscii(in, pairsLineStart, pairsLineEnd);
-        if (pairs < 0) {
-            throw new IllegalArgumentException("Protocol error: invalid attribute length");
-        }
-        if (pairs > maxArgs) {
-            throw new IllegalArgumentException("Protocol error: attribute length too large");
-        }
-
-        in.readerIndex(pairsLineEnd + 2);
-        for (int i = 0; i < pairs; i++) {
-            int endKey = trySkipOne(in, 0);
-            if (endKey < 0) {
-                in.readerIndex(startIdx);
-                return false;
-            }
-            int endVal = trySkipOne(in, 0);
-            if (endVal < 0) {
-                in.readerIndex(startIdx);
-                return false;
-            }
-        }
+        in.readerIndex(startIdx + endOffset);
         return true;
     }
 

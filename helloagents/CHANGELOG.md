@@ -12,6 +12,8 @@
 - 新增事务队列硬上限：`--transactionQueueMaxCommands/--transactionQueueMaxBytes`，防止 MULTI 大事务/大参数导致 OOM。
 - 新增 maxmemory 预算口径参数：`--maxmemoryScope global|per-db`（默认 global，更贴近 Redis 全实例口径；保留 per-db 兼容模式）。
 - RESP3 reply 互操作增强：补齐 `RespEncoder` 对 RESP3 扩展类型写出覆盖，并增强 CLI 对 set/boolean/double/bignum/verbatim/blob error/push/attribute 等类型的展示与回归测试。
+- 新增 RESP 解析质量兜底测试矩阵：wire skipper strictness/limits、attributes 解析用例、以及 decoder 随机分片短 fuzz（固定 seed，argv 全量断言），降低 fast-path/materialize/skip-scan 漂移风险。
+- 协议解析 SSOT 收敛：新增 Netty-free `RespWireSupport/RespWireSkipper`，并在 Netty decoders 中复用以统一 streamed/attributes/skip-scan 的边界语义（保留 request bulk-array fast-path）。
 - 多 DB 支持：新增 `--databases`（默认 16），并在连接态维护 `dbIndex`，支持 `SELECT 0..N-1` 与按连接路由到目标 DB。
 - 新增 `yierdis-bytes` 中立模块：承载 `BytesSource/BytesSink/BytesSlice` 抽象，供 protocol/off-heap/I/O 复用，避免 `yierdis-protocol` 通过 “off-heap” 命名模块复用 bytes 接口造成依赖误导。
 - 新增 `RespMap`（RESP3 map 最小对象模型）与 client 侧 RESP3 最小解码能力（`%` map、`_` null），用于覆盖 `HELLO 3` 分支。

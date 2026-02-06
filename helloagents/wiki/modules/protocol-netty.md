@@ -10,7 +10,7 @@
 
 - **Responsibility:** Netty codec（`RespCommandDecoder` / `RespDecoder`）+ `RespFrame/RespSession` 的 Netty 实现（frame ownership / release）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-03
+- **Last Updated:** 2026-02-06
 
 ## Specifications
 
@@ -25,7 +25,8 @@
   - 允许在 `*` 命令数组内使用部分 RESP3 标量类型（例如 `+`/`:`/`_`/`#`/`,`/`(`/`=`）作为参数，并映射为 argv bytes view（保持二进制安全）
   - 支持 `$?` streamed blob string 作为参数（chunk 非连续时会 materialize 为连续 argv bytes）
   - 支持 `*?` streamed array 作为命令容器（直到 `.` END；受 `maxArgs` 上限保护）
-- top-level 仍严格区分 request/reply：命令必须是 `*` multi-bulk 或 inline；对 RESP reply（含常见 RESP3 类型前缀）与控制字符前缀统一判为 `Protocol error`，避免误路由为 inline 导致执行层状态错乱
+- top-level 非 `*` 按 inline command 解析（Redis-like）：包括看起来像 RESP2/RESP3 reply 前缀的文本（例如 `%0`、`#t`、`_` 等）也会被当作命令名 token，通常在执行层返回 unknown command 并保持连接可用（避免把“误用/探测输入”升级为 fatal protocol error）
+- 仍对控制字符与结构性 malformed request 判为 `Protocol error`，并由 server handler 返回 `-ERR Protocol error: ...` 后关闭连接（防止状态错乱与资源占用）
 - 保持参数 **二进制安全**：bulk string 不强制 UTF-8 解码
 - 支持输入上限参数化：`maxBulkBytes/maxArgs/maxLineBytes`（与 server args SSOT 对齐，避免 DoS 风险）
  - attributes 跳过路径额外受嵌套深度限制（`RespLimits.DEFAULT_MAX_NESTING_DEPTH`），避免恶意构造的深层结构体导致 decode 长尾
@@ -83,6 +84,7 @@ RESP2/RESP3 的协商属于连接级状态：
 
 - 2026-01-15：边界加固：netty codec/adapters 迁移到独立包 `yier.bubu.redis.protocol.netty`，`yierdis-protocol` 独占 `yier.bubu.redis.protocol`（消除 split-package）。
 - 2026-01-16：增加 `RespFrame.retainedBytes()` 口径与 `RespCommandBuilder.replaceFrame(...)`，为执行器 bytes 预算与 compaction 提供协议层支撑。
-- 2026-01-17：request 解码严格化：明确允许集合（array + inline），对 RESP reply/非法前缀统一 protocol error；连接态二分：`ConnectionContext` 仅表达协议会话，server 运行时连接状态迁移到 `ServerConnectionState`；`RespEncoder` 写出语义收敛为 `RespWriter`。
+- 2026-01-17：request 解码严格化：明确允许集合（array + inline），对控制字符与结构性 malformed request 统一 protocol error；连接态二分：`ConnectionContext` 仅表达协议会话，server 运行时连接状态迁移到 `ServerConnectionState`；`RespEncoder` 写出语义收敛为 `RespWriter`。
 - 2026-02-01：reply 切帧 decoder（`RespDecoder`）扩展 RESP3 前缀覆盖（set/push/attribute/boolean/double/verbatim/blob error 等），与 `RespWriter/RespObjectParser` 的类型集合保持一致；同时补齐“把 reply 前缀当成 inline request”这一类误用的协议错误测试用例。
 - 2026-02-03：request decoder 兼容扩展：支持 RESP3 `|` attributes 前缀（忽略 metadata）与 `*` 命令数组内的部分 RESP3 标量类型参数（提升对 Redis/代理的 request 兼容性）。
+- 2026-02-06：补齐 RESP codec 质量兜底：wire skipper strictness/limits 边界、attributes parser 解析，以及随机分片短 fuzz 对 argv 全量断言（降低 fast-path/materialize/skip-scan 漂移风险）。

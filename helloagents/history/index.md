@@ -35,6 +35,8 @@
 | 202602031814 | db_prod_arch_contracts | Execution Command | ⚠️ Partial | helloagents/history/2026-02/202602031814_db_prod_arch_contracts/ |
 | 202602041128 | core_embedded_instance_runtime_api | Standard Development | ✅ Completed | helloagents/history/2026-02/202602041128_core_embedded_instance_runtime_api/ |
 | 202602041630 | db_prod_arch_contracts_full_newimpl | Standard Development | ✅ Completed | helloagents/history/2026-02/202602041630_db_prod_arch_contracts_full_newimpl/ |
+| 202602061102 | resp_parser_ssot_alignment | Standard Development | ✅ Completed | helloagents/history/2026-02/202602061102_resp_parser_ssot_alignment/ |
+| 202602061216 | resp_codec_test_matrix | Standard Development | ✅ Completed | helloagents/history/2026-02/202602061216_resp_codec_test_matrix/ |
 
 ---
 
@@ -72,6 +74,8 @@
 - helloagents/history/2026-02/202602031814_db_prod_arch_contracts/
 - helloagents/history/2026-02/202602041128_core_embedded_instance_runtime_api/
 - helloagents/history/2026-02/202602041630_db_prod_arch_contracts_full_newimpl/
+- helloagents/history/2026-02/202602061102_resp_parser_ssot_alignment/
+- helloagents/history/2026-02/202602061216_resp_codec_test_matrix/
 
 ## 2026-01
 - 202601172157_executor_modularize - 执行器组件化与不变量测试补齐

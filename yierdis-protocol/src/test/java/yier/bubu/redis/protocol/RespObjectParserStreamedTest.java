@@ -100,6 +100,46 @@ public class RespObjectParserStreamedTest {
         }
     }
 
+    @Test
+    public void parsesAttributesWrappingStreamedValue() {
+        byte[] bytes = ascii("|1\r\n+meta\r\n:1\r\n$?\r\n;5\r\nhello\r\n;0\r\n");
+        try (RespFrame frame = new HeapRespFrame(bytes)) {
+            RespObject obj = RespObjectParser.parse(frame);
+            Assert.assertTrue(obj instanceof RespAttribute);
+
+            RespAttribute attr = (RespAttribute) obj;
+            Assert.assertNotNull(attr.attributes());
+            Assert.assertEquals(1, attr.attributes().entries().size());
+
+            RespMap.Entry e = attr.attributes().entries().get(0);
+            Assert.assertTrue(e.key() instanceof RespSimpleString);
+            Assert.assertEquals("meta", ((RespSimpleString) e.key()).value());
+            Assert.assertTrue(e.value() instanceof RespInteger);
+            Assert.assertEquals(1L, ((RespInteger) e.value()).value());
+
+            Assert.assertTrue(attr.value() instanceof RespBulkString);
+            Assert.assertArrayEquals(ascii("hello"), ((RespBulkString) attr.value()).data());
+        }
+    }
+
+    @Test
+    public void parsesChainedAttributesWrapperAsNestedRespAttributeObjects() {
+        byte[] bytes = ascii("|0\r\n|0\r\n+OK\r\n");
+        try (RespFrame frame = new HeapRespFrame(bytes)) {
+            RespObject obj = RespObjectParser.parse(frame);
+            Assert.assertTrue(obj instanceof RespAttribute);
+
+            RespAttribute outer = (RespAttribute) obj;
+            Assert.assertEquals(0, outer.attributes().entries().size());
+            Assert.assertTrue(outer.value() instanceof RespAttribute);
+
+            RespAttribute inner = (RespAttribute) outer.value();
+            Assert.assertEquals(0, inner.attributes().entries().size());
+            Assert.assertTrue(inner.value() instanceof RespSimpleString);
+            Assert.assertEquals("OK", ((RespSimpleString) inner.value()).value());
+        }
+    }
+
     private static byte[] ascii(String s) {
         return s.getBytes(StandardCharsets.US_ASCII);
     }
@@ -132,4 +172,3 @@ public class RespObjectParserStreamedTest {
         }
     }
 }
-

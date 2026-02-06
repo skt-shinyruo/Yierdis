@@ -33,6 +33,33 @@ public class RespCommandDecoderResp3RequestTest {
     }
 
     @Test
+    public void decodesChainedResp3AttributesThenCommandArray() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder());
+        try {
+            byte[] req = concat(
+                    ascii("|0\r\n"),
+                    ascii("|1\r\n"),
+                    ascii("+meta\r\n"),
+                    ascii("$?\r\n"),
+                    ascii(";3\r\n"),
+                    ascii("foo\r\n"),
+                    ascii(";0\r\n"),
+                    ascii("*1\r\n"),
+                    ascii("+PING\r\n")
+            );
+            ch.writeInbound(Unpooled.wrappedBuffer(req));
+
+            RespCommand cmd = ch.readInbound();
+            Assert.assertNotNull(cmd);
+            Assert.assertEquals(1, cmd.argc());
+            Assert.assertArrayEquals(ascii("PING"), cmd.toByteArray(0));
+            cmd.recycle();
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void decodesResp3ScalarArgsInsideCommandArray() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder());
         try {
@@ -61,6 +88,31 @@ public class RespCommandDecoderResp3RequestTest {
             Assert.assertArrayEquals(ascii("t"), cmd.toByteArray(4));
             Assert.assertArrayEquals(ascii("hello"), cmd.toByteArray(5));
 
+            cmd.recycle();
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void attributesMapCanContainStreamedAggregateValuesAndStillBeSkipped() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder());
+        try {
+            byte[] req = concat(
+                    ascii("|1\r\n"),
+                    ascii("+meta\r\n"),
+                    ascii("*?\r\n"),
+                    ascii("+a\r\n"),
+                    ascii(".\r\n"),
+                    ascii("*1\r\n"),
+                    ascii("+PING\r\n")
+            );
+            ch.writeInbound(Unpooled.wrappedBuffer(req));
+
+            RespCommand cmd = ch.readInbound();
+            Assert.assertNotNull(cmd);
+            Assert.assertEquals(1, cmd.argc());
+            Assert.assertArrayEquals(ascii("PING"), cmd.toByteArray(0));
             cmd.recycle();
         } finally {
             ch.finishAndReleaseAll();

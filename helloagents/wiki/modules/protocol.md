@@ -12,7 +12,7 @@
 
 - **Responsibility:** RESP 对象模型 + RESP2/RESP3 回复写出（连接级协议状态）+ `RespFrame/RespSession` 抽象
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-03
+- **Last Updated:** 2026-02-06
 
 ## Specifications
 
@@ -34,6 +34,18 @@
 - `RespLimits` 作为 RESP 相关默认上限的 **Single Source of Truth**
 - 典型覆盖：`maxBulkBytes/maxArgs/maxLineBytes` 以及 reply 解析相关的 `maxArrayLen/maxNestingDepth`
 - 期望：`yierdis-args`（server 参数默认值）、`RespObjectParser`、Netty decoder 默认值保持一致，并通过单测锁定
+
+### Requirement: RESP wire skip/scan SSOT（`RespWireSkipper`）
+**Module:** protocol
+
+RESP 协议解码存在 request fast-path、reply framing、CLI/调试 parser 等多层消费形态。为避免多处实现 scan/skip 语义导致漂移：
+- `RespWireSkipper` 提供 **Netty-free** 的 wire-level skip 能力：在不构建对象树的前提下定位一个完整 RESP 值的边界（endIndex / -1 表示数据不足）
+- 支持 RESP3 streamed/attributes/aggregate 等形态的“边界识别”，供：
+  - `yierdis-protocol-netty` 的 `RespDecoder` 做 reply 切帧（wire-preserving）
+  - `yierdis-protocol-netty` 的 `RespCommandDecoder` 跳过 request 前置的 attributes metadata（`trySkipAttributeMapOnly`）
+- strictness 约定：
+  - reply/framing 场景对 `!`/`=` 采用宽松 bulk 语义（允许 `-1`），以保持历史兼容与 framing 宽容度
+  - request/strict 场景对 `!`/`=` 禁止 `-1`，避免 attributes 等内部结构出现“空值语义不确定”导致解析漂移
 
 ### Requirement: RESP3（最小子集）握手与 nil
 **Module:** protocol
@@ -105,3 +117,4 @@
 - 2026-01-17：新增 `RespLimits` 作为协议默认安全上限 SSOT，并将默认值在 parser/decoder/args 之间收敛。
 - 2026-01-23：补齐 RESP3 set（`~`）类型建模与写出/解析（`RespSet` + `RespWriter.setHeader` + `RespObjectParser`），供集合类命令在 RESP3 下返回 map/set。
 - 2026-02-01：RESP3 reply 类型覆盖扩展：补齐 boolean/double/big number/verbatim/blob error/attribute/push 等最小集合，并在 `RespWriter` 中引入连接级 session 访问与 close-after-reply 请求标志（由 server/executor 落实连接关闭）。
+- 2026-02-06：补齐 RESP wire skipper 与 parser 的一致性兜底测试：strictness（`trySkipOneStrict`）、limits 边界，以及 attributes + streamed 组合的对象化解析用例。
