@@ -154,12 +154,12 @@ public final class YierdisOffHeapAllocators {
     }
 
     private static YierdisOffHeapAllocator createForeign(long maxBytes) {
-        // 先做构建能力探测：默认构建未包含 foreign 模块（需 -Pforeign-memory）。
+        // 先做构建能力探测：若构建产物未包含 foreign 模块（例如显式禁用 foreign-memory profile），这里会 ClassNotFound。
         try {
             Class.forName(FOREIGN_ALLOCATOR_CLASS, false, YierdisOffHeapAllocators.class.getClassLoader());
         } catch (ClassNotFoundException e) {
             throw new YierdisOffHeapBackendUnavailableException(
-                    "Foreign Memory 后端在当前构建中不可用。请使用 Maven profile 'foreign-memory' 重新构建（例如：mvn -Pforeign-memory package）。"
+                    "Foreign Memory 后端在当前构建中不可用。若你从源码构建，请确认 Maven profile 'foreign-memory' 已启用（默认启用；可用 -P!foreign-memory 禁用）。"
                             + "运行时还需要添加：--add-modules " + FOREIGN_MODULE_NAME + "（Java 17）。"
                             + "已发现 providers: " + availableProvidersSummary(),
                     e);

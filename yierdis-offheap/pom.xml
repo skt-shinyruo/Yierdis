@@ -25,6 +25,9 @@
     <profiles>
         <profile>
             <id>foreign-memory</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
             <modules>
                 <module>foreign</module>
             </modules>
