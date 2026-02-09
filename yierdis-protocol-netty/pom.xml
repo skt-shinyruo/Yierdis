@@ -14,7 +14,7 @@
     <packaging>jar</packaging>
 
     <name>yierdis-protocol-netty</name>
-    <description>Netty codec/adapters for yierdis-protocol (RESP SSOT).</description>
+    <description>Netty codecs/adapters for Custom Protocol v1 (request decoder + NDJSON reply line codec).</description>
 
     <dependencies>
         <dependency>
