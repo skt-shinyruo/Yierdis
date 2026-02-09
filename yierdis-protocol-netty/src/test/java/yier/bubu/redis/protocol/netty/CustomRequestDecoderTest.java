@@ -84,17 +84,14 @@ public class CustomRequestDecoderTest {
         EmbeddedChannel ch = new EmbeddedChannel(new CustomRequestDecoder(1024, 16, 64));
         try {
             byte[] bad = frame("{\"cmd\":\"PING\",\n\"args\":[]}");
-            Assert.assertFalse(ch.writeInbound(Unpooled.wrappedBuffer(bad)));
+            Assert.assertTrue(ch.writeInbound(Unpooled.wrappedBuffer(bad)));
 
-            ByteBuf err = ch.readOutbound();
-            Assert.assertNotNull(err);
-            String errLine = err.toString(StandardCharsets.UTF_8);
-            err.release();
-            Assert.assertTrue(errLine.contains("\"ok\":false"));
-            Assert.assertTrue(errLine.contains("\"kind\":\"protocol\""));
-            Assert.assertTrue(errLine.endsWith("\n"));
-
+            Object e = ch.readInbound();
+            Assert.assertNotNull(e);
+            Assert.assertTrue(e instanceof ProtocolError);
+            Assert.assertTrue(((ProtocolError) e).message().startsWith("Protocol error"));
             Assert.assertNull(ch.readInbound());
+            Assert.assertNull(ch.readOutbound());
         } finally {
             ch.finishAndReleaseAll();
         }
@@ -112,18 +109,16 @@ public class CustomRequestDecoderTest {
 
             Assert.assertTrue(ch.writeInbound(Unpooled.wrappedBuffer(both)));
 
-            ByteBuf err = ch.readOutbound();
-            Assert.assertNotNull(err);
-            String errLine = err.toString(StandardCharsets.UTF_8);
-            err.release();
-            Assert.assertTrue(errLine.contains("\"ok\":false"));
-            Assert.assertTrue(errLine.contains("\"kind\":\"protocol\""));
-            Assert.assertTrue(errLine.endsWith("\n"));
+            Object e = ch.readInbound();
+            Assert.assertNotNull(e);
+            Assert.assertTrue(e instanceof ProtocolError);
+            Assert.assertTrue(((ProtocolError) e).message().startsWith("Protocol error"));
 
             Command cmd = ch.readInbound();
             Assert.assertNotNull(cmd);
             Assert.assertEquals("PING", new String(cmd.toByteArray(0), StandardCharsets.UTF_8));
             cmd.close();
+            Assert.assertNull(ch.readOutbound());
         } finally {
             ch.finishAndReleaseAll();
         }
@@ -141,16 +136,16 @@ public class CustomRequestDecoderTest {
 
             Assert.assertTrue(ch.writeInbound(Unpooled.wrappedBuffer(both)));
 
-            ByteBuf err = ch.readOutbound();
-            Assert.assertNotNull(err);
-            String errLine = err.toString(StandardCharsets.UTF_8);
-            err.release();
-            Assert.assertTrue(errLine.contains("\"ok\":false"));
+            Object e = ch.readInbound();
+            Assert.assertNotNull(e);
+            Assert.assertTrue(e instanceof ProtocolError);
+            Assert.assertTrue(((ProtocolError) e).message().startsWith("Protocol error"));
 
             Command cmd = ch.readInbound();
             Assert.assertNotNull(cmd);
             Assert.assertEquals("PING", new String(cmd.toByteArray(0), StandardCharsets.UTF_8));
             cmd.close();
+            Assert.assertNull(ch.readOutbound());
         } finally {
             ch.finishAndReleaseAll();
         }

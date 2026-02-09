@@ -56,22 +56,24 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         }
 
         Throwable root = unwrapDecoderException(cause);
-        String message = safeErrorMessage(root);
+        String rawMessage = root == null ? null : root.getMessage();
+        String logMessage = safeLogMessage(root);
         String remote = String.valueOf(ctx.channel().remoteAddress());
-        boolean protocolError = message.startsWith("Protocol error");
+        boolean protocolError = rawMessage != null && rawMessage.startsWith("Protocol error");
 
-        if (message.startsWith("Protocol error")) {
+        if (protocolError) {
             // Protocol errors are often client-driven; keep logs low-noise by default.
-            log.debug("Protocol error from {}: {}", remote, message);
+            log.debug("Protocol error from {}: {}", remote, logMessage);
         } else {
-            log.error("Internal error from {}: {}", remote, message, root);
+            log.error("Internal error from {}: {}", remote, logMessage, root);
         }
 
         ByteBuf out = ctx.alloc().buffer();
         try {
             ReplyWriter writer = nettyExecutor.newReplyWriter(out, ctx.channel());
             if (protocolError) {
-                writer.protocolError(message);
+                // 回包的 message 净化/限长由协议层 writer SSOT 统一处理，handler 不做重复净化避免漂移。
+                writer.protocolError(rawMessage);
             } else {
                 // 标记该连接进入 closing：避免 internal error 触发 close 后，已入队命令仍在 executor 中继续执行产生副作用。
                 ServerConnectionState conn = ServerConnectionState.getOrCreate(ctx.channel());
@@ -99,7 +101,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         return cause;
     }
 
-    private static String safeErrorMessage(Throwable cause) {
+    private static String safeLogMessage(Throwable cause) {
         if (cause == null) {
             return "internal error";
         }

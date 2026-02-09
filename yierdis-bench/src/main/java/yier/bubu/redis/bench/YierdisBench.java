@@ -522,6 +522,7 @@ public final class YierdisBench {
     private static final byte[] ERR_PREFIX = "{\"ok\":false,\"error\":".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] REPLY_OK = "{\"ok\":true,\"result\":\"OK\"}".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] REPLY_PONG = "{\"ok\":true,\"result\":\"PONG\"}".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] RESULT_B64_PREFIX = "{\"$b64\":\"".getBytes(StandardCharsets.US_ASCII);
 
     private static boolean validateStrictReply(Workload workload, byte[] line, int lineLen, int expectedDataSize) {
         if (workload == null || line == null || lineLen <= 0) {
@@ -551,6 +552,17 @@ public final class YierdisBench {
                             && line[prefixLen + 3] == 'l'
                             && line[prefixLen + 4] == '}';
                 }
+                if (first == '{') {
+                    // {"ok":true,"result":{"$b64":"..."}}  (non-UTF8 bytes are tagged as base64)
+                    if (!startsWithAt(line, lineLen, prefixLen, RESULT_B64_PREFIX)) {
+                        return false;
+                    }
+                    // Minimal structural validation: ..."}} (result object + envelope)
+                    if (lineLen < prefixLen + RESULT_B64_PREFIX.length + 3) {
+                        return false;
+                    }
+                    return line[lineLen - 3] == '"' && line[lineLen - 2] == '}' && line[lineLen - 1] == '}';
+                }
                 if (first != '"') {
                     return false;
                 }
@@ -578,6 +590,24 @@ public final class YierdisBench {
         }
         for (int i = 0; i < prefix.length; i++) {
             if (line[i] != prefix[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean startsWithAt(byte[] line, int lineLen, int offset, byte[] prefix) {
+        if (line == null || prefix == null) {
+            return false;
+        }
+        if (offset < 0 || lineLen < 0) {
+            return false;
+        }
+        if (lineLen < offset + prefix.length) {
+            return false;
+        }
+        for (int i = 0; i < prefix.length; i++) {
+            if (line[offset + i] != prefix[i]) {
                 return false;
             }
         }

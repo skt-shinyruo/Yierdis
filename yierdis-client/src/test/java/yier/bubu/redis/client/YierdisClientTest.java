@@ -20,6 +20,7 @@ import yier.bubu.redis.protocol.json.JsonNull;
 import yier.bubu.redis.protocol.json.JsonObject;
 import yier.bubu.redis.protocol.json.JsonString;
 import yier.bubu.redis.protocol.json.JsonValue;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1TaggedValue;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -208,7 +209,11 @@ public class YierdisClientTest {
     private static JsonObject objectResult(JsonValue envelope) {
         JsonValue v = resultValue(envelope);
         Assert.assertTrue(v instanceof JsonObject);
-        return (JsonObject) v;
+        JsonObject obj = (JsonObject) v;
+        if (CustomProtocolV1TaggedValue.isTaggedMap(obj)) {
+            return new JsonObject(CustomProtocolV1TaggedValue.decodeTaggedMapToStringKeyedObject(obj));
+        }
+        return obj;
     }
 
     private static JsonObject errorObject(JsonValue envelope) {
@@ -453,4 +458,3 @@ public class YierdisClientTest {
         }
     }
 }
-

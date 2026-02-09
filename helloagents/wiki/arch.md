@@ -182,6 +182,7 @@ sequenceDiagram
 | ADR-20260202-04 | busy 错误保持兼容形态但增强原因表达 | 2026-02-02 | ✅ Accepted | yierdis-server,helloagents/wiki | `-ERR busy <reason>` + `STATS` 映射，提升排障能力；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-004 |
 | ADR-20260204-01 | core 暴露 Netty-free embedded instance API（YierdisInstance） | 2026-02-04 | ✅ Accepted | yierdis-core,yierdis-server | 统一 instance 装配语义并支持 bench/工具/测试嵌入使用；details: helloagents/history/2026-02/202602041128_core_embedded_instance_runtime_api/how.md#adr-001-place-embedded-instance-api-in-yierdis-core-netty-free |
 | ADR-20260206-01 | Custom Protocol v1：request/reply 帧格式与错误模型 | 2026-02-06 | ✅ Accepted | yierdis-protocol,yierdis-protocol-netty,yierdis-server,yierdis-client | request 采用 `<len>:<json>\\n`；reply 采用 NDJSON；解析/校验错误返回 error 并尽量 resync（触达安全上限时允许断连） |
+| ADR-20260209-01 | Custom Protocol v1 reply：tagged value（`$map/$b64/$error`）与 decoder 事件化（ProtocolError） | 2026-02-09 | ✅ Accepted | yierdis-protocol,yierdis-protocol-netty,yierdis-server,yierdis-client,yierdis-bench,helloagents/wiki | reply 语义以 Reply IR + encoder SSOT 固化；decoder 仅 framing/parse/resync；回包由 pipeline 上层统一编码；details: helloagents/history/2026-02/202602091941_protocol_v1_reply_ir/how.md#adr-20260209-01 |
 	
 ## Security Check（2026-02-02）
 

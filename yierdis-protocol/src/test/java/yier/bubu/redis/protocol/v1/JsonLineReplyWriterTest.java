@@ -25,6 +25,22 @@ public class JsonLineReplyWriterTest {
     }
 
     @Test
+    public void protocolErrorProducesErrorEnvelope() {
+        ByteArraySink sink = new ByteArraySink();
+        JsonLineReplyWriter w = new JsonLineReplyWriter(sink);
+        w.protocolError("Protocol error: bad frame");
+        Assert.assertEquals("{\"ok\":false,\"error\":{\"kind\":\"protocol\",\"message\":\"Protocol error: bad frame\"}}\n", sink.utf8());
+    }
+
+    @Test
+    public void internalErrorProducesErrorEnvelope() {
+        ByteArraySink sink = new ByteArraySink();
+        JsonLineReplyWriter w = new JsonLineReplyWriter(sink);
+        w.internalError("ERR internal error");
+        Assert.assertEquals("{\"ok\":false,\"error\":{\"kind\":\"internal\",\"message\":\"ERR internal error\"}}\n", sink.utf8());
+    }
+
+    @Test
     public void arrayWithMixedValuesAndErrors() {
         ByteArraySink sink = new ByteArraySink();
         JsonLineReplyWriter w = new JsonLineReplyWriter(sink);
@@ -32,7 +48,7 @@ public class JsonLineReplyWriterTest {
         w.integer(1);
         w.error("ERR nope");
         w.nullValue();
-        Assert.assertEquals("{\"ok\":true,\"result\":[1,{\"error\":{\"kind\":\"command\",\"message\":\"ERR nope\"}},null]}\n", sink.utf8());
+        Assert.assertEquals("{\"ok\":true,\"result\":[1,{\"$error\":{\"kind\":\"command\",\"message\":\"ERR nope\"}},null]}\n", sink.utf8());
     }
 
     @Test
@@ -44,7 +60,27 @@ public class JsonLineReplyWriterTest {
         w.integer(1);
         w.bulkString("b".getBytes(StandardCharsets.UTF_8));
         w.bulkString((byte[]) null);
-        Assert.assertEquals("{\"ok\":true,\"result\":{\"a\":1,\"b\":null}}\n", sink.utf8());
+        Assert.assertEquals("{\"ok\":true,\"result\":{\"$map\":[[\"a\",1],[\"b\",null]]}}\n", sink.utf8());
+    }
+
+    @Test
+    public void invalidUtf8BytesFallbackToB64TaggedValue() {
+        ByteArraySink sink = new ByteArraySink();
+        JsonLineReplyWriter w = new JsonLineReplyWriter(sink);
+        w.bulkString(new byte[]{(byte) 0xC3, 0x28});
+        Assert.assertEquals("{\"ok\":true,\"result\":{\"$b64\":\"wyg=\"}}\n", sink.utf8());
+    }
+
+    @Test
+    public void errorMessageIsSanitizedAndLimited() {
+        ByteArraySink sink = new ByteArraySink();
+        JsonLineReplyWriter w = new JsonLineReplyWriter(sink);
+        String msg = "ERR hi\r\nthere " + "x".repeat(300);
+        w.error(msg);
+
+        String sanitized = msg.replace('\r', ' ').replace('\n', ' ');
+        sanitized = sanitized.substring(0, 256);
+        Assert.assertEquals("{\"ok\":false,\"error\":{\"kind\":\"command\",\"message\":\"" + sanitized + "\"}}\n", sink.utf8());
     }
 
     private static final class ByteArraySink implements BytesSink {
@@ -60,4 +96,3 @@ public class JsonLineReplyWriterTest {
         }
     }
 }
-

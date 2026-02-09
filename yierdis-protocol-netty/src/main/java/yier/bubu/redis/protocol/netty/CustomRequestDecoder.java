@@ -3,7 +3,6 @@ package yier.bubu.redis.protocol.netty;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ByteToMessageDecoder;
-import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.protocol.json.JsonArray;
 import yier.bubu.redis.protocol.json.JsonLimits;
 import yier.bubu.redis.protocol.json.JsonNull;
@@ -12,11 +11,9 @@ import yier.bubu.redis.protocol.json.JsonParseException;
 import yier.bubu.redis.protocol.json.JsonParser;
 import yier.bubu.redis.protocol.json.JsonString;
 import yier.bubu.redis.protocol.json.JsonValue;
-import yier.bubu.redis.protocol.json.JsonWriter;
 import yier.bubu.redis.protocol.v1.CustomCommand;
 
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -26,8 +23,8 @@ import java.util.Map;
  * <p>
  * Wire framing: {@code <len>:<json-payload>\n}, where {@code <len>} is the UTF-8 byte length of the JSON payload.
  * <p>
- * Protocol errors are best-effort recoverable: the decoder writes an error reply and resyncs by discarding until the
- * next {@code '\n'}.
+ * Protocol errors are best-effort recoverable: the decoder emits {@link ProtocolError} events and resyncs by
+ * discarding until the next {@code '\n'} when needed.
  */
 public final class CustomRequestDecoder extends ByteToMessageDecoder {
     private static final byte COLON = (byte) ':';
@@ -74,7 +71,7 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
             }
 
             if (state == State.READ_HEADER) {
-                Integer len = tryReadLengthHeader(ctx, in);
+                Integer len = tryReadLengthHeader(out, in);
                 if (len == null) {
                     if (state == State.DISCARD_TO_LF) {
                         continue;
@@ -92,14 +89,14 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
                 ByteBuf payload = in.readSlice(expectedPayloadLen);
                 byte term = in.readByte();
                 if (term != LF) {
-                    enterDiscard(ctx, "Protocol error: missing frame terminator");
+                    enterDiscard(out, "Protocol error: missing frame terminator");
                     state = State.DISCARD_TO_LF;
                     continue;
                 }
 
                 // Enforce "single line payload": reject raw CR/LF bytes inside payload to keep resync predictable.
                 if (containsCrLf(payload)) {
-                    enterDiscard(ctx, "Protocol error: payload must be a single line");
+                    enterDiscard(out, "Protocol error: payload must be a single line");
                     state = State.DISCARD_TO_LF;
                     continue;
                 }
@@ -108,11 +105,11 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
                     CustomCommand cmd = parseCommandPayload(payload);
                     out.add(cmd);
                 } catch (JsonParseException e) {
-                    enterDiscard(ctx, "Protocol error: invalid JSON");
+                    enterDiscard(out, "Protocol error: invalid JSON");
                 } catch (IllegalArgumentException e) {
-                    enterDiscard(ctx, "Protocol error: invalid request schema");
+                    enterDiscard(out, "Protocol error: invalid request schema");
                 } catch (Throwable t) {
-                    enterDiscard(ctx, "Protocol error: decode failed");
+                    enterDiscard(out, "Protocol error: decode failed");
                 } finally {
                     expectedPayloadLen = 0;
                     state = State.READ_HEADER;
@@ -121,7 +118,7 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
         }
     }
 
-    private Integer tryReadLengthHeader(ChannelHandlerContext ctx, ByteBuf in) {
+    private Integer tryReadLengthHeader(List<Object> out, ByteBuf in) {
         int start = in.readerIndex();
         int end = in.writerIndex();
         if (start >= end) {
@@ -141,7 +138,7 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
                 break;
             }
             if (b < '0' || b > '9') {
-                enterDiscard(ctx, "Protocol error: invalid length header");
+                enterDiscard(out, "Protocol error: invalid length header");
                 state = State.DISCARD_TO_LF;
                 return null;
             }
@@ -149,7 +146,7 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
 
         if (colonIdx < 0) {
             if (scanLimit < end) {
-                enterDiscard(ctx, "Protocol error: length header too long");
+                enterDiscard(out, "Protocol error: length header too long");
                 state = State.DISCARD_TO_LF;
                 return null;
             }
@@ -158,7 +155,7 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
 
         int digits = colonIdx - start;
         if (digits <= 0) {
-            enterDiscard(ctx, "Protocol error: empty length header");
+            enterDiscard(out, "Protocol error: empty length header");
             state = State.DISCARD_TO_LF;
             return null;
         }
@@ -168,12 +165,12 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
             int d = (in.getByte(i) & 0xFF) - '0';
             len = len * 10L + (long) d;
             if (len > (long) Integer.MAX_VALUE) {
-                enterDiscard(ctx, "Protocol error: length too large");
+                enterDiscard(out, "Protocol error: length too large");
                 state = State.DISCARD_TO_LF;
                 return null;
             }
             if (maxPayloadBytes > 0 && len > (long) maxPayloadBytes) {
-                enterDiscard(ctx, "Protocol error: payload too large");
+                enterDiscard(out, "Protocol error: payload too large");
                 state = State.DISCARD_TO_LF;
                 return null;
             }
@@ -208,46 +205,12 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
         return false;
     }
 
-    private void enterDiscard(ChannelHandlerContext ctx, String message) {
-        writeProtocolError(ctx, message);
-    }
-
-    private void writeProtocolError(ChannelHandlerContext ctx, String message) {
-        if (ctx == null) {
+    private void enterDiscard(List<Object> out, String message) {
+        if (out == null) {
             return;
         }
-        String msg = safeErrorMessage(message);
-
-        ByteBuf out = ctx.alloc().buffer();
-        boolean ok = false;
-        try {
-            ByteBuf buf = out;
-            BytesSink sink = (src, srcIndex, len) -> buf.writeBytes(src, srcIndex, len);
-
-            // {"ok":false,"error":{"kind":"protocol","message":"..."} }\n
-            sink.writeBytes("{\"ok\":false,\"error\":{\"kind\":\"protocol\",\"message\":".getBytes(StandardCharsets.US_ASCII));
-            JsonWriter.writeString(sink, msg);
-            sink.writeBytes("}}\n".getBytes(StandardCharsets.US_ASCII));
-
-            ctx.writeAndFlush(out);
-            ok = true;
-        } finally {
-            if (!ok) {
-                out.release();
-            }
-        }
-    }
-
-    private static String safeErrorMessage(String message) {
-        String msg = message;
-        if (msg == null || msg.isBlank()) {
-            msg = "Protocol error";
-        }
-        msg = msg.replace('\r', ' ').replace('\n', ' ');
-        if (msg.length() > 256) {
-            msg = msg.substring(0, 256);
-        }
-        return msg;
+        // decoder 只输出协议错误事件；具体 NDJSON 编码由上层 handler 统一处理（避免重复与漂移）。
+        out.add(new ProtocolError(message));
     }
 
     private CustomCommand parseCommandPayload(ByteBuf payload) {

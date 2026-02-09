@@ -6,6 +6,7 @@
 
 ### Breaking
 - 对外协议完全替换：服务端不再接受旧协议请求；改为 Custom Protocol v1（`<len>:<json>\\n` request + NDJSON reply），并将“协议错误”策略调整为**返回 error 并尝试继续读下一帧（resync）**（触达安全上限时可能断连）。
+- Custom Protocol v1 reply 的值语义收敛（breaking）：map/attribute 统一改为 tagged value `{"$map":[[k,v],...]}`（不再依赖 JSON object key 为 string 的隐式限制与 fallback）；非 UTF-8 bytes 统一输出 `{"$b64":"<base64>"}`；嵌套错误值输出 `{"$error":{...}}`；错误 message 的 CRLF 净化/限长由协议层 encoder SSOT 单点统一。
 - 移除 deprecated bytes alias（`YierdisBytesSink/YierdisBytesSource/YierdisDirectBytesSink` 等），bytes SSOT 统一为 `yierdis-bytes`。
 - 删除 legacy 模式：移除 SCAN cursor v1（`ScanCursor`）与相关开关/兼容路径，统一为 `ScanCursorV2`（rehash-aware + 可 time-slice）。
 

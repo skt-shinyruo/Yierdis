@@ -35,6 +35,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                         config.protocolMaxArgs,
                         config.protocolMaxLineBytes
                 ))
+                .addLast("protocolErrorReply", new ProtocolErrorReplyHandler(executor))
                 .addLast("commandHandler", new YierdisFastCommandHandler(executor));
     }
 

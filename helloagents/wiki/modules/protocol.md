@@ -2,13 +2,13 @@
 
 ## Purpose
 
-提供 **协议无关** 的命令/回复抽象（供 core 命令层使用），以及 Custom Protocol v1 所需的最小 JSON codec 与 reply writer 实现。
+提供 **协议无关** 的命令/回复抽象（供 core 命令层使用），并承载 Custom Protocol v1 的 reply 语义（Reply IR）与 NDJSON 编码规则（encoder SSOT），以及最小 JSON codec（无三方依赖）。
 
 ## Module Overview
 
-- **Responsibility:** `Command/ReplyWriter/ReplySink/Session` 抽象 + Custom Protocol v1 JSON codec
+- **Responsibility:** `Command/ReplyWriter/ReplySink/Session` 抽象 + Reply IR（`ReplyValue/*`）+ Custom Protocol v1 JSON codec + NDJSON encoder/writer（SSOT）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-08
+- **Last Updated:** 2026-02-09
 
 ## Specifications
 
@@ -37,10 +37,21 @@ Custom Protocol v1 的 reply 采用 NDJSON（每个 reply 一行 JSON）：
 - success envelope：`{"ok":true,"result":...}\\n`
 - error envelope：`{"ok":false,"error":{"kind":"command|protocol|internal","message":"..."}}\\n`
 
-聚合类型映射：
+值与聚合类型映射（稳定 wire 语义，禁止 best-effort 漂移）：
 
+- null/boolean/integer/double/string → JSON 原生值
+- bytes（bulk string）：若为 **严格 UTF-8** 字节序列，则输出 JSON string（可逆）；否则输出 tagged value：`{"$b64":"<base64>"}`（语义保真，避免信息丢失）
 - array → JSON array
-- map/set/push → JSON object / JSON array（保持最小集合语义；以 `ReplyWriter` 的调用形状为准）
+- map/attribute → tagged value：`{"$map":[[k,v],...]}`（entries 结构；key/value 均为 value，可表达任意类型，避免 JSON object key 只能为 string 的限制）
+- nested error（数组元素/值域内错误）→ tagged value：`{"$error":{"kind":"command|protocol|internal","message":"..."}}`
+
+错误 message 规则（SSOT）：
+- CR/LF 统一替换为空格，防止 response splitting
+- message 为空/blank 时使用 kind 的默认 message
+- 默认最大长度 256 字符（可配置时以代码为准）
+
+职责边界约束：
+- decoder/handler/writer 禁止各自手写 JSON error envelope；回包必须走 `CustomProtocolV1NdjsonEncoder`（SSOT）
 
 ### Requirement: 最小 JSON codec（无三方依赖）
 **Module:** protocol

@@ -31,9 +31,13 @@
   - `maxHeaderBytes`：限制 header 扫描长度（防 DoS）
   - `maxArgs`：限制 argv 长度（防 DoS）
 - 错误模型（尽量可恢复）：
-  - 解码/校验失败：写回 `ok=false` 且 `error.kind=\"protocol\"`
-  - resync：尽量丢弃到下一帧边界（`\\n`）后继续读取后续帧
+  - 解码/校验失败：decoder 只输出 `ProtocolError` 事件（不直接写回 NDJSON reply）
+  - 回包：由上层 pipeline handler 统一调用协议层 encoder/writer 编码为 `ok=false` 的 NDJSON error envelope（避免重复与漂移）
+  - resync：header 级错误会进入 discard-to-LF，尽量丢弃到下一帧边界（`\\n`）后继续读取后续帧
   - 兜底：若长时间无法找到边界（discard 超上限），允许断连（DoS 防护）
+
+建议的 server pipeline 形态（示意）：
+- `CustomRequestDecoder` → `ProtocolErrorReplyHandler` → `YierdisFastCommandHandler`
 
 ### Requirement: NDJSON line decoder（client/bench）
 **Module:** protocol-netty

@@ -5,8 +5,15 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.protocol.ReplyWriter;
 import yier.bubu.redis.protocol.Session;
 import yier.bubu.redis.protocol.json.JsonWriter;
+import yier.bubu.redis.protocol.reply.ReplyErrorKind;
 
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
@@ -22,28 +29,13 @@ public final class JsonLineReplyWriter implements ReplyWriter {
     private static final byte[] OK_PREFIX = "{\"ok\":true,\"result\":".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] OK_SUFFIX = "}\n".getBytes(StandardCharsets.US_ASCII);
 
-    private static final byte[] ERR_PREFIX_PROTOCOL = "{\"ok\":false,\"error\":{\"kind\":\"protocol\",\"message\":".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] ERR_PREFIX_COMMAND = "{\"ok\":false,\"error\":{\"kind\":\"command\",\"message\":".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] ERR_PREFIX_INTERNAL = "{\"ok\":false,\"error\":{\"kind\":\"internal\",\"message\":".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] ERR_SUFFIX = "}}\n".getBytes(StandardCharsets.US_ASCII);
-
-    private static final byte[] VALUE_ERR_PREFIX_PROTOCOL = "{\"error\":{\"kind\":\"protocol\",\"message\":".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] VALUE_ERR_PREFIX_COMMAND = "{\"error\":{\"kind\":\"command\",\"message\":".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] VALUE_ERR_PREFIX_INTERNAL = "{\"error\":{\"kind\":\"internal\",\"message\":".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] VALUE_ERR_SUFFIX = "}}".getBytes(StandardCharsets.US_ASCII);
-
     private static final byte[] NULL = "null".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] TRUE = "true".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] FALSE = "false".getBytes(StandardCharsets.US_ASCII);
 
     private static final byte[] LBRACKET = new byte[]{'['};
     private static final byte[] RBRACKET = new byte[]{']'};
-    private static final byte[] LBRACE = new byte[]{'{'};
-    private static final byte[] RBRACE = new byte[]{'}'};
     private static final byte[] COMMA = new byte[]{','};
-    private static final byte[] COLON = new byte[]{':'};
-
-    private static final int MAX_ERROR_MESSAGE_CHARS = 256;
 
     private final BytesSink out;
     private final Session session;
@@ -57,7 +49,7 @@ public final class JsonLineReplyWriter implements ReplyWriter {
 
     private enum ContainerType {
         ARRAY,
-        OBJECT
+        MAP
     }
 
     private static final class Container {
@@ -69,9 +61,15 @@ public final class JsonLineReplyWriter implements ReplyWriter {
         private Container(ContainerType type, int remaining) {
             this.type = type;
             this.remaining = remaining;
-            this.expectingKey = type == ContainerType.OBJECT;
+            this.expectingKey = type == ContainerType.MAP;
         }
     }
+
+    private static final ThreadLocal<CharsetDecoder> TL_UTF8_DECODER = ThreadLocal.withInitial(() ->
+            StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+    );
 
     public JsonLineReplyWriter(BytesSink out) {
         this(out, null);
@@ -106,17 +104,17 @@ public final class JsonLineReplyWriter implements ReplyWriter {
 
     @Override
     public void error(String message) {
-        writeErrorValue(ErrorKind.COMMAND, message);
+        writeErrorValue(ReplyErrorKind.COMMAND, message);
     }
 
     @Override
     public void protocolError(String message) {
-        writeErrorValue(ErrorKind.PROTOCOL, message);
+        writeErrorValue(ReplyErrorKind.PROTOCOL, message);
     }
 
     @Override
     public void internalError(String message) {
-        writeErrorValue(ErrorKind.INTERNAL, message);
+        writeErrorValue(ReplyErrorKind.INTERNAL, message);
     }
 
     @Override
@@ -127,10 +125,6 @@ public final class JsonLineReplyWriter implements ReplyWriter {
     @Override
     public void booleanValue(boolean value) {
         beginValueOrKey();
-        if (isExpectingKey()) {
-            writeObjectKey(value ? "true" : "false");
-            return;
-        }
         out.writeBytes(value ? TRUE : FALSE);
         finishValue();
     }
@@ -152,13 +146,17 @@ public final class JsonLineReplyWriter implements ReplyWriter {
     @Override
     public void verbatimString(String format, byte[] data) {
         String prefix = format == null ? "" : format.trim();
-        String s = decodeUtf8(data, 0, data == null ? 0 : data.length);
+        String s = strictUtf8ToStringOrNull(data, 0, data == null ? 0 : data.length);
+        if (s == null) {
+            String b64 = data == null ? "" : Base64.getEncoder().encodeToString(data);
+            s = "b64:" + b64;
+        }
         writeStringValue(prefix.isEmpty() ? s : (prefix + ":" + s));
     }
 
     @Override
     public void blobError(String message) {
-        writeErrorValue(ErrorKind.COMMAND, message);
+        writeErrorValue(ReplyErrorKind.COMMAND, message);
     }
 
     // --- Bulk / bytes ---
@@ -181,7 +179,7 @@ public final class JsonLineReplyWriter implements ReplyWriter {
         if (off < 0 || len < 0 || off + len > data.length) {
             throw new IndexOutOfBoundsException();
         }
-        writeStringValue(decodeUtf8(data, off, len));
+        writeBytesValue(data, off, len);
     }
 
     @Override
@@ -197,7 +195,7 @@ public final class JsonLineReplyWriter implements ReplyWriter {
         }
         byte[] data = new byte[len];
         slice.getBytes(0, data, 0, len);
-        writeStringValue(decodeUtf8(data, 0, len));
+        writeBytesValue(data, 0, len);
     }
 
     @Override
@@ -211,10 +209,6 @@ public final class JsonLineReplyWriter implements ReplyWriter {
     @Override
     public void nullValue() {
         beginValueOrKey();
-        if (isExpectingKey()) {
-            writeObjectKey("null");
-            return;
-        }
         out.writeBytes(NULL);
         finishValue();
     }
@@ -227,10 +221,6 @@ public final class JsonLineReplyWriter implements ReplyWriter {
     @Override
     public void arrayHeader(int count) {
         beginValueOrKey();
-        if (isExpectingKey()) {
-            // Keys must be strings; fall back to a placeholder.
-            writeObjectKey("array");
-        }
 
         int n = Math.max(0, count);
         out.writeBytes(LBRACKET);
@@ -262,19 +252,15 @@ public final class JsonLineReplyWriter implements ReplyWriter {
     @Override
     public void mapHeader(int pairs) {
         beginValueOrKey();
-        if (isExpectingKey()) {
-            // Keys must be strings; fall back to a placeholder.
-            writeObjectKey("map");
-        }
 
         int n = Math.max(0, pairs);
-        out.writeBytes(LBRACE);
+        CustomProtocolV1NdjsonEncoder.writeMapPrefix(out);
         if (n == 0) {
-            out.writeBytes(RBRACE);
+            CustomProtocolV1NdjsonEncoder.writeMapSuffix(out);
             finishValue();
             return;
         }
-        stack.push(new Container(ContainerType.OBJECT, n));
+        stack.push(new Container(ContainerType.MAP, n));
     }
 
     @Override
@@ -294,52 +280,22 @@ public final class JsonLineReplyWriter implements ReplyWriter {
 
     // --- Internals ---
 
-    private enum ErrorKind {
-        PROTOCOL,
-        COMMAND,
-        INTERNAL
-    }
-
-    private void writeErrorValue(ErrorKind kind, String message) {
+    private void writeErrorValue(ReplyErrorKind kind, String message) {
         if (finished) {
             return;
         }
 
-        String msg = safeErrorMessage(message);
         if (stack.isEmpty() && !envelopeStarted) {
             // Top-level error: write the error envelope and finish the reply.
-            out.writeBytes(errorEnvelopePrefix(kind));
-            JsonWriter.writeString(out, msg);
-            out.writeBytes(ERR_SUFFIX);
+            CustomProtocolV1NdjsonEncoder.writeErrorEnvelope(out, kind, message);
             finished = true;
             return;
         }
 
-        // Nested error value (e.g., EXEC array element): encode as a JSON object value.
+        // Nested error value (e.g., EXEC array element): encode as a tagged JSON object value.
         beginValueOrKey();
-        if (isExpectingKey()) {
-            writeObjectKey("error");
-        }
-        out.writeBytes(errorValuePrefix(kind));
-        JsonWriter.writeString(out, msg);
-        out.writeBytes(VALUE_ERR_SUFFIX);
+        CustomProtocolV1NdjsonEncoder.writeNestedErrorValue(out, kind, message);
         finishValue();
-    }
-
-    private byte[] errorEnvelopePrefix(ErrorKind kind) {
-        return switch (kind) {
-            case PROTOCOL -> ERR_PREFIX_PROTOCOL;
-            case COMMAND -> ERR_PREFIX_COMMAND;
-            case INTERNAL -> ERR_PREFIX_INTERNAL;
-        };
-    }
-
-    private byte[] errorValuePrefix(ErrorKind kind) {
-        return switch (kind) {
-            case PROTOCOL -> VALUE_ERR_PREFIX_PROTOCOL;
-            case COMMAND -> VALUE_ERR_PREFIX_COMMAND;
-            case INTERNAL -> VALUE_ERR_PREFIX_INTERNAL;
-        };
     }
 
     private void writeStringValue(String value) {
@@ -347,10 +303,6 @@ public final class JsonLineReplyWriter implements ReplyWriter {
             return;
         }
         beginValueOrKey();
-        if (isExpectingKey()) {
-            writeObjectKey(value == null ? "null" : value);
-            return;
-        }
         JsonWriter.writeString(out, value);
         finishValue();
     }
@@ -360,12 +312,17 @@ public final class JsonLineReplyWriter implements ReplyWriter {
             return;
         }
         beginValueOrKey();
-        if (isExpectingKey()) {
-            writeObjectKey(asciiNumber == null ? "0" : asciiNumber);
-            return;
-        }
         byte[] bytes = (asciiNumber == null ? "0" : asciiNumber).getBytes(StandardCharsets.US_ASCII);
         out.writeBytes(bytes, 0, bytes.length);
+        finishValue();
+    }
+
+    private void writeBytesValue(byte[] data, int off, int len) {
+        if (finished) {
+            return;
+        }
+        beginValueOrKey();
+        CustomProtocolV1NdjsonEncoder.writeBytesValue(out, data, off, len);
         finishValue();
     }
 
@@ -397,36 +354,17 @@ public final class JsonLineReplyWriter implements ReplyWriter {
             return;
         }
 
-        if (c.type == ContainerType.OBJECT) {
+        if (c.type == ContainerType.MAP) {
             if (c.expectingKey) {
                 if (!c.first) {
                     out.writeBytes(COMMA);
                 }
                 c.first = false;
+                out.writeBytes(LBRACKET);
+                return;
             }
-            // For values, ':' is written by writeObjectKey().
+            out.writeBytes(COMMA);
         }
-    }
-
-    private boolean isExpectingKey() {
-        if (stack.isEmpty()) {
-            return false;
-        }
-        Container c = stack.peek();
-        return c != null && c.type == ContainerType.OBJECT && c.expectingKey;
-    }
-
-    private void writeObjectKey(String key) {
-        Container c = stack.peek();
-        if (c == null || c.type != ContainerType.OBJECT || !c.expectingKey) {
-            // Not in key position: write as a value.
-            JsonWriter.writeString(out, key);
-            finishValue();
-            return;
-        }
-        JsonWriter.writeString(out, key == null ? "null" : key);
-        out.writeBytes(COLON);
-        c.expectingKey = false;
     }
 
     private void finishValue() {
@@ -458,37 +396,42 @@ public final class JsonLineReplyWriter implements ReplyWriter {
             return;
         }
 
-        if (c.type == ContainerType.OBJECT) {
+        if (c.type == ContainerType.MAP) {
+            if (c.expectingKey) {
+                // Finishing a key: next value will be the pair's value.
+                c.expectingKey = false;
+                return;
+            }
+
             // Finishing a value completes one pair.
+            out.writeBytes(RBRACKET);
             c.remaining--;
             c.expectingKey = true;
             if (c.remaining <= 0) {
-                out.writeBytes(RBRACE);
+                CustomProtocolV1NdjsonEncoder.writeMapSuffix(out);
                 stack.pop();
                 finishValue();
             }
         }
     }
 
-    private static String safeErrorMessage(String message) {
-        String msg = message;
-        if (msg == null || msg.isBlank()) {
-            msg = "ERR error";
-        }
-        msg = msg.replace('\r', ' ').replace('\n', ' ');
-        if (msg.length() > MAX_ERROR_MESSAGE_CHARS) {
-            msg = msg.substring(0, MAX_ERROR_MESSAGE_CHARS);
-        }
-        return msg;
-    }
-
-    private static String decodeUtf8(byte[] data, int off, int len) {
+    private static String strictUtf8ToStringOrNull(byte[] data, int off, int len) {
         if (data == null) {
             return null;
         }
         if (len == 0) {
             return "";
         }
-        return new String(data, off, len, StandardCharsets.UTF_8);
+        if (off < 0 || len < 0 || off + len > data.length) {
+            throw new IndexOutOfBoundsException();
+        }
+        CharsetDecoder dec = TL_UTF8_DECODER.get();
+        dec.reset();
+        try {
+            CharBuffer cb = dec.decode(ByteBuffer.wrap(data, off, len));
+            return cb.toString();
+        } catch (CharacterCodingException e) {
+            return null;
+        }
     }
 }

@@ -11,6 +11,7 @@ import yier.bubu.redis.protocol.json.JsonNull;
 import yier.bubu.redis.protocol.json.JsonObject;
 import yier.bubu.redis.protocol.json.JsonString;
 import yier.bubu.redis.protocol.json.JsonValue;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1TaggedValue;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -113,8 +114,13 @@ public class MaxmemoryScopeTest {
         Assert.assertTrue(okEnvelope(envelope));
         JsonValue result = resultValue(envelope);
         Assert.assertTrue(result instanceof JsonObject);
+        JsonObject obj = (JsonObject) result;
+        Map<String, JsonValue> values = CustomProtocolV1TaggedValue.isTaggedMap(obj)
+                ? CustomProtocolV1TaggedValue.decodeTaggedMapToStringKeyedObject(obj)
+                : obj.values();
+
         HashMap<String, Long> out = new HashMap<>();
-        for (Map.Entry<String, JsonValue> e : ((JsonObject) result).values().entrySet()) {
+        for (Map.Entry<String, JsonValue> e : values.entrySet()) {
             JsonValue v = e.getValue();
             if (v instanceof JsonLong l) {
                 out.put(e.getKey(), l.value());
@@ -188,4 +194,3 @@ public class MaxmemoryScopeTest {
         }
     }
 }
-

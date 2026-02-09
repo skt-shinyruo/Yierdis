@@ -11,10 +11,18 @@
 - reply envelope：
   - 成功：`{"ok":true,"result":...}\\n`
   - 错误：`{"ok":false,"error":{"kind":"protocol|command|internal","message":"..."}}\\n`
+- reply value 编码（result 与 nested value 的稳定表示）：
+  - null/boolean/integer/double/string → JSON 原生值
+  - bytes（bulk string）：若为严格 UTF-8 字节序列，则输出 JSON string（可逆）；否则输出 `{"$b64":"<base64>"}`（语义保真）
+  - array → JSON array
+  - map/attribute → `{"$map":[[k,v],...]}`（entries 结构；key/value 均为 value，可表达任意类型）
+  - nested error（数组元素/值域内错误）→ `{"$error":{"kind":"...","message":"..."}}`
 
 > 内置 `YierdisCli` / `yierdis-client` 使用 Custom Protocol v1 发送命令并打印 NDJSON（单行）。
 
 > 注意：request 的 `args` 元素只支持 `string|null`；遇到 `number/object/array` 等类型会被视为 protocol error。若需要传递数值/二进制，应在上层做编码（例如字符串化或 base64 文本）。
+
+> 注意：reply 的 bytes/map/error 采用 tagged value（`$b64/$map/$error`）以避免 JSON 语义限制导致的 best-effort 漂移；这属于 breaking change，旧 client/脚本可能需要更新解析逻辑。
 
 > 注意：该手册描述的是当前已实现能力；新增能力以 `helloagents/plan/` 与 `helloagents/history/` 为准（以代码为准，文档做同步）。
 
