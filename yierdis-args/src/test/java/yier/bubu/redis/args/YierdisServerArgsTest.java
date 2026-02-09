@@ -3,7 +3,7 @@ package yier.bubu.redis.args;
 import org.junit.Assert;
 import org.junit.Test;
 import picocli.CommandLine;
-import yier.bubu.redis.protocol.RespLimits;
+import yier.bubu.redis.protocol.ProtocolLimits;
 
 public class YierdisServerArgsTest {
     @Test
@@ -64,11 +64,11 @@ public class YierdisServerArgsTest {
     }
 
     @Test
-    public void protocolDefaultsMatchRespLimitsSsot() {
+    public void protocolDefaultsMatchProtocolLimitsSsot() {
         YierdisServerArgs args = new YierdisServerArgs();
-        Assert.assertEquals(RespLimits.DEFAULT_MAX_BULK_BYTES, args.protocolMaxBulkBytes);
-        Assert.assertEquals(RespLimits.DEFAULT_MAX_ARGS, args.protocolMaxArgs);
-        Assert.assertEquals(RespLimits.DEFAULT_MAX_LINE_BYTES, args.protocolMaxLineBytes);
+        Assert.assertEquals(ProtocolLimits.DEFAULT_MAX_REQUEST_PAYLOAD_BYTES, args.protocolMaxBulkBytes);
+        Assert.assertEquals(ProtocolLimits.DEFAULT_MAX_ARGS, args.protocolMaxArgs);
+        Assert.assertEquals(ProtocolLimits.DEFAULT_MAX_HEADER_BYTES, args.protocolMaxLineBytes);
     }
 
     private static YierdisServerArgs parse(String... argv) {

@@ -2,7 +2,7 @@ package yier.bubu.redis.args;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
-import yier.bubu.redis.protocol.RespLimits;
+import yier.bubu.redis.protocol.ProtocolLimits;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -10,21 +10,20 @@ import java.util.Locale;
 
 @Command(
         name = "yierdis",
-        description = "A simplified Redis-compatible server (teaching-oriented).",
+        description = "A simplified server using Custom Protocol v1 (teaching-oriented).",
         sortOptions = false,
         usageHelpAutoWidth = true
 )
 public final class YierdisServerArgs {
-    private static final int DEFAULT_PROTOCOL_MAX_BULK_BYTES = RespLimits.DEFAULT_MAX_BULK_BYTES;
-    private static final int DEFAULT_PROTOCOL_MAX_ARGS = RespLimits.DEFAULT_MAX_ARGS;
-    private static final int DEFAULT_PROTOCOL_MAX_LINE_BYTES = RespLimits.DEFAULT_MAX_LINE_BYTES;
+    private static final int DEFAULT_PROTOCOL_MAX_BULK_BYTES = ProtocolLimits.DEFAULT_MAX_REQUEST_PAYLOAD_BYTES;
+    private static final int DEFAULT_PROTOCOL_MAX_ARGS = ProtocolLimits.DEFAULT_MAX_ARGS;
+    private static final int DEFAULT_PROTOCOL_MAX_LINE_BYTES = ProtocolLimits.DEFAULT_MAX_HEADER_BYTES;
 
     private static final long DEFAULT_EXECUTOR_QUEUE_MAX_BYTES = 64L * 1024 * 1024; // 64 MiB
     private static final int DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS = 1024;
     private static final long DEFAULT_TRANSACTION_QUEUE_MAX_BYTES = DEFAULT_EXECUTOR_QUEUE_MAX_BYTES;
     private static final long DEFAULT_BACKPRESSURE_BYTES_HIGH = 16L * 1024 * 1024; // 16 MiB
     private static final long DEFAULT_BACKPRESSURE_BYTES_LOW = 8L * 1024 * 1024; // 8 MiB
-    private static final int DEFAULT_FRAME_COMPACTION_MAX_COPY_BYTES = 1024 * 1024; // 1 MiB
 
     @Option(names = {"-h", "--help"}, usageHelp = true, description = "Show this help message and exit.")
     public boolean help;
@@ -73,27 +72,6 @@ public final class YierdisServerArgs {
     )
     public String executorSchedulingPolicy = "fair";
 
-    @Option(
-            names = YierdisServerArgNames.FRAME_COMPACTION_THRESHOLD_BYTES,
-            defaultValue = "0",
-            description = "Frame compaction threshold bytes (0 disables)."
-    )
-    public long frameCompactionThresholdBytes = 0;
-
-    @Option(
-            names = YierdisServerArgNames.FRAME_COMPACTION_RATIO,
-            defaultValue = "2.0",
-            description = "Frame compaction retained/length ratio threshold (>= 1.0)."
-    )
-    public double frameCompactionRatio = 2.0;
-
-    @Option(
-            names = YierdisServerArgNames.FRAME_COMPACTION_MAX_COPY_BYTES,
-            defaultValue = "" + DEFAULT_FRAME_COMPACTION_MAX_COPY_BYTES,
-            description = "Frame compaction max copy bytes."
-    )
-    public int frameCompactionMaxCopyBytes = DEFAULT_FRAME_COMPACTION_MAX_COPY_BYTES;
-
     @Option(names = YierdisServerArgNames.BACKPRESSURE_HIGH, defaultValue = "256", description = "Backpressure high watermark.")
     public int backpressureHighWatermark = 256;
 
@@ -137,7 +115,7 @@ public final class YierdisServerArgs {
     @Option(
             names = YierdisServerArgNames.PROTOCOL_MAX_BULK_BYTES,
             defaultValue = "" + DEFAULT_PROTOCOL_MAX_BULK_BYTES,
-            description = "Protocol max bulk string bytes."
+            description = "Protocol max request payload bytes."
     )
     public int protocolMaxBulkBytes = DEFAULT_PROTOCOL_MAX_BULK_BYTES;
 
@@ -151,7 +129,7 @@ public final class YierdisServerArgs {
     @Option(
             names = YierdisServerArgNames.PROTOCOL_MAX_LINE_BYTES,
             defaultValue = "" + DEFAULT_PROTOCOL_MAX_LINE_BYTES,
-            description = "Protocol max line bytes."
+            description = "Protocol max header bytes."
     )
     public int protocolMaxLineBytes = DEFAULT_PROTOCOL_MAX_LINE_BYTES;
 
@@ -242,15 +220,6 @@ public final class YierdisServerArgs {
             throw new IllegalArgumentException("unsupported executorSchedulingPolicy: " + executorSchedulingPolicy);
         }
         executorSchedulingPolicy = executorPolicy;
-        if (frameCompactionThresholdBytes < 0) {
-            throw new IllegalArgumentException("frameCompactionThresholdBytes must be >= 0");
-        }
-        if (Double.isNaN(frameCompactionRatio) || frameCompactionRatio < 1.0) {
-            throw new IllegalArgumentException("frameCompactionRatio must be >= 1.0");
-        }
-        if (frameCompactionMaxCopyBytes <= 0) {
-            throw new IllegalArgumentException("frameCompactionMaxCopyBytes must be > 0");
-        }
         if (backpressureHighWatermark <= 0) {
             throw new IllegalArgumentException("backpressureHighWatermark must be > 0");
         }
@@ -362,9 +331,6 @@ public final class YierdisServerArgs {
         out.executorQueueCapacity = executorQueueCapacity;
         out.executorQueueMaxBytes = executorQueueMaxBytes;
         out.executorSchedulingPolicy = executorSchedulingPolicy;
-        out.frameCompactionThresholdBytes = frameCompactionThresholdBytes;
-        out.frameCompactionRatio = frameCompactionRatio;
-        out.frameCompactionMaxCopyBytes = frameCompactionMaxCopyBytes;
         out.backpressureHighWatermark = backpressureHighWatermark;
         out.backpressureLowWatermark = backpressureLowWatermark;
         out.backpressureBytesHighWatermark = backpressureBytesHighWatermark;
@@ -424,12 +390,6 @@ public final class YierdisServerArgs {
         out.add(Long.toString(executorQueueMaxBytes));
         out.add(YierdisServerArgNames.EXECUTOR_SCHEDULING_POLICY);
         out.add(executorSchedulingPolicy);
-        out.add(YierdisServerArgNames.FRAME_COMPACTION_THRESHOLD_BYTES);
-        out.add(Long.toString(frameCompactionThresholdBytes));
-        out.add(YierdisServerArgNames.FRAME_COMPACTION_RATIO);
-        out.add(Double.toString(frameCompactionRatio));
-        out.add(YierdisServerArgNames.FRAME_COMPACTION_MAX_COPY_BYTES);
-        out.add(Integer.toString(frameCompactionMaxCopyBytes));
         out.add(YierdisServerArgNames.BACKPRESSURE_HIGH);
         out.add(Integer.toString(backpressureHighWatermark));
         out.add(YierdisServerArgNames.BACKPRESSURE_LOW);

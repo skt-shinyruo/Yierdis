@@ -9,9 +9,6 @@ public final class YierdisServerArgNames {
     public static final String EXECUTOR_QUEUE_CAPACITY = "--executorQueueCapacity";
     public static final String EXECUTOR_QUEUE_MAX_BYTES = "--executorQueueMaxBytes";
     public static final String EXECUTOR_SCHEDULING_POLICY = "--executorSchedulingPolicy";
-    public static final String FRAME_COMPACTION_THRESHOLD_BYTES = "--frameCompactionThresholdBytes";
-    public static final String FRAME_COMPACTION_RATIO = "--frameCompactionRatio";
-    public static final String FRAME_COMPACTION_MAX_COPY_BYTES = "--frameCompactionMaxCopyBytes";
     public static final String BACKPRESSURE_HIGH = "--backpressureHigh";
     public static final String BACKPRESSURE_LOW = "--backpressureLow";
     public static final String BACKPRESSURE_BYTES_HIGH = "--backpressureBytesHigh";
