@@ -14,7 +14,7 @@
     <packaging>jar</packaging>
 
     <name>yierdis-protocol</name>
-    <description>RESP objects and codec implementation (SSOT) shared by server/client/bench.</description>
+    <description>Protocol-agnostic interfaces + Custom Protocol v1 JSON codec shared by server/client/bench.</description>
 
     <dependencies>
         <dependency>

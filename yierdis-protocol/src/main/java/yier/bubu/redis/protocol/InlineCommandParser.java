@@ -14,8 +14,8 @@ import java.util.List;
  * - 双引号内支持反斜杠转义与 {@code \\xHH} 十六进制字节
  * - 单引号内仅支持 {@code \\'}
  */
-public final class RespInlineCommandParser {
-    private RespInlineCommandParser() {
+public final class InlineCommandParser {
+    private InlineCommandParser() {
     }
 
     public static Decoded parse(byte[] input, int off, int len, int maxArgs) {
@@ -226,4 +226,3 @@ public final class RespInlineCommandParser {
         return 0;
     }
 }
-

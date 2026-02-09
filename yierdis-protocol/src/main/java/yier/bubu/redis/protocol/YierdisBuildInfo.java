@@ -22,7 +22,7 @@ public final class YierdisBuildInfo {
     }
 
     /**
-     * 返回 US-ASCII 编码的版本字节数组（用于 RESP 写出路径）。
+     * 返回 US-ASCII 编码的版本字节数组（用于协议写出路径，例如 HELLO/INFO 等的版本展示）。
      * <p>
      * 说明：该数组为共享常量，调用方不得修改其内容。
      */
@@ -47,4 +47,3 @@ public final class YierdisBuildInfo {
         return version;
     }
 }
-
