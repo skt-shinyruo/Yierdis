@@ -14,7 +14,7 @@
     <packaging>jar</packaging>
 
     <name>yierdis</name>
-    <description>A simplified Yierdis server (Redis-compatible, RESP2) built with Netty.</description>
+    <description>A simplified Yierdis server (Custom Protocol v1) built with Netty.</description>
 
     <dependencies>
         <dependency>
@@ -115,6 +115,9 @@
     <profiles>
         <profile>
             <id>foreign-memory</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
             <dependencies>
                 <dependency>
                     <groupId>yier.bubu.redis</groupId>

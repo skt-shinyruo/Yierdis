@@ -5,8 +5,7 @@ package yier.bubu.redis;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.protocol.RespTransactionState;
-import yier.bubu.redis.protocol.netty.ConnectionContext;
+import yier.bubu.redis.protocol.TransactionState;
 
 import java.nio.charset.StandardCharsets;
 
@@ -15,9 +14,8 @@ public class TransactionQueueCleanupTest {
     public void closingConnectionDiscardsTransactionState() {
         EmbeddedChannel ch = new EmbeddedChannel();
         try {
-            ConnectionContext session = ConnectionContext.getOrCreate(ch);
-            ServerConnectionState conn = ServerConnectionState.getOrCreate(ch, session, 1, 16);
-            RespTransactionState tx = conn.transaction();
+            ServerConnectionState conn = ServerConnectionState.getOrCreate(ch, 1, 16);
+            TransactionState tx = conn.transaction();
 
             tx.begin();
             Assert.assertTrue(tx.active());
@@ -44,4 +42,3 @@ public class TransactionQueueCleanupTest {
         return s.getBytes(StandardCharsets.UTF_8);
     }
 }
-

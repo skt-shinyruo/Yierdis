@@ -3,12 +3,11 @@ package yier.bubu.redis;
 // INFO/STATS 提供器：基于执行器统计与连接态（ServerConnectionState）输出可观测性摘要，避免在热路径做额外分配。
 
 import yier.bubu.redis.command.ServerInfoProvider;
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.YierdisMemoryStats;
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespProtocol;
-import yier.bubu.redis.protocol.RespSession;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.protocol.Session;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
 
 import java.nio.charset.StandardCharsets;
@@ -72,7 +71,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private final ServerConfig config;
     private final long startedMillis;
     private volatile NettyCommandExecutor executor;
-    private volatile YierdisDb[] dbs;
+    private volatile DbEngine[] engines;
 
     NettyServerInfoProvider(ServerConfig config) {
         this.config = Objects.requireNonNull(config, "config");
@@ -83,12 +82,12 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         this.executor = Objects.requireNonNull(executor, "executor");
     }
 
-    void bindDbs(YierdisDb[] dbs) {
-        this.dbs = dbs;
+    void bindEngines(DbEngine[] engines) {
+        this.engines = engines;
     }
 
     @Override
-    public void info(RespCommand cmd, RespWriter out) {
+    public void info(Command cmd, ReplyWriter out) {
         Objects.requireNonNull(out, "out");
         NettyCommandExecutor ex = executor;
         if (ex == null) {
@@ -106,7 +105,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     @Override
-    public void stats(RespCommand cmd, RespWriter out) {
+    public void stats(Command cmd, ReplyWriter out) {
         Objects.requireNonNull(out, "out");
         NettyCommandExecutor ex = executor;
         if (ex == null) {
@@ -154,12 +153,12 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     @Override
-    public YierdisMemoryStats memoryStats(RespWriter out) {
+    public YierdisMemoryStats memoryStats(ReplyWriter out) {
         if (config.maxmemoryScope != ServerConfig.MaxmemoryScope.GLOBAL) {
             return null;
         }
 
-        YierdisDb[] local = dbs;
+        DbEngine[] local = engines;
         if (local == null || local.length == 0) {
             return new YierdisMemoryStats(
                     config.maxmemoryBytes,
@@ -202,11 +201,11 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         int expireCap1 = 0;
 
         for (int i = 0; i < local.length; i++) {
-            YierdisDb db = local[i];
+            DbEngine db = local[i];
             if (db == null) {
                 continue;
             }
-            YierdisMemoryStats s = db.memoryStats();
+            YierdisMemoryStats s = db.memory().memoryStats();
             heap += s.heapDataBytesEstimate();
             keyspaceOverhead += s.keyspaceTableOverheadBytesEstimate();
             expireOverhead += s.expireTableOverheadBytesEstimate();
@@ -252,7 +251,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         );
     }
 
-    private void writeYierdisStructuredInfo(RespWriter out, NettyCommandExecutor ex) {
+    private void writeYierdisStructuredInfo(ReplyWriter out, NettyCommandExecutor ex) {
         NettyCommandExecutor.StatsSnapshot s = ex.statsSnapshot();
         long nowMillis = System.currentTimeMillis();
         long uptimeMillis = Math.max(0, nowMillis - startedMillis);
@@ -324,14 +323,14 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                     offHeapIncludedInMaxmemory = memStats.offHeapIncludedInMaxmemory();
                 }
             } else {
-                YierdisDb[] local = dbs;
+                DbEngine[] local = engines;
                 if (local != null) {
                     for (int i = 0; i < local.length; i++) {
-                        YierdisDb db = local[i];
+                        DbEngine db = local[i];
                         if (db == null) {
                             continue;
                         }
-                        YierdisMemoryStats dbStats = db.memoryStats();
+                        YierdisMemoryStats dbStats = db.memory().memoryStats();
                         ledgerReservedBytes += dbStats.reservedBytes();
                         maxmemoryUsedBytes += dbStats.usedBytesForMaxmemory();
                         maxmemoryEffectiveUsedBytes += dbStats.effectiveUsedBytesForMaxmemory();
@@ -383,16 +382,16 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     private void appendKeyspace(StringBuilder sb) {
-        YierdisDb[] local = dbs;
+        DbEngine[] local = engines;
         if (local == null || local.length == 0) {
             return;
         }
         for (int i = 0; i < local.length; i++) {
-            YierdisDb db = local[i];
+            DbEngine db = local[i];
             if (db == null) {
                 continue;
             }
-            YierdisMemoryStats s = db.memoryStats();
+            YierdisMemoryStats s = db.memory().memoryStats();
             int keys = s.keyCount();
             int expires = s.expireCount();
             if (keys <= 0 && expires <= 0) {
@@ -406,7 +405,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     private MemorySummary memorySummary() {
-        YierdisDb[] local = dbs;
+        DbEngine[] local = engines;
         if (local == null || local.length == 0) {
             return new MemorySummary(0, 0, 0, 0);
         }
@@ -417,11 +416,11 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         long offHeap = 0;
 
         for (int i = 0; i < local.length; i++) {
-            YierdisDb db = local[i];
+            DbEngine db = local[i];
             if (db == null) {
                 continue;
             }
-            YierdisMemoryStats s = db.memoryStats();
+            YierdisMemoryStats s = db.memory().memoryStats();
             heap += s.heapDataBytesEstimate();
             keyspaceOverhead += s.keyspaceTableOverheadBytesEstimate();
             expireOverhead += s.expireTableOverheadBytesEstimate();
@@ -450,34 +449,34 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
     }
 
-    private static ServerConnectionState connectionState(RespWriter out) {
-        RespSession session = out.session();
+    private static ServerConnectionState connectionState(ReplyWriter out) {
+        Session session = out.session();
         if (session instanceof ServerConnectionState ctx) {
             return ctx;
         }
         return null;
     }
 
-    private static void writeHeader(RespWriter out, int pairs) {
-        RespProtocol protocol = out.protocol();
-        if (protocol == RespProtocol.RESP3) {
+    private static void writeHeader(ReplyWriter out, int pairs) {
+        try {
             out.mapHeader(pairs);
-            return;
+        } catch (RuntimeException e) {
+            // Best-effort compatibility: some reply writers may not support maps.
+            out.arrayHeader(pairs * 2);
         }
-        out.arrayHeader(pairs * 2);
     }
 
-    private static void writePair(RespWriter out, byte[] key, byte[] value) {
+    private static void writePair(ReplyWriter out, byte[] key, byte[] value) {
         out.bulkString(key);
         out.bulkString(value);
     }
 
-    private static void writePair(RespWriter out, byte[] key, long value) {
+    private static void writePair(ReplyWriter out, byte[] key, long value) {
         out.bulkString(key);
         out.integer(value);
     }
 
-    private static String asciiLower(RespCommand cmd, int argIndex) {
+    private static String asciiLower(Command cmd, int argIndex) {
         if (cmd == null || argIndex < 0 || argIndex >= cmd.argc() || cmd.isNull(argIndex) || cmd.len(argIndex) <= 0) {
             return null;
         }

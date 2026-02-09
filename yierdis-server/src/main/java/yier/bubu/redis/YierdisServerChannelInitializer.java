@@ -4,8 +4,7 @@ package yier.bubu.redis;
 
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
-import yier.bubu.redis.protocol.netty.ConnectionContext;
-import yier.bubu.redis.protocol.netty.RespCommandDecoder;
+import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
 
 import java.util.Objects;
 
@@ -20,12 +19,9 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
 
     @Override
     protected void initChannel(SocketChannel ch) {
-        // 协议会话 SSOT（RESP2/RESP3 协商等）
-        ConnectionContext session = ConnectionContext.getOrCreate(ch);
-        // server 连接运行时状态（背压/统计/closing 等）
+        // server 连接运行时状态（背压/统计/closing 等）+ Redis-like session state（SELECT/MULTI/...）
         ServerConnectionState.getOrCreate(
                 ch,
-                session,
                 config.transactionQueueMaxCommands,
                 config.transactionQueueMaxBytes
         );
@@ -34,7 +30,7 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
 
         ch.pipeline()
                 .addLast("writeBufferBackpressure", new WriteBufferBackpressureHandler(executor))
-                .addLast("respCommandDecoder", new RespCommandDecoder(
+                .addLast("customRequestDecoder", new CustomRequestDecoder(
                         config.protocolMaxBulkBytes,
                         config.protocolMaxArgs,
                         config.protocolMaxLineBytes

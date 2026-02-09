@@ -21,8 +21,13 @@ public final class YierdisServer {
         }
 
         try {
+            Integer exitCode = ForeignMemoryAutoModules.maybeRelaunchIfNeeded(config, args);
+            if (exitCode != null) {
+                System.exit(exitCode);
+                return;
+            }
             try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config)) {
-                log.info("yierdis started on 0.0.0.0:{} (RESP2 default; supports HELLO 3 / RESP3 + inline)", server.port());
+                log.info("yierdis started on 0.0.0.0:{} (Custom Protocol v1)", server.port());
                 server.awaitClose();
             }
         } catch (YierdisCliException e) {

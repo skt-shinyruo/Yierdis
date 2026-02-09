@@ -1,15 +1,16 @@
 package yier.bubu.redis;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.protocol.netty.RespCommandDecoder;
+import yier.bubu.redis.protocol.v1.CustomCommand;
+import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
+import yier.bubu.redis.runtime.YierdisInstance;
+import yier.bubu.redis.runtime.YierdisInstanceConfig;
 
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
@@ -21,12 +22,13 @@ public class NettyCommandExecutorTest {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+        YierdisFastCommandProcessor processor = instance.newCommandProcessor();
         NettyCommandExecutor executor = new NettyCommandExecutor(
-                db,
+                instance::bindToCurrentThread,
                 processor,
                 eventExecutor,
+                new JsonLineReplyWriterFactory(),
                 1,
                 0,
                 256,
@@ -34,7 +36,8 @@ public class NettyCommandExecutorTest {
                 0,
                 0,
                 128,
-                10
+                10,
+                NettyCommandExecutor.SchedulingPolicy.FAIR
         );
         executor.start();
 
@@ -50,26 +53,24 @@ public class NettyCommandExecutorTest {
         CountDownLatch blocker2Started = new CountDownLatch(1);
         CountDownLatch unblock2 = new CountDownLatch(1);
 
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
         try {
-            byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
-
-            ch.writeInbound(Unpooled.wrappedBuffer(ping));
+            ch.writeInbound(new CustomCommand("PING", null));
             ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
             Assert.assertEquals(0L, conn.commandsRejectedCounter().get());
             Assert.assertNull("first command should be queued (no reply yet)", ch.readOutbound());
 
-            ch.writeInbound(Unpooled.wrappedBuffer(ping));
+            ch.writeInbound(new CustomCommand("PING", null));
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
             Assert.assertEquals(1L, conn.commandsRejectedCounter().get());
-            Assert.assertArrayEquals(ascii("-ERR busy queue_full\r\n"), readOutbound(ch));
+            Assert.assertArrayEquals(ascii("{\"ok\":false,\"error\":{\"kind\":\"command\",\"message\":\"ERR busy queue_full\"}}\n"), readOutbound(ch));
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().syncUninterruptibly();
-            executor.executor().submit(db::shutdown).syncUninterruptibly();
+            executor.executor().submit(instance::close).syncUninterruptibly();
             group.shutdownGracefully().syncUninterruptibly();
             ch.finishAndReleaseAll();
         }
@@ -80,12 +81,13 @@ public class NettyCommandExecutorTest {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+        YierdisFastCommandProcessor processor = instance.newCommandProcessor();
         NettyCommandExecutor executor = new NettyCommandExecutor(
-                db,
+                instance::bindToCurrentThread,
                 processor,
                 eventExecutor,
+                new JsonLineReplyWriterFactory(),
                 1024,
                 0,
                 256,
@@ -93,7 +95,8 @@ public class NettyCommandExecutorTest {
                 0,
                 0,
                 1,
-                1000
+                1000,
+                NettyCommandExecutor.SchedulingPolicy.FAIR
         );
         executor.start();
 
@@ -110,13 +113,11 @@ public class NettyCommandExecutorTest {
         CountDownLatch blocker2Started = new CountDownLatch(1);
         CountDownLatch unblock2 = new CountDownLatch(1);
 
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
         try {
-            byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
-
             // Enqueue 2 commands while executor is blocked.
-            ch.writeInbound(Unpooled.wrappedBuffer(ping));
-            ch.writeInbound(Unpooled.wrappedBuffer(ping));
+            ch.writeInbound(new CustomCommand("PING", null));
+            ch.writeInbound(new CustomCommand("PING", null));
             ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
             Assert.assertEquals(2L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
@@ -134,19 +135,19 @@ public class NettyCommandExecutorTest {
 
             // Only the first command should have been processed in the first drain tick.
             byte[] r1 = awaitOutbound(ch, 1000);
-            Assert.assertArrayEquals(ascii("+PONG\r\n"), r1);
+            Assert.assertArrayEquals(ascii("{\"ok\":true,\"result\":\"PONG\"}\n"), r1);
             Assert.assertEquals(1L, conn.commandsExecutedCounter().get());
             Assert.assertNull("second reply must wait for next drain tick", readOutbound(ch));
 
             // Allow the second drain tick to run and produce the second reply.
             unblock2.countDown();
             byte[] r2 = awaitOutbound(ch, 1000);
-            Assert.assertArrayEquals(ascii("+PONG\r\n"), r2);
+            Assert.assertArrayEquals(ascii("{\"ok\":true,\"result\":\"PONG\"}\n"), r2);
             Assert.assertEquals(2L, conn.commandsExecutedCounter().get());
         } finally {
             unblock2.countDown();
             executor.shutdownGracefully().syncUninterruptibly();
-            executor.executor().submit(db::shutdown).syncUninterruptibly();
+            executor.executor().submit(instance::close).syncUninterruptibly();
             group.shutdownGracefully().syncUninterruptibly();
             ch.finishAndReleaseAll();
         }
@@ -157,12 +158,13 @@ public class NettyCommandExecutorTest {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+        YierdisFastCommandProcessor processor = instance.newCommandProcessor();
         NettyCommandExecutor executor = new NettyCommandExecutor(
-                db,
+                instance::bindToCurrentThread,
                 processor,
                 eventExecutor,
+                new JsonLineReplyWriterFactory(),
                 1024,
                 0,
                 1,
@@ -170,7 +172,8 @@ public class NettyCommandExecutorTest {
                 0,
                 0,
                 128,
-                10
+                10,
+                NettyCommandExecutor.SchedulingPolicy.FAIR
         );
         executor.start();
 
@@ -183,12 +186,11 @@ public class NettyCommandExecutorTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
         try {
             Assert.assertTrue(ch.config().isAutoRead());
 
-            byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
-            ch.writeInbound(Unpooled.wrappedBuffer(ping));
+            ch.writeInbound(new CustomCommand("PING", null));
             ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
 
@@ -201,7 +203,7 @@ public class NettyCommandExecutorTest {
 
             // Wait for a reply and allow scheduled tasks (flush + autoRead re-enable) to run.
             byte[] reply = awaitOutbound(ch, 1000);
-            Assert.assertArrayEquals(ascii("+PONG\r\n"), reply);
+            Assert.assertArrayEquals(ascii("{\"ok\":true,\"result\":\"PONG\"}\n"), reply);
 
             ch.runPendingTasks();
             Assert.assertTrue("autoRead should be re-enabled after backlog drains", ch.config().isAutoRead());
@@ -211,7 +213,7 @@ public class NettyCommandExecutorTest {
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().syncUninterruptibly();
-            executor.executor().submit(db::shutdown).syncUninterruptibly();
+            executor.executor().submit(instance::close).syncUninterruptibly();
             group.shutdownGracefully().syncUninterruptibly();
             ch.finishAndReleaseAll();
         }
@@ -222,12 +224,13 @@ public class NettyCommandExecutorTest {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+        YierdisFastCommandProcessor processor = instance.newCommandProcessor();
         NettyCommandExecutor executor = new NettyCommandExecutor(
-                db,
+                instance::bindToCurrentThread,
                 processor,
                 eventExecutor,
+                new JsonLineReplyWriterFactory(),
                 16,
                 7,
                 256,
@@ -235,7 +238,8 @@ public class NettyCommandExecutorTest {
                 0,
                 0,
                 128,
-                10
+                10,
+                NettyCommandExecutor.SchedulingPolicy.FAIR
         );
         executor.start();
 
@@ -248,36 +252,34 @@ public class NettyCommandExecutorTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
         try {
-            byte[] pingInline = ascii("PING\r\n");
-
-            ch.writeInbound(Unpooled.wrappedBuffer(pingInline));
+            ch.writeInbound(new CustomCommand("PING", null));
             Assert.assertNull("first command should be queued (no reply yet)", ch.readOutbound());
 
             NettyCommandExecutor.StatsSnapshot s1 = executor.statsSnapshot();
             Assert.assertTrue("expected queued bytes > 0 when queueMaxBytes is enabled", s1.queuedBytes > 0);
 
-            ch.writeInbound(Unpooled.wrappedBuffer(pingInline));
-            Assert.assertArrayEquals(ascii("-ERR busy bytes_budget\r\n"), readOutbound(ch));
+            ch.writeInbound(new CustomCommand("PING", null));
+            Assert.assertArrayEquals(ascii("{\"ok\":false,\"error\":{\"kind\":\"command\",\"message\":\"ERR busy bytes_budget\"}}\n"), readOutbound(ch));
 
             NettyCommandExecutor.StatsSnapshot s2 = executor.statsSnapshot();
             Assert.assertEquals("reject path must not leak queued bytes", s1.queuedBytes, s2.queuedBytes);
 
             unblock.countDown();
 
-            Assert.assertArrayEquals(ascii("+PONG\r\n"), awaitOutbound(ch, 1000));
+            Assert.assertArrayEquals(ascii("{\"ok\":true,\"result\":\"PONG\"}\n"), awaitOutbound(ch, 1000));
 
             NettyCommandExecutor.StatsSnapshot s3 = executor.statsSnapshot();
             Assert.assertEquals("after drain, queued tasks should be released", 0, s3.queuedTasks);
             Assert.assertEquals("after drain, queued bytes should be released", 0L, s3.queuedBytes);
 
-            ch.writeInbound(Unpooled.wrappedBuffer(pingInline));
-            Assert.assertArrayEquals("budget should recover after drain", ascii("+PONG\r\n"), awaitOutbound(ch, 1000));
+            ch.writeInbound(new CustomCommand("PING", null));
+            Assert.assertArrayEquals("budget should recover after drain", ascii("{\"ok\":true,\"result\":\"PONG\"}\n"), awaitOutbound(ch, 1000));
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().syncUninterruptibly();
-            executor.executor().submit(db::shutdown).syncUninterruptibly();
+            executor.executor().submit(instance::close).syncUninterruptibly();
             group.shutdownGracefully().syncUninterruptibly();
             ch.finishAndReleaseAll();
         }
@@ -288,12 +290,13 @@ public class NettyCommandExecutorTest {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+        YierdisFastCommandProcessor processor = instance.newCommandProcessor();
         NettyCommandExecutor executor = new NettyCommandExecutor(
-                db,
+                instance::bindToCurrentThread,
                 processor,
                 eventExecutor,
+                new JsonLineReplyWriterFactory(),
                 1024,
                 0,
                 256,
@@ -301,7 +304,8 @@ public class NettyCommandExecutorTest {
                 1,
                 0,
                 128,
-                10
+                10,
+                NettyCommandExecutor.SchedulingPolicy.FAIR
         );
         executor.start();
 
@@ -314,12 +318,11 @@ public class NettyCommandExecutorTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
         try {
             Assert.assertTrue(ch.config().isAutoRead());
 
-            byte[] pingInline = ascii("PING\r\n");
-            ch.writeInbound(Unpooled.wrappedBuffer(pingInline));
+            ch.writeInbound(new CustomCommand("PING", null));
 
             ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
@@ -334,7 +337,7 @@ public class NettyCommandExecutorTest {
 
             unblock.countDown();
 
-            Assert.assertArrayEquals(ascii("+PONG\r\n"), awaitOutbound(ch, 1000));
+            Assert.assertArrayEquals(ascii("{\"ok\":true,\"result\":\"PONG\"}\n"), awaitOutbound(ch, 1000));
 
             ch.runPendingTasks();
             Assert.assertTrue("autoRead should be re-enabled after bytes backlog drains", ch.config().isAutoRead());
@@ -346,7 +349,7 @@ public class NettyCommandExecutorTest {
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().syncUninterruptibly();
-            executor.executor().submit(db::shutdown).syncUninterruptibly();
+            executor.executor().submit(instance::close).syncUninterruptibly();
             group.shutdownGracefully().syncUninterruptibly();
             ch.finishAndReleaseAll();
         }
@@ -357,12 +360,13 @@ public class NettyCommandExecutorTest {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
-        YierdisDb db = new YierdisDb();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+        YierdisFastCommandProcessor processor = instance.newCommandProcessor();
         NettyCommandExecutor executor = new NettyCommandExecutor(
-                db,
+                instance::bindToCurrentThread,
                 processor,
                 eventExecutor,
+                new JsonLineReplyWriterFactory(),
                 1024,
                 0,
                 256,
@@ -370,7 +374,8 @@ public class NettyCommandExecutorTest {
                 0,
                 0,
                 128,
-                10
+                10,
+                NettyCommandExecutor.SchedulingPolicy.FAIR
         );
         executor.start();
 
@@ -383,14 +388,11 @@ public class NettyCommandExecutorTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandDecoder(), new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
         try {
-            byte[] quit = ascii("*1\r\n$4\r\nQUIT\r\n");
-            byte[] ping = ascii("*1\r\n$4\r\nPING\r\n");
-
             // Enqueue QUIT + PING while executor is blocked, so both are accepted.
-            ch.writeInbound(Unpooled.wrappedBuffer(quit));
-            ch.writeInbound(Unpooled.wrappedBuffer(ping));
+            ch.writeInbound(new CustomCommand("QUIT", null));
+            ch.writeInbound(new CustomCommand("PING", null));
 
             ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
             Assert.assertEquals(2L, conn.commandsEnqueuedCounter().get());
@@ -399,7 +401,7 @@ public class NettyCommandExecutorTest {
             unblock.countDown();
 
             byte[] r1 = awaitOutbound(ch, 1000);
-            Assert.assertArrayEquals(ascii("+OK\r\n"), r1);
+            Assert.assertArrayEquals(ascii("{\"ok\":true,\"result\":\"OK\"}\n"), r1);
 
             // No reply for the followup PING; it should be skipped after closing is requested.
             Assert.assertNull(readOutbound(ch));
@@ -414,7 +416,7 @@ public class NettyCommandExecutorTest {
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().syncUninterruptibly();
-            executor.executor().submit(db::shutdown).syncUninterruptibly();
+            executor.executor().submit(instance::close).syncUninterruptibly();
             group.shutdownGracefully().syncUninterruptibly();
             ch.finishAndReleaseAll();
         }

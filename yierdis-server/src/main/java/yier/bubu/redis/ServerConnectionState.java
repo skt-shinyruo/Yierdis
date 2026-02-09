@@ -1,15 +1,12 @@
 package yier.bubu.redis;
 
-// Server 连接运行时状态（server 私有）：承载背压/计数/closing 等语义，并通过 RespSession 代理协议协商状态。
+// Server 连接运行时状态（server 私有）：承载背压/计数/closing 等语义，并暴露最小 Redis-like 连接态给命令层。
 
 import io.netty.channel.Channel;
 import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
-import yier.bubu.redis.protocol.RespProtocol;
-import yier.bubu.redis.protocol.RespSession;
-import yier.bubu.redis.protocol.RespServerSession;
-import yier.bubu.redis.protocol.RespTransactionState;
-import yier.bubu.redis.protocol.netty.ConnectionContext;
+import yier.bubu.redis.protocol.ServerSession;
+import yier.bubu.redis.protocol.TransactionState;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -22,10 +19,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * Server-side per-connection runtime state.
  * <p>
  * 该对象位于 server 模块中，用于承载与 Netty 执行器相关的运行时语义：
- * pending/backpressure/closing/counters 等。协议协商状态（RESP2/RESP3）通过委托 {@link RespSession}
- * 获取与设置，避免 protocol-netty adapter 携带 server 语义。
+ * pending/backpressure/closing/counters 等。
  */
-final class ServerConnectionState implements RespServerSession {
+final class ServerConnectionState implements ServerSession {
     private static final AttributeKey<ServerConnectionState> KEY =
             AttributeKey.valueOf("yierdis.serverConnectionState");
     private static final java.util.concurrent.atomic.AtomicLong NEXT_CLIENT_ID = new java.util.concurrent.atomic.AtomicLong(1);
@@ -33,36 +29,21 @@ final class ServerConnectionState implements RespServerSession {
     private static final long DEFAULT_TRANSACTION_QUEUE_MAX_BYTES = 64L * 1024 * 1024; // 64 MiB
 
     static ServerConnectionState getOrCreate(Channel channel) {
-        Objects.requireNonNull(channel, "channel");
-        ConnectionContext session = ConnectionContext.getOrCreate(channel);
-        return getOrCreate(channel, session);
-    }
-
-    static ServerConnectionState getOrCreate(Channel channel, RespSession session) {
-        return getOrCreate(
-                channel,
-                session,
-                DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS,
-                DEFAULT_TRANSACTION_QUEUE_MAX_BYTES
-        );
+        return getOrCreate(channel, DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS, DEFAULT_TRANSACTION_QUEUE_MAX_BYTES);
     }
 
     static ServerConnectionState getOrCreate(
             Channel channel,
-            RespSession session,
             int transactionQueueMaxCommands,
             long transactionQueueMaxBytes
     ) {
         Objects.requireNonNull(channel, "channel");
-        Objects.requireNonNull(session, "session");
         Attribute<ServerConnectionState> attr = channel.attr(KEY);
         ServerConnectionState existing = attr.get();
         if (existing != null) {
-            existing.bindSessionIfAbsent(session);
             return existing;
         }
         ServerConnectionState created = new ServerConnectionState(
-                session,
                 Math.max(0, transactionQueueMaxCommands),
                 Math.max(0, transactionQueueMaxBytes)
         );
@@ -70,18 +51,15 @@ final class ServerConnectionState implements RespServerSession {
         if (raced == null) {
             return created;
         }
-        raced.bindSessionIfAbsent(session);
         return raced;
     }
 
-    private volatile RespSession session;
-
-    // --- Redis-like connection state (跨模块可见，通过 RespServerSession 暴露给命令层) ---
+    // --- Redis-like connection state（跨模块可见，通过 ServerSession 暴露给命令层） ---
     private final long clientId = NEXT_CLIENT_ID.getAndIncrement();
     private final AtomicInteger dbIndex = new AtomicInteger(0);
     private volatile String clientName;
     private final AtomicBoolean authenticated = new AtomicBoolean(false);
-    private final TransactionState transaction;
+    private final ConnectionTransactionState transaction;
 
     // --- Executor / backpressure (跨线程读写，使用原子类型) ---
     private final AtomicInteger pending = new AtomicInteger(0);
@@ -98,34 +76,8 @@ final class ServerConnectionState implements RespServerSession {
     private final AtomicLong backpressureEnter = new AtomicLong(0);
     private final AtomicLong backpressureExit = new AtomicLong(0);
 
-    private ServerConnectionState(RespSession session, int transactionQueueMaxCommands, long transactionQueueMaxBytes) {
-        this.session = Objects.requireNonNull(session, "session");
-        this.transaction = new TransactionState(transactionQueueMaxCommands, transactionQueueMaxBytes);
-    }
-
-    private void bindSessionIfAbsent(RespSession session) {
-        if (this.session != null) {
-            return;
-        }
-        this.session = Objects.requireNonNull(session, "session");
-    }
-
-    @Override
-    public RespProtocol protocol() {
-        RespSession s = session;
-        if (s == null) {
-            return RespProtocol.RESP2;
-        }
-        return s.protocol();
-    }
-
-    @Override
-    public void setProtocol(RespProtocol protocol) {
-        RespSession s = session;
-        if (s == null) {
-            return;
-        }
-        s.setProtocol(protocol);
+    private ServerConnectionState(int transactionQueueMaxCommands, long transactionQueueMaxBytes) {
+        this.transaction = new ConnectionTransactionState(transactionQueueMaxCommands, transactionQueueMaxBytes);
     }
 
     @Override
@@ -171,7 +123,7 @@ final class ServerConnectionState implements RespServerSession {
     }
 
     @Override
-    public RespTransactionState transaction() {
+    public TransactionState transaction() {
         return transaction;
     }
 
@@ -233,7 +185,7 @@ final class ServerConnectionState implements RespServerSession {
         return backpressureExit;
     }
 
-    private static final class TransactionState implements RespTransactionState {
+    private static final class ConnectionTransactionState implements TransactionState {
         private final int maxQueuedCommands;
         private final long maxQueuedBytes;
         private boolean active;
@@ -241,7 +193,7 @@ final class ServerConnectionState implements RespServerSession {
         private long queuedBytes;
         private final ArrayList<byte[][]> queue = new ArrayList<>();
 
-        private TransactionState(int maxQueuedCommands, long maxQueuedBytes) {
+        private ConnectionTransactionState(int maxQueuedCommands, long maxQueuedBytes) {
             this.maxQueuedCommands = Math.max(0, maxQueuedCommands);
             this.maxQueuedBytes = Math.max(0, maxQueuedBytes);
         }

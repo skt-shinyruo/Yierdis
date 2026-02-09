@@ -11,11 +11,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.protocol.ReplyWriterFactory;
 
-import java.util.IdentityHashMap;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -34,9 +33,9 @@ import java.util.concurrent.atomic.LongAdder;
  * Key behaviors (contract):
  * <ul>
  *     <li><b>Bounded queue</b>: {@code queueCapacity} is a hard cap for the global backlog.
- *     When the queue is full (or executor is closing), {@link #trySubmit(ChannelHandlerContext, RespCommand)}
+ *     When the queue is full (or executor is closing), {@link #trySubmit(ChannelHandlerContext, Command)}
  *     returns {@code false} and the caller is expected to fail-fast (server returns {@code -ERR busy}).</li>
- *     <li><b>Ownership</b>: on success, the executor takes ownership of {@link RespCommand} and will recycle it.
+ *     <li><b>Ownership</b>: on success, the executor takes ownership of {@link Command} and will recycle it.
  *     On failure, the caller must recycle.</li>
  *     <li><b>Connection-level backpressure</b>: backpressure is tracked per-channel by a pending counter.
  *     When {@code pending >= backpressureHighWatermark}, the executor disables Netty {@code autoRead} for that
@@ -50,7 +49,7 @@ import java.util.concurrent.atomic.LongAdder;
  *       The time limit is a <b>budget</b>, not a {@code sleep}. When the budget is hit and the queue is still not
  *       empty, the executor schedules the next drain tick, allowing other tasks on the same executor (e.g. scheduled
  *       TTL cleanup) to run between ticks.</li>
- *     <li><b>Flush coalescing</b>: commands write replies via {@link RespWriter} into Netty buffers; each tick batches
+ *     <li><b>Flush coalescing</b>: commands write replies via {@link yier.bubu.redis.protocol.ReplyWriter} into Netty buffers; each tick batches
  *     {@code write(...)} calls and performs a single {@code flush()} per channel at the end.</li>
  * </ul>
  * <p>
@@ -67,16 +66,14 @@ public final class NettyCommandExecutor implements AutoCloseable {
         FAIR
     }
 
-    // 连接态：协议会话在 ConnectionContext（protocol-netty）；server 运行时连接态在 ServerConnectionState（server 私有）。
+    // 连接态：server 运行时连接态 + Redis-like session state 在 ServerConnectionState（server 私有）。
     // 执行器调度状态在 NettyExecutorChannelState（避免跨层耦合）。
-
-    // Compaction is intentionally conservative: only compact "small frames that retain too much memory" to reduce
-    // the risk of copying large payloads.
-    private static final int DEFAULT_FRAME_COMPACTION_MAX_COPY_BYTES = 1024 * 1024; // 1 MiB
+    // 注：Custom Protocol v1 的请求解码为 heap 命令（无 ByteBuf slice 驻留），无需 frame compaction。
 
     private final Runnable bindToCurrentThread;
     private final YierdisFastCommandProcessor commandProcessor;
     private final EventExecutor executor;
+    private final ReplyWriterFactory replyWriterFactory;
 
     private final SchedulingPolicy schedulingPolicy;
 
@@ -106,78 +103,32 @@ public final class NettyCommandExecutor implements AutoCloseable {
     private final int maxDrainCommands;
     private final long drainTimeLimitNanos;
 
-    private final NettyExecutorFrameCompactor frameCompactor;
-
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean drainScheduled = new AtomicBoolean(false);
     private volatile boolean running = true;
     private final NettyExecutorBackpressureController backpressureController;
 
     public NettyCommandExecutor(
-            YierdisDb db,
+            Runnable bindToCurrentThread,
             YierdisFastCommandProcessor commandProcessor,
             EventExecutor executor,
-            int queueCapacity,
-            long queueMaxBytes,
-            int backpressureHighWatermark,
-            int backpressureLowWatermark,
-            long backpressureBytesHighWatermark,
-            long backpressureBytesLowWatermark,
-            int maxDrainCommands,
-            long drainTimeLimitMillis
+            ReplyWriterFactory replyWriterFactory,
+            NettyCommandExecutorConfig config
     ) {
         this(
-                Objects.requireNonNull(db, "db")::bindToCurrentThread,
+                bindToCurrentThread,
                 commandProcessor,
                 executor,
-                queueCapacity,
-                queueMaxBytes,
-                backpressureHighWatermark,
-                backpressureLowWatermark,
-                backpressureBytesHighWatermark,
-                backpressureBytesLowWatermark,
-                maxDrainCommands,
-                drainTimeLimitMillis,
-                SchedulingPolicy.FAIR,
-                0,
-                2.0,
-                DEFAULT_FRAME_COMPACTION_MAX_COPY_BYTES
-        );
-    }
-
-    public NettyCommandExecutor(
-            YierdisDb db,
-            YierdisFastCommandProcessor commandProcessor,
-            EventExecutor executor,
-            int queueCapacity,
-            long queueMaxBytes,
-            int backpressureHighWatermark,
-            int backpressureLowWatermark,
-            long backpressureBytesHighWatermark,
-            long backpressureBytesLowWatermark,
-            int maxDrainCommands,
-            long drainTimeLimitMillis,
-            SchedulingPolicy schedulingPolicy,
-            long frameCompactionThresholdBytes,
-            double frameCompactionRatio,
-            int frameCompactionMaxCopyBytes
-    ) {
-        this(
-                Objects.requireNonNull(db, "db")::bindToCurrentThread,
-                commandProcessor,
-                executor,
-                queueCapacity,
-                queueMaxBytes,
-                backpressureHighWatermark,
-                backpressureLowWatermark,
-                backpressureBytesHighWatermark,
-                backpressureBytesLowWatermark,
-                maxDrainCommands,
-                drainTimeLimitMillis,
-                schedulingPolicy,
-                frameCompactionThresholdBytes,
-                frameCompactionRatio,
-                frameCompactionMaxCopyBytes
+                replyWriterFactory,
+                Objects.requireNonNull(config, "config").queueCapacity(),
+                config.queueMaxBytes(),
+                config.backpressureHighWatermark(),
+                config.backpressureLowWatermark(),
+                config.backpressureBytesHighWatermark(),
+                config.backpressureBytesLowWatermark(),
+                config.maxDrainCommands(),
+                config.drainTimeLimitMillis(),
+                config.schedulingPolicy()
         );
     }
 
@@ -185,6 +136,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
             Runnable bindToCurrentThread,
             YierdisFastCommandProcessor commandProcessor,
             EventExecutor executor,
+            ReplyWriterFactory replyWriterFactory,
             int queueCapacity,
             long queueMaxBytes,
             int backpressureHighWatermark,
@@ -193,14 +145,12 @@ public final class NettyCommandExecutor implements AutoCloseable {
             long backpressureBytesLowWatermark,
             int maxDrainCommands,
             long drainTimeLimitMillis,
-            SchedulingPolicy schedulingPolicy,
-            long frameCompactionThresholdBytes,
-            double frameCompactionRatio,
-            int frameCompactionMaxCopyBytes
+            SchedulingPolicy schedulingPolicy
     ) {
         this.bindToCurrentThread = Objects.requireNonNull(bindToCurrentThread, "bindToCurrentThread");
         this.commandProcessor = Objects.requireNonNull(commandProcessor, "commandProcessor");
         this.executor = Objects.requireNonNull(executor, "executor");
+        this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
         this.schedulingPolicy = schedulingPolicy == null ? SchedulingPolicy.FAIR : schedulingPolicy;
         if (queueCapacity <= 0) {
             throw new IllegalArgumentException("queueCapacity must be > 0");
@@ -235,15 +185,6 @@ public final class NettyCommandExecutor implements AutoCloseable {
         if (drainTimeLimitMillis <= 0) {
             throw new IllegalArgumentException("drainTimeLimitMillis must be > 0");
         }
-        if (frameCompactionThresholdBytes < 0) {
-            throw new IllegalArgumentException("frameCompactionThresholdBytes must be >= 0");
-        }
-        if (Double.isNaN(frameCompactionRatio) || frameCompactionRatio < 1.0) {
-            throw new IllegalArgumentException("frameCompactionRatio must be >= 1.0");
-        }
-        if (frameCompactionMaxCopyBytes <= 0) {
-            throw new IllegalArgumentException("frameCompactionMaxCopyBytes must be > 0");
-        }
 
         this.queue = this.schedulingPolicy == SchedulingPolicy.GLOBAL ? new ArrayBlockingQueue<>(queueCapacity) : null;
         this.taskQueue = new NettyExecutorTaskQueue(this.schedulingPolicy, this.queue);
@@ -255,12 +196,6 @@ public final class NettyCommandExecutor implements AutoCloseable {
         this.maxDrainCommands = maxDrainCommands;
         this.drainTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(drainTimeLimitMillis);
 
-        this.frameCompactor = new NettyExecutorFrameCompactor(
-                frameCompactionThresholdBytes,
-                frameCompactionRatio,
-                frameCompactionMaxCopyBytes
-        );
-
         this.backpressureController = new NettyExecutorBackpressureController(
                 this.executor,
                 this.backlogBudget,
@@ -271,6 +206,13 @@ public final class NettyCommandExecutor implements AutoCloseable {
                 this.backpressureExit,
                 () -> this.running
         );
+    }
+
+    ReplyWriter newReplyWriter(ByteBuf out, Channel ch) {
+        Objects.requireNonNull(out, "out");
+        Objects.requireNonNull(ch, "ch");
+        ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
+        return replyWriterFactory.newWriter(new NettyByteBufSink(out), conn);
     }
 
     public EventExecutor executor() {
@@ -351,10 +293,10 @@ public final class NettyCommandExecutor implements AutoCloseable {
     /**
      * Attempts to submit a client command for execution.
      * <p>
-     * Success: the executor takes ownership of {@link RespCommand} and is responsible for recycle().
+     * Success: the executor takes ownership of {@link Command} and is responsible for close().
      * Failure: the caller retains ownership and MUST recycle().
      */
-    public boolean trySubmit(ChannelHandlerContext ctx, RespCommand cmd) {
+    public boolean trySubmit(ChannelHandlerContext ctx, Command cmd) {
         return trySubmitWithReason(ctx, cmd) == null;
     }
 
@@ -375,7 +317,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
         }
     }
 
-    SubmitRejectReason trySubmitWithReason(ChannelHandlerContext ctx, RespCommand cmd) {
+    SubmitRejectReason trySubmitWithReason(ChannelHandlerContext ctx, Command cmd) {
         Objects.requireNonNull(ctx, "ctx");
         Objects.requireNonNull(cmd, "cmd");
         Channel ch = ctx.channel();
@@ -411,8 +353,6 @@ public final class NettyCommandExecutor implements AutoCloseable {
         int retainedBytes = 0;
         boolean reservedBytes = false;
         try {
-            frameCompactor.tryCompact(ctx, cmd);
-
             retainedBytes = Math.max(0, safeRetainedBytes(cmd));
             if (!backlogBudget.tryReserveQueuedBytes(retainedBytes)) {
                 if (reservedSlot) {
@@ -504,7 +444,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
         boolean hitMaxDrainCommands = false;
         boolean hitDrainTimeBudget = false;
 
-        IdentityHashMap<Channel, ChannelHandlerContext> flushTargets = new IdentityHashMap<>();
+        NettyReplyFlushBatch flushBatch = new NettyReplyFlushBatch();
         for (; ; ) {
             if (processed >= maxDrainCommands) {
                 hitMaxDrainCommands = true;
@@ -521,12 +461,10 @@ public final class NettyCommandExecutor implements AutoCloseable {
             }
             processed++;
 
-            executeOne(task, flushTargets);
+            executeOne(task, flushBatch);
         }
 
-        for (ChannelHandlerContext ctx : flushTargets.values()) {
-            safeFlush(ctx);
-        }
+        flushBatch.flushAll();
 
         boolean pendingAfterDrain = taskQueue.hasPendingTasks();
         if (pendingAfterDrain) {
@@ -548,9 +486,9 @@ public final class NettyCommandExecutor implements AutoCloseable {
         }
     }
 
-    private void executeOne(NettyExecutorTask task, IdentityHashMap<Channel, ChannelHandlerContext> flushTargets) {
+    private void executeOne(NettyExecutorTask task, NettyReplyFlushBatch flushBatch) {
         ChannelHandlerContext ctx = task.ctx;
-        RespCommand cmd = task.cmd;
+        Command cmd = task.cmd;
         if (ctx == null || cmd == null) {
             return;
         }
@@ -569,7 +507,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
             boolean ok = false;
             try {
                 ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
-                RespWriter writer = new RespWriter(new NettyByteBufSink(out), conn);
+                ReplyWriter writer = replyWriterFactory.newWriter(new NettyByteBufSink(out), conn);
                 commandProcessor.execute(cmd, writer);
                 if (writer.closeAfterReplyRequested()) {
                     // close-after-reply：flush 后关闭连接，并标记该 channel 后续任务需要跳过。
@@ -580,7 +518,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
                     ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
                 } else {
                     ctx.write(out, ctx.voidPromise());
-                    flushTargets.put(ctx.channel(), ctx);
+                    flushBatch.record(ctx);
                 }
                 ok = true;
             } finally {
@@ -594,9 +532,10 @@ public final class NettyCommandExecutor implements AutoCloseable {
                 ByteBuf out = ctx.alloc().buffer();
                 boolean ok = false;
                 try {
-                    new RespWriter(new NettyByteBufSink(out), ServerConnectionState.getOrCreate(ch)).error("ERR internal error");
+                    ReplyWriter writer = newReplyWriter(out, ch);
+                    writer.internalError("ERR internal error");
                     ctx.write(out, ctx.voidPromise());
-                    flushTargets.put(ctx.channel(), ctx);
+                    flushBatch.record(ctx);
                     ok = true;
                 } finally {
                     if (!ok) {
@@ -639,17 +578,6 @@ public final class NettyCommandExecutor implements AutoCloseable {
         }
         if (running && globalOk) {
             backpressureController.scheduleGlobalRecovery();
-        }
-    }
-
-    private static void safeFlush(ChannelHandlerContext ctx) {
-        if (ctx == null) {
-            return;
-        }
-        try {
-            ctx.flush();
-        } catch (Throwable ignored) {
-            // ignore
         }
     }
 
@@ -823,15 +751,12 @@ public final class NettyCommandExecutor implements AutoCloseable {
         );
     }
 
-    private static int safeRetainedBytes(RespCommand cmd) {
+    private static int safeRetainedBytes(Command cmd) {
         if (cmd == null) {
             return 0;
         }
         try {
-            if (cmd.frame() == null) {
-                return 0;
-            }
-            return cmd.frame().retainedBytes();
+            return Math.max(0, cmd.retainedBytes());
         } catch (Throwable ignored) {
             return 0;
         }

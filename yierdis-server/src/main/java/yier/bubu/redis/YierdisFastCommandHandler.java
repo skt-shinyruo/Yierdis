@@ -7,13 +7,12 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.DecoderException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import yier.bubu.redis.bytes.netty.NettyByteBufSink;
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.util.Objects;
 
-public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler<RespCommand> {
+public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler<Command> {
     private static final Logger log = LoggerFactory.getLogger(YierdisFastCommandHandler.class);
 
     private final NettyCommandExecutor nettyExecutor;
@@ -23,7 +22,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
     }
 
     @Override
-    protected void channelRead0(ChannelHandlerContext ctx, RespCommand msg) {
+    protected void channelRead0(ChannelHandlerContext ctx, Command msg) {
         NettyCommandExecutor.SubmitRejectReason reject = nettyExecutor.trySubmitWithReason(ctx, msg);
         if (reject == null) {
             // 执行器接管 msg 的生命周期，负责 recycle。
@@ -35,7 +34,8 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         try {
             String err = "ERR busy";
             err += " " + reject.code();
-            new RespWriter(new NettyByteBufSink(out), ServerConnectionState.getOrCreate(ctx.channel())).error(err);
+            ReplyWriter writer = nettyExecutor.newReplyWriter(out, ctx.channel());
+            writer.error(err);
             ctx.writeAndFlush(out);
             out = null;
         } finally {
@@ -48,22 +48,17 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        // Best-effort: return a RESP error and close the connection.
-        // This covers protocol decode errors (e.g. invalid RESP frames) and unexpected runtime errors.
+        // Best-effort: return an error reply.
+        // Protocol errors should keep the connection alive (decoder will resync when possible).
+        // Internal errors may close the connection to avoid side effects from already-queued commands.
         if (ctx == null) {
             return;
         }
-        // 标记该连接进入 closing：避免 protocol/internal error 触发 close 后，已入队命令仍在 executor 中继续执行产生副作用。
-        ServerConnectionState conn = ServerConnectionState.getOrCreate(ctx.channel());
-        conn.markClosing();
-        nettyExecutor.disableAutoRead(ctx.channel());
 
         Throwable root = unwrapDecoderException(cause);
         String message = safeErrorMessage(root);
         String remote = String.valueOf(ctx.channel().remoteAddress());
-        String err = message.startsWith("Protocol error")
-                ? "ERR " + message
-                : "ERR internal error";
+        boolean protocolError = message.startsWith("Protocol error");
 
         if (message.startsWith("Protocol error")) {
             // Protocol errors are often client-driven; keep logs low-noise by default.
@@ -74,8 +69,21 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
 
         ByteBuf out = ctx.alloc().buffer();
         try {
-            new RespWriter(new NettyByteBufSink(out), ServerConnectionState.getOrCreate(ctx.channel())).error(err);
-            ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
+            ReplyWriter writer = nettyExecutor.newReplyWriter(out, ctx.channel());
+            if (protocolError) {
+                writer.protocolError(message);
+            } else {
+                // 标记该连接进入 closing：避免 internal error 触发 close 后，已入队命令仍在 executor 中继续执行产生副作用。
+                ServerConnectionState conn = ServerConnectionState.getOrCreate(ctx.channel());
+                conn.markClosing();
+                nettyExecutor.disableAutoRead(ctx.channel());
+                writer.internalError("ERR internal error");
+            }
+            if (protocolError) {
+                ctx.writeAndFlush(out);
+            } else {
+                ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
+            }
             out = null;
         } finally {
             if (out != null) {

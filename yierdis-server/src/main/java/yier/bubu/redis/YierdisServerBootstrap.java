@@ -16,11 +16,12 @@ import org.slf4j.LoggerFactory;
 import yier.bubu.redis.args.YierdisCliException;
 import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocators;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackendUnavailableException;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
 import yier.bubu.redis.runtime.YierdisInstanceConfig;
 
@@ -44,7 +45,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
     // Core resources (closed in reverse order).
     private YierdisInstance instance;
-    private YierdisDb[] dbs;
+    private DbEngine[] engines;
     private YierdisOffHeapAllocator offHeapAllocator;
     private NettyCommandExecutor executor;
     private EventExecutorGroup commandGroup;
@@ -136,27 +137,28 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .evictionTimeLimitMillis(config.evictionTimeLimitMillis)
                 .expireCleanupTimeLimitMillis(config.expireCleanupTimeLimitMillis)
                 .build());
-        dbs = instance.dbs();
+        engines = instance.engines();
 
         NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(config);
-        infoProvider.bindDbs(dbs);
+        infoProvider.bindEngines(engines);
         SlowCommandGovernor slowGovernor = new SlowCommandGovernor() {
             private final long timeBudgetNanos = config.keysTimeBudgetMillis <= 0
                     ? 0
                     : TimeUnit.MILLISECONDS.toNanos(config.keysTimeBudgetMillis);
 
             @Override
-            public long keysTimeBudgetNanos(yier.bubu.redis.protocol.RespWriter out) {
+            public long keysTimeBudgetNanos(yier.bubu.redis.protocol.ReplyWriter out) {
                 return timeBudgetNanos;
             }
 
             @Override
-            public int keysMaxResults(yier.bubu.redis.protocol.RespWriter out) {
+            public int keysMaxResults(yier.bubu.redis.protocol.ReplyWriter out) {
                 return config.keysMaxResults;
             }
         };
         YierdisFastCommandProcessor processor = instance.newCommandProcessor(infoProvider, slowGovernor);
         commandGroup = new DefaultEventExecutorGroup(1);
+        NettyCommandExecutorConfig executorConfig = NettyCommandExecutorConfig.from(config);
         executor = new NettyCommandExecutor(
                 () -> {
                     YierdisInstance inst = instance;
@@ -166,18 +168,8 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 },
                 processor,
                 commandGroup.next(),
-                config.executorQueueCapacity,
-                config.executorQueueMaxBytes,
-                config.backpressureHighWatermark,
-                config.backpressureLowWatermark,
-                config.backpressureBytesHighWatermark,
-                config.backpressureBytesLowWatermark,
-                config.executorMaxDrainCommands,
-                config.executorDrainTimeLimitMillis,
-                config.executorSchedulingPolicy,
-                config.frameCompactionThresholdBytes,
-                config.frameCompactionRatio,
-                config.frameCompactionMaxCopyBytes
+                new JsonLineReplyWriterFactory(),
+                executorConfig
         );
         infoProvider.bindExecutor(executor);
 
@@ -193,7 +185,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             // 2) 通过 executeMaintenance 让 cleanup 在 DB 绑定线程中执行。
             // 3) 通过 coalesce 避免在高压下积累多个 cleanup 请求（fixed-rate catch-up storm）。
             long period = config.expirationCleanupIntervalMillis;
-            YierdisDb[] dbsForTask = dbs;
+            DbEngine[] enginesForTask = engines;
             NettyCommandExecutor exForTask = executor;
             java.util.concurrent.atomic.AtomicBoolean cleanupPending = new java.util.concurrent.atomic.AtomicBoolean(false);
             cleanupFuture = workerGroup.next().scheduleWithFixedDelay(() -> {
@@ -202,22 +194,22 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 }
                 exForTask.executeMaintenance(() -> {
                     try {
-                        if (dbsForTask != null) {
-                            YierdisDb firstDb = null;
-                            for (YierdisDb d : dbsForTask) {
+                        if (enginesForTask != null) {
+                            DbEngine firstDb = null;
+                            for (DbEngine d : enginesForTask) {
                                 if (d == null) {
                                     continue;
                                 }
                                 if (firstDb == null) {
                                     firstDb = d;
                                 }
-                                d.cleanupExpired();
+                                d.expiration().cleanupExpired();
                                 if (config.maxmemoryBytes > 0 && config.maxmemoryScope == ServerConfig.MaxmemoryScope.PER_DB) {
-                                    d.enforceMaxmemory();
+                                    d.eviction().enforceMaxmemory();
                                 }
                             }
                             if (config.maxmemoryBytes > 0 && config.maxmemoryScope == ServerConfig.MaxmemoryScope.GLOBAL && firstDb != null) {
-                                firstDb.enforceMaxmemory();
+                                firstDb.eviction().enforceMaxmemory();
                             }
                         }
                     } catch (Exception e) {
@@ -280,7 +272,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             }
         }
         instance = null;
-        dbs = null;
+        engines = null;
         executor = null;
 
         EventExecutorGroup cg = commandGroup;

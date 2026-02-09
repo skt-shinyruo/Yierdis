@@ -19,9 +19,6 @@ final class ServerConfig {
     final int executorQueueCapacity;
     final long executorQueueMaxBytes;
     final NettyCommandExecutor.SchedulingPolicy executorSchedulingPolicy;
-    final long frameCompactionThresholdBytes;
-    final double frameCompactionRatio;
-    final int frameCompactionMaxCopyBytes;
     final int backpressureHighWatermark;
     final int backpressureLowWatermark;
     final long backpressureBytesHighWatermark;
@@ -53,9 +50,6 @@ final class ServerConfig {
             int executorQueueCapacity,
             long executorQueueMaxBytes,
             NettyCommandExecutor.SchedulingPolicy executorSchedulingPolicy,
-            long frameCompactionThresholdBytes,
-            double frameCompactionRatio,
-            int frameCompactionMaxCopyBytes,
             int backpressureHighWatermark,
             int backpressureLowWatermark,
             long backpressureBytesHighWatermark,
@@ -86,9 +80,6 @@ final class ServerConfig {
         this.executorQueueCapacity = executorQueueCapacity;
         this.executorQueueMaxBytes = executorQueueMaxBytes;
         this.executorSchedulingPolicy = executorSchedulingPolicy;
-        this.frameCompactionThresholdBytes = frameCompactionThresholdBytes;
-        this.frameCompactionRatio = frameCompactionRatio;
-        this.frameCompactionMaxCopyBytes = frameCompactionMaxCopyBytes;
         this.backpressureHighWatermark = backpressureHighWatermark;
         this.backpressureLowWatermark = backpressureLowWatermark;
         this.backpressureBytesHighWatermark = backpressureBytesHighWatermark;
@@ -153,9 +144,6 @@ final class ServerConfig {
                 parsed.executorQueueCapacity,
                 parsed.executorQueueMaxBytes,
                 schedulingPolicy,
-                parsed.frameCompactionThresholdBytes,
-                parsed.frameCompactionRatio,
-                parsed.frameCompactionMaxCopyBytes,
                 parsed.backpressureHighWatermark,
                 parsed.backpressureLowWatermark,
                 parsed.backpressureBytesHighWatermark,
