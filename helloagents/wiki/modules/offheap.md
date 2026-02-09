@@ -8,7 +8,7 @@
 
 - **Responsibility:** 分配器 API、slice/buf 抽象、unsafe/netty/foreign 等后端
 - **Status:** 🚧In Development
-- **Last Updated:** 2026-02-02
+- **Last Updated:** 2026-02-08
 
 ## Specifications
 
@@ -16,7 +16,7 @@
 **Module:** bytes/offheap-api
 bytes 抽象的 SSOT 已抽取到 `yierdis-bytes`（Netty-free）：
 - `BytesSource`：统一的只读 bytes view（可由 heap byte[]、Netty ByteBuf、off-heap slice 等实现）
-- `BytesSink/DirectBytesSink`：统一的写入目标（供 `RespWriter`、off-heap buf 写路径等复用）
+- `BytesSink/DirectBytesSink`：统一的写入目标（供 `JsonLineReplyWriter`、off-heap buf 写路径等复用）
 
 `yierdis-offheap-api` 不再提供 bytes 兼容别名（Breaking）：所有 bytes 视图/写出接口以 `yierdis-bytes` 为 SSOT；Netty 适配（`ByteBuf` sink/source）位于 `yierdis-bytes-netty`。
 
@@ -49,18 +49,17 @@ bytes 抽象的 SSOT 已抽取到 `yierdis-bytes`（Netty-free）：
 - 优先通过 `ServiceLoader` 发现 `YierdisOffHeapAllocatorProvider`（netty/unsafe/foreign 各自注册）
 - 在 server fat-jar（shade）场景下，使用 `ServicesResourceTransformer` 合并 `META-INF/services`，确保多后端可同时发现
 - 若指定后端不可用，启动期直接抛出明确错误（提示缺失依赖/需要的 profile），避免运行中才暴露
-- `foreign` 后端需要 Maven profile `foreign-memory` 编译进产物，并要求运行时启用 incubator 模块（`--add-modules jdk.incubator.foreign`）；不满足时返回可预期的配置错误提示（避免长堆栈淹没关键信息）
+- `foreign` 后端默认构建已包含（profile `foreign-memory` 默认启用）；运行时仍需启用 incubator 模块（`--add-modules jdk.incubator.foreign`）。为降低部署复杂度，当 server 检测到 `--offheapBackend foreign` 且模块未启用时会自动重启补齐该 JVM 参数（并保留原 JVM 参数，例如 `-Xmx` / `-XX:MaxDirectMemorySize`）。
 - 建议在 server 启动时输出“可发现的 providers / 最终选择结果”，提升可运维性与排障效率
 
-### Requirement: RESP frame slice 直接写入 off-heap（减少双拷贝）
+### Requirement: 输入 bytes 直写 off-heap（减少双拷贝）
 **Module:** offheap
-为了支持“端到端低分配”的写入路径，off-heap buf 提供从 `BytesSource` 写入的入口；当输入来自 Netty `ByteBuf` 时，通常由 `RespFrame`（例如 `NettyRespFrame`）直接提供 `BytesSource` 视图，无需额外中转。
+为了支持“端到端低分配”的写入路径，off-heap buf 提供从 `BytesSource` 写入的入口，避免无意义的中间拷贝。
 
 #### Scenario: SET/APPEND 等写命令零中转写入
-条件：启用非 unsafe 的 off-heap backend（例如 `netty/foreign`），并使用 RESP bulk string 发送 value
+条件：启用非 unsafe 的 off-heap backend（例如 `netty/foreign`）
 - 预期：服务端可调用 `YierdisOffHeapBuf#setBytes(int, BytesSource, int, int)` 将 value 写入 off-heap
-- 预期：当输入源是 Netty `ByteBuf` 时，直接使用 `RespFrame` 的 `BytesSource` 视图（避免 `ByteBuf → byte[] → off-heap` 的中转）
-- 预期：减少“RESP frame → heap byte[] → off-heap”的中间分配与额外拷贝
+- 说明：Custom Protocol v1 的 request 当前会将 JSON args 物化为 heap `byte[]`；如需进一步减少拷贝，可在未来引入更适合二进制 payload 的 framing，并通过 `Command.frame()` 暴露可选 `BytesSource` slice 视图。
 
 ## Dependencies
 
@@ -83,3 +82,4 @@ bytes 抽象的 SSOT 已抽取到 `yierdis-bytes`（Netty-free）：
 - 2026-01-16：后端加载升级：引入 `YierdisOffHeapAllocatorProvider`（ServiceLoader）并在 server shade 场景合并 services 资源，提升可运维性与错误可读性。
 - 2026-01-16：可观测性增强：增加 providers 发现摘要（ServiceLoader）与 server 启动诊断输出；缺失后端错误信息附带 discovered providers（摘要在失败路径懒加载，避免成功路径额外 ServiceLoader 扫描）。
 - 2026-01-23：off-heap Hash 编码策略对齐 Redis：小 hash 以 packed(listpack-like) 起步，按阈值/oversize 升级到 dict，并增强 SDS 分配/升级路径的异常安全（避免泄漏）。
+- 2026-02-08：foreign-memory 默认启用：默认构建包含 `yierdis-offheap-foreign`；当选择 `--offheapBackend foreign` 且未启用 `--add-modules jdk.incubator.foreign` 时，server 自动重启补齐该参数。

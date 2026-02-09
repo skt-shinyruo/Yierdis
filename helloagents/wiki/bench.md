@@ -72,21 +72,21 @@ java -jar yierdis-bench/target/yierdis-bench-0.1.0-SNAPSHOT.jar --help
 
 ---
 
-## 5. 正确性统计与 RESP3 兼容性说明
+## 5. 正确性统计与协议语义说明
 
 ### errors 统计（吞吐/延迟都会展示）
 bench 在汇总表格中会同时展示 throughput/latency 与 `errors`：
 
-- 只要遇到 `-ERR ...`（RESP error reply），就会计入 `errors`
+- 只要遇到 `{"ok":false,"error":...}`（Custom Protocol v1 error envelope），就会计入 `errors`
 - `errors` 会在吞吐与延迟两类结果里都展示，便于区分“性能变快但语义错误”的情况
 
 ### `--strictReplies`：最小语义校验（可选）
-默认情况下，bench 主要用于性能对比：只要响应不是 `-ERR`，就会按成功统计。
+默认情况下，bench 主要用于性能对比：只要响应不是 `ok=false`，就会按成功统计。
 
-当开启 `--strictReplies` 时，会对不同 workload 的响应做“最小类型校验”，例如：
-- `PING` 期望 `+PONG`
-- `SET` 期望 `+OK`
-- `GET` 期望 bulk string（并校验 bulk 长度与 bench 的 `--dataSize` 一致；允许 `(nil)`）
+当开启 `--strictReplies` 时，会对不同 workload 的响应做“最小 shape 校验”，例如：
+- `PING` 期望 `{"ok":true,"result":"PONG"}`
+- `SET` 期望 `{"ok":true,"result":"OK"}`
+- `GET` 期望 `{"ok":true,"result":"<string>"}`（并校验 string 长度与 bench 的 `--dataSize` 一致；允许 `null`）
 
 若返回类型不符合预期，也会计入 `errors`（用于捕捉协议/实现差异导致的隐藏错误）。
 

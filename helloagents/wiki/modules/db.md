@@ -10,9 +10,20 @@
 
 - **Responsibility:** Keyspace + 过期索引 + 值编码（string/list/set/hash/zset）+ maxmemory
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-04
+- **Last Updated:** 2026-02-09
 
 ## Specifications
+
+### Requirement: 存储层与回包形态解耦（ReplySink）
+**Module:** db
+
+为避免 “存储层/协议层/性能优化” 相互渗透，db 层遵循以下边界约束：
+
+- db 不对外暴露 `*ReplyCount/*ReplyInto` 等“为了回包优化的 API”（回包形态属于命令/协议层职责）；对外统一使用数据语义命名（例如 `*Count/*WriteTo`）
+- value/数据结构层如需 streaming 输出 bulk string 值，只依赖协议层的窄接口 `ReplySink`（仅 bulk-string 子集）
+- 命令层负责 reply 形状（array/map header、count 计算、错误语义等），并将 `ReplyWriter` 作为 `ReplySink` 下传
+
+补充：db 对命令层暴露的稳定边界为 `DbEngine`（`yier.bubu.redis.ops.DbEngine`），通过 `values()/expiration()/eviction()/keyspace()/ttl()/memory()/lifecycle()` 组合子能力；命令层/协议层不得直接依赖具体 DB 实现（当前实现为 `YierdisDb`）。
 
 ### Contracts（SSOT 冻结契约）
 **Module:** db
@@ -45,7 +56,7 @@
 #### Contract: ScanCursorV2（SCAN cursor SSOT）
 - SSOT 类型：`yier.bubu.redis.db.ScanCursorV2`
 - 不可变语义：
-  - cursor 为 RESP bulk string 的数字字符串；`0` 表示扫描结束
+  - cursor 为数字字符串（ASCII 十进制）；`0` 表示扫描结束
   - best-effort：不保证强一致，但必须“可推进、可终止”；rehash/插入/删除/过期并发下仍可 make progress
   - `COUNT` 为 hint，不得导致死循环或单次扫描跑完整个 keyspace
 - 现状：
@@ -58,14 +69,14 @@
 - 不可变语义：
   - snapshot 基于 `ScanCursorV2` 做 time-slice（`count + cursor` 分批推进），不得暴露/依赖 keyspace 内部结构
   - change event 不携带 DB 内部对象引用或 raw address（避免消费者误用导致泄漏/越界）
-  - 消费者不得跨线程直接触达 `YierdisDb`；需要执行命令必须回到 owner thread（instance/executor 调度）
+  - 消费者不得跨线程直接触达 DB 引擎实现实例（`DbEngine` 的实现，如 `YierdisDb`）；需要执行命令必须回到 owner thread（instance/executor 调度）
 - 现状：
   - core 已提供最小接口与回归测试锚点，用于后续 RDB/AOF/replication/审计能力接入
 
 ### Requirement: DB 单线程语义硬化（fail-fast）
 **Module:** db
-`YierdisDb` 明确为 **非线程安全**，并通过 owner-thread 绑定 + fail-fast 机制将“约定”变为“硬约束”：
-- 必须在唯一线程调用 `bindToCurrentThread()` 完成绑定（通常由 server executor 在 `start()` 阶段执行）
+DB 引擎实现（当前为 `YierdisDb`）明确为 **非线程安全**，并通过 owner-thread 绑定 + fail-fast 机制将“约定”变为“硬约束”：
+- 必须在唯一线程完成 owner-thread 绑定（通常由 server 在 executor owner thread 上通过 binder/`YierdisInstance#bindToCurrentThread` 触发）
 - 未绑定即访问、或跨线程访问：立即抛出异常（测试可覆盖），避免静默竞态/一致性风险
 
 ### Requirement: 二进制安全 Keyspace
@@ -100,7 +111,7 @@ Yierdis 提供 `--maxmemoryScope` 来明确预算口径：
 
 - `--maxmemoryScope global`（默认，更贴近 Redis）：
   - `maxmemoryBytes` 视为全实例预算；淘汰可跨 DB 进行（allkeys-*）
-  - `MEMORY STATS`（RESP3 map / RESP2 扁平 kv array）输出 **全局口径**（汇总所有 DB）
+  - `MEMORY STATS` 输出 **全局口径**（汇总所有 DB）
 - `--maxmemoryScope per-db`（兼容模式）：
   - 将 `maxmemoryBytes` 按 DB 数量做硬分摊（`maxmemoryBytes / databases`），各 DB 独立执行淘汰/拒写
   - 行为更像“每个逻辑 DB 一个预算”，与 Redis 的全实例口径不同，但便于教学/隔离
@@ -114,17 +125,13 @@ Yierdis 提供 `--maxmemoryScope` 来明确预算口径：
 - 当 server 多 DB 共享同一个 off-heap allocator（`ownsOffHeapAllocator=false`）时：为避免同一 `allocator.usedBytes()` 被每个 DB 重复计入导致过度淘汰，DB 侧 `usedBytesForMaxmemory` 仅使用 heap 估算；off-heap 总量由 `--offheapMaxBytes` 单独约束，并通过 `MEMORY STATS`/`INFO` 输出可观测。
 
 为提升“为什么拒写/为什么淘汰”的可解释性，补充预算分解输出：
-- `YierdisDb.memoryStats()`：输出 heap/off-heap/结构开销等分解估算
+- `DbEngine.memory().memoryStats()`（当前实现委派到 `YierdisDb#memoryStats()`）：输出 heap/off-heap/结构开销等分解估算
 - `MEMORY STATS`：命令侧暴露预算分解（用于排障/教学；明确为估算）
 
 #### Contract: `MEMORY STATS` 输出字段（稳定性约束）
-`MEMORY STATS` 输出字段集合保持稳定，按连接协议版本返回不同容器类型：
-- RESP2：输出为 **扁平 key/value 数组**（总元素数固定为 **40**，即 20 对 key/value）
-- RESP3：输出为 **map**（总 pair 数固定为 **20**）
-
-字段编码约束：
-- key 均为 ASCII bulk string
-- value 均为 integer（RESP2/RESP3 一致；布尔值用 `0/1` 表示）
+`MEMORY STATS` 输出字段集合保持稳定，输出为结构化 object（key/value）：
+- key：ASCII string
+- value：integer（布尔值用 `0/1` 表示）
 
 字段含义（口径：估算/预算优先，可解释性优先）：
 - `maxmemory_bytes`：配置的 maxmemory 上限（0 表示不启用淘汰/拒写）
@@ -187,6 +194,7 @@ Yierdis 提供 `--maxmemoryScope` 来明确预算口径：
 - 2026-01-08：淘汰与过期清理增加“时间预算”并支持配置（`--evictionTimeLimitMillis` / `--expireCleanupTimeLimitMillis`），降低高压下维护任务放大 tail latency 的风险。
 - 2026-01-16：off-heap capabilities：core 通过 `YierdisOffHeapAddressAllocator` 显式判断 raw address 能力，避免对具体后端类型的 `instanceof` 耦合，并让依赖方向更符合“SSOT 仅依赖 API”的边界约束。
 - 2026-01-16：线程模型硬化：DB 未绑定或跨线程访问 fail-fast；keys/expires 的 off-heap 使用改为显式开关（默认安全）。
-- 2026-01-23：新增写入 preflight（`prepareWrite`）与可复用淘汰逻辑（evictUntilUnder），并补齐 `KEYS` glob（`[]`/范围/否定/转义）与 RESP3 `MEMORY STATS` map 输出约定。
+- 2026-01-23：新增写入 preflight（`prepareWrite`）与可复用淘汰逻辑（evictUntilUnder），并补齐 `KEYS` glob（`[]`/范围/否定/转义）与 `MEMORY STATS` 输出字段约定。
 - 2026-02-01：`EXPIRE seconds<=0` 对齐为“立即删除”；`MEMORY STATS` 的数值字段对齐为 integer；entry overhead 估算常量收敛为单点定义（避免命令层/DB 双口径漂移），并对多 DB + shared allocator 场景明确 maxmemory/off-heap 的口径边界。
 - 2026-02-04：实例语义收敛：抽离 global maxmemory 协调器并引入 core 的 `YierdisInstance`（embedded instance API），为 server/bench/测试复用 instance 装配与生命周期语义提供基座。
+- 2026-02-09：分层边界收口：引入/扩展 `DbEngine` 子 ops（keyspace/ttl/memory/lifecycle）并适配 `YierdisDb`；集合 streaming 写出接口命名收敛为 `*Count/*WriteTo`，避免 reply 语义渗透到存储层 API 命名。

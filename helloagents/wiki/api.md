@@ -1,13 +1,20 @@
-# 命令 / API 手册（RESP2/RESP3）
+# 命令 / API 手册（Custom Protocol v1）
 
 ## 概览
 
-本项目对外暴露的“API”即 Redis 风格命令（RESP over TCP）：默认 RESP2，支持最小 RESP3（`HELLO 3` 协商后切换），并支持 inline command（便于调试，支持引号/转义/`\\xHH`）。
+本项目对外暴露的“API”是 argv 风格命令，通过 **Custom Protocol v1 over TCP** 传输（对外不兼容 Redis 原生协议，Redis 生态客户端不可直接使用）。
 
-> 内置 `YierdisCli` 仍使用 RESP2 发送命令；如需使用 RESP3，请用 `redis-cli --resp3`。
+协议要点：
+- request framing：`<len>:<json-payload>\\n`（`len` 为 JSON payload 的 UTF-8 字节长度）
+- request schema：JSON object：`{"cmd":"PING","args":["a","b"]}`（`args` 可省略；元素仅允许 `string|null`）
+- reply framing：NDJSON（每条回复一个 JSON object，以 `\\n` 结尾）
+- reply envelope：
+  - 成功：`{"ok":true,"result":...}\\n`
+  - 错误：`{"ok":false,"error":{"kind":"protocol|command|internal","message":"..."}}\\n`
 
-> 注意：当前实现的“RESP3 支持”仍以 **reply 侧类型覆盖** 为主；request 侧主路径是 RESP2 的 multi-bulk/inline（与 Redis 生态客户端一致），但额外兼容 RESP3 `|` attributes 前缀与 `*` 命令数组内的部分 RESP3 标量类型（作为参数映射为 argv bytes）。
-> 这并不等价于完整 RESP3 request：不支持聚合类型作为参数，遇到不支持的类型会返回 protocol error。
+> 内置 `YierdisCli` / `yierdis-client` 使用 Custom Protocol v1 发送命令并打印 NDJSON（单行）。
+
+> 注意：request 的 `args` 元素只支持 `string|null`；遇到 `number/object/array` 等类型会被视为 protocol error。若需要传递数值/二进制，应在上层做编码（例如字符串化或 base64 文本）。
 
 > 注意：该手册描述的是当前已实现能力；新增能力以 `helloagents/plan/` 与 `helloagents/history/` 为准（以代码为准，文档做同步）。
 
@@ -18,18 +25,17 @@
 ### 通用
 - `PING [message]`
 - `ECHO <message>`
-- `HELLO [2|3]`（支持 2/3；`HELLO 3` 会切换连接为 RESP3）
+- `HELLO`（信息命令：返回 server/version/proto/mode/role；不做协议协商/切换）
 - `COMMAND`（最小子集：`COMMAND`/`COMMAND COUNT`/`COMMAND INFO <name ...>`）
 - `SELECT <index>`（默认支持 `0..15`；可通过 `--databases` 调整）
 - `QUIT`
-- `INFO [section]`（Redis bulk string 形态；`section` 目前为最小子集）
+- `INFO [section]`（返回 JSON string；`section` 目前为最小子集）
 - `STATS`（结构化统计；用于排障/教学）
 
-#### HELLO（最小子集）
+#### HELLO（信息命令）
 
-- `HELLO 2`：使用 RESP2 回复（array of bulk strings）
-- `HELLO 3`：切换连接为 RESP3 回复，并返回 RESP3 map（`%...`）
-- 返回字段包含：`server/version/proto/mode/role`
+- 返回一个结构化对象（Custom Protocol 下表现为 JSON object）：`server/version/proto/mode/role`
+- `proto` 当前固定为 `1`（Custom Protocol v1），不进行协议协商/切换
 - `version` 来自构建版本（`project.version` 资源注入），避免硬编码常量漂移
 
 ### Key/TTL
@@ -50,7 +56,7 @@
 - `FLUSHDB [SYNC|ASYNC]`（本实现为单线程执行器，二者语义等价）
 - `OBJECT ENCODING key`（教学用：查看内部编码）
 - `MEMORY USAGE key`
-- `MEMORY STATS`（RESP2 flat array / RESP3 map）
+- `MEMORY STATS`（结构化 object；字段集合保持稳定）
 
 ### String
 - `INCR key`
@@ -105,4 +111,4 @@
 
 事务边界与兼容性提示（重要）：
 - 事务队列为连接级状态，server 提供条数/bytes 的硬上限（防 OOM；触发错误会进入 aborted，后续 `EXEC` 返回 `EXECABORT` 并丢弃队列）。
-- `HELLO` 属于连接级协议协商命令（RESP2/RESP3 握手），为避免在 `EXEC` reply 中混入不同协议类型前缀导致客户端解析失败，MULTI 模式下禁止 `HELLO`（返回错误并触发 `EXECABORT`）。
+- `HELLO` 属于连接级信息命令；为简化事务语义与护栏实现，MULTI 模式下仍禁止 `HELLO`（返回错误并触发 `EXECABORT`）。

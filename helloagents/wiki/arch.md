@@ -8,8 +8,8 @@
 
 - `yierdis-bytes`：中立 bytes 抽象（`BytesSource/BytesSink/BytesSlice`），供协议层/off-heap/I/O 复用（SSOT，**Netty-free**）
 - `yierdis-bytes-netty`：`yierdis-bytes` 的 Netty 适配层（`ByteBuf` ↔ `DirectBytesSink/BytesSource`），为 server/off-heap 提供 fast-path（adapter）
-- `yierdis-protocol`：RESP 对象模型 + fast-path `RespWriter` + `RespFrame/RespSession` 抽象（SSOT，**Netty-free**）
-- `yierdis-protocol-netty`：Netty codec（decoder/encoder）+ `RespFrame/RespSession` 的 Netty 适配实现（adapter，可复用）
+- `yierdis-protocol`：协议无关抽象（`Command/ReplyWriter/Session`）+ Custom Protocol v1（JSON codec + NDJSON reply writer）（SSOT，**Netty-free**）
+- `yierdis-protocol-netty`：Custom Protocol v1 Netty codec（`CustomRequestDecoder` + `JsonLineDecoder`）（adapter，可复用）
 - `yierdis-core`：DB/Keyspace/Value/TTL/maxmemory/命令处理（SSOT）+ embedded instance/runtime（`YierdisInstance`：多 DB 装配/路由/生命周期，Netty-free），**不依赖 Netty**
 - `yierdis-args`：server 参数模型与校验（picocli，SSOT），供 server/bench 复用
 - `yierdis-client`：Netty client + CLI（调试工具），依赖 `yierdis-protocol-netty`
@@ -103,23 +103,23 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-  participant Client as Client (redis-cli / yierdis-client / bench)
+  participant Client as Client (yierdis-client / bench / custom SDK)
   participant Netty as yierdis-server (Netty pipeline)
-  participant Decoder as yierdis-protocol-netty (RespCommandDecoder)
+  participant Decoder as yierdis-protocol-netty (CustomRequestDecoder)
   participant Handler as yierdis-server (YierdisFastCommandHandler)
   participant Exec as yierdis-server (NettyCommandExecutor)
   participant Processor as yierdis-core (YierdisFastCommandProcessor / CommandRegistry)
-  participant DB as yierdis-core (YierdisDb)
-  participant Writer as yierdis-protocol (RespWriter + RespSession)
+  participant Engine as yierdis-core (DbEngine；impl: YierdisDb)
+  participant Writer as yierdis-protocol (ReplyWriter via ReplyWriterFactory)
 
-  Client->>Netty: TCP bytes (RESP2 / inline)
-  Netty->>Decoder: decode to RespCommand
-  Decoder->>Handler: fire RespCommand
+  Client->>Netty: TCP bytes (Custom Protocol v1: &lt;len&gt;:&lt;json&gt;\\n)
+  Netty->>Decoder: decode to Command (CustomCommand)
+  Decoder->>Handler: fire Command
   Handler->>Exec: trySubmit(ctx, cmd)
   Exec->>Processor: execute(cmd, writer)
-  Processor->>DB: read/write (keyspace/value/ttl/eviction/off-heap)
-  Processor->>Writer: write reply (RESP2/RESP3 by connection state)
-  Writer-->>Client: TCP bytes (RESP2/RESP3 reply)
+  Processor->>Engine: read/write (keyspace/value/ttl/eviction/off-heap)
+  Processor->>Writer: write reply (protocol-agnostic aggregates/scalars)
+  Writer-->>Client: NDJSON reply ({"ok":...}\\n)
 ```
 
 ## 执行模型与扩展策略（冻结）
@@ -127,11 +127,11 @@ sequenceDiagram
 > 本节是“生产能力扩展”的前置护栏：明确哪些语义固定不变，扩展点在哪里，以及未来 shard/router 的演进边界。
 
 - **单线程 DB 语义（SSOT）**
-  - 每个 `YierdisDb` 必须绑定到唯一 owner thread；所有读写/维护逻辑都在该线程上执行。
+  - 每个 DB 引擎实现（`DbEngine` 的实现，例如 `YierdisDb`）必须绑定到唯一 owner thread；所有读写/维护逻辑都在该线程上执行。
   - 未绑定或跨线程访问直接 fail-fast（以错误暴露误用，而不是默默竞态）。
 - **扩展点：instance 层（现状）**
   - `YierdisInstance` 负责装配多 DB、选择路由策略、管理共享 allocator 生命周期，以及启用 global maxmemory 协调器。
-  - 当前路由维度为“逻辑 DB”（RESP session 的 `dbIndex()`，由 `SELECT` 设置）；server 只做会话管理与调度，不承担 DB 语义。
+  - 当前路由维度为“逻辑 DB”（`ServerSession.dbIndex()`，由 `SELECT` 设置）；server 只做会话管理与调度，不承担 DB 语义。
 - **未来 shard/router（策略冻结）**
   - 默认保持 **single-shard**（一个 instance 即一组 DB，不做 key hash 分片）。
   - 若未来引入 key-hash shard：
@@ -156,7 +156,7 @@ sequenceDiagram
 - **off-heap 生命周期必须显式可审计**
   - 扩展模块不得持有 raw address/allocator slice 超过命令边界；若需要缓存，必须明确 copy 策略与释放时机。
 - **ACL/模块接入的线程语义**
-  - ACL/模块执行不得跨线程直接触达 `YierdisDb`；必须通过 instance/processor 在 owner thread 上执行，或将操作显式调度到 executor。
+  - ACL/模块执行不得跨线程直接触达具体 DB 引擎实现（例如 `YierdisDb`）；必须通过 instance/processor 在 owner thread 上执行，或将操作显式调度到 executor。
 
 ## Major Architecture Decisions（摘要）
 
@@ -166,34 +166,31 @@ sequenceDiagram
 | ADR-20260114-02 | offheap-api 去 Netty 依赖 | 2026-01-14 | ✅ Accepted | yierdis-offheap-api,yierdis-offheap-netty | ByteBuf 适配下沉到 netty 模块；API 仅保留 bytes sink/source 抽象 |
 | ADR-20260115-01 | protocol 拆分 protocol-netty（codec 下沉） | 2026-01-15 | ✅ Accepted | yierdis-protocol,yierdis-protocol-netty,yierdis-server,yierdis-client,yierdis-bench | `yierdis-protocol` 收敛为 Netty-free SSOT；Netty codec/adapters 下沉到 `yierdis-protocol-netty`，降低耦合与泄漏风险 |
 | ADR-20260115-02 | off-heap capabilities（address allocator） | 2026-01-15 | ✅ Accepted | yierdis-core,yierdis-offheap-api,yierdis-offheap-unsafe | 以 `YierdisOffHeapAddressAllocator` 显式表达 raw address 能力：core 通过 capability 选择 keyspace/expires 的 off-heap 路径，避免对具体后端的 `instanceof` 耦合 |
-| ADR-20260115-03 | backlog bytes 预算（retained bytes SSOT） | 2026-01-15 | ✅ Accepted | yierdis-server,yierdis-protocol,yierdis-protocol-netty,yierdis-args | 在执行器中引入 bytes-based 预算与滞回反压（与条数阈值并存），口径以 `RespFrame.retainedBytes()` 为准（更贴近真实驻留内存） |
+| ADR-20260115-03 | backlog bytes 预算（retained bytes SSOT） | 2026-01-15 | ✅ Accepted | yierdis-server,yierdis-protocol,yierdis-protocol-netty,yierdis-args | 在执行器中引入 bytes-based 预算与滞回反压（与条数阈值并存），口径以 `Command.retainedBytes()` 为准（更贴近真实驻留内存） |
 | ADR-20260115-04 | 消除 split-package（protocol-netty 独立包名） | 2026-01-15 | ✅ Accepted | yierdis-protocol-netty,yierdis-protocol,yierdis-server,yierdis-client,yierdis-bench | netty codec/adapters 迁移到 `yier.bubu.redis.protocol.netty`，让 `yierdis-protocol` 独占 `yier.bubu.redis.protocol` |
 | ADR-20260115-05 | Version SSOT（构建元数据注入） | 2026-01-16 | ✅ Accepted | yierdis-core,yierdis-server | `HELLO` 的 version 由构建资源注入读取，避免硬编码常量造成漂移 |
 | ADR-20260116-01 | 单入口执行 + DB fail-fast 线程语义 | 2026-01-16 | ✅ Accepted | yierdis-server,yierdis-core | server 侧仅保留走执行器的命令路径；DB 未绑定/跨线程访问一律 fail-fast，降低误用与竞态风险 |
 | ADR-20260116-02 | 命令层拆分（CommandRegistry + Domain Commands） | 2026-01-16 | ✅ Accepted | yierdis-core | 将命令实现按 domain 拆分为多个 `*Commands`，集中注册与错误映射，降低新增命令的修改半径 |
-| ADR-20260116-03 | frame compaction 与连接级公平调度 | 2026-01-16 | ✅ Accepted | yierdis-server,yierdis-protocol-netty | 在 retained-bytes 预算基础上，支持可配置 compaction 与 per-channel round-robin，降低驻留与 starvation 风险 |
+| ADR-20260116-03 | 连接级公平调度（fair scheduling） | 2026-01-16 | ✅ Accepted | yierdis-server | 在 retained-bytes 预算基础上，支持 per-channel round-robin（fair），降低热点连接的 starvation 风险 |
 | ADR-20260116-04 | 架构护栏与可观测性加固优先（bytes 模块后续评估） | 2026-01-16 | ✅ Accepted | yierdis-offheap-api,yierdis-server,yierdis-core,yierdis-protocol-netty,helloagents/wiki | 先通过文档/护栏/启动诊断降低退化风险；抽取 bytes 基础模块作为可选演进 |
-| ADR-20260116-05 | QUIT 的 close-after-reply 语义与 post-QUIT backlog 跳过 | 2026-01-16 | ✅ Accepted | yierdis-protocol,yierdis-core,yierdis-server | QUIT 纳入 core 命令；命令层通过 `RespWriter` 请求 close-after-reply；执行器 flush 后关闭连接并跳过该连接后续已入队命令（仅回收，不执行） |
+| ADR-20260116-05 | QUIT 的 close-after-reply 语义与 post-QUIT backlog 跳过 | 2026-01-16 | ✅ Accepted | yierdis-protocol,yierdis-core,yierdis-server | QUIT 纳入 core 命令；命令层通过 `ReplyWriter` 请求 close-after-reply；执行器 flush 后关闭连接并跳过该连接后续已入队命令（仅回收，不执行） |
 | ADR-20260116-06 | 引入 bytes-netty 适配层（ByteBuf sink 上移） | 2026-01-16 | ✅ Accepted | yierdis-bytes-netty,yierdis-server,yierdis-offheap-netty | 将 ByteBuf→BytesSink/DirectBytesSink 适配器收敛到 `yierdis-bytes-netty`，避免通用写回适配落在 offheap 后端模块，并保持 off-heap slice 写出 fast-path |
-| ADR-20260117-01 | server pipeline 内聚与执行器组件化落地 | 2026-01-17 | ✅ Accepted | yierdis-server | pipeline 装配下沉到 initializer；执行器拆分预算/compaction 等组件，降低单类复杂度并便于测试 |
-| ADR-20260117-02 | ConnectionContext 仅表达协议会话，执行器调度状态归属 server | 2026-01-17 | ✅ Accepted | yierdis-protocol-netty,yierdis-server | 连接级协议会话收敛到 `ConnectionContext`；server 运行时连接状态（pending/backpressure/closing/counters）收敛到 `ServerConnectionState`；per-channel 调度（队列+scheduled 标志）下沉到 server 私有 `NettyExecutorChannelState`（`Channel.attr`） |
-| ADR-20260117-03 | 请求解码对齐 Redis：保留 inline；控制字符 fatal protocol error | 2026-01-17 | ✅ Accepted | yierdis-protocol-netty,yierdis-server | decoder 明确允许集合（array + inline）；top-level 非 array 按 inline 处理（含看似 RESP3 前缀的误用输入）；控制字符/结构性错误判为 protocol error 并 close（由回归测试锁定） |
-| ADR-20260202-01 | RespWriter 作为 RESP2/RESP3 reply 写出 SSOT（含 encoder 对齐） | 2026-02-02 | ✅ Accepted | yierdis-protocol,yierdis-protocol-netty,yierdis-server | 统一 `RespWriter/RespObject/RespEncoder` 的 RESP3 类型集合与写出语义；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-001 |
+| ADR-20260117-01 | server pipeline 内聚与执行器组件化落地 | 2026-01-17 | ✅ Accepted | yierdis-server | pipeline 装配下沉到 initializer；执行器拆分预算/背压等组件，降低单类复杂度并便于测试 |
+| ADR-20260117-02 | 连接级状态归属 server（连接态 + 调度态） | 2026-01-17 | ✅ Accepted | yierdis-server | 连接级运行时状态收敛到 `ServerConnectionState`；per-channel 调度（队列+scheduled 标志）下沉到 server 私有 `NettyExecutorChannelState`（`Channel.attr`） |
 | ADR-20260202-02 | MULTI 入队错误采用 Redis 风格 EXECABORT（事务队列有界） | 2026-02-02 | ✅ Accepted | yierdis-core,yierdis-server,yierdis-args | 事务队列新增 commands/bytes 上限并对齐 EXECABORT；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-002 |
 | ADR-20260202-03 | maxmemory scope 升级为 global（保留 per-db 兼容开关） | 2026-02-02 | ✅ Accepted | yierdis-core,yierdis-server,yierdis-args,helloagents/wiki | 默认 global 更贴近 Redis 全实例预算；per-db 保留旧行为；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-003 |
 | ADR-20260202-04 | busy 错误保持兼容形态但增强原因表达 | 2026-02-02 | ✅ Accepted | yierdis-server,helloagents/wiki | `-ERR busy <reason>` + `STATS` 映射，提升排障能力；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-004 |
 | ADR-20260204-01 | core 暴露 Netty-free embedded instance API（YierdisInstance） | 2026-02-04 | ✅ Accepted | yierdis-core,yierdis-server | 统一 instance 装配语义并支持 bench/工具/测试嵌入使用；details: helloagents/history/2026-02/202602041128_core_embedded_instance_runtime_api/how.md#adr-001-place-embedded-instance-api-in-yierdis-core-netty-free |
-| ADR-20260206-01 | RESP wire scan/skip 语义下沉到 protocol 作为 SSOT | 2026-02-06 | ✅ Accepted | yierdis-protocol,yierdis-protocol-netty | 引入 Netty-free `RespWireSupport/RespWireSkipper` 并由 Netty decoders 复用（保留 request fast-path），减少多实现漂移；details: helloagents/history/2026-02/202602061102_resp_parser_ssot_alignment/how.md |
-| ADR-20260206-02 | RESP 解析质量兜底：golden/round-trip/fuzz/差分测试矩阵 | 2026-02-06 | ✅ Accepted | yierdis-protocol,yierdis-protocol-netty,yierdis-server,helloagents/wiki | 以测试锁定 attributes/streamed/limits/close 策略等行为边界，降低 fast-path/materialize/skip-scan 漂移风险；details: helloagents/history/2026-02/202602061216_resp_codec_test_matrix/how.md |
-
+| ADR-20260206-01 | Custom Protocol v1：request/reply 帧格式与错误模型 | 2026-02-06 | ✅ Accepted | yierdis-protocol,yierdis-protocol-netty,yierdis-server,yierdis-client | request 采用 `<len>:<json>\\n`；reply 采用 NDJSON；解析/校验错误返回 error 并尽量 resync（触达安全上限时允许断连） |
+	
 ## Security Check（2026-02-02）
 
 本轮变更按 G9 对以下高风险点做了“硬限制/净化/可观测”收敛，并补齐文档说明：
 
-- **输入上限（DoS 防护）**：request 解码上限由 `RespLimits` 作为 SSOT，并通过 server 参数 `--protocolMaxBulkBytes/--protocolMaxArgs/--protocolMaxLineBytes` 显式可配。
+- **输入上限（DoS 防护）**：request 解码上限由 `ProtocolLimits` 作为 SSOT，并通过 server 参数 `--protocolMaxBulkBytes/--protocolMaxArgs/--protocolMaxLineBytes` 显式可配。
 - **事务队列上限（OOM 风险）**：MULTI 事务队列新增 `--transactionQueueMaxCommands/--transactionQueueMaxBytes` 两条硬上限；触达上限会触发入队错误并进入 aborted，后续 EXEC 返回 `EXECABORT` 并丢弃队列。
-- **错误消息净化（response splitting 风险）**：RESP error 写出统一做 CR/LF 过滤与限长；拒绝/忙错误的 reason 为固定枚举码，不携带客户端原始输入。
-- **拒绝路径资源回收（泄漏风险）**：busy/拒绝路径会回收 `RespCommand/RespFrame`（避免 ByteBuf 驻留或泄漏），并通过回归测试锁定。
+- **错误消息净化（response splitting 风险）**：错误消息输出统一做 CR/LF 过滤与限长；拒绝/忙错误的 reason 为固定枚举码，不携带客户端原始输入。
+- **拒绝路径资源回收（泄漏风险）**：busy/拒绝路径会关闭/丢弃 `Command`（避免 payload 驻留），并通过回归测试锁定。
 - **off-heap 上限不“隐式无限”**：maxmemory 与 off-heap 是两套约束；当启用 off-heap 后端但 `--offheapMaxBytes=0` 时，server 启动会给出显式风险提示，避免误以为 maxmemory 具备硬上限语义。
 
 结论：上述风险点均已具备“可配置硬上限/错误净化/回归测试 + 文档解释”，未发现需要阻断发布的高风险缺口。
@@ -204,14 +201,14 @@ sequenceDiagram
 
 ### 1) 不一致点（行为/语义漂移风险）
 
-- **协议层 SSOT 边界漂移：**若 `RespWriter` 与 codec 混放在同一模块，容易出现“server/client/bench 引用的 codec 版本不一致”，导致行为漂移；已通过 `yierdis-protocol` / `yierdis-protocol-netty` 拆分降低该风险。
+- **协议层 SSOT 边界漂移：**若 `ReplyWriter` 的实现与 transport codec 混放在同一模块，容易出现“server/client/bench 引用的 codec 版本不一致”，导致行为漂移；已通过 `yierdis-protocol` / `yierdis-protocol-netty` 拆分降低该风险。
 - **maxmemory / MEMORY USAGE 口径：**off-heap 启用时若同时计入 heap 估算与 off-heap payload，可能出现明显双计数或漏计，进而导致淘汰/拒写时机不可解释（建议以 `heap 元数据估算 + allocator.usedBytes()` 为统一口径，并在 `MEMORY USAGE` 侧明确说明“估算/实占”的差异）。
 
 ### 2) 可维护性（依赖/演进成本）
 
 - **避免 core 引入 Netty internal：**`io.netty.util.internal.PlatformDependent` 属于 Netty internal API，版本升级风险高、语义不稳定；目前 core 通过 `yierdis-offheap-api` 的 capability（`YierdisOffHeapAddressAllocator`）表达 raw memory 能力，具体实现留在后端模块中，便于替换与审计。
 - **bytes 抽象与 off-heap 能力的语义：**bytes 抽象已迁移到 `yierdis-bytes`（SSOT，Netty-free），off-heap allocator/capability API 继续留在 `yierdis-offheap-api`。协议层不再需要通过 “off-heap” 命名模块来复用 bytes 接口，依赖方向更直观，也降低误解成本。
-- **连接级协议状态（SSOT）与 server 调度边界：**RESP2/RESP3 协商属于连接级协议会话，收敛到 `ConnectionContext`（实现 `RespSession`）并在 Netty 侧以 `Channel.attr` 绑定；pending/backpressure/closing/counters 属于 server 运行时语义，收敛到 server 私有 `ServerConnectionState`（同样与连接生命周期绑定）。与之相对，执行器调度（per-channel 队列 + scheduled 标志）属于 server 内部实现细节，收敛到 `NettyExecutorChannelState`（`yierdis-server` 私有，`Channel.attr` 绑定），避免 protocol 模块被调度策略绑死。
+- **连接级状态与 server 调度边界：**连接级运行时状态（dbIndex/事务队列/pending/backpressure/closing/counters）收敛到 server 私有 `ServerConnectionState`（`Channel.attr` 绑定）。与之相对，执行器调度（per-channel 队列 + scheduled 标志）属于 server 内部实现细节，收敛到 `NettyExecutorChannelState`（`yierdis-server` 私有，`Channel.attr` 绑定），避免跨模块重复维护状态。
 
 ### 3) 可插拔性（后端替换/灰度能力）
 
@@ -225,6 +222,5 @@ sequenceDiagram
 
 ### 5) 泄漏风险（ByteBuf/off-heap 生命周期）
 
-- **ByteBuf ownership：**decoder/encoder 产生的 frame 必须明确“谁 release”；当前通过 `RespFrame.close()` 统一回收语义，并让 `RespCommand.recycle()` 负责关闭 frame，建议在 review 中强制检查：所有异常路径是否都会 recycle/close。
+- **输入驻留与资源回收：**decoder 不保留 ByteBuf slice；请求 payload 会被解析为 heap argv（`CustomCommand`）。拒绝/关闭路径需确保及时丢弃引用并调用 `Command.close()`（即使当前实现为 no-op，也作为统一回收语义锚点）。
 - **off-heap address 生命周期：**Unsafe/off-heap 分配必须存在唯一 owner，并保证 delete/expire/evict/shutdown 路径都能回收；建议持续用 `allocator.usedBytes()` 作为回归验证锚点，并在测试中覆盖异常/早退路径。
-- **retained bytes 与 compaction：**零拷贝 slice 可能让小 frame 持有大底层 buf；执行器应以 `retainedBytes()` 做预算，并允许在阈值触发时 compact（copy→precise frame）释放驻留体积。
