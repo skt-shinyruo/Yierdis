@@ -2,12 +2,10 @@ package yier.bubu.redis.ops;
 
 // HllOps：HLL（PFADD/PFCOUNT）边界。
 
-import yier.bubu.redis.protocol.RespCommand;
-
 import java.util.List;
 
 public interface HllOps {
-    int pfadd(byte[] keyBytes, RespCommand cmd, int firstElementArgIndex);
+    int pfadd(byte[] keyBytes, List<byte[]> elements);
 
     long pfcount(List<byte[]> keys);
 

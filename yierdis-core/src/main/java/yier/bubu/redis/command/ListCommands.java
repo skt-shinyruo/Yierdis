@@ -1,9 +1,9 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.DbMemoryConstants;
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.util.List;
 import java.util.Objects;
@@ -24,46 +24,46 @@ final class ListCommands {
         registry.register("RPOP", this::rpop);
     }
 
-    private void lpush(RespCommand cmd, RespWriter out) {
+    private void lpush(Command cmd, ReplyWriter out) {
         push(cmd, out, true);
     }
 
-    private void rpush(RespCommand cmd, RespWriter out) {
+    private void rpush(Command cmd, ReplyWriter out) {
         push(cmd, out, false);
     }
 
-    private void lpop(RespCommand cmd, RespWriter out) {
+    private void lpop(Command cmd, ReplyWriter out) {
         pop(cmd, out, true);
     }
 
-    private void rpop(RespCommand cmd, RespWriter out) {
+    private void rpop(Command cmd, ReplyWriter out) {
         pop(cmd, out, false);
     }
 
-    private void push(RespCommand cmd, RespWriter out, boolean left) {
+    private void push(Command cmd, ReplyWriter out, boolean left) {
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, left ? "lpush" : "rpush");
             return;
         }
-        YierdisDb db = support.db(out);
+        DbEngine engine = support.db(out);
         long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
         }
-        db.prepareWrite(extra);
+        engine.eviction().prepareWrite(extra);
         int valuesLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, valuesLen);
         try {
             long len = left
-                    ? db.values().lists().lpush(cmd.toByteArray(1), support.slice())
-                    : db.values().lists().rpush(cmd.toByteArray(1), support.slice());
+                    ? engine.values().lists().lpush(cmd.toByteArray(1), support.slice())
+                    : engine.values().lists().rpush(cmd.toByteArray(1), support.slice());
             out.integer(len);
         } finally {
             support.clearScratch(valuesLen);
         }
     }
 
-    private void lrange(RespCommand cmd, RespWriter out) {
+    private void lrange(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 4) {
             CommandSupport.wrongArity(out, "lrange");
             return;
@@ -72,16 +72,16 @@ final class ListCommands {
         int stop = CommandSupport.parseIntClamped(cmd, 3, "stop");
 
         byte[] key = cmd.toByteArray(1);
-        YierdisDb db = support.db(out);
-        int count = db.values().lists().lrangeReplyCount(key, start, stop);
+        DbEngine engine = support.db(out);
+        int count = engine.values().lists().lrangeCount(key, start, stop);
         out.arrayHeader(count);
         if (count == 0) {
             return;
         }
-        db.values().lists().lrangeReplyInto(key, start, stop, support.bulkOut(out));
+        engine.values().lists().lrangeWriteTo(key, start, stop, out);
     }
 
-    private void pop(RespCommand cmd, RespWriter out, boolean left) {
+    private void pop(Command cmd, ReplyWriter out, boolean left) {
         if (cmd.argc() != 2 && cmd.argc() != 3) {
             CommandSupport.wrongArity(out, left ? "lpop" : "rpop");
             return;
@@ -100,14 +100,14 @@ final class ListCommands {
             }
         }
 
-        YierdisDb db = support.db(out);
+        DbEngine engine = support.db(out);
         List<byte[]> popped = left
-                ? db.values().lists().lpop(cmd.toByteArray(1), count)
-                : db.values().lists().rpop(cmd.toByteArray(1), count);
+                ? engine.values().lists().lpop(cmd.toByteArray(1), count)
+                : engine.values().lists().rpop(cmd.toByteArray(1), count);
         popResponse(out, popped, hasCount);
     }
 
-    private static void popResponse(RespWriter out, List<byte[]> popped, boolean hasCount) {
+    private static void popResponse(ReplyWriter out, List<byte[]> popped, boolean hasCount) {
         if (!hasCount) {
             if (popped == null || popped.isEmpty()) {
                 out.bulkString((byte[]) null);

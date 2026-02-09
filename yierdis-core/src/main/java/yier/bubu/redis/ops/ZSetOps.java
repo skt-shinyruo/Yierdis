@@ -2,22 +2,22 @@ package yier.bubu.redis.ops;
 
 // ZSetOps：zset 类型操作边界。
 
-import yier.bubu.redis.db.YierdisBulkStringOutput;
+import yier.bubu.redis.protocol.ReplySink;
 
 import java.util.List;
 
 public interface ZSetOps {
     long zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs);
 
-    int zrangeReplyCount(byte[] keyBytes, long start, long stop, boolean withScores);
+    int zrangeCount(byte[] keyBytes, long start, long stop, boolean withScores);
 
-    void zrangeReplyInto(byte[] keyBytes, long start, long stop, boolean withScores, YierdisBulkStringOutput out);
+    void zrangeWriteTo(byte[] keyBytes, long start, long stop, boolean withScores, ReplySink out);
 
-    int zrevrangeReplyCount(byte[] keyBytes, long start, long stop, boolean withScores);
+    int zrevrangeCount(byte[] keyBytes, long start, long stop, boolean withScores);
 
-    void zrevrangeReplyInto(byte[] keyBytes, long start, long stop, boolean withScores, YierdisBulkStringOutput out);
+    void zrevrangeWriteTo(byte[] keyBytes, long start, long stop, boolean withScores, ReplySink out);
 
-    int zrangeByScoreReplyCount(
+    int zrangeByScoreCount(
             byte[] keyBytes,
             double min,
             boolean minExclusive,
@@ -28,7 +28,7 @@ public interface ZSetOps {
             long count
     );
 
-    void zrangeByScoreReplyInto(
+    void zrangeByScoreWriteTo(
             byte[] keyBytes,
             double min,
             boolean minExclusive,
@@ -37,10 +37,10 @@ public interface ZSetOps {
             boolean withScores,
             long offset,
             long count,
-            YierdisBulkStringOutput out
+            ReplySink out
     );
 
-    int zrevrangeByScoreReplyCount(
+    int zrevrangeByScoreCount(
             byte[] keyBytes,
             double min,
             boolean minExclusive,
@@ -51,7 +51,7 @@ public interface ZSetOps {
             long count
     );
 
-    void zrevrangeByScoreReplyInto(
+    void zrevrangeByScoreWriteTo(
             byte[] keyBytes,
             double min,
             boolean minExclusive,
@@ -60,7 +60,7 @@ public interface ZSetOps {
             boolean withScores,
             long offset,
             long count,
-            YierdisBulkStringOutput out
+            ReplySink out
     );
 
     long zremrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive);

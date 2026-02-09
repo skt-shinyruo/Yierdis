@@ -1,10 +1,12 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.DbMemoryConstants;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.ExpireOption;
+import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.StringOps;
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.util.Arrays;
 import java.util.Objects;
@@ -31,42 +33,42 @@ final class StringCommands {
         registry.register("DECR", this::decr);
     }
 
-    private void set(RespCommand cmd, RespWriter out) {
+    private void set(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, "set");
             return;
         }
 
         byte[] key = cmd.toByteArray(1);
-        YierdisDb db = support.db(out);
+        DbEngine engine = support.db(out);
 
-        YierdisDb.SetMode mode = YierdisDb.SetMode.NORMAL;
-        YierdisDb.ExpireOption expire = null;
+        SetMode mode = SetMode.NORMAL;
+        ExpireOption expire = null;
         boolean getOld = false;
 
         for (int i = 3; i < cmd.argc(); i++) {
             if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "NX")) {
-                if (mode == YierdisDb.SetMode.XX) {
+                if (mode == SetMode.XX) {
                     out.error("ERR syntax error");
                     return;
                 }
-                if (mode == YierdisDb.SetMode.NX) {
+                if (mode == SetMode.NX) {
                     out.error("ERR syntax error");
                     return;
                 }
-                mode = YierdisDb.SetMode.NX;
+                mode = SetMode.NX;
                 continue;
             }
             if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "XX")) {
-                if (mode == YierdisDb.SetMode.NX) {
+                if (mode == SetMode.NX) {
                     out.error("ERR syntax error");
                     return;
                 }
-                if (mode == YierdisDb.SetMode.XX) {
+                if (mode == SetMode.XX) {
                     out.error("ERR syntax error");
                     return;
                 }
-                mode = YierdisDb.SetMode.XX;
+                mode = SetMode.XX;
                 continue;
             }
             if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "GET")) {
@@ -82,7 +84,7 @@ final class StringCommands {
                     out.error("ERR syntax error");
                     return;
                 }
-                expire = YierdisDb.ExpireOption.keepTtl();
+                expire = ExpireOption.keepTtl();
                 continue;
             }
             if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "EX")) {
@@ -95,7 +97,7 @@ final class StringCommands {
                     out.error("ERR invalid expire time in 'set' command");
                     return;
                 }
-                expire = YierdisDb.ExpireOption.ex(seconds);
+                expire = ExpireOption.ex(seconds);
                 continue;
             }
             if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "PX")) {
@@ -108,7 +110,7 @@ final class StringCommands {
                     out.error("ERR invalid expire time in 'set' command");
                     return;
                 }
-                expire = YierdisDb.ExpireOption.px(millis);
+                expire = ExpireOption.px(millis);
                 continue;
             }
             if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "EXAT")) {
@@ -131,7 +133,7 @@ final class StringCommands {
                     out.error("ERR invalid expire time in 'set' command");
                     return;
                 }
-                expire = YierdisDb.ExpireOption.exAt(unixSeconds);
+                expire = ExpireOption.exAt(unixSeconds);
                 continue;
             }
             if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "PXAT")) {
@@ -148,7 +150,7 @@ final class StringCommands {
                     out.error("ERR invalid expire time in 'set' command");
                     return;
                 }
-                expire = YierdisDb.ExpireOption.pxAt(unixMillis);
+                expire = ExpireOption.pxAt(unixMillis);
                 continue;
             }
             out.error("ERR syntax error");
@@ -156,15 +158,15 @@ final class StringCommands {
         }
 
         boolean willSet = true;
-        if (mode == YierdisDb.SetMode.NX) {
-            willSet = !db.existsKey(support.argView(cmd, 1));
-        } else if (mode == YierdisDb.SetMode.XX) {
-            willSet = db.existsKey(support.argView(cmd, 1));
+        if (mode == SetMode.NX) {
+            willSet = !engine.keyspace().existsKey(support.argView(cmd, 1));
+        } else if (mode == SetMode.XX) {
+            willSet = engine.keyspace().existsKey(support.argView(cmd, 1));
         }
 
         byte[] oldValueForGet = null;
         if (getOld && willSet) {
-            byte[] old = db.getStringBytes(key);
+            byte[] old = engine.values().strings().getStringBytes(key);
             if (old != null) {
                 oldValueForGet = Arrays.copyOf(old, old.length);
             }
@@ -172,11 +174,11 @@ final class StringCommands {
 
         if (willSet) {
             long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-            db.prepareWrite(extra);
+            engine.eviction().prepareWrite(extra);
         }
 
-        StringOps strings = db.values().strings();
-        boolean ok = strings.setString(key, cmd, 2, mode, expire);
+        StringOps strings = engine.values().strings();
+        boolean ok = strings.setString(key, support.argSlice(cmd, 2), mode, expire);
         if (!ok) {
             out.bulkString((byte[]) null);
             return;
@@ -188,42 +190,42 @@ final class StringCommands {
         out.simpleString("OK");
     }
 
-    private void get(RespCommand cmd, RespWriter out) {
+    private void get(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "get");
             return;
         }
-        YierdisDb db = support.db(out);
-        db.values().strings().getStringForReply(support.argView(cmd, 1), support.bulkOut(out));
+        DbEngine engine = support.db(out);
+        engine.values().strings().getStringForReply(support.argView(cmd, 1), out);
     }
 
-    private void strlen(RespCommand cmd, RespWriter out) {
+    private void strlen(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "strlen");
             return;
         }
-        YierdisDb db = support.db(out);
-        out.integer(db.values().strings().strlen(support.argView(cmd, 1)));
+        DbEngine engine = support.db(out);
+        out.integer(engine.values().strings().strlen(support.argView(cmd, 1)));
     }
 
-    private void append(RespCommand cmd, RespWriter out) {
+    private void append(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 3) {
             CommandSupport.wrongArity(out, "append");
             return;
         }
-        YierdisDb db = support.db(out);
+        DbEngine engine = support.db(out);
         long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        db.prepareWrite(extra);
-        long len = db.values().strings().append(cmd.toByteArray(1), cmd, 2);
+        engine.eviction().prepareWrite(extra);
+        long len = engine.values().strings().append(cmd.toByteArray(1), support.argSlice(cmd, 2));
         out.integer(len);
     }
 
-    private void setbit(RespCommand cmd, RespWriter out) {
+    private void setbit(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 4) {
             CommandSupport.wrongArity(out, "setbit");
             return;
         }
-        YierdisDb db = support.db(out);
+        DbEngine engine = support.db(out);
         long offset = CommandSupport.parseNonNegativeLong(cmd, 2, "offset");
         long v = CommandSupport.parseLong(cmd, 3, "value");
         if (v != 0 && v != 1) {
@@ -231,63 +233,63 @@ final class StringCommands {
             return;
         }
 
-        int currentLen = db.strlen(support.argView(cmd, 1));
+        long currentLen = engine.values().strings().strlen(support.argView(cmd, 1));
         long requiredBytes = (offset >>> 3) + 1;
         if (requiredBytes > MAX_STRING_BYTES) {
             out.error("ERR string exceeds maximum allowed size");
             return;
         }
-        long growth = Math.max(0L, requiredBytes - (long) currentLen);
+        long growth = Math.max(0L, requiredBytes - currentLen);
         long extra = (long) Math.max(0, cmd.len(1)) + growth + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        db.prepareWrite(extra);
+        engine.eviction().prepareWrite(extra);
 
-        int old = db.values().strings().setBit(cmd.toByteArray(1), offset, (int) v);
+        int old = engine.values().strings().setBit(cmd.toByteArray(1), offset, (int) v);
         out.integer(old);
     }
 
-    private void getbit(RespCommand cmd, RespWriter out) {
+    private void getbit(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 3) {
             CommandSupport.wrongArity(out, "getbit");
             return;
         }
         long offset = CommandSupport.parseNonNegativeLong(cmd, 2, "offset");
-        YierdisDb db = support.db(out);
-        out.integer(db.values().strings().getBit(support.argView(cmd, 1), offset));
+        DbEngine engine = support.db(out);
+        out.integer(engine.values().strings().getBit(support.argView(cmd, 1), offset));
     }
 
-    private void bitcount(RespCommand cmd, RespWriter out) {
+    private void bitcount(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 2 && cmd.argc() != 4) {
             CommandSupport.wrongArity(out, "bitcount");
             return;
         }
         if (cmd.argc() == 2) {
-            YierdisDb db = support.db(out);
-            out.integer(db.values().strings().bitcount(support.argView(cmd, 1)));
+            DbEngine engine = support.db(out);
+            out.integer(engine.values().strings().bitcount(support.argView(cmd, 1)));
             return;
         }
         long start = CommandSupport.parseLong(cmd, 2, "start");
         long end = CommandSupport.parseLong(cmd, 3, "end");
-        YierdisDb db = support.db(out);
-        out.integer(db.values().strings().bitcount(support.argView(cmd, 1), start, end));
+        DbEngine engine = support.db(out);
+        out.integer(engine.values().strings().bitcount(support.argView(cmd, 1), start, end));
     }
 
-    private void incr(RespCommand cmd, RespWriter out) {
+    private void incr(Command cmd, ReplyWriter out) {
         incrBy(cmd, out, 1);
     }
 
-    private void decr(RespCommand cmd, RespWriter out) {
+    private void decr(Command cmd, ReplyWriter out) {
         incrBy(cmd, out, -1);
     }
 
-    private void incrBy(RespCommand cmd, RespWriter out, long delta) {
+    private void incrBy(Command cmd, ReplyWriter out, long delta) {
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, delta > 0 ? "incr" : "decr");
             return;
         }
-        YierdisDb db = support.db(out);
+        DbEngine engine = support.db(out);
         long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        db.prepareWrite(extra);
-        long value = db.values().strings().incrBy(cmd.toByteArray(1), delta);
+        engine.eviction().prepareWrite(extra);
+        long value = engine.values().strings().incrBy(cmd.toByteArray(1), delta);
         out.integer(value);
     }
 }

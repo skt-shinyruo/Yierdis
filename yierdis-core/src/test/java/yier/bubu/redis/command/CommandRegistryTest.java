@@ -2,11 +2,8 @@ package yier.bubu.redis.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespCommandBuilder;
-import yier.bubu.redis.protocol.RespFrame;
+import yier.bubu.redis.protocol.v1.CustomCommand;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 public class CommandRegistryTest {
@@ -16,13 +13,13 @@ public class CommandRegistryTest {
         registry.register("PING", (cmd, out) -> {
         });
 
-        try (RespCommand c1 = command("PING")) {
+        try (CustomCommand c1 = new CustomCommand("PING", null)) {
             Assert.assertNotNull(registry.find(c1));
         }
-        try (RespCommand c2 = command("ping")) {
+        try (CustomCommand c2 = new CustomCommand("ping", null)) {
             Assert.assertNotNull(registry.find(c2));
         }
-        try (RespCommand c3 = command("PiNg")) {
+        try (CustomCommand c3 = new CustomCommand("PiNg", null)) {
             Assert.assertNotNull(registry.find(c3));
         }
     }
@@ -33,7 +30,7 @@ public class CommandRegistryTest {
         registry.register("PING", (cmd, out) -> {
         });
 
-        try (RespCommand cmd = command("NOPE")) {
+        try (CustomCommand cmd = new CustomCommand("NOPE", null)) {
             Assert.assertNull(registry.find(cmd));
         }
     }
@@ -88,46 +85,9 @@ public class CommandRegistryTest {
         }
 
         for (String name : names) {
-            try (RespCommand cmd = command(name.toLowerCase(Locale.ROOT))) {
+            try (CustomCommand cmd = new CustomCommand(name.toLowerCase(Locale.ROOT), null)) {
                 Assert.assertNotNull("expected handler for " + name, registry.find(cmd));
             }
-        }
-    }
-
-    private static RespCommand command(String nameAscii) {
-        byte[] bytes = nameAscii.getBytes(StandardCharsets.US_ASCII);
-        RespCommand cmd = RespCommandBuilder.acquire(1);
-        RespFrame frame = new ByteArrayRespFrame(bytes);
-        RespCommandBuilder.setFrame(cmd, frame);
-        RespCommandBuilder.setArgSlice(cmd, 0, 0, bytes.length);
-        return cmd;
-    }
-
-    private static final class ByteArrayRespFrame implements RespFrame {
-        private final byte[] bytes;
-
-        private ByteArrayRespFrame(byte[] bytes) {
-            this.bytes = bytes;
-        }
-
-        @Override
-        public int length() {
-            return bytes.length;
-        }
-
-        @Override
-        public byte getByte(int index) {
-            return bytes[index];
-        }
-
-        @Override
-        public void getBytes(int index, byte[] dst, int dstOff, int len) {
-            System.arraycopy(bytes, index, dst, dstOff, len);
-        }
-
-        @Override
-        public void close() {
-            // no-op
         }
     }
 }

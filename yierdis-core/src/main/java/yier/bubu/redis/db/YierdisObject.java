@@ -5,8 +5,8 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
-import yier.bubu.redis.bytes.BytesSource;
-import yier.bubu.redis.protocol.RespCommand;
+import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.ops.YierdisCommandException;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -77,29 +77,17 @@ final class YierdisObject {
         return o;
     }
 
-    static YierdisObject newString(YierdisOffHeapAllocator offHeapAllocator, RespCommand cmd, int argIndex) {
-        if (cmd == null) {
-            throw new IllegalArgumentException("cmd must not be null");
-        }
-        if (cmd.isNull(argIndex)) {
-            YierdisObject o = new YierdisObject(ValueType.STRING, ValueEncoding.STRING_EMBSTR, new byte[0]);
-            o.rawLen = 0;
-            return o;
+    static YierdisObject newString(YierdisOffHeapAllocator offHeapAllocator, BytesSlice value) {
+        if (value == null) {
+            return newString(offHeapAllocator, (byte[]) null);
         }
 
-        int len = cmd.len(argIndex);
-        if (len < 0) {
-            YierdisObject o = new YierdisObject(ValueType.STRING, ValueEncoding.STRING_EMBSTR, new byte[0]);
-            o.rawLen = 0;
-            return o;
-        }
-        if (len == 0) {
-            YierdisObject o = new YierdisObject(ValueType.STRING, ValueEncoding.STRING_EMBSTR, new byte[0]);
-            o.rawLen = 0;
-            return o;
+        int len = value.length();
+        if (len <= 0) {
+            return newString(offHeapAllocator, (byte[]) null);
         }
 
-        Long parsed = tryParseLongForIntEncoding(cmd, argIndex);
+        Long parsed = tryParseLongForIntEncoding(value);
         if (parsed != null) {
             return newStringInt(parsed);
         }
@@ -108,15 +96,15 @@ final class YierdisObject {
         Object payload;
         if (offHeapAllocator != null) {
             if (offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator) {
-                payload = new YierdisUnsafeOffHeapString(addressAllocator, len);
-                copyArgToAddress(addressAllocator, cmd, argIndex, ((YierdisUnsafeOffHeapString) payload).dataAddress(), len);
-                ((YierdisUnsafeOffHeapString) payload).setLength(len);
+                YierdisUnsafeOffHeapString s = new YierdisUnsafeOffHeapString(addressAllocator, len);
+                copySliceToAddress(addressAllocator, value, s.dataAddress(), len);
+                s.setLength(len);
+                payload = s;
             } else {
                 YierdisOffHeapBuf buf = offHeapAllocator.allocate(len);
                 boolean ok = false;
                 try {
-                    BytesSource src = cmd.frame();
-                    buf.setBytes(0, src, cmd.argOffset(argIndex), len);
+                    buf.setBytes(0, value, 0, len);
                     payload = buf;
                     ok = true;
                 } finally {
@@ -127,7 +115,7 @@ final class YierdisObject {
             }
         } else {
             byte[] raw = new byte[len];
-            cmd.copyToByteArray(argIndex, raw, 0);
+            value.getBytes(0, raw, 0, len);
             payload = raw;
         }
 
@@ -296,14 +284,11 @@ final class YierdisObject {
         this.intBytesCacheFor = 0L;
     }
 
-    void overwriteWithString(YierdisOffHeapAllocator offHeapAllocator, RespCommand cmd, int argIndex) {
-        if (cmd == null) {
-            throw new IllegalArgumentException("cmd must not be null");
-        }
-
+    void overwriteWithString(YierdisOffHeapAllocator offHeapAllocator, BytesSlice value) {
+        int len = value == null ? 0 : value.length();
         if (payload instanceof YierdisUnsafeOffHeapString current
                 && offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator) {
-            if (cmd.isNull(argIndex)) {
+            if (len <= 0) {
                 current.close();
                 this.type = ValueType.STRING;
                 this.encoding = ValueEncoding.STRING_EMBSTR;
@@ -315,20 +300,7 @@ final class YierdisObject {
                 return;
             }
 
-            int nextLen = cmd.len(argIndex);
-            if (nextLen < 0) {
-                current.close();
-                this.type = ValueType.STRING;
-                this.encoding = ValueEncoding.STRING_EMBSTR;
-                this.payload = new byte[0];
-                this.rawLen = 0;
-                this.intValue = 0L;
-                this.intBytesCache = null;
-                this.intBytesCacheFor = 0L;
-                return;
-            }
-
-            Long parsed = tryParseLongForIntEncoding(cmd, argIndex);
+            Long parsed = tryParseLongForIntEncoding(value);
             if (parsed != null) {
                 current.close();
                 this.type = ValueType.STRING;
@@ -341,41 +313,35 @@ final class YierdisObject {
                 return;
             }
 
-            ValueEncoding nextEnc = nextLen <= EMBSTR_MAX_BYTES ? ValueEncoding.STRING_EMBSTR : ValueEncoding.STRING_RAW;
-            if (nextLen == 0) {
-                current.close();
-                this.type = ValueType.STRING;
-                this.encoding = nextEnc;
-                this.payload = new byte[0];
-                this.rawLen = 0;
-                this.intValue = 0L;
-                this.intBytesCache = null;
-                this.intBytesCacheFor = 0L;
-                return;
-            }
-
-            if (current.capacity() >= nextLen) {
-                copyArgToAddress(addressAllocator, cmd, argIndex, current.dataAddress(), nextLen);
-                current.setLength(nextLen);
+            ValueEncoding nextEnc = len <= EMBSTR_MAX_BYTES ? ValueEncoding.STRING_EMBSTR : ValueEncoding.STRING_RAW;
+            if (len > 0 && current.capacity() >= len) {
+                copySliceToAddress(addressAllocator, value, current.dataAddress(), len);
+                current.setLength(len);
                 this.type = ValueType.STRING;
                 this.encoding = nextEnc;
                 this.payload = current;
-                this.rawLen = nextLen;
+                this.rawLen = len;
                 this.intValue = 0L;
                 this.intBytesCache = null;
                 this.intBytesCacheFor = 0L;
                 return;
             }
 
-            int cap = nextCapacity(Math.max(current.capacity(), 16), nextLen);
-            YierdisUnsafeOffHeapString next = new YierdisUnsafeOffHeapString(addressAllocator, cap);
-            copyArgToAddress(addressAllocator, cmd, argIndex, next.dataAddress(), nextLen);
-            next.setLength(nextLen);
+            Object nextPayload;
+            if (len == 0) {
+                nextPayload = new byte[0];
+            } else {
+                int cap = nextCapacity(Math.max(current.capacity(), 16), len);
+                YierdisUnsafeOffHeapString next = new YierdisUnsafeOffHeapString(addressAllocator, cap);
+                copySliceToAddress(addressAllocator, value, next.dataAddress(), len);
+                next.setLength(len);
+                nextPayload = next;
+            }
             current.close();
             this.type = ValueType.STRING;
             this.encoding = nextEnc;
-            this.payload = next;
-            this.rawLen = nextLen;
+            this.payload = nextPayload;
+            this.rawLen = len;
             this.intValue = 0L;
             this.intBytesCache = null;
             this.intBytesCacheFor = 0L;
@@ -385,7 +351,7 @@ final class YierdisObject {
         // Fast-path: reuse an existing off-heap buffer for SET-overwrite to avoid needing
         // "old + new" bytes at the same time under a hard cap.
         if (payload instanceof YierdisOffHeapBuf current && offHeapAllocator != null) {
-            if (cmd.isNull(argIndex)) {
+            if (len <= 0) {
                 current.close();
                 this.type = ValueType.STRING;
                 this.encoding = ValueEncoding.STRING_EMBSTR;
@@ -397,20 +363,7 @@ final class YierdisObject {
                 return;
             }
 
-            int nextLen = cmd.len(argIndex);
-            if (nextLen < 0) {
-                current.close();
-                this.type = ValueType.STRING;
-                this.encoding = ValueEncoding.STRING_EMBSTR;
-                this.payload = new byte[0];
-                this.rawLen = 0;
-                this.intValue = 0L;
-                this.intBytesCache = null;
-                this.intBytesCacheFor = 0L;
-                return;
-            }
-
-            Long parsed = tryParseLongForIntEncoding(cmd, argIndex);
+            Long parsed = tryParseLongForIntEncoding(value);
             if (parsed != null) {
                 current.close();
                 this.type = ValueType.STRING;
@@ -423,25 +376,13 @@ final class YierdisObject {
                 return;
             }
 
-            ValueEncoding nextEnc = nextLen <= EMBSTR_MAX_BYTES ? ValueEncoding.STRING_EMBSTR : ValueEncoding.STRING_RAW;
-            if (nextLen == 0) {
-                current.close();
+            ValueEncoding nextEnc = len <= EMBSTR_MAX_BYTES ? ValueEncoding.STRING_EMBSTR : ValueEncoding.STRING_RAW;
+            if (len > 0 && current.capacity() >= len) {
+                current.setBytes(0, value, 0, len);
                 this.type = ValueType.STRING;
                 this.encoding = nextEnc;
-                this.payload = new byte[0];
-                this.rawLen = 0;
-                this.intValue = 0L;
-                this.intBytesCache = null;
-                this.intBytesCacheFor = 0L;
-                return;
-            }
-
-            if (current.capacity() >= nextLen) {
-                BytesSource src = cmd.frame();
-                current.setBytes(0, src, cmd.argOffset(argIndex), nextLen);
-                this.type = ValueType.STRING;
-                this.encoding = nextEnc;
-                this.rawLen = nextLen;
+                this.payload = current;
+                this.rawLen = len;
                 this.intValue = 0L;
                 this.intBytesCache = null;
                 this.intBytesCacheFor = 0L;
@@ -449,19 +390,18 @@ final class YierdisObject {
             }
 
             Object nextPayload;
-            if (nextLen == 0) {
+            if (len == 0) {
                 nextPayload = new byte[0];
             } else {
-                YierdisOffHeapBuf nextBuf = offHeapAllocator.allocate(nextLen);
+                YierdisOffHeapBuf next = offHeapAllocator.allocate(len);
                 boolean ok = false;
                 try {
-                    BytesSource src = cmd.frame();
-                    nextBuf.setBytes(0, src, cmd.argOffset(argIndex), nextLen);
-                    nextPayload = nextBuf;
+                    next.setBytes(0, value, 0, len);
+                    nextPayload = next;
                     ok = true;
                 } finally {
                     if (!ok) {
-                        nextBuf.close();
+                        next.close();
                     }
                 }
             }
@@ -469,20 +409,72 @@ final class YierdisObject {
             this.type = ValueType.STRING;
             this.encoding = nextEnc;
             this.payload = nextPayload;
-            this.rawLen = nextLen;
+            this.rawLen = len;
             this.intValue = 0L;
             this.intBytesCache = null;
             this.intBytesCacheFor = 0L;
             return;
         }
 
-        YierdisObject next = newString(offHeapAllocator, cmd, argIndex);
-        releasePayloadIfAny();
-        this.type = next.type;
-        this.encoding = next.encoding;
-        this.payload = next.payload;
-        this.intValue = next.intValue;
-        this.rawLen = next.rawLen;
+        // Fallback: allocate a new payload and replace.
+        if (len <= 0) {
+            releaseStringPayloadIfAny();
+            this.type = ValueType.STRING;
+            this.encoding = ValueEncoding.STRING_EMBSTR;
+            this.payload = new byte[0];
+            this.rawLen = 0;
+            this.intValue = 0L;
+            this.intBytesCache = null;
+            this.intBytesCacheFor = 0L;
+            return;
+        }
+
+        Long parsed = tryParseLongForIntEncoding(value);
+        if (parsed != null) {
+            releaseStringPayloadIfAny();
+            this.type = ValueType.STRING;
+            this.encoding = ValueEncoding.STRING_INT;
+            this.payload = null;
+            this.rawLen = 0;
+            this.intValue = parsed;
+            this.intBytesCache = null;
+            this.intBytesCacheFor = 0L;
+            return;
+        }
+
+        ValueEncoding nextEnc = len <= EMBSTR_MAX_BYTES ? ValueEncoding.STRING_EMBSTR : ValueEncoding.STRING_RAW;
+        Object nextPayload;
+        if (offHeapAllocator != null) {
+            if (offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator) {
+                YierdisUnsafeOffHeapString next = new YierdisUnsafeOffHeapString(addressAllocator, len);
+                copySliceToAddress(addressAllocator, value, next.dataAddress(), len);
+                next.setLength(len);
+                nextPayload = next;
+            } else {
+                YierdisOffHeapBuf next = offHeapAllocator.allocate(len);
+                boolean ok = false;
+                try {
+                    next.setBytes(0, value, 0, len);
+                    nextPayload = next;
+                    ok = true;
+                } finally {
+                    if (!ok) {
+                        next.close();
+                    }
+                }
+            }
+        } else {
+            byte[] raw = new byte[len];
+            value.getBytes(0, raw, 0, len);
+            nextPayload = raw;
+        }
+
+        releaseStringPayloadIfAny();
+        this.type = ValueType.STRING;
+        this.encoding = nextEnc;
+        this.payload = nextPayload;
+        this.rawLen = len;
+        this.intValue = 0L;
         this.intBytesCache = null;
         this.intBytesCacheFor = 0L;
     }
@@ -541,11 +533,11 @@ final class YierdisObject {
 
     int stringGetBit(long offset) {
         if (offset < 0) {
-            throw new YierdisDb.YierdisCommandException("ERR bit offset is not an integer or out of range");
+            throw new YierdisCommandException("ERR bit offset is not an integer or out of range");
         }
         long byteIndexLong = offset >>> 3;
         if (byteIndexLong > Integer.MAX_VALUE) {
-            throw new YierdisDb.YierdisCommandException("ERR bit offset is not an integer or out of range");
+            throw new YierdisCommandException("ERR bit offset is not an integer or out of range");
         }
         int byteIndex = (int) byteIndexLong;
         int bit = (int) (offset & 7);
@@ -568,19 +560,19 @@ final class YierdisObject {
 
     int stringSetBit(YierdisOffHeapAllocator offHeapAllocator, long offset, int value) {
         if (value != 0 && value != 1) {
-            throw new YierdisDb.YierdisCommandException("ERR bit is not an integer or out of range");
+            throw new YierdisCommandException("ERR bit is not an integer or out of range");
         }
         if (offset < 0) {
-            throw new YierdisDb.YierdisCommandException("ERR bit offset is not an integer or out of range");
+            throw new YierdisCommandException("ERR bit offset is not an integer or out of range");
         }
         long byteIndexLong = offset >>> 3;
         if (byteIndexLong > Integer.MAX_VALUE) {
-            throw new YierdisDb.YierdisCommandException("ERR bit offset is not an integer or out of range");
+            throw new YierdisCommandException("ERR bit offset is not an integer or out of range");
         }
         int byteIndex = (int) byteIndexLong;
         int requiredLen = byteIndex + 1;
         if (requiredLen > MAX_STRING_BYTES) {
-            throw new YierdisDb.YierdisCommandException("ERR string exceeds maximum allowed size");
+            throw new YierdisCommandException("ERR string exceeds maximum allowed size");
         }
 
         stringEnsureLength(offHeapAllocator, requiredLen);
@@ -606,7 +598,7 @@ final class YierdisObject {
             throw new IllegalArgumentException("requiredLen must be >= 0");
         }
         if (requiredLen > MAX_STRING_BYTES) {
-            throw new YierdisDb.YierdisCommandException("ERR string exceeds maximum allowed size");
+            throw new YierdisCommandException("ERR string exceeds maximum allowed size");
         }
 
         ensureStringRawForSize(offHeapAllocator, requiredLen);
@@ -722,27 +714,23 @@ final class YierdisObject {
         throw new IllegalStateException("unexpected string payload: " + payload);
     }
 
-    int stringAppend(YierdisOffHeapAllocator offHeapAllocator, RespCommand cmd, int argIndex) {
-        if (cmd == null) {
-            throw new IllegalArgumentException("cmd must not be null");
-        }
-        if (cmd.isNull(argIndex)) {
+    int stringAppend(YierdisOffHeapAllocator offHeapAllocator, BytesSlice suffix) {
+        if (suffix == null) {
             return stringByteLength();
         }
-        int len = cmd.len(argIndex);
+        int len = suffix.length();
         if (len <= 0) {
             return stringByteLength();
         }
 
         ensureStringRawForAppend(offHeapAllocator, len);
         if (payload instanceof byte[] buf) {
-            cmd.copyToByteArray(argIndex, buf, rawLen);
+            suffix.getBytes(0, buf, rawLen, len);
             rawLen += len;
             return rawLen;
         }
         if (payload instanceof YierdisOffHeapBuf buf) {
-            BytesSource src = cmd.frame();
-            buf.setBytes(rawLen, src, cmd.argOffset(argIndex), len);
+            buf.setBytes(rawLen, suffix, 0, len);
             rawLen += len;
             return rawLen;
         }
@@ -750,7 +738,7 @@ final class YierdisObject {
             if (!(offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator)) {
                 throw new IllegalStateException("off-heap address allocator is required for unsafe off-heap string append");
             }
-            copyArgToAddress(addressAllocator, cmd, argIndex, s.dataAddress() + rawLen, len);
+            copySliceToAddress(addressAllocator, suffix, s.dataAddress() + rawLen, len);
             rawLen += len;
             s.setLength(rawLen);
             return rawLen;
@@ -890,7 +878,7 @@ final class YierdisObject {
             throw new IllegalArgumentException("requiredLen must be >= 0");
         }
         if (requiredLen > MAX_STRING_BYTES) {
-            throw new YierdisDb.YierdisCommandException("ERR string exceeds maximum allowed size");
+            throw new YierdisCommandException("ERR string exceeds maximum allowed size");
         }
         int currentLen = stringByteLength();
         int additional = Math.max(0, requiredLen - currentLen);
@@ -947,12 +935,12 @@ final class YierdisObject {
         if (payload instanceof YierdisUnsafeOffHeapString s) {
             return parseLongAscii(s, len);
         }
-        throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+        throw new YierdisCommandException("ERR value is not an integer or out of range");
     }
 
     private static long parseLongAscii(YierdisOffHeapBuf buf, int len) {
         if (len <= 0) {
-            throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+            throw new YierdisCommandException("ERR value is not an integer or out of range");
         }
 
         int i = 0;
@@ -965,18 +953,18 @@ final class YierdisObject {
             i = 1;
         }
         if (i >= len) {
-            throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+            throw new YierdisCommandException("ERR value is not an integer or out of range");
         }
 
         long value = 0L;
         for (; i < len; i++) {
             byte b = buf.getByte(i);
             if (b < '0' || b > '9') {
-                throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+                throw new YierdisCommandException("ERR value is not an integer or out of range");
             }
             int digit = b - '0';
             if (value > (Long.MAX_VALUE - digit) / 10L) {
-                throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+                throw new YierdisCommandException("ERR value is not an integer or out of range");
             }
             value = value * 10L + digit;
         }
@@ -985,7 +973,7 @@ final class YierdisObject {
 
     private static long parseLongAscii(YierdisUnsafeOffHeapString buf, int len) {
         if (len <= 0) {
-            throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+            throw new YierdisCommandException("ERR value is not an integer or out of range");
         }
 
         int i = 0;
@@ -998,18 +986,18 @@ final class YierdisObject {
             i = 1;
         }
         if (i >= len) {
-            throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+            throw new YierdisCommandException("ERR value is not an integer or out of range");
         }
 
         long value = 0L;
         for (; i < len; i++) {
             byte b = buf.getByte(i);
             if (b < '0' || b > '9') {
-                throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+                throw new YierdisCommandException("ERR value is not an integer or out of range");
             }
             int digit = b - '0';
             if (value > (Long.MAX_VALUE - digit) / 10L) {
-                throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+                throw new YierdisCommandException("ERR value is not an integer or out of range");
             }
             value = value * 10L + digit;
         }
@@ -1046,10 +1034,10 @@ final class YierdisObject {
 
     private static long safeAdd(long a, long b) {
         if (b > 0 && a > Long.MAX_VALUE - b) {
-            throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+            throw new YierdisCommandException("ERR value is not an integer or out of range");
         }
         if (b < 0 && a < Long.MIN_VALUE - b) {
-            throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+            throw new YierdisCommandException("ERR value is not an integer or out of range");
         }
         return a + b;
     }
@@ -1071,7 +1059,7 @@ final class YierdisObject {
         long parsed;
         try {
             parsed = parseLongAscii(buf, len);
-        } catch (YierdisDb.YierdisCommandException e) {
+        } catch (YierdisCommandException e) {
             return null;
         }
         String canonical = Long.toString(parsed);
@@ -1086,15 +1074,18 @@ final class YierdisObject {
         return parsed;
     }
 
-    private static Long tryParseLongForIntEncoding(RespCommand cmd, int argIndex) {
-        int len = cmd.len(argIndex);
+    private static Long tryParseLongForIntEncoding(BytesSlice slice) {
+        if (slice == null) {
+            return null;
+        }
+        int len = slice.length();
         if (len <= 0) {
             return null;
         }
         long parsed;
         try {
-            parsed = parseLongAscii(cmd, argIndex, len);
-        } catch (YierdisDb.YierdisCommandException e) {
+            parsed = parseLongAscii(slice, len);
+        } catch (YierdisCommandException e) {
             return null;
         }
         String canonical = Long.toString(parsed);
@@ -1102,26 +1093,26 @@ final class YierdisObject {
             return null;
         }
         for (int i = 0; i < len; i++) {
-            if ((byte) canonical.charAt(i) != cmd.byteAt(argIndex, i)) {
+            if ((byte) canonical.charAt(i) != slice.getByte(i)) {
                 return null;
             }
         }
         return parsed;
     }
 
-    private static long parseLongAscii(RespCommand cmd, int argIndex, int len) {
+    private static long parseLongAscii(BytesSlice slice, int len) {
         if (len <= 0) {
-            throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+            throw new YierdisCommandException("ERR value is not an integer or out of range");
         }
 
         int i = 0;
         boolean negative = false;
-        byte first = cmd.byteAt(argIndex, 0);
+        byte first = slice.getByte(0);
         if (first == '-' || first == '+') {
             negative = first == '-';
             i = 1;
             if (i == len) {
-                throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+                throw new YierdisCommandException("ERR value is not an integer or out of range");
             }
         }
 
@@ -1130,16 +1121,16 @@ final class YierdisObject {
         long result = 0;
 
         while (i < len) {
-            int digit = cmd.byteAt(argIndex, i++) - '0';
+            int digit = slice.getByte(i++) - '0';
             if (digit < 0 || digit > 9) {
-                throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+                throw new YierdisCommandException("ERR value is not an integer or out of range");
             }
             if (result < multMin) {
-                throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+                throw new YierdisCommandException("ERR value is not an integer or out of range");
             }
             result *= 10;
             if (result < limit + digit) {
-                throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+                throw new YierdisCommandException("ERR value is not an integer or out of range");
             }
             result -= digit;
         }
@@ -1147,13 +1138,12 @@ final class YierdisObject {
         return negative ? result : -result;
     }
 
-    private static void copyArgToAddress(YierdisOffHeapAddressAllocator allocator,
-                                         RespCommand cmd,
-                                         int argIndex,
-                                         long dstAddress,
-                                         int len) {
+    private static void copySliceToAddress(YierdisOffHeapAddressAllocator allocator, BytesSlice src, long dstAddress, int len) {
         if (allocator == null) {
             throw new IllegalArgumentException("allocator must not be null");
+        }
+        if (src == null) {
+            throw new IllegalArgumentException("src must not be null");
         }
         if (len <= 0) {
             return;
@@ -1162,10 +1152,8 @@ final class YierdisObject {
             throw new IllegalArgumentException("dstAddress must be != 0");
         }
 
-        BytesSource frame = cmd.frame();
-        int srcIndex = cmd.argOffset(argIndex);
-        if (frame.hasMemoryAddress()) {
-            allocator.copyMemory(frame.memoryAddress() + srcIndex, dstAddress, len);
+        if (src.hasMemoryAddress()) {
+            allocator.copyMemory(src.memoryAddress(), dstAddress, len);
             return;
         }
 
@@ -1174,7 +1162,7 @@ final class YierdisObject {
         int off = 0;
         while (remaining > 0) {
             int chunk = Math.min(remaining, scratch.length);
-            frame.getBytes(srcIndex + off, scratch, 0, chunk);
+            src.getBytes(off, scratch, 0, chunk);
             allocator.copyMemory(scratch, 0, dstAddress + off, chunk);
             off += chunk;
             remaining -= chunk;
@@ -1183,7 +1171,7 @@ final class YierdisObject {
 
     private static long parseLongAscii(byte[] buf, int len) {
         if (len <= 0) {
-            throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+            throw new YierdisCommandException("ERR value is not an integer or out of range");
         }
 
         int i = 0;
@@ -1193,7 +1181,7 @@ final class YierdisObject {
             negative = first == '-';
             i = 1;
             if (i == len) {
-                throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+                throw new YierdisCommandException("ERR value is not an integer or out of range");
             }
         }
 
@@ -1204,14 +1192,14 @@ final class YierdisObject {
         while (i < len) {
             int digit = buf[i++] - '0';
             if (digit < 0 || digit > 9) {
-                throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+                throw new YierdisCommandException("ERR value is not an integer or out of range");
             }
             if (result < multMin) {
-                throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+                throw new YierdisCommandException("ERR value is not an integer or out of range");
             }
             result *= 10;
             if (result < limit + digit) {
-                throw new YierdisDb.YierdisCommandException("ERR value is not an integer or out of range");
+                throw new YierdisCommandException("ERR value is not an integer or out of range");
             }
             result -= digit;
         }

@@ -1,11 +1,13 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.db.YierdisBulkStringOutput;
+import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.bytes.BytesSource;
 import yier.bubu.redis.db.YierdisBytesView;
-import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.YierdisCommandException;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.nio.charset.StandardCharsets;
 import java.util.AbstractList;
@@ -24,15 +26,15 @@ final class CommandSupport {
 
     private final ByteArraySliceList slice = new ByteArraySliceList();
     private byte[][] argvScratch = new byte[16][];
-    private final RespCommandArgBytesView argView = new RespCommandArgBytesView();
-    private final WriterBulkStringOutput bulkOut = new WriterBulkStringOutput();
+    private final CommandArgBytesView argView = new CommandArgBytesView();
+    private final CommandArgBytesSlice argSlice = new CommandArgBytesSlice();
 
-    CommandSupport(YierdisDb db) {
-        this(singleDbRouter(db), null, SlowCommandGovernor.DEFAULT);
+    CommandSupport(DbEngine engine) {
+        this(singleDbRouter(engine), null, SlowCommandGovernor.DEFAULT);
     }
 
-    CommandSupport(YierdisDb db, ServerInfoProvider infoProvider) {
-        this(singleDbRouter(db), infoProvider, SlowCommandGovernor.DEFAULT);
+    CommandSupport(DbEngine engine, ServerInfoProvider infoProvider) {
+        this(singleDbRouter(engine), infoProvider, SlowCommandGovernor.DEFAULT);
     }
 
     CommandSupport(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider) {
@@ -45,7 +47,7 @@ final class CommandSupport {
         this.slowGovernor = slowGovernor == null ? SlowCommandGovernor.DEFAULT : slowGovernor;
     }
 
-    YierdisDb db(RespWriter out) {
+    DbEngine db(ReplyWriter out) {
         return dbRouter.dbFor(out);
     }
 
@@ -61,20 +63,19 @@ final class CommandSupport {
         return slowGovernor;
     }
 
-    YierdisBytesView argView(RespCommand cmd, int argIndex) {
+    YierdisBytesView argView(Command cmd, int argIndex) {
         return argView.reset(cmd, argIndex);
     }
 
-    YierdisBulkStringOutput bulkOut(RespWriter writer) {
-        bulkOut.reset(writer);
-        return bulkOut;
+    BytesSlice argSlice(Command cmd, int argIndex) {
+        return argSlice.reset(cmd, argIndex);
     }
 
     java.util.List<byte[]> slice() {
         return slice;
     }
 
-    void sliceResetFromCommand(RespCommand cmd, int argStart, int len) {
+    void sliceResetFromCommand(Command cmd, int argStart, int len) {
         if (len < 0) {
             throw new IllegalArgumentException("len must be non-negative");
         }
@@ -109,11 +110,11 @@ final class CommandSupport {
         argvScratch = Arrays.copyOf(argvScratch, next);
     }
 
-    private static YierdisDbRouter singleDbRouter(YierdisDb db) {
-        YierdisDb fixed = java.util.Objects.requireNonNull(db, "db");
+    private static YierdisDbRouter singleDbRouter(DbEngine engine) {
+        DbEngine fixed = java.util.Objects.requireNonNull(engine, "engine");
         return new YierdisDbRouter() {
             @Override
-            public YierdisDb dbFor(RespWriter out) {
+            public DbEngine dbFor(ReplyWriter out) {
                 return fixed;
             }
 
@@ -124,11 +125,11 @@ final class CommandSupport {
         };
     }
 
-    static void wrongArity(RespWriter out, String cmdLower) {
+    static void wrongArity(ReplyWriter out, String cmdLower) {
         out.error("ERR wrong number of arguments for '" + cmdLower + "' command");
     }
 
-    static String utf8(RespCommand cmd, int argIndex) {
+    static String utf8(Command cmd, int argIndex) {
         return utf8(cmd.toByteArray(argIndex));
     }
 
@@ -136,7 +137,7 @@ final class CommandSupport {
         return s == null ? null : new String(s, StandardCharsets.UTF_8);
     }
 
-    static boolean asciiEqualsIgnoreCase(RespCommand cmd, int argIndex, String literal) {
+    static boolean asciiEqualsIgnoreCase(Command cmd, int argIndex, String literal) {
         if (literal == null) {
             return false;
         }
@@ -213,11 +214,11 @@ final class CommandSupport {
         return true;
     }
 
-    static long parseLong(RespCommand cmd, int argIndex, String label) {
+    static long parseLong(Command cmd, int argIndex, String label) {
         return parseLong(cmd.toByteArray(argIndex), label);
     }
 
-    static long parseNonNegativeLong(RespCommand cmd, int argIndex, String label) {
+    static long parseNonNegativeLong(Command cmd, int argIndex, String label) {
         long v = parseLong(cmd, argIndex, label);
         if (v < 0) {
             throw new IllegalArgumentException("value is not an integer or out of range");
@@ -225,7 +226,7 @@ final class CommandSupport {
         return v;
     }
 
-    static int parseIntClamped(RespCommand cmd, int argIndex, String label) {
+    static int parseIntClamped(Command cmd, int argIndex, String label) {
         long v = parseLong(cmd, argIndex, label);
         if (v > Integer.MAX_VALUE) {
             return Integer.MAX_VALUE;
@@ -295,7 +296,7 @@ final class CommandSupport {
 
     static ScoreBound parseScoreBound(byte[] raw) {
         if (raw == null || raw.length == 0) {
-            throw new YierdisDb.YierdisCommandException("ERR min or max is not a float");
+            throw new YierdisCommandException("ERR min or max is not a float");
         }
 
         int start = 0;
@@ -308,7 +309,7 @@ final class CommandSupport {
             start = 1;
         }
         if (start >= raw.length) {
-            throw new YierdisDb.YierdisCommandException("ERR min or max is not a float");
+            throw new YierdisCommandException("ERR min or max is not a float");
         }
 
         int len = raw.length - start;
@@ -327,10 +328,10 @@ final class CommandSupport {
         try {
             v = Double.parseDouble(s);
         } catch (NumberFormatException e) {
-            throw new YierdisDb.YierdisCommandException("ERR min or max is not a float");
+            throw new YierdisCommandException("ERR min or max is not a float");
         }
         if (Double.isNaN(v) || Double.isInfinite(v)) {
-            throw new YierdisDb.YierdisCommandException("ERR min or max is not a float");
+            throw new YierdisCommandException("ERR min or max is not a float");
         }
         return new ScoreBound(v, exclusive);
     }
@@ -342,34 +343,6 @@ final class CommandSupport {
         private ScoreBound(double value, boolean exclusive) {
             this.value = value;
             this.exclusive = exclusive;
-        }
-    }
-
-    private static final class WriterBulkStringOutput implements YierdisBulkStringOutput {
-        private RespWriter writer;
-
-        void reset(RespWriter writer) {
-            this.writer = writer;
-        }
-
-        @Override
-        public void bulkString(byte[] buf, int off, int len) {
-            writer.bulkString(buf, off, len);
-        }
-
-        @Override
-        public void bulkString(YierdisOffHeapSlice slice) {
-            writer.bulkString(slice);
-        }
-
-        @Override
-        public void bulkStringNull() {
-            writer.bulkString((byte[]) null);
-        }
-
-        @Override
-        public void bulkStringLongAscii(long value) {
-            writer.bulkStringLongAscii(value);
         }
     }
 
@@ -398,11 +371,11 @@ final class CommandSupport {
         }
     }
 
-    private static final class RespCommandArgBytesView implements YierdisBytesView {
-        private RespCommand cmd;
+    private static final class CommandArgBytesView implements YierdisBytesView {
+        private Command cmd;
         private int argIndex;
 
-        RespCommandArgBytesView reset(RespCommand cmd, int argIndex) {
+        CommandArgBytesView reset(Command cmd, int argIndex) {
             this.cmd = cmd;
             this.argIndex = argIndex;
             return this;
@@ -416,6 +389,112 @@ final class CommandSupport {
         @Override
         public byte byteAt(int index) {
             return cmd.byteAt(argIndex, index);
+        }
+    }
+
+    private static final class CommandArgBytesSlice implements BytesSlice {
+        private static final int WRITE_CHUNK_BYTES = 8 * 1024;
+        private static final ThreadLocal<byte[]> TL_WRITE_BUF =
+                ThreadLocal.withInitial(() -> new byte[WRITE_CHUNK_BYTES]);
+
+        private Command cmd;
+        private int argIndex;
+        private BytesSource frame;
+        private int frameOffset;
+
+        CommandArgBytesSlice reset(Command cmd, int argIndex) {
+            this.cmd = cmd;
+            this.argIndex = argIndex;
+            this.frame = cmd == null ? null : cmd.frame();
+            this.frameOffset = frame == null ? -1 : cmd.argOffset(argIndex);
+            return this;
+        }
+
+        @Override
+        public int length() {
+            if (cmd == null) {
+                return 0;
+            }
+            int len = cmd.len(argIndex);
+            return Math.max(0, len);
+        }
+
+        @Override
+        public byte getByte(int index) {
+            int len = length();
+            if (index < 0 || index >= len) {
+                throw new IndexOutOfBoundsException();
+            }
+            if (frame != null && frameOffset >= 0) {
+                return frame.getByte(frameOffset + index);
+            }
+            return cmd.byteAt(argIndex, index);
+        }
+
+        @Override
+        public void getBytes(int index, byte[] dst, int dstOff, int len) {
+            int l = length();
+            if (len < 0) {
+                throw new IllegalArgumentException("len must be >= 0");
+            }
+            if (index < 0 || index + len > l) {
+                throw new IndexOutOfBoundsException();
+            }
+            if (dst == null) {
+                throw new IllegalArgumentException("dst must not be null");
+            }
+            if (dstOff < 0 || dstOff + len > dst.length) {
+                throw new IndexOutOfBoundsException();
+            }
+            if (len == 0) {
+                return;
+            }
+
+            if (frame != null && frameOffset >= 0) {
+                frame.getBytes(frameOffset + index, dst, dstOff, len);
+                return;
+            }
+
+            // Heap-only fallback: use command APIs (copy whole arg when possible).
+            if (index == 0 && len == l) {
+                cmd.copyToByteArray(argIndex, dst, dstOff);
+                return;
+            }
+            for (int i = 0; i < len; i++) {
+                dst[dstOff + i] = cmd.byteAt(argIndex, index + i);
+            }
+        }
+
+        @Override
+        public void writeTo(BytesSink out) {
+            if (out == null) {
+                throw new IllegalArgumentException("out must not be null");
+            }
+            int len = length();
+            if (len <= 0) {
+                return;
+            }
+            byte[] scratch = TL_WRITE_BUF.get();
+            int index = 0;
+            while (index < len) {
+                int chunk = Math.min(len - index, scratch.length);
+                getBytes(index, scratch, 0, chunk);
+                out.writeBytes(scratch, 0, chunk);
+                index += chunk;
+            }
+        }
+
+        @Override
+        public boolean hasMemoryAddress() {
+            return frame != null && frameOffset >= 0 && frame.hasMemoryAddress();
+        }
+
+        @Override
+        public long memoryAddress() {
+            if (!hasMemoryAddress()) {
+                throw new UnsupportedOperationException("memoryAddress not supported");
+            }
+            return frame.memoryAddress() + frameOffset;
         }
     }
 }

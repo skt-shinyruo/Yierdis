@@ -4,14 +4,13 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespProtocol;
-import yier.bubu.redis.protocol.RespServerSession;
-import yier.bubu.redis.protocol.RespTransactionState;
+import yier.bubu.redis.protocol.ServerSession;
+import yier.bubu.redis.protocol.TransactionState;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyArray;
+import yier.bubu.redis.testutil.ReplyBulkString;
+import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyInteger;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -45,12 +44,12 @@ public class ContractsIntegrationSmokeTest {
 
             try (FastTestClient client = new FastTestClient(processor, session)) {
                 // TTL family: basic Redis-like conventions.
-                Assert.assertEquals(-2L, ((RespInteger) client.execute(Arrays.asList(b("TTL"), b("missing")))).value());
+                Assert.assertEquals(-2L, ((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("missing")))).value());
 
                 client.execute(Arrays.asList(b("SET"), b("k"), b("v")));
-                Assert.assertEquals(-1L, ((RespInteger) client.execute(Arrays.asList(b("PTTL"), b("k")))).value());
-                Assert.assertEquals(1L, ((RespInteger) client.execute(Arrays.asList(b("EXPIRE"), b("k"), b("60")))).value());
-                Assert.assertTrue(((RespInteger) client.execute(Arrays.asList(b("TTL"), b("k")))).value() > 0L);
+                Assert.assertEquals(-1L, ((ReplyInteger) client.execute(Arrays.asList(b("PTTL"), b("k")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("EXPIRE"), b("k"), b("60")))).value());
+                Assert.assertTrue(((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("k")))).value() > 0L);
 
                 // SCAN must always be able to make progress and terminate at cursor=0 (best-effort).
                 for (int i = 0; i < 20; i++) {
@@ -58,7 +57,7 @@ public class ContractsIntegrationSmokeTest {
                 }
                 long cursor = 0L;
                 for (int round = 0; round < 50; round++) {
-                    RespArray reply = (RespArray) client.execute(Arrays.asList(
+                    ReplyArray reply = (ReplyArray) client.execute(Arrays.asList(
                             b("SCAN"),
                             Long.toString(cursor).getBytes(StandardCharsets.US_ASCII),
                             b("MATCH"), b("scan:*"),
@@ -79,7 +78,7 @@ public class ContractsIntegrationSmokeTest {
                     // Alternate DB index to exercise global/per-db coordination.
                     client.execute(Arrays.asList(b("SELECT"), b(Integer.toString(i & 1))));
                     Object reply = client.execute(Arrays.asList(b("SET"), b("oom:" + i), big));
-                    if (reply instanceof RespError) {
+                    if (reply instanceof ReplyError) {
                         sawOom = true;
                         break;
                     }
@@ -89,29 +88,18 @@ public class ContractsIntegrationSmokeTest {
         }
     }
 
-    private static long parseCursor(RespArray reply) {
+    private static long parseCursor(ReplyArray reply) {
         Assert.assertNotNull(reply);
         Assert.assertNotNull(reply.values());
         Assert.assertEquals(2, reply.values().size());
-        RespBulkString cursorOut = (RespBulkString) reply.values().get(0);
+        ReplyBulkString cursorOut = (ReplyBulkString) reply.values().get(0);
         Assert.assertNotNull(cursorOut.data());
         return Long.parseLong(new String(cursorOut.data(), StandardCharsets.US_ASCII));
     }
 
-    private static final class TestSession implements RespServerSession {
-        private RespProtocol protocol = RespProtocol.RESP2;
+    private static final class TestSession implements ServerSession {
         private int dbIndex;
-        private final RespTransactionState tx = new NoopTransactionState();
-
-        @Override
-        public RespProtocol protocol() {
-            return protocol;
-        }
-
-        @Override
-        public void setProtocol(RespProtocol protocol) {
-            this.protocol = protocol == null ? RespProtocol.RESP2 : protocol;
-        }
+        private final TransactionState tx = new NoopTransactionState();
 
         @Override
         public int dbIndex() {
@@ -147,12 +135,12 @@ public class ContractsIntegrationSmokeTest {
         }
 
         @Override
-        public RespTransactionState transaction() {
+        public TransactionState transaction() {
             return tx;
         }
     }
 
-    private static final class NoopTransactionState implements RespTransactionState {
+    private static final class NoopTransactionState implements TransactionState {
         @Override
         public boolean active() {
             return false;

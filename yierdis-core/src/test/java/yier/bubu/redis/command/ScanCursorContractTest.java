@@ -2,9 +2,9 @@ package yier.bubu.redis.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespBulkString;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyArray;
+import yier.bubu.redis.testutil.ReplyBulkString;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -24,7 +24,7 @@ public class ScanCursorContractTest {
 
                 long cursor = 0L;
                 for (int round = 0; round < 200; round++) {
-                    RespArray reply = (RespArray) client.execute(Arrays.asList(
+                    ReplyArray reply = (ReplyArray) client.execute(Arrays.asList(
                             b("SCAN"),
                             Long.toString(cursor).getBytes(StandardCharsets.US_ASCII),
                             b("COUNT"), b("3")
@@ -54,7 +54,7 @@ public class ScanCursorContractTest {
 
                 long cursor = 0L;
                 for (int round = 0; round < 20; round++) {
-                    RespArray reply = (RespArray) client.execute(Arrays.asList(
+                    ReplyArray reply = (ReplyArray) client.execute(Arrays.asList(
                             b("SCAN"),
                             Long.toString(cursor).getBytes(StandardCharsets.US_ASCII),
                             b("MATCH"), b("nomatch*"),
@@ -82,7 +82,7 @@ public class ScanCursorContractTest {
 
                 long cursor = 0L;
                 for (int round = 0; round < 500; round++) {
-                    RespArray reply = (RespArray) client.execute(Arrays.asList(
+                    ReplyArray reply = (ReplyArray) client.execute(Arrays.asList(
                             b("SCAN"),
                             Long.toString(cursor).getBytes(StandardCharsets.US_ASCII),
                             b("COUNT"), b("5")
@@ -114,11 +114,11 @@ public class ScanCursorContractTest {
         });
     }
 
-    private static long parseCursor(RespArray reply) {
+    private static long parseCursor(ReplyArray reply) {
         Assert.assertNotNull(reply);
         Assert.assertNotNull(reply.values());
         Assert.assertEquals(2, reply.values().size());
-        RespBulkString cursorOut = (RespBulkString) reply.values().get(0);
+        ReplyBulkString cursorOut = (ReplyBulkString) reply.values().get(0);
         Assert.assertNotNull(cursorOut.data());
         return Long.parseLong(new String(cursorOut.data(), StandardCharsets.US_ASCII));
     }

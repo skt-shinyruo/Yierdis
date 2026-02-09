@@ -2,6 +2,7 @@ package yier.bubu.redis.db;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.ops.SetMode;
 
 import java.nio.charset.StandardCharsets;
 
@@ -15,7 +16,7 @@ public class KeysBudgetTest {
             for (int i = 0; i < 4096; i++) {
                 byte[] key = ("k" + i).getBytes(StandardCharsets.US_ASCII);
                 byte[] val = ("v" + i).getBytes(StandardCharsets.US_ASCII);
-                db.setString(key, val, YierdisDb.SetMode.NORMAL, null);
+                db.setString(key, val, SetMode.NORMAL, null);
             }
 
             Assert.assertTrue(
@@ -34,7 +35,7 @@ public class KeysBudgetTest {
         try {
             for (int i = 0; i < 4; i++) {
                 byte[] key = ("k" + i).getBytes(StandardCharsets.US_ASCII);
-                db.setString(key, "v".getBytes(StandardCharsets.US_ASCII), YierdisDb.SetMode.NORMAL, null);
+            db.setString(key, "v".getBytes(StandardCharsets.US_ASCII), SetMode.NORMAL, null);
             }
 
             Assert.assertEquals(

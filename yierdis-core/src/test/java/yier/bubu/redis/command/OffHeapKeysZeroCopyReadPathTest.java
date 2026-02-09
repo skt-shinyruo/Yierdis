@@ -5,10 +5,10 @@ import org.junit.Test;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.OffHeapKeyCopyDiagnostics;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespSimpleString;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyBulkString;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
 import static yier.bubu.redis.testutil.TestBytes.cmd;
 
@@ -22,21 +22,21 @@ public class OffHeapKeysZeroCopyReadPathTest {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 OffHeapKeyCopyDiagnostics.reset();
-                Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof RespSimpleString);
+                Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
 
                 // 只统计“从 off-heap 复制 canonical key bytes 到 heap”的次数；SET 本身不应触发该路径。
                 OffHeapKeyCopyDiagnostics.reset();
 
-                RespBulkString v = (RespBulkString) client.execute(cmd("GET", "k"));
+                ReplyBulkString v = (ReplyBulkString) client.execute(cmd("GET", "k"));
                 Assert.assertEquals("v", v.asString());
 
-                RespInteger exists = (RespInteger) client.execute(cmd("EXISTS", "k"));
+                ReplyInteger exists = (ReplyInteger) client.execute(cmd("EXISTS", "k"));
                 Assert.assertEquals(1L, exists.value());
 
-                RespSimpleString type = (RespSimpleString) client.execute(cmd("TYPE", "k"));
+                ReplySimpleString type = (ReplySimpleString) client.execute(cmd("TYPE", "k"));
                 Assert.assertEquals("string", type.value());
 
-                RespInteger ttl = (RespInteger) client.execute(cmd("TTL", "k"));
+                ReplyInteger ttl = (ReplyInteger) client.execute(cmd("TTL", "k"));
                 Assert.assertEquals(-1L, ttl.value());
 
                 Assert.assertEquals(0L, OffHeapKeyCopyDiagnostics.heapKeyCopies());

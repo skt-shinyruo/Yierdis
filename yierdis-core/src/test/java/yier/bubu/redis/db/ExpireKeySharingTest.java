@@ -2,6 +2,7 @@ package yier.bubu.redis.db;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.ops.SetMode;
 
 import java.lang.reflect.Field;
 
@@ -17,7 +18,7 @@ public class ExpireKeySharingTest {
             byte[] key2 = b("k");
             Assert.assertNotSame(key1, key2);
 
-            db.setString(key1, b("v"), YierdisDb.SetMode.NORMAL, null);
+            db.setString(key1, b("v"), SetMode.NORMAL, null);
             Assert.assertTrue(db.expire(key2, 60));
 
             ByteArrayKeyspace<?> store = storeKeyspace(db);
@@ -42,7 +43,7 @@ public class ExpireKeySharingTest {
             byte[] key2 = b("k");
             Assert.assertNotSame(key1, key2);
 
-            db.setString(key1, b("v"), YierdisDb.SetMode.NORMAL, null);
+            db.setString(key1, b("v"), SetMode.NORMAL, null);
 
             ByteArrayKeyspace<?> store = storeKeyspace(db);
             ByteArrayKeyspace<Long> expires = expiresKeyspace(db);

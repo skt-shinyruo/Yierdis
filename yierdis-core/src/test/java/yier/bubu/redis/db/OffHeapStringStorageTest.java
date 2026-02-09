@@ -2,8 +2,12 @@ package yier.bubu.redis.db;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.db.offheap.netty.YierdisNettyOffHeapAllocator;
+import yier.bubu.redis.ops.ExpireOption;
+import yier.bubu.redis.ops.SetMode;
+import yier.bubu.redis.ops.YierdisCommandException;
+import yier.bubu.redis.protocol.ReplySink;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
@@ -21,11 +25,11 @@ public class OffHeapStringStorageTest {
             byte[] key = b("k");
             byte[] value = b("hello");
 
-            Assert.assertTrue(db.setString(key, value, YierdisDb.SetMode.NORMAL, null));
+            Assert.assertTrue(db.setString(key, value, SetMode.NORMAL, null));
             Assert.assertTrue(allocator.usedBytes() > 0);
 
             RecordingBulkOutput out = new RecordingBulkOutput();
-            db.getStringForReply(key, out);
+            db.values().strings().getStringForReply(new BytesView(key), out);
             Assert.assertTrue(out.usedOffHeapSlice);
             Assert.assertArrayEquals(value, out.bytes);
 
@@ -43,7 +47,7 @@ public class OffHeapStringStorageTest {
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
-            db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, YierdisDb.ExpireOption.px(0));
+            db.setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
             Assert.assertTrue(allocator.usedBytes() > 0);
 
             db.cleanupExpired();
@@ -61,7 +65,7 @@ public class OffHeapStringStorageTest {
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
-            db.setString(key, b("v"), YierdisDb.SetMode.NORMAL, YierdisDb.ExpireOption.px(0));
+            db.setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
             Assert.assertTrue(allocator.usedBytes() > 0);
 
             db.lpush(key, List.of(b("a")));
@@ -83,14 +87,14 @@ public class OffHeapStringStorageTest {
             byte[] v1 = b("hello");
             byte[] v2 = b("world");
 
-            Assert.assertTrue(db.setString(key, v1, YierdisDb.SetMode.NORMAL, null));
+            Assert.assertTrue(db.setString(key, v1, SetMode.NORMAL, null));
             Assert.assertEquals(5L, allocator.usedBytes());
 
-            Assert.assertTrue(db.setString(key, v2, YierdisDb.SetMode.NORMAL, null));
+            Assert.assertTrue(db.setString(key, v2, SetMode.NORMAL, null));
             Assert.assertEquals(5L, allocator.usedBytes());
 
             RecordingBulkOutput out = new RecordingBulkOutput();
-            db.getStringForReply(key, out);
+            db.values().strings().getStringForReply(new BytesView(key), out);
             Assert.assertTrue(out.usedOffHeapSlice);
             Assert.assertArrayEquals(v2, out.bytes);
         } finally {
@@ -105,9 +109,9 @@ public class OffHeapStringStorageTest {
         try {
             db.bindToCurrentThread();
             try {
-                db.setString(b("k"), b("hello"), YierdisDb.SetMode.NORMAL, null);
-                Assert.fail("expected YierdisDb.YierdisCommandException");
-            } catch (YierdisDb.YierdisCommandException e) {
+                db.setString(b("k"), b("hello"), SetMode.NORMAL, null);
+                Assert.fail("expected YierdisCommandException");
+            } catch (YierdisCommandException e) {
                 Assert.assertTrue(e.getMessage().contains("off-heap"));
             }
         } finally {
@@ -115,20 +119,35 @@ public class OffHeapStringStorageTest {
         }
     }
 
-    private static final class RecordingBulkOutput implements YierdisBulkStringOutput {
+    private static final class RecordingBulkOutput implements ReplySink {
         private byte[] bytes;
         private boolean usedOffHeapSlice;
 
         @Override
-        public void bulkString(byte[] buf, int off, int len) {
+        public void bulkString(byte[] data) {
             usedOffHeapSlice = false;
-            bytes = new byte[len];
-            System.arraycopy(buf, off, bytes, 0, len);
+            if (data == null) {
+                bytes = null;
+                return;
+            }
+            bytes = new byte[data.length];
+            System.arraycopy(data, 0, bytes, 0, bytes.length);
         }
 
         @Override
-        public void bulkString(YierdisOffHeapSlice slice) {
-            usedOffHeapSlice = true;
+        public void bulkString(byte[] data, int off, int len) {
+            usedOffHeapSlice = false;
+            if (data == null) {
+                bytes = null;
+                return;
+            }
+            bytes = new byte[len];
+            System.arraycopy(data, off, bytes, 0, len);
+        }
+
+        @Override
+        public void bulkString(BytesSlice slice) {
+            usedOffHeapSlice = slice instanceof yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
             if (slice == null) {
                 bytes = null;
                 return;
@@ -138,15 +157,27 @@ public class OffHeapStringStorageTest {
         }
 
         @Override
-        public void bulkStringNull() {
-            usedOffHeapSlice = false;
-            bytes = null;
-        }
-
-        @Override
         public void bulkStringLongAscii(long value) {
             usedOffHeapSlice = false;
             bytes = Long.toString(value).getBytes(StandardCharsets.US_ASCII);
+        }
+    }
+
+    private static final class BytesView implements YierdisBytesView {
+        private final byte[] data;
+
+        private BytesView(byte[] data) {
+            this.data = data;
+        }
+
+        @Override
+        public int len() {
+            return data.length;
+        }
+
+        @Override
+        public byte byteAt(int index) {
+            return data[index];
         }
     }
 }

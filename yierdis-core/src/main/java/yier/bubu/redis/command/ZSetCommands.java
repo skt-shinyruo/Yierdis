@@ -1,9 +1,10 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.DbMemoryConstants;
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.ZSetOps;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.util.Objects;
 
@@ -26,28 +27,28 @@ final class ZSetCommands {
         registry.register("ZREM", this::zrem);
     }
 
-    private void zadd(RespCommand cmd, RespWriter out) {
+    private void zadd(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 4) {
             CommandSupport.wrongArity(out, "zadd");
             return;
         }
-        YierdisDb db = support.db(out);
+        DbEngine engine = support.db(out);
         long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
         }
-        db.prepareWrite(extra);
+        engine.eviction().prepareWrite(extra);
         int pairsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, pairsLen);
         try {
-            long added = db.zadd(cmd.toByteArray(1), support.slice());
+            long added = engine.values().zsets().zadd(cmd.toByteArray(1), support.slice());
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
         }
     }
 
-    private void zrange(RespCommand cmd, RespWriter out) {
+    private void zrange(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 4 || cmd.argc() > 6) {
             CommandSupport.wrongArity(out, "zrange");
             return;
@@ -71,21 +72,22 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
+        ZSetOps zsets = support.db(out).values().zsets();
         int count = rev
-                ? support.db(out).zrevrangeReplyCount(key, start, stop, withScores)
-                : support.db(out).zrangeReplyCount(key, start, stop, withScores);
+                ? zsets.zrevrangeCount(key, start, stop, withScores)
+                : zsets.zrangeCount(key, start, stop, withScores);
         out.arrayHeader(count);
         if (count == 0) {
             return;
         }
         if (rev) {
-            support.db(out).zrevrangeReplyInto(key, start, stop, withScores, support.bulkOut(out));
+            zsets.zrevrangeWriteTo(key, start, stop, withScores, out);
         } else {
-            support.db(out).zrangeReplyInto(key, start, stop, withScores, support.bulkOut(out));
+            zsets.zrangeWriteTo(key, start, stop, withScores, out);
         }
     }
 
-    private void zrevrange(RespCommand cmd, RespWriter out) {
+    private void zrevrange(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 4 && cmd.argc() != 5) {
             CommandSupport.wrongArity(out, "zrevrange");
             return;
@@ -103,15 +105,16 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        int count = support.db(out).zrevrangeReplyCount(key, start, stop, withScores);
+        ZSetOps zsets = support.db(out).values().zsets();
+        int count = zsets.zrevrangeCount(key, start, stop, withScores);
         out.arrayHeader(count);
         if (count == 0) {
             return;
         }
-        support.db(out).zrevrangeReplyInto(key, start, stop, withScores, support.bulkOut(out));
+        zsets.zrevrangeWriteTo(key, start, stop, withScores, out);
     }
 
-    private void zrangebyscore(RespCommand cmd, RespWriter out) {
+    private void zrangebyscore(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 4) {
             CommandSupport.wrongArity(out, "zrangebyscore");
             return;
@@ -146,7 +149,8 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        int replyCount = support.db(out).zrangeByScoreReplyCount(
+        ZSetOps zsets = support.db(out).values().zsets();
+        int replyCount = zsets.zrangeByScoreCount(
                 key,
                 min.value,
                 min.exclusive,
@@ -160,7 +164,7 @@ final class ZSetCommands {
         if (replyCount == 0) {
             return;
         }
-        support.db(out).zrangeByScoreReplyInto(
+        zsets.zrangeByScoreWriteTo(
                 key,
                 min.value,
                 min.exclusive,
@@ -169,11 +173,11 @@ final class ZSetCommands {
                 withScores,
                 offset,
                 count,
-                support.bulkOut(out)
+                out
         );
     }
 
-    private void zremrangebyscore(RespCommand cmd, RespWriter out) {
+    private void zremrangebyscore(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 4) {
             CommandSupport.wrongArity(out, "zremrangebyscore");
             return;
@@ -181,10 +185,10 @@ final class ZSetCommands {
 
         CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(cmd.toByteArray(2));
         CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(cmd.toByteArray(3));
-        out.integer(support.db(out).zremrangeByScore(cmd.toByteArray(1), min.value, min.exclusive, max.value, max.exclusive));
+        out.integer(support.db(out).values().zsets().zremrangeByScore(cmd.toByteArray(1), min.value, min.exclusive, max.value, max.exclusive));
     }
 
-    private void zrevrangebyscore(RespCommand cmd, RespWriter out) {
+    private void zrevrangebyscore(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 4) {
             CommandSupport.wrongArity(out, "zrevrangebyscore");
             return;
@@ -219,7 +223,8 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        int replyCount = support.db(out).zrevrangeByScoreReplyCount(
+        ZSetOps zsets = support.db(out).values().zsets();
+        int replyCount = zsets.zrevrangeByScoreCount(
                 key,
                 min.value,
                 min.exclusive,
@@ -233,7 +238,7 @@ final class ZSetCommands {
         if (replyCount == 0) {
             return;
         }
-        support.db(out).zrevrangeByScoreReplyInto(
+        zsets.zrevrangeByScoreWriteTo(
                 key,
                 min.value,
                 min.exclusive,
@@ -242,21 +247,21 @@ final class ZSetCommands {
                 withScores,
                 offset,
                 count,
-                support.bulkOut(out)
+                out
         );
     }
 
-    private void zremrangebyrank(RespCommand cmd, RespWriter out) {
+    private void zremrangebyrank(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 4) {
             CommandSupport.wrongArity(out, "zremrangebyrank");
             return;
         }
         long start = CommandSupport.parseLong(cmd, 2, "start");
         long stop = CommandSupport.parseLong(cmd, 3, "stop");
-        out.integer(support.db(out).zremrangeByRank(cmd.toByteArray(1), start, stop));
+        out.integer(support.db(out).values().zsets().zremrangeByRank(cmd.toByteArray(1), start, stop));
     }
 
-    private void zrem(RespCommand cmd, RespWriter out) {
+    private void zrem(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, "zrem");
             return;
@@ -264,7 +269,7 @@ final class ZSetCommands {
         int membersLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, membersLen);
         try {
-            out.integer(support.db(out).zrem(cmd.toByteArray(1), support.slice()));
+            out.integer(support.db(out).values().zsets().zrem(cmd.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(membersLen);
         }

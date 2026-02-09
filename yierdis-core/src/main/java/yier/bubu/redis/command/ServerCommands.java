@@ -1,11 +1,10 @@
 package yier.bubu.redis.command;
 
-// server 侧通用命令实现：包含 PING/ECHO/HELLO/INFO/QUIT 等基础命令，并通过 RespWriter 直接写回响应。
+// server 侧通用命令实现：包含 PING/ECHO/HELLO/INFO/QUIT 等基础命令，并通过 ReplyWriter 直接写回响应。
 
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespProtocol;
-import yier.bubu.redis.protocol.RespServerSession;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.protocol.ServerSession;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
 
 import java.nio.charset.StandardCharsets;
@@ -41,7 +40,7 @@ final class ServerCommands {
         registry.register("FLUSHDB", this::flushdb);
     }
 
-    private void info(RespCommand cmd, RespWriter out) {
+    private void info(Command cmd, ReplyWriter out) {
         ServerInfoProvider provider = support.infoProvider();
         if (provider == null) {
             out.error("ERR INFO not supported");
@@ -54,7 +53,7 @@ final class ServerCommands {
         provider.info(cmd, out);
     }
 
-    private void stats(RespCommand cmd, RespWriter out) {
+    private void stats(Command cmd, ReplyWriter out) {
         ServerInfoProvider provider = support.infoProvider();
         if (provider == null) {
             out.error("ERR STATS not supported");
@@ -63,7 +62,7 @@ final class ServerCommands {
         provider.stats(cmd, out);
     }
 
-    private void ping(RespCommand cmd, RespWriter out) {
+    private void ping(Command cmd, ReplyWriter out) {
         if (cmd.argc() == 1) {
             out.simpleString("PONG");
             return;
@@ -75,7 +74,7 @@ final class ServerCommands {
         CommandSupport.wrongArity(out, "ping");
     }
 
-    private void echo(RespCommand cmd, RespWriter out) {
+    private void echo(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "echo");
             return;
@@ -83,46 +82,27 @@ final class ServerCommands {
         out.bulkString(cmd.toByteArray(1));
     }
 
-    private void hello(RespCommand cmd, RespWriter out) {
-        // Minimal HELLO implementation (RESP2 + RESP3 handshake).
-        String version = cmd.argc() >= 2 ? CommandSupport.utf8(cmd, 1) : "2";
-        if ("3".equals(version)) {
-            // Switch the connection to RESP3 and return a map as required by RESP3 clients.
-            out.setProtocol(RespProtocol.RESP3);
-            out.mapHeader(5);
-            out.bulkString(HELLO_SERVER_KEY);
-            out.bulkString(HELLO_SERVER_VALUE);
-            out.bulkString(HELLO_VERSION_KEY);
-            out.bulkString(HELLO_VERSION_VALUE);
-            out.bulkString(HELLO_PROTO_KEY);
-            out.integer(3);
-            out.bulkString(HELLO_MODE_KEY);
-            out.bulkString(HELLO_MODE_VALUE);
-            out.bulkString(HELLO_ROLE_KEY);
-            out.bulkString(HELLO_ROLE_VALUE);
+    private void hello(Command cmd, ReplyWriter out) {
+        // Custom protocol: HELLO is informational only (best-effort compatibility for existing clients/tests).
+        // Optional argv[1] is accepted but does not negotiate a wire protocol version.
+        if (cmd.argc() != 1 && cmd.argc() != 2) {
+            CommandSupport.wrongArity(out, "hello");
             return;
         }
-        if (!"2".equals(version)) {
-            out.error("ERR unsupported protocol version");
-            return;
-        }
-
-        // Switch back to RESP2 when explicitly requested.
-        out.setProtocol(RespProtocol.RESP2);
-        out.arrayHeader(10);
+        out.mapHeader(5);
         out.bulkString(HELLO_SERVER_KEY);
         out.bulkString(HELLO_SERVER_VALUE);
         out.bulkString(HELLO_VERSION_KEY);
         out.bulkString(HELLO_VERSION_VALUE);
         out.bulkString(HELLO_PROTO_KEY);
-        out.integer(2);
+        out.integer(1);
         out.bulkString(HELLO_MODE_KEY);
         out.bulkString(HELLO_MODE_VALUE);
         out.bulkString(HELLO_ROLE_KEY);
         out.bulkString(HELLO_ROLE_VALUE);
     }
 
-    private void select(RespCommand cmd, RespWriter out) {
+    private void select(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "select");
             return;
@@ -149,7 +129,7 @@ final class ServerCommands {
             return;
         }
 
-        if (out.session() instanceof RespServerSession s) {
+        if (out.session() instanceof ServerSession s) {
             s.setDbIndex(dbIndex);
         } else if (dbIndex != 0) {
             // 在没有连接态的场景（例如部分单元测试）下，仅允许 DB0。
@@ -159,7 +139,7 @@ final class ServerCommands {
         out.simpleString("OK");
     }
 
-    private void quit(RespCommand cmd, RespWriter out) {
+    private void quit(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 1) {
             CommandSupport.wrongArity(out, "quit");
             return;
@@ -169,7 +149,7 @@ final class ServerCommands {
         out.requestCloseAfterReply();
     }
 
-    private void flushdb(RespCommand cmd, RespWriter out) {
+    private void flushdb(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 1 && cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "flushdb");
             return;
@@ -182,11 +162,11 @@ final class ServerCommands {
                 return;
             }
         }
-        support.db(out).flushDb();
+        support.db(out).lifecycle().flushDb();
         out.simpleString("OK");
     }
 
-    private static void command(RespCommand cmd, RespWriter out, CommandRegistry registry) {
+    private static void command(Command cmd, ReplyWriter out, CommandRegistry registry) {
         if (cmd.argc() == 1) {
             // Redis-compatible shape: array of arrays.
             String[] names = registry.upperNamesSorted();
@@ -237,7 +217,7 @@ final class ServerCommands {
      * <p>
      * Format: [name, arity, flags, firstKey, lastKey, step]
      */
-    private static void writeCommandInfo(RespWriter out, String nameUpper) {
+    private static void writeCommandInfo(ReplyWriter out, String nameUpper) {
         // We keep this minimal but compatible: flags are empty; key specs are best-effort.
         int arity = commandArity(nameUpper);
         int firstKey = firstKeyIndex(nameUpper);

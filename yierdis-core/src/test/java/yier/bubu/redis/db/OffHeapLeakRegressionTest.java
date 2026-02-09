@@ -5,8 +5,9 @@ import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.offheap.netty.YierdisNettyOffHeapAllocator;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
-import yier.bubu.redis.protocol.RespInteger;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.util.Arrays;
 import java.util.List;
@@ -25,19 +26,19 @@ public class OffHeapLeakRegressionTest {
             try (FastTestClient client = new FastTestClient(processor)) {
                 byte[] v1600 = repeat((byte) 'x', 1600);
 
-                Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), v1600)) instanceof yier.bubu.redis.protocol.RespSimpleString);
+                Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), v1600)) instanceof ReplySimpleString);
                 long usedAfterA = allocator.usedBytes();
                 Assert.assertTrue(usedAfterA > 0);
 
-                Assert.assertTrue(client.execute(List.of(b("SET"), b("b"), v1600)) instanceof yier.bubu.redis.protocol.RespSimpleString);
-                RespInteger exists = (RespInteger) client.execute(cmd("EXISTS", "a", "b"));
-                Assert.assertEquals(1, exists.value());
+                Assert.assertTrue(client.execute(List.of(b("SET"), b("b"), v1600)) instanceof ReplySimpleString);
+                ReplyInteger exists = (ReplyInteger) client.execute(cmd("EXISTS", "a", "b"));
+                Assert.assertEquals(1L, exists.value());
                 Assert.assertTrue("eviction should free some off-heap bytes", allocator.usedBytes() <= usedAfterA);
 
                 // Expire path: ensure payload is released.
-                Assert.assertTrue(client.execute(cmd("SET", "e", "v")) instanceof yier.bubu.redis.protocol.RespSimpleString);
-                Assert.assertEquals(1L, ((RespInteger) client.execute(cmd("EXPIRE", "e", "0"))).value());
-                Assert.assertEquals(-2L, ((RespInteger) client.execute(cmd("TTL", "e"))).value());
+                Assert.assertTrue(client.execute(cmd("SET", "e", "v")) instanceof ReplySimpleString);
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(cmd("EXPIRE", "e", "0"))).value());
+                Assert.assertEquals(-2L, ((ReplyInteger) client.execute(cmd("TTL", "e"))).value());
             }
         } finally {
             db.shutdown();
@@ -55,18 +56,18 @@ public class OffHeapLeakRegressionTest {
             try (FastTestClient client = new FastTestClient(processor)) {
                 byte[] v1600 = repeat((byte) 'x', 1600);
 
-                Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("a"), v1600)) instanceof yier.bubu.redis.protocol.RespSimpleString);
-                Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("b"), v1600)) instanceof yier.bubu.redis.protocol.RespSimpleString);
-                Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("c"), v1600)) instanceof yier.bubu.redis.protocol.RespSimpleString);
+                Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("a"), v1600)) instanceof ReplySimpleString);
+                Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("b"), v1600)) instanceof ReplySimpleString);
+                Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("c"), v1600)) instanceof ReplySimpleString);
 
-                RespInteger exists = (RespInteger) client.execute(cmd("EXISTS", "a", "b", "c"));
-                Assert.assertEquals(2, exists.value());
+                ReplyInteger exists = (ReplyInteger) client.execute(cmd("EXISTS", "a", "b", "c"));
+                Assert.assertEquals(2L, exists.value());
 
                 // Delete + expire: cover more释放路径。
                 client.execute(cmd("DEL", "a", "b", "c"));
-                Assert.assertTrue(client.execute(cmd("SET", "e", "v")) instanceof yier.bubu.redis.protocol.RespSimpleString);
-                Assert.assertEquals(1L, ((RespInteger) client.execute(cmd("EXPIRE", "e", "0"))).value());
-                Assert.assertEquals(-2L, ((RespInteger) client.execute(cmd("TTL", "e"))).value());
+                Assert.assertTrue(client.execute(cmd("SET", "e", "v")) instanceof ReplySimpleString);
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(cmd("EXPIRE", "e", "0"))).value());
+                Assert.assertEquals(-2L, ((ReplyInteger) client.execute(cmd("TTL", "e"))).value());
             }
         } finally {
             db.shutdown();

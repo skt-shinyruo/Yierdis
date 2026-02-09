@@ -1,5 +1,7 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.protocol.ReplySink;
+
 import java.util.Arrays;
 
 /**
@@ -390,7 +392,7 @@ final class YierdisListpack {
             return Arrays.copyOfRange(owner.data, current.dataOffset, current.dataOffset + current.len);
         }
 
-        void writeTo(YierdisBulkStringOutput out) {
+        void writeTo(ReplySink out) {
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
             }

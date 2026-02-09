@@ -3,12 +3,11 @@ package yier.bubu.redis.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.testutil.ReplyArray;
+import yier.bubu.redis.testutil.ReplyBulkString;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.util.Arrays;
 
@@ -24,7 +23,7 @@ public class SetCommandTest {
 
             byte[] key = new byte[]{'s', 0, 1};
 
-            RespInteger added = (RespInteger) client.execute(Arrays.asList(
+            ReplyInteger added = (ReplyInteger) client.execute(Arrays.asList(
                     b("SADD"),
                     key,
                     b("1"),
@@ -34,20 +33,20 @@ public class SetCommandTest {
             Assert.assertEquals(3, added.value());
 
             byte[] binaryMember = new byte[]{0, (byte) 0xFF, 'x'};
-            RespInteger added2 = (RespInteger) client.execute(Arrays.asList(
+            ReplyInteger added2 = (ReplyInteger) client.execute(Arrays.asList(
                     b("SADD"),
                     key,
                     binaryMember
             ));
             Assert.assertEquals(1, added2.value());
 
-            RespInteger is2 = (RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("2")));
+            ReplyInteger is2 = (ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("2")));
             Assert.assertEquals(1, is2.value());
 
-            RespInteger isBin = (RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, binaryMember));
+            ReplyInteger isBin = (ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, binaryMember));
             Assert.assertEquals(1, isBin.value());
 
-            RespArray members = (RespArray) client.execute(Arrays.asList(b("SMEMBERS"), key));
+            ReplyArray members = (ReplyArray) client.execute(Arrays.asList(b("SMEMBERS"), key));
             Assert.assertEquals(4, members.values().size());
             Assert.assertTrue(containsBytes(members, b("1")));
             Assert.assertTrue(containsBytes(members, b("2")));
@@ -65,7 +64,7 @@ public class SetCommandTest {
 
             byte[] key = b("s");
 
-            RespInteger added = (RespInteger) client.execute(Arrays.asList(
+            ReplyInteger added = (ReplyInteger) client.execute(Arrays.asList(
                     b("SADD"),
                     key,
                     b("1"),
@@ -76,26 +75,26 @@ public class SetCommandTest {
             ));
             Assert.assertEquals(5, added.value());
 
-            RespInteger card = (RespInteger) client.execute(Arrays.asList(b("SCARD"), key));
+            ReplyInteger card = (ReplyInteger) client.execute(Arrays.asList(b("SCARD"), key));
             Assert.assertEquals(5, card.value());
 
-            Assert.assertEquals(1, ((RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("1")))).value());
-            Assert.assertEquals(1, ((RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("01")))).value());
-            Assert.assertEquals(1, ((RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("+1")))).value());
-            Assert.assertEquals(1, ((RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("0")))).value());
-            Assert.assertEquals(1, ((RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("-0")))).value());
+            Assert.assertEquals(1, ((ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("1")))).value());
+            Assert.assertEquals(1, ((ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("01")))).value());
+            Assert.assertEquals(1, ((ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("+1")))).value());
+            Assert.assertEquals(1, ((ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("0")))).value());
+            Assert.assertEquals(1, ((ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("-0")))).value());
 
-            RespInteger removed = (RespInteger) client.execute(Arrays.asList(b("SREM"), key, b("01")));
+            ReplyInteger removed = (ReplyInteger) client.execute(Arrays.asList(b("SREM"), key, b("01")));
             Assert.assertEquals(1, removed.value());
 
-            RespInteger card2 = (RespInteger) client.execute(Arrays.asList(b("SCARD"), key));
+            ReplyInteger card2 = (ReplyInteger) client.execute(Arrays.asList(b("SCARD"), key));
             Assert.assertEquals(4, card2.value());
 
-            Assert.assertEquals(1, ((RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("1")))).value());
-            Assert.assertEquals(0, ((RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("01")))).value());
-            Assert.assertEquals(1, ((RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("+1")))).value());
-            Assert.assertEquals(1, ((RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("0")))).value());
-            Assert.assertEquals(1, ((RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("-0")))).value());
+            Assert.assertEquals(1, ((ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("1")))).value());
+            Assert.assertEquals(0, ((ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("01")))).value());
+            Assert.assertEquals(1, ((ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("+1")))).value());
+            Assert.assertEquals(1, ((ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("0")))).value());
+            Assert.assertEquals(1, ((ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("-0")))).value());
             }
         });
     }
@@ -109,30 +108,30 @@ public class SetCommandTest {
             byte[] key = new byte[]{0, 's'};
             byte[] member = new byte[]{(byte) 0xFF};
 
-            RespInteger added = (RespInteger) client.execute(Arrays.asList(b("SADD"), key, member));
+            ReplyInteger added = (ReplyInteger) client.execute(Arrays.asList(b("SADD"), key, member));
             Assert.assertEquals(1, added.value());
 
-            RespInteger removed = (RespInteger) client.execute(Arrays.asList(b("SREM"), key, member));
+            ReplyInteger removed = (ReplyInteger) client.execute(Arrays.asList(b("SREM"), key, member));
             Assert.assertEquals(1, removed.value());
 
-            RespInteger card = (RespInteger) client.execute(Arrays.asList(b("SCARD"), key));
+            ReplyInteger card = (ReplyInteger) client.execute(Arrays.asList(b("SCARD"), key));
             Assert.assertEquals(0, card.value());
 
-            RespArray members = (RespArray) client.execute(Arrays.asList(b("SMEMBERS"), key));
+            ReplyArray members = (ReplyArray) client.execute(Arrays.asList(b("SMEMBERS"), key));
             Assert.assertTrue(members.values().isEmpty());
 
-            RespInteger exists = (RespInteger) client.execute(Arrays.asList(b("EXISTS"), key));
+            ReplyInteger exists = (ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key));
             Assert.assertEquals(0, exists.value());
 
-            RespSimpleString type = (RespSimpleString) client.execute(Arrays.asList(b("TYPE"), key));
+            ReplySimpleString type = (ReplySimpleString) client.execute(Arrays.asList(b("TYPE"), key));
             Assert.assertEquals("none", type.value());
             }
         });
     }
 
-    private static boolean containsBytes(RespArray array, byte[] expected) {
+    private static boolean containsBytes(ReplyArray array, byte[] expected) {
         for (Object o : array.values()) {
-            if (o instanceof RespBulkString && Arrays.equals(expected, ((RespBulkString) o).data())) {
+            if (o instanceof ReplyBulkString && Arrays.equals(expected, ((ReplyBulkString) o).data())) {
                 return true;
             }
         }

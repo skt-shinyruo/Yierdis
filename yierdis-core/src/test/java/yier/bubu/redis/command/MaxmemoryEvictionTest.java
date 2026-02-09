@@ -5,11 +5,12 @@ import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespObject;
-import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.testutil.ReplyBulkString;
+import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplyNull;
+import yier.bubu.redis.testutil.ReplyObject;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.util.List;
 
@@ -27,14 +28,14 @@ public class MaxmemoryEvictionTest {
 
             byte[] v1600 = repeat((byte) 'x', 1600);
 
-            Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), v1600)) instanceof RespSimpleString);
+            Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), v1600)) instanceof ReplySimpleString);
 
-            RespObject err = client.execute(List.of(b("SET"), b("b"), v1600));
-            Assert.assertTrue(err instanceof RespError);
-            Assert.assertEquals("OOM command not allowed when used memory > 'maxmemory'.", ((RespError) err).message());
+            ReplyObject err = client.execute(List.of(b("SET"), b("b"), v1600));
+            Assert.assertTrue(err instanceof ReplyError);
+            Assert.assertEquals("OOM command not allowed when used memory > 'maxmemory'.", ((ReplyError) err).message());
 
-            RespBulkString getB = (RespBulkString) client.execute(List.of(b("GET"), b("b")));
-            Assert.assertTrue(getB.isNull());
+	            ReplyObject getB = client.execute(List.of(b("GET"), b("b")));
+	            Assert.assertTrue(getB instanceof ReplyNull);
             }
         });
     }
@@ -47,10 +48,10 @@ public class MaxmemoryEvictionTest {
 
             byte[] v1600 = repeat((byte) 'x', 1600);
 
-            Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), v1600)) instanceof RespSimpleString);
-            Assert.assertTrue(client.execute(List.of(b("SET"), b("b"), v1600)) instanceof RespSimpleString);
+            Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), v1600)) instanceof ReplySimpleString);
+            Assert.assertTrue(client.execute(List.of(b("SET"), b("b"), v1600)) instanceof ReplySimpleString);
 
-            RespInteger exists = (RespInteger) client.execute(cmd("EXISTS", "a", "b"));
+            ReplyInteger exists = (ReplyInteger) client.execute(cmd("EXISTS", "a", "b"));
             Assert.assertEquals(1, exists.value());
             Assert.assertTrue("used bytes must be <= maxmemory", db.estimatedUsedBytes() <= 3000);
 
@@ -67,21 +68,19 @@ public class MaxmemoryEvictionTest {
 
             byte[] v1600 = repeat((byte) 'x', 1600);
 
-            Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), v1600)) instanceof RespSimpleString);
-            Assert.assertTrue(client.execute(List.of(b("SET"), b("b"), v1600)) instanceof RespSimpleString);
+            Assert.assertTrue(client.execute(List.of(b("SET"), b("a"), v1600)) instanceof ReplySimpleString);
+            Assert.assertTrue(client.execute(List.of(b("SET"), b("b"), v1600)) instanceof ReplySimpleString);
 
             // Make "a" more recently used than "b".
-            RespBulkString getA = (RespBulkString) client.execute(List.of(b("GET"), b("a")));
-            Assert.assertFalse(getA.isNull());
+            Assert.assertTrue(client.execute(List.of(b("GET"), b("a"))) instanceof ReplyBulkString);
 
             // This write triggers eviction; the least recently used key ("b") should be evicted.
-            Assert.assertTrue(client.execute(List.of(b("SET"), b("c"), v1600)) instanceof RespSimpleString);
+            Assert.assertTrue(client.execute(List.of(b("SET"), b("c"), v1600)) instanceof ReplySimpleString);
 
-            RespBulkString getB = (RespBulkString) client.execute(List.of(b("GET"), b("b")));
-            Assert.assertTrue(getB.isNull());
+	            ReplyObject getB = client.execute(List.of(b("GET"), b("b")));
+	            Assert.assertTrue(getB instanceof ReplyNull);
 
-            RespBulkString getC = (RespBulkString) client.execute(List.of(b("GET"), b("c")));
-            Assert.assertFalse(getC.isNull());
+	            Assert.assertTrue(client.execute(List.of(b("GET"), b("c"))) instanceof ReplyBulkString);
 
             Assert.assertTrue("used bytes must be <= maxmemory", db.estimatedUsedBytes() <= 4500);
             }
@@ -94,49 +93,47 @@ public class MaxmemoryEvictionTest {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
-        Assert.assertTrue(client.execute(cmd("SET", "k", "1")) instanceof RespSimpleString);
-        Assert.assertEquals("int", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "k"))).asString());
-        Assert.assertTrue(client.execute(cmd("MEMORY", "USAGE", "k")) instanceof RespInteger);
+        Assert.assertTrue(client.execute(cmd("SET", "k", "1")) instanceof ReplySimpleString);
+        Assert.assertEquals("int", ((ReplyBulkString) client.execute(cmd("OBJECT", "ENCODING", "k"))).asString());
+        Assert.assertTrue(client.execute(cmd("MEMORY", "USAGE", "k")) instanceof ReplyInteger);
 
-        Assert.assertTrue(client.execute(cmd("SET", "k", "abc")) instanceof RespSimpleString);
-        Assert.assertEquals("embstr", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "k"))).asString());
+        Assert.assertTrue(client.execute(cmd("SET", "k", "abc")) instanceof ReplySimpleString);
+        Assert.assertEquals("embstr", ((ReplyBulkString) client.execute(cmd("OBJECT", "ENCODING", "k"))).asString());
 
-        Assert.assertTrue(client.execute(List.of(b("SET"), b("k"), repeat((byte) 'x', 50))) instanceof RespSimpleString);
-        Assert.assertEquals("raw", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "k"))).asString());
+        Assert.assertTrue(client.execute(List.of(b("SET"), b("k"), repeat((byte) 'x', 50))) instanceof ReplySimpleString);
+        Assert.assertEquals("raw", ((ReplyBulkString) client.execute(cmd("OBJECT", "ENCODING", "k"))).asString());
 
         // Collection encodings.
-        Assert.assertTrue(client.execute(cmd("LPUSH", "l", "a")) instanceof RespInteger);
-        Assert.assertEquals("listpack", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "l"))).asString());
+        Assert.assertTrue(client.execute(cmd("LPUSH", "l", "a")) instanceof ReplyInteger);
+        Assert.assertEquals("listpack", ((ReplyBulkString) client.execute(cmd("OBJECT", "ENCODING", "l"))).asString());
 
-        Assert.assertTrue(client.execute(cmd("SADD", "s", "1", "2")) instanceof RespInteger);
-        Assert.assertEquals("intset", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "s"))).asString());
-        Assert.assertTrue(client.execute(cmd("SADD", "s", "x")) instanceof RespInteger);
-        Assert.assertEquals("hashtable", ((RespBulkString) client.execute(cmd("OBJECT", "ENCODING", "s"))).asString());
+        Assert.assertTrue(client.execute(cmd("SADD", "s", "1", "2")) instanceof ReplyInteger);
+        Assert.assertEquals("intset", ((ReplyBulkString) client.execute(cmd("OBJECT", "ENCODING", "s"))).asString());
+        Assert.assertTrue(client.execute(cmd("SADD", "s", "x")) instanceof ReplyInteger);
+        Assert.assertEquals("hashtable", ((ReplyBulkString) client.execute(cmd("OBJECT", "ENCODING", "s"))).asString());
 
-        // Missing keys return nil.
-        RespObject missing = client.execute(cmd("OBJECT", "ENCODING", "missing"));
-        Assert.assertTrue(missing instanceof RespBulkString);
-        Assert.assertTrue(((RespBulkString) missing).isNull());
+	        // Missing keys return nil.
+	        ReplyObject missing = client.execute(cmd("OBJECT", "ENCODING", "missing"));
+	        Assert.assertTrue(missing instanceof ReplyNull);
 
-        RespObject missingUsage = client.execute(cmd("MEMORY", "USAGE", "missing"));
-        Assert.assertTrue(missingUsage instanceof RespBulkString);
-        Assert.assertTrue(((RespBulkString) missingUsage).isNull());
+	        ReplyObject missingUsage = client.execute(cmd("MEMORY", "USAGE", "missing"));
+	        Assert.assertTrue(missingUsage instanceof ReplyNull);
 
-        RespObject wrongArityMemory = client.execute(cmd("MEMORY"));
-        Assert.assertTrue(wrongArityMemory instanceof RespError);
-        Assert.assertEquals("ERR wrong number of arguments for 'memory' command", ((RespError) wrongArityMemory).message());
+        ReplyObject wrongArityMemory = client.execute(cmd("MEMORY"));
+        Assert.assertTrue(wrongArityMemory instanceof ReplyError);
+        Assert.assertEquals("ERR wrong number of arguments for 'memory' command", ((ReplyError) wrongArityMemory).message());
 
-        RespObject wrongArityObject = client.execute(cmd("OBJECT"));
-        Assert.assertTrue(wrongArityObject instanceof RespError);
-        Assert.assertEquals("ERR wrong number of arguments for 'object' command", ((RespError) wrongArityObject).message());
+        ReplyObject wrongArityObject = client.execute(cmd("OBJECT"));
+        Assert.assertTrue(wrongArityObject instanceof ReplyError);
+        Assert.assertEquals("ERR wrong number of arguments for 'object' command", ((ReplyError) wrongArityObject).message());
 
-        RespObject syntaxMemory = client.execute(cmd("MEMORY", "FOO", "k"));
-        Assert.assertTrue(syntaxMemory instanceof RespError);
-        Assert.assertEquals("ERR syntax error", ((RespError) syntaxMemory).message());
+        ReplyObject syntaxMemory = client.execute(cmd("MEMORY", "FOO", "k"));
+        Assert.assertTrue(syntaxMemory instanceof ReplyError);
+        Assert.assertEquals("ERR syntax error", ((ReplyError) syntaxMemory).message());
 
-        RespObject syntaxObject = client.execute(cmd("OBJECT", "FOO", "k"));
-        Assert.assertTrue(syntaxObject instanceof RespError);
-        Assert.assertEquals("ERR syntax error", ((RespError) syntaxObject).message());
+        ReplyObject syntaxObject = client.execute(cmd("OBJECT", "FOO", "k"));
+        Assert.assertTrue(syntaxObject instanceof ReplyError);
+        Assert.assertEquals("ERR syntax error", ((ReplyError) syntaxObject).message());
 
             }
         });

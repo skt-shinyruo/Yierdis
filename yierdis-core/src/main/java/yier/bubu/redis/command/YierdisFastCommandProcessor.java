@@ -1,11 +1,13 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespServerSession;
-import yier.bubu.redis.protocol.RespTransactionState;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.WrongTypeException;
+import yier.bubu.redis.ops.YierdisCommandException;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.protocol.ServerSession;
+import yier.bubu.redis.protocol.TransactionState;
 import yier.bubu.redis.runtime.YierdisChangeEvent;
 import yier.bubu.redis.runtime.YierdisChangeSink;
 
@@ -14,7 +16,7 @@ import java.util.Objects;
 /**
  * A server-side command processor optimized for low allocation.
  * <p>
- * It executes commands and writes RESP replies directly via {@link RespWriter}.
+ * It executes commands and writes replies via {@link ReplyWriter}.
  */
 public final class YierdisFastCommandProcessor {
     private static final String NULL_BULK_STRING_ERR = "ERR Protocol error: null bulk string";
@@ -23,24 +25,24 @@ public final class YierdisFastCommandProcessor {
     private final YierdisDbRouter dbRouter;
     private final YierdisChangeSink changeSink;
 
-    public YierdisFastCommandProcessor(YierdisDb db) {
-        this(db, null, YierdisChangeSink.NOOP, null);
+    public YierdisFastCommandProcessor(DbEngine engine) {
+        this(engine, null, YierdisChangeSink.NOOP, null);
     }
 
-    public YierdisFastCommandProcessor(YierdisDb db, ServerInfoProvider infoProvider) {
-        this(db, infoProvider, YierdisChangeSink.NOOP, null);
+    public YierdisFastCommandProcessor(DbEngine engine, ServerInfoProvider infoProvider) {
+        this(engine, infoProvider, YierdisChangeSink.NOOP, null);
     }
 
-    public YierdisFastCommandProcessor(YierdisDb db, ServerInfoProvider infoProvider, YierdisChangeSink changeSink) {
-        this(db, infoProvider, changeSink, null);
+    public YierdisFastCommandProcessor(DbEngine engine, ServerInfoProvider infoProvider, YierdisChangeSink changeSink) {
+        this(engine, infoProvider, changeSink, null);
     }
 
-    public YierdisFastCommandProcessor(YierdisDb db, ServerInfoProvider infoProvider, SlowCommandGovernor slowGovernor) {
-        this(db, infoProvider, YierdisChangeSink.NOOP, slowGovernor);
+    public YierdisFastCommandProcessor(DbEngine engine, ServerInfoProvider infoProvider, SlowCommandGovernor slowGovernor) {
+        this(engine, infoProvider, YierdisChangeSink.NOOP, slowGovernor);
     }
 
-    public YierdisFastCommandProcessor(YierdisDb db, ServerInfoProvider infoProvider, YierdisChangeSink changeSink, SlowCommandGovernor slowGovernor) {
-        this(singleDbRouter(db), infoProvider, changeSink, slowGovernor);
+    public YierdisFastCommandProcessor(DbEngine engine, ServerInfoProvider infoProvider, YierdisChangeSink changeSink, SlowCommandGovernor slowGovernor) {
+        this(singleDbRouter(engine), infoProvider, changeSink, slowGovernor);
     }
 
     public YierdisFastCommandProcessor(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider) {
@@ -73,7 +75,7 @@ public final class YierdisFastCommandProcessor {
         this.registry = registry;
     }
 
-    public void execute(RespCommand cmd, RespWriter out) {
+    public void execute(Command cmd, ReplyWriter out) {
         int argc = cmd.argc();
         if (argc <= 0) {
             out.error("ERR empty command");
@@ -99,8 +101,8 @@ public final class YierdisFastCommandProcessor {
             return;
         }
 
-        RespTransactionState tx = null;
-        if (out.session() instanceof RespServerSession s) {
+        TransactionState tx = null;
+        if (out.session() instanceof ServerSession s) {
             tx = s.transaction();
         }
         if (tx != null && tx.active()) {
@@ -108,10 +110,8 @@ public final class YierdisFastCommandProcessor {
             boolean isExec = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "EXEC");
             boolean isDiscard = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "DISCARD");
             if (!isMulti && !isExec && !isDiscard) {
-                // HELLO 属于连接级协议协商命令（RESP2/RESP3 握手）。
-                // 将其允许在 MULTI/EXEC 中执行会破坏 reply 流：
-                // 例如 EXEC 的外层 reply 仍是 RESP2 array（'*'），但 HELLO 3 会在数组元素里写出 RESP3 map（'%'），
-                // 导致 RESP2 客户端解析失败。
+                // HELLO 属于连接级握手/协商类命令。为避免事务语义被“连接态变更”干扰，保持与 Redis 类似的限制：
+                // MULTI 队列中不允许出现 HELLO。
                 if (CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "HELLO")) {
                     tx.markAborted();
                     out.error("ERR HELLO is not allowed in MULTI");
@@ -127,7 +127,6 @@ public final class YierdisFastCommandProcessor {
             }
         }
 
-        YierdisDb db = null;
         try {
             CommandRegistry.CommandHandler handler = registry.find(cmd);
             if (handler == null) {
@@ -139,7 +138,7 @@ public final class YierdisFastCommandProcessor {
             // 变更事件：仅在命令执行成功后触发，并尽量避免对读命令做额外分配。
             if (changeSink != YierdisChangeSink.NOOP && isWriteCommand(cmd)) {
                 int dbIndex = 0;
-                if (out != null && out.session() instanceof RespServerSession s) {
+                if (out != null && out.session() instanceof ServerSession s) {
                     dbIndex = Math.max(0, s.dbIndex());
                 }
                 try {
@@ -148,9 +147,9 @@ public final class YierdisFastCommandProcessor {
                     // best-effort: 事件消费失败不应影响主命令执行路径
                 }
             }
-        } catch (YierdisDb.WrongTypeException e) {
+        } catch (WrongTypeException e) {
             out.error(e.getMessage());
-        } catch (YierdisDb.YierdisCommandException e) {
+        } catch (YierdisCommandException e) {
             out.error(e.getMessage());
         } catch (YierdisOffHeapOutOfMemoryException e) {
             out.error("OOM off-heap memory limit exceeded");
@@ -161,9 +160,9 @@ public final class YierdisFastCommandProcessor {
             // Command implementations are expected to finish (commit/rollback) their own reservations,
             // but this is a defensive last line to keep invariants stable.
             try {
-                db = dbRouter.dbFor(out);
-                if (db != null) {
-                    db.rollbackWriteReservationIfAny();
+                DbEngine engine = dbRouter.dbFor(out);
+                if (engine != null) {
+                    engine.eviction().rollbackWriteReservationIfAny();
                 }
             } catch (Throwable ignored) {
                 // best-effort
@@ -171,7 +170,7 @@ public final class YierdisFastCommandProcessor {
         }
     }
 
-    private static boolean isWriteCommand(RespCommand cmd) {
+    private static boolean isWriteCommand(Command cmd) {
         // 约定：事件流用于 AOF/replication 等外部能力，因此以“可能改变状态”的命令集合为准。
         // 这里不在核心层做“是否真实发生变更”的判定（例如 DEL 0 / SET NX 未写入等）。
         return CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "SET")
@@ -201,7 +200,7 @@ public final class YierdisFastCommandProcessor {
                 || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "FLUSHDB");
     }
 
-    private static byte[][] copyArgv(RespCommand cmd) {
+    private static byte[][] copyArgv(Command cmd) {
         int argc = cmd == null ? 0 : cmd.argc();
         byte[][] argv = new byte[argc][];
         for (int i = 0; i < argc; i++) {
@@ -210,7 +209,7 @@ public final class YierdisFastCommandProcessor {
         return argv;
     }
 
-    private static String unknownCommandMessage(RespCommand cmd) {
+    private static String unknownCommandMessage(Command cmd) {
         if (cmd == null || cmd.argc() <= 0 || cmd.isNull(0) || cmd.len(0) <= 0) {
             return "ERR unknown command";
         }
@@ -230,11 +229,11 @@ public final class YierdisFastCommandProcessor {
         return "ERR unknown command";
     }
 
-    private static YierdisDbRouter singleDbRouter(YierdisDb db) {
-        YierdisDb fixed = Objects.requireNonNull(db, "db");
+    private static YierdisDbRouter singleDbRouter(DbEngine engine) {
+        DbEngine fixed = Objects.requireNonNull(engine, "engine");
         return new YierdisDbRouter() {
             @Override
-            public YierdisDb dbFor(RespWriter out) {
+            public DbEngine dbFor(ReplyWriter out) {
                 return fixed;
             }
 

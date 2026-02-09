@@ -8,8 +8,9 @@ import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
-import yier.bubu.redis.protocol.RespServerSession;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.protocol.ServerSession;
 
 import java.util.Objects;
 
@@ -98,12 +99,12 @@ public final class YierdisInstance implements AutoCloseable {
 
         YierdisDbRouter router = new YierdisDbRouter() {
             @Override
-            public YierdisDb dbFor(RespWriter out) {
+            public DbEngine dbFor(ReplyWriter out) {
                 if (dbs.length == 0) {
                     throw new IllegalStateException("no dbs");
                 }
                 int idx = 0;
-                if (out != null && out.session() instanceof RespServerSession s) {
+                if (out != null && out.session() instanceof ServerSession s) {
                     idx = s.dbIndex();
                 }
                 if (idx < 0 || idx >= dbs.length) {
@@ -127,6 +128,22 @@ public final class YierdisInstance implements AutoCloseable {
 
     public int databases() {
         return dbs.length;
+    }
+
+    /**
+     * 获取 DB 的能力视图（依赖倒置到 {@link DbEngine}），避免上层（例如 server/bootstrap）直接依赖具体实现类。
+     */
+    public DbEngine engine(int dbIndex) {
+        return db(dbIndex);
+    }
+
+    /**
+     * 获取所有 DB 的能力视图数组（{@link DbEngine}）。
+     * <p>
+     * 返回的是底层数组的协变视图（实现类数组），调用方不应向该数组写入非 DB 实现对象。
+     */
+    public DbEngine[] engines() {
+        return dbs;
     }
 
     public YierdisDb[] dbs() {

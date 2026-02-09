@@ -2,17 +2,17 @@ package yier.bubu.redis.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespProtocol;
-import yier.bubu.redis.protocol.RespServerSession;
-import yier.bubu.redis.protocol.RespSimpleString;
-import yier.bubu.redis.protocol.RespTransactionState;
+import yier.bubu.redis.protocol.ServerSession;
+import yier.bubu.redis.protocol.TransactionState;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyArray;
+import yier.bubu.redis.testutil.ReplyBulkString;
+import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyObject;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
-import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
@@ -25,17 +25,17 @@ public class TransactionCommandTest {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
-                Assert.assertEquals("OK", ((RespSimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
-                Assert.assertEquals("QUEUED", ((RespSimpleString) client.execute(Arrays.asList(b("SET"), b("k"), b("v")))).value());
-                Assert.assertEquals("QUEUED", ((RespSimpleString) client.execute(Arrays.asList(b("GET"), b("k")))).value());
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("k"), b("v")))).value());
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(b("GET"), b("k")))).value());
 
-                RespArray exec = (RespArray) client.execute(Arrays.asList(b("EXEC")));
+                ReplyArray exec = (ReplyArray) client.execute(Arrays.asList(b("EXEC")));
                 Assert.assertNotNull(exec.values());
                 Assert.assertEquals(2, exec.values().size());
-                Assert.assertEquals("OK", ((RespSimpleString) exec.values().get(0)).value());
-                Assert.assertEquals("v", ((RespBulkString) exec.values().get(1)).asString());
+                Assert.assertEquals("OK", ((ReplySimpleString) exec.values().get(0)).value());
+                Assert.assertEquals("v", ((ReplyBulkString) exec.values().get(1)).asString());
 
-                Assert.assertEquals("v", ((RespBulkString) client.execute(Arrays.asList(b("GET"), b("k")))).asString());
+                Assert.assertEquals("v", ((ReplyBulkString) client.execute(Arrays.asList(b("GET"), b("k")))).asString());
             }
         });
     }
@@ -46,11 +46,13 @@ public class TransactionCommandTest {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
-                RespError exec = (RespError) client.execute(Arrays.asList(b("EXEC")));
-                Assert.assertEquals("ERR EXEC without MULTI", exec.message());
+                ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
+                Assert.assertTrue(exec instanceof ReplyError);
+                Assert.assertEquals("ERR EXEC without MULTI", ((ReplyError) exec).message());
 
-                RespError discard = (RespError) client.execute(Arrays.asList(b("DISCARD")));
-                Assert.assertEquals("ERR DISCARD without MULTI", discard.message());
+                ReplyObject discard = client.execute(Arrays.asList(b("DISCARD")));
+                Assert.assertTrue(discard instanceof ReplyError);
+                Assert.assertEquals("ERR DISCARD without MULTI", ((ReplyError) discard).message());
             }
         });
     }
@@ -61,32 +63,22 @@ public class TransactionCommandTest {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
-                Assert.assertEquals("OK", ((RespSimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
 
-                RespError nested = (RespError) client.execute(Arrays.asList(b("MULTI")));
-                Assert.assertEquals("ERR MULTI calls can not be nested", nested.message());
+                ReplyObject nested = client.execute(Arrays.asList(b("MULTI")));
+                Assert.assertTrue(nested instanceof ReplyError);
+                Assert.assertEquals("ERR MULTI calls can not be nested", ((ReplyError) nested).message());
 
-                Assert.assertEquals("OK", ((RespSimpleString) client.execute(Arrays.asList(b("DISCARD")))).value());
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("DISCARD")))).value());
             }
         });
     }
 
-    private static final class TestSession implements RespServerSession {
-        private RespProtocol protocol = RespProtocol.RESP2;
+    private static final class TestSession implements ServerSession {
         private int dbIndex;
         private String clientName;
         private boolean authenticated;
-        private final RespTransactionState tx = new TestTransactionState();
-
-        @Override
-        public RespProtocol protocol() {
-            return protocol;
-        }
-
-        @Override
-        public void setProtocol(RespProtocol protocol) {
-            this.protocol = protocol == null ? RespProtocol.RESP2 : protocol;
-        }
+        private final TransactionState tx = new TestTransactionState();
 
         @Override
         public int dbIndex() {
@@ -124,12 +116,12 @@ public class TransactionCommandTest {
         }
 
         @Override
-        public RespTransactionState transaction() {
+        public TransactionState transaction() {
             return tx;
         }
     }
 
-    private static final class TestTransactionState implements RespTransactionState {
+    private static final class TestTransactionState implements TransactionState {
         private boolean active;
         private final ArrayList<byte[][]> queue = new ArrayList<>();
 

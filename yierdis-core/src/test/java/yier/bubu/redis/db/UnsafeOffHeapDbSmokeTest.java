@@ -3,6 +3,7 @@ package yier.bubu.redis.db;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.ops.SetMode;
 
 import java.util.List;
 
@@ -11,12 +12,12 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 public class UnsafeOffHeapDbSmokeTest {
     @Test
     public void offHeapCompositeTypesWorkAndShutdownDoesNotLeak() {
-        YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator);
-        try {
-            db.bindToCurrentThread();
-            Assert.assertTrue(db.setString(b("s"), b("v"), YierdisDb.SetMode.NORMAL, null));
-            Assert.assertArrayEquals(b("v"), db.getStringBytes(b("s")));
+            YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
+            YierdisDb db = new YierdisDb(allocator);
+            try {
+                db.bindToCurrentThread();
+                Assert.assertTrue(db.setString(b("s"), b("v"), SetMode.NORMAL, null));
+                Assert.assertArrayEquals(b("v"), db.getStringBytes(b("s")));
 
             Assert.assertEquals(3, db.rpush(b("l"), List.of(b("a"), b("b"), b("c"))));
             List<byte[]> range = db.lrange(b("l"), 0, -1);
@@ -27,7 +28,7 @@ public class UnsafeOffHeapDbSmokeTest {
 
             Assert.assertEquals(2, db.hset(b("h"), List.of(b("f1"), b("v1"), b("f2"), b("v2"))));
             Assert.assertArrayEquals(b("v1"), db.hget(b("h"), b("f1")));
-            Assert.assertEquals(4, db.hgetallReplyCount(b("h")));
+            Assert.assertEquals(2, db.values().hashes().hgetallPairCount(b("h")));
 
             Assert.assertEquals(3, db.sadd(b("set"), List.of(b("x"), b("y"), b("z"))));
             Assert.assertTrue(db.sismember(b("set"), b("y")));

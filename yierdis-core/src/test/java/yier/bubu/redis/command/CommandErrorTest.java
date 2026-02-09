@@ -5,10 +5,10 @@ import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespObject;
-import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplyObject;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.util.Arrays;
 
@@ -27,10 +27,10 @@ public class CommandErrorTest {
             byte[] setKey = b("s");
             byte[] zsetKey = b("z");
 
-            Assert.assertTrue(client.execute(Arrays.asList(b("RPUSH"), listKey, b("a"))) instanceof RespInteger);
-            Assert.assertTrue(client.execute(Arrays.asList(b("HSET"), hashKey, b("f"), b("v"))) instanceof RespInteger);
-            Assert.assertTrue(client.execute(Arrays.asList(b("SADD"), setKey, b("a"))) instanceof RespInteger);
-            Assert.assertTrue(client.execute(Arrays.asList(b("ZADD"), zsetKey, b("1"), b("a"))) instanceof RespInteger);
+            Assert.assertTrue(client.execute(Arrays.asList(b("RPUSH"), listKey, b("a"))) instanceof ReplyInteger);
+            Assert.assertTrue(client.execute(Arrays.asList(b("HSET"), hashKey, b("f"), b("v"))) instanceof ReplyInteger);
+            Assert.assertTrue(client.execute(Arrays.asList(b("SADD"), setKey, b("a"))) instanceof ReplyInteger);
+            Assert.assertTrue(client.execute(Arrays.asList(b("ZADD"), zsetKey, b("1"), b("a"))) instanceof ReplyInteger);
 
             assertWrongType(client.execute(Arrays.asList(b("GET"), listKey)));
             assertWrongType(client.execute(Arrays.asList(b("GET"), hashKey)));
@@ -51,10 +51,10 @@ public class CommandErrorTest {
             byte[] setKey = b("k:set");
             byte[] zsetKey = b("k:zset");
 
-            Assert.assertTrue(client.execute(Arrays.asList(b("SET"), stringKey, b("v"))) instanceof RespSimpleString);
-            Assert.assertTrue(client.execute(Arrays.asList(b("RPUSH"), listKey, b("a"))) instanceof RespInteger);
-            Assert.assertTrue(client.execute(Arrays.asList(b("SADD"), setKey, b("a"))) instanceof RespInteger);
-            Assert.assertTrue(client.execute(Arrays.asList(b("ZADD"), zsetKey, b("1"), b("a"))) instanceof RespInteger);
+            Assert.assertTrue(client.execute(Arrays.asList(b("SET"), stringKey, b("v"))) instanceof ReplySimpleString);
+            Assert.assertTrue(client.execute(Arrays.asList(b("RPUSH"), listKey, b("a"))) instanceof ReplyInteger);
+            Assert.assertTrue(client.execute(Arrays.asList(b("SADD"), setKey, b("a"))) instanceof ReplyInteger);
+            Assert.assertTrue(client.execute(Arrays.asList(b("ZADD"), zsetKey, b("1"), b("a"))) instanceof ReplyInteger);
 
             assertWrongType(client.execute(Arrays.asList(b("HSET"), stringKey, b("f"), b("v"))));
             assertWrongType(client.execute(Arrays.asList(b("HSET"), listKey, b("f"), b("v"))));
@@ -74,9 +74,9 @@ public class CommandErrorTest {
             byte[] listKey = b("k:list");
             byte[] hashKey = b("k:hash");
 
-            Assert.assertTrue(client.execute(Arrays.asList(b("SET"), stringKey, b("v"))) instanceof RespSimpleString);
-            Assert.assertTrue(client.execute(Arrays.asList(b("RPUSH"), listKey, b("a"))) instanceof RespInteger);
-            Assert.assertTrue(client.execute(Arrays.asList(b("HSET"), hashKey, b("f"), b("v"))) instanceof RespInteger);
+            Assert.assertTrue(client.execute(Arrays.asList(b("SET"), stringKey, b("v"))) instanceof ReplySimpleString);
+            Assert.assertTrue(client.execute(Arrays.asList(b("RPUSH"), listKey, b("a"))) instanceof ReplyInteger);
+            Assert.assertTrue(client.execute(Arrays.asList(b("HSET"), hashKey, b("f"), b("v"))) instanceof ReplyInteger);
 
             assertWrongType(client.execute(Arrays.asList(b("SADD"), stringKey, b("a"))));
             assertWrongType(client.execute(Arrays.asList(b("SADD"), listKey, b("a"))));
@@ -95,16 +95,16 @@ public class CommandErrorTest {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
-            RespError hsetWrongArity = (RespError) client.execute(Arrays.asList(b("HSET"), b("k"), b("f")));
+            ReplyError hsetWrongArity = (ReplyError) client.execute(Arrays.asList(b("HSET"), b("k"), b("f")));
             Assert.assertEquals("ERR wrong number of arguments for 'hset' command", hsetWrongArity.message());
 
-            RespError zaddWrongArity = (RespError) client.execute(Arrays.asList(b("ZADD"), b("k"), b("1"), b("a"), b("2")));
+            ReplyError zaddWrongArity = (ReplyError) client.execute(Arrays.asList(b("ZADD"), b("k"), b("1"), b("a"), b("2")));
             Assert.assertEquals("ERR wrong number of arguments for 'zadd' command", zaddWrongArity.message());
 
-            RespError zrangeSyntax = (RespError) client.execute(Arrays.asList(b("ZRANGE"), b("k"), b("0"), b("-1"), b("WITHSCORESX")));
+            ReplyError zrangeSyntax = (ReplyError) client.execute(Arrays.asList(b("ZRANGE"), b("k"), b("0"), b("-1"), b("WITHSCORESX")));
             Assert.assertEquals("ERR syntax error", zrangeSyntax.message());
 
-            RespError setBadInt = (RespError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("EX"), b("abc")));
+            ReplyError setBadInt = (ReplyError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("EX"), b("abc")));
             Assert.assertEquals("ERR value is not an integer or out of range", setBadInt.message());
 
             }
@@ -117,33 +117,33 @@ public class CommandErrorTest {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
-            RespError zrangeByScoreWrongArity = (RespError) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0")));
+            ReplyError zrangeByScoreWrongArity = (ReplyError) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0")));
             Assert.assertEquals("ERR wrong number of arguments for 'zrangebyscore' command", zrangeByScoreWrongArity.message());
 
-            RespError zrevrangeByScoreWrongArity = (RespError) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("0")));
+            ReplyError zrevrangeByScoreWrongArity = (ReplyError) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("0")));
             Assert.assertEquals("ERR wrong number of arguments for 'zrevrangebyscore' command", zrevrangeByScoreWrongArity.message());
 
-            RespError badOpt = (RespError) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0"), b("1"), b("WITHSCORESX")));
+            ReplyError badOpt = (ReplyError) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0"), b("1"), b("WITHSCORESX")));
             Assert.assertEquals("ERR syntax error", badOpt.message());
 
-            RespError limitMissingCount = (RespError) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0")));
+            ReplyError limitMissingCount = (ReplyError) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0")));
             Assert.assertEquals("ERR syntax error", limitMissingCount.message());
 
-            RespError negativeOffset = (RespError) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0"), b("1"), b("LIMIT"), b("-1"), b("1")));
+            ReplyError negativeOffset = (ReplyError) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0"), b("1"), b("LIMIT"), b("-1"), b("1")));
             Assert.assertEquals("ERR value is not an integer or out of range", negativeOffset.message());
 
-            RespError negativeCount = (RespError) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0"), b("-1")));
+            ReplyError negativeCount = (ReplyError) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0"), b("-1")));
             Assert.assertEquals("ERR value is not an integer or out of range", negativeCount.message());
 
-            RespError badCount = (RespError) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0"), b("x")));
+            ReplyError badCount = (ReplyError) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), b("k"), b("1"), b("0"), b("LIMIT"), b("0"), b("x")));
             Assert.assertEquals("ERR value is not an integer or out of range", badCount.message());
 
             }
         });
     }
 
-    private static void assertWrongType(RespObject obj) {
-        Assert.assertTrue(obj instanceof RespError);
-        Assert.assertTrue(((RespError) obj).message().startsWith("WRONGTYPE"));
+    private static void assertWrongType(ReplyObject obj) {
+        Assert.assertTrue(obj instanceof ReplyError);
+        Assert.assertTrue(((ReplyError) obj).message().startsWith("WRONGTYPE"));
     }
 }

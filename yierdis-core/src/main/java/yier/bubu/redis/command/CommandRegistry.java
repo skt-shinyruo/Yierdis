@@ -1,7 +1,7 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -14,7 +14,7 @@ import java.util.Set;
  * Command name to handler registry (SSOT) for the server command processor.
  * <p>
  * Runtime lookup is allocation-free: the registry builds an open-addressed hash table at registration time,
- * then matches commands directly against the request {@link RespCommand} bytes (ASCII case-insensitive).
+ * then matches commands directly against the request {@link Command} bytes (ASCII case-insensitive).
  */
 final class CommandRegistry {
     private static final int MIN_TABLE_SIZE = 16;
@@ -26,7 +26,7 @@ final class CommandRegistry {
 
     @FunctionalInterface
     interface CommandHandler {
-        void execute(RespCommand cmd, RespWriter out);
+        void execute(Command cmd, ReplyWriter out);
     }
 
     private static final class Entry {
@@ -67,7 +67,7 @@ final class CommandRegistry {
         insert(new Entry(ascii, hash, handler));
     }
 
-    CommandHandler find(RespCommand cmd) {
+    CommandHandler find(Command cmd) {
         if (cmd == null || cmd.argc() <= 0) {
             return null;
         }
@@ -164,7 +164,7 @@ final class CommandRegistry {
         return bytes;
     }
 
-    private static boolean asciiEqualsIgnoreCase(RespCommand cmd, int argIndex, byte[] upperAscii) {
+    private static boolean asciiEqualsIgnoreCase(Command cmd, int argIndex, byte[] upperAscii) {
         if (cmd.len(argIndex) != upperAscii.length) {
             return false;
         }
@@ -180,7 +180,7 @@ final class CommandRegistry {
         return true;
     }
 
-    private static long hashUpperAscii(RespCommand cmd, int argIndex, int len) {
+    private static long hashUpperAscii(Command cmd, int argIndex, int len) {
         long h = FNV64_OFFSET_BASIS;
         for (int i = 0; i < len; i++) {
             int b = cmd.byteAt(argIndex, i) & 0xFF;

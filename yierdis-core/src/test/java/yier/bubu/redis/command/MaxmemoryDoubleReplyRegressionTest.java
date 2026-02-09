@@ -4,9 +4,9 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyObject;
 
 import java.util.Arrays;
 
@@ -23,15 +23,15 @@ public class MaxmemoryDoubleReplyRegressionTest {
             db.bindToCurrentThread();
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
-                RespObject reply = client.execute(Arrays.asList(
+                ReplyObject reply = client.execute(Arrays.asList(
                         b("APPEND"),
                         b("k"),
                         b("0123456789")
                 ));
-                Assert.assertTrue(reply instanceof RespError);
+                Assert.assertTrue(reply instanceof ReplyError);
                 Assert.assertEquals(
                         "OOM command not allowed when used memory > 'maxmemory'.",
-                        ((RespError) reply).message()
+                        ((ReplyError) reply).message()
                 );
             }
         } finally {
@@ -39,4 +39,3 @@ public class MaxmemoryDoubleReplyRegressionTest {
         }
     }
 }
-

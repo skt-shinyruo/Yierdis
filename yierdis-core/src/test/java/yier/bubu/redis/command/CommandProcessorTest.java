@@ -2,12 +2,13 @@ package yier.bubu.redis.command;
 
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespObject;
-import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.testutil.ReplyArray;
+import yier.bubu.redis.testutil.ReplyBulkString;
+import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplyNull;
+import yier.bubu.redis.testutil.ReplyObject;
+import yier.bubu.redis.testutil.ReplySimpleString;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -32,35 +33,35 @@ public class CommandProcessorTest {
                     b("SET"),
                     key,
                     value
-            )) instanceof RespSimpleString);
+            )) instanceof ReplySimpleString);
 
-            RespObject get = client.execute(Arrays.asList(
+            ReplyObject get = client.execute(Arrays.asList(
                     b("GET"),
                     key
             ));
-            Assert.assertTrue(get instanceof RespBulkString);
-            Assert.assertArrayEquals(value, ((RespBulkString) get).data());
+            Assert.assertTrue(get instanceof ReplyBulkString);
+            Assert.assertArrayEquals(value, ((ReplyBulkString) get).data());
 
-            RespInteger len = (RespInteger) client.execute(Arrays.asList(
+            ReplyInteger len = (ReplyInteger) client.execute(Arrays.asList(
                     b("STRLEN"),
                     key
             ));
             Assert.assertEquals(value.length, len.value());
 
             byte[] extra = new byte[]{1, 2, 3};
-            RespInteger newLen = (RespInteger) client.execute(Arrays.asList(
+            ReplyInteger newLen = (ReplyInteger) client.execute(Arrays.asList(
                     b("APPEND"),
                     key,
                     extra
             ));
             Assert.assertEquals(value.length + extra.length, newLen.value());
 
-            RespObject get2 = client.execute(Arrays.asList(
+            ReplyObject get2 = client.execute(Arrays.asList(
                     b("GET"),
                     key
             ));
-            Assert.assertTrue(get2 instanceof RespBulkString);
-            Assert.assertArrayEquals(new byte[]{0, (byte) 0xFF, 'a', '\n', 1, 2, 3}, ((RespBulkString) get2).data());
+            Assert.assertTrue(get2 instanceof ReplyBulkString);
+            Assert.assertArrayEquals(new byte[]{0, (byte) 0xFF, 'a', '\n', 1, 2, 3}, ((ReplyBulkString) get2).data());
             }
         });
     }
@@ -71,15 +72,15 @@ public class CommandProcessorTest {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
-            Assert.assertTrue(client.execute(cmd("SET", "k", "1")) instanceof RespSimpleString);
+            Assert.assertTrue(client.execute(cmd("SET", "k", "1")) instanceof ReplySimpleString);
 
-            RespInteger len = (RespInteger) client.execute(Arrays.asList(b("APPEND"), b("k"), b("0")));
+            ReplyInteger len = (ReplyInteger) client.execute(Arrays.asList(b("APPEND"), b("k"), b("0")));
             Assert.assertEquals(2, len.value());
 
-            RespInteger incr = (RespInteger) client.execute(Arrays.asList(b("INCR"), b("k")));
+            ReplyInteger incr = (ReplyInteger) client.execute(Arrays.asList(b("INCR"), b("k")));
             Assert.assertEquals(11, incr.value());
 
-            RespBulkString get = (RespBulkString) client.execute(Arrays.asList(b("GET"), b("k")));
+            ReplyBulkString get = (ReplyBulkString) client.execute(Arrays.asList(b("GET"), b("k")));
             Assert.assertEquals("11", get.asString());
             }
         });
@@ -107,21 +108,21 @@ public class CommandProcessorTest {
             byte[] key = new byte[]{0, (byte) 0xFF, 'k'};
             byte[] value = new byte[]{1, 2, 3};
 
-            Assert.assertTrue(client.execute(Arrays.asList(b("SET"), key, value)) instanceof RespSimpleString);
+            Assert.assertTrue(client.execute(Arrays.asList(b("SET"), key, value)) instanceof ReplySimpleString);
 
-            RespBulkString get = (RespBulkString) client.execute(Arrays.asList(b("GET"), key));
+            ReplyBulkString get = (ReplyBulkString) client.execute(Arrays.asList(b("GET"), key));
             Assert.assertArrayEquals(value, get.data());
 
-            RespInteger exists1 = (RespInteger) client.execute(Arrays.asList(b("EXISTS"), key));
+            ReplyInteger exists1 = (ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key));
             Assert.assertEquals(1, exists1.value());
 
-            RespArray keys = (RespArray) client.execute(Arrays.asList(b("KEYS"), b("*")));
+            ReplyArray keys = (ReplyArray) client.execute(Arrays.asList(b("KEYS"), b("*")));
             Assert.assertTrue(containsBytes(keys, key));
 
-            RespInteger del = (RespInteger) client.execute(Arrays.asList(b("DEL"), key));
+            ReplyInteger del = (ReplyInteger) client.execute(Arrays.asList(b("DEL"), key));
             Assert.assertEquals(1, del.value());
 
-            RespInteger exists0 = (RespInteger) client.execute(Arrays.asList(b("EXISTS"), key));
+            ReplyInteger exists0 = (ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key));
             Assert.assertEquals(0, exists0.value());
             }
         });
@@ -143,7 +144,7 @@ public class CommandProcessorTest {
             client.execute(Arrays.asList(b("SET"), k3, v));
 
             // Prefix match: 0x00 + '*'
-            RespArray prefix = (RespArray) client.execute(Arrays.asList(
+            ReplyArray prefix = (ReplyArray) client.execute(Arrays.asList(
                     b("KEYS"),
                     new byte[]{0, '*'}
             ));
@@ -152,7 +153,7 @@ public class CommandProcessorTest {
             Assert.assertTrue(containsBytes(prefix, k2));
 
             // Exactly 2 bytes: 0x00 + '?'
-            RespArray oneByte = (RespArray) client.execute(Arrays.asList(
+            ReplyArray oneByte = (ReplyArray) client.execute(Arrays.asList(
                     b("KEYS"),
                     new byte[]{0, '?'}
             ));
@@ -184,37 +185,37 @@ public class CommandProcessorTest {
             client.execute(Arrays.asList(b("SET"), kQ, v));
             client.execute(Arrays.asList(b("SET"), kLbracket, v));
 
-            RespArray ab = (RespArray) client.execute(cmd("KEYS", "[ab]*"));
+            ReplyArray ab = (ReplyArray) client.execute(cmd("KEYS", "[ab]*"));
             Assert.assertEquals(2, ab.values().size());
             Assert.assertTrue(containsBytes(ab, ka1));
             Assert.assertTrue(containsBytes(ab, kb1));
 
-            RespArray aToC = (RespArray) client.execute(cmd("KEYS", "[a-c]*"));
+            ReplyArray aToC = (ReplyArray) client.execute(cmd("KEYS", "[a-c]*"));
             Assert.assertEquals(3, aToC.values().size());
             Assert.assertTrue(containsBytes(aToC, ka1));
             Assert.assertTrue(containsBytes(aToC, kb1));
             Assert.assertTrue(containsBytes(aToC, kc1));
 
-            RespArray notA = (RespArray) client.execute(cmd("KEYS", "[^a]*"));
+            ReplyArray notA = (ReplyArray) client.execute(cmd("KEYS", "[^a]*"));
             Assert.assertTrue(containsBytes(notA, kb1));
             Assert.assertTrue(containsBytes(notA, kc1));
             Assert.assertFalse(containsBytes(notA, ka1));
 
             // Escapes: "\*" "\?" "\[" should match literal '*', '?', '['.
-            RespArray stars = (RespArray) client.execute(cmd("KEYS", "\\*"));
+            ReplyArray stars = (ReplyArray) client.execute(cmd("KEYS", "\\*"));
             Assert.assertEquals(1, stars.values().size());
             Assert.assertTrue(containsBytes(stars, kStar));
 
-            RespArray qs = (RespArray) client.execute(cmd("KEYS", "\\?"));
+            ReplyArray qs = (ReplyArray) client.execute(cmd("KEYS", "\\?"));
             Assert.assertEquals(1, qs.values().size());
             Assert.assertTrue(containsBytes(qs, kQ));
 
-            RespArray lbrackets = (RespArray) client.execute(cmd("KEYS", "\\["));
+            ReplyArray lbrackets = (ReplyArray) client.execute(cmd("KEYS", "\\["));
             Assert.assertEquals(1, lbrackets.values().size());
             Assert.assertTrue(containsBytes(lbrackets, kLbracket));
 
             // Unclosed character classes are treated as literal '['.
-            RespArray literalLbracket = (RespArray) client.execute(cmd("KEYS", "["));
+            ReplyArray literalLbracket = (ReplyArray) client.execute(cmd("KEYS", "["));
             Assert.assertEquals(1, literalLbracket.values().size());
             Assert.assertTrue(containsBytes(literalLbracket, kLbracket));
             }
@@ -231,15 +232,15 @@ public class CommandProcessorTest {
 
             // Non-integer
             client.execute(Arrays.asList(b("SET"), key, new byte[]{'x'}));
-            RespObject err1 = client.execute(Arrays.asList(b("INCR"), key));
-            Assert.assertTrue(err1 instanceof RespError);
-            Assert.assertEquals("ERR value is not an integer or out of range", ((RespError) err1).message());
+            ReplyObject err1 = client.execute(Arrays.asList(b("INCR"), key));
+            Assert.assertTrue(err1 instanceof ReplyError);
+            Assert.assertEquals("ERR value is not an integer or out of range", ((ReplyError) err1).message());
 
             // Overflow
             client.execute(Arrays.asList(b("SET"), key, b(Long.toString(Long.MAX_VALUE))));
-            RespObject err2 = client.execute(Arrays.asList(b("INCR"), key));
-            Assert.assertTrue(err2 instanceof RespError);
-            Assert.assertEquals("ERR value is not an integer or out of range", ((RespError) err2).message());
+            ReplyObject err2 = client.execute(Arrays.asList(b("INCR"), key));
+            Assert.assertTrue(err2 instanceof ReplyError);
+            Assert.assertEquals("ERR value is not an integer or out of range", ((ReplyError) err2).message());
 
             }
         });
@@ -256,16 +257,16 @@ public class CommandProcessorTest {
 
             client.execute(Arrays.asList(b("SET"), key, value));
 
-            RespInteger expire = (RespInteger) client.execute(Arrays.asList(b("EXPIRE"), key, b("0")));
+            ReplyInteger expire = (ReplyInteger) client.execute(Arrays.asList(b("EXPIRE"), key, b("0")));
             Assert.assertEquals(1, expire.value());
 
-            RespInteger ttl = (RespInteger) client.execute(Arrays.asList(b("TTL"), key));
+            ReplyInteger ttl = (ReplyInteger) client.execute(Arrays.asList(b("TTL"), key));
             Assert.assertEquals(-2, ttl.value());
 
-            RespBulkString get = (RespBulkString) client.execute(Arrays.asList(b("GET"), key));
-            Assert.assertTrue(get.isNull());
+	            ReplyObject get = client.execute(Arrays.asList(b("GET"), key));
+	            Assert.assertTrue(get instanceof ReplyNull);
 
-            RespInteger exists = (RespInteger) client.execute(Arrays.asList(b("EXISTS"), key));
+            ReplyInteger exists = (ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key));
             Assert.assertEquals(0, exists.value());
 
             }
@@ -278,18 +279,18 @@ public class CommandProcessorTest {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
-            Assert.assertTrue(client.execute(cmd("SET", "a", "1")) instanceof RespSimpleString);
-            RespObject get = client.execute(cmd("GET", "a"));
-            Assert.assertEquals("1", ((RespBulkString) get).asString());
+            Assert.assertTrue(client.execute(cmd("SET", "a", "1")) instanceof ReplySimpleString);
+            ReplyObject get = client.execute(cmd("GET", "a"));
+            Assert.assertEquals("1", ((ReplyBulkString) get).asString());
 
-            RespObject incr = client.execute(cmd("INCR", "a"));
-            Assert.assertEquals(2, ((RespInteger) incr).value());
+            ReplyObject incr = client.execute(cmd("INCR", "a"));
+            Assert.assertEquals(2, ((ReplyInteger) incr).value());
 
-            RespObject expire = client.execute(cmd("EXPIRE", "a", "10"));
-            Assert.assertEquals(1, ((RespInteger) expire).value());
+            ReplyObject expire = client.execute(cmd("EXPIRE", "a", "10"));
+            Assert.assertEquals(1, ((ReplyInteger) expire).value());
 
-            RespObject ttl = client.execute(cmd("TTL", "a"));
-            Assert.assertTrue(((RespInteger) ttl).value() >= 0);
+            ReplyObject ttl = client.execute(cmd("TTL", "a"));
+            Assert.assertTrue(((ReplyInteger) ttl).value() >= 0);
 
             }
         });
@@ -305,14 +306,14 @@ public class CommandProcessorTest {
                 YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
                 try (FastTestClient client = new FastTestClient(processor)) {
 
-                RespObject pong = client.execute(cmd("ping"));
-                Assert.assertTrue(pong instanceof RespSimpleString);
-                Assert.assertEquals("PONG", ((RespSimpleString) pong).value());
+                ReplyObject pong = client.execute(cmd("ping"));
+                Assert.assertTrue(pong instanceof ReplySimpleString);
+                Assert.assertEquals("PONG", ((ReplySimpleString) pong).value());
 
                 client.execute(cmd("set", "a", "1"));
-                RespObject type = client.execute(cmd("type", "a"));
-                Assert.assertTrue(type instanceof RespSimpleString);
-                Assert.assertEquals("string", ((RespSimpleString) type).value());
+                ReplyObject type = client.execute(cmd("type", "a"));
+                Assert.assertTrue(type instanceof ReplySimpleString);
+                Assert.assertEquals("string", ((ReplySimpleString) type).value());
                 }
             });
         } finally {
@@ -326,14 +327,13 @@ public class CommandProcessorTest {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
-            Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof RespSimpleString);
-            RespObject res = client.execute(cmd("SET", "k", "v2", "NX"));
-            Assert.assertTrue(res instanceof RespBulkString);
-            Assert.assertTrue(((RespBulkString) res).isNull());
+	            Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
+	            ReplyObject res = client.execute(cmd("SET", "k", "v2", "NX"));
+	            Assert.assertTrue(res instanceof ReplyNull);
 
-            }
-        });
-    }
+	            }
+	        });
+	    }
 
     @Test
     public void wrongTypeReturnsError() {
@@ -342,27 +342,27 @@ public class CommandProcessorTest {
             try (FastTestClient client = new FastTestClient(processor)) {
 
             client.execute(cmd("SET", "a", "1"));
-            RespObject err = client.execute(cmd("LPUSH", "a", "x"));
-            Assert.assertTrue(err instanceof RespError);
-            Assert.assertTrue(((RespError) err).message().startsWith("WRONGTYPE"));
+            ReplyObject err = client.execute(cmd("LPUSH", "a", "x"));
+            Assert.assertTrue(err instanceof ReplyError);
+            Assert.assertTrue(((ReplyError) err).message().startsWith("WRONGTYPE"));
 
             }
         });
     }
 
     private static void assertBinarySafeRoundTrip(FastTestClient client, byte[] key, byte[] value) {
-        Assert.assertTrue(client.execute(Arrays.asList(b("SET"), key, value)) instanceof RespSimpleString);
+        Assert.assertTrue(client.execute(Arrays.asList(b("SET"), key, value)) instanceof ReplySimpleString);
 
-        RespBulkString get = (RespBulkString) client.execute(Arrays.asList(b("GET"), key));
+        ReplyBulkString get = (ReplyBulkString) client.execute(Arrays.asList(b("GET"), key));
         Assert.assertArrayEquals(value, get.data());
 
-        RespInteger len = (RespInteger) client.execute(Arrays.asList(b("STRLEN"), key));
+        ReplyInteger len = (ReplyInteger) client.execute(Arrays.asList(b("STRLEN"), key));
         Assert.assertEquals(value.length, len.value());
     }
 
-    private static boolean containsBytes(RespArray array, byte[] expected) {
-        for (RespObject o : array.values()) {
-            if (o instanceof RespBulkString && Arrays.equals(expected, ((RespBulkString) o).data())) {
+    private static boolean containsBytes(ReplyArray array, byte[] expected) {
+        for (ReplyObject o : array.values()) {
+            if (o instanceof ReplyBulkString && Arrays.equals(expected, ((ReplyBulkString) o).data())) {
                 return true;
             }
         }

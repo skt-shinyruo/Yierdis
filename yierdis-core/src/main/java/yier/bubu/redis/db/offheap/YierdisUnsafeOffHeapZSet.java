@@ -1,8 +1,9 @@
 package yier.bubu.redis.db.offheap;
 
-import yier.bubu.redis.db.YierdisBulkStringOutput;
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
+import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.protocol.ReplySink;
+import yier.bubu.redis.ops.YierdisCommandException;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -44,17 +45,17 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
     }
 
     public List<byte[]> zrange(long start, long stop, boolean withScores) {
-        int count = zrangeReplyCount(start, stop, withScores);
+        int count = zrangeCount(start, stop, withScores);
         if (count == 0) {
             return new ArrayList<>();
         }
 
         List<byte[]> out = new ArrayList<>(count);
-        zrangeReplyInto(start, stop, withScores, new ListBulkOutput(out));
+        zrangeWriteTo(start, stop, withScores, new ListBulkOutput(out));
         return out;
     }
 
-    public void zrangeReplyInto(long start, long stop, boolean withScores, YierdisBulkStringOutput out) {
+    public void zrangeWriteTo(long start, long stop, boolean withScores, ReplySink out) {
         Objects.requireNonNull(out, "out");
         int size = size();
         if (size == 0) {
@@ -74,7 +75,7 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         }
     }
 
-    public int zrangeReplyCount(long start, long stop, boolean withScores) {
+    public int zrangeCount(long start, long stop, boolean withScores) {
         int size = size();
         if (size == 0) {
             return 0;
@@ -88,17 +89,17 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
     }
 
     public List<byte[]> zrevrange(long start, long stop, boolean withScores) {
-        int count = zrevrangeReplyCount(start, stop, withScores);
+        int count = zrevrangeCount(start, stop, withScores);
         if (count == 0) {
             return new ArrayList<>();
         }
 
         List<byte[]> out = new ArrayList<>(count);
-        zrevrangeReplyInto(start, stop, withScores, new ListBulkOutput(out));
+        zrevrangeWriteTo(start, stop, withScores, new ListBulkOutput(out));
         return out;
     }
 
-    public void zrevrangeReplyInto(long start, long stop, boolean withScores, YierdisBulkStringOutput out) {
+    public void zrevrangeWriteTo(long start, long stop, boolean withScores, ReplySink out) {
         Objects.requireNonNull(out, "out");
         int size = size();
         if (size == 0) {
@@ -118,7 +119,7 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         }
     }
 
-    public int zrevrangeReplyCount(long start, long stop, boolean withScores) {
+    public int zrevrangeCount(long start, long stop, boolean withScores) {
         int size = size();
         if (size == 0) {
             return 0;
@@ -132,22 +133,22 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
     }
 
     public List<byte[]> zrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        int replyCount = zrangeByScoreReplyCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        int replyCount = zrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
         if (replyCount == 0) {
             return new ArrayList<>();
         }
         List<byte[]> out = new ArrayList<>(replyCount);
-        zrangeByScoreReplyInto(min, minExclusive, max, maxExclusive, withScores, offset, count, new ListBulkOutput(out));
+        zrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, new ListBulkOutput(out));
         return out;
     }
 
-    public int zrangeByScoreReplyCount(double min,
-                                      boolean minExclusive,
-                                      double max,
-                                      boolean maxExclusive,
-                                      boolean withScores,
-                                      long offset,
-                                      long count) {
+    public int zrangeByScoreCount(double min,
+                                 boolean minExclusive,
+                                 double max,
+                                 boolean maxExclusive,
+                                 boolean withScores,
+                                 long offset,
+                                 long count) {
         if (count <= 0) {
             return 0;
         }
@@ -184,14 +185,14 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         return withScores ? emitted * 2 : emitted;
     }
 
-    public void zrangeByScoreReplyInto(double min,
-                                       boolean minExclusive,
-                                       double max,
-                                       boolean maxExclusive,
-                                       boolean withScores,
-                                       long offset,
-                                       long count,
-                                       YierdisBulkStringOutput out) {
+    public void zrangeByScoreWriteTo(double min,
+                                     boolean minExclusive,
+                                     double max,
+                                     boolean maxExclusive,
+                                     boolean withScores,
+                                     long offset,
+                                     long count,
+                                     ReplySink out) {
         Objects.requireNonNull(out, "out");
         if (count <= 0) {
             return;
@@ -229,22 +230,22 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
     }
 
     public List<byte[]> zrevrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        int replyCount = zrevrangeByScoreReplyCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        int replyCount = zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
         if (replyCount == 0) {
             return new ArrayList<>();
         }
         List<byte[]> out = new ArrayList<>(replyCount);
-        zrevrangeByScoreReplyInto(min, minExclusive, max, maxExclusive, withScores, offset, count, new ListBulkOutput(out));
+        zrevrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, new ListBulkOutput(out));
         return out;
     }
 
-    public int zrevrangeByScoreReplyCount(double min,
-                                         boolean minExclusive,
-                                         double max,
-                                         boolean maxExclusive,
-                                         boolean withScores,
-                                         long offset,
-                                         long count) {
+    public int zrevrangeByScoreCount(double min,
+                                    boolean minExclusive,
+                                    double max,
+                                    boolean maxExclusive,
+                                    boolean withScores,
+                                    long offset,
+                                    long count) {
         if (count <= 0) {
             return 0;
         }
@@ -283,14 +284,14 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         return withScores ? emitted * 2 : emitted;
     }
 
-    public void zrevrangeByScoreReplyInto(double min,
-                                          boolean minExclusive,
-                                          double max,
-                                          boolean maxExclusive,
-                                          boolean withScores,
-                                          long offset,
-                                          long count,
-                                          YierdisBulkStringOutput out) {
+    public void zrevrangeByScoreWriteTo(double min,
+                                        boolean minExclusive,
+                                        double max,
+                                        boolean maxExclusive,
+                                        boolean withScores,
+                                        long offset,
+                                        long count,
+                                        ReplySink out) {
         Objects.requireNonNull(out, "out");
         if (count <= 0) {
             return;
@@ -491,7 +492,7 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         byMember.removeByPtr(memberPtr, memberLen, memberHash);
     }
 
-    private void writeNodeTo(YierdisBulkStringOutput out, long node, boolean withScores) {
+    private void writeNodeTo(ReplySink out, long node, boolean withScores) {
         out.bulkString(new YierdisUnsafeOffHeapRawSlice(allocator, byScore.memberPtr(node), byScore.memberLen(node)));
         if (!withScores) {
             return;
@@ -532,15 +533,15 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         try {
             v = Double.parseDouble(new String(s, StandardCharsets.US_ASCII));
         } catch (NumberFormatException e) {
-            throw new YierdisDb.YierdisCommandException("ERR value is not a valid float");
+            throw new YierdisCommandException("ERR value is not a valid float");
         }
         if (Double.isNaN(v) || Double.isInfinite(v)) {
-            throw new YierdisDb.YierdisCommandException("ERR value is not a valid float");
+            throw new YierdisCommandException("ERR value is not a valid float");
         }
         return v;
     }
 
-    private static void writeScoreTo(YierdisBulkStringOutput out, double score) {
+    private static void writeScoreTo(ReplySink out, double score) {
         if (score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE) {
             out.bulkStringLongAscii((long) score);
             return;
@@ -559,11 +560,20 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         }
     }
 
-    private static final class ListBulkOutput implements YierdisBulkStringOutput {
+    private static final class ListBulkOutput implements ReplySink {
         private final List<byte[]> out;
 
         private ListBulkOutput(List<byte[]> out) {
             this.out = out;
+        }
+
+        @Override
+        public void bulkString(byte[] data) {
+            if (data == null) {
+                out.add(null);
+                return;
+            }
+            bulkString(data, 0, data.length);
         }
 
         @Override
@@ -578,7 +588,7 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         }
 
         @Override
-        public void bulkString(yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice slice) {
+        public void bulkString(BytesSlice slice) {
             if (slice == null) {
                 out.add(null);
                 return;
@@ -586,11 +596,6 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
             byte[] copy = new byte[slice.length()];
             slice.getBytes(0, copy, 0, copy.length);
             out.add(copy);
-        }
-
-        @Override
-        public void bulkStringNull() {
-            out.add(null);
         }
 
         @Override

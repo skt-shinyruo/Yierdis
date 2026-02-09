@@ -5,11 +5,10 @@ import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespObject;
-import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.testutil.ReplyArray;
+import yier.bubu.redis.testutil.ReplyBulkString;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -30,29 +29,29 @@ public class ListCommandTest {
             byte[] second = new byte[]{1};
             byte[] c = new byte[]{2};
 
-            RespInteger len = (RespInteger) client.execute(Arrays.asList(b("RPUSH"), key, a, second, c));
+            ReplyInteger len = (ReplyInteger) client.execute(Arrays.asList(b("RPUSH"), key, a, second, c));
             Assert.assertEquals(3, len.value());
 
-            RespArray popped2 = (RespArray) client.execute(Arrays.asList(b("LPOP"), key, b("2")));
+            ReplyArray popped2 = (ReplyArray) client.execute(Arrays.asList(b("LPOP"), key, b("2")));
             Assert.assertEquals(2, popped2.values().size());
-            Assert.assertArrayEquals(a, ((RespBulkString) popped2.values().get(0)).data());
-            Assert.assertArrayEquals(second, ((RespBulkString) popped2.values().get(1)).data());
+            Assert.assertArrayEquals(a, ((ReplyBulkString) popped2.values().get(0)).data());
+            Assert.assertArrayEquals(second, ((ReplyBulkString) popped2.values().get(1)).data());
 
-            RespArray remaining = (RespArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("-1")));
+            ReplyArray remaining = (ReplyArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("-1")));
             Assert.assertEquals(1, remaining.values().size());
-            Assert.assertArrayEquals(c, ((RespBulkString) remaining.values().get(0)).data());
+            Assert.assertArrayEquals(c, ((ReplyBulkString) remaining.values().get(0)).data());
 
-            RespArray poppedAll = (RespArray) client.execute(Arrays.asList(b("RPOP"), key, b("10")));
+            ReplyArray poppedAll = (ReplyArray) client.execute(Arrays.asList(b("RPOP"), key, b("10")));
             Assert.assertEquals(1, poppedAll.values().size());
-            Assert.assertArrayEquals(c, ((RespBulkString) poppedAll.values().get(0)).data());
+            Assert.assertArrayEquals(c, ((ReplyBulkString) poppedAll.values().get(0)).data());
 
-            RespInteger exists = (RespInteger) client.execute(Arrays.asList(b("EXISTS"), key));
+            ReplyInteger exists = (ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key));
             Assert.assertEquals(0, exists.value());
 
-            RespSimpleString type = (RespSimpleString) client.execute(Arrays.asList(b("TYPE"), key));
+            ReplySimpleString type = (ReplySimpleString) client.execute(Arrays.asList(b("TYPE"), key));
             Assert.assertEquals("none", type.value());
 
-            RespArray rangeEmpty = (RespArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("-1")));
+            ReplyArray rangeEmpty = (ReplyArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("-1")));
             Assert.assertTrue(rangeEmpty.values().isEmpty());
             }
         });
@@ -67,27 +66,27 @@ public class ListCommandTest {
             byte[] key = b("mylist");
             client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b"), b("c")));
 
-            RespArray all = (RespArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("-1")));
+            ReplyArray all = (ReplyArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("-1")));
             Assert.assertEquals(3, all.values().size());
-            Assert.assertEquals("a", ((RespBulkString) all.values().get(0)).asString());
-            Assert.assertEquals("b", ((RespBulkString) all.values().get(1)).asString());
-            Assert.assertEquals("c", ((RespBulkString) all.values().get(2)).asString());
+            Assert.assertEquals("a", ((ReplyBulkString) all.values().get(0)).asString());
+            Assert.assertEquals("b", ((ReplyBulkString) all.values().get(1)).asString());
+            Assert.assertEquals("c", ((ReplyBulkString) all.values().get(2)).asString());
 
-            RespArray clampStop = (RespArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("10")));
+            ReplyArray clampStop = (ReplyArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("10")));
             Assert.assertEquals(3, clampStop.values().size());
 
-            RespArray tail = (RespArray) client.execute(Arrays.asList(b("LRANGE"), key, b("-2"), b("-1")));
+            ReplyArray tail = (ReplyArray) client.execute(Arrays.asList(b("LRANGE"), key, b("-2"), b("-1")));
             Assert.assertEquals(2, tail.values().size());
-            Assert.assertEquals("b", ((RespBulkString) tail.values().get(0)).asString());
-            Assert.assertEquals("c", ((RespBulkString) tail.values().get(1)).asString());
+            Assert.assertEquals("b", ((ReplyBulkString) tail.values().get(0)).asString());
+            Assert.assertEquals("c", ((ReplyBulkString) tail.values().get(1)).asString());
 
-            RespArray startTooLarge = (RespArray) client.execute(Arrays.asList(b("LRANGE"), key, b("5"), b("10")));
+            ReplyArray startTooLarge = (ReplyArray) client.execute(Arrays.asList(b("LRANGE"), key, b("5"), b("10")));
             Assert.assertTrue(startTooLarge.values().isEmpty());
 
-            RespArray startAfterStop = (RespArray) client.execute(Arrays.asList(b("LRANGE"), key, b("2"), b("1")));
+            ReplyArray startAfterStop = (ReplyArray) client.execute(Arrays.asList(b("LRANGE"), key, b("2"), b("1")));
             Assert.assertTrue(startAfterStop.values().isEmpty());
 
-            RespArray hugeNegativeStart = (RespArray) client.execute(Arrays.asList(b("LRANGE"), key, b("-10"), b("-1")));
+            ReplyArray hugeNegativeStart = (ReplyArray) client.execute(Arrays.asList(b("LRANGE"), key, b("-10"), b("-1")));
             Assert.assertEquals(3, hugeNegativeStart.values().size());
             }
         });
@@ -109,20 +108,20 @@ public class ListCommandTest {
                 args.add(b("v" + i));
             }
 
-            RespInteger len = (RespInteger) client.execute(args);
+            ReplyInteger len = (ReplyInteger) client.execute(args);
             Assert.assertEquals(n, len.value());
 
-            RespArray range = (RespArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("-1")));
+            ReplyArray range = (ReplyArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("-1")));
             Assert.assertEquals(n, range.values().size());
-            Assert.assertEquals("v0", ((RespBulkString) range.values().get(0)).asString());
-            Assert.assertEquals("v" + (n - 1), ((RespBulkString) range.values().get(n - 1)).asString());
+            Assert.assertEquals("v0", ((ReplyBulkString) range.values().get(0)).asString());
+            Assert.assertEquals("v" + (n - 1), ((ReplyBulkString) range.values().get(n - 1)).asString());
 
-            RespArray popped = (RespArray) client.execute(Arrays.asList(b("LPOP"), key, b("2")));
+            ReplyArray popped = (ReplyArray) client.execute(Arrays.asList(b("LPOP"), key, b("2")));
             Assert.assertEquals(2, popped.values().size());
-            Assert.assertEquals("v0", ((RespBulkString) popped.values().get(0)).asString());
-            Assert.assertEquals("v1", ((RespBulkString) popped.values().get(1)).asString());
+            Assert.assertEquals("v0", ((ReplyBulkString) popped.values().get(0)).asString());
+            Assert.assertEquals("v1", ((ReplyBulkString) popped.values().get(1)).asString());
 
-            RespBulkString last = (RespBulkString) client.execute(Arrays.asList(b("RPOP"), key));
+            ReplyBulkString last = (ReplyBulkString) client.execute(Arrays.asList(b("RPOP"), key));
             Assert.assertEquals("v" + (n - 1), last.asString());
             }
         });
@@ -137,7 +136,7 @@ public class ListCommandTest {
             byte[] key = b("list:huge-index");
             client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b"), b("c")));
 
-            RespArray empty = (RespArray) client.execute(Arrays.asList(
+            ReplyArray empty = (ReplyArray) client.execute(Arrays.asList(
                     b("LRANGE"), key,
                     b("9223372036854775807"), b("9223372036854775807")
             ));
@@ -155,13 +154,13 @@ public class ListCommandTest {
             byte[] key = b("list:huge-count");
             client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b"), b("c")));
 
-            RespArray popped = (RespArray) client.execute(Arrays.asList(b("RPOP"), key, b("9223372036854775807")));
+            ReplyArray popped = (ReplyArray) client.execute(Arrays.asList(b("RPOP"), key, b("9223372036854775807")));
             Assert.assertEquals(3, popped.values().size());
-            Assert.assertEquals("c", ((RespBulkString) popped.values().get(0)).asString());
-            Assert.assertEquals("b", ((RespBulkString) popped.values().get(1)).asString());
-            Assert.assertEquals("a", ((RespBulkString) popped.values().get(2)).asString());
+            Assert.assertEquals("c", ((ReplyBulkString) popped.values().get(0)).asString());
+            Assert.assertEquals("b", ((ReplyBulkString) popped.values().get(1)).asString());
+            Assert.assertEquals("a", ((ReplyBulkString) popped.values().get(2)).asString());
 
-            Assert.assertEquals(0L, ((RespInteger) client.execute(Arrays.asList(b("EXISTS"), key))).value());
+            Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key))).value());
             }
         });
     }

@@ -3,14 +3,13 @@ package yier.bubu.redis.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespObject;
-import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.testutil.ReplyArray;
+import yier.bubu.redis.testutil.ReplyBulkString;
+import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplyObject;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -27,17 +26,17 @@ public class ZSetCommandTest {
             try {
                 byte[] key = b("z");
 
-                RespObject err1 = client.execute(Arrays.asList(b("ZADD"), key, b("NaN"), b("a")));
-                Assert.assertTrue(err1 instanceof RespError);
-                Assert.assertEquals("ERR value is not a valid float", ((RespError) err1).message());
+                ReplyObject err1 = client.execute(Arrays.asList(b("ZADD"), key, b("NaN"), b("a")));
+                Assert.assertTrue(err1 instanceof ReplyError);
+                Assert.assertEquals("ERR value is not a valid float", ((ReplyError) err1).message());
 
-                RespObject err2 = client.execute(Arrays.asList(b("ZADD"), key, b("Infinity"), b("a")));
-                Assert.assertTrue(err2 instanceof RespError);
-                Assert.assertEquals("ERR value is not a valid float", ((RespError) err2).message());
+                ReplyObject err2 = client.execute(Arrays.asList(b("ZADD"), key, b("Infinity"), b("a")));
+                Assert.assertTrue(err2 instanceof ReplyError);
+                Assert.assertEquals("ERR value is not a valid float", ((ReplyError) err2).message());
 
-                RespObject err3 = client.execute(Arrays.asList(b("ZADD"), key, b("nope"), b("a")));
-                Assert.assertTrue(err3 instanceof RespError);
-                Assert.assertEquals("ERR value is not a valid float", ((RespError) err3).message());
+                ReplyObject err3 = client.execute(Arrays.asList(b("ZADD"), key, b("nope"), b("a")));
+                Assert.assertTrue(err3 instanceof ReplyError);
+                Assert.assertEquals("ERR value is not a valid float", ((ReplyError) err3).message());
             } finally {
                 client.close();
             }
@@ -57,7 +56,7 @@ public class ZSetCommandTest {
         byte[] m3 = new byte[]{0, 1};
         byte[] m4 = new byte[]{(byte) 0xFF};
 
-        RespInteger added = (RespInteger) client.execute(Arrays.asList(
+        ReplyInteger added = (ReplyInteger) client.execute(Arrays.asList(
                 b("ZADD"),
                 key,
                 b("1"), m4,
@@ -67,30 +66,30 @@ public class ZSetCommandTest {
         ));
         Assert.assertEquals(4, added.value());
 
-        RespArray all = (RespArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
+        ReplyArray all = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
         Assert.assertEquals(4, all.values().size());
-        Assert.assertArrayEquals(m1, ((RespBulkString) all.values().get(0)).data());
-        Assert.assertArrayEquals(m2, ((RespBulkString) all.values().get(1)).data());
-        Assert.assertArrayEquals(m3, ((RespBulkString) all.values().get(2)).data());
-        Assert.assertArrayEquals(m4, ((RespBulkString) all.values().get(3)).data());
+        Assert.assertArrayEquals(m1, ((ReplyBulkString) all.values().get(0)).data());
+        Assert.assertArrayEquals(m2, ((ReplyBulkString) all.values().get(1)).data());
+        Assert.assertArrayEquals(m3, ((ReplyBulkString) all.values().get(2)).data());
+        Assert.assertArrayEquals(m4, ((ReplyBulkString) all.values().get(3)).data());
 
-        RespArray withScores = (RespArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("1"), b("WITHSCORES")));
+        ReplyArray withScores = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("1"), b("WITHSCORES")));
         Assert.assertEquals(4, withScores.values().size());
-        Assert.assertArrayEquals(m1, ((RespBulkString) withScores.values().get(0)).data());
-        Assert.assertEquals("1", ((RespBulkString) withScores.values().get(1)).asString());
-        Assert.assertArrayEquals(m2, ((RespBulkString) withScores.values().get(2)).data());
-        Assert.assertEquals("1", ((RespBulkString) withScores.values().get(3)).asString());
+        Assert.assertArrayEquals(m1, ((ReplyBulkString) withScores.values().get(0)).data());
+        Assert.assertEquals("1", ((ReplyBulkString) withScores.values().get(1)).asString());
+        Assert.assertArrayEquals(m2, ((ReplyBulkString) withScores.values().get(2)).data());
+        Assert.assertEquals("1", ((ReplyBulkString) withScores.values().get(3)).asString());
 
-        RespArray startTooLarge = (RespArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("10"), b("20")));
+        ReplyArray startTooLarge = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("10"), b("20")));
         Assert.assertTrue(startTooLarge.values().isEmpty());
 
-        RespArray stopHuge = (RespArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("9223372036854775807")));
+        ReplyArray stopHuge = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("9223372036854775807")));
         Assert.assertEquals(4, stopHuge.values().size());
 
-        RespArray startHugeNegative = (RespArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("-9223372036854775808"), b("-1")));
+        ReplyArray startHugeNegative = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("-9223372036854775808"), b("-1")));
         Assert.assertEquals(4, startHugeNegative.values().size());
 
-        RespArray startAfterStop = (RespArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("2"), b("1")));
+        ReplyArray startAfterStop = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("2"), b("1")));
         Assert.assertTrue(startAfterStop.values().isEmpty());
 
             }
@@ -110,7 +109,7 @@ public class ZSetCommandTest {
         byte[] m3 = new byte[]{0, 1};
         byte[] m4 = new byte[]{(byte) 0xFF};
 
-        RespInteger added = (RespInteger) client.execute(Arrays.asList(
+        ReplyInteger added = (ReplyInteger) client.execute(Arrays.asList(
                 b("ZADD"),
                 key,
                 b("1"), m4,
@@ -120,26 +119,26 @@ public class ZSetCommandTest {
         ));
         Assert.assertEquals(4, added.value());
 
-        RespArray rev = (RespArray) client.execute(Arrays.asList(b("ZREVRANGE"), key, b("0"), b("-1")));
+        ReplyArray rev = (ReplyArray) client.execute(Arrays.asList(b("ZREVRANGE"), key, b("0"), b("-1")));
         Assert.assertEquals(4, rev.values().size());
-        Assert.assertArrayEquals(m4, ((RespBulkString) rev.values().get(0)).data());
-        Assert.assertArrayEquals(m3, ((RespBulkString) rev.values().get(1)).data());
-        Assert.assertArrayEquals(m2, ((RespBulkString) rev.values().get(2)).data());
-        Assert.assertArrayEquals(m1, ((RespBulkString) rev.values().get(3)).data());
+        Assert.assertArrayEquals(m4, ((ReplyBulkString) rev.values().get(0)).data());
+        Assert.assertArrayEquals(m3, ((ReplyBulkString) rev.values().get(1)).data());
+        Assert.assertArrayEquals(m2, ((ReplyBulkString) rev.values().get(2)).data());
+        Assert.assertArrayEquals(m1, ((ReplyBulkString) rev.values().get(3)).data());
 
-        RespArray revViaZrange = (RespArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1"), b("REV")));
+        ReplyArray revViaZrange = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1"), b("REV")));
         Assert.assertEquals(4, revViaZrange.values().size());
-        Assert.assertArrayEquals(m4, ((RespBulkString) revViaZrange.values().get(0)).data());
-        Assert.assertArrayEquals(m3, ((RespBulkString) revViaZrange.values().get(1)).data());
-        Assert.assertArrayEquals(m2, ((RespBulkString) revViaZrange.values().get(2)).data());
-        Assert.assertArrayEquals(m1, ((RespBulkString) revViaZrange.values().get(3)).data());
+        Assert.assertArrayEquals(m4, ((ReplyBulkString) revViaZrange.values().get(0)).data());
+        Assert.assertArrayEquals(m3, ((ReplyBulkString) revViaZrange.values().get(1)).data());
+        Assert.assertArrayEquals(m2, ((ReplyBulkString) revViaZrange.values().get(2)).data());
+        Assert.assertArrayEquals(m1, ((ReplyBulkString) revViaZrange.values().get(3)).data());
 
-        RespArray revWithScores = (RespArray) client.execute(Arrays.asList(b("ZREVRANGE"), key, b("0"), b("1"), b("WITHSCORES")));
+        ReplyArray revWithScores = (ReplyArray) client.execute(Arrays.asList(b("ZREVRANGE"), key, b("0"), b("1"), b("WITHSCORES")));
         Assert.assertEquals(4, revWithScores.values().size());
-        Assert.assertArrayEquals(m4, ((RespBulkString) revWithScores.values().get(0)).data());
-        Assert.assertEquals("1", ((RespBulkString) revWithScores.values().get(1)).asString());
-        Assert.assertArrayEquals(m3, ((RespBulkString) revWithScores.values().get(2)).data());
-        Assert.assertEquals("1", ((RespBulkString) revWithScores.values().get(3)).asString());
+        Assert.assertArrayEquals(m4, ((ReplyBulkString) revWithScores.values().get(0)).data());
+        Assert.assertEquals("1", ((ReplyBulkString) revWithScores.values().get(1)).asString());
+        Assert.assertArrayEquals(m3, ((ReplyBulkString) revWithScores.values().get(2)).data());
+        Assert.assertEquals("1", ((ReplyBulkString) revWithScores.values().get(3)).asString());
 
             }
         });
@@ -154,16 +153,16 @@ public class ZSetCommandTest {
         byte[] key = new byte[]{0, 'z'};
         byte[] member = new byte[]{0, 1, 2};
 
-        RespInteger added = (RespInteger) client.execute(Arrays.asList(b("ZADD"), key, b("1"), member));
+        ReplyInteger added = (ReplyInteger) client.execute(Arrays.asList(b("ZADD"), key, b("1"), member));
         Assert.assertEquals(1, added.value());
 
-        RespInteger removed = (RespInteger) client.execute(Arrays.asList(b("ZREM"), key, member));
+        ReplyInteger removed = (ReplyInteger) client.execute(Arrays.asList(b("ZREM"), key, member));
         Assert.assertEquals(1, removed.value());
 
-        RespInteger exists = (RespInteger) client.execute(Arrays.asList(b("EXISTS"), key));
+        ReplyInteger exists = (ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key));
         Assert.assertEquals(0, exists.value());
 
-        RespSimpleString type = (RespSimpleString) client.execute(Arrays.asList(b("TYPE"), key));
+        ReplySimpleString type = (ReplySimpleString) client.execute(Arrays.asList(b("TYPE"), key));
         Assert.assertEquals("none", type.value());
             }
 
@@ -187,18 +186,18 @@ public class ZSetCommandTest {
             args.add(b(String.format("m%03d", i))); // member
         }
 
-        RespInteger added = (RespInteger) client.execute(args);
+        ReplyInteger added = (ReplyInteger) client.execute(args);
         Assert.assertEquals(n, added.value());
 
-        RespArray range = (RespArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
+        ReplyArray range = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
         Assert.assertEquals(n, range.values().size());
-        Assert.assertEquals("m000", ((RespBulkString) range.values().get(0)).asString());
-        Assert.assertEquals("m128", ((RespBulkString) range.values().get(n - 1)).asString());
+        Assert.assertEquals("m000", ((ReplyBulkString) range.values().get(0)).asString());
+        Assert.assertEquals("m128", ((ReplyBulkString) range.values().get(n - 1)).asString());
 
-        RespArray rev = (RespArray) client.execute(Arrays.asList(b("ZREVRANGE"), key, b("0"), b("1")));
+        ReplyArray rev = (ReplyArray) client.execute(Arrays.asList(b("ZREVRANGE"), key, b("0"), b("1")));
         Assert.assertEquals(2, rev.values().size());
-        Assert.assertEquals("m128", ((RespBulkString) rev.values().get(0)).asString());
-        Assert.assertEquals("m127", ((RespBulkString) rev.values().get(1)).asString());
+        Assert.assertEquals("m128", ((ReplyBulkString) rev.values().get(0)).asString());
+        Assert.assertEquals("m127", ((ReplyBulkString) rev.values().get(1)).asString());
 
             }
         });
@@ -215,17 +214,17 @@ public class ZSetCommandTest {
         byte[] big = new byte[65];
         Arrays.fill(big, (byte) 'x');
 
-        RespInteger added = (RespInteger) client.execute(Arrays.asList(
+        ReplyInteger added = (ReplyInteger) client.execute(Arrays.asList(
                 b("ZADD"), key,
                 b("1"), big,
                 b("0"), small
         ));
         Assert.assertEquals(2, added.value());
 
-        RespArray range = (RespArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
+        ReplyArray range = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
         Assert.assertEquals(2, range.values().size());
-        Assert.assertArrayEquals(small, ((RespBulkString) range.values().get(0)).data());
-        Assert.assertArrayEquals(big, ((RespBulkString) range.values().get(1)).data());
+        Assert.assertArrayEquals(small, ((ReplyBulkString) range.values().get(0)).data());
+        Assert.assertArrayEquals(big, ((ReplyBulkString) range.values().get(1)).data());
 
             }
         });
@@ -246,39 +245,39 @@ public class ZSetCommandTest {
                 b("3"), b("d")
         ));
 
-        RespArray range = (RespArray) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("2"), b("3")));
+        ReplyArray range = (ReplyArray) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("2"), b("3")));
         Assert.assertEquals(3, range.values().size());
-        Assert.assertEquals("b", ((RespBulkString) range.values().get(0)).asString());
-        Assert.assertEquals("c", ((RespBulkString) range.values().get(1)).asString());
-        Assert.assertEquals("d", ((RespBulkString) range.values().get(2)).asString());
+        Assert.assertEquals("b", ((ReplyBulkString) range.values().get(0)).asString());
+        Assert.assertEquals("c", ((ReplyBulkString) range.values().get(1)).asString());
+        Assert.assertEquals("d", ((ReplyBulkString) range.values().get(2)).asString());
 
-        RespArray exMin = (RespArray) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("(2"), b("3")));
+        ReplyArray exMin = (ReplyArray) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("(2"), b("3")));
         Assert.assertEquals(1, exMin.values().size());
-        Assert.assertEquals("d", ((RespBulkString) exMin.values().get(0)).asString());
+        Assert.assertEquals("d", ((ReplyBulkString) exMin.values().get(0)).asString());
 
-        RespArray exMax = (RespArray) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("2"), b("(3")));
+        ReplyArray exMax = (ReplyArray) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("2"), b("(3")));
         Assert.assertEquals(2, exMax.values().size());
-        Assert.assertEquals("b", ((RespBulkString) exMax.values().get(0)).asString());
-        Assert.assertEquals("c", ((RespBulkString) exMax.values().get(1)).asString());
+        Assert.assertEquals("b", ((ReplyBulkString) exMax.values().get(0)).asString());
+        Assert.assertEquals("c", ((ReplyBulkString) exMax.values().get(1)).asString());
 
-        RespArray limit = (RespArray) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("2"), b("3"), b("LIMIT"), b("1"), b("1")));
+        ReplyArray limit = (ReplyArray) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("2"), b("3"), b("LIMIT"), b("1"), b("1")));
         Assert.assertEquals(1, limit.values().size());
-        Assert.assertEquals("c", ((RespBulkString) limit.values().get(0)).asString());
+        Assert.assertEquals("c", ((ReplyBulkString) limit.values().get(0)).asString());
 
-        RespArray withScores = (RespArray) client.execute(Arrays.asList(
+        ReplyArray withScores = (ReplyArray) client.execute(Arrays.asList(
                 b("ZRANGEBYSCORE"), key, b("-inf"), b("+inf"),
                 b("WITHSCORES"), b("LIMIT"), b("0"), b("2")
         ));
         Assert.assertEquals(4, withScores.values().size());
-        Assert.assertEquals("a", ((RespBulkString) withScores.values().get(0)).asString());
-        Assert.assertEquals("1", ((RespBulkString) withScores.values().get(1)).asString());
-        Assert.assertEquals("b", ((RespBulkString) withScores.values().get(2)).asString());
-        Assert.assertEquals("2", ((RespBulkString) withScores.values().get(3)).asString());
+        Assert.assertEquals("a", ((ReplyBulkString) withScores.values().get(0)).asString());
+        Assert.assertEquals("1", ((ReplyBulkString) withScores.values().get(1)).asString());
+        Assert.assertEquals("b", ((ReplyBulkString) withScores.values().get(2)).asString());
+        Assert.assertEquals("2", ((ReplyBulkString) withScores.values().get(3)).asString());
 
-        RespArray emptyWhenMinGreaterThanMax = (RespArray) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("3"), b("2")));
+        ReplyArray emptyWhenMinGreaterThanMax = (ReplyArray) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("3"), b("2")));
         Assert.assertEquals(0, emptyWhenMinGreaterThanMax.values().size());
 
-        RespArray emptyWhenCountZero = (RespArray) client.execute(Arrays.asList(
+        ReplyArray emptyWhenCountZero = (ReplyArray) client.execute(Arrays.asList(
                 b("ZRANGEBYSCORE"), key, b("-inf"), b("+inf"),
                 b("LIMIT"), b("0"), b("0")
         ));
@@ -302,17 +301,17 @@ public class ZSetCommandTest {
                 b("3"), b("c")
         ));
 
-        RespInteger removed = (RespInteger) client.execute(Arrays.asList(b("ZREMRANGEBYSCORE"), key, b("2"), b("3")));
+        ReplyInteger removed = (ReplyInteger) client.execute(Arrays.asList(b("ZREMRANGEBYSCORE"), key, b("2"), b("3")));
         Assert.assertEquals(2, removed.value());
 
-        RespArray remaining = (RespArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
+        ReplyArray remaining = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
         Assert.assertEquals(1, remaining.values().size());
-        Assert.assertEquals("a", ((RespBulkString) remaining.values().get(0)).asString());
+        Assert.assertEquals("a", ((ReplyBulkString) remaining.values().get(0)).asString());
 
-        RespInteger removedAll = (RespInteger) client.execute(Arrays.asList(b("ZREMRANGEBYSCORE"), key, b("-inf"), b("+inf")));
+        ReplyInteger removedAll = (ReplyInteger) client.execute(Arrays.asList(b("ZREMRANGEBYSCORE"), key, b("-inf"), b("+inf")));
         Assert.assertEquals(1, removedAll.value());
 
-        RespInteger exists = (RespInteger) client.execute(Arrays.asList(b("EXISTS"), key));
+        ReplyInteger exists = (ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key));
         Assert.assertEquals(0, exists.value());
 
             }
@@ -329,17 +328,17 @@ public class ZSetCommandTest {
         byte[] big = new byte[65];
         Arrays.fill(big, (byte) 'x');
 
-        RespInteger added = (RespInteger) client.execute(Arrays.asList(
+        ReplyInteger added = (ReplyInteger) client.execute(Arrays.asList(
                 b("ZADD"), key,
                 b("1"), big,
                 b("0"), b("a")
         ));
         Assert.assertEquals(2, added.value());
 
-        RespArray range = (RespArray) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("0"), b("1")));
+        ReplyArray range = (ReplyArray) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), key, b("0"), b("1")));
         Assert.assertEquals(2, range.values().size());
-        Assert.assertEquals("a", ((RespBulkString) range.values().get(0)).asString());
-        Assert.assertArrayEquals(big, ((RespBulkString) range.values().get(1)).data());
+        Assert.assertEquals("a", ((ReplyBulkString) range.values().get(0)).asString());
+        Assert.assertArrayEquals(big, ((ReplyBulkString) range.values().get(1)).data());
 
             }
         });
@@ -360,39 +359,39 @@ public class ZSetCommandTest {
                 b("3"), b("d")
         ));
 
-        RespArray range = (RespArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("3"), b("2")));
+        ReplyArray range = (ReplyArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("3"), b("2")));
         Assert.assertEquals(3, range.values().size());
-        Assert.assertEquals("d", ((RespBulkString) range.values().get(0)).asString());
-        Assert.assertEquals("c", ((RespBulkString) range.values().get(1)).asString());
-        Assert.assertEquals("b", ((RespBulkString) range.values().get(2)).asString());
+        Assert.assertEquals("d", ((ReplyBulkString) range.values().get(0)).asString());
+        Assert.assertEquals("c", ((ReplyBulkString) range.values().get(1)).asString());
+        Assert.assertEquals("b", ((ReplyBulkString) range.values().get(2)).asString());
 
-        RespArray exMax = (RespArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("(3"), b("2")));
+        ReplyArray exMax = (ReplyArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("(3"), b("2")));
         Assert.assertEquals(2, exMax.values().size());
-        Assert.assertEquals("c", ((RespBulkString) exMax.values().get(0)).asString());
-        Assert.assertEquals("b", ((RespBulkString) exMax.values().get(1)).asString());
+        Assert.assertEquals("c", ((ReplyBulkString) exMax.values().get(0)).asString());
+        Assert.assertEquals("b", ((ReplyBulkString) exMax.values().get(1)).asString());
 
-        RespArray limit = (RespArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("3"), b("2"), b("LIMIT"), b("1"), b("1")));
+        ReplyArray limit = (ReplyArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("3"), b("2"), b("LIMIT"), b("1"), b("1")));
         Assert.assertEquals(1, limit.values().size());
-        Assert.assertEquals("c", ((RespBulkString) limit.values().get(0)).asString());
+        Assert.assertEquals("c", ((ReplyBulkString) limit.values().get(0)).asString());
 
-        RespArray withScores = (RespArray) client.execute(Arrays.asList(
+        ReplyArray withScores = (ReplyArray) client.execute(Arrays.asList(
                 b("ZREVRANGEBYSCORE"), key, b("+inf"), b("-inf"),
                 b("WITHSCORES"), b("LIMIT"), b("0"), b("2")
         ));
         Assert.assertEquals(4, withScores.values().size());
-        Assert.assertEquals("d", ((RespBulkString) withScores.values().get(0)).asString());
-        Assert.assertEquals("3", ((RespBulkString) withScores.values().get(1)).asString());
-        Assert.assertEquals("c", ((RespBulkString) withScores.values().get(2)).asString());
-        Assert.assertEquals("2", ((RespBulkString) withScores.values().get(3)).asString());
+        Assert.assertEquals("d", ((ReplyBulkString) withScores.values().get(0)).asString());
+        Assert.assertEquals("3", ((ReplyBulkString) withScores.values().get(1)).asString());
+        Assert.assertEquals("c", ((ReplyBulkString) withScores.values().get(2)).asString());
+        Assert.assertEquals("2", ((ReplyBulkString) withScores.values().get(3)).asString());
 
-        RespArray exMin = (RespArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("3"), b("(2")));
+        ReplyArray exMin = (ReplyArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("3"), b("(2")));
         Assert.assertEquals(1, exMin.values().size());
-        Assert.assertEquals("d", ((RespBulkString) exMin.values().get(0)).asString());
+        Assert.assertEquals("d", ((ReplyBulkString) exMin.values().get(0)).asString());
 
-        RespArray emptyWhenMaxLessThanMin = (RespArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("1"), b("2")));
+        ReplyArray emptyWhenMaxLessThanMin = (ReplyArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("1"), b("2")));
         Assert.assertEquals(0, emptyWhenMaxLessThanMin.values().size());
 
-        RespArray offsetPastEnd = (RespArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("3"), b("2"), b("LIMIT"), b("10"), b("1")));
+        ReplyArray offsetPastEnd = (ReplyArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("3"), b("2"), b("LIMIT"), b("10"), b("1")));
         Assert.assertEquals(0, offsetPastEnd.values().size());
 
             }
@@ -414,21 +413,21 @@ public class ZSetCommandTest {
                 b("4"), b("d")
         ));
 
-        RespInteger removed = (RespInteger) client.execute(Arrays.asList(b("ZREMRANGEBYRANK"), key, b("1"), b("2")));
+        ReplyInteger removed = (ReplyInteger) client.execute(Arrays.asList(b("ZREMRANGEBYRANK"), key, b("1"), b("2")));
         Assert.assertEquals(2, removed.value());
 
-        RespArray remaining = (RespArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
+        ReplyArray remaining = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
         Assert.assertEquals(2, remaining.values().size());
-        Assert.assertEquals("a", ((RespBulkString) remaining.values().get(0)).asString());
-        Assert.assertEquals("d", ((RespBulkString) remaining.values().get(1)).asString());
+        Assert.assertEquals("a", ((ReplyBulkString) remaining.values().get(0)).asString());
+        Assert.assertEquals("d", ((ReplyBulkString) remaining.values().get(1)).asString());
 
-        RespInteger removedLast = (RespInteger) client.execute(Arrays.asList(b("ZREMRANGEBYRANK"), key, b("-1"), b("-1")));
+        ReplyInteger removedLast = (ReplyInteger) client.execute(Arrays.asList(b("ZREMRANGEBYRANK"), key, b("-1"), b("-1")));
         Assert.assertEquals(1, removedLast.value());
 
-        RespInteger removedAll = (RespInteger) client.execute(Arrays.asList(b("ZREMRANGEBYRANK"), key, b("0"), b("-1")));
+        ReplyInteger removedAll = (ReplyInteger) client.execute(Arrays.asList(b("ZREMRANGEBYRANK"), key, b("0"), b("-1")));
         Assert.assertEquals(1, removedAll.value());
 
-        RespInteger exists = (RespInteger) client.execute(Arrays.asList(b("EXISTS"), key));
+        ReplyInteger exists = (ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key));
         Assert.assertEquals(0, exists.value());
 
             }
@@ -445,22 +444,22 @@ public class ZSetCommandTest {
         byte[] big = new byte[65];
         Arrays.fill(big, (byte) 'x');
 
-        RespInteger added = (RespInteger) client.execute(Arrays.asList(
+        ReplyInteger added = (ReplyInteger) client.execute(Arrays.asList(
                 b("ZADD"), key,
                 b("0"), b("a"),
                 b("1"), big
         ));
         Assert.assertEquals(2, added.value());
 
-        RespArray rev = (RespArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("1"), b("0")));
+        ReplyArray rev = (ReplyArray) client.execute(Arrays.asList(b("ZREVRANGEBYSCORE"), key, b("1"), b("0")));
         Assert.assertEquals(2, rev.values().size());
-        Assert.assertArrayEquals(big, ((RespBulkString) rev.values().get(0)).data());
-        Assert.assertEquals("a", ((RespBulkString) rev.values().get(1)).asString());
+        Assert.assertArrayEquals(big, ((ReplyBulkString) rev.values().get(0)).data());
+        Assert.assertEquals("a", ((ReplyBulkString) rev.values().get(1)).asString());
 
-        RespInteger removedAll = (RespInteger) client.execute(Arrays.asList(b("ZREMRANGEBYRANK"), key, b("0"), b("-1")));
+        ReplyInteger removedAll = (ReplyInteger) client.execute(Arrays.asList(b("ZREMRANGEBYRANK"), key, b("0"), b("-1")));
         Assert.assertEquals(2, removedAll.value());
 
-        RespInteger exists = (RespInteger) client.execute(Arrays.asList(b("EXISTS"), key));
+        ReplyInteger exists = (ReplyInteger) client.execute(Arrays.asList(b("EXISTS"), key));
         Assert.assertEquals(0, exists.value());
 
             }

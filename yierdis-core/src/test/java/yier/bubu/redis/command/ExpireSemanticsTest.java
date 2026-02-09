@@ -5,10 +5,11 @@ import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.testutil.ReplyArray;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplyMap;
+import yier.bubu.redis.testutil.ReplyNull;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.util.Arrays;
 
@@ -23,19 +24,18 @@ public class ExpireSemanticsTest {
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("list");
-            Assert.assertEquals(2L, ((RespInteger) client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b")))).value());
+            Assert.assertEquals(2L, ((ReplyInteger) client.execute(Arrays.asList(b("RPUSH"), key, b("a"), b("b")))).value());
 
-            Assert.assertEquals(1L, ((RespInteger) client.execute(Arrays.asList(b("EXPIRE"), key, b("0")))).value());
-            Assert.assertEquals(-2L, ((RespInteger) client.execute(Arrays.asList(b("TTL"), key))).value());
-            Assert.assertEquals("none", ((RespSimpleString) client.execute(Arrays.asList(b("TYPE"), key))).value());
+            Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("EXPIRE"), key, b("0")))).value());
+            Assert.assertEquals(-2L, ((ReplyInteger) client.execute(Arrays.asList(b("TTL"), key))).value());
+            Assert.assertEquals("none", ((ReplySimpleString) client.execute(Arrays.asList(b("TYPE"), key))).value());
 
-            RespArray range = (RespArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("-1")));
+            ReplyArray range = (ReplyArray) client.execute(Arrays.asList(b("LRANGE"), key, b("0"), b("-1")));
             Assert.assertTrue(range.values().isEmpty());
 
-            RespBulkString lpop = (RespBulkString) client.execute(Arrays.asList(b("LPOP"), key));
-            Assert.assertTrue(lpop.isNull());
+	            Assert.assertTrue(client.execute(Arrays.asList(b("LPOP"), key)) instanceof ReplyNull);
 
-            Assert.assertEquals(1L, ((RespInteger) client.execute(Arrays.asList(b("RPUSH"), key, b("x")))).value());
+            Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("RPUSH"), key, b("x")))).value());
             }
         });
     }
@@ -47,19 +47,18 @@ public class ExpireSemanticsTest {
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("hash");
-            Assert.assertEquals(1L, ((RespInteger) client.execute(Arrays.asList(b("HSET"), key, b("f"), b("v")))).value());
+            Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("HSET"), key, b("f"), b("v")))).value());
 
-            Assert.assertEquals(1L, ((RespInteger) client.execute(Arrays.asList(b("EXPIRE"), key, b("0")))).value());
-            Assert.assertEquals("none", ((RespSimpleString) client.execute(Arrays.asList(b("TYPE"), key))).value());
+            Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("EXPIRE"), key, b("0")))).value());
+            Assert.assertEquals("none", ((ReplySimpleString) client.execute(Arrays.asList(b("TYPE"), key))).value());
 
-            RespBulkString hget = (RespBulkString) client.execute(Arrays.asList(b("HGET"), key, b("f")));
-            Assert.assertTrue(hget.isNull());
+	            Assert.assertTrue(client.execute(Arrays.asList(b("HGET"), key, b("f"))) instanceof ReplyNull);
 
-            RespArray all = (RespArray) client.execute(Arrays.asList(b("HGETALL"), key));
-            Assert.assertTrue(all.values().isEmpty());
+	            ReplyMap all = (ReplyMap) client.execute(Arrays.asList(b("HGETALL"), key));
+	            Assert.assertTrue(all.entries().isEmpty());
 
-            Assert.assertEquals(0L, ((RespInteger) client.execute(Arrays.asList(b("HLEN"), key))).value());
-            Assert.assertEquals(1L, ((RespInteger) client.execute(Arrays.asList(b("HSET"), key, b("f2"), b("v2")))).value());
+            Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("HLEN"), key))).value());
+            Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("HSET"), key, b("f2"), b("v2")))).value());
             }
         });
     }
@@ -71,18 +70,18 @@ public class ExpireSemanticsTest {
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("set");
-            Assert.assertEquals(1L, ((RespInteger) client.execute(Arrays.asList(b("SADD"), key, b("a")))).value());
+            Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("SADD"), key, b("a")))).value());
 
-            Assert.assertEquals(1L, ((RespInteger) client.execute(Arrays.asList(b("EXPIRE"), key, b("0")))).value());
-            Assert.assertEquals("none", ((RespSimpleString) client.execute(Arrays.asList(b("TYPE"), key))).value());
+            Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("EXPIRE"), key, b("0")))).value());
+            Assert.assertEquals("none", ((ReplySimpleString) client.execute(Arrays.asList(b("TYPE"), key))).value());
 
-            Assert.assertEquals(0L, ((RespInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("a")))).value());
-            Assert.assertEquals(0L, ((RespInteger) client.execute(Arrays.asList(b("SCARD"), key))).value());
+            Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("SISMEMBER"), key, b("a")))).value());
+            Assert.assertEquals(0L, ((ReplyInteger) client.execute(Arrays.asList(b("SCARD"), key))).value());
 
-            RespArray members = (RespArray) client.execute(Arrays.asList(b("SMEMBERS"), key));
+            ReplyArray members = (ReplyArray) client.execute(Arrays.asList(b("SMEMBERS"), key));
             Assert.assertTrue(members.values().isEmpty());
 
-            Assert.assertEquals(1L, ((RespInteger) client.execute(Arrays.asList(b("SADD"), key, b("x")))).value());
+            Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("SADD"), key, b("x")))).value());
             }
         });
     }
@@ -94,15 +93,15 @@ public class ExpireSemanticsTest {
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("zset");
-            Assert.assertEquals(1L, ((RespInteger) client.execute(Arrays.asList(b("ZADD"), key, b("1"), b("a")))).value());
+            Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("ZADD"), key, b("1"), b("a")))).value());
 
-            Assert.assertEquals(1L, ((RespInteger) client.execute(Arrays.asList(b("EXPIRE"), key, b("0")))).value());
-            Assert.assertEquals("none", ((RespSimpleString) client.execute(Arrays.asList(b("TYPE"), key))).value());
+            Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("EXPIRE"), key, b("0")))).value());
+            Assert.assertEquals("none", ((ReplySimpleString) client.execute(Arrays.asList(b("TYPE"), key))).value());
 
-            RespArray range = (RespArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
+            ReplyArray range = (ReplyArray) client.execute(Arrays.asList(b("ZRANGE"), key, b("0"), b("-1")));
             Assert.assertTrue(range.values().isEmpty());
 
-            Assert.assertEquals(1L, ((RespInteger) client.execute(Arrays.asList(b("ZADD"), key, b("1"), b("x")))).value());
+            Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("ZADD"), key, b("1"), b("x")))).value());
             }
         });
     }

@@ -1,9 +1,9 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.DbMemoryConstants;
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.util.Objects;
 
@@ -23,19 +23,24 @@ final class HllCommands {
         registry.register("PFMERGE", this::pfmerge);
     }
 
-    private void pfadd(RespCommand cmd, RespWriter out) {
+    private void pfadd(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, "pfadd");
             return;
         }
-        YierdisDb db = support.db(out);
+        DbEngine engine = support.db(out);
         long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        db.prepareWrite(extra);
-        long changed = db.pfadd(cmd.toByteArray(1), cmd, 2);
-        out.integer(changed);
+        engine.eviction().prepareWrite(extra);
+        int elementsLen = cmd.argc() - 2;
+        support.sliceResetFromCommand(cmd, 2, elementsLen);
+        try {
+            out.integer(engine.values().hll().pfadd(cmd.toByteArray(1), support.slice()));
+        } finally {
+            support.clearScratch(elementsLen);
+        }
     }
 
-    private void pfcount(RespCommand cmd, RespWriter out) {
+    private void pfcount(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 2) {
             CommandSupport.wrongArity(out, "pfcount");
             return;
@@ -43,25 +48,25 @@ final class HllCommands {
         int len = cmd.argc() - 1;
         support.sliceResetFromCommand(cmd, 1, len);
         try {
-            out.integer(support.db(out).pfcount(support.slice()));
+            out.integer(support.db(out).values().hll().pfcount(support.slice()));
         } finally {
             support.clearScratch(len);
         }
     }
 
-    private void pfmerge(RespCommand cmd, RespWriter out) {
+    private void pfmerge(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, "pfmerge");
             return;
         }
         long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        YierdisDb db = support.db(out);
-        db.prepareWrite(extra);
+        DbEngine engine = support.db(out);
+        engine.eviction().prepareWrite(extra);
 
         int sourcesLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, sourcesLen);
         try {
-            db.pfmerge(cmd.toByteArray(1), support.slice());
+            engine.values().hll().pfmerge(cmd.toByteArray(1), support.slice());
         } finally {
             support.clearScratch(sourcesLen);
         }

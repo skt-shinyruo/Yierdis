@@ -2,6 +2,8 @@ package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapZSet;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
+import yier.bubu.redis.protocol.ReplySink;
+import yier.bubu.redis.ops.YierdisCommandException;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -245,52 +247,52 @@ final class ZSetValue implements YierdisValue {
         return rangeByIndex(start, stop, withScores, true);
     }
 
-    int zrangeReplyCount(long start, long stop, boolean withScores) {
+    int zrangeCount(long start, long stop, boolean withScores) {
         if (offHeapAllocator != null) {
-            return offHeap.zrangeReplyCount(start, stop, withScores);
+            return offHeap.zrangeCount(start, stop, withScores);
         }
-        return rangeByIndexReplyCount(start, stop, withScores, false);
+        return rangeByIndexCount(start, stop, withScores, false);
     }
 
-    void zrangeReplyInto(long start, long stop, boolean withScores, YierdisBulkStringOutput out) {
+    void zrangeWriteTo(long start, long stop, boolean withScores, ReplySink out) {
         if (offHeapAllocator != null) {
-            offHeap.zrangeReplyInto(start, stop, withScores, out);
+            offHeap.zrangeWriteTo(start, stop, withScores, out);
             return;
         }
-        rangeByIndexReplyInto(start, stop, withScores, false, out);
+        rangeByIndexWriteTo(start, stop, withScores, false, out);
     }
 
-    int zrevrangeReplyCount(long start, long stop, boolean withScores) {
+    int zrevrangeCount(long start, long stop, boolean withScores) {
         if (offHeapAllocator != null) {
-            return offHeap.zrevrangeReplyCount(start, stop, withScores);
+            return offHeap.zrevrangeCount(start, stop, withScores);
         }
-        return rangeByIndexReplyCount(start, stop, withScores, true);
+        return rangeByIndexCount(start, stop, withScores, true);
     }
 
-    void zrevrangeReplyInto(long start, long stop, boolean withScores, YierdisBulkStringOutput out) {
+    void zrevrangeWriteTo(long start, long stop, boolean withScores, ReplySink out) {
         if (offHeapAllocator != null) {
-            offHeap.zrevrangeReplyInto(start, stop, withScores, out);
+            offHeap.zrevrangeWriteTo(start, stop, withScores, out);
             return;
         }
-        rangeByIndexReplyInto(start, stop, withScores, true, out);
+        rangeByIndexWriteTo(start, stop, withScores, true, out);
     }
 
-    int zrangeByScoreReplyCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+    int zrangeByScoreCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
         if (offHeapAllocator != null) {
-            return offHeap.zrangeByScoreReplyCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            return offHeap.zrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
         }
         if (count <= 0) {
             return 0;
         }
         if (listpack != null) {
-            return zrangeByScoreReplyCountListpack(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            return zrangeByScoreCountListpack(min, minExclusive, max, maxExclusive, withScores, offset, count);
         }
-        return zrangeByScoreReplyCountSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        return zrangeByScoreCountSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
     }
 
-    void zrangeByScoreReplyInto(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, YierdisBulkStringOutput out) {
+    void zrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ReplySink out) {
         if (offHeapAllocator != null) {
-            offHeap.zrangeByScoreReplyInto(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+            offHeap.zrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
             return;
         }
         if (out == null) {
@@ -300,28 +302,28 @@ final class ZSetValue implements YierdisValue {
             return;
         }
         if (listpack != null) {
-            zrangeByScoreReplyIntoListpack(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+            zrangeByScoreWriteToListpack(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
             return;
         }
-        zrangeByScoreReplyIntoSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+        zrangeByScoreWriteToSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
     }
 
-    int zrevrangeByScoreReplyCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+    int zrevrangeByScoreCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
         if (offHeapAllocator != null) {
-            return offHeap.zrevrangeByScoreReplyCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            return offHeap.zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
         }
         if (count <= 0) {
             return 0;
         }
         if (listpack != null) {
-            return zrevrangeByScoreReplyCountListpack(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            return zrevrangeByScoreCountListpack(min, minExclusive, max, maxExclusive, withScores, offset, count);
         }
-        return zrevrangeByScoreReplyCountSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        return zrevrangeByScoreCountSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count);
     }
 
-    void zrevrangeByScoreReplyInto(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, YierdisBulkStringOutput out) {
+    void zrevrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ReplySink out) {
         if (offHeapAllocator != null) {
-            offHeap.zrevrangeByScoreReplyInto(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+            offHeap.zrevrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
             return;
         }
         if (out == null) {
@@ -331,10 +333,10 @@ final class ZSetValue implements YierdisValue {
             return;
         }
         if (listpack != null) {
-            zrevrangeByScoreReplyIntoListpack(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+            zrevrangeByScoreWriteToListpack(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
             return;
         }
-        zrevrangeByScoreReplyIntoSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+        zrevrangeByScoreWriteToSkipList(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
     }
 
     private List<byte[]> rangeByIndex(long start, long stop, boolean withScores, boolean reverse) {
@@ -396,7 +398,7 @@ final class ZSetValue implements YierdisValue {
         return out;
     }
 
-    private int rangeByIndexReplyCount(long start, long stop, boolean withScores, boolean reverse) {
+    private int rangeByIndexCount(long start, long stop, boolean withScores, boolean reverse) {
         int size = size();
         if (size == 0) {
             return 0;
@@ -433,19 +435,19 @@ final class ZSetValue implements YierdisValue {
         return (int) elementCount;
     }
 
-    private void rangeByIndexReplyInto(long start, long stop, boolean withScores, boolean reverse, YierdisBulkStringOutput out) {
+    private void rangeByIndexWriteTo(long start, long stop, boolean withScores, boolean reverse, ReplySink out) {
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }
 
         if (listpack != null) {
-            rangeByIndexReplyIntoListpack(start, stop, withScores, reverse, out);
+            rangeByIndexWriteToListpack(start, stop, withScores, reverse, out);
             return;
         }
-        rangeByIndexReplyIntoSkipList(start, stop, withScores, reverse, out);
+        rangeByIndexWriteToSkipList(start, stop, withScores, reverse, out);
     }
 
-    private void rangeByIndexReplyIntoListpack(long start, long stop, boolean withScores, boolean reverse, YierdisBulkStringOutput out) {
+    private void rangeByIndexWriteToListpack(long start, long stop, boolean withScores, boolean reverse, ReplySink out) {
         int size = listpack.size();
         if (size == 0) {
             return;
@@ -476,7 +478,7 @@ final class ZSetValue implements YierdisValue {
         }
     }
 
-    private void rangeByIndexReplyIntoSkipList(long start, long stop, boolean withScores, boolean reverse, YierdisBulkStringOutput out) {
+    private void rangeByIndexWriteToSkipList(long start, long stop, boolean withScores, boolean reverse, ReplySink out) {
         int size = byMember.size();
         if (size == 0) {
             return;
@@ -563,7 +565,7 @@ final class ZSetValue implements YierdisValue {
         return out;
     }
 
-    private int zrangeByScoreReplyCountListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+    private int zrangeByScoreCountListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
         int size = listpack.size();
         if (size == 0) {
             return 0;
@@ -609,7 +611,7 @@ final class ZSetValue implements YierdisValue {
         return outCount;
     }
 
-    private void zrangeByScoreReplyIntoListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, YierdisBulkStringOutput out) {
+    private void zrangeByScoreWriteToListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ReplySink out) {
         int size = listpack.size();
         if (size == 0) {
             return;
@@ -683,7 +685,7 @@ final class ZSetValue implements YierdisValue {
         return out;
     }
 
-    private int zrevrangeByScoreReplyCountListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+    private int zrevrangeByScoreCountListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
         int size = listpack.size();
         if (size == 0) {
             return 0;
@@ -713,7 +715,7 @@ final class ZSetValue implements YierdisValue {
         return outCount;
     }
 
-    private void zrevrangeByScoreReplyIntoListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, YierdisBulkStringOutput out) {
+    private void zrevrangeByScoreWriteToListpack(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ReplySink out) {
         int size = listpack.size();
         if (size == 0) {
             return;
@@ -805,7 +807,7 @@ final class ZSetValue implements YierdisValue {
         return out;
     }
 
-    private int zrangeByScoreReplyCountSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+    private int zrangeByScoreCountSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
         int size = byMember.size();
         if (size == 0) {
             return 0;
@@ -842,7 +844,7 @@ final class ZSetValue implements YierdisValue {
         return outCount;
     }
 
-    private void zrangeByScoreReplyIntoSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, YierdisBulkStringOutput out) {
+    private void zrangeByScoreWriteToSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ReplySink out) {
         ZSkipList.Node node = firstNodeForMin(min, minExclusive);
         if (node == null) {
             return;
@@ -911,7 +913,7 @@ final class ZSetValue implements YierdisValue {
         return out;
     }
 
-    private int zrevrangeByScoreReplyCountSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
+    private int zrevrangeByScoreCountSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
         int size = byMember.size();
         if (size == 0) {
             return 0;
@@ -947,7 +949,7 @@ final class ZSetValue implements YierdisValue {
         return outCount;
     }
 
-    private void zrevrangeByScoreReplyIntoSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, YierdisBulkStringOutput out) {
+    private void zrevrangeByScoreWriteToSkipList(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, ReplySink out) {
         ZSkipList.Node node = lastNodeForMax(max, maxExclusive);
         if (node == null) {
             return;
@@ -1084,10 +1086,10 @@ final class ZSetValue implements YierdisValue {
         try {
             v = Double.parseDouble(new String(s, StandardCharsets.US_ASCII));
         } catch (NumberFormatException e) {
-            throw new YierdisDb.YierdisCommandException("ERR value is not a valid float");
+            throw new YierdisCommandException("ERR value is not a valid float");
         }
         if (Double.isNaN(v) || Double.isInfinite(v)) {
-            throw new YierdisDb.YierdisCommandException("ERR value is not a valid float");
+            throw new YierdisCommandException("ERR value is not a valid float");
         }
         return v;
     }
@@ -1099,7 +1101,7 @@ final class ZSetValue implements YierdisValue {
         return Double.toString(score).getBytes(StandardCharsets.US_ASCII);
     }
 
-    private static void writeScoreTo(YierdisBulkStringOutput out, double score) {
+    private static void writeScoreTo(ReplySink out, double score) {
         if (score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE) {
             out.bulkStringLongAscii((long) score);
             return;
@@ -1248,7 +1250,7 @@ final class ZSetValue implements YierdisValue {
             return Arrays.copyOfRange(data, e.dataOffset, e.dataOffset + e.len);
         }
 
-        void memberWriteTo(int index, YierdisBulkStringOutput out) {
+        void memberWriteTo(int index, ReplySink out) {
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
             }

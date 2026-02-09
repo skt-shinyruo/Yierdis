@@ -3,6 +3,7 @@ package yier.bubu.redis.db;
 // YierdisGlobalMaxmemoryCoordinator：多 DB 场景下的实例级 maxmemory 协调器（best-effort，尽量对齐 Redis 全实例预算语义）。
 
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
+import yier.bubu.redis.ops.YierdisCommandException;
 
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
@@ -45,7 +46,7 @@ final class YierdisGlobalMaxmemoryCoordinator {
         }
         long extra = Math.max(0, additionalBytes);
         if (globalUsedBytesForMaxmemory() + extra > maxmemoryBytes) {
-            throw new YierdisDb.YierdisCommandException(YierdisDb.OOM_ERR);
+            throw new YierdisCommandException(YierdisDb.OOM_ERR);
         }
     }
 
@@ -59,7 +60,7 @@ final class YierdisGlobalMaxmemoryCoordinator {
 
         long extra = Math.max(0, estimatedExtraBytes);
         if (extra > 0 && extra > maxmemoryBytes) {
-            throw new YierdisDb.YierdisCommandException(YierdisDb.OOM_ERR);
+            throw new YierdisCommandException(YierdisDb.OOM_ERR);
         }
         long limit = maxmemoryBytes - extra;
         if (limit < 0) {
@@ -71,7 +72,7 @@ final class YierdisGlobalMaxmemoryCoordinator {
 
         if (policy == YierdisDb.MaxmemoryPolicy.NOEVICTION) {
             if (extra > 0) {
-                throw new YierdisDb.YierdisCommandException(YierdisDb.OOM_ERR);
+                throw new YierdisCommandException(YierdisDb.OOM_ERR);
             }
             // extra == 0: allow "no growth" operations even when already above maxmemory.
             return;
@@ -80,7 +81,7 @@ final class YierdisGlobalMaxmemoryCoordinator {
         evictUntilUnder(limit);
         if (globalUsedBytesForMaxmemory() > limit) {
             if (extra > 0) {
-                throw new YierdisDb.YierdisCommandException(YierdisDb.OOM_ERR);
+                throw new YierdisCommandException(YierdisDb.OOM_ERR);
             }
         }
     }
@@ -98,12 +99,12 @@ final class YierdisGlobalMaxmemoryCoordinator {
         }
 
         if (policy == YierdisDb.MaxmemoryPolicy.NOEVICTION) {
-            throw new YierdisDb.YierdisCommandException(YierdisDb.OOM_ERR);
+            throw new YierdisCommandException(YierdisDb.OOM_ERR);
         }
 
         evictUntilUnder(maxmemoryBytes);
         if (globalUsedBytesForMaxmemory() > maxmemoryBytes) {
-            throw new YierdisDb.YierdisCommandException(YierdisDb.OOM_ERR);
+            throw new YierdisCommandException(YierdisDb.OOM_ERR);
         }
     }
 

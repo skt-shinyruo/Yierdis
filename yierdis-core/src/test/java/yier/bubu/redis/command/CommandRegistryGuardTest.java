@@ -2,9 +2,9 @@ package yier.bubu.redis.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyObject;
 
 import java.util.Arrays;
 
@@ -41,11 +41,11 @@ public class CommandRegistryGuardTest {
         });
     }
 
-    private static void assertNotUnknown(RespObject reply) {
-        if (!(reply instanceof RespError)) {
+    private static void assertNotUnknown(ReplyObject reply) {
+        if (!(reply instanceof ReplyError)) {
             return;
         }
-        String message = ((RespError) reply).message();
+        String message = ((ReplyError) reply).message();
         Assert.assertNotEquals("ERR unknown command", message);
     }
 }

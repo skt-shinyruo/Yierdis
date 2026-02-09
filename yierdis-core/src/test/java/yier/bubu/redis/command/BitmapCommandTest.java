@@ -3,10 +3,11 @@ package yier.bubu.redis.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespObject;
+import yier.bubu.redis.ops.WrongTypeException;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplyObject;
 
 import java.util.Arrays;
 
@@ -22,20 +23,20 @@ public class BitmapCommandTest {
             try (FastTestClient client = new FastTestClient(processor)) {
                 byte[] key = b("k");
 
-                RespInteger miss = (RespInteger) client.execute(Arrays.asList(b("GETBIT"), key, b("0")));
+                ReplyInteger miss = (ReplyInteger) client.execute(Arrays.asList(b("GETBIT"), key, b("0")));
                 Assert.assertEquals(0, miss.value());
 
-                RespInteger old0 = (RespInteger) client.execute(Arrays.asList(b("SETBIT"), key, b("0"), b("1")));
+                ReplyInteger old0 = (ReplyInteger) client.execute(Arrays.asList(b("SETBIT"), key, b("0"), b("1")));
                 Assert.assertEquals(0, old0.value());
 
-                RespInteger now1 = (RespInteger) client.execute(Arrays.asList(b("GETBIT"), key, b("0")));
+                ReplyInteger now1 = (ReplyInteger) client.execute(Arrays.asList(b("GETBIT"), key, b("0")));
                 Assert.assertEquals(1, now1.value());
 
                 // offset=7 对应第 1 个字节的最低位
-                RespInteger old7 = (RespInteger) client.execute(Arrays.asList(b("SETBIT"), key, b("7"), b("1")));
+                ReplyInteger old7 = (ReplyInteger) client.execute(Arrays.asList(b("SETBIT"), key, b("7"), b("1")));
                 Assert.assertEquals(0, old7.value());
 
-                RespInteger get7 = (RespInteger) client.execute(Arrays.asList(b("GETBIT"), key, b("7")));
+                ReplyInteger get7 = (ReplyInteger) client.execute(Arrays.asList(b("GETBIT"), key, b("7")));
                 Assert.assertEquals(1, get7.value());
             }
         });
@@ -51,16 +52,16 @@ public class BitmapCommandTest {
                 client.execute(Arrays.asList(b("SETBIT"), key, b("0"), b("1")));
                 client.execute(Arrays.asList(b("SETBIT"), key, b("15"), b("1")));
 
-                RespInteger all = (RespInteger) client.execute(Arrays.asList(b("BITCOUNT"), key));
+                ReplyInteger all = (ReplyInteger) client.execute(Arrays.asList(b("BITCOUNT"), key));
                 Assert.assertEquals(2, all.value());
 
-                RespInteger b0 = (RespInteger) client.execute(Arrays.asList(b("BITCOUNT"), key, b("0"), b("0")));
+                ReplyInteger b0 = (ReplyInteger) client.execute(Arrays.asList(b("BITCOUNT"), key, b("0"), b("0")));
                 Assert.assertEquals(1, b0.value());
 
-                RespInteger b1 = (RespInteger) client.execute(Arrays.asList(b("BITCOUNT"), key, b("1"), b("1")));
+                ReplyInteger b1 = (ReplyInteger) client.execute(Arrays.asList(b("BITCOUNT"), key, b("1"), b("1")));
                 Assert.assertEquals(1, b1.value());
 
-                RespInteger last = (RespInteger) client.execute(Arrays.asList(b("BITCOUNT"), key, b("-1"), b("-1")));
+                ReplyInteger last = (ReplyInteger) client.execute(Arrays.asList(b("BITCOUNT"), key, b("-1"), b("-1")));
                 Assert.assertEquals(1, last.value());
             }
         });
@@ -77,10 +78,10 @@ public class BitmapCommandTest {
                 client.execute(cmd("APPEND", "k", "b"));
                 client.execute(cmd("SET", "k", "a"));
 
-                RespInteger old = (RespInteger) client.execute(Arrays.asList(b("SETBIT"), key, b("8"), b("0")));
+                ReplyInteger old = (ReplyInteger) client.execute(Arrays.asList(b("SETBIT"), key, b("8"), b("0")));
                 Assert.assertEquals(0, old.value());
 
-                RespInteger count = (RespInteger) client.execute(Arrays.asList(b("BITCOUNT"), key));
+                ReplyInteger count = (ReplyInteger) client.execute(Arrays.asList(b("BITCOUNT"), key));
                 Assert.assertEquals(Integer.bitCount('a'), count.value());
             }
         });
@@ -94,11 +95,10 @@ public class BitmapCommandTest {
             try (FastTestClient client = new FastTestClient(processor)) {
                 client.execute(Arrays.asList(b("LPUSH"), b("k"), b("x")));
 
-                RespObject err = client.execute(Arrays.asList(b("GETBIT"), b("k"), b("0")));
-                Assert.assertTrue(err instanceof RespError);
-                Assert.assertEquals(new YierdisDb.WrongTypeException().getMessage(), ((RespError) err).message());
+                ReplyObject err = client.execute(Arrays.asList(b("GETBIT"), b("k"), b("0")));
+                Assert.assertTrue(err instanceof ReplyError);
+                Assert.assertEquals(new WrongTypeException().getMessage(), ((ReplyError) err).message());
             }
         });
     }
 }
-

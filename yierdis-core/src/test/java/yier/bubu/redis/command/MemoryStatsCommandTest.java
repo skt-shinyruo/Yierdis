@@ -2,11 +2,11 @@ package yier.bubu.redis.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespObject;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyBulkString;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplyMap;
+import yier.bubu.redis.testutil.ReplyObject;
 
 import java.util.HashMap;
 import java.util.List;
@@ -19,15 +19,15 @@ public class MemoryStatsCommandTest {
     @Test
     public void memoryStatsReturnsStableKeyValuePairs() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+                YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
-                RespObject resp = client.execute(cmd("MEMORY", "STATS"));
-                Assert.assertTrue(resp instanceof RespArray);
-                List<RespObject> values = ((RespArray) resp).values();
-                Assert.assertNotNull(values);
-                Assert.assertEquals(40, values.size());
+                ReplyObject resp = client.execute(cmd("MEMORY", "STATS"));
+                Assert.assertTrue(resp instanceof ReplyMap);
+                List<ReplyMap.Entry> entries = ((ReplyMap) resp).entries();
+                Assert.assertNotNull(entries);
+                Assert.assertEquals(20, entries.size());
 
-                Map<String, RespObject> map = toObjectMap(values);
+                Map<String, ReplyObject> map = toObjectMap(entries);
                 Assert.assertTrue(map.containsKey("maxmemory_bytes"));
                 Assert.assertTrue(map.containsKey("used_bytes_for_maxmemory"));
                 Assert.assertTrue(map.containsKey("effective_used_bytes_for_maxmemory"));
@@ -53,22 +53,22 @@ public class MemoryStatsCommandTest {
         });
     }
 
-    private static Map<String, RespObject> toObjectMap(List<RespObject> values) {
-        Map<String, RespObject> map = new HashMap<>();
-        for (int i = 0; i + 1 < values.size(); i += 2) {
-            Assert.assertTrue(values.get(i) instanceof RespBulkString);
-            String k = ((RespBulkString) values.get(i)).asString();
-            map.put(k, values.get(i + 1));
+    private static Map<String, ReplyObject> toObjectMap(List<ReplyMap.Entry> entries) {
+        Map<String, ReplyObject> map = new HashMap<>();
+        for (ReplyMap.Entry e : entries) {
+            Assert.assertTrue(e.key() instanceof ReplyBulkString);
+            String k = ((ReplyBulkString) e.key()).asString();
+            map.put(k, e.value());
         }
         return map;
     }
 
-    private static void assertLongValue(RespObject obj) {
+    private static void assertLongValue(ReplyObject obj) {
         Assert.assertNotNull(obj);
-        if (obj instanceof RespInteger i) {
+        if (obj instanceof ReplyInteger i) {
             return;
         }
-        if (obj instanceof RespBulkString bs) {
+        if (obj instanceof ReplyBulkString bs) {
             Long.parseLong(bs.asString());
             return;
         }

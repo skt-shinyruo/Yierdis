@@ -6,6 +6,7 @@ import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapRawSlice;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapSds;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.protocol.ReplySink;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -291,7 +292,7 @@ final class HashValue implements YierdisValue {
         return size() * 2;
     }
 
-    void hgetallPairsInto(YierdisBulkStringOutput out) {
+    void hgetallPairsInto(ReplySink out) {
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }

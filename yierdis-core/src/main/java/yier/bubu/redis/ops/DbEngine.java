@@ -14,5 +14,12 @@ public interface DbEngine {
     ExpirationManager expiration();
 
     EvictionCoordinator eviction();
-}
 
+    KeyspaceOps keyspace();
+
+    TtlOps ttl();
+
+    MemoryOps memory();
+
+    DbLifecycleOps lifecycle();
+}

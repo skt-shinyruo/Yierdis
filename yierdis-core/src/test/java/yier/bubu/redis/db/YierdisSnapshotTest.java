@@ -3,8 +3,9 @@ package yier.bubu.redis.db;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.protocol.RespSimpleString;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -22,9 +23,9 @@ public class YierdisSnapshotTest {
         try {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
-                Assert.assertTrue(client.execute(cmd("SET", "a", "1")) instanceof RespSimpleString);
-                Assert.assertTrue(client.execute(cmd("SET", "b", "2")) instanceof RespSimpleString);
-                Assert.assertTrue(client.execute(cmd("EXPIRE", "a", "10")) instanceof yier.bubu.redis.protocol.RespInteger);
+                Assert.assertTrue(client.execute(cmd("SET", "a", "1")) instanceof ReplySimpleString);
+                Assert.assertTrue(client.execute(cmd("SET", "b", "2")) instanceof ReplySimpleString);
+                Assert.assertTrue(client.execute(cmd("EXPIRE", "a", "10")) instanceof ReplyInteger);
             }
 
             List<YierdisSnapshotEntry> entries = new ArrayList<>();
@@ -59,4 +60,3 @@ public class YierdisSnapshotTest {
         }
     }
 }
-

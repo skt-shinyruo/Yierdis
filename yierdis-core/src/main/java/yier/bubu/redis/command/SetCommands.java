@@ -1,10 +1,9 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.DbMemoryConstants;
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespProtocol;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.util.Objects;
 
@@ -24,28 +23,28 @@ final class SetCommands {
         registry.register("SCARD", this::scard);
     }
 
-    private void sadd(RespCommand cmd, RespWriter out) {
+    private void sadd(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, "sadd");
             return;
         }
-        YierdisDb db = support.db(out);
+        DbEngine engine = support.db(out);
         long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
         }
-        db.prepareWrite(extra);
+        engine.eviction().prepareWrite(extra);
         int membersLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, membersLen);
         try {
-            long added = db.values().sets().sadd(cmd.toByteArray(1), support.slice());
+            long added = engine.values().sets().sadd(cmd.toByteArray(1), support.slice());
             out.integer(added);
         } finally {
             support.clearScratch(membersLen);
         }
     }
 
-    private void srem(RespCommand cmd, RespWriter out) {
+    private void srem(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, "srem");
             return;
@@ -53,48 +52,44 @@ final class SetCommands {
         int membersLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, membersLen);
         try {
-            YierdisDb db = support.db(out);
-            out.integer(db.values().sets().srem(cmd.toByteArray(1), support.slice()));
+            DbEngine engine = support.db(out);
+            out.integer(engine.values().sets().srem(cmd.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(membersLen);
         }
     }
 
-    private void smembers(RespCommand cmd, RespWriter out) {
+    private void smembers(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "smembers");
             return;
         }
 
         byte[] key = cmd.toByteArray(1);
-        YierdisDb db = support.db(out);
-        int count = db.values().sets().smembersReplyCount(key);
-        if (out.protocol() == RespProtocol.RESP3) {
-            out.setHeader(count);
-        } else {
-            out.arrayHeader(count);
-        }
+        DbEngine engine = support.db(out);
+        int count = engine.values().sets().smembersCount(key);
+        out.arrayHeader(count);
         if (count == 0) {
             return;
         }
-        db.values().sets().smembersReplyInto(key, support.bulkOut(out));
+        engine.values().sets().smembersWriteTo(key, out);
     }
 
-    private void sismember(RespCommand cmd, RespWriter out) {
+    private void sismember(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 3) {
             CommandSupport.wrongArity(out, "sismember");
             return;
         }
-        YierdisDb db = support.db(out);
-        out.integer(db.values().sets().sismember(cmd.toByteArray(1), cmd.toByteArray(2)) ? 1 : 0);
+        DbEngine engine = support.db(out);
+        out.integer(engine.values().sets().sismember(cmd.toByteArray(1), cmd.toByteArray(2)) ? 1 : 0);
     }
 
-    private void scard(RespCommand cmd, RespWriter out) {
+    private void scard(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "scard");
             return;
         }
-        YierdisDb db = support.db(out);
-        out.integer(db.values().sets().scard(cmd.toByteArray(1)));
+        DbEngine engine = support.db(out);
+        out.integer(engine.values().sets().scard(cmd.toByteArray(1)));
     }
 }

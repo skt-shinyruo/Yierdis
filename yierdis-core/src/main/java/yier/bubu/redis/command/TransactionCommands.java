@@ -1,11 +1,9 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespCommandBuilder;
-import yier.bubu.redis.protocol.RespFrame;
-import yier.bubu.redis.protocol.RespServerSession;
-import yier.bubu.redis.protocol.RespTransactionState;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.protocol.ServerSession;
+import yier.bubu.redis.protocol.TransactionState;
 
 import java.util.List;
 import java.util.Objects;
@@ -14,7 +12,7 @@ import java.util.Objects;
  * Redis 事务命令（最小实现）：MULTI/EXEC/DISCARD。
  * <p>
  * 设计约束：
- * - 连接级状态通过 {@link RespServerSession} 暴露，避免 core 依赖 server/Netty
+ * - 连接级状态通过 {@link ServerSession} 暴露，避免 core 依赖 server/Netty
  * - MULTI 态下，普通命令由 {@link YierdisFastCommandProcessor} 负责入队并返回 QUEUED
  */
 final class TransactionCommands {
@@ -33,12 +31,12 @@ final class TransactionCommands {
         registry.register("EXEC", this::exec);
     }
 
-    private void multi(RespCommand cmd, RespWriter out) {
+    private void multi(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 1) {
             CommandSupport.wrongArity(out, "multi");
             return;
         }
-        RespTransactionState tx = txOrNull(out);
+        TransactionState tx = txOrNull(out);
         if (tx == null) {
             out.error("ERR MULTI is only supported on server connections");
             return;
@@ -51,12 +49,12 @@ final class TransactionCommands {
         out.simpleString("OK");
     }
 
-    private void discard(RespCommand cmd, RespWriter out) {
+    private void discard(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 1) {
             CommandSupport.wrongArity(out, "discard");
             return;
         }
-        RespTransactionState tx = txOrNull(out);
+        TransactionState tx = txOrNull(out);
         if (tx == null || !tx.active()) {
             out.error("ERR DISCARD without MULTI");
             return;
@@ -65,12 +63,12 @@ final class TransactionCommands {
         out.simpleString("OK");
     }
 
-    private void exec(RespCommand cmd, RespWriter out) {
+    private void exec(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 1) {
             CommandSupport.wrongArity(out, "exec");
             return;
         }
-        RespTransactionState tx = txOrNull(out);
+        TransactionState tx = txOrNull(out);
         if (tx == null || !tx.active()) {
             out.error("ERR EXEC without MULTI");
             return;
@@ -85,86 +83,103 @@ final class TransactionCommands {
         out.arrayHeader(queued.size());
         for (int i = 0; i < queued.size(); i++) {
             byte[][] argv = queued.get(i);
-            try (RespCommand q = buildCommand(argv)) {
+            try (Command q = new QueuedCommand(argv)) {
                 processor.execute(q, out);
             }
         }
     }
 
-    private RespTransactionState txOrNull(RespWriter out) {
+    private TransactionState txOrNull(ReplyWriter out) {
         if (out == null) {
             return null;
         }
-        if (out.session() instanceof RespServerSession s) {
+        if (out.session() instanceof ServerSession s) {
             return s.transaction();
         }
         return null;
     }
 
-    private static RespCommand buildCommand(byte[][] argv) {
-        if (argv == null) {
-            throw new IllegalArgumentException("argv must not be null");
-        }
-
-        int argc = argv.length;
-        RespCommand cmd = RespCommandBuilder.acquire(argc);
-
-        int total = 0;
-        for (int i = 0; i < argc; i++) {
-            byte[] arg = argv[i];
-            if (arg != null) {
-                total += arg.length;
-            }
-        }
-
-        byte[] data = new byte[total];
-        RespCommandBuilder.setFrame(cmd, new HeapFrame(data));
-
-        int off = 0;
-        for (int i = 0; i < argc; i++) {
-            byte[] arg = argv[i];
-            if (arg == null) {
-                RespCommandBuilder.setArgNull(cmd, i);
-                continue;
-            }
-            int len = arg.length;
-            if (len > 0) {
-                System.arraycopy(arg, 0, data, off, len);
-            }
-            RespCommandBuilder.setArgSlice(cmd, i, off, len);
-            off += len;
-        }
-        return cmd;
-    }
-
     /**
-     * 事务队列里的命令帧：将 argv 拼成一个连续 heap byte[]，避免依赖 Netty ByteBuf 生命周期。
+     * Transaction-queued command: wraps argv bytes with stable lifetime and command API.
      */
-    private static final class HeapFrame implements RespFrame {
-        private final byte[] data;
+    private static final class QueuedCommand implements Command {
+        private final byte[][] argv;
+        private final int retainedBytes;
 
-        private HeapFrame(byte[] data) {
-            this.data = Objects.requireNonNull(data, "data");
+        private QueuedCommand(byte[][] argv) {
+            this.argv = Objects.requireNonNull(argv, "argv");
+            int total = 0;
+            for (int i = 0; i < argv.length; i++) {
+                byte[] a = argv[i];
+                if (a != null) {
+                    total += a.length;
+                }
+            }
+            this.retainedBytes = total;
         }
 
         @Override
-        public int length() {
-            return data.length;
+        public int argc() {
+            return argv.length;
         }
 
         @Override
-        public byte getByte(int index) {
-            return data[index];
+        public boolean isNull(int index) {
+            if (index < 0 || index >= argv.length) {
+                throw new IndexOutOfBoundsException();
+            }
+            return argv[index] == null;
         }
 
         @Override
-        public void getBytes(int index, byte[] dst, int dstOff, int len) {
-            System.arraycopy(data, index, dst, dstOff, len);
+        public int len(int index) {
+            if (index < 0 || index >= argv.length) {
+                throw new IndexOutOfBoundsException();
+            }
+            byte[] a = argv[index];
+            return a == null ? -1 : a.length;
+        }
+
+        @Override
+        public byte byteAt(int index, int offset) {
+            byte[] a = argv[index];
+            if (a == null) {
+                throw new IllegalStateException("arg is null");
+            }
+            return a[offset];
+        }
+
+        @Override
+        public void copyToByteArray(int index, byte[] dst, int dstOff) {
+            byte[] a = argv[index];
+            if (a == null) {
+                throw new IllegalStateException("arg is null");
+            }
+            System.arraycopy(a, 0, dst, dstOff, a.length);
+        }
+
+        @Override
+        public byte[] toByteArray(int index) {
+            byte[] a = argv[index];
+            if (a == null) {
+                return null;
+            }
+            if (a.length == 0) {
+                return new byte[0];
+            }
+            byte[] out = new byte[a.length];
+            System.arraycopy(a, 0, out, 0, a.length);
+            return out;
+        }
+
+        @Override
+        public int retainedBytes() {
+            return retainedBytes;
         }
 
         @Override
         public void close() {
-            // no-op (heap byte[] will be GC'ed)
+            // no-op: argv is owned by the transaction queue and will be released on discard/drain
         }
     }
 }

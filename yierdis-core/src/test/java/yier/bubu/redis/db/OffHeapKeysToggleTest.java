@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.db.offheap.netty.YierdisNettyOffHeapAllocator;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.ops.SetMode;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
 
@@ -14,7 +15,7 @@ public class OffHeapKeysToggleTest {
         YierdisDb db = new YierdisDb(allocator);
         try {
             db.bindToCurrentThread();
-            db.setString(b("k"), b("v"), YierdisDb.SetMode.NORMAL, null);
+            db.setString(b("k"), b("v"), SetMode.NORMAL, null);
             Assert.assertFalse(db.memoryStats().keysStoredOffHeap());
         } finally {
             db.shutdown();
@@ -27,7 +28,7 @@ public class OffHeapKeysToggleTest {
         YierdisDb db = new YierdisDb(allocator, true, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
-            db.setString(b("k"), b("v"), YierdisDb.SetMode.NORMAL, null);
+            db.setString(b("k"), b("v"), SetMode.NORMAL, null);
             Assert.assertTrue(db.memoryStats().keysStoredOffHeap());
         } finally {
             db.shutdown();
@@ -47,4 +48,3 @@ public class OffHeapKeysToggleTest {
         }
     }
 }
-

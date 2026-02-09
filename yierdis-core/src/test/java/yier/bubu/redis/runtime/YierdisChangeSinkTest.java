@@ -4,8 +4,8 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.protocol.RespSimpleString;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -29,7 +29,7 @@ public class YierdisChangeSinkTest {
                 client.execute(cmd("GET", "missing"));
                 Assert.assertEquals(0, events.size());
 
-                Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof RespSimpleString);
+                Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
                 Assert.assertEquals(1, events.size());
 
                 YierdisChangeEvent e = events.get(0);
@@ -43,4 +43,3 @@ public class YierdisChangeSinkTest {
         }
     }
 }
-

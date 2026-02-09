@@ -5,15 +5,20 @@ package yier.bubu.redis.db;
 import yier.bubu.redis.ops.HashOps;
 import yier.bubu.redis.ops.HllOps;
 import yier.bubu.redis.ops.ListOps;
+import yier.bubu.redis.ops.ExpireOption;
+import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.SetOps;
 import yier.bubu.redis.ops.StringOps;
 import yier.bubu.redis.ops.ValueOps;
+import yier.bubu.redis.ops.WrongTypeException;
+import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.ops.ZSetOps;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
-import yier.bubu.redis.protocol.RespCommand;
+import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.protocol.ReplySink;
 
 import java.util.Collections;
 import java.util.List;
@@ -76,7 +81,7 @@ final class YierdisDbValueOps implements ValueOps {
         }
 
         @Override
-        public boolean setString(byte[] keyBytes, byte[] value, YierdisDb.SetMode mode, YierdisDb.ExpireOption expireOption) {
+        public boolean setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption) {
             db.checkThread();
             long now = System.currentTimeMillis();
             boolean keepTtl = expireOption != null && expireOption.isKeepTtl();
@@ -98,11 +103,11 @@ final class YierdisDbValueOps implements ValueOps {
                         oldEstimate = 0;
                     }
                     existed[0] = old != null;
-                    if (mode == YierdisDb.SetMode.NX && old != null) {
+                    if (mode == SetMode.NX && old != null) {
                         db.touch(old);
                         return old;
                     }
-                    if (mode == YierdisDb.SetMode.XX && old == null) {
+                    if (mode == SetMode.XX && old == null) {
                         return null;
                     }
                     if (old == null) {
@@ -123,7 +128,7 @@ final class YierdisDbValueOps implements ValueOps {
                 });
             } catch (YierdisOffHeapOutOfMemoryException e) {
                 db.rollbackWrite();
-                throw new YierdisDb.YierdisCommandException("OOM off-heap memory limit exceeded");
+                throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
             db.commitWrite(deltaBytes[0]);
             if (didSet[0]) {
@@ -141,11 +146,8 @@ final class YierdisDbValueOps implements ValueOps {
         }
 
         @Override
-        public boolean setString(byte[] keyBytes, RespCommand cmd, int valueArgIndex, YierdisDb.SetMode mode, YierdisDb.ExpireOption expireOption) {
+        public boolean setString(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
             db.checkThread();
-            if (cmd == null) {
-                throw new IllegalArgumentException("cmd must not be null");
-            }
             long now = System.currentTimeMillis();
             boolean keepTtl = expireOption != null && expireOption.isKeepTtl();
             Long expireAtMillis = (expireOption == null || keepTtl) ? null : expireOption.toExpireAtMillis(now);
@@ -166,22 +168,22 @@ final class YierdisDbValueOps implements ValueOps {
                         oldEstimate = 0;
                     }
                     existed[0] = old != null;
-                    if (mode == YierdisDb.SetMode.NX && old != null) {
+                    if (mode == SetMode.NX && old != null) {
                         db.touch(old);
                         return old;
                     }
-                    if (mode == YierdisDb.SetMode.XX && old == null) {
+                    if (mode == SetMode.XX && old == null) {
                         return null;
                     }
                     if (old == null) {
                         didSet[0] = true;
-                        YierdisObject next = YierdisObject.newString(db.offHeapAllocator, cmd, valueArgIndex);
+                        YierdisObject next = YierdisObject.newString(db.offHeapAllocator, value);
                         db.touch(next);
                         db.refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
                     }
-                    old.overwriteWithString(db.offHeapAllocator, cmd, valueArgIndex);
+                    old.overwriteWithString(db.offHeapAllocator, value);
                     db.touch(old);
                     deltaBytes[0] -= oldEstimate;
                     db.refreshEstimatedBytes(k, old);
@@ -191,7 +193,7 @@ final class YierdisDbValueOps implements ValueOps {
                 });
             } catch (YierdisOffHeapOutOfMemoryException e) {
                 db.rollbackWrite();
-                throw new YierdisDb.YierdisCommandException("OOM off-heap memory limit exceeded");
+                throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
             db.commitWrite(deltaBytes[0]);
             if (didSet[0]) {
@@ -209,7 +211,12 @@ final class YierdisDbValueOps implements ValueOps {
         }
 
         @Override
-        public void getStringForReply(YierdisBytesView keyView, YierdisBulkStringOutput out) {
+        public byte[] getStringBytes(byte[] keyBytes) {
+            return db.getStringBytes(keyBytes);
+        }
+
+        @Override
+        public void getStringForReply(YierdisBytesView keyView, ReplySink out) {
             db.checkThread();
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
@@ -221,7 +228,7 @@ final class YierdisDbValueOps implements ValueOps {
                 return;
             }
             if (e.type != ValueType.STRING) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
 
             if (e.encoding == ValueEncoding.STRING_INT) {
@@ -245,17 +252,14 @@ final class YierdisDbValueOps implements ValueOps {
                 return 0;
             }
             if (e.type != ValueType.STRING) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
             return e.stringByteLength();
         }
 
         @Override
-        public long append(byte[] keyBytes, RespCommand cmd, int valueArgIndex) {
+        public long append(byte[] keyBytes, BytesSlice value) {
             db.checkThread();
-            if (cmd == null) {
-                throw new IllegalArgumentException("cmd must not be null");
-            }
             long now = System.currentTimeMillis();
             final int[] newLen = new int[]{0};
             final long[] deltaBytes = new long[]{0};
@@ -270,7 +274,7 @@ final class YierdisDbValueOps implements ValueOps {
                         oldEstimate = 0;
                     }
                     if (old == null) {
-                        YierdisObject o = YierdisObject.newString(db.offHeapAllocator, cmd, valueArgIndex);
+                        YierdisObject o = YierdisObject.newString(db.offHeapAllocator, value);
                         newLen[0] = o.stringByteLength();
                         db.touch(o);
                         db.refreshEstimatedBytes(k, o);
@@ -279,10 +283,10 @@ final class YierdisDbValueOps implements ValueOps {
                     }
 
                     if (old.type != ValueType.STRING) {
-                        throw new YierdisDb.WrongTypeException();
+                        throw new WrongTypeException();
                     }
                     db.touch(old);
-                    newLen[0] = old.stringAppend(db.offHeapAllocator, cmd, valueArgIndex);
+                    newLen[0] = old.stringAppend(db.offHeapAllocator, value);
                     deltaBytes[0] -= oldEstimate;
                     db.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
@@ -290,7 +294,7 @@ final class YierdisDbValueOps implements ValueOps {
                 });
             } catch (YierdisOffHeapOutOfMemoryException e) {
                 db.rollbackWrite();
-                throw new YierdisDb.YierdisCommandException("OOM off-heap memory limit exceeded");
+                throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
             db.commitWrite(deltaBytes[0]);
             return newLen[0];
@@ -318,7 +322,7 @@ final class YierdisDbValueOps implements ValueOps {
                         db.touch(old);
                     } else {
                         if (old.type != ValueType.STRING) {
-                            throw new YierdisDb.WrongTypeException();
+                            throw new WrongTypeException();
                         }
                         db.touch(old);
                     }
@@ -331,7 +335,7 @@ final class YierdisDbValueOps implements ValueOps {
                 });
             } catch (YierdisOffHeapOutOfMemoryException e) {
                 db.rollbackWrite();
-                throw new YierdisDb.YierdisCommandException("OOM off-heap memory limit exceeded");
+                throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
             db.commitWrite(deltaBytes[0]);
             return oldBit[0];
@@ -345,7 +349,7 @@ final class YierdisDbValueOps implements ValueOps {
                 return 0;
             }
             if (e.type != ValueType.STRING) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
             return e.stringGetBit(offset);
         }
@@ -358,7 +362,7 @@ final class YierdisDbValueOps implements ValueOps {
                 return 0L;
             }
             if (e.type != ValueType.STRING) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
 
             int len = e.stringByteLength();
@@ -376,7 +380,7 @@ final class YierdisDbValueOps implements ValueOps {
                 return 0L;
             }
             if (e.type != ValueType.STRING) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
             int len = e.stringByteLength();
             if (len <= 0) {
@@ -435,7 +439,7 @@ final class YierdisDbValueOps implements ValueOps {
                 }
 
                 if (old.type != ValueType.STRING) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 db.touch(old);
                 result[0] = old.stringIncrBy(db.offHeapAllocator, delta);
@@ -498,7 +502,7 @@ final class YierdisDbValueOps implements ValueOps {
         public long hset(byte[] keyBytes, List<byte[]> fieldValuePairs) {
             db.checkThread();
             if (fieldValuePairs.size() % 2 != 0) {
-                throw new YierdisDb.YierdisCommandException("ERR wrong number of arguments for 'hset' command");
+                throw new YierdisCommandException("ERR wrong number of arguments for 'hset' command");
             }
             long now = System.currentTimeMillis();
             YierdisOffHeapAddressAllocator addressAllocator =
@@ -524,7 +528,7 @@ final class YierdisDbValueOps implements ValueOps {
                     return o;
                 }
                 if (old.type != ValueType.HASH) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 added[0] = ((HashValue) old.payload).hsetMany(fieldValuePairs);
                 old.refreshCompositeEncodingFromPayload();
@@ -546,26 +550,26 @@ final class YierdisDbValueOps implements ValueOps {
                 return null;
             }
             if (e.type != ValueType.HASH) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
             return ((HashValue) e.payload).hget(fieldBytes);
         }
 
         @Override
-        public int hgetallReplyCount(byte[] keyBytes) {
+        public int hgetallPairCount(byte[] keyBytes) {
             db.checkThread();
             YierdisObject e = db.getObjectIfNotExpired(keyBytes);
             if (e == null) {
                 return 0;
             }
             if (e.type != ValueType.HASH) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
-            return ((HashValue) e.payload).hgetallCount();
+            return ((HashValue) e.payload).size();
         }
 
         @Override
-        public void hgetallReplyInto(byte[] keyBytes, YierdisBulkStringOutput out) {
+        public void hgetallWriteTo(byte[] keyBytes, ReplySink out) {
             db.checkThread();
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
@@ -576,7 +580,7 @@ final class YierdisDbValueOps implements ValueOps {
                 return;
             }
             if (e.type != ValueType.HASH) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
             ((HashValue) e.payload).hgetallPairsInto(out);
         }
@@ -589,7 +593,7 @@ final class YierdisDbValueOps implements ValueOps {
                 return 0;
             }
             if (e.type != ValueType.HASH) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
             return ((HashValue) e.payload).size();
         }
@@ -609,7 +613,7 @@ final class YierdisDbValueOps implements ValueOps {
                     return null;
                 }
                 if (old.type != ValueType.HASH) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 HashValue hv = (HashValue) old.payload;
                 removed[0] = hv.hdel(fields);
@@ -650,20 +654,20 @@ final class YierdisDbValueOps implements ValueOps {
         }
 
         @Override
-        public int lrangeReplyCount(byte[] keyBytes, int start, int stop) {
+        public int lrangeCount(byte[] keyBytes, int start, int stop) {
             db.checkThread();
             YierdisObject e = db.getObjectIfNotExpired(keyBytes);
             if (e == null) {
                 return 0;
             }
             if (e.type != ValueType.LIST) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
             return ((ListValue) e.payload).rangeCount(start, stop);
         }
 
         @Override
-        public void lrangeReplyInto(byte[] keyBytes, int start, int stop, YierdisBulkStringOutput out) {
+        public void lrangeWriteTo(byte[] keyBytes, int start, int stop, ReplySink out) {
             db.checkThread();
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
@@ -674,7 +678,7 @@ final class YierdisDbValueOps implements ValueOps {
                 return;
             }
             if (e.type != ValueType.LIST) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
             ((ListValue) e.payload).rangeInto(start, stop, out);
         }
@@ -722,7 +726,7 @@ final class YierdisDbValueOps implements ValueOps {
                 }
 
                 if (old.type != ValueType.LIST) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 ListValue lv = (ListValue) old.payload;
                 if (left) {
@@ -761,7 +765,7 @@ final class YierdisDbValueOps implements ValueOps {
                     return null;
                 }
                 if (old.type != ValueType.LIST) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 ListValue lv = (ListValue) old.payload;
                 popped[0] = left ? lv.lpop(count) : lv.rpop(count);
@@ -816,7 +820,7 @@ final class YierdisDbValueOps implements ValueOps {
                     return o;
                 }
                 if (old.type != ValueType.SET) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 added[0] = ((SetValue) old.payload).addAll(members);
                 old.refreshCompositeEncodingFromPayload();
@@ -845,7 +849,7 @@ final class YierdisDbValueOps implements ValueOps {
                     return null;
                 }
                 if (old.type != ValueType.SET) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 SetValue sv = (SetValue) old.payload;
                 removed[0] = sv.removeAll(members);
@@ -866,20 +870,20 @@ final class YierdisDbValueOps implements ValueOps {
         }
 
         @Override
-        public int smembersReplyCount(byte[] keyBytes) {
+        public int smembersCount(byte[] keyBytes) {
             db.checkThread();
             YierdisObject e = db.getObjectIfNotExpired(keyBytes);
             if (e == null) {
                 return 0;
             }
             if (e.type != ValueType.SET) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
             return ((SetValue) e.payload).size();
         }
 
         @Override
-        public void smembersReplyInto(byte[] keyBytes, YierdisBulkStringOutput out) {
+        public void smembersWriteTo(byte[] keyBytes, ReplySink out) {
             db.checkThread();
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
@@ -890,7 +894,7 @@ final class YierdisDbValueOps implements ValueOps {
                 return;
             }
             if (e.type != ValueType.SET) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
             ((SetValue) e.payload).membersInto(out);
         }
@@ -903,7 +907,7 @@ final class YierdisDbValueOps implements ValueOps {
                 return false;
             }
             if (e.type != ValueType.SET) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
             return ((SetValue) e.payload).contains(member);
         }
@@ -916,7 +920,7 @@ final class YierdisDbValueOps implements ValueOps {
                 return 0;
             }
             if (e.type != ValueType.SET) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
             return ((SetValue) e.payload).size();
         }
@@ -933,7 +937,7 @@ final class YierdisDbValueOps implements ValueOps {
         public long zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
             db.checkThread();
             if (scoreMemberPairs.size() % 2 != 0) {
-                throw new YierdisDb.YierdisCommandException("ERR wrong number of arguments for 'zadd' command");
+                throw new YierdisCommandException("ERR wrong number of arguments for 'zadd' command");
             }
             long now = System.currentTimeMillis();
             YierdisOffHeapAddressAllocator addressAllocator =
@@ -964,7 +968,7 @@ final class YierdisDbValueOps implements ValueOps {
                     return o;
                 }
                 if (old.type != ValueType.ZSET) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 added[0] = ((ZSetValue) old.payload).zaddMany(scoreMemberPairs);
                 old.refreshCompositeEncodingFromPayload();
@@ -979,20 +983,20 @@ final class YierdisDbValueOps implements ValueOps {
         }
 
         @Override
-        public int zrangeReplyCount(byte[] keyBytes, long start, long stop, boolean withScores) {
+        public int zrangeCount(byte[] keyBytes, long start, long stop, boolean withScores) {
             db.checkThread();
             YierdisObject e = db.getObjectIfNotExpired(keyBytes);
             if (e == null) {
                 return 0;
             }
             if (e.type != ValueType.ZSET) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
-            return ((ZSetValue) e.payload).zrangeReplyCount(start, stop, withScores);
+            return ((ZSetValue) e.payload).zrangeCount(start, stop, withScores);
         }
 
         @Override
-        public void zrangeReplyInto(byte[] keyBytes, long start, long stop, boolean withScores, YierdisBulkStringOutput out) {
+        public void zrangeWriteTo(byte[] keyBytes, long start, long stop, boolean withScores, ReplySink out) {
             db.checkThread();
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
@@ -1003,26 +1007,26 @@ final class YierdisDbValueOps implements ValueOps {
                 return;
             }
             if (e.type != ValueType.ZSET) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
-            ((ZSetValue) e.payload).zrangeReplyInto(start, stop, withScores, out);
+            ((ZSetValue) e.payload).zrangeWriteTo(start, stop, withScores, out);
         }
 
         @Override
-        public int zrevrangeReplyCount(byte[] keyBytes, long start, long stop, boolean withScores) {
+        public int zrevrangeCount(byte[] keyBytes, long start, long stop, boolean withScores) {
             db.checkThread();
             YierdisObject e = db.getObjectIfNotExpired(keyBytes);
             if (e == null) {
                 return 0;
             }
             if (e.type != ValueType.ZSET) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
-            return ((ZSetValue) e.payload).zrevrangeReplyCount(start, stop, withScores);
+            return ((ZSetValue) e.payload).zrevrangeCount(start, stop, withScores);
         }
 
         @Override
-        public void zrevrangeReplyInto(byte[] keyBytes, long start, long stop, boolean withScores, YierdisBulkStringOutput out) {
+        public void zrevrangeWriteTo(byte[] keyBytes, long start, long stop, boolean withScores, ReplySink out) {
             db.checkThread();
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
@@ -1033,13 +1037,13 @@ final class YierdisDbValueOps implements ValueOps {
                 return;
             }
             if (e.type != ValueType.ZSET) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
-            ((ZSetValue) e.payload).zrevrangeReplyInto(start, stop, withScores, out);
+            ((ZSetValue) e.payload).zrevrangeWriteTo(start, stop, withScores, out);
         }
 
         @Override
-        public int zrangeByScoreReplyCount(
+        public int zrangeByScoreCount(
                 byte[] keyBytes,
                 double min,
                 boolean minExclusive,
@@ -1055,13 +1059,13 @@ final class YierdisDbValueOps implements ValueOps {
                 return 0;
             }
             if (e.type != ValueType.ZSET) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
-            return ((ZSetValue) e.payload).zrangeByScoreReplyCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            return ((ZSetValue) e.payload).zrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
         }
 
         @Override
-        public void zrangeByScoreReplyInto(
+        public void zrangeByScoreWriteTo(
                 byte[] keyBytes,
                 double min,
                 boolean minExclusive,
@@ -1070,7 +1074,7 @@ final class YierdisDbValueOps implements ValueOps {
                 boolean withScores,
                 long offset,
                 long count,
-                YierdisBulkStringOutput out
+                ReplySink out
         ) {
             db.checkThread();
             if (out == null) {
@@ -1082,13 +1086,13 @@ final class YierdisDbValueOps implements ValueOps {
                 return;
             }
             if (e.type != ValueType.ZSET) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
-            ((ZSetValue) e.payload).zrangeByScoreReplyInto(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+            ((ZSetValue) e.payload).zrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
         }
 
         @Override
-        public int zrevrangeByScoreReplyCount(
+        public int zrevrangeByScoreCount(
                 byte[] keyBytes,
                 double min,
                 boolean minExclusive,
@@ -1104,13 +1108,13 @@ final class YierdisDbValueOps implements ValueOps {
                 return 0;
             }
             if (e.type != ValueType.ZSET) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
-            return ((ZSetValue) e.payload).zrevrangeByScoreReplyCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            return ((ZSetValue) e.payload).zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
         }
 
         @Override
-        public void zrevrangeByScoreReplyInto(
+        public void zrevrangeByScoreWriteTo(
                 byte[] keyBytes,
                 double min,
                 boolean minExclusive,
@@ -1119,7 +1123,7 @@ final class YierdisDbValueOps implements ValueOps {
                 boolean withScores,
                 long offset,
                 long count,
-                YierdisBulkStringOutput out
+                ReplySink out
         ) {
             db.checkThread();
             if (out == null) {
@@ -1131,9 +1135,9 @@ final class YierdisDbValueOps implements ValueOps {
                 return;
             }
             if (e.type != ValueType.ZSET) {
-                throw new YierdisDb.WrongTypeException();
+                throw new WrongTypeException();
             }
-            ((ZSetValue) e.payload).zrevrangeByScoreReplyInto(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+            ((ZSetValue) e.payload).zrevrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
         }
 
         @Override
@@ -1151,7 +1155,7 @@ final class YierdisDbValueOps implements ValueOps {
                     return null;
                 }
                 if (old.type != ValueType.ZSET) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 ZSetValue zv = (ZSetValue) old.payload;
                 removed[0] = zv.zremrangeByScore(min, minExclusive, max, maxExclusive);
@@ -1186,7 +1190,7 @@ final class YierdisDbValueOps implements ValueOps {
                     return null;
                 }
                 if (old.type != ValueType.ZSET) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 ZSetValue zv = (ZSetValue) old.payload;
                 removed[0] = zv.zremrangeByRank(start, stop);
@@ -1221,7 +1225,7 @@ final class YierdisDbValueOps implements ValueOps {
                     return null;
                 }
                 if (old.type != ValueType.ZSET) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 ZSetValue zv = (ZSetValue) old.payload;
                 removed[0] = zv.zrem(members);
@@ -1250,11 +1254,8 @@ final class YierdisDbValueOps implements ValueOps {
         }
 
         @Override
-        public int pfadd(byte[] keyBytes, RespCommand cmd, int firstElementArgIndex) {
+        public int pfadd(byte[] keyBytes, List<byte[]> elements) {
             db.checkThread();
-            if (cmd == null) {
-                throw new IllegalArgumentException("cmd must not be null");
-            }
             long now = System.currentTimeMillis();
             final boolean[] changed = new boolean[]{false};
             final long[] deltaBytes = new long[]{0};
@@ -1274,12 +1275,12 @@ final class YierdisDbValueOps implements ValueOps {
                         db.touch(old);
                     } else {
                         if (old.type != ValueType.STRING) {
-                            throw new YierdisDb.WrongTypeException();
+                            throw new WrongTypeException();
                         }
                         db.touch(old);
                     }
 
-                    changed[0] = YierdisHyperLogLog.pfAdd(old, db.offHeapAllocator, cmd, firstElementArgIndex);
+                    changed[0] = YierdisHyperLogLog.pfAdd(old, db.offHeapAllocator, elements);
 
                     deltaBytes[0] -= oldEstimate;
                     db.refreshEstimatedBytes(k, old);
@@ -1288,7 +1289,7 @@ final class YierdisDbValueOps implements ValueOps {
                 });
             } catch (YierdisOffHeapOutOfMemoryException e) {
                 db.rollbackWrite();
-                throw new YierdisDb.YierdisCommandException("OOM off-heap memory limit exceeded");
+                throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
             db.commitWrite(deltaBytes[0]);
             return changed[0] ? 1 : 0;
@@ -1308,10 +1309,10 @@ final class YierdisDbValueOps implements ValueOps {
                     continue;
                 }
                 if (e.type != ValueType.STRING) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 if (!YierdisHyperLogLog.isHllString(e)) {
-                    throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                    throw new WrongTypeException();
                 }
                 YierdisHyperLogLog.mergeHllIntoRegisters(e.stringBytesView(), registers);
             }
@@ -1332,10 +1333,10 @@ final class YierdisDbValueOps implements ValueOps {
                     continue;
                 }
                 if (e.type != ValueType.STRING) {
-                    throw new YierdisDb.WrongTypeException();
+                    throw new WrongTypeException();
                 }
                 if (!YierdisHyperLogLog.isHllString(e)) {
-                    throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                    throw new WrongTypeException();
                 }
                 YierdisHyperLogLog.mergeHllIntoRegisters(e.stringBytesView(), registers);
             }
@@ -1371,7 +1372,7 @@ final class YierdisDbValueOps implements ValueOps {
                 });
             } catch (YierdisOffHeapOutOfMemoryException e) {
                 db.rollbackWrite();
-                throw new YierdisDb.YierdisCommandException("OOM off-heap memory limit exceeded");
+                throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
             db.commitWrite(deltaBytes[0]);
             // 与 SET 类似：PFMERGE 结果写入后应清除 destKey 的 TTL。

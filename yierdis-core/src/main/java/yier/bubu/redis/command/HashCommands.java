@@ -1,10 +1,9 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.DbMemoryConstants;
-import yier.bubu.redis.protocol.RespCommand;
-import yier.bubu.redis.protocol.RespProtocol;
-import yier.bubu.redis.protocol.RespWriter;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.util.Objects;
 
@@ -24,66 +23,62 @@ final class HashCommands {
         registry.register("HDEL", this::hdel);
     }
 
-    private void hset(RespCommand cmd, RespWriter out) {
+    private void hset(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 4) {
             CommandSupport.wrongArity(out, "hset");
             return;
         }
-        YierdisDb db = support.db(out);
+        DbEngine engine = support.db(out);
         long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
         }
-        db.prepareWrite(extra);
+        engine.eviction().prepareWrite(extra);
         int pairsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, pairsLen);
         try {
-            long added = db.values().hashes().hset(cmd.toByteArray(1), support.slice());
+            long added = engine.values().hashes().hset(cmd.toByteArray(1), support.slice());
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
         }
     }
 
-    private void hget(RespCommand cmd, RespWriter out) {
+    private void hget(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 3) {
             CommandSupport.wrongArity(out, "hget");
             return;
         }
-        YierdisDb db = support.db(out);
-        out.bulkString(db.values().hashes().hget(cmd.toByteArray(1), cmd.toByteArray(2)));
+        DbEngine engine = support.db(out);
+        out.bulkString(engine.values().hashes().hget(cmd.toByteArray(1), cmd.toByteArray(2)));
     }
 
-    private void hgetall(RespCommand cmd, RespWriter out) {
+    private void hgetall(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "hgetall");
             return;
         }
 
         byte[] key = cmd.toByteArray(1);
-        YierdisDb db = support.db(out);
-        int count = db.values().hashes().hgetallReplyCount(key);
-        if (out.protocol() == RespProtocol.RESP3) {
-            out.mapHeader(count / 2);
-        } else {
-            out.arrayHeader(count);
-        }
-        if (count == 0) {
+        DbEngine engine = support.db(out);
+        int pairs = engine.values().hashes().hgetallPairCount(key);
+        out.mapHeader(pairs);
+        if (pairs == 0) {
             return;
         }
-        db.values().hashes().hgetallReplyInto(key, support.bulkOut(out));
+        engine.values().hashes().hgetallWriteTo(key, out);
     }
 
-    private void hlen(RespCommand cmd, RespWriter out) {
+    private void hlen(Command cmd, ReplyWriter out) {
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "hlen");
             return;
         }
-        YierdisDb db = support.db(out);
-        out.integer(db.values().hashes().hlen(cmd.toByteArray(1)));
+        DbEngine engine = support.db(out);
+        out.integer(engine.values().hashes().hlen(cmd.toByteArray(1)));
     }
 
-    private void hdel(RespCommand cmd, RespWriter out) {
+    private void hdel(Command cmd, ReplyWriter out) {
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, "hdel");
             return;
@@ -91,8 +86,8 @@ final class HashCommands {
         int fieldsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, fieldsLen);
         try {
-            YierdisDb db = support.db(out);
-            out.integer(db.values().hashes().hdel(cmd.toByteArray(1), support.slice()));
+            DbEngine engine = support.db(out);
+            out.integer(engine.values().hashes().hdel(cmd.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(fieldsLen);
         }

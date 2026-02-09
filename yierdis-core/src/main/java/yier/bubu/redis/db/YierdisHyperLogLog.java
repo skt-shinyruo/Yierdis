@@ -2,7 +2,9 @@ package yier.bubu.redis.db;
 
 // HyperLogLog（PFADD/PFCOUNT/PFMERGE）实现：以 STRING bytes 存储，并通过固定 header 区分普通 string 与 HLL string。
 
-import yier.bubu.redis.protocol.RespCommand;
+import yier.bubu.redis.ops.YierdisCommandException;
+
+import java.util.List;
 
 final class YierdisHyperLogLog {
     static final int P = 14;
@@ -64,36 +66,35 @@ final class YierdisHyperLogLog {
 
     static boolean pfAdd(YierdisObject o,
                          yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator offHeapAllocator,
-                         RespCommand cmd,
-                         int firstElementArgIndex) {
+                         List<byte[]> elements) {
         if (o == null) {
             throw new IllegalArgumentException("o must not be null");
         }
-        if (cmd == null) {
-            throw new IllegalArgumentException("cmd must not be null");
-        }
         if (!isHllString(o)) {
-            throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
+        if (elements == null || elements.isEmpty()) {
+            return false;
         }
 
         int enc = o.stringByteAt(HEADER_ENCODING_OFFSET) & 0xFF;
         if (enc == ENCODING_DENSE) {
-            return pfAddDenseInPlace(o, cmd, firstElementArgIndex);
+            return pfAddDenseInPlace(o, elements);
         }
         if (enc == ENCODING_SPARSE) {
-            return pfAddSparseRewrite(o, offHeapAllocator, cmd, firstElementArgIndex);
+            return pfAddSparseRewrite(o, offHeapAllocator, elements);
         }
-        throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
 
     static void mergeHllIntoRegisters(byte[] raw, int[] registers) {
         if (!isValidHllBytes(raw)) {
-            throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
         }
         int enc = raw[HEADER_ENCODING_OFFSET] & 0xFF;
         if (enc == ENCODING_DENSE) {
             if (raw.length != HEADER_BYTES + DENSE_DATA_BYTES) {
-                throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
             }
             for (int i = 0; i < REGISTERS; i++) {
                 int v = denseGetRegister(raw, i);
@@ -106,13 +107,13 @@ final class YierdisHyperLogLog {
         if (enc == ENCODING_SPARSE) {
             int dataLen = raw.length - HEADER_BYTES;
             if (dataLen < 0 || (dataLen % SPARSE_ENTRY_BYTES) != 0) {
-                throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
             }
             for (int pos = HEADER_BYTES; pos < raw.length; pos += SPARSE_ENTRY_BYTES) {
                 int idx = ((raw[pos] & 0xFF) << 8) | (raw[pos + 1] & 0xFF);
                 int v = raw[pos + 2] & 0xFF;
                 if (idx >= REGISTERS || v < 0 || v > MAX_REGISTER) {
-                    throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                    throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
                 }
                 if (v > registers[idx]) {
                     registers[idx] = v;
@@ -120,7 +121,7 @@ final class YierdisHyperLogLog {
             }
             return;
         }
-        throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
 
     static long estimateCardinality(int[] registers) {
@@ -194,18 +195,17 @@ final class YierdisHyperLogLog {
         return p == P && ver == VERSION;
     }
 
-    private static boolean pfAddDenseInPlace(YierdisObject o, RespCommand cmd, int firstElementArgIndex) {
+    private static boolean pfAddDenseInPlace(YierdisObject o, List<byte[]> elements) {
         if (o.rawLen != HEADER_BYTES + DENSE_DATA_BYTES) {
-            throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
         }
 
         boolean changed = false;
-        int argc = cmd.argc();
-        for (int i = firstElementArgIndex; i < argc; i++) {
-            if (cmd.isNull(i)) {
+        for (byte[] element : elements) {
+            if (element == null || element.length == 0) {
                 continue;
             }
-            long h = murmurHash3_x64_128_h1(cmd, i);
+            long h = murmurHash3_x64_128_h1(element);
             int regIndex = (int) (h & (REGISTERS - 1));
             long w = h >>> P;
             int rank = (Long.numberOfLeadingZeros(w) + 1) - P;
@@ -225,20 +225,19 @@ final class YierdisHyperLogLog {
     }
 
     private static boolean pfAddSparseRewrite(YierdisObject o,
-                                             yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator offHeapAllocator,
-                                             RespCommand cmd,
-                                             int firstElementArgIndex) {
+                                              yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator offHeapAllocator,
+                                              List<byte[]> elements) {
         byte[] raw = o.stringBytesView();
         if (!isValidHllBytes(raw)) {
-            throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
         }
         int enc = raw[HEADER_ENCODING_OFFSET] & 0xFF;
         if (enc != ENCODING_SPARSE) {
-            throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
         }
         int dataLen = raw.length - HEADER_BYTES;
         if (dataLen < 0 || (dataLen % SPARSE_ENTRY_BYTES) != 0) {
-            throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
         }
 
         int[] registers = new int[REGISTERS];
@@ -247,7 +246,7 @@ final class YierdisHyperLogLog {
             int idx = ((raw[pos] & 0xFF) << 8) | (raw[pos + 1] & 0xFF);
             int v = raw[pos + 2] & 0xFF;
             if (idx >= REGISTERS || v < 0 || v > MAX_REGISTER) {
-                throw new YierdisDb.YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
             }
             if (registers[idx] == 0) {
                 entries++;
@@ -258,12 +257,11 @@ final class YierdisHyperLogLog {
         }
 
         boolean changed = false;
-        int argc = cmd.argc();
-        for (int i = firstElementArgIndex; i < argc; i++) {
-            if (cmd.isNull(i)) {
+        for (byte[] element : elements) {
+            if (element == null || element.length == 0) {
                 continue;
             }
-            long h = murmurHash3_x64_128_h1(cmd, i);
+            long h = murmurHash3_x64_128_h1(element);
             int regIndex = (int) (h & (REGISTERS - 1));
             long w = h >>> P;
             int rank = (Long.numberOfLeadingZeros(w) + 1) - P;
@@ -395,11 +393,11 @@ final class YierdisHyperLogLog {
     }
 
     // MurmurHash3 x64 128-bit 的 h1（返回 64-bit），用于 HLL 的 index/rank 计算。
-    private static long murmurHash3_x64_128_h1(RespCommand cmd, int argIndex) {
-        int len = cmd.len(argIndex);
-        if (len <= 0) {
+    private static long murmurHash3_x64_128_h1(byte[] data) {
+        if (data == null || data.length == 0) {
             return 0L;
         }
+        int len = data.length;
         final long c1 = 0x87c37b91114253d5L;
         final long c2 = 0x4cf5ad432745937fL;
         long h1 = 0L;
@@ -408,8 +406,8 @@ final class YierdisHyperLogLog {
         int nblocks = len / 16;
         for (int i = 0; i < nblocks; i++) {
             int base = i * 16;
-            long k1 = getLongLE(cmd, argIndex, base);
-            long k2 = getLongLE(cmd, argIndex, base + 8);
+            long k1 = getLongLE(data, base);
+            long k2 = getLongLE(data, base + 8);
 
             k1 *= c1;
             k1 = Long.rotateLeft(k1, 31);
@@ -436,39 +434,39 @@ final class YierdisHyperLogLog {
         int tail = len & 15;
         switch (tail) {
             case 15:
-                k2 ^= ((long) cmd.byteAt(argIndex, tailStart + 14) & 0xFF) << 48;
+                k2 ^= ((long) data[tailStart + 14] & 0xFF) << 48;
             case 14:
-                k2 ^= ((long) cmd.byteAt(argIndex, tailStart + 13) & 0xFF) << 40;
+                k2 ^= ((long) data[tailStart + 13] & 0xFF) << 40;
             case 13:
-                k2 ^= ((long) cmd.byteAt(argIndex, tailStart + 12) & 0xFF) << 32;
+                k2 ^= ((long) data[tailStart + 12] & 0xFF) << 32;
             case 12:
-                k2 ^= ((long) cmd.byteAt(argIndex, tailStart + 11) & 0xFF) << 24;
+                k2 ^= ((long) data[tailStart + 11] & 0xFF) << 24;
             case 11:
-                k2 ^= ((long) cmd.byteAt(argIndex, tailStart + 10) & 0xFF) << 16;
+                k2 ^= ((long) data[tailStart + 10] & 0xFF) << 16;
             case 10:
-                k2 ^= ((long) cmd.byteAt(argIndex, tailStart + 9) & 0xFF) << 8;
+                k2 ^= ((long) data[tailStart + 9] & 0xFF) << 8;
             case 9:
-                k2 ^= ((long) cmd.byteAt(argIndex, tailStart + 8) & 0xFF);
+                k2 ^= ((long) data[tailStart + 8] & 0xFF);
                 k2 *= c2;
                 k2 = Long.rotateLeft(k2, 33);
                 k2 *= c1;
                 h2 ^= k2;
             case 8:
-                k1 ^= ((long) cmd.byteAt(argIndex, tailStart + 7) & 0xFF) << 56;
+                k1 ^= ((long) data[tailStart + 7] & 0xFF) << 56;
             case 7:
-                k1 ^= ((long) cmd.byteAt(argIndex, tailStart + 6) & 0xFF) << 48;
+                k1 ^= ((long) data[tailStart + 6] & 0xFF) << 48;
             case 6:
-                k1 ^= ((long) cmd.byteAt(argIndex, tailStart + 5) & 0xFF) << 40;
+                k1 ^= ((long) data[tailStart + 5] & 0xFF) << 40;
             case 5:
-                k1 ^= ((long) cmd.byteAt(argIndex, tailStart + 4) & 0xFF) << 32;
+                k1 ^= ((long) data[tailStart + 4] & 0xFF) << 32;
             case 4:
-                k1 ^= ((long) cmd.byteAt(argIndex, tailStart + 3) & 0xFF) << 24;
+                k1 ^= ((long) data[tailStart + 3] & 0xFF) << 24;
             case 3:
-                k1 ^= ((long) cmd.byteAt(argIndex, tailStart + 2) & 0xFF) << 16;
+                k1 ^= ((long) data[tailStart + 2] & 0xFF) << 16;
             case 2:
-                k1 ^= ((long) cmd.byteAt(argIndex, tailStart + 1) & 0xFF) << 8;
+                k1 ^= ((long) data[tailStart + 1] & 0xFF) << 8;
             case 1:
-                k1 ^= ((long) cmd.byteAt(argIndex, tailStart) & 0xFF);
+                k1 ^= ((long) data[tailStart] & 0xFF);
                 k1 *= c1;
                 k1 = Long.rotateLeft(k1, 31);
                 k1 *= c2;
@@ -490,15 +488,15 @@ final class YierdisHyperLogLog {
         return h1;
     }
 
-    private static long getLongLE(RespCommand cmd, int argIndex, int off) {
-        return ((long) cmd.byteAt(argIndex, off) & 0xFF)
-                | (((long) cmd.byteAt(argIndex, off + 1) & 0xFF) << 8)
-                | (((long) cmd.byteAt(argIndex, off + 2) & 0xFF) << 16)
-                | (((long) cmd.byteAt(argIndex, off + 3) & 0xFF) << 24)
-                | (((long) cmd.byteAt(argIndex, off + 4) & 0xFF) << 32)
-                | (((long) cmd.byteAt(argIndex, off + 5) & 0xFF) << 40)
-                | (((long) cmd.byteAt(argIndex, off + 6) & 0xFF) << 48)
-                | (((long) cmd.byteAt(argIndex, off + 7) & 0xFF) << 56);
+    private static long getLongLE(byte[] data, int off) {
+        return ((long) data[off] & 0xFF)
+                | (((long) data[off + 1] & 0xFF) << 8)
+                | (((long) data[off + 2] & 0xFF) << 16)
+                | (((long) data[off + 3] & 0xFF) << 24)
+                | (((long) data[off + 4] & 0xFF) << 32)
+                | (((long) data[off + 5] & 0xFF) << 40)
+                | (((long) data[off + 6] & 0xFF) << 48)
+                | (((long) data[off + 7] & 0xFF) << 56);
     }
 
     private static long fmix64(long k) {

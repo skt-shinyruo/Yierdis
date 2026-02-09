@@ -12,11 +12,18 @@ import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.db.memory.MemoryLedger;
 import yier.bubu.redis.db.memory.MemoryLedgerOutOfMemoryException;
 import yier.bubu.redis.db.memory.MemoryReservation;
+import yier.bubu.redis.ops.DbLifecycleOps;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.EvictionCoordinator;
+import yier.bubu.redis.ops.ExpireOption;
 import yier.bubu.redis.ops.ExpirationManager;
+import yier.bubu.redis.ops.KeyspaceOps;
+import yier.bubu.redis.ops.MemoryOps;
+import yier.bubu.redis.ops.SetMode;
+import yier.bubu.redis.ops.TtlOps;
 import yier.bubu.redis.ops.ValueOps;
-import yier.bubu.redis.protocol.RespCommand;
+import yier.bubu.redis.ops.WrongTypeException;
+import yier.bubu.redis.ops.YierdisCommandException;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -59,6 +66,10 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
     private final ValueOps values;
     private final ExpirationManager expirationManager;
     private final EvictionCoordinator evictionCoordinator;
+    private final KeyspaceOps keyspaceOps;
+    private final TtlOps ttlOps;
+    private final MemoryOps memoryOps;
+    private final DbLifecycleOps lifecycleOps;
 
     public YierdisDb() {
         this(null, false, 0, "noeviction", 5, 5, 5);
@@ -138,6 +149,10 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         this.values = new YierdisDbValueOps(this);
         this.expirationManager = new YierdisDbExpirationManager(this);
         this.evictionCoordinator = new YierdisDbEvictionCoordinator(this);
+        this.keyspaceOps = new YierdisDbKeyspaceOps(this);
+        this.ttlOps = new YierdisDbTtlOps(this);
+        this.memoryOps = new YierdisDbMemoryOps(this);
+        this.lifecycleOps = new YierdisDbLifecycleOps(this);
         // Scheduling (if any) is done by the Netty event loop in YierdisServer, not by a dedicated thread.
     }
 
@@ -154,6 +169,26 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
     @Override
     public EvictionCoordinator eviction() {
         return evictionCoordinator;
+    }
+
+    @Override
+    public KeyspaceOps keyspace() {
+        return keyspaceOps;
+    }
+
+    @Override
+    public TtlOps ttl() {
+        return ttlOps;
+    }
+
+    @Override
+    public MemoryOps memory() {
+        return memoryOps;
+    }
+
+    @Override
+    public DbLifecycleOps lifecycle() {
+        return lifecycleOps;
     }
 
     private static MaxmemoryPolicy parseMaxmemoryPolicy(String policy) {
@@ -244,7 +279,7 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
      * </ul>
      * <p>
      * This method exists to reduce "write succeeded but later returned OOM" scenarios and to ensure any
-     * maxmemory errors happen before writing the RESP reply (avoiding double replies / protocol corruption).
+     * maxmemory errors happen before writing the reply (avoiding double replies / protocol corruption).
      *
      * @param estimatedExtraBytes best-effort upper bound of the additional bytes the write may consume.
      */
@@ -1259,73 +1294,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         return didSet[0];
     }
 
-    public boolean setString(byte[] keyBytes, RespCommand cmd, int valueArgIndex, SetMode mode, ExpireOption expireOption) {
-        checkThread();
-        if (cmd == null) {
-            throw new IllegalArgumentException("cmd must not be null");
-        }
-        long now = System.currentTimeMillis();
-        boolean keepTtl = expireOption != null && expireOption.isKeepTtl();
-        Long expireAtMillis = (expireOption == null || keepTtl) ? null : expireOption.toExpireAtMillis(now);
-
-        final boolean[] didSet = new boolean[]{false};
-        final boolean[] existed = new boolean[]{false};
-        final KeyHandle[] handleRef = new KeyHandle[]{null};
-        final long[] deltaBytes = new long[]{0};
-        try {
-            store.computeWithHandle(keyBytes, (k, old) -> {
-                handleRef[0] = k;
-                long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                if (old != null && isKeyExpired(k, now)) {
-                    old.releasePayloadIfAny();
-                    removeExpire(k);
-                    deltaBytes[0] -= oldEstimate;
-                    old = null;
-                    oldEstimate = 0;
-                }
-                existed[0] = old != null;
-                if (mode == SetMode.NX && old != null) {
-                    touch(old);
-                    return old;
-                }
-                if (mode == SetMode.XX && old == null) {
-                    return null;
-                }
-                if (old == null) {
-                    didSet[0] = true;
-                    YierdisObject next = YierdisObject.newString(offHeapAllocator, cmd, valueArgIndex);
-                    touch(next);
-                    refreshEstimatedBytes(k, next);
-                    deltaBytes[0] += next.estimatedBytes;
-                    return next;
-                }
-                old.overwriteWithString(offHeapAllocator, cmd, valueArgIndex);
-                touch(old);
-                deltaBytes[0] -= oldEstimate;
-                refreshEstimatedBytes(k, old);
-                deltaBytes[0] += old.estimatedBytes;
-                didSet[0] = true;
-                return old;
-            });
-        } catch (YierdisOffHeapOutOfMemoryException e) {
-            rollbackWrite();
-            throw new YierdisCommandException("OOM off-heap memory limit exceeded");
-        }
-        commitWrite(deltaBytes[0]);
-        if (didSet[0]) {
-            if (keepTtl && existed[0]) {
-                // KEEPTTL：覆盖写入但保留原有过期时间（仅当 key 原先存在时有意义）。
-                return true;
-            }
-            if (expireAtMillis != null) {
-                setExpireAtMillis(handleRef[0], expireAtMillis);
-                return true;
-            }
-            removeExpire(handleRef[0]);
-        }
-        return didSet[0];
-    }
-
     public byte[] getStringBytes(byte[] keyBytes) {
         checkThread();
         YierdisObject e = getObjectIfNotExpired(keyBytes);
@@ -1336,62 +1304,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
             throw new WrongTypeException();
         }
         return e.stringBytesView();
-    }
-
-    public void getStringForReply(YierdisBytesView keyView, YierdisBulkStringOutput out) {
-        checkThread();
-        if (out == null) {
-            throw new IllegalArgumentException("out must not be null");
-        }
-
-        YierdisObject e = getObjectIfNotExpired(keyView);
-        if (e == null) {
-            out.bulkStringNull();
-            return;
-        }
-        if (e.type != ValueType.STRING) {
-            throw new WrongTypeException();
-        }
-
-        if (e.encoding == ValueEncoding.STRING_INT) {
-            out.bulkStringLongAscii(e.intValue);
-            return;
-        }
-        YierdisOffHeapSlice slice = e.stringOffHeapSlice();
-        if (slice != null) {
-            out.bulkString(slice);
-            return;
-        }
-        byte[] buf = (byte[]) e.payload;
-        out.bulkString(buf, 0, e.rawLen);
-    }
-
-    public void getStringForReply(byte[] keyBytes, YierdisBulkStringOutput out) {
-        checkThread();
-        if (out == null) {
-            throw new IllegalArgumentException("out must not be null");
-        }
-
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            out.bulkStringNull();
-            return;
-        }
-        if (e.type != ValueType.STRING) {
-            throw new WrongTypeException();
-        }
-
-        if (e.encoding == ValueEncoding.STRING_INT) {
-            out.bulkStringLongAscii(e.intValue);
-            return;
-        }
-        YierdisOffHeapSlice slice = e.stringOffHeapSlice();
-        if (slice != null) {
-            out.bulkString(slice);
-            return;
-        }
-        byte[] buf = (byte[]) e.payload;
-        out.bulkString(buf, 0, e.rawLen);
     }
 
     public int strlen(byte[] keyBytes) {
@@ -1447,51 +1359,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
                 }
                 touch(old);
                 newLen[0] = old.stringAppend(offHeapAllocator, appendValue);
-                deltaBytes[0] -= oldEstimate;
-                refreshEstimatedBytes(k, old);
-                deltaBytes[0] += old.estimatedBytes;
-                return old;
-            });
-        } catch (YierdisOffHeapOutOfMemoryException e) {
-            rollbackWrite();
-            throw new YierdisCommandException("OOM off-heap memory limit exceeded");
-        }
-        commitWrite(deltaBytes[0]);
-        return newLen[0];
-    }
-
-    public int append(byte[] keyBytes, RespCommand cmd, int argIndex) {
-        checkThread();
-        if (cmd == null) {
-            throw new IllegalArgumentException("cmd must not be null");
-        }
-        long now = System.currentTimeMillis();
-        final int[] newLen = new int[]{0};
-        final long[] deltaBytes = new long[]{0};
-        try {
-            store.computeWithHandle(keyBytes, (k, old) -> {
-                long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                if (old != null && isKeyExpired(k, now)) {
-                    old.releasePayloadIfAny();
-                    removeExpire(k);
-                    deltaBytes[0] -= oldEstimate;
-                    old = null;
-                    oldEstimate = 0;
-                }
-                if (old == null) {
-                    YierdisObject o = YierdisObject.newString(offHeapAllocator, cmd, argIndex);
-                    newLen[0] = o.stringByteLength();
-                    touch(o);
-                    refreshEstimatedBytes(k, o);
-                    deltaBytes[0] += o.estimatedBytes;
-                    return o;
-                }
-
-                if (old.type != ValueType.STRING) {
-                    throw new WrongTypeException();
-                }
-                touch(old);
-                newLen[0] = old.stringAppend(offHeapAllocator, cmd, argIndex);
                 deltaBytes[0] -= oldEstimate;
                 refreshEstimatedBytes(k, old);
                 deltaBytes[0] += old.estimatedBytes;
@@ -1721,132 +1588,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         return 0L;
     }
 
-    public int pfadd(byte[] keyBytes, RespCommand cmd, int firstElementArgIndex) {
-        checkThread();
-        if (cmd == null) {
-            throw new IllegalArgumentException("cmd must not be null");
-        }
-        long now = System.currentTimeMillis();
-        final boolean[] changed = new boolean[]{false};
-        final long[] deltaBytes = new long[]{0};
-        try {
-            store.computeWithHandle(keyBytes, (k, old) -> {
-                long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                if (old != null && isKeyExpired(k, now)) {
-                    old.releasePayloadIfAny();
-                    removeExpire(k);
-                    deltaBytes[0] -= oldEstimate;
-                    old = null;
-                    oldEstimate = 0;
-                }
-
-                if (old == null) {
-                    old = YierdisObject.newString(offHeapAllocator, YierdisHyperLogLog.newSparse());
-                    touch(old);
-                } else {
-                    if (old.type != ValueType.STRING) {
-                        throw new WrongTypeException();
-                    }
-                    touch(old);
-                }
-
-                changed[0] = YierdisHyperLogLog.pfAdd(old, offHeapAllocator, cmd, firstElementArgIndex);
-
-                deltaBytes[0] -= oldEstimate;
-                refreshEstimatedBytes(k, old);
-                deltaBytes[0] += old.estimatedBytes;
-                return old;
-            });
-        } catch (YierdisOffHeapOutOfMemoryException e) {
-            rollbackWrite();
-            throw new YierdisCommandException("OOM off-heap memory limit exceeded");
-        }
-        commitWrite(deltaBytes[0]);
-        return changed[0] ? 1 : 0;
-    }
-
-    public long pfcount(Collection<byte[]> keys) {
-        checkThread();
-        if (keys == null || keys.isEmpty()) {
-            return 0L;
-        }
-
-        int[] registers = new int[YierdisHyperLogLog.REGISTERS];
-        for (byte[] keyBytes : keys) {
-            YierdisObject e = getObjectIfNotExpired(keyBytes);
-            if (e == null) {
-                continue;
-            }
-            if (e.type != ValueType.STRING) {
-                throw new WrongTypeException();
-            }
-            if (!YierdisHyperLogLog.isHllString(e)) {
-                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
-            }
-            YierdisHyperLogLog.mergeHllIntoRegisters(e.stringBytesView(), registers);
-        }
-        return YierdisHyperLogLog.estimateCardinality(registers);
-    }
-
-    public void pfmerge(byte[] destKeyBytes, Collection<byte[]> sourceKeys) {
-        checkThread();
-        if (sourceKeys == null || sourceKeys.isEmpty()) {
-            throw new IllegalArgumentException("sourceKeys must not be empty");
-        }
-
-        int[] registers = new int[YierdisHyperLogLog.REGISTERS];
-        for (byte[] keyBytes : sourceKeys) {
-            YierdisObject e = getObjectIfNotExpired(keyBytes);
-            if (e == null) {
-                continue;
-            }
-            if (e.type != ValueType.STRING) {
-                throw new WrongTypeException();
-            }
-            if (!YierdisHyperLogLog.isHllString(e)) {
-                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
-            }
-            YierdisHyperLogLog.mergeHllIntoRegisters(e.stringBytesView(), registers);
-        }
-
-        byte[] mergedDense = YierdisHyperLogLog.denseBytesFromRegisters(registers);
-        long now = System.currentTimeMillis();
-        final long[] deltaBytes = new long[]{0};
-        try {
-            store.computeWithHandle(destKeyBytes, (k, old) -> {
-                long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                if (old != null && isKeyExpired(k, now)) {
-                    old.releasePayloadIfAny();
-                    removeExpire(k);
-                    deltaBytes[0] -= oldEstimate;
-                    old = null;
-                    oldEstimate = 0;
-                }
-
-                if (old == null) {
-                    YierdisObject next = YierdisObject.newString(offHeapAllocator, mergedDense);
-                    touch(next);
-                    refreshEstimatedBytes(k, next);
-                    deltaBytes[0] += next.estimatedBytes;
-                    return next;
-                }
-
-                old.overwriteWithString(offHeapAllocator, mergedDense);
-                touch(old);
-                deltaBytes[0] -= oldEstimate;
-                refreshEstimatedBytes(k, old);
-                deltaBytes[0] += old.estimatedBytes;
-                return old;
-            });
-        } catch (YierdisOffHeapOutOfMemoryException e) {
-            rollbackWrite();
-            throw new YierdisCommandException("OOM off-heap memory limit exceeded");
-        }
-        commitWrite(deltaBytes[0]);
-        // 与 SET 类似：PFMERGE 结果写入后应清除 destKey 的 TTL。
-        removeExpire(destKeyBytes);
-    }
-
     public long incrBy(byte[] keyBytes, long delta) {
         checkThread();
         long now = System.currentTimeMillis();
@@ -1956,34 +1697,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
             throw new WrongTypeException();
         }
         return ((ListValue) e.payload).range(start, stop);
-    }
-
-    public int lrangeReplyCount(byte[] keyBytes, int start, int stop) {
-        checkThread();
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return 0;
-        }
-        if (e.type != ValueType.LIST) {
-            throw new WrongTypeException();
-        }
-        return ((ListValue) e.payload).rangeCount(start, stop);
-    }
-
-    public void lrangeReplyInto(byte[] keyBytes, int start, int stop, YierdisBulkStringOutput out) {
-        checkThread();
-        if (out == null) {
-            throw new IllegalArgumentException("out must not be null");
-        }
-
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return;
-        }
-        if (e.type != ValueType.LIST) {
-            throw new WrongTypeException();
-        }
-        ((ListValue) e.payload).rangeInto(start, stop, out);
     }
 
     public List<byte[]> lpop(byte[] keyBytes, int count) {
@@ -2100,34 +1813,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
             throw new WrongTypeException();
         }
         return ((HashValue) e.payload).hgetallPairs();
-    }
-
-    public int hgetallReplyCount(byte[] keyBytes) {
-        checkThread();
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return 0;
-        }
-        if (e.type != ValueType.HASH) {
-            throw new WrongTypeException();
-        }
-        return ((HashValue) e.payload).hgetallCount();
-    }
-
-    public void hgetallReplyInto(byte[] keyBytes, YierdisBulkStringOutput out) {
-        checkThread();
-        if (out == null) {
-            throw new IllegalArgumentException("out must not be null");
-        }
-
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return;
-        }
-        if (e.type != ValueType.HASH) {
-            throw new WrongTypeException();
-        }
-        ((HashValue) e.payload).hgetallPairsInto(out);
     }
 
     public int hlen(byte[] keyBytes) {
@@ -2262,34 +1947,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         return ((SetValue) e.payload).members();
     }
 
-    public int smembersReplyCount(byte[] keyBytes) {
-        checkThread();
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return 0;
-        }
-        if (e.type != ValueType.SET) {
-            throw new WrongTypeException();
-        }
-        return ((SetValue) e.payload).size();
-    }
-
-    public void smembersReplyInto(byte[] keyBytes, YierdisBulkStringOutput out) {
-        checkThread();
-        if (out == null) {
-            throw new IllegalArgumentException("out must not be null");
-        }
-
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return;
-        }
-        if (e.type != ValueType.SET) {
-            throw new WrongTypeException();
-        }
-        ((SetValue) e.payload).membersInto(out);
-    }
-
     public boolean sismember(byte[] keyBytes, byte[] memberBytes) {
         checkThread();
         YierdisObject e = getObjectIfNotExpired(keyBytes);
@@ -2374,34 +2031,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         return ((ZSetValue) e.payload).zrange(start, stop, withScores);
     }
 
-    public int zrangeReplyCount(byte[] keyBytes, long start, long stop, boolean withScores) {
-        checkThread();
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return 0;
-        }
-        if (e.type != ValueType.ZSET) {
-            throw new WrongTypeException();
-        }
-        return ((ZSetValue) e.payload).zrangeReplyCount(start, stop, withScores);
-    }
-
-    public void zrangeReplyInto(byte[] keyBytes, long start, long stop, boolean withScores, YierdisBulkStringOutput out) {
-        checkThread();
-        if (out == null) {
-            throw new IllegalArgumentException("out must not be null");
-        }
-
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return;
-        }
-        if (e.type != ValueType.ZSET) {
-            throw new WrongTypeException();
-        }
-        ((ZSetValue) e.payload).zrangeReplyInto(start, stop, withScores, out);
-    }
-
     public List<byte[]> zrevrange(byte[] keyBytes, long start, long stop, boolean withScores) {
         checkThread();
         YierdisObject e = getObjectIfNotExpired(keyBytes);
@@ -2412,34 +2041,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
             throw new WrongTypeException();
         }
         return ((ZSetValue) e.payload).zrevrange(start, stop, withScores);
-    }
-
-    public int zrevrangeReplyCount(byte[] keyBytes, long start, long stop, boolean withScores) {
-        checkThread();
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return 0;
-        }
-        if (e.type != ValueType.ZSET) {
-            throw new WrongTypeException();
-        }
-        return ((ZSetValue) e.payload).zrevrangeReplyCount(start, stop, withScores);
-    }
-
-    public void zrevrangeReplyInto(byte[] keyBytes, long start, long stop, boolean withScores, YierdisBulkStringOutput out) {
-        checkThread();
-        if (out == null) {
-            throw new IllegalArgumentException("out must not be null");
-        }
-
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return;
-        }
-        if (e.type != ValueType.ZSET) {
-            throw new WrongTypeException();
-        }
-        ((ZSetValue) e.payload).zrevrangeReplyInto(start, stop, withScores, out);
     }
 
     public List<byte[]> zrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
@@ -2454,34 +2055,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         return ((ZSetValue) e.payload).zrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
     }
 
-    public int zrangeByScoreReplyCount(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        checkThread();
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return 0;
-        }
-        if (e.type != ValueType.ZSET) {
-            throw new WrongTypeException();
-        }
-        return ((ZSetValue) e.payload).zrangeByScoreReplyCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
-    }
-
-    public void zrangeByScoreReplyInto(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, YierdisBulkStringOutput out) {
-        checkThread();
-        if (out == null) {
-            throw new IllegalArgumentException("out must not be null");
-        }
-
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return;
-        }
-        if (e.type != ValueType.ZSET) {
-            throw new WrongTypeException();
-        }
-        ((ZSetValue) e.payload).zrangeByScoreReplyInto(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
-    }
-
     public List<byte[]> zrevrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
         checkThread();
         YierdisObject e = getObjectIfNotExpired(keyBytes);
@@ -2492,34 +2065,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
             throw new WrongTypeException();
         }
         return ((ZSetValue) e.payload).zrevrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
-    }
-
-    public int zrevrangeByScoreReplyCount(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        checkThread();
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return 0;
-        }
-        if (e.type != ValueType.ZSET) {
-            throw new WrongTypeException();
-        }
-        return ((ZSetValue) e.payload).zrevrangeByScoreReplyCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
-    }
-
-    public void zrevrangeByScoreReplyInto(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, YierdisBulkStringOutput out) {
-        checkThread();
-        if (out == null) {
-            throw new IllegalArgumentException("out must not be null");
-        }
-
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return;
-        }
-        if (e.type != ValueType.ZSET) {
-            throw new WrongTypeException();
-        }
-        ((ZSetValue) e.payload).zrevrangeByScoreReplyInto(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
     }
 
     public int zrem(byte[] keyBytes, List<byte[]> members) {
@@ -3062,12 +2607,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         return negate ? !matched : matched;
     }
 
-    public enum SetMode {
-        NORMAL,
-        NX,
-        XX
-    }
-
     private final class DbMemoryLedger implements MemoryLedger {
         @Override
         public long limitBytes() {
@@ -3223,98 +2762,6 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
                 }
                 return token;
             }
-        }
-    }
-
-    public static final class ExpireOption {
-        public enum Kind {
-            KEEP_TTL,
-            EX,
-            PX,
-            EXAT,
-            PXAT
-        }
-
-        final Kind kind;
-        final long value;
-
-        private ExpireOption(Kind kind, long value) {
-            this.kind = Objects.requireNonNull(kind, "kind");
-            this.value = value;
-        }
-
-        public static ExpireOption keepTtl() {
-            return new ExpireOption(Kind.KEEP_TTL, 0L);
-        }
-
-        public static ExpireOption ex(long seconds) {
-            return new ExpireOption(Kind.EX, seconds);
-        }
-
-        public static ExpireOption px(long milliseconds) {
-            return new ExpireOption(Kind.PX, milliseconds);
-        }
-
-        public static ExpireOption exAt(long unixSeconds) {
-            return new ExpireOption(Kind.EXAT, unixSeconds);
-        }
-
-        public static ExpireOption pxAt(long unixMilliseconds) {
-            return new ExpireOption(Kind.PXAT, unixMilliseconds);
-        }
-
-        boolean isKeepTtl() {
-            return kind == Kind.KEEP_TTL;
-        }
-
-        long toExpireAtMillis(long nowMillis) {
-            return switch (kind) {
-                case KEEP_TTL -> throw new IllegalStateException("KEEP_TTL has no expireAtMillis");
-                case EX -> safeExpireRelativeMillis(nowMillis, value, TimeUnit.SECONDS);
-                case PX -> safeExpireRelativeMillis(nowMillis, value, TimeUnit.MILLISECONDS);
-                case EXAT -> safeExpireAbsoluteMillis(value, TimeUnit.SECONDS);
-                case PXAT -> safeExpireAbsoluteMillis(value, TimeUnit.MILLISECONDS);
-            };
-        }
-
-        private static long safeExpireRelativeMillis(long nowMillis, long duration, TimeUnit unit) {
-            if (duration <= 0) {
-                return nowMillis;
-            }
-            long deltaMillis;
-            try {
-                deltaMillis = Math.multiplyExact(duration, unit == TimeUnit.SECONDS ? 1000L : 1L);
-            } catch (ArithmeticException e) {
-                return Long.MAX_VALUE;
-            }
-            try {
-                return Math.addExact(nowMillis, deltaMillis);
-            } catch (ArithmeticException e) {
-                return Long.MAX_VALUE;
-            }
-        }
-
-        private static long safeExpireAbsoluteMillis(long value, TimeUnit unit) {
-            if (unit == TimeUnit.MILLISECONDS) {
-                return value;
-            }
-            try {
-                return Math.multiplyExact(value, 1000L);
-            } catch (ArithmeticException e) {
-                return Long.MAX_VALUE;
-            }
-        }
-    }
-
-    public static final class YierdisCommandException extends RuntimeException {
-        public YierdisCommandException(String message) {
-            super(message);
-        }
-    }
-
-    public static final class WrongTypeException extends RuntimeException {
-        public WrongTypeException() {
-            super("WRONGTYPE Operation against a key holding the wrong kind of value");
         }
     }
 

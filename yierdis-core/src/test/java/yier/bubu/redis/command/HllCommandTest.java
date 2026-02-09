@@ -2,11 +2,11 @@ package yier.bubu.redis.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespObject;
-import yier.bubu.redis.protocol.RespSimpleString;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplyObject;
+import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.util.Arrays;
 
@@ -20,13 +20,13 @@ public class HllCommandTest {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
-                RespInteger add1 = (RespInteger) client.execute(cmd("PFADD", "h", "a"));
+                ReplyInteger add1 = (ReplyInteger) client.execute(cmd("PFADD", "h", "a"));
                 Assert.assertEquals(1, add1.value());
 
-                RespInteger add2 = (RespInteger) client.execute(cmd("PFADD", "h", "a"));
+                ReplyInteger add2 = (ReplyInteger) client.execute(cmd("PFADD", "h", "a"));
                 Assert.assertEquals(0, add2.value());
 
-                RespInteger count = (RespInteger) client.execute(cmd("PFCOUNT", "h"));
+                ReplyInteger count = (ReplyInteger) client.execute(cmd("PFCOUNT", "h"));
                 Assert.assertEquals(1, count.value());
             }
         });
@@ -40,19 +40,19 @@ public class HllCommandTest {
                 client.execute(cmd("PFADD", "h1", "foo", "bar"));
                 client.execute(cmd("PFADD", "h2", "bar", "baz"));
 
-                RespInteger c1 = (RespInteger) client.execute(cmd("PFCOUNT", "h1"));
+                ReplyInteger c1 = (ReplyInteger) client.execute(cmd("PFCOUNT", "h1"));
                 Assert.assertEquals(2, c1.value());
 
-                RespInteger c2 = (RespInteger) client.execute(cmd("PFCOUNT", "h2"));
+                ReplyInteger c2 = (ReplyInteger) client.execute(cmd("PFCOUNT", "h2"));
                 Assert.assertEquals(2, c2.value());
 
-                RespInteger cu = (RespInteger) client.execute(cmd("PFCOUNT", "h1", "h2"));
+                ReplyInteger cu = (ReplyInteger) client.execute(cmd("PFCOUNT", "h1", "h2"));
                 Assert.assertEquals(3, cu.value());
 
-                RespObject ok = client.execute(cmd("PFMERGE", "hu", "h1", "h2"));
-                Assert.assertTrue(ok instanceof RespSimpleString);
+                ReplyObject ok = client.execute(cmd("PFMERGE", "hu", "h1", "h2"));
+                Assert.assertTrue(ok instanceof ReplySimpleString);
 
-                RespInteger merged = (RespInteger) client.execute(cmd("PFCOUNT", "hu"));
+                ReplyInteger merged = (ReplyInteger) client.execute(cmd("PFCOUNT", "hu"));
                 Assert.assertEquals(3, merged.value());
             }
         });
@@ -68,10 +68,10 @@ public class HllCommandTest {
                 // PFMERGE 总是写 dense，这样后续 PFADD 会走 dense 原地更新分支。
                 client.execute(cmd("PFMERGE", "dense", "src"));
 
-                RespInteger add = (RespInteger) client.execute(cmd("PFADD", "dense", "c"));
+                ReplyInteger add = (ReplyInteger) client.execute(cmd("PFADD", "dense", "c"));
                 Assert.assertEquals(1, add.value());
 
-                RespInteger count = (RespInteger) client.execute(cmd("PFCOUNT", "dense"));
+                ReplyInteger count = (ReplyInteger) client.execute(cmd("PFCOUNT", "dense"));
                 Assert.assertEquals(3, count.value());
             }
         });
@@ -84,11 +84,10 @@ public class HllCommandTest {
             try (FastTestClient client = new FastTestClient(processor)) {
                 client.execute(cmd("SET", "k", "v"));
 
-                RespObject err = client.execute(Arrays.asList(b("PFADD"), b("k"), b("x")));
-                Assert.assertTrue(err instanceof RespError);
-                Assert.assertEquals("WRONGTYPE Operation against a key holding the wrong kind of value", ((RespError) err).message());
+                ReplyObject err = client.execute(Arrays.asList(b("PFADD"), b("k"), b("x")));
+                Assert.assertTrue(err instanceof ReplyError);
+                Assert.assertEquals("WRONGTYPE Operation against a key holding the wrong kind of value", ((ReplyError) err).message());
             }
         });
     }
 }
-
