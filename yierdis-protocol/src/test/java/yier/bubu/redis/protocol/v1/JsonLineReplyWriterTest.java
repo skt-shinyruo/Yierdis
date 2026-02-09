@@ -2,6 +2,7 @@ package yier.bubu.redis.protocol.v1;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesSink;
 
 import java.io.ByteArrayOutputStream;
@@ -64,11 +65,71 @@ public class JsonLineReplyWriterTest {
     }
 
     @Test
+    public void utf8BytesAreEscapedInBulkString() {
+        ByteArraySink sink = new ByteArraySink();
+        JsonLineReplyWriter w = new JsonLineReplyWriter(sink);
+        w.bulkString("a\nb\"c\\d\t".getBytes(StandardCharsets.UTF_8));
+        Assert.assertEquals("{\"ok\":true,\"result\":\"a\\nb\\\"c\\\\d\\t\"}\n", sink.utf8());
+    }
+
+    @Test
     public void invalidUtf8BytesFallbackToB64TaggedValue() {
         ByteArraySink sink = new ByteArraySink();
         JsonLineReplyWriter w = new JsonLineReplyWriter(sink);
         w.bulkString(new byte[]{(byte) 0xC3, 0x28});
         Assert.assertEquals("{\"ok\":true,\"result\":{\"$b64\":\"wyg=\"}}\n", sink.utf8());
+    }
+
+    @Test
+    public void bytesSliceUtf8NoEscapeUsesWriteToAndAvoidsFullCopy() {
+        byte[] bytes = "x".repeat(16 * 1024 + 3).getBytes(StandardCharsets.UTF_8);
+        ChunkLimitedBytesSlice slice = new ChunkLimitedBytesSlice(bytes, 8 * 1024);
+
+        String fromArray = writeBulkString(bytes);
+        String fromSlice = writeBulkString(slice);
+        Assert.assertEquals(fromArray, fromSlice);
+        Assert.assertTrue(slice.writeToCalled);
+        Assert.assertTrue(slice.getBytesCalls > 1);
+    }
+
+    @Test
+    public void bytesSliceUtf8WithEscapeIsEscapedAndChunked() {
+        byte[] bytes = new byte[16 * 1024 + 3];
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = (byte) 'x';
+        }
+        bytes[1] = (byte) '\n';
+        bytes[bytes.length / 2] = (byte) '"';
+        bytes[bytes.length - 2] = (byte) '\\';
+
+        ChunkLimitedBytesSlice slice = new ChunkLimitedBytesSlice(bytes, 8 * 1024);
+
+        String fromArray = writeBulkString(bytes);
+        String fromSlice = writeBulkString(slice);
+        Assert.assertEquals(fromArray, fromSlice);
+        Assert.assertFalse(slice.writeToCalled);
+        Assert.assertTrue(slice.getBytesCalls > 1);
+    }
+
+    @Test
+    public void bytesSliceInvalidUtf8FallbackToB64TaggedValueAndChunked() {
+        byte[] bytes = new byte[16 * 1024 + 3];
+        for (int i = 0; i + 1 < bytes.length; i += 2) {
+            bytes[i] = (byte) 0xC3;
+            bytes[i + 1] = 0x28;
+        }
+        // 若长度为奇数，末尾再补一个裸 continuation，确保 strict UTF-8 校验失败
+        if ((bytes.length & 1) == 1) {
+            bytes[bytes.length - 1] = (byte) 0x80;
+        }
+
+        ChunkLimitedBytesSlice slice = new ChunkLimitedBytesSlice(bytes, 8 * 1024);
+
+        String fromArray = writeBulkString(bytes);
+        String fromSlice = writeBulkString(slice);
+        Assert.assertEquals(fromArray, fromSlice);
+        Assert.assertFalse(slice.writeToCalled);
+        Assert.assertTrue(slice.getBytesCalls > 1);
     }
 
     @Test
@@ -81,6 +142,58 @@ public class JsonLineReplyWriterTest {
         String sanitized = msg.replace('\r', ' ').replace('\n', ' ');
         sanitized = sanitized.substring(0, 256);
         Assert.assertEquals("{\"ok\":false,\"error\":{\"kind\":\"command\",\"message\":\"" + sanitized + "\"}}\n", sink.utf8());
+    }
+
+    private static String writeBulkString(byte[] bytes) {
+        ByteArraySink sink = new ByteArraySink();
+        JsonLineReplyWriter w = new JsonLineReplyWriter(sink);
+        w.bulkString(bytes);
+        return sink.utf8();
+    }
+
+    private static String writeBulkString(BytesSlice slice) {
+        ByteArraySink sink = new ByteArraySink();
+        JsonLineReplyWriter w = new JsonLineReplyWriter(sink);
+        w.bulkString(slice);
+        return sink.utf8();
+    }
+
+    private static final class ChunkLimitedBytesSlice implements BytesSlice {
+        private final byte[] data;
+        private final int maxChunkBytes;
+
+        private int getBytesCalls;
+        private boolean writeToCalled;
+
+        private ChunkLimitedBytesSlice(byte[] data, int maxChunkBytes) {
+            this.data = data;
+            this.maxChunkBytes = maxChunkBytes;
+        }
+
+        @Override
+        public int length() {
+            return data.length;
+        }
+
+        @Override
+        public byte getByte(int index) {
+            throw new UnsupportedOperationException("getByte not supported in this test slice");
+        }
+
+        @Override
+        public void getBytes(int index, byte[] dst, int dstOff, int len) {
+            getBytesCalls++;
+            if (len > maxChunkBytes) {
+                throw new AssertionError("getBytes len too large: " + len);
+            }
+            System.arraycopy(data, index, dst, dstOff, len);
+        }
+
+        @Override
+        public void writeTo(BytesSink out) {
+            writeToCalled = true;
+            out.writeBytes(data, 0, data.length);
+        }
     }
 
     private static final class ByteArraySink implements BytesSink {

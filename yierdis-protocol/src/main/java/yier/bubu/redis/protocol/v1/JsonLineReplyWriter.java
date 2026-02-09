@@ -193,9 +193,7 @@ public final class JsonLineReplyWriter implements ReplyWriter {
             writeStringValue("");
             return;
         }
-        byte[] data = new byte[len];
-        slice.getBytes(0, data, 0, len);
-        writeBytesValue(data, 0, len);
+        writeBytesValue(slice);
     }
 
     @Override
@@ -323,6 +321,15 @@ public final class JsonLineReplyWriter implements ReplyWriter {
         }
         beginValueOrKey();
         CustomProtocolV1NdjsonEncoder.writeBytesValue(out, data, off, len);
+        finishValue();
+    }
+
+    private void writeBytesValue(BytesSlice slice) {
+        if (finished) {
+            return;
+        }
+        beginValueOrKey();
+        CustomProtocolV1NdjsonEncoder.writeBytesValue(out, slice);
         finishValue();
     }
 

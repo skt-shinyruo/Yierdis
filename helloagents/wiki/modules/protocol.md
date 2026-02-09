@@ -41,6 +41,7 @@ Custom Protocol v1 的 reply 采用 NDJSON（每个 reply 一行 JSON）：
 
 - null/boolean/integer/double/string → JSON 原生值
 - bytes（bulk string）：若为 **严格 UTF-8** 字节序列，则输出 JSON string（可逆）；否则输出 tagged value：`{"$b64":"<base64>"}`（语义保真，避免信息丢失）
+  - 实现要点：bytes value 编码由 `CustomProtocolV1NdjsonEncoder`（SSOT）以 streaming 方式完成；当输入为 `BytesSlice` 且 strict UTF-8 且无需 JSON escape 时，直接走 `BytesSlice.writeTo(BytesSink)`，以便 `NettyByteBufSink`/off-heap slice 命中 fast-path；需要 escape 或 invalid UTF-8 时，按固定 chunk（8KB）读取并编码，避免按 value 大小分配 heap `byte[]`。
 - array → JSON array
 - map/attribute → tagged value：`{"$map":[[k,v],...]}`（entries 结构；key/value 均为 value，可表达任意类型，避免 JSON object key 只能为 string 的限制）
 - nested error（数组元素/值域内错误）→ tagged value：`{"$error":{"kind":"command|protocol|internal","message":"..."}}`
@@ -69,3 +70,4 @@ Custom Protocol v1 的 reply 采用 NDJSON（每个 reply 一行 JSON）：
 ## Change History
 
 - 2026-02-06：引入协议无关抽象 + Custom Protocol v1（JSON codec + NDJSON reply），并移除旧协议遗留实现与测试。
+- 2026-02-09：reply bytes value 编码贯通 `BytesSlice` 直写/少拷贝链路（streaming strict UTF-8 + JSON escape + `$b64` fallback），详情：`helloagents/history/2026-02/202602092316_reply_byteslice_streaming_encoder/`。

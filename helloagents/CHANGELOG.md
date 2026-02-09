@@ -78,6 +78,7 @@
 - STRING 扩展：补齐随机读写/按需扩容的零填充语义，支持 BITMAP/HLL 的原地修改；unsafe off-heap string 增加 `setByte/setBytes` 以支持随机写。
 - protocol-netty：codec/adapters 迁移到独立包 `yier.bubu.redis.protocol.netty`，`yierdis-protocol` 独占 `yier.bubu.redis.protocol`（消除 split-package）。
 - reply 写出语义收敛：命令层仅依赖 `ReplyWriter`；Custom Protocol v1 reply 统一由 `JsonLineReplyWriter` 编码为 NDJSON。
+- reply bytes value streaming：`CustomProtocolV1NdjsonEncoder` 对 bulk-string(bytes) 的 strict UTF-8 校验 + JSON string escape + `$b64` fallback 改为 streaming；`JsonLineReplyWriter.bulkString(BytesSlice)` 不再按 value 大小 `new byte[len]` 全量拷贝，且在无需 escape 的 UTF-8 场景走 `BytesSlice.writeTo(BytesSink)`，贯通 off-heap/Netty sink fast-path。
 - off-heap：core 通过 `YierdisOffHeapAddressAllocator` capability 选择 keyspace/expires 的 off-heap 路径，避免对具体后端类型的 `instanceof` 耦合；`yierdis-core` 不再编译期依赖 `yierdis-offheap-unsafe`。
 - off-heap 可观测性增强：`YierdisOffHeapAllocators` 增加 ServiceLoader providers 发现摘要；server 启动期输出 backend/providers 诊断信息；缺失后端错误信息附带 discovered providers（摘要在失败路径懒加载，避免成功路径额外 ServiceLoader 扫描）。
 - 背压语义增强：在全局队列满/bytes 预算耗尽时，触发可恢复的全局 backpressure（禁读 + 滞回恢复），降低 busy 风暴与“禁读后无法恢复”的风险。
