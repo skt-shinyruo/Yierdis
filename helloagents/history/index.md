@@ -37,6 +37,12 @@
 | 202602041630 | db_prod_arch_contracts_full_newimpl | Standard Development | ✅ Completed | helloagents/history/2026-02/202602041630_db_prod_arch_contracts_full_newimpl/ |
 | 202602061102 | resp_parser_ssot_alignment | Standard Development | ✅ Completed | helloagents/history/2026-02/202602061102_resp_parser_ssot_alignment/ |
 | 202602061216 | resp_codec_test_matrix | Standard Development | ✅ Completed | helloagents/history/2026-02/202602061216_resp_codec_test_matrix/ |
+| 202602061601 | custom_protocol_v1 | Standard Development | ✅ Completed | helloagents/history/2026-02/202602061601_custom_protocol_v1/ |
+| 202602081104 | protocol_v1_request_decoder_low_copy | Execution Command | ✅ Completed | helloagents/history/2026-02/202602081104_protocol_v1_request_decoder_low_copy/ |
+| 202602081454 | db_executor_decouple | Standard Development | ⚠️ Partial | helloagents/history/2026-02/202602081454_db_executor_decouple/ |
+| 202602081752 | foreign_memory_default | Lightweight Iteration | ✅ Completed | helloagents/history/2026-02/202602081752_foreign_memory_default/ |
+| 202602081942 | command_engine_boundary | Standard Development | ✅ Completed | helloagents/history/2026-02/202602081942_command_engine_boundary/ |
+| 202602091258 | db_executor_decouple_v2 | Execution Command | ✅ Completed | helloagents/history/2026-02/202602091258_db_executor_decouple_v2/ |
 
 ---
 
@@ -76,6 +82,12 @@
 - helloagents/history/2026-02/202602041630_db_prod_arch_contracts_full_newimpl/
 - helloagents/history/2026-02/202602061102_resp_parser_ssot_alignment/
 - helloagents/history/2026-02/202602061216_resp_codec_test_matrix/
+- helloagents/history/2026-02/202602061601_custom_protocol_v1/
+- helloagents/history/2026-02/202602081104_protocol_v1_request_decoder_low_copy/
+- helloagents/history/2026-02/202602081454_db_executor_decouple/
+- helloagents/history/2026-02/202602081752_foreign_memory_default/
+- helloagents/history/2026-02/202602081942_command_engine_boundary/
+- helloagents/history/2026-02/202602091258_db_executor_decouple_v2/
 
 ## 2026-01
 - 202601172157_executor_modularize - 执行器组件化与不变量测试补齐

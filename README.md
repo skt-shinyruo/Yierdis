@@ -1,14 +1,16 @@
 # yierdis (Java 17 + Netty)
 
-一个简化版的 Yierdis Server（兼容 Redis），适合用来学习/演示 Netty 网络编程与 Redis 协议。
+一个教学/演示导向的内存 KV 服务端，适合用来学习/演示 Netty 网络编程与单线程命令执行、背压与淘汰等思路。
+
+对外协议使用自定义协议 **Custom Protocol v1**（不兼容 Redis 原生协议）。
 
 ## 定位与兼容性边界（重要）
 
-Yierdis 的目标是 **教学/演示**：可以用 `redis-cli` 做交互学习、用最小命令集理解数据结构/协议/背压/淘汰等思路。
+Yierdis 的目标是 **教学/演示**：可以用项目内置 CLI 做交互学习、用最小命令集理解数据结构/协议/背压/淘汰等思路。
 
 但它不是 Redis 的 drop-in replacement（README 明确将不少能力定义为 out-of-scope），并且即便是已实现命令，也有不少“刻意简化/最小子集”的语义差异（例如 TTL 清理、`KEYS` glob 覆盖范围、事务边界行为等）。
 
-- **包含（In scope）**：单机内存版数据结构、基础命令子集、TTL（惰性删除 + 轻量后台清理）、maxmemory（教学口径的估算 + 近似淘汰）、最小事务子集（`MULTI/EXEC/DISCARD`）、RESP2 + RESP3（request + reply，含 push/attributes/streamed）、`INFO/STATS/MEMORY STATS` 可观测性
+- **包含（In scope）**：单机内存版数据结构、基础命令子集、TTL（惰性删除 + 轻量后台清理）、maxmemory（教学口径的估算 + 近似淘汰）、最小事务子集（`MULTI/EXEC/DISCARD`）、自定义协议（Custom Protocol v1：length-prefixed request + NDJSON reply；协议错误尽量可恢复）、`INFO/STATS/MEMORY STATS` 可观测性
 - **不包含（Out of scope）**：AOF/RDB 持久化、复制/集群、Lua、ACL/TLS、PubSub/订阅模式、完整的模块化运维能力
 
 ## 环境
@@ -23,43 +25,28 @@ mvn -q -DskipTests package
 java -jar yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar --port 6378
 ```
 
-然后可以用 `redis-cli` 连接：
+然后使用项目内置 CLI 连接（默认 `127.0.0.1:6378`）：
 
 ```bash
-redis-cli -p 6378 ping
-redis-cli -p 6378 set a 1
-redis-cli -p 6378 get a
-redis-cli -p 6378 incr a
-redis-cli -p 6378 expire a 10
-redis-cli -p 6378 ttl a
-redis-cli -p 6378 info
-redis-cli -p 6378 info yierdis
-redis-cli -p 6378 stats
+java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar PING
+java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar SET a 1
+java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar GET a
+java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar INFO
+java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar INFO yierdis
+java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar STATS
 ```
 
-如果需要显式指定协议版本：
+也可以用 `nc` 直接发送一帧（示例：PING）：
 
 ```bash
-# 强制 RESP2
-redis-cli -p 6378 --resp2 ping
-
-# 使用 RESP3（服务端会在 HELLO 3 后切换为 RESP3 回复；实现为最小子集）
-redis-cli -p 6378 --resp3 ping
+printf '24:{"cmd":"PING","args":[]}\n' | nc 127.0.0.1 6378
 ```
 
-`HELLO` 返回的 `version` 字段来自构建版本（`project.version` 资源注入），用于保证对外版本输出与构建产物一致（避免硬编码常量漂移）。
+说明：
 
-RESP3 说明（重要）：
-
-- reply 侧：在 `HELLO 3` 后，服务端切换为 RESP3 回复，并尽量以 RESP3 类型返回集合与标量（`%` map、`~` set、`_` null、`#` boolean、`,` double、`(` big number、`=` verbatim string、`!` blob error、`>` push、`|` attribute）；同时 codec/parser 支持 streamed strings（`$? ... ;0`）与 streamed aggregates（`*?/%?/~? ... .`）以提升互操作性。
-- request 侧：主路径仍是 RESP2 的 “array of bulk strings”（与 Redis 客户端一致），但 server 的 request decoder 支持 RESP3 `|` attributes 前缀、命令数组内的 RESP3 标量参数，以及 `$?` streamed blob string 与 `*?` streamed array（严格要求 top-level 为 array/inline；不支持将 map/set 等聚合类型作为命令参数）。
-
-也支持 inline command（便于 telnet/nc 调试；兼容 Redis `sdssplitargs` 风格：支持单/双引号、反斜杠转义、`\\xHH` 十六进制转义）：
-
-```bash
-printf "PING\r\n" | nc 127.0.0.1 6378
-printf "ECHO \"hello world\"\r\n" | nc 127.0.0.1 6378
-```
+- `len` 是 JSON payload 的 UTF-8 字节长度；其他命令需要按 payload 实际字节数计算。
+- 服务端返回 NDJSON：每个 reply 一行 JSON（以 `\n` 结尾）。
+- 对外仅支持 Custom Protocol v1（不兼容 Redis 原生协议与其生态客户端）。
 
 ## 客户端（CLI）
 
@@ -80,14 +67,15 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 - `--host <host>`
 - `--port <port>`
 - `--timeoutMillis <ms>`
-- `--hex`（bulk string 以 hex 输出，便于观察二进制数据）
+- `--hex`（raw JSON reply line 以 hex 输出）
 
 说明：
 
-- client 侧发送命令仍采用 RESP2 的 “array of bulk strings” 形式（与 Redis 客户端一致）。
-- 在执行 `HELLO 3` 之后，client/CLI 可解析 RESP3 reply 的常见类型（map/set/push/attribute/标量），并支持 streamed 类型的切帧与对象树解析，便于回归与排障。
-- client 侧对 RESP3 push（含 attributes 包裹 push）做了分流：push 不会破坏 `execute()` 的 request/response 配对，可通过 `YierdisClient.pollPush(...)` 获取。
-- REPL 输入解析规则与 server inline command 解析保持一致（sdssplitargs 风格：支持单/双引号、反斜杠转义、`\\xHH` 十六进制转义）。
+- client/CLI 使用 Custom Protocol v1：
+  - request：`<len>:<json>\n`，payload 形如 `{"cmd":"PING","args":["a","1"]}`
+  - reply：NDJSON（一行一个 JSON 对象）
+- CLI 默认打印服务端返回的 JSON 单行文本；`--hex` 仅改变展示方式（不改变协议）。
+- REPL 输入解析规则保持 sdssplitargs 风格（支持单/双引号、反斜杠转义、`\\xHH` 十六进制转义）。
 
 ## 已实现命令（简化版）
 
@@ -95,7 +83,7 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 
 - `PING [message]`
 - `ECHO <message>`
-- `HELLO [2|3]`（支持 2/3；`HELLO 3` 会切换连接为 RESP3）
+- `HELLO [ignored]`（信息型命令：返回 server/version/proto/mode/role；不进行协议协商）
 - `COMMAND`（最小子集：`COMMAND`/`COMMAND COUNT`/`COMMAND INFO <name ...>`）
 - `SELECT <index>`（默认支持 `0..15`；可通过 `--databases` 调整）
 - `QUIT`
@@ -182,7 +170,7 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 
 - 这是一个 **单机内存版** 实现：不包含 AOF/RDB 持久化、复制、集群、Lua、ACL、TLS 等复杂功能。
 - 事务仅支持最小子集：`MULTI/EXEC/DISCARD`（不包含 WATCH 等）。
-- 协议层默认 RESP2，并支持最小 RESP3（`HELLO 3` 协商后切换；nil 返回使用 RESP3 null），以及 inline command（仅用于调试，支持引号/转义/`\\xHH`）。
+- 协议层为 Custom Protocol v1（length-prefixed JSON request + NDJSON reply）；协议错误尽量可恢复（返回 error 并尝试读取下一帧；在安全上限触达时可能断连）。
 - TTL 采用“访问时惰性删除”，并带一个轻量级后台清理任务（可关）。
 
 ## 内存管理（maxmemory / 淘汰，教学用）
@@ -225,9 +213,14 @@ java -jar yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar \
 - `--backpressureHigh/--backpressureLow`：连接级条数背压水位线（滞回）
 - `--backpressureBytesHigh/--backpressureBytesLow`：连接级 bytes 背压水位线（滞回；`0` 表示禁用）
 
+开放网络环境建议（重要）：
+
+- 如果部署在公网/弱隔离环境，建议 **显式收紧** `--protocolMaxBulkBytes`（以及 `--protocolMaxArgs/--protocolMaxLineBytes`），不要依赖默认值。
+- 即便 decoder 侧已做“尽量低拷贝”的优化，大包请求仍可能导致解析与字符串驻留带来显著内存/CPU 压力；输入上限是更有效的第一道护栏。
+
 busy 可诊断性（排障）：
 
-- 当投递被拒绝时，server 会返回 `-ERR busy <reason>`（保持 RESP error 形态兼容；`reason` 用于人类排障）：
+- 当投递被拒绝时，server 会返回错误（`message` 以 `ERR busy <reason>` 开头；`reason` 用于人类排障）：
   - `not_running`：执行器未启动或正在关闭
   - `queue_full`：全局队列已满
   - `bytes_budget`：全局 queued-bytes 预算耗尽
@@ -240,7 +233,7 @@ busy 可诊断性（排障）：
 
 - `netty`：基于 Netty direct `ByteBuf`（适配层在 `yierdis-offheap-netty`；`yierdis-offheap-api` 不依赖 Netty）
 - `unsafe`：基于 `sun.misc.Unsafe`（通过 Netty `PlatformDependent`）管理 native memory（无需 incubator modules）
-- `foreign`：基于 Java 17 incubator 的 Foreign Memory API（需要 Maven profile + JVM module 参数）
+- `foreign`：基于 Java 17 incubator 的 Foreign Memory API（默认构建已包含；运行时需要启用模块，server 可自动补齐）
 
 目前该层主要用于逐步迁移（先抽象，再替换实现）。默认 `--offheapBackend none` 不影响现有逻辑；当显式启用
 off-heap 后端后，当前已用于字符串值的存储与回复（例如 `GET` 会优先走 off-heap slice 的写出路径，避免为已存储值再分配新的 heap `byte[]`）。
@@ -248,23 +241,28 @@ off-heap 后端后，当前已用于字符串值的存储与回复（例如 `GET
 
 ### 运行/测试 Foreign Memory 后端
 
-默认 `mvn test` 不会编译 Foreign Memory 后端源码。开启方式：
+从 2026-02-08 起，`foreign-memory` profile 默认启用，因此默认构建会编译并打包 foreign 后端：
 
 ```bash
-mvn -Pforeign-memory test
+mvn test
+mvn -DskipTests package
 ```
 
-如果需要把 Foreign Memory 后端打进 shaded jar，也需要带 profile 进行打包：
+如果你的构建/运行环境不包含 `jdk.incubator.foreign`（例如不是 JDK 17），可以显式禁用该 profile：
 
 ```bash
-mvn -Pforeign-memory -DskipTests package
+mvn -P!foreign-memory test
+mvn -P!foreign-memory -DskipTests package
 ```
 
-运行时如果选择 `foreign` 后端，需要显式添加模块（Java 17）：
+运行时若选择 `foreign` 后端，Java 17 需要启用 incubator 模块。推荐显式添加（避免一次自动重启）：
 
 ```bash
 java --add-modules jdk.incubator.foreign -jar yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar --offheapBackend foreign
 ```
+
+为降低部署复杂度，如果你直接运行 `java -jar ... --offheapBackend foreign`，server 会检测到模块未启用并自动重启补齐
+`--add-modules jdk.incubator.foreign`（并保留原 JVM 参数，例如 `-Xmx` / `-XX:MaxDirectMemorySize` 等）。
 
 ### Server 参数（预留）
 
