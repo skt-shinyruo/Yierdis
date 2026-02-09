@@ -10,7 +10,7 @@ import java.util.List;
 
 @Command(
         name = "yierdis-bench",
-        description = "Pure Java benchmark tool for Yierdis (RESP2 over TCP).",
+        description = "Pure Java benchmark tool for Yierdis (Custom Protocol v1 over TCP).",
         sortOptions = false,
         usageHelpAutoWidth = true
 )
@@ -86,4 +86,3 @@ public final class YierdisBenchArgs {
     @Unmatched
     public List<String> serverArgs = new ArrayList<>();
 }
-

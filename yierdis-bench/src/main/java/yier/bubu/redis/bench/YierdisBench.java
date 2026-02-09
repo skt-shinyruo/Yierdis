@@ -1,15 +1,8 @@
 package yier.bubu.redis.bench;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
-import io.netty.channel.embedded.EmbeddedChannel;
 import picocli.CommandLine;
 import picocli.CommandLine.ParameterException;
 import yier.bubu.redis.args.YierdisServerArgs;
-import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.protocol.RespWriter;
-import yier.bubu.redis.protocol.netty.RespDecoder;
-import yier.bubu.redis.protocol.netty.NettyRespFrame;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -43,7 +36,7 @@ import java.util.concurrent.TimeUnit;
  * <p>
  * 设计原则：
  * - 不依赖 redis-benchmark 等系统工具
- * - 使用本地 TCP + RESP2，避免“进程内直连”偏离真实网络路径
+ * - 使用本地 TCP + 自定义协议 v1，避免“进程内直连”偏离真实网络路径
  * - 以固定请求数为主，输出 QPS 与简单的延迟分位数
  */
 public final class YierdisBench {
@@ -304,16 +297,12 @@ public final class YierdisBench {
                 s.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
                 try (BufferedOutputStream out = new BufferedOutputStream(s.getOutputStream());
                      BufferedInputStream in = new BufferedInputStream(s.getInputStream())) {
-                    try (RespCommandWriter w = new RespCommandWriter(out);
-                         RespReplyReader reader = new RespReplyReader(in)) {
+                    try (CustomCommandWriter w = new CustomCommandWriter(out);
+                         JsonReplyReader reader = new JsonReplyReader(in)) {
                         w.writePing();
                         out.flush();
-                        NettyRespFrame frame = reader.readFrame();
-                        try {
-                            return RespReplyReader.kindOf(frame) != null;
-                        } finally {
-                            frame.close();
-                        }
+                        JsonReplyReader.Line line = reader.readLine();
+                        return line != null && line.len() > 0 && startsWith(line.bytes(), line.len(), OK_PREFIX);
                     }
                 }
             } catch (Exception ignored) {
@@ -529,123 +518,92 @@ public final class YierdisBench {
         System.out.println(s);
     }
 
-    private static boolean validateStrictReply(Workload workload, NettyRespFrame frame, int expectedDataSize) {
-        if (frame == null || workload == null) {
+    private static final byte[] OK_PREFIX = "{\"ok\":true,\"result\":".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] ERR_PREFIX = "{\"ok\":false,\"error\":".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] REPLY_OK = "{\"ok\":true,\"result\":\"OK\"}".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] REPLY_PONG = "{\"ok\":true,\"result\":\"PONG\"}".getBytes(StandardCharsets.US_ASCII);
+
+    private static boolean validateStrictReply(Workload workload, byte[] line, int lineLen, int expectedDataSize) {
+        if (workload == null || line == null || lineLen <= 0) {
             return false;
         }
-        ByteBuf buf = frame.unwrap();
-        int start = buf.readerIndex();
-        if (start >= buf.writerIndex()) {
+        if (!startsWith(line, lineLen, OK_PREFIX)) {
             return false;
         }
-        byte prefix = buf.getByte(start);
         switch (workload) {
             case PING:
-                return prefix == '+' && matchesSimpleString(buf, start, "PONG");
+                return bytesEqual(line, lineLen, REPLY_PONG);
             case SET_RANDOM:
             case SET_SEQUENTIAL:
-                return prefix == '+' && matchesSimpleString(buf, start, "OK");
-            case GET_RANDOM:
-                if (prefix != '$') {
+                return bytesEqual(line, lineLen, REPLY_OK);
+            case GET_RANDOM: {
+                int prefixLen = OK_PREFIX.length;
+                if (lineLen < prefixLen + 2) {
                     return false;
                 }
-                int bulkLen = parseBulkLen(buf, start);
-                return bulkLen == -1 || bulkLen == expectedDataSize;
+                byte first = line[prefixLen];
+                if (first == 'n') {
+                    // {"ok":true,"result":null}
+                    return lineLen == prefixLen + 5
+                            && line[prefixLen] == 'n'
+                            && line[prefixLen + 1] == 'u'
+                            && line[prefixLen + 2] == 'l'
+                            && line[prefixLen + 3] == 'l'
+                            && line[prefixLen + 4] == '}';
+                }
+                if (first != '"') {
+                    return false;
+                }
+                int expectedLen = prefixLen + Math.max(0, expectedDataSize) + 3; // prefix + " + value + " + }
+                if (expectedDataSize >= 0 && lineLen != expectedLen) {
+                    return false;
+                }
+                return line[lineLen - 2] == '"' && line[lineLen - 1] == '}';
+            }
             default:
                 return true;
         }
     }
 
-    private static boolean matchesSimpleString(ByteBuf buf, int start, String expectedAscii) {
-        int i = start + 1;
-        int limit = buf.writerIndex() - 1;
-        for (; i < limit; i++) {
-            if (buf.getByte(i) == '\r' && buf.getByte(i + 1) == '\n') {
-                break;
-            }
-        }
-        if (i >= limit) {
+    private static boolean isErrorLine(byte[] line, int lineLen) {
+        return startsWith(line, lineLen, ERR_PREFIX);
+    }
+
+    private static boolean startsWith(byte[] line, int lineLen, byte[] prefix) {
+        if (line == null || prefix == null) {
             return false;
         }
-        int len = i - (start + 1);
-        if (len != expectedAscii.length()) {
+        if (lineLen < prefix.length) {
             return false;
         }
-        for (int k = 0; k < expectedAscii.length(); k++) {
-            if (buf.getByte(start + 1 + k) != (byte) expectedAscii.charAt(k)) {
+        for (int i = 0; i < prefix.length; i++) {
+            if (line[i] != prefix[i]) {
                 return false;
             }
         }
         return true;
     }
 
-    private static int parseBulkLen(ByteBuf buf, int start) {
-        int i = start + 1;
-        int limit = buf.writerIndex() - 1;
-        for (; i < limit; i++) {
-            if (buf.getByte(i) == '\r' && buf.getByte(i + 1) == '\n') {
-                break;
+    private static boolean bytesEqual(byte[] line, int lineLen, byte[] expected) {
+        if (line == null || expected == null) {
+            return false;
+        }
+        if (lineLen != expected.length) {
+            return false;
+        }
+        for (int i = 0; i < expected.length; i++) {
+            if (line[i] != expected[i]) {
+                return false;
             }
         }
-        if (i >= limit) {
-            return Integer.MIN_VALUE;
-        }
-        int lenStart = start + 1;
-        int lenEnd = i;
-        boolean negative = false;
-        if (lenStart < lenEnd && buf.getByte(lenStart) == '-') {
-            negative = true;
-            lenStart++;
-        }
-        if (lenStart >= lenEnd) {
-            return Integer.MIN_VALUE;
-        }
-        int v = 0;
-        for (int p = lenStart; p < lenEnd; p++) {
-            int digit = (buf.getByte(p) & 0xFF) - '0';
-            if (digit < 0 || digit > 9) {
-                return Integer.MIN_VALUE;
-            }
-            if (v > (Integer.MAX_VALUE - digit) / 10) {
-                return Integer.MIN_VALUE;
-            }
-            v = v * 10 + digit;
-        }
-        return negative ? -v : v;
+        return true;
     }
 
     enum Workload {
         PING,
         SET_RANDOM,
         SET_SEQUENTIAL,
-        GET_RANDOM;
-
-        boolean accepts(ReplyKind kind) {
-            if (kind == null) {
-                return false;
-            }
-            switch (this) {
-                case PING:
-                case SET_RANDOM:
-                case SET_SEQUENTIAL:
-                    return kind == ReplyKind.SIMPLE_STRING;
-                case GET_RANDOM:
-                    return kind == ReplyKind.BULK_STRING || kind == ReplyKind.NULL;
-                default:
-                    return true;
-            }
-        }
-    }
-
-    enum ReplyKind {
-        SIMPLE_STRING,
-        ERROR,
-        INTEGER,
-        BULK_STRING,
-        ARRAY,
-        NULL,
-        MAP,
-        SET
+        GET_RANDOM
     }
 
     static final class BenchConfig {
@@ -909,8 +867,8 @@ public final class YierdisBench {
                 socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
                 try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                      BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
-                    try (RespCommandWriter writer = new RespCommandWriter(out);
-                         RespReplyReader reader = new RespReplyReader(in)) {
+                    try (CustomCommandWriter writer = new CustomCommandWriter(out);
+                         JsonReplyReader reader = new JsonReplyReader(in)) {
                         byte[] keyBuf = new byte[9]; // "k" + 8 digits
 
                         int remaining = requests;
@@ -941,16 +899,11 @@ public final class YierdisBench {
                             out.flush();
 
                             for (int i = 0; i < batch; i++) {
-                                NettyRespFrame reply = reader.readFrame();
-                                try {
-                                    ReplyKind kind = RespReplyReader.kindOf(reply);
-                                    if (kind == ReplyKind.ERROR) {
-                                        errors++;
-                                    } else if (strictReplies && (!workload.accepts(kind) || !validateStrictReply(workload, reply, value.length))) {
-                                        errors++;
-                                    }
-                                } finally {
-                                    reply.close();
+                                JsonReplyReader.Line reply = reader.readLine();
+                                if (isErrorLine(reply.bytes(), reply.len())) {
+                                    errors++;
+                                } else if (strictReplies && !validateStrictReply(workload, reply.bytes(), reply.len(), value.length)) {
+                                    errors++;
                                 }
                             }
 
@@ -1004,8 +957,8 @@ public final class YierdisBench {
                 socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
                 try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                      BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
-                    try (RespCommandWriter writer = new RespCommandWriter(out);
-                         RespReplyReader reader = new RespReplyReader(in)) {
+                    try (CustomCommandWriter writer = new CustomCommandWriter(out);
+                         JsonReplyReader reader = new JsonReplyReader(in)) {
                         for (int i = 0; i < requests; i++) {
                             int keyIndex = rnd.nextInt(keyspace);
                             writeKey(keyBuf, keyIndex);
@@ -1025,16 +978,11 @@ public final class YierdisBench {
                                     throw new IllegalStateException("unexpected workload: " + workload);
                             }
                             out.flush();
-                            NettyRespFrame reply = reader.readFrame();
-                            try {
-                                ReplyKind kind = RespReplyReader.kindOf(reply);
-                                if (kind == ReplyKind.ERROR) {
-                                    errors++;
-                                } else if (strictReplies && (!workload.accepts(kind) || !validateStrictReply(workload, reply, value.length))) {
-                                    errors++;
-                                }
-                            } finally {
-                                reply.close();
+                            JsonReplyReader.Line reply = reader.readLine();
+                            if (isErrorLine(reply.bytes(), reply.len())) {
+                                errors++;
+                            } else if (strictReplies && !validateStrictReply(workload, reply.bytes(), reply.len(), value.length)) {
+                                errors++;
                             }
                             long t1 = System.nanoTime();
                             samples[i] = t1 - t0;
@@ -1051,130 +999,185 @@ public final class YierdisBench {
         }
     }
 
-    static final class RespCommandWriter implements AutoCloseable {
+    static final class CustomCommandWriter implements AutoCloseable {
         private static final byte[] CMD_PING = "PING".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] CMD_GET = "GET".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] CMD_SET = "SET".getBytes(StandardCharsets.US_ASCII);
 
-        private final OutputStream out;
-        private final ByteBuf buf;
-        private final RespWriter writer;
+        private static final byte[] PREFIX_CMD = "{\"cmd\":\"".getBytes(StandardCharsets.US_ASCII);
+        private static final byte[] MID_ARGS = "\",\"args\":[".getBytes(StandardCharsets.US_ASCII);
+        private static final byte[] SUFFIX = "]}".getBytes(StandardCharsets.US_ASCII);
 
-        RespCommandWriter(OutputStream out) {
+        private final OutputStream out;
+        private final byte[] intBuf = new byte[16];
+
+        CustomCommandWriter(OutputStream out) {
             this.out = Objects.requireNonNull(out, "out");
-            this.buf = Unpooled.buffer(256);
-            BytesSink sink = (src, srcIndex, len) -> this.buf.writeBytes(src, srcIndex, len);
-            this.writer = new RespWriter(sink);
         }
 
         void writePing() throws IOException {
-            writer.arrayHeader(1);
-            writer.bulkString(CMD_PING);
-            flush();
+            writeFrame(CMD_PING, null, null);
         }
 
         void writeGet(byte[] key) throws IOException {
-            writer.arrayHeader(2);
-            writer.bulkString(CMD_GET);
-            writer.bulkString(key);
-            flush();
+            writeFrame(CMD_GET, key, null);
         }
 
         void writeSet(byte[] key, byte[] value) throws IOException {
-            writer.arrayHeader(3);
-            writer.bulkString(CMD_SET);
-            writer.bulkString(key);
-            writer.bulkString(value);
-            flush();
+            writeFrame(CMD_SET, key, value);
         }
 
-        private void flush() throws IOException {
-            int len = buf.readableBytes();
-            if (len > 0) {
-                buf.readBytes(out, len);
+        private void writeFrame(byte[] cmd, byte[] arg1, byte[] arg2) throws IOException {
+            int payloadLen = payloadLen(cmd, arg1, arg2);
+            writeIntAscii(payloadLen);
+            out.write(':');
+
+            out.write(PREFIX_CMD);
+            out.write(cmd);
+            out.write(MID_ARGS);
+
+            if (arg1 != null) {
+                writeJsonStringBytes(arg1);
+                if (arg2 != null) {
+                    out.write(',');
+                    writeJsonStringBytes(arg2);
+                }
             }
-            buf.clear();
+
+            out.write(SUFFIX);
+            out.write('\n');
+        }
+
+        private static int payloadLen(byte[] cmd, byte[] arg1, byte[] arg2) {
+            int cmdLen = cmd == null ? 0 : cmd.length;
+            int argsLen = 0;
+            if (arg1 != null) {
+                argsLen += 2 + arg1.length;
+                if (arg2 != null) {
+                    argsLen += 1 + 2 + arg2.length; // ',' + second string
+                }
+            }
+            return PREFIX_CMD.length + cmdLen + MID_ARGS.length + argsLen + SUFFIX.length;
+        }
+
+        private void writeJsonStringBytes(byte[] utf8) throws IOException {
+            if (utf8 == null) {
+                out.write('n');
+                out.write('u');
+                out.write('l');
+                out.write('l');
+                return;
+            }
+            for (int i = 0; i < utf8.length; i++) {
+                int b = utf8[i] & 0xFF;
+                if (b < 0x20 || b == '"' || b == '\\') {
+                    throw new IOException("bench payload contains unsupported characters");
+                }
+            }
+            out.write('"');
+            out.write(utf8);
+            out.write('"');
+        }
+
+        private void writeIntAscii(int value) throws IOException {
+            int v = Math.max(0, value);
+            int pos = intBuf.length;
+            if (v == 0) {
+                intBuf[--pos] = '0';
+            } else {
+                while (v > 0) {
+                    int digit = v % 10;
+                    intBuf[--pos] = (byte) ('0' + digit);
+                    v /= 10;
+                }
+            }
+            out.write(intBuf, pos, intBuf.length - pos);
         }
 
         @Override
         public void close() {
-            buf.release();
+            // no-op
         }
     }
 
-    static final class RespReplyReader implements AutoCloseable {
+    static final class JsonReplyReader implements AutoCloseable {
         private static final int READ_BUF_BYTES = 8 * 1024;
+        private static final int DEFAULT_MAX_LINE_BYTES = 1024 * 1024; // 1 MiB
 
         private final InputStream in;
-        private final EmbeddedChannel decoder;
         private final byte[] readBuf = new byte[READ_BUF_BYTES];
+        private int readPos;
+        private int readLimit;
 
-        RespReplyReader(InputStream in) {
+        private final int maxLineBytes;
+        private final Line line = new Line();
+
+        JsonReplyReader(InputStream in) {
+            this(in, DEFAULT_MAX_LINE_BYTES);
+        }
+
+        JsonReplyReader(InputStream in, int maxLineBytes) {
             this.in = Objects.requireNonNull(in, "in");
-            this.decoder = new EmbeddedChannel(new RespDecoder());
+            this.maxLineBytes = Math.max(0, maxLineBytes);
         }
 
-        NettyRespFrame readFrame() throws IOException {
-            return readOne();
-        }
-
-        private NettyRespFrame readOne() throws IOException {
-            while (true) {
-                Object msg = decoder.readInbound();
-                if (msg != null) {
-                    if (!(msg instanceof NettyRespFrame)) {
-                        throw new IOException("unexpected decoded type: " + msg.getClass().getName());
+        Line readLine() throws IOException {
+            line.len = 0;
+            for (; ; ) {
+                if (readPos >= readLimit) {
+                    int n = in.read(readBuf);
+                    if (n < 0) {
+                        throw new IOException("EOF");
                     }
-                    return (NettyRespFrame) msg;
+                    if (n == 0) {
+                        continue;
+                    }
+                    readPos = 0;
+                    readLimit = n;
                 }
 
-                int n = in.read(readBuf);
-                if (n < 0) {
-                    throw new IOException("EOF");
+                byte b = readBuf[readPos++];
+                if (b == '\n') {
+                    return line;
                 }
-                if (n == 0) {
+                if (b == '\r') {
                     continue;
                 }
-                decoder.writeInbound(Unpooled.wrappedBuffer(readBuf, 0, n));
-                decoder.runPendingTasks();
-            }
-        }
-
-        static ReplyKind kindOf(NettyRespFrame frame) {
-            if (frame == null) {
-                return null;
-            }
-            ByteBuf buf = frame.unwrap();
-            int start = buf.readerIndex();
-            if (start >= buf.writerIndex()) {
-                return null;
-            }
-            byte prefix = buf.getByte(start);
-            switch (prefix) {
-                case '+':
-                    return ReplyKind.SIMPLE_STRING;
-                case '-':
-                    return ReplyKind.ERROR;
-                case ':':
-                    return ReplyKind.INTEGER;
-                case '$': {
-                    int len = parseBulkLen(buf, start);
-                    return len == -1 ? ReplyKind.NULL : ReplyKind.BULK_STRING;
+                if (maxLineBytes > 0 && line.len + 1 > maxLineBytes) {
+                    throw new IOException("line too long");
                 }
-                case '*':
-                    return ReplyKind.ARRAY;
-                case '%':
-                    return ReplyKind.MAP;
-                case '_':
-                    return ReplyKind.NULL;
-                default:
-                    return null;
+                line.ensureCapacity(line.len + 1);
+                line.bytes[line.len++] = b;
             }
         }
 
         @Override
         public void close() {
-            decoder.finishAndReleaseAll();
+            // no-op
+        }
+
+        static final class Line {
+            private byte[] bytes = new byte[256];
+            private int len;
+
+            byte[] bytes() {
+                return bytes;
+            }
+
+            int len() {
+                return len;
+            }
+
+            private void ensureCapacity(int desired) {
+                if (bytes.length >= desired) {
+                    return;
+                }
+                int next = bytes.length;
+                while (next < desired) {
+                    next = next <= 0 ? 256 : Math.min(Integer.MAX_VALUE / 2, next * 2);
+                }
+                bytes = Arrays.copyOf(bytes, next);
+            }
         }
     }
 
