@@ -26,7 +26,7 @@ final class YierdisCliArgs {
     @Option(names = "--timeoutMillis", defaultValue = "5000", description = "Command timeout in milliseconds.")
     long timeoutMillis = 5000;
 
-    @Option(names = "--hex", description = "Print bulk strings as hex bytes.")
+    @Option(names = "--hex", description = "Print the raw JSON reply line as hex bytes.")
     boolean hex;
 
     @Parameters(
@@ -36,4 +36,3 @@ final class YierdisCliArgs {
     )
     List<String> command = new ArrayList<>();
 }
-

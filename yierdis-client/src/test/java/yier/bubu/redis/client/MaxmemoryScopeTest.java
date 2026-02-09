@@ -5,18 +5,17 @@ package yier.bubu.redis.client;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.YierdisServerBootstrap;
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespFrame;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespObject;
-import yier.bubu.redis.protocol.RespObjectParser;
-import yier.bubu.redis.protocol.RespSimpleString;
+import yier.bubu.redis.protocol.json.JsonBoolean;
+import yier.bubu.redis.protocol.json.JsonLong;
+import yier.bubu.redis.protocol.json.JsonNull;
+import yier.bubu.redis.protocol.json.JsonObject;
+import yier.bubu.redis.protocol.json.JsonString;
+import yier.bubu.redis.protocol.json.JsonValue;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.List;
+import java.util.Map;
 
 public class MaxmemoryScopeTest {
     @Test
@@ -39,14 +38,14 @@ public class MaxmemoryScopeTest {
                 ok(client, b("SET"), b("c"), bytesOfLen(256, (byte) 'c'));
 
                 ok(client, b("SELECT"), b("1"));
-                RespBulkString bVal = (RespBulkString) execute(client, b("GET"), b("b"));
-                Assert.assertTrue(bVal.isNull());
+                JsonValue bVal = resultValue(execute(client, b("GET"), b("b")));
+                Assert.assertTrue(bVal == null || bVal instanceof JsonNull);
 
                 ok(client, b("SELECT"), b("0"));
-                RespBulkString aVal = (RespBulkString) execute(client, b("GET"), b("a"));
-                Assert.assertFalse(aVal.isNull());
-                RespBulkString cVal = (RespBulkString) execute(client, b("GET"), b("c"));
-                Assert.assertFalse(cVal.isNull());
+                JsonValue aVal = resultValue(execute(client, b("GET"), b("a")));
+                Assert.assertTrue(aVal instanceof JsonString);
+                JsonValue cVal = resultValue(execute(client, b("GET"), b("c")));
+                Assert.assertTrue(cVal instanceof JsonString);
             }
         }
     }
@@ -71,14 +70,14 @@ public class MaxmemoryScopeTest {
                 ok(client, b("SET"), b("c"), bytesOfLen(256, (byte) 'c'));
 
                 ok(client, b("SELECT"), b("1"));
-                RespBulkString bVal = (RespBulkString) execute(client, b("GET"), b("b"));
-                Assert.assertFalse(bVal.isNull());
+                JsonValue bVal = resultValue(execute(client, b("GET"), b("b")));
+                Assert.assertTrue(bVal instanceof JsonString);
 
                 ok(client, b("SELECT"), b("0"));
-                RespBulkString aVal = (RespBulkString) execute(client, b("GET"), b("a"));
-                Assert.assertTrue(aVal.isNull());
-                RespBulkString cVal = (RespBulkString) execute(client, b("GET"), b("c"));
-                Assert.assertFalse(cVal.isNull());
+                JsonValue aVal = resultValue(execute(client, b("GET"), b("a")));
+                Assert.assertTrue(aVal == null || aVal instanceof JsonNull);
+                JsonValue cVal = resultValue(execute(client, b("GET"), b("c")));
+                Assert.assertTrue(cVal instanceof JsonString);
             }
         }
     }
@@ -110,32 +109,45 @@ public class MaxmemoryScopeTest {
         }
     }
 
-    private static HashMap<String, Long> parseMemoryStats(RespObject obj) {
-        Assert.assertTrue(obj instanceof RespArray);
-        RespArray arr = (RespArray) obj;
-        Assert.assertNotNull(arr.values());
-        List<RespObject> values = arr.values();
+    private static HashMap<String, Long> parseMemoryStats(JsonValue envelope) {
+        Assert.assertTrue(okEnvelope(envelope));
+        JsonValue result = resultValue(envelope);
+        Assert.assertTrue(result instanceof JsonObject);
         HashMap<String, Long> out = new HashMap<>();
-        for (int i = 0; i + 1 < values.size(); i += 2) {
-            Assert.assertTrue(values.get(i) instanceof RespBulkString);
-            Assert.assertTrue(values.get(i + 1) instanceof RespInteger);
-            String k = ((RespBulkString) values.get(i)).asString();
-            long v = ((RespInteger) values.get(i + 1)).value();
-            out.put(k, v);
+        for (Map.Entry<String, JsonValue> e : ((JsonObject) result).values().entrySet()) {
+            JsonValue v = e.getValue();
+            if (v instanceof JsonLong l) {
+                out.put(e.getKey(), l.value());
+            }
         }
         return out;
     }
 
-    private static RespObject execute(YierdisClient client, byte[]... args) throws Exception {
-        try (RespFrame frame = client.execute(Arrays.asList(args), 2000)) {
-            return RespObjectParser.parse(frame);
-        }
+    private static JsonValue execute(YierdisClient client, byte[]... args) throws Exception {
+        return client.execute(Arrays.asList(args), 2000).envelope();
     }
 
     private static void ok(YierdisClient client, byte[]... args) throws Exception {
-        RespObject obj = execute(client, args);
-        Assert.assertTrue(obj instanceof RespSimpleString);
-        Assert.assertEquals("OK", ((RespSimpleString) obj).value());
+        JsonValue env = execute(client, args);
+        Assert.assertTrue(okEnvelope(env));
+        Assert.assertEquals("OK", stringResult(env));
+    }
+
+    private static boolean okEnvelope(JsonValue envelope) {
+        Assert.assertTrue(envelope instanceof JsonObject);
+        JsonValue ok = ((JsonObject) envelope).values().get("ok");
+        return ok instanceof JsonBoolean b && b.value();
+    }
+
+    private static JsonValue resultValue(JsonValue envelope) {
+        Assert.assertTrue(envelope instanceof JsonObject);
+        return ((JsonObject) envelope).values().get("result");
+    }
+
+    private static String stringResult(JsonValue envelope) {
+        JsonValue v = resultValue(envelope);
+        Assert.assertTrue(v instanceof JsonString);
+        return ((JsonString) v).value();
     }
 
     private static byte[] bytesOfLen(int len, byte fill) {
@@ -176,3 +188,4 @@ public class MaxmemoryScopeTest {
         }
     }
 }
+

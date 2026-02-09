@@ -1,8 +1,7 @@
 package yier.bubu.redis.client;
 
-import org.junit.Assert;
-import org.junit.Test;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -11,24 +10,22 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.buffer.Unpooled;
 import io.netty.util.ReferenceCountUtil;
+import org.junit.Assert;
+import org.junit.Test;
 import yier.bubu.redis.YierdisServerBootstrap;
-import yier.bubu.redis.protocol.RespBulkString;
-import yier.bubu.redis.protocol.RespArray;
-import yier.bubu.redis.protocol.RespError;
-import yier.bubu.redis.protocol.RespFrame;
-import yier.bubu.redis.protocol.RespInteger;
-import yier.bubu.redis.protocol.RespMap;
-import yier.bubu.redis.protocol.RespNull;
-import yier.bubu.redis.protocol.RespObject;
-import yier.bubu.redis.protocol.RespSimpleString;
-import yier.bubu.redis.protocol.RespObjectParser;
+import yier.bubu.redis.protocol.json.JsonBoolean;
+import yier.bubu.redis.protocol.json.JsonLong;
+import yier.bubu.redis.protocol.json.JsonNull;
+import yier.bubu.redis.protocol.json.JsonObject;
+import yier.bubu.redis.protocol.json.JsonString;
+import yier.bubu.redis.protocol.json.JsonValue;
 
-import java.nio.charset.StandardCharsets;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -37,75 +34,58 @@ public class YierdisClientTest {
     public void pingWorks() throws Exception {
         try (TestServer server = TestServer.start()) {
             try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                try (RespFrame frame = client.execute(Arrays.asList(b("PING")), 1000)) {
-                    RespObject resp = RespObjectParser.parse(frame);
-                    Assert.assertTrue(resp instanceof RespSimpleString);
-                    Assert.assertEquals("PONG", ((RespSimpleString) resp).value());
-                }
+                YierdisClient.JsonReply reply = client.execute(Arrays.asList(b("PING")), 1000);
+                Assert.assertTrue(ok(reply.envelope()));
+                Assert.assertEquals("PONG", stringResult(reply.envelope()));
             }
         }
     }
 
     @Test
-    public void hello3ReturnsResp3MapAndNullIsDecoded() throws Exception {
+    public void helloReturnsObjectAndNullIsDecoded() throws Exception {
         try (TestServer server = TestServer.start()) {
             try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                RespObject helloObj;
-                try (RespFrame frame = client.execute(Arrays.asList(b("HELLO"), b("3")), 1000)) {
-                    helloObj = RespObjectParser.parse(frame);
-                }
-                Assert.assertTrue(helloObj instanceof RespMap);
-                RespMap map = (RespMap) helloObj;
-                Assert.assertEquals(5, map.entries().size());
+                YierdisClient.JsonReply reply = client.execute(Arrays.asList(b("HELLO"), b("3")), 1000);
+                Assert.assertTrue(ok(reply.envelope()));
+                JsonObject result = objectResult(reply.envelope());
+                Assert.assertEquals("yierdis", stringField(result, "server"));
+                Assert.assertNotNull(stringField(result, "version"));
+                Assert.assertEquals(1L, longField(result, "proto"));
+                Assert.assertEquals("standalone", stringField(result, "mode"));
+                Assert.assertEquals("master", stringField(result, "role"));
 
-                java.util.HashMap<String, RespObject> kv = new java.util.HashMap<>();
-                for (RespMap.Entry e : map.entries()) {
-                    kv.put(bulkUtf8(e.key()), e.value());
-                }
-                Assert.assertEquals("yierdis", bulkUtf8(kv.get("server")));
-                Assert.assertEquals(3, integerValue(kv.get("proto")));
-                Assert.assertEquals("standalone", bulkUtf8(kv.get("mode")));
-                Assert.assertEquals("master", bulkUtf8(kv.get("role")));
-                Assert.assertNotNull(kv.get("version"));
-
-                try (RespFrame frame = client.execute(Arrays.asList(b("GET"), b("missing")), 1000)) {
-                    RespObject missing = RespObjectParser.parse(frame);
-                    Assert.assertTrue(missing instanceof RespNull);
-                }
+                YierdisClient.JsonReply missing = client.execute(Arrays.asList(b("GET"), b("missing")), 1000);
+                Assert.assertTrue(ok(missing.envelope()));
+                JsonValue v = resultValue(missing.envelope());
+                Assert.assertTrue(v == null || v instanceof JsonNull);
             }
         }
     }
 
     @Test
-    public void setGetAreBinarySafeOverTcp() throws Exception {
+    public void setGetWorkOverTcpUsingUtf8Strings() throws Exception {
         try (TestServer server = TestServer.start()) {
             try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                byte[] key = new byte[]{0, (byte) 0xFF, 'k'};
-                byte[] value = new byte[]{0, 1, (byte) 0xFF, '\n'};
+                YierdisClient.JsonReply set = client.execute(Arrays.asList(b("SET"), b("k"), b("v")), 1000);
+                Assert.assertTrue(ok(set.envelope()));
+                Assert.assertEquals("OK", stringResult(set.envelope()));
 
-                try (RespFrame frame = client.execute(Arrays.asList(b("SET"), key, value), 1000)) {
-                    RespObject set = RespObjectParser.parse(frame);
-                    Assert.assertTrue(set instanceof RespSimpleString);
-                }
-
-                try (RespFrame frame = client.execute(Arrays.asList(b("GET"), key), 1000)) {
-                    RespObject get = RespObjectParser.parse(frame);
-                    Assert.assertTrue(get instanceof RespBulkString);
-                    Assert.assertArrayEquals(value, ((RespBulkString) get).data());
-                }
+                YierdisClient.JsonReply get = client.execute(Arrays.asList(b("GET"), b("k")), 1000);
+                Assert.assertTrue(ok(get.envelope()));
+                Assert.assertEquals("v", stringResult(get.envelope()));
             }
         }
     }
 
     @Test
-    public void unknownCommandReturnsRespError() throws Exception {
+    public void unknownCommandReturnsCommandErrorEnvelope() throws Exception {
         try (TestServer server = TestServer.start()) {
             try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                try (RespFrame frame = client.execute(Arrays.asList(b("NOPE")), 1000)) {
-                    RespObject resp = RespObjectParser.parse(frame);
-                    Assert.assertTrue(resp instanceof RespError);
-                    Assert.assertTrue(((RespError) resp).message().startsWith("ERR unknown command"));
-                }
+                YierdisClient.JsonReply reply = client.execute(Arrays.asList(b("NOPE")), 1000);
+                Assert.assertFalse(ok(reply.envelope()));
+                JsonObject err = errorObject(reply.envelope());
+                Assert.assertEquals("command", stringField(err, "kind"));
+                Assert.assertTrue(stringField(err, "message").startsWith("ERR unknown command"));
             }
         }
     }
@@ -114,34 +94,24 @@ public class YierdisClientTest {
     public void memoryStatsHasStableKeySet() throws Exception {
         try (TestServer server = TestServer.start()) {
             try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                try (RespFrame frame = client.execute(Arrays.asList(b("MEMORY"), b("STATS")), 1000)) {
-                    RespObject obj = RespObjectParser.parse(frame);
-                    Assert.assertTrue(obj instanceof RespArray);
-                    RespArray arr = (RespArray) obj;
-                    Assert.assertFalse(arr.isNull());
-                    Assert.assertNotNull(arr.values());
-                    // 20 key/value pairs (RESP2 flat array => 40 elements).
-                    Assert.assertEquals(40, arr.values().size());
+                YierdisClient.JsonReply reply = client.execute(Arrays.asList(b("MEMORY"), b("STATS")), 1000);
+                Assert.assertTrue(ok(reply.envelope()));
+                JsonObject stats = objectResult(reply.envelope());
 
-                    HashSet<String> keys = new HashSet<>();
-                    for (int i = 0; i < arr.values().size(); i += 2) {
-                        keys.add(bulkUtf8(arr.values().get(i)));
-                    }
-
-                    Assert.assertTrue(keys.contains("maxmemory_bytes"));
-                    Assert.assertTrue(keys.contains("used_bytes_for_maxmemory"));
-                    Assert.assertTrue(keys.contains("effective_used_bytes_for_maxmemory"));
-                    Assert.assertTrue(keys.contains("ledger_used_bytes"));
-                    Assert.assertTrue(keys.contains("ledger_reserved_bytes"));
-                    Assert.assertTrue(keys.contains("offheap_used_bytes"));
-                    Assert.assertTrue(keys.contains("offheap_included_in_maxmemory"));
-                    Assert.assertTrue(keys.contains("total_estimated_bytes"));
-                    Assert.assertTrue(keys.contains("keyspace_rehashing"));
-                    Assert.assertTrue(keys.contains("keyspace_table0_capacity"));
-                    Assert.assertTrue(keys.contains("expire_rehashing"));
-                    Assert.assertTrue(keys.contains("key_count"));
-                    Assert.assertTrue(keys.contains("expire_count"));
-                }
+                HashSet<String> keys = new HashSet<>(stats.values().keySet());
+                Assert.assertTrue(keys.contains("maxmemory_bytes"));
+                Assert.assertTrue(keys.contains("used_bytes_for_maxmemory"));
+                Assert.assertTrue(keys.contains("effective_used_bytes_for_maxmemory"));
+                Assert.assertTrue(keys.contains("ledger_used_bytes"));
+                Assert.assertTrue(keys.contains("ledger_reserved_bytes"));
+                Assert.assertTrue(keys.contains("offheap_used_bytes"));
+                Assert.assertTrue(keys.contains("offheap_included_in_maxmemory"));
+                Assert.assertTrue(keys.contains("total_estimated_bytes"));
+                Assert.assertTrue(keys.contains("keyspace_rehashing"));
+                Assert.assertTrue(keys.contains("keyspace_table0_capacity"));
+                Assert.assertTrue(keys.contains("expire_rehashing"));
+                Assert.assertTrue(keys.contains("key_count"));
+                Assert.assertTrue(keys.contains("expire_count"));
             }
         }
     }
@@ -203,7 +173,7 @@ public class YierdisClientTest {
         try (FloodingServer server = FloodingServer.start(256)) {
             try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
                 Assert.assertTrue(server.awaitFlood(1_000));
-                // Give the client a moment to decode/enqueue a few frames.
+                // Give the client a moment to decode/enqueue a few lines.
                 Thread.sleep(50);
 
                 try {
@@ -218,20 +188,59 @@ public class YierdisClientTest {
         }
     }
 
+    private static boolean ok(JsonValue envelope) {
+        JsonObject obj = envelopeObject(envelope);
+        JsonValue v = obj.values().get("ok");
+        return v instanceof JsonBoolean b && b.value();
+    }
+
+    private static JsonValue resultValue(JsonValue envelope) {
+        JsonObject obj = envelopeObject(envelope);
+        return obj.values().get("result");
+    }
+
+    private static String stringResult(JsonValue envelope) {
+        JsonValue v = resultValue(envelope);
+        Assert.assertTrue(v instanceof JsonString);
+        return ((JsonString) v).value();
+    }
+
+    private static JsonObject objectResult(JsonValue envelope) {
+        JsonValue v = resultValue(envelope);
+        Assert.assertTrue(v instanceof JsonObject);
+        return (JsonObject) v;
+    }
+
+    private static JsonObject errorObject(JsonValue envelope) {
+        JsonObject obj = envelopeObject(envelope);
+        JsonValue v = obj.values().get("error");
+        Assert.assertTrue(v instanceof JsonObject);
+        return (JsonObject) v;
+    }
+
+    private static JsonObject envelopeObject(JsonValue envelope) {
+        Assert.assertTrue(envelope instanceof JsonObject);
+        return (JsonObject) envelope;
+    }
+
+    private static String stringField(JsonObject obj, String key) {
+        Assert.assertNotNull(obj);
+        Map<String, JsonValue> map = obj.values();
+        JsonValue v = map.get(key);
+        Assert.assertTrue("expected string field: " + key, v instanceof JsonString);
+        return ((JsonString) v).value();
+    }
+
+    private static long longField(JsonObject obj, String key) {
+        Assert.assertNotNull(obj);
+        Map<String, JsonValue> map = obj.values();
+        JsonValue v = map.get(key);
+        Assert.assertTrue("expected long field: " + key, v instanceof JsonLong);
+        return ((JsonLong) v).value();
+    }
+
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static String bulkUtf8(RespObject obj) {
-        Assert.assertTrue(obj instanceof RespBulkString);
-        RespBulkString bulk = (RespBulkString) obj;
-        Assert.assertFalse(bulk.isNull());
-        return bulk.asString();
-    }
-
-    private static long integerValue(RespObject obj) {
-        Assert.assertTrue(obj instanceof RespInteger);
-        return ((RespInteger) obj).value();
     }
 
     private static final class TestServer implements AutoCloseable {
@@ -378,24 +387,22 @@ public class YierdisClientTest {
     }
 
     /**
-     * A server that floods RESP frames on connect, used to trigger client response queue overflow.
+     * A server that floods JSON reply lines on connect, used to trigger client response queue overflow.
      */
     private static final class FloodingServer implements AutoCloseable {
         private final EventLoopGroup boss;
         private final EventLoopGroup workers;
         private final Channel serverChannel;
         private final CountDownLatch flooded;
-        private final int frames;
 
-        private FloodingServer(EventLoopGroup boss, EventLoopGroup workers, Channel serverChannel, CountDownLatch flooded, int frames) {
+        private FloodingServer(EventLoopGroup boss, EventLoopGroup workers, Channel serverChannel, CountDownLatch flooded) {
             this.boss = boss;
             this.workers = workers;
             this.serverChannel = serverChannel;
             this.flooded = flooded;
-            this.frames = frames;
         }
 
-        static FloodingServer start(int frames) throws Exception {
+        static FloodingServer start(int lines) throws Exception {
             EventLoopGroup boss = new NioEventLoopGroup(1);
             EventLoopGroup workers = new NioEventLoopGroup(1);
             CountDownLatch flooded = new CountDownLatch(1);
@@ -409,8 +416,8 @@ public class YierdisClientTest {
                             ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
                                 @Override
                                 public void channelActive(ChannelHandlerContext ctx) {
-                                    byte[] ok = "+OK\r\n".getBytes(StandardCharsets.US_ASCII);
-                                    for (int i = 0; i < frames; i++) {
+                                    byte[] ok = "{\"ok\":true,\"result\":\"OK\"}\n".getBytes(StandardCharsets.US_ASCII);
+                                    for (int i = 0; i < lines; i++) {
                                         ctx.write(Unpooled.copiedBuffer(ok));
                                     }
                                     ctx.flush();
@@ -421,7 +428,7 @@ public class YierdisClientTest {
                     });
 
             Channel ch = bootstrap.bind(0).sync().channel();
-            return new FloodingServer(boss, workers, ch, flooded, frames);
+            return new FloodingServer(boss, workers, ch, flooded);
         }
 
         boolean awaitFlood(long timeoutMillis) throws InterruptedException {
@@ -446,3 +453,4 @@ public class YierdisClientTest {
         }
     }
 }
+
