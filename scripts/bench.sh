@@ -70,7 +70,7 @@ main() {
   build_if_needed
 
   local server_jar bench_jar
-  server_jar="$(pick_jar "$ROOT_DIR/yierdis-server/target/yierdis-*.jar" "original-")"
+  server_jar="$(pick_jar "$ROOT_DIR/yierdis-server/target/yierdis-server-*.jar" "original-")"
   bench_jar="$(pick_jar "$ROOT_DIR/yierdis-bench/target/yierdis-bench-*.jar" "original-")"
 
   local args=()

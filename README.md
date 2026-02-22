@@ -22,7 +22,7 @@ Yierdis 的目标是 **教学/演示**：可以用项目内置 CLI 做交互学�
 
 ```bash
 mvn -q -DskipTests package
-java -jar yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar --port 6378
+java -jar yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378
 ```
 
 然后使用项目内置 CLI 连接（默认 `127.0.0.1:6378`）：
@@ -188,7 +188,7 @@ Yierdis 提供一个“Redis 风格、但刻意简化”的 maxmemory/淘汰机�
 示例：开启 10MB 内存预算，并使用 LRU 淘汰：
 
 ```bash
-java -jar yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar \
+java -jar yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar \
   --port 6378 \
   --maxmemoryBytes 10485760 \
   --maxmemoryScope global \
@@ -258,7 +258,7 @@ mvn -P!foreign-memory -DskipTests package
 运行时若选择 `foreign` 后端，Java 17 需要启用 incubator 模块。推荐显式添加（避免一次自动重启）：
 
 ```bash
-java --add-modules jdk.incubator.foreign -jar yierdis-server/target/yierdis-0.1.0-SNAPSHOT.jar --offheapBackend foreign
+java --add-modules jdk.incubator.foreign -jar yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --offheapBackend foreign
 ```
 
 为降低部署复杂度，如果你直接运行 `java -jar ... --offheapBackend foreign`，server 会检测到模块未启用并自动重启补齐

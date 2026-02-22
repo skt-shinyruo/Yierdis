@@ -7,8 +7,9 @@
 ## Module Overview
 
 - **Responsibility:** 端口监听、Pipeline 组装、定时任务（如 TTL 清理）的调度入口
+- **ArtifactId:** `yierdis-server`
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-09
+- **Last Updated:** 2026-02-21
 
 ## Specifications
 
@@ -141,7 +142,7 @@
 
 ## Dependencies
 
-- `yierdis-protocol-netty`（Netty codec/adapters；`yierdis-protocol` 由其传递依赖提供）
+- `yierdis-protocol-netty`（Netty codec/adapters；通过其依赖引入 `yierdis-protocol-codec` / `yierdis-protocol-model`）
 - `yierdis-core`
 - `yierdis-args`
 

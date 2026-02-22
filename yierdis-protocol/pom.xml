@@ -14,19 +14,19 @@
     <packaging>jar</packaging>
 
     <name>yierdis-protocol</name>
-    <description>Protocol-agnostic interfaces + Custom Protocol v1 JSON codec shared by server/client/bench.</description>
+    <description>Compatibility aggregator for protocol model + codec (kept for migration).</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-bytes</artifactId>
+            <artifactId>yierdis-protocol-model</artifactId>
             <version>${project.version}</version>
         </dependency>
 
         <dependency>
-            <groupId>junit</groupId>
-            <artifactId>junit</artifactId>
-            <scope>test</scope>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-protocol-codec</artifactId>
+            <version>${project.version}</version>
         </dependency>
     </dependencies>
 </project>

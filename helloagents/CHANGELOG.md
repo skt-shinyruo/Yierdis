@@ -9,6 +9,7 @@
 - Custom Protocol v1 reply 的值语义收敛（breaking）：map/attribute 统一改为 tagged value `{"$map":[[k,v],...]}`（不再依赖 JSON object key 为 string 的隐式限制与 fallback）；非 UTF-8 bytes 统一输出 `{"$b64":"<base64>"}`；嵌套错误值输出 `{"$error":{...}}`；错误 message 的 CRLF 净化/限长由协议层 encoder SSOT 单点统一。
 - 移除 deprecated bytes alias（`YierdisBytesSink/YierdisBytesSource/YierdisDirectBytesSink` 等），bytes SSOT 统一为 `yierdis-bytes`。
 - 删除 legacy 模式：移除 SCAN cursor v1（`ScanCursor`）与相关开关/兼容路径，统一为 `ScanCursorV2`（rehash-aware + 可 time-slice）。
+- server 制品坐标对齐：`yierdis-server` 的 artifactId 从 `yierdis` 调整为 `yierdis-server`（依赖坐标与服务端 jar 名称同步变化）。
 
 ### Added
 - 新增事务队列硬上限：`--transactionQueueMaxCommands/--transactionQueueMaxBytes`，防止 MULTI 大事务/大参数导致 OOM。
@@ -26,7 +27,8 @@
 - 新增生产能力扩展前置接口：`YierdisChangeSink`（事件流）与 `YierdisSnapshot`（time-slice 快照），作为 AOF/RDB/replication/ACL/modules 的 guardrails 基座（本版本不启用真实持久化）。
 - DB core 组件化拆分：引入 `yier.bubu.redis.ops.*`（`DbEngine/ValueOps/*Ops/ExpirationManager/EvictionCoordinator`）并迁移命令层调用，降低存储-命令耦合与修改半径。
 - 新增 off-heap keys 零 canonical heap copy 回归：`OffHeapKeyCopyDiagnostics` + `OffHeapKeysZeroCopyReadPathTest`，锁定 `GET/EXISTS/TYPE/TTL` 热路径不触发 heap key 拷贝。
-- Maven 多模块拆分：引入 `yierdis-protocol`（协议 SSOT：`Command/ReplyWriter/Session` + JSON codec）、`yierdis-core`（DB/命令 SSOT）、`yierdis-args`（参数 SSOT）、`yierdis-client`（client/CLI），并调整 `yierdis-server`/`yierdis-bench` 依赖方向。
+- Maven 多模块拆分：引入协议层模块（`yierdis-protocol-model` 端口/模型 SSOT + `yierdis-protocol-codec` JSON/v1 codec SSOT；`yierdis-protocol` 为兼容聚合层）、`yierdis-core`（DB/命令 SSOT）、`yierdis-args`（参数 SSOT）、`yierdis-client`（client/CLI），并调整 `yierdis-server`/`yierdis-bench` 依赖方向。
+- 新增协议层二次拆分：引入 `yierdis-protocol-model`（端口/Reply IR SSOT）与 `yierdis-protocol-codec`（JSON + Custom Protocol v1 codec SSOT），并保留 `yierdis-protocol` 作为兼容聚合层（migration）。
 - 引入 `ReplySink`（bulk string streaming 子集）并让 `ReplyWriter` 继承：将 streaming bulk 写出接口从 db 包迁出到 protocol；db/value 层仅依赖 `ReplySink`，移除 `YierdisDb` 的 `*ReplyCount/*ReplyInto` 回包形态 API（以 `ValueOps/*Ops` 为唯一入口），并删除旧桥接接口 `YierdisBulkStringOutput`。
 - 引入 `ReplyWriterFactory`（协议写出注入点）：server 的执行器/handler 通过 factory 获取 `ReplyWriter`，避免直接 `new JsonLineReplyWriter(...)`，为后续协议替换/多协议共存提供边界。
 - 新增 `yierdis-protocol-netty`：承载 Netty codec/adapters（Custom Protocol v1 decoder + reply line decoder）。
@@ -61,6 +63,7 @@
 - 事务边界行为对齐 Redis：MULTI 入队阶段触发错误（例如触达队列上限）会进入 aborted，后续 EXEC 返回 `EXECABORT` 并丢弃事务队列。
 - protocol-netty：`CustomRequestDecoder` request payload 解码低拷贝化（`ByteBuf` slice + `ByteBuffer` 解析），避免在 decoder 中按 `len` 分配整帧 heap `byte[]`；极端 composite 场景保留受上限约束的保守 fallback，并补充文档与回归测试。
 - `yierdis-protocol` 依赖收敛：不再直接依赖 `yierdis-offheap-api`，改为依赖 `yierdis-bytes`；同时移除 `yierdis-offheap-api` 的 bytes 兼容别名，避免 SSOT 漂移。
+- protocol 依赖方向收敛：`yierdis-core`/`yierdis-args` 依赖 `yierdis-protocol-model`（避免编译期引入 codec）；`yierdis-protocol-netty` 依赖 `yierdis-protocol-codec`；`yierdis-protocol` 调整为兼容聚合层以降低迁移成本。
 - bench/server 参数体系收敛：共享参数由 `yierdis-args` 解析与校验；bench 通过 `--` 透传 server 参数，避免维护两套默认值。
 - server↔DB 依赖倒置：server 装配与运维任务不再直接依赖 `YierdisDb`，统一通过 `DbEngine`/子 ops（expiration/eviction/memory 等）交互；执行器装配参数收敛到 `NettyCommandExecutorConfig`，降低构造参数爆炸与测试维护成本。
 - `maxmemoryBytes` 统计口径调整为“heap 估算 + off-heap allocator.usedBytes 实占”，并避免对 off-heap string payload 双计数。

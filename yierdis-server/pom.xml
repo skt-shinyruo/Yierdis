@@ -10,10 +10,10 @@
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>yierdis</artifactId>
+    <artifactId>yierdis-server</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis</name>
+    <name>yierdis-server</name>
     <description>A simplified Yierdis server (Custom Protocol v1) built with Netty.</description>
 
     <dependencies>

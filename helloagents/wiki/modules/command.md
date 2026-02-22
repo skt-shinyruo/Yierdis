@@ -87,7 +87,7 @@
 
 ## Dependencies
 
-- 外部：`yierdis-protocol`（`Command`/`ReplyWriter`/`Session` 等协议无关接口）
+- 外部：`yierdis-protocol-model`（`Command`/`ReplyWriter`/`Session` 等协议无关接口）
 - 内部：`yierdis-core` 的 `ops` 边界（`DbEngine`/`ValueOps`/`KeyspaceOps`/`TtlOps`/`MemoryOps` 等）
 
 ## Change History

@@ -28,6 +28,8 @@
         <module>yierdis-offheap</module>
         <module>yierdis-bytes</module>
         <module>yierdis-bytes-netty</module>
+        <module>yierdis-protocol-model</module>
+        <module>yierdis-protocol-codec</module>
         <module>yierdis-protocol</module>
         <module>yierdis-protocol-netty</module>
         <module>yierdis-core</module>

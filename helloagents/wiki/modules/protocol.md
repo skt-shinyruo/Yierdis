@@ -2,18 +2,18 @@
 
 ## Purpose
 
-提供 **协议无关** 的命令/回复抽象（供 core 命令层使用），并承载 Custom Protocol v1 的 reply 语义（Reply IR）与 NDJSON 编码规则（encoder SSOT），以及最小 JSON codec（无三方依赖）。
+提供 **协议无关** 的命令/回复抽象与 Reply IR（供 core 命令层使用），并将 Custom Protocol v1 的 JSON/NDJSON codec 实现与模型/端口解耦，降低协议替换与 embedded 复用成本。
 
 ## Module Overview
 
-- **Responsibility:** `Command/ReplyWriter/ReplySink/Session` 抽象 + Reply IR（`ReplyValue/*`）+ Custom Protocol v1 JSON codec + NDJSON encoder/writer（SSOT）
+- **Responsibility:** `protocol-model`（端口/模型 SSOT）+ `protocol-codec`（JSON + v1 codec SSOT）+ `yierdis-protocol`（兼容聚合层）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-09
+- **Last Updated:** 2026-02-21
 
 ## Specifications
 
 ### Requirement: 协议无关抽象（core API）
-**Module:** protocol
+**Module:** yierdis-protocol-model
 
 为避免 core 命令层绑定某个 wire protocol，协议层定义最小抽象：
 
@@ -30,7 +30,7 @@
 - db/value 层允许依赖 `ReplySink`（用于低分配 streaming 写出），但不得依赖 `ReplyWriter`（避免协议/回复形状耦合）
 
 ### Requirement: Custom Protocol v1 reply（NDJSON）
-**Module:** protocol
+**Module:** yierdis-protocol-codec（实现） + yierdis-protocol-model（Reply IR）
 
 Custom Protocol v1 的 reply 采用 NDJSON（每个 reply 一行 JSON）：
 
@@ -55,7 +55,7 @@ Custom Protocol v1 的 reply 采用 NDJSON（每个 reply 一行 JSON）：
 - decoder/handler/writer 禁止各自手写 JSON error envelope；回包必须走 `CustomProtocolV1NdjsonEncoder`（SSOT）
 
 ### Requirement: 最小 JSON codec（无三方依赖）
-**Module:** protocol
+**Module:** yierdis-protocol-codec
 
 为了避免引入重量级依赖，同时可控安全边界：
 
@@ -65,9 +65,12 @@ Custom Protocol v1 的 reply 采用 NDJSON（每个 reply 一行 JSON）：
 
 ## Dependencies
 
-- `yierdis-bytes`（`BytesSource/BytesSink/BytesSlice` 通用 bytes 抽象）
+- `yierdis-protocol-model`：依赖 `yierdis-bytes`（`BytesSource/BytesSink/BytesSlice` 通用 bytes 抽象）
+- `yierdis-protocol-codec`：依赖 `yierdis-protocol-model` + `yierdis-bytes`
+- `yierdis-protocol`（兼容聚合层）：聚合依赖 `yierdis-protocol-model` + `yierdis-protocol-codec`
 
 ## Change History
 
 - 2026-02-06：引入协议无关抽象 + Custom Protocol v1（JSON codec + NDJSON reply），并移除旧协议遗留实现与测试。
 - 2026-02-09：reply bytes value 编码贯通 `BytesSlice` 直写/少拷贝链路（streaming strict UTF-8 + JSON escape + `$b64` fallback），详情：`helloagents/history/2026-02/202602092316_reply_byteslice_streaming_encoder/`。
+- 2026-02-21：协议层拆分为 `yierdis-protocol-model` / `yierdis-protocol-codec`，并保留 `yierdis-protocol` 作为兼容聚合层；core 依赖收敛到 model，避免编译期引入 codec。

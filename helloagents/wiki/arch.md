@@ -8,7 +8,9 @@
 
 - `yierdis-bytes`：中立 bytes 抽象（`BytesSource/BytesSink/BytesSlice`），供协议层/off-heap/I/O 复用（SSOT，**Netty-free**）
 - `yierdis-bytes-netty`：`yierdis-bytes` 的 Netty 适配层（`ByteBuf` ↔ `DirectBytesSink/BytesSource`），为 server/off-heap 提供 fast-path（adapter）
-- `yierdis-protocol`：协议无关抽象（`Command/ReplyWriter/Session`）+ Custom Protocol v1（JSON codec + NDJSON reply writer）（SSOT，**Netty-free**）
+- `yierdis-protocol-model`：协议无关抽象（`Command/ReplyWriter/Session`）+ Reply IR（`ReplyValue/*`）（SSOT，**Netty-free**）
+- `yierdis-protocol-codec`：最小 JSON codec + Custom Protocol v1 codec（NDJSON reply writer/encoder）（SSOT，**Netty-free**）
+- `yierdis-protocol`：兼容聚合层（migration；聚合 `protocol-model` + `protocol-codec`）
 - `yierdis-protocol-netty`：Custom Protocol v1 Netty codec（`CustomRequestDecoder` + `JsonLineDecoder`）（adapter，可复用）
 - `yierdis-core`：DB/Keyspace/Value/TTL/maxmemory/命令处理（SSOT）+ embedded instance/runtime（`YierdisInstance`：多 DB 装配/路由/生命周期，Netty-free），**不依赖 Netty**
 - `yierdis-args`：server 参数模型与校验（picocli，SSOT），供 server/bench 复用
@@ -19,8 +21,8 @@
 
 ### 依赖方向（约束）
 
-- `yierdis-core` / `yierdis-protocol` 不依赖 `io.netty.*`
-- `yierdis-protocol-netty` **可以**依赖 `io.netty.*`，但只允许向下依赖 `yierdis-protocol`（不得反向渗透）
+- `yierdis-core` / `yierdis-protocol-model` / `yierdis-protocol-codec` 不依赖 `io.netty.*`
+- `yierdis-protocol-netty` **可以**依赖 `io.netty.*`，但只允许向下依赖 `yierdis-protocol-codec`（不得反向渗透）
 - `yierdis-offheap-api` 不依赖 `io.netty.*`（Netty 相关 adapter 放在 `yierdis-offheap-netty`）
 - `yierdis-server` 依赖 `yierdis-core` / `yierdis-protocol-netty` / `yierdis-args`
 - `yierdis-client` / `yierdis-bench` 依赖 `yierdis-protocol-netty`（可选依赖 `yierdis-args` 复用参数 SSOT）
@@ -35,11 +37,16 @@ flowchart LR
 
   subgraph SSOT[SSOT Modules]
     Bytes[yierdis-bytes]
-    Protocol[yierdis-protocol]
+    ProtocolModel[yierdis-protocol-model]
     Core[yierdis-core]
     Args[yierdis-args]
   end
   
+  subgraph Codec[Protocol Codec]
+    ProtocolCodec[yierdis-protocol-codec]
+    ProtocolAgg[yierdis-protocol (compat)]
+  end
+
   subgraph Adapters[Adapters]
     BytesNetty[yierdis-bytes-netty]
     ProtocolNetty[yierdis-protocol-netty]
@@ -61,10 +68,15 @@ flowchart LR
   Bench --> Args
   
   OffheapNetty --> BytesNetty
-  ProtocolNetty --> Protocol
+  ProtocolNetty --> ProtocolCodec
 
-  Protocol --> Bytes
-  Core --> Protocol
+  ProtocolAgg --> ProtocolModel
+  ProtocolAgg --> ProtocolCodec
+  ProtocolCodec --> ProtocolModel
+
+  ProtocolModel --> Bytes
+  Core --> ProtocolModel
+  Args --> ProtocolModel
   Core --> OffheapApi
   OffheapApi --> Bytes
 
@@ -73,7 +85,7 @@ flowchart LR
   OffheapForeign --> OffheapApi
 ```
 
-> 说明：通用 bytes 抽象已抽取到 `yierdis-bytes`（中立模块）。`yierdis-protocol` 与 `yierdis-offheap-api` 都依赖该模块，但这不等同于“协议层依赖某个具体 off-heap 后端”，后端选择仍由 server bootstrap 层负责。
+> 说明：通用 bytes 抽象已抽取到 `yierdis-bytes`（中立模块）。`yierdis-protocol-model` / `yierdis-protocol-codec` 与 `yierdis-offheap-api` 都依赖该模块，但这不等同于“协议层依赖某个具体 off-heap 后端”，后端选择仍由 server bootstrap 层负责。
 
 ## 内核契约（SSOT Contracts）
 
@@ -110,7 +122,7 @@ sequenceDiagram
   participant Exec as yierdis-server (NettyCommandExecutor)
   participant Processor as yierdis-core (YierdisFastCommandProcessor / CommandRegistry)
   participant Engine as yierdis-core (DbEngine；impl: YierdisDb)
-  participant Writer as yierdis-protocol (ReplyWriter via ReplyWriterFactory)
+  participant Writer as yierdis-protocol-model (ReplyWriter via ReplyWriterFactory)
 
   Client->>Netty: TCP bytes (Custom Protocol v1: &lt;len&gt;:&lt;json&gt;\\n)
   Netty->>Decoder: decode to Command (CustomCommand)
@@ -183,6 +195,8 @@ sequenceDiagram
 | ADR-20260204-01 | core 暴露 Netty-free embedded instance API（YierdisInstance） | 2026-02-04 | ✅ Accepted | yierdis-core,yierdis-server | 统一 instance 装配语义并支持 bench/工具/测试嵌入使用；details: helloagents/history/2026-02/202602041128_core_embedded_instance_runtime_api/how.md#adr-001-place-embedded-instance-api-in-yierdis-core-netty-free |
 | ADR-20260206-01 | Custom Protocol v1：request/reply 帧格式与错误模型 | 2026-02-06 | ✅ Accepted | yierdis-protocol,yierdis-protocol-netty,yierdis-server,yierdis-client | request 采用 `<len>:<json>\\n`；reply 采用 NDJSON；解析/校验错误返回 error 并尽量 resync（触达安全上限时允许断连） |
 | ADR-20260209-01 | Custom Protocol v1 reply：tagged value（`$map/$b64/$error`）与 decoder 事件化（ProtocolError） | 2026-02-09 | ✅ Accepted | yierdis-protocol,yierdis-protocol-netty,yierdis-server,yierdis-client,yierdis-bench,helloagents/wiki | reply 语义以 Reply IR + encoder SSOT 固化；decoder 仅 framing/parse/resync；回包由 pipeline 上层统一编码；details: helloagents/history/2026-02/202602091941_protocol_v1_reply_ir/how.md#adr-20260209-01 |
+| ADR-20260221-01 | protocol 拆分为 protocol-model/protocol-codec（保留兼容聚合层） | 2026-02-21 | ✅ Accepted | yierdis-protocol-model,yierdis-protocol-codec,yierdis-protocol,yierdis-protocol-netty,yierdis-core,yierdis-args | 以 Maven 依赖边界硬化“core 不依赖 codec”；`yierdis-protocol` 作为迁移期聚合层保留；details: helloagents/history/2026-02/202602212340_module_naming_protocol_split/how.md#adr-20260221-01 |
+| ADR-20260221-02 | server artifactId 对齐为 yierdis-server | 2026-02-21 | ✅ Accepted | yierdis-server,yierdis-client,helloagents/wiki | 将服务端制品坐标从 `yierdis` 调整为 `yierdis-server`，减少依赖/排障歧义；details: helloagents/history/2026-02/202602212340_module_naming_protocol_split/how.md#adr-20260221-02 |
 	
 ## Security Check（2026-02-02）
 
@@ -202,7 +216,7 @@ sequenceDiagram
 
 ### 1) 不一致点（行为/语义漂移风险）
 
-- **协议层 SSOT 边界漂移：**若 `ReplyWriter` 的实现与 transport codec 混放在同一模块，容易出现“server/client/bench 引用的 codec 版本不一致”，导致行为漂移；已通过 `yierdis-protocol` / `yierdis-protocol-netty` 拆分降低该风险。
+- **协议层 SSOT 边界漂移：**若 `ReplyWriter` 的端口/模型与 JSON/v1 codec 或 transport codec 混放在同一模块，容易出现“core 误引入 codec”或“server/client/bench 引用的 codec 版本不一致”，导致行为漂移；已通过 `yierdis-protocol-model` / `yierdis-protocol-codec` / `yierdis-protocol-netty` 分层降低该风险。
 - **maxmemory / MEMORY USAGE 口径：**off-heap 启用时若同时计入 heap 估算与 off-heap payload，可能出现明显双计数或漏计，进而导致淘汰/拒写时机不可解释（建议以 `heap 元数据估算 + allocator.usedBytes()` 为统一口径，并在 `MEMORY USAGE` 侧明确说明“估算/实占”的差异）。
 
 ### 2) 可维护性（依赖/演进成本）

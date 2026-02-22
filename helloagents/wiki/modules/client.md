@@ -8,7 +8,7 @@
 
 - **Responsibility:** 连接管理、命令输入、reply line 解码（NDJSON）、输出显示（单行 JSON；可选 hex）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-07
+- **Last Updated:** 2026-02-21
 
 ## Specifications
 
@@ -45,7 +45,7 @@ client 采用“单请求-单响应”模型（不支持 pipelining），但仍�
 ## Dependencies
 
 - `yierdis-protocol-netty`（`JsonLineDecoder`）
-- `yierdis-protocol`（`JsonParser/JsonValue`）
+- `yierdis-protocol-codec`（`JsonParser/JsonValue`）
 - Netty（连接管理与 IO）
 - picocli（CLI 参数解析）
 

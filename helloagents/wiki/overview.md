@@ -24,7 +24,7 @@ Yierdis 是一个“教学/演示导向”的内存 KV 服务端：使用 Java 1
 | 模块 | 责任 | 状态 | 文档 |
 |------|------|------|------|
 | server | Netty 启动/管线/Handler | ✅Stable | [modules/server.md](modules/server.md) |
-| protocol | 协议无关抽象（`Command/ReplyWriter/Session`）+ Custom Protocol v1（JSON codec） | ✅Stable | [modules/protocol.md](modules/protocol.md) |
+| protocol | 协议层（`protocol-model` 端口/模型 + `protocol-codec` JSON/v1 codec；`yierdis-protocol` 为兼容聚合层） | ✅Stable | [modules/protocol.md](modules/protocol.md) |
 | protocol-netty | Netty codec/adapters（Custom Protocol v1 decoder/line decoder + 连接态适配） | ✅Stable | [modules/protocol-netty.md](modules/protocol-netty.md) |
 | command | 命令路由与参数解析 | ✅Stable | [modules/command.md](modules/command.md) |
 | db | 内存存储、编码、TTL、淘汰 | ✅Stable | [modules/db.md](modules/db.md) |
