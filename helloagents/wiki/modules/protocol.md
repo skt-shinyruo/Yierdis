@@ -8,7 +8,7 @@
 
 - **Responsibility:** `protocol-model`（端口/模型 SSOT）+ `protocol-codec`（JSON + v1 codec SSOT）+ `yierdis-protocol`（兼容聚合层）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-21
+- **Last Updated:** 2026-02-22
 
 ## Specifications
 
@@ -27,7 +27,7 @@
 
 - core 只能依赖这些抽象；server/client 的 Netty/IO 细节不得渗透到 core
 - `ReplyWriter.requestCloseAfterReply()` 只表达语义，实际关闭由 transport 层落实
-- db/value 层允许依赖 `ReplySink`（用于低分配 streaming 写出），但不得依赖 `ReplyWriter`（避免协议/回复形状耦合）
+- db/value/off-heap 层不得依赖 `yierdis-protocol-model`（包含 `ReplyWriter/ReplySink`）：streaming bulk 值写出通过 core 的 domain result / `BulkStringSink` 表达，由命令层 adapter 写入 `ReplyWriter`
 
 ### Requirement: Custom Protocol v1 reply（NDJSON）
 **Module:** yierdis-protocol-codec（实现） + yierdis-protocol-model（Reply IR）

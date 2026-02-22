@@ -2,22 +2,18 @@ package yier.bubu.redis.ops;
 
 // ZSetOps：zset 类型操作边界。
 
-import yier.bubu.redis.protocol.ReplySink;
+import yier.bubu.redis.ops.result.BulkStringSequence;
 
 import java.util.List;
 
 public interface ZSetOps {
     long zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs);
 
-    int zrangeCount(byte[] keyBytes, long start, long stop, boolean withScores);
+    BulkStringSequence zrange(byte[] keyBytes, long start, long stop, boolean withScores);
 
-    void zrangeWriteTo(byte[] keyBytes, long start, long stop, boolean withScores, ReplySink out);
+    BulkStringSequence zrevrange(byte[] keyBytes, long start, long stop, boolean withScores);
 
-    int zrevrangeCount(byte[] keyBytes, long start, long stop, boolean withScores);
-
-    void zrevrangeWriteTo(byte[] keyBytes, long start, long stop, boolean withScores, ReplySink out);
-
-    int zrangeByScoreCount(
+    BulkStringSequence zrangeByScore(
             byte[] keyBytes,
             double min,
             boolean minExclusive,
@@ -28,19 +24,7 @@ public interface ZSetOps {
             long count
     );
 
-    void zrangeByScoreWriteTo(
-            byte[] keyBytes,
-            double min,
-            boolean minExclusive,
-            double max,
-            boolean maxExclusive,
-            boolean withScores,
-            long offset,
-            long count,
-            ReplySink out
-    );
-
-    int zrevrangeByScoreCount(
+    BulkStringSequence zrevrangeByScore(
             byte[] keyBytes,
             double min,
             boolean minExclusive,
@@ -49,18 +33,6 @@ public interface ZSetOps {
             boolean withScores,
             long offset,
             long count
-    );
-
-    void zrevrangeByScoreWriteTo(
-            byte[] keyBytes,
-            double min,
-            boolean minExclusive,
-            double max,
-            boolean maxExclusive,
-            boolean withScores,
-            long offset,
-            long count,
-            ReplySink out
     );
 
     long zremrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive);

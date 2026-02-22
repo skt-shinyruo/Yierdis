@@ -2,7 +2,7 @@ package yier.bubu.redis.ops;
 
 // SetOps：set 类型操作边界。
 
-import yier.bubu.redis.protocol.ReplySink;
+import yier.bubu.redis.ops.result.BulkStringSequence;
 
 import java.util.List;
 
@@ -11,9 +11,7 @@ public interface SetOps {
 
     long srem(byte[] keyBytes, List<byte[]> members);
 
-    int smembersCount(byte[] keyBytes);
-
-    void smembersWriteTo(byte[] keyBytes, ReplySink out);
+    BulkStringSequence smembers(byte[] keyBytes);
 
     boolean sismember(byte[] keyBytes, byte[] member);
 

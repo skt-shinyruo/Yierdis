@@ -4,7 +4,7 @@ package yier.bubu.redis.ops;
 
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.db.YierdisBytesView;
-import yier.bubu.redis.protocol.ReplySink;
+import yier.bubu.redis.ops.result.BulkStringValue;
 
 public interface StringOps {
     boolean setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption);
@@ -21,7 +21,7 @@ public interface StringOps {
      */
     byte[] getStringBytes(byte[] keyBytes);
 
-    void getStringForReply(YierdisBytesView keyView, ReplySink out);
+    BulkStringValue getStringValue(YierdisBytesView keyView);
 
     long strlen(YierdisBytesView keyView);
 

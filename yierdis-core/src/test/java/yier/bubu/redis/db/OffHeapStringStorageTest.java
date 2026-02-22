@@ -7,7 +7,7 @@ import yier.bubu.redis.db.offheap.netty.YierdisNettyOffHeapAllocator;
 import yier.bubu.redis.ops.ExpireOption;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.YierdisCommandException;
-import yier.bubu.redis.protocol.ReplySink;
+import yier.bubu.redis.ops.result.BulkStringSink;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
@@ -29,7 +29,7 @@ public class OffHeapStringStorageTest {
             Assert.assertTrue(allocator.usedBytes() > 0);
 
             RecordingBulkOutput out = new RecordingBulkOutput();
-            db.values().strings().getStringForReply(new BytesView(key), out);
+            db.values().strings().getStringValue(new BytesView(key)).writeTo(out);
             Assert.assertTrue(out.usedOffHeapSlice);
             Assert.assertArrayEquals(value, out.bytes);
 
@@ -94,7 +94,7 @@ public class OffHeapStringStorageTest {
             Assert.assertEquals(5L, allocator.usedBytes());
 
             RecordingBulkOutput out = new RecordingBulkOutput();
-            db.values().strings().getStringForReply(new BytesView(key), out);
+            db.values().strings().getStringValue(new BytesView(key)).writeTo(out);
             Assert.assertTrue(out.usedOffHeapSlice);
             Assert.assertArrayEquals(v2, out.bytes);
         } finally {
@@ -119,7 +119,7 @@ public class OffHeapStringStorageTest {
         }
     }
 
-    private static final class RecordingBulkOutput implements ReplySink {
+    private static final class RecordingBulkOutput implements BulkStringSink {
         private byte[] bytes;
         private boolean usedOffHeapSlice;
 

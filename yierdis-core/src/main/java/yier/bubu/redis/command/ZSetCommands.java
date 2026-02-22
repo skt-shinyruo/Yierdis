@@ -3,6 +3,7 @@ package yier.bubu.redis.command;
 import yier.bubu.redis.db.DbMemoryConstants;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.ZSetOps;
+import yier.bubu.redis.ops.result.BulkStringSequence;
 import yier.bubu.redis.protocol.Command;
 import yier.bubu.redis.protocol.ReplyWriter;
 
@@ -73,18 +74,15 @@ final class ZSetCommands {
 
         byte[] key = cmd.toByteArray(1);
         ZSetOps zsets = support.db(out).values().zsets();
-        int count = rev
-                ? zsets.zrevrangeCount(key, start, stop, withScores)
-                : zsets.zrangeCount(key, start, stop, withScores);
+        BulkStringSequence seq = rev
+                ? zsets.zrevrange(key, start, stop, withScores)
+                : zsets.zrange(key, start, stop, withScores);
+        int count = seq.count();
         out.arrayHeader(count);
         if (count == 0) {
             return;
         }
-        if (rev) {
-            zsets.zrevrangeWriteTo(key, start, stop, withScores, out);
-        } else {
-            zsets.zrangeWriteTo(key, start, stop, withScores, out);
-        }
+        seq.emitTo(new BulkStringReplyAdapter(out));
     }
 
     private void zrevrange(Command cmd, ReplyWriter out) {
@@ -106,12 +104,13 @@ final class ZSetCommands {
 
         byte[] key = cmd.toByteArray(1);
         ZSetOps zsets = support.db(out).values().zsets();
-        int count = zsets.zrevrangeCount(key, start, stop, withScores);
+        BulkStringSequence seq = zsets.zrevrange(key, start, stop, withScores);
+        int count = seq.count();
         out.arrayHeader(count);
         if (count == 0) {
             return;
         }
-        zsets.zrevrangeWriteTo(key, start, stop, withScores, out);
+        seq.emitTo(new BulkStringReplyAdapter(out));
     }
 
     private void zrangebyscore(Command cmd, ReplyWriter out) {
@@ -150,7 +149,7 @@ final class ZSetCommands {
 
         byte[] key = cmd.toByteArray(1);
         ZSetOps zsets = support.db(out).values().zsets();
-        int replyCount = zsets.zrangeByScoreCount(
+        BulkStringSequence seq = zsets.zrangeByScore(
                 key,
                 min.value,
                 min.exclusive,
@@ -160,21 +159,12 @@ final class ZSetCommands {
                 offset,
                 count
         );
+        int replyCount = seq.count();
         out.arrayHeader(replyCount);
         if (replyCount == 0) {
             return;
         }
-        zsets.zrangeByScoreWriteTo(
-                key,
-                min.value,
-                min.exclusive,
-                max.value,
-                max.exclusive,
-                withScores,
-                offset,
-                count,
-                out
-        );
+        seq.emitTo(new BulkStringReplyAdapter(out));
     }
 
     private void zremrangebyscore(Command cmd, ReplyWriter out) {
@@ -224,7 +214,7 @@ final class ZSetCommands {
 
         byte[] key = cmd.toByteArray(1);
         ZSetOps zsets = support.db(out).values().zsets();
-        int replyCount = zsets.zrevrangeByScoreCount(
+        BulkStringSequence seq = zsets.zrevrangeByScore(
                 key,
                 min.value,
                 min.exclusive,
@@ -234,21 +224,12 @@ final class ZSetCommands {
                 offset,
                 count
         );
+        int replyCount = seq.count();
         out.arrayHeader(replyCount);
         if (replyCount == 0) {
             return;
         }
-        zsets.zrevrangeByScoreWriteTo(
-                key,
-                min.value,
-                min.exclusive,
-                max.value,
-                max.exclusive,
-                withScores,
-                offset,
-                count,
-                out
-        );
+        seq.emitTo(new BulkStringReplyAdapter(out));
     }
 
     private void zremrangebyrank(Command cmd, ReplyWriter out) {

@@ -46,6 +46,7 @@
 | 202602091941 | protocol_v1_reply_ir | Standard Development | ✅ Completed | helloagents/history/2026-02/202602091941_protocol_v1_reply_ir/ |
 | 202602092316 | reply_byteslice_streaming_encoder | Standard Development | ✅ Completed | helloagents/history/2026-02/202602092316_reply_byteslice_streaming_encoder/ |
 | 202602212340 | module_naming_protocol_split | Standard Development | ✅ Completed | helloagents/history/2026-02/202602212340_module_naming_protocol_split/ |
+| 202602221020 | domain_result_adapter | Standard Development | ✅ Completed | helloagents/history/2026-02/202602221020_domain_result_adapter/ |
 
 ---
 
@@ -94,6 +95,7 @@
 - helloagents/history/2026-02/202602091941_protocol_v1_reply_ir/
 - helloagents/history/2026-02/202602092316_reply_byteslice_streaming_encoder/
 - helloagents/history/2026-02/202602212340_module_naming_protocol_split/
+- helloagents/history/2026-02/202602221020_domain_result_adapter/
 
 ## 2026-01
 - 202601172157_executor_modularize - 执行器组件化与不变量测试补齐

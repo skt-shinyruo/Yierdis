@@ -10,18 +10,18 @@
 
 - **Responsibility:** Keyspace + 过期索引 + 值编码（string/list/set/hash/zset）+ maxmemory
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-09
+- **Last Updated:** 2026-02-22
 
 ## Specifications
 
-### Requirement: 存储层与回包形态解耦（ReplySink）
+### Requirement: 存储层与协议写出解耦（domain result / BulkStringSink）
 **Module:** db
 
 为避免 “存储层/协议层/性能优化” 相互渗透，db 层遵循以下边界约束：
 
 - db 不对外暴露 `*ReplyCount/*ReplyInto` 等“为了回包优化的 API”（回包形态属于命令/协议层职责）；对外统一使用数据语义命名（例如 `*Count/*WriteTo`）
-- value/数据结构层如需 streaming 输出 bulk string 值，只依赖协议层的窄接口 `ReplySink`（仅 bulk-string 子集）
-- 命令层负责 reply 形状（array/map header、count 计算、错误语义等），并将 `ReplyWriter` 作为 `ReplySink` 下传
+- value/数据结构层如需 streaming 输出 bulk string 值，只依赖 core 内协议无关的 domain result / sink（例如 `BulkStringValue/BulkStringSequence/BulkStringMapPairs` + `BulkStringSink`），不得依赖 `yierdis-protocol-model`（`ReplyWriter/ReplySink`）
+- 命令层负责 reply 形状（array/map header、count 计算、错误语义等），并通过 adapter 将 domain result 写入 `ReplyWriter`（协议编码留在边界层）
 
 补充：db 对命令层暴露的稳定边界为 `DbEngine`（`yier.bubu.redis.ops.DbEngine`），通过 `values()/expiration()/eviction()/keyspace()/ttl()/memory()/lifecycle()` 组合子能力；命令层/协议层不得直接依赖具体 DB 实现（当前实现为 `YierdisDb`）。
 

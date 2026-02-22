@@ -196,7 +196,7 @@ final class StringCommands {
             return;
         }
         DbEngine engine = support.db(out);
-        engine.values().strings().getStringForReply(support.argView(cmd, 1), out);
+        engine.values().strings().getStringValue(support.argView(cmd, 1)).writeTo(new BulkStringReplyAdapter(out));
     }
 
     private void strlen(Command cmd, ReplyWriter out) {

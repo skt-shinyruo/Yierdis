@@ -3,7 +3,7 @@ package yier.bubu.redis.db;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapDictLong;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapRawSlice;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
-import yier.bubu.redis.protocol.ReplySink;
+import yier.bubu.redis.ops.result.BulkStringSink;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -164,7 +164,7 @@ final class SetValue implements YierdisValue {
         return out;
     }
 
-    void membersInto(ReplySink out) {
+    void membersInto(BulkStringSink out) {
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }

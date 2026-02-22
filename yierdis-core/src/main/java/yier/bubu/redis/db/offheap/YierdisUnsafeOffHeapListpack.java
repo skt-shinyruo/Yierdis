@@ -2,7 +2,7 @@ package yier.bubu.redis.db.offheap;
 
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
-import yier.bubu.redis.protocol.ReplySink;
+import yier.bubu.redis.ops.result.BulkStringSink;
 
 /**
  * A minimal listpack-like container backed by {@link YierdisUnsafeOffHeapString}.
@@ -447,7 +447,7 @@ public final class YierdisUnsafeOffHeapListpack implements AutoCloseable {
             return out;
         }
 
-        public void writeTo(ReplySink out) {
+        public void writeTo(BulkStringSink out) {
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
             }

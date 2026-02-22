@@ -2,6 +2,7 @@ package yier.bubu.redis.command;
 
 import yier.bubu.redis.db.DbMemoryConstants;
 import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.result.BulkStringSequence;
 import yier.bubu.redis.protocol.Command;
 import yier.bubu.redis.protocol.ReplyWriter;
 
@@ -67,12 +68,13 @@ final class SetCommands {
 
         byte[] key = cmd.toByteArray(1);
         DbEngine engine = support.db(out);
-        int count = engine.values().sets().smembersCount(key);
+        BulkStringSequence seq = engine.values().sets().smembers(key);
+        int count = seq.count();
         out.arrayHeader(count);
         if (count == 0) {
             return;
         }
-        engine.values().sets().smembersWriteTo(key, out);
+        seq.emitTo(new BulkStringReplyAdapter(out));
     }
 
     private void sismember(Command cmd, ReplyWriter out) {

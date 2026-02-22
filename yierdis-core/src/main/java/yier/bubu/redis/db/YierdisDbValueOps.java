@@ -18,7 +18,12 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.protocol.ReplySink;
+import yier.bubu.redis.ops.result.BulkStringMapPairs;
+import yier.bubu.redis.ops.result.BulkStringMapPairsSupport;
+import yier.bubu.redis.ops.result.BulkStringSequence;
+import yier.bubu.redis.ops.result.BulkStringSequences;
+import yier.bubu.redis.ops.result.BulkStringSink;
+import yier.bubu.redis.ops.result.BulkStringValue;
 
 import java.util.Collections;
 import java.util.List;
@@ -216,32 +221,26 @@ final class YierdisDbValueOps implements ValueOps {
         }
 
         @Override
-        public void getStringForReply(YierdisBytesView keyView, ReplySink out) {
+        public BulkStringValue getStringValue(YierdisBytesView keyView) {
             db.checkThread();
-            if (out == null) {
-                throw new IllegalArgumentException("out must not be null");
-            }
 
             YierdisObject e = db.getObjectIfNotExpired(keyView);
             if (e == null) {
-                out.bulkStringNull();
-                return;
+                return BulkStringValue.nullValue();
             }
             if (e.type != ValueType.STRING) {
                 throw new WrongTypeException();
             }
 
             if (e.encoding == ValueEncoding.STRING_INT) {
-                out.bulkStringLongAscii(e.intValue);
-                return;
+                return BulkStringValue.longAscii(e.intValue);
             }
             YierdisOffHeapSlice slice = e.stringOffHeapSlice();
             if (slice != null) {
-                out.bulkString(slice);
-                return;
+                return BulkStringValue.slice(slice);
             }
             byte[] buf = (byte[]) e.payload;
-            out.bulkString(buf, 0, e.rawLen);
+            return BulkStringValue.bytes(buf, 0, e.rawLen);
         }
 
         @Override
@@ -556,33 +555,31 @@ final class YierdisDbValueOps implements ValueOps {
         }
 
         @Override
-        public int hgetallPairCount(byte[] keyBytes) {
+        public BulkStringMapPairs hgetall(byte[] keyBytes) {
             db.checkThread();
             YierdisObject e = db.getObjectIfNotExpired(keyBytes);
             if (e == null) {
-                return 0;
+                return BulkStringMapPairsSupport.empty();
             }
             if (e.type != ValueType.HASH) {
                 throw new WrongTypeException();
             }
-            return ((HashValue) e.payload).size();
-        }
+            HashValue hv = (HashValue) e.payload;
+            int pairs = hv.size();
+            if (pairs == 0) {
+                return BulkStringMapPairsSupport.empty();
+            }
+            return new BulkStringMapPairs() {
+                @Override
+                public int pairCount() {
+                    return pairs;
+                }
 
-        @Override
-        public void hgetallWriteTo(byte[] keyBytes, ReplySink out) {
-            db.checkThread();
-            if (out == null) {
-                throw new IllegalArgumentException("out must not be null");
-            }
-
-            YierdisObject e = db.getObjectIfNotExpired(keyBytes);
-            if (e == null) {
-                return;
-            }
-            if (e.type != ValueType.HASH) {
-                throw new WrongTypeException();
-            }
-            ((HashValue) e.payload).hgetallPairsInto(out);
+                @Override
+                public void emitPairsTo(BulkStringSink out) {
+                    hv.hgetallPairsInto(out);
+                }
+            };
         }
 
         @Override
@@ -654,33 +651,31 @@ final class YierdisDbValueOps implements ValueOps {
         }
 
         @Override
-        public int lrangeCount(byte[] keyBytes, int start, int stop) {
+        public BulkStringSequence lrange(byte[] keyBytes, int start, int stop) {
             db.checkThread();
             YierdisObject e = db.getObjectIfNotExpired(keyBytes);
             if (e == null) {
-                return 0;
+                return BulkStringSequences.empty();
             }
             if (e.type != ValueType.LIST) {
                 throw new WrongTypeException();
             }
-            return ((ListValue) e.payload).rangeCount(start, stop);
-        }
+            ListValue lv = (ListValue) e.payload;
+            int count = lv.rangeCount(start, stop);
+            if (count == 0) {
+                return BulkStringSequences.empty();
+            }
+            return new BulkStringSequence() {
+                @Override
+                public int count() {
+                    return count;
+                }
 
-        @Override
-        public void lrangeWriteTo(byte[] keyBytes, int start, int stop, ReplySink out) {
-            db.checkThread();
-            if (out == null) {
-                throw new IllegalArgumentException("out must not be null");
-            }
-
-            YierdisObject e = db.getObjectIfNotExpired(keyBytes);
-            if (e == null) {
-                return;
-            }
-            if (e.type != ValueType.LIST) {
-                throw new WrongTypeException();
-            }
-            ((ListValue) e.payload).rangeInto(start, stop, out);
+                @Override
+                public void emitTo(BulkStringSink out) {
+                    lv.rangeInto(start, stop, out);
+                }
+            };
         }
 
         @Override
@@ -870,33 +865,31 @@ final class YierdisDbValueOps implements ValueOps {
         }
 
         @Override
-        public int smembersCount(byte[] keyBytes) {
+        public BulkStringSequence smembers(byte[] keyBytes) {
             db.checkThread();
             YierdisObject e = db.getObjectIfNotExpired(keyBytes);
             if (e == null) {
-                return 0;
+                return BulkStringSequences.empty();
             }
             if (e.type != ValueType.SET) {
                 throw new WrongTypeException();
             }
-            return ((SetValue) e.payload).size();
-        }
+            SetValue sv = (SetValue) e.payload;
+            int count = sv.size();
+            if (count == 0) {
+                return BulkStringSequences.empty();
+            }
+            return new BulkStringSequence() {
+                @Override
+                public int count() {
+                    return count;
+                }
 
-        @Override
-        public void smembersWriteTo(byte[] keyBytes, ReplySink out) {
-            db.checkThread();
-            if (out == null) {
-                throw new IllegalArgumentException("out must not be null");
-            }
-
-            YierdisObject e = db.getObjectIfNotExpired(keyBytes);
-            if (e == null) {
-                return;
-            }
-            if (e.type != ValueType.SET) {
-                throw new WrongTypeException();
-            }
-            ((SetValue) e.payload).membersInto(out);
+                @Override
+                public void emitTo(BulkStringSink out) {
+                    sv.membersInto(out);
+                }
+            };
         }
 
         @Override
@@ -983,67 +976,63 @@ final class YierdisDbValueOps implements ValueOps {
         }
 
         @Override
-        public int zrangeCount(byte[] keyBytes, long start, long stop, boolean withScores) {
+        public BulkStringSequence zrange(byte[] keyBytes, long start, long stop, boolean withScores) {
             db.checkThread();
             YierdisObject e = db.getObjectIfNotExpired(keyBytes);
             if (e == null) {
-                return 0;
+                return BulkStringSequences.empty();
             }
             if (e.type != ValueType.ZSET) {
                 throw new WrongTypeException();
             }
-            return ((ZSetValue) e.payload).zrangeCount(start, stop, withScores);
+            ZSetValue zv = (ZSetValue) e.payload;
+            int count = zv.zrangeCount(start, stop, withScores);
+            if (count == 0) {
+                return BulkStringSequences.empty();
+            }
+            return new BulkStringSequence() {
+                @Override
+                public int count() {
+                    return count;
+                }
+
+                @Override
+                public void emitTo(BulkStringSink out) {
+                    zv.zrangeWriteTo(start, stop, withScores, out);
+                }
+            };
         }
 
         @Override
-        public void zrangeWriteTo(byte[] keyBytes, long start, long stop, boolean withScores, ReplySink out) {
+        public BulkStringSequence zrevrange(byte[] keyBytes, long start, long stop, boolean withScores) {
             db.checkThread();
-            if (out == null) {
-                throw new IllegalArgumentException("out must not be null");
-            }
-
             YierdisObject e = db.getObjectIfNotExpired(keyBytes);
             if (e == null) {
-                return;
+                return BulkStringSequences.empty();
             }
             if (e.type != ValueType.ZSET) {
                 throw new WrongTypeException();
             }
-            ((ZSetValue) e.payload).zrangeWriteTo(start, stop, withScores, out);
+            ZSetValue zv = (ZSetValue) e.payload;
+            int count = zv.zrevrangeCount(start, stop, withScores);
+            if (count == 0) {
+                return BulkStringSequences.empty();
+            }
+            return new BulkStringSequence() {
+                @Override
+                public int count() {
+                    return count;
+                }
+
+                @Override
+                public void emitTo(BulkStringSink out) {
+                    zv.zrevrangeWriteTo(start, stop, withScores, out);
+                }
+            };
         }
 
         @Override
-        public int zrevrangeCount(byte[] keyBytes, long start, long stop, boolean withScores) {
-            db.checkThread();
-            YierdisObject e = db.getObjectIfNotExpired(keyBytes);
-            if (e == null) {
-                return 0;
-            }
-            if (e.type != ValueType.ZSET) {
-                throw new WrongTypeException();
-            }
-            return ((ZSetValue) e.payload).zrevrangeCount(start, stop, withScores);
-        }
-
-        @Override
-        public void zrevrangeWriteTo(byte[] keyBytes, long start, long stop, boolean withScores, ReplySink out) {
-            db.checkThread();
-            if (out == null) {
-                throw new IllegalArgumentException("out must not be null");
-            }
-
-            YierdisObject e = db.getObjectIfNotExpired(keyBytes);
-            if (e == null) {
-                return;
-            }
-            if (e.type != ValueType.ZSET) {
-                throw new WrongTypeException();
-            }
-            ((ZSetValue) e.payload).zrevrangeWriteTo(start, stop, withScores, out);
-        }
-
-        @Override
-        public int zrangeByScoreCount(
+        public BulkStringSequence zrangeByScore(
                 byte[] keyBytes,
                 double min,
                 boolean minExclusive,
@@ -1056,43 +1045,31 @@ final class YierdisDbValueOps implements ValueOps {
             db.checkThread();
             YierdisObject e = db.getObjectIfNotExpired(keyBytes);
             if (e == null) {
-                return 0;
+                return BulkStringSequences.empty();
             }
             if (e.type != ValueType.ZSET) {
                 throw new WrongTypeException();
             }
-            return ((ZSetValue) e.payload).zrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            ZSetValue zv = (ZSetValue) e.payload;
+            int replyCount = zv.zrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            if (replyCount == 0) {
+                return BulkStringSequences.empty();
+            }
+            return new BulkStringSequence() {
+                @Override
+                public int count() {
+                    return replyCount;
+                }
+
+                @Override
+                public void emitTo(BulkStringSink out) {
+                    zv.zrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+                }
+            };
         }
 
         @Override
-        public void zrangeByScoreWriteTo(
-                byte[] keyBytes,
-                double min,
-                boolean minExclusive,
-                double max,
-                boolean maxExclusive,
-                boolean withScores,
-                long offset,
-                long count,
-                ReplySink out
-        ) {
-            db.checkThread();
-            if (out == null) {
-                throw new IllegalArgumentException("out must not be null");
-            }
-
-            YierdisObject e = db.getObjectIfNotExpired(keyBytes);
-            if (e == null) {
-                return;
-            }
-            if (e.type != ValueType.ZSET) {
-                throw new WrongTypeException();
-            }
-            ((ZSetValue) e.payload).zrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
-        }
-
-        @Override
-        public int zrevrangeByScoreCount(
+        public BulkStringSequence zrevrangeByScore(
                 byte[] keyBytes,
                 double min,
                 boolean minExclusive,
@@ -1105,39 +1082,27 @@ final class YierdisDbValueOps implements ValueOps {
             db.checkThread();
             YierdisObject e = db.getObjectIfNotExpired(keyBytes);
             if (e == null) {
-                return 0;
+                return BulkStringSequences.empty();
             }
             if (e.type != ValueType.ZSET) {
                 throw new WrongTypeException();
             }
-            return ((ZSetValue) e.payload).zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
-        }
+            ZSetValue zv = (ZSetValue) e.payload;
+            int replyCount = zv.zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+            if (replyCount == 0) {
+                return BulkStringSequences.empty();
+            }
+            return new BulkStringSequence() {
+                @Override
+                public int count() {
+                    return replyCount;
+                }
 
-        @Override
-        public void zrevrangeByScoreWriteTo(
-                byte[] keyBytes,
-                double min,
-                boolean minExclusive,
-                double max,
-                boolean maxExclusive,
-                boolean withScores,
-                long offset,
-                long count,
-                ReplySink out
-        ) {
-            db.checkThread();
-            if (out == null) {
-                throw new IllegalArgumentException("out must not be null");
-            }
-
-            YierdisObject e = db.getObjectIfNotExpired(keyBytes);
-            if (e == null) {
-                return;
-            }
-            if (e.type != ValueType.ZSET) {
-                throw new WrongTypeException();
-            }
-            ((ZSetValue) e.payload).zrevrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+                @Override
+                public void emitTo(BulkStringSink out) {
+                    zv.zrevrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+                }
+            };
         }
 
         @Override

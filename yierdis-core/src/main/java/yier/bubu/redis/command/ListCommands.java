@@ -2,6 +2,7 @@ package yier.bubu.redis.command;
 
 import yier.bubu.redis.db.DbMemoryConstants;
 import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.result.BulkStringSequence;
 import yier.bubu.redis.protocol.Command;
 import yier.bubu.redis.protocol.ReplyWriter;
 
@@ -73,12 +74,13 @@ final class ListCommands {
 
         byte[] key = cmd.toByteArray(1);
         DbEngine engine = support.db(out);
-        int count = engine.values().lists().lrangeCount(key, start, stop);
+        BulkStringSequence seq = engine.values().lists().lrange(key, start, stop);
+        int count = seq.count();
         out.arrayHeader(count);
         if (count == 0) {
             return;
         }
-        engine.values().lists().lrangeWriteTo(key, start, stop, out);
+        seq.emitTo(new BulkStringReplyAdapter(out));
     }
 
     private void pop(Command cmd, ReplyWriter out, boolean left) {

@@ -29,7 +29,9 @@
 - 新增 off-heap keys 零 canonical heap copy 回归：`OffHeapKeyCopyDiagnostics` + `OffHeapKeysZeroCopyReadPathTest`，锁定 `GET/EXISTS/TYPE/TTL` 热路径不触发 heap key 拷贝。
 - Maven 多模块拆分：引入协议层模块（`yierdis-protocol-model` 端口/模型 SSOT + `yierdis-protocol-codec` JSON/v1 codec SSOT；`yierdis-protocol` 为兼容聚合层）、`yierdis-core`（DB/命令 SSOT）、`yierdis-args`（参数 SSOT）、`yierdis-client`（client/CLI），并调整 `yierdis-server`/`yierdis-bench` 依赖方向。
 - 新增协议层二次拆分：引入 `yierdis-protocol-model`（端口/Reply IR SSOT）与 `yierdis-protocol-codec`（JSON + Custom Protocol v1 codec SSOT），并保留 `yierdis-protocol` 作为兼容聚合层（migration）。
-- 引入 `ReplySink`（bulk string streaming 子集）并让 `ReplyWriter` 继承：将 streaming bulk 写出接口从 db 包迁出到 protocol；db/value 层仅依赖 `ReplySink`，移除 `YierdisDb` 的 `*ReplyCount/*ReplyInto` 回包形态 API（以 `ValueOps/*Ops` 为唯一入口），并删除旧桥接接口 `YierdisBulkStringOutput`。
+- 引入 `ReplySink`（bulk string streaming 子集）并让 `ReplyWriter` 继承：作为命令层写出 bulk 值的协议端口子集；db/value/off-heap 不再依赖 `ReplySink`，streaming bulk 输出改为 core 的 domain result / `BulkStringSink`，命令层通过 adapter 写入 `ReplyWriter`；同时保持移除 `YierdisDb` 的 `*ReplyCount/*ReplyInto` 回包形态 API（以 `ValueOps/*Ops` 为唯一入口），并删除旧桥接接口 `YierdisBulkStringOutput`。
+- 新增分层护栏回归测试：禁止 `yier.bubu.redis.db.*` / `yier.bubu.redis.ops.*` import `yier.bubu.redis.protocol.*`，避免协议端口向下渗透。
+- 修复 off-heap 空字节串 streaming 输出：允许 `(address==0,len==0)` 表达空 slice，避免集合/字典中空值写出时触发 `IllegalArgumentException`；并补充命令回归（SMEMBERS/HGETALL/ZRANGE 空 bulk string）。
 - 引入 `ReplyWriterFactory`（协议写出注入点）：server 的执行器/handler 通过 factory 获取 `ReplyWriter`，避免直接 `new JsonLineReplyWriter(...)`，为后续协议替换/多协议共存提供边界。
 - 新增 `yierdis-protocol-netty`：承载 Netty codec/adapters（Custom Protocol v1 decoder + reply line decoder）。
 - 升级为 Netty 体系内单线程 `NettyCommandExecutor`（`DefaultEventExecutorGroup(1)`）：批量 `write` + 末尾 `flush` 合并、连接级 `autoRead` 背压（high/low 滞回阈值）、全局有界队列与 `-ERR busy` 保护。

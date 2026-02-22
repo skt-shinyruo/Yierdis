@@ -2,7 +2,7 @@ package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapListpack;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
-import yier.bubu.redis.protocol.ReplySink;
+import yier.bubu.redis.ops.result.BulkStringSink;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -365,7 +365,7 @@ final class ListValue implements YierdisValue {
         return normalizedStop - normalizedStart + 1;
     }
 
-    void rangeInto(int start, int stop, ReplySink out) {
+    void rangeInto(int start, int stop, BulkStringSink out) {
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }

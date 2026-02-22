@@ -2,8 +2,7 @@ package yier.bubu.redis.db.offheap;
 
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.protocol.ReplySink;
-import yier.bubu.redis.ops.YierdisCommandException;
+import yier.bubu.redis.ops.result.BulkStringSink;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -55,7 +54,7 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         return out;
     }
 
-    public void zrangeWriteTo(long start, long stop, boolean withScores, ReplySink out) {
+    public void zrangeWriteTo(long start, long stop, boolean withScores, BulkStringSink out) {
         Objects.requireNonNull(out, "out");
         int size = size();
         if (size == 0) {
@@ -99,7 +98,7 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         return out;
     }
 
-    public void zrevrangeWriteTo(long start, long stop, boolean withScores, ReplySink out) {
+    public void zrevrangeWriteTo(long start, long stop, boolean withScores, BulkStringSink out) {
         Objects.requireNonNull(out, "out");
         int size = size();
         if (size == 0) {
@@ -192,7 +191,7 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
                                      boolean withScores,
                                      long offset,
                                      long count,
-                                     ReplySink out) {
+                                     BulkStringSink out) {
         Objects.requireNonNull(out, "out");
         if (count <= 0) {
             return;
@@ -291,7 +290,7 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
                                         boolean withScores,
                                         long offset,
                                         long count,
-                                        ReplySink out) {
+                                        BulkStringSink out) {
         Objects.requireNonNull(out, "out");
         if (count <= 0) {
             return;
@@ -492,7 +491,7 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         byMember.removeByPtr(memberPtr, memberLen, memberHash);
     }
 
-    private void writeNodeTo(ReplySink out, long node, boolean withScores) {
+    private void writeNodeTo(BulkStringSink out, long node, boolean withScores) {
         out.bulkString(new YierdisUnsafeOffHeapRawSlice(allocator, byScore.memberPtr(node), byScore.memberLen(node)));
         if (!withScores) {
             return;
@@ -529,19 +528,22 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
     }
 
     private static double parseScore(byte[] s) {
+        if (s == null) {
+            throw new IllegalArgumentException("value is not a valid float");
+        }
         double v;
         try {
             v = Double.parseDouble(new String(s, StandardCharsets.US_ASCII));
         } catch (NumberFormatException e) {
-            throw new YierdisCommandException("ERR value is not a valid float");
+            throw new IllegalArgumentException("value is not a valid float");
         }
         if (Double.isNaN(v) || Double.isInfinite(v)) {
-            throw new YierdisCommandException("ERR value is not a valid float");
+            throw new IllegalArgumentException("value is not a valid float");
         }
         return v;
     }
 
-    private static void writeScoreTo(ReplySink out, double score) {
+    private static void writeScoreTo(BulkStringSink out, double score) {
         if (score == Math.rint(score) && score >= Long.MIN_VALUE && score <= Long.MAX_VALUE) {
             out.bulkStringLongAscii((long) score);
             return;
@@ -560,7 +562,7 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         }
     }
 
-    private static final class ListBulkOutput implements ReplySink {
+    private static final class ListBulkOutput implements BulkStringSink {
         private final List<byte[]> out;
 
         private ListBulkOutput(List<byte[]> out) {

@@ -28,7 +28,7 @@ public class UnsafeOffHeapDbSmokeTest {
 
             Assert.assertEquals(2, db.hset(b("h"), List.of(b("f1"), b("v1"), b("f2"), b("v2"))));
             Assert.assertArrayEquals(b("v1"), db.hget(b("h"), b("f1")));
-            Assert.assertEquals(2, db.values().hashes().hgetallPairCount(b("h")));
+            Assert.assertEquals(2, db.values().hashes().hgetall(b("h")).pairCount());
 
             Assert.assertEquals(3, db.sadd(b("set"), List.of(b("x"), b("y"), b("z"))));
             Assert.assertTrue(db.sismember(b("set"), b("y")));
@@ -45,7 +45,7 @@ public class UnsafeOffHeapDbSmokeTest {
             Assert.assertArrayEquals(b("a"), zrange.get(1));
             Assert.assertArrayEquals(b("b"), zrange.get(2));
         } finally {
-            // Closes the allocator; will throw on leaks.
+            // 关闭 allocator；如果有内存泄漏会抛异常。
             db.shutdown();
         }
     }

@@ -24,11 +24,11 @@ public final class YierdisUnsafeOffHeapRawSlice implements YierdisOffHeapSlice {
         if (allocator == null) {
             throw new IllegalArgumentException("allocator must not be null");
         }
-        if (address == 0) {
-            throw new IllegalArgumentException("address must be != 0");
-        }
         if (len < 0) {
             throw new IllegalArgumentException("len must be >= 0");
+        }
+        if (address == 0 && len > 0) {
+            throw new IllegalArgumentException("address must be != 0 when len > 0");
         }
         this.allocator = allocator;
         this.address = address;

@@ -2,6 +2,7 @@ package yier.bubu.redis.command;
 
 import yier.bubu.redis.db.DbMemoryConstants;
 import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.result.BulkStringMapPairs;
 import yier.bubu.redis.protocol.Command;
 import yier.bubu.redis.protocol.ReplyWriter;
 
@@ -61,12 +62,13 @@ final class HashCommands {
 
         byte[] key = cmd.toByteArray(1);
         DbEngine engine = support.db(out);
-        int pairs = engine.values().hashes().hgetallPairCount(key);
+        BulkStringMapPairs pairsResult = engine.values().hashes().hgetall(key);
+        int pairs = pairsResult.pairCount();
         out.mapHeader(pairs);
         if (pairs == 0) {
             return;
         }
-        engine.values().hashes().hgetallWriteTo(key, out);
+        pairsResult.emitPairsTo(new BulkStringReplyAdapter(out));
     }
 
     private void hlen(Command cmd, ReplyWriter out) {
