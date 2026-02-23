@@ -8,7 +8,7 @@
 
 - **Responsibility:** `protocol-model`（端口/模型 SSOT）+ `protocol-codec`（JSON + v1 codec SSOT）+ `yierdis-protocol`（兼容聚合层）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-22
+- **Last Updated:** 2026-02-23
 
 ## Specifications
 
@@ -18,10 +18,12 @@
 为避免 core 命令层绑定某个 wire protocol，协议层定义最小抽象：
 
 - `Command`：argv 风格的 byte-oriented 访问（支持 `null` 参数语义）
-- `ReplyWriter`：协议无关的 reply 形状写出 API（标量/聚合/null/close-after-reply/protocolError）
+- `ReplyWriter`：协议无关的 reply 形状写出 API（标量/聚合/null/close-after-reply/protocolError）；**纯输出端口，不承载 Session**
 - `ReplySink`：用于 streaming bulk-string 值写出的窄接口（仅 bulk string 子集；不包含 array/map header 等 reply 形状）
 - `Session` / `ServerSession`：连接级状态（dbIndex/auth/clientName/MULTI 事务队列等）
+- `DbIndexProvider`：路由读取 `dbIndex` 的最小能力视图（避免 router 依赖过宽的连接态接口）
 - `TransactionState`：MULTI/EXEC/DISCARD 的队列与上限保护
+- `CommandContext`：命令执行上下文（`Session` + `ReplyWriter` 的聚合），用于把“输入侧状态”与“输出端口”显式拆分
 
 核心约束：
 
@@ -74,3 +76,4 @@ Custom Protocol v1 的 reply 采用 NDJSON（每个 reply 一行 JSON）：
 - 2026-02-06：引入协议无关抽象 + Custom Protocol v1（JSON codec + NDJSON reply），并移除旧协议遗留实现与测试。
 - 2026-02-09：reply bytes value 编码贯通 `BytesSlice` 直写/少拷贝链路（streaming strict UTF-8 + JSON escape + `$b64` fallback），详情：`helloagents/history/2026-02/202602092316_reply_byteslice_streaming_encoder/`。
 - 2026-02-21：协议层拆分为 `yierdis-protocol-model` / `yierdis-protocol-codec`，并保留 `yierdis-protocol` 作为兼容聚合层；core 依赖收敛到 model，避免编译期引入 codec。
+- 2026-02-23：引入 `CommandContext`（输入侧 `Session` + 输出端口 `ReplyWriter`），并移除 `ReplyWriter.session()`；路由/事务/可观测等输入侧逻辑改为基于 `CommandContext.session()` / `DbIndexProvider`。

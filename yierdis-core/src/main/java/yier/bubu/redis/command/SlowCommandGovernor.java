@@ -2,7 +2,7 @@ package yier.bubu.redis.command;
 
 // SlowCommandGovernor：慢命令治理接口（时间预算/输出上限/可观测），优先用于 KEYS/SCAN 等潜在长耗时命令。
 
-import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.protocol.CommandContext;
 
 /**
  * Slow command governance (minimal contract).
@@ -17,14 +17,14 @@ import yier.bubu.redis.protocol.ReplyWriter;
 public interface SlowCommandGovernor {
     SlowCommandGovernor UNBOUNDED = new SlowCommandGovernor() {
         @Override
-        public long keysTimeBudgetNanos(ReplyWriter out) {
+        public long keysTimeBudgetNanos(CommandContext ctx) {
             return 0;
         }
     };
 
     SlowCommandGovernor DEFAULT = new SlowCommandGovernor() {
         @Override
-        public long keysTimeBudgetNanos(ReplyWriter out) {
+        public long keysTimeBudgetNanos(CommandContext ctx) {
             // 约定：KEYS 本质是全表扫描，默认加一个温和预算以避免极端情况下阻塞 executor。
             // 小数据集下几乎不会触发，且 COUNT/分页场景建议使用 SCAN。
             return java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(20);
@@ -34,14 +34,14 @@ public interface SlowCommandGovernor {
     /**
      * Time budget for KEYS command (0 means unlimited).
      */
-    long keysTimeBudgetNanos(ReplyWriter out);
+    long keysTimeBudgetNanos(CommandContext ctx);
 
     /**
      * Max results for KEYS (best-effort). When exceeded, implementations should fail-fast.
      * <p>
      * Default is "no limit" (preserve Redis-compatible behavior).
      */
-    default int keysMaxResults(ReplyWriter out) {
+    default int keysMaxResults(CommandContext ctx) {
         return Integer.MAX_VALUE;
     }
 }

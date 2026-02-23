@@ -3,7 +3,6 @@ package yier.bubu.redis.protocol.v1;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.protocol.ReplyWriter;
-import yier.bubu.redis.protocol.Session;
 import yier.bubu.redis.protocol.json.JsonWriter;
 import yier.bubu.redis.protocol.reply.ReplyErrorKind;
 
@@ -38,7 +37,6 @@ public final class JsonLineReplyWriter implements ReplyWriter {
     private static final byte[] COMMA = new byte[]{','};
 
     private final BytesSink out;
-    private final Session session;
 
     private boolean closeAfterReplyRequested;
 
@@ -72,17 +70,7 @@ public final class JsonLineReplyWriter implements ReplyWriter {
     );
 
     public JsonLineReplyWriter(BytesSink out) {
-        this(out, null);
-    }
-
-    public JsonLineReplyWriter(BytesSink out, Session session) {
         this.out = Objects.requireNonNull(out, "out");
-        this.session = session;
-    }
-
-    @Override
-    public Session session() {
-        return session;
     }
 
     @Override

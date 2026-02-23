@@ -6,7 +6,9 @@ import yier.bubu.redis.bytes.BytesSource;
 import yier.bubu.redis.db.YierdisBytesView;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.YierdisCommandException;
+import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.DbIndexProvider;
 import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.nio.charset.StandardCharsets;
@@ -47,8 +49,9 @@ final class CommandSupport {
         this.slowGovernor = slowGovernor == null ? SlowCommandGovernor.DEFAULT : slowGovernor;
     }
 
-    DbEngine db(ReplyWriter out) {
-        return dbRouter.dbFor(out);
+    DbEngine db(CommandContext ctx) {
+        java.util.Objects.requireNonNull(ctx, "ctx");
+        return dbRouter.dbFor(ctx.dbIndexProviderOrNull());
     }
 
     int databases() {
@@ -114,7 +117,7 @@ final class CommandSupport {
         DbEngine fixed = java.util.Objects.requireNonNull(engine, "engine");
         return new YierdisDbRouter() {
             @Override
-            public DbEngine dbFor(ReplyWriter out) {
+            public DbEngine dbFor(DbIndexProvider dbIndexProvider) {
                 return fixed;
             }
 

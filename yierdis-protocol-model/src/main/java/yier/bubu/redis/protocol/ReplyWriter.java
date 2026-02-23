@@ -9,9 +9,6 @@ import java.util.List;
  * semantic shape implied by the method calls (scalars vs aggregates, nulls, etc.).
  */
 public interface ReplyWriter extends ReplySink {
-    // --- Connection/session state (best-effort; may be a no-op depending on protocol) ---
-    Session session();
-
     void requestCloseAfterReply();
 
     boolean closeAfterReplyRequested();

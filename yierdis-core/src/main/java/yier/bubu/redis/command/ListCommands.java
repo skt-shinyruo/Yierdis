@@ -4,6 +4,7 @@ import yier.bubu.redis.db.DbMemoryConstants;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.result.BulkStringSequence;
 import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.util.List;
@@ -25,28 +26,29 @@ final class ListCommands {
         registry.register("RPOP", this::rpop);
     }
 
-    private void lpush(Command cmd, ReplyWriter out) {
-        push(cmd, out, true);
+    private void lpush(Command cmd, CommandContext ctx) {
+        push(cmd, ctx, true);
     }
 
-    private void rpush(Command cmd, ReplyWriter out) {
-        push(cmd, out, false);
+    private void rpush(Command cmd, CommandContext ctx) {
+        push(cmd, ctx, false);
     }
 
-    private void lpop(Command cmd, ReplyWriter out) {
-        pop(cmd, out, true);
+    private void lpop(Command cmd, CommandContext ctx) {
+        pop(cmd, ctx, true);
     }
 
-    private void rpop(Command cmd, ReplyWriter out) {
-        pop(cmd, out, false);
+    private void rpop(Command cmd, CommandContext ctx) {
+        pop(cmd, ctx, false);
     }
 
-    private void push(Command cmd, ReplyWriter out, boolean left) {
+    private void push(Command cmd, CommandContext ctx, boolean left) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, left ? "lpush" : "rpush");
             return;
         }
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
@@ -64,7 +66,8 @@ final class ListCommands {
         }
     }
 
-    private void lrange(Command cmd, ReplyWriter out) {
+    private void lrange(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 4) {
             CommandSupport.wrongArity(out, "lrange");
             return;
@@ -73,7 +76,7 @@ final class ListCommands {
         int stop = CommandSupport.parseIntClamped(cmd, 3, "stop");
 
         byte[] key = cmd.toByteArray(1);
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         BulkStringSequence seq = engine.values().lists().lrange(key, start, stop);
         int count = seq.count();
         out.arrayHeader(count);
@@ -83,7 +86,8 @@ final class ListCommands {
         seq.emitTo(new BulkStringReplyAdapter(out));
     }
 
-    private void pop(Command cmd, ReplyWriter out, boolean left) {
+    private void pop(Command cmd, CommandContext ctx, boolean left) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 2 && cmd.argc() != 3) {
             CommandSupport.wrongArity(out, left ? "lpop" : "rpop");
             return;
@@ -102,7 +106,7 @@ final class ListCommands {
             }
         }
 
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         List<byte[]> popped = left
                 ? engine.values().lists().lpop(cmd.toByteArray(1), count)
                 : engine.values().lists().rpop(cmd.toByteArray(1), count);

@@ -1,6 +1,7 @@
 package yier.bubu.redis.command;
 
 import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.nio.charset.StandardCharsets;
@@ -26,7 +27,7 @@ final class CommandRegistry {
 
     @FunctionalInterface
     interface CommandHandler {
-        void execute(Command cmd, ReplyWriter out);
+        void execute(Command cmd, CommandContext ctx);
     }
 
     private static final class Entry {

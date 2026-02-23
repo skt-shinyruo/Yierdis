@@ -6,6 +6,7 @@ import yier.bubu.redis.command.ServerInfoProvider;
 import yier.bubu.redis.db.YierdisMemoryStats;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.ReplyWriter;
 import yier.bubu.redis.protocol.Session;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
@@ -87,8 +88,9 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     @Override
-    public void info(Command cmd, ReplyWriter out) {
-        Objects.requireNonNull(out, "out");
+    public void info(Command cmd, CommandContext ctx) {
+        Objects.requireNonNull(ctx, "ctx");
+        ReplyWriter out = Objects.requireNonNull(ctx.out(), "out");
         NettyCommandExecutor ex = executor;
         if (ex == null) {
             out.error("ERR INFO not ready");
@@ -105,8 +107,9 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     @Override
-    public void stats(Command cmd, ReplyWriter out) {
-        Objects.requireNonNull(out, "out");
+    public void stats(Command cmd, CommandContext ctx) {
+        Objects.requireNonNull(ctx, "ctx");
+        ReplyWriter out = Objects.requireNonNull(ctx.out(), "out");
         NettyCommandExecutor ex = executor;
         if (ex == null) {
             out.error("ERR STATS not ready");
@@ -114,7 +117,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         NettyCommandExecutor.StatsSnapshot s = ex.statsSnapshot();
-        ServerConnectionState conn = connectionState(out);
+        ServerConnectionState conn = connectionState(ctx);
 
         int pairs = 15 + (conn == null ? 0 : 11);
         writeHeader(out, pairs);
@@ -153,7 +156,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     @Override
-    public YierdisMemoryStats memoryStats(ReplyWriter out) {
+    public YierdisMemoryStats memoryStats(CommandContext ctx) {
         if (config.maxmemoryScope != ServerConfig.MaxmemoryScope.GLOBAL) {
             return null;
         }
@@ -449,10 +452,13 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
     }
 
-    private static ServerConnectionState connectionState(ReplyWriter out) {
-        Session session = out.session();
-        if (session instanceof ServerConnectionState ctx) {
-            return ctx;
+    private static ServerConnectionState connectionState(CommandContext ctx) {
+        if (ctx == null) {
+            return null;
+        }
+        Session session = ctx.session();
+        if (session instanceof ServerConnectionState s) {
+            return s;
         }
         return null;
     }

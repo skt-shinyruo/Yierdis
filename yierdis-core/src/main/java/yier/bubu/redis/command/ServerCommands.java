@@ -3,6 +3,7 @@ package yier.bubu.redis.command;
 // server 侧通用命令实现：包含 PING/ECHO/HELLO/INFO/QUIT 等基础命令，并通过 ReplyWriter 直接写回响应。
 
 import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.ReplyWriter;
 import yier.bubu.redis.protocol.ServerSession;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
@@ -32,7 +33,7 @@ final class ServerCommands {
         registry.register("PING", this::ping);
         registry.register("ECHO", this::echo);
         registry.register("HELLO", this::hello);
-        registry.register("COMMAND", (cmd, out) -> command(cmd, out, registry));
+        registry.register("COMMAND", (cmd, ctx) -> command(cmd, ctx.out(), registry));
         registry.register("INFO", this::info);
         registry.register("STATS", this::stats);
         registry.register("SELECT", this::select);
@@ -40,7 +41,8 @@ final class ServerCommands {
         registry.register("FLUSHDB", this::flushdb);
     }
 
-    private void info(Command cmd, ReplyWriter out) {
+    private void info(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         ServerInfoProvider provider = support.infoProvider();
         if (provider == null) {
             out.error("ERR INFO not supported");
@@ -50,19 +52,21 @@ final class ServerCommands {
             CommandSupport.wrongArity(out, "info");
             return;
         }
-        provider.info(cmd, out);
+        provider.info(cmd, ctx);
     }
 
-    private void stats(Command cmd, ReplyWriter out) {
+    private void stats(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         ServerInfoProvider provider = support.infoProvider();
         if (provider == null) {
             out.error("ERR STATS not supported");
             return;
         }
-        provider.stats(cmd, out);
+        provider.stats(cmd, ctx);
     }
 
-    private void ping(Command cmd, ReplyWriter out) {
+    private void ping(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() == 1) {
             out.simpleString("PONG");
             return;
@@ -74,7 +78,8 @@ final class ServerCommands {
         CommandSupport.wrongArity(out, "ping");
     }
 
-    private void echo(Command cmd, ReplyWriter out) {
+    private void echo(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "echo");
             return;
@@ -82,7 +87,8 @@ final class ServerCommands {
         out.bulkString(cmd.toByteArray(1));
     }
 
-    private void hello(Command cmd, ReplyWriter out) {
+    private void hello(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         // Custom protocol: HELLO is informational only (best-effort compatibility for existing clients/tests).
         // Optional argv[1] is accepted but does not negotiate a wire protocol version.
         if (cmd.argc() != 1 && cmd.argc() != 2) {
@@ -102,7 +108,8 @@ final class ServerCommands {
         out.bulkString(HELLO_ROLE_VALUE);
     }
 
-    private void select(Command cmd, ReplyWriter out) {
+    private void select(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "select");
             return;
@@ -129,7 +136,8 @@ final class ServerCommands {
             return;
         }
 
-        if (out.session() instanceof ServerSession s) {
+        ServerSession s = ctx.serverSessionOrNull();
+        if (s != null) {
             s.setDbIndex(dbIndex);
         } else if (dbIndex != 0) {
             // 在没有连接态的场景（例如部分单元测试）下，仅允许 DB0。
@@ -139,7 +147,8 @@ final class ServerCommands {
         out.simpleString("OK");
     }
 
-    private void quit(Command cmd, ReplyWriter out) {
+    private void quit(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 1) {
             CommandSupport.wrongArity(out, "quit");
             return;
@@ -149,7 +158,8 @@ final class ServerCommands {
         out.requestCloseAfterReply();
     }
 
-    private void flushdb(Command cmd, ReplyWriter out) {
+    private void flushdb(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 1 && cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "flushdb");
             return;
@@ -162,7 +172,7 @@ final class ServerCommands {
                 return;
             }
         }
-        support.db(out).lifecycle().flushDb();
+        support.db(ctx).lifecycle().flushDb();
         out.simpleString("OK");
     }
 

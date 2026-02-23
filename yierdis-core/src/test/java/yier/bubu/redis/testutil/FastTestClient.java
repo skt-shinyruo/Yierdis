@@ -2,10 +2,10 @@ package yier.bubu.redis.testutil;
 
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.Command;
 import yier.bubu.redis.protocol.ReplyWriter;
 import yier.bubu.redis.protocol.ServerSession;
-import yier.bubu.redis.protocol.Session;
 import yier.bubu.redis.protocol.TransactionState;
 
 import java.util.ArrayDeque;
@@ -36,8 +36,8 @@ public final class FastTestClient implements AutoCloseable {
     public ReplyObject execute(List<byte[]> args) {
         Objects.requireNonNull(args, "args");
         HeapCommand cmd = new HeapCommand(args);
-        CapturingReplyWriter writer = new CapturingReplyWriter(session);
-        processor.execute(cmd, writer);
+        CapturingReplyWriter writer = new CapturingReplyWriter();
+        processor.execute(cmd, new CommandContext(session, writer));
         cmd.close();
         return writer.root();
     }
@@ -105,7 +105,6 @@ public final class FastTestClient implements AutoCloseable {
     }
 
     private static final class CapturingReplyWriter implements ReplyWriter {
-        private final Session session;
         private boolean closeAfterReplyRequested;
 
         private ReplyObject root;
@@ -131,9 +130,7 @@ public final class FastTestClient implements AutoCloseable {
             }
         }
 
-        private CapturingReplyWriter(Session session) {
-            this.session = session;
-        }
+        private CapturingReplyWriter() {}
 
         ReplyObject root() {
             if (root == null) {
@@ -143,11 +140,6 @@ public final class FastTestClient implements AutoCloseable {
                 throw new AssertionError("reply container not finished");
             }
             return root;
-        }
-
-        @Override
-        public Session session() {
-            return session;
         }
 
         @Override

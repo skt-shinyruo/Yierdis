@@ -1,6 +1,7 @@
 package yier.bubu.redis.command;
 
 import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.ReplyWriter;
 import yier.bubu.redis.protocol.ServerSession;
 import yier.bubu.redis.protocol.TransactionState;
@@ -31,12 +32,13 @@ final class TransactionCommands {
         registry.register("EXEC", this::exec);
     }
 
-    private void multi(Command cmd, ReplyWriter out) {
+    private void multi(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 1) {
             CommandSupport.wrongArity(out, "multi");
             return;
         }
-        TransactionState tx = txOrNull(out);
+        TransactionState tx = txOrNull(ctx);
         if (tx == null) {
             out.error("ERR MULTI is only supported on server connections");
             return;
@@ -49,12 +51,13 @@ final class TransactionCommands {
         out.simpleString("OK");
     }
 
-    private void discard(Command cmd, ReplyWriter out) {
+    private void discard(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 1) {
             CommandSupport.wrongArity(out, "discard");
             return;
         }
-        TransactionState tx = txOrNull(out);
+        TransactionState tx = txOrNull(ctx);
         if (tx == null || !tx.active()) {
             out.error("ERR DISCARD without MULTI");
             return;
@@ -63,12 +66,13 @@ final class TransactionCommands {
         out.simpleString("OK");
     }
 
-    private void exec(Command cmd, ReplyWriter out) {
+    private void exec(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 1) {
             CommandSupport.wrongArity(out, "exec");
             return;
         }
-        TransactionState tx = txOrNull(out);
+        TransactionState tx = txOrNull(ctx);
         if (tx == null || !tx.active()) {
             out.error("ERR EXEC without MULTI");
             return;
@@ -84,16 +88,14 @@ final class TransactionCommands {
         for (int i = 0; i < queued.size(); i++) {
             byte[][] argv = queued.get(i);
             try (Command q = new QueuedCommand(argv)) {
-                processor.execute(q, out);
+                processor.execute(q, ctx);
             }
         }
     }
 
-    private TransactionState txOrNull(ReplyWriter out) {
-        if (out == null) {
-            return null;
-        }
-        if (out.session() instanceof ServerSession s) {
+    private TransactionState txOrNull(CommandContext ctx) {
+        ServerSession s = ctx.serverSessionOrNull();
+        if (s != null) {
             return s.transaction();
         }
         return null;

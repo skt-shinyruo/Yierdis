@@ -4,7 +4,9 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.WrongTypeException;
 import yier.bubu.redis.ops.YierdisCommandException;
+import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.DbIndexProvider;
 import yier.bubu.redis.protocol.ReplyWriter;
 import yier.bubu.redis.protocol.ServerSession;
 import yier.bubu.redis.protocol.TransactionState;
@@ -75,7 +77,9 @@ public final class YierdisFastCommandProcessor {
         this.registry = registry;
     }
 
-    public void execute(Command cmd, ReplyWriter out) {
+    public void execute(Command cmd, CommandContext ctx) {
+        Objects.requireNonNull(ctx, "ctx");
+        ReplyWriter out = ctx.out();
         int argc = cmd.argc();
         if (argc <= 0) {
             out.error("ERR empty command");
@@ -102,7 +106,8 @@ public final class YierdisFastCommandProcessor {
         }
 
         TransactionState tx = null;
-        if (out.session() instanceof ServerSession s) {
+        ServerSession s = ctx.serverSessionOrNull();
+        if (s != null) {
             tx = s.transaction();
         }
         if (tx != null && tx.active()) {
@@ -133,13 +138,14 @@ public final class YierdisFastCommandProcessor {
                 out.error(unknownCommandMessage(cmd));
                 return;
             }
-            handler.execute(cmd, out);
+            handler.execute(cmd, ctx);
 
             // 变更事件：仅在命令执行成功后触发，并尽量避免对读命令做额外分配。
             if (changeSink != YierdisChangeSink.NOOP && isWriteCommand(cmd)) {
                 int dbIndex = 0;
-                if (out != null && out.session() instanceof ServerSession s) {
-                    dbIndex = Math.max(0, s.dbIndex());
+                DbIndexProvider provider = ctx.dbIndexProviderOrNull();
+                if (provider != null) {
+                    dbIndex = Math.max(0, provider.dbIndex());
                 }
                 try {
                     changeSink.onChange(new YierdisChangeEvent(dbIndex, copyArgv(cmd)));
@@ -160,7 +166,7 @@ public final class YierdisFastCommandProcessor {
             // Command implementations are expected to finish (commit/rollback) their own reservations,
             // but this is a defensive last line to keep invariants stable.
             try {
-                DbEngine engine = dbRouter.dbFor(out);
+                DbEngine engine = dbRouter.dbFor(ctx.dbIndexProviderOrNull());
                 if (engine != null) {
                     engine.eviction().rollbackWriteReservationIfAny();
                 }
@@ -233,7 +239,7 @@ public final class YierdisFastCommandProcessor {
         DbEngine fixed = Objects.requireNonNull(engine, "engine");
         return new YierdisDbRouter() {
             @Override
-            public DbEngine dbFor(ReplyWriter out) {
+            public DbEngine dbFor(DbIndexProvider dbIndexProvider) {
                 return fixed;
             }
 

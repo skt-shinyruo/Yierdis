@@ -9,7 +9,7 @@
 - **Responsibility:** 端口监听、Pipeline 组装、定时任务（如 TTL 清理）的调度入口
 - **ArtifactId:** `yierdis-server`
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-21
+- **Last Updated:** 2026-02-23
 
 ## Specifications
 
@@ -58,6 +58,7 @@
 - 目标：保持 Redis 风格“全局单线程命令语义”，同时减少 per-command `flush` 并引入连接级背压闭环
 - 执行：I/O 线程负责解码与投递；命令在执行器线程串行执行；同一轮 drain 内对同一连接 `write` 聚合并在末尾 `flush`
 - 协议写出解耦：执行器与 handler 通过 `ReplyWriterFactory` 注入获取 `ReplyWriter`；默认使用 Custom Protocol v1 的 `JsonLineReplyWriterFactory`，避免在执行器侧直接依赖具体协议实现
+- 执行上下文收敛：执行器为每条命令组装 `CommandContext`（`session + out`），并调用 core 的 `YierdisFastCommandProcessor.execute(cmd, ctx)`；路由/事务/可观测等输入侧状态从 `ctx.session()` 获取，避免通过输出端口旁路读取
 - 背压：采用“双约束”：per-connection pending **条数** + pending **bytes** 两套水位线（带滞回阈值 high/low），避免“少量大包积压”导致内存驻留不可解释
 - 公平性：支持连接级公平调度（per-channel queue + round-robin），避免热点连接长期挤占全局 backlog（可配置）
 - 连接关闭语义：`QUIT` 由命令层请求 close-after-reply，执行器在 flush 后关闭连接，并跳过该连接后续已入队命令（仅回收，不执行 DB），保证 pipeline 顺序与无副作用

@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.ReplyWriter;
 import yier.bubu.redis.protocol.ReplyWriterFactory;
 
@@ -74,6 +75,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
     private final YierdisFastCommandProcessor commandProcessor;
     private final EventExecutor executor;
     private final ReplyWriterFactory replyWriterFactory;
+    private CommandContext execCtx;
 
     private final SchedulingPolicy schedulingPolicy;
 
@@ -211,8 +213,17 @@ public final class NettyCommandExecutor implements AutoCloseable {
     ReplyWriter newReplyWriter(ByteBuf out, Channel ch) {
         Objects.requireNonNull(out, "out");
         Objects.requireNonNull(ch, "ch");
-        ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
-        return replyWriterFactory.newWriter(new NettyByteBufSink(out), conn);
+        return replyWriterFactory.newWriter(new NettyByteBufSink(out));
+    }
+
+    private CommandContext context(ServerConnectionState session, ReplyWriter out) {
+        CommandContext ctx = execCtx;
+        if (ctx == null) {
+            ctx = new CommandContext(session, out);
+            execCtx = ctx;
+            return ctx;
+        }
+        return ctx.reset(session, out);
     }
 
     public EventExecutor executor() {
@@ -507,8 +518,8 @@ public final class NettyCommandExecutor implements AutoCloseable {
             boolean ok = false;
             try {
                 ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
-                ReplyWriter writer = replyWriterFactory.newWriter(new NettyByteBufSink(out), conn);
-                commandProcessor.execute(cmd, writer);
+                ReplyWriter writer = replyWriterFactory.newWriter(new NettyByteBufSink(out));
+                commandProcessor.execute(cmd, context(conn, writer));
                 if (writer.closeAfterReplyRequested()) {
                     // close-after-reply：flush 后关闭连接，并标记该 channel 后续任务需要跳过。
                     conn.closeAfterReplyCounter().incrementAndGet();

@@ -6,13 +6,13 @@
 
 归属：`yierdis-core`（`yier.bubu.redis.command.*`），作为命令语义 SSOT；`yierdis-server` 仅负责 Netty 适配与调度。
 补充：为保持分层，命令层负责 reply 形状（array/map header、count 等）；value/db/off-heap 层通过 domain result（`BulkStringValue/BulkStringSequence/BulkStringMapPairs`）与 `BulkStringSink` 表达“可 streaming 的 bulk 值输出”，命令层通过 adapter 将其写入 `ReplyWriter`。
-边界约束：命令层通过 `YierdisDbRouter` 选择 `DbEngine`，仅依赖 `yier.bubu.redis.ops.*`，不直接引用具体实现（例如 `YierdisDb`）。
+边界约束：命令层通过 `YierdisDbRouter`（依赖 `DbIndexProvider`）选择 `DbEngine`；路由的输入侧状态来自 `CommandContext.session()`，输出通过 `CommandContext.out()` 写回。
 
 ## Module Overview
 
 - **Responsibility:** 命令分发、参数解析、错误映射、性能优化（低分配写出路径）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-22
+- **Last Updated:** 2026-02-23
 
 ## Specifications
 
@@ -87,7 +87,7 @@
 
 ## Dependencies
 
-- 外部：`yierdis-protocol-model`（`Command`/`ReplyWriter`/`Session` 等协议无关接口）
+- 外部：`yierdis-protocol-model`（`Command`/`CommandContext`/`ReplyWriter`/`Session`/`DbIndexProvider` 等协议无关接口）
 - 内部：`yierdis-core` 的 `ops` 边界（`DbEngine`/`ValueOps`/`KeyspaceOps`/`TtlOps`/`MemoryOps` 等）
 
 ## Change History
@@ -99,8 +99,9 @@
 - 2026-01-14：新增 BITMAP/HLL 命令族（`SETBIT/GETBIT/BITCOUNT/PFADD/PFCOUNT/PFMERGE`），并补齐相关参数校验与 `maxmemory` 接入。
 - 2026-01-17：命令路由加速：`CommandRegistry` 从线性扫描升级为 O(1) 哈希索引；新增 `INFO/STATS` 作为可观测性入口（输出由 server 注入 provider）。
 - 2026-01-23：写命令统一引入 write preflight（`prepareWrite`）并调整顺序为 preflight→执行→enforce→reply（避免双 reply）；集合类命令（如 `HGETALL/MEMORY STATS/SMEMBERS`）按 map/set 形状写出；`KEYS` glob 兼容范围补齐（`[]`/否定/范围/转义）。
-- 2026-02-01：多 DB 路由接入命令层（通过 `ReplyWriter.session` 访问连接态 `dbIndex`）；`INFO` 输出形态对齐 Redis（bulk string，结构化指标迁移到 `INFO YIERDIS`/`STATS`）；`MEMORY STATS` 数值字段类型对齐为 integer；`OBJECT ENCODING` 回复类型对齐为 bulk string。
+- 2026-02-01：多 DB 路由接入命令层（连接态维护 `dbIndex`）；`INFO` 输出形态对齐 Redis（bulk string，结构化指标迁移到 `INFO YIERDIS`/`STATS`）；`MEMORY STATS` 数值字段类型对齐为 integer；`OBJECT ENCODING` 回复类型对齐为 bulk string。
 - 2026-02-03：事务护栏：MULTI 模式下禁止 `HELLO`，避免连接级命令干扰事务边界（触发 `EXECABORT` 并清理队列）。
 - 2026-02-04：maxmemory 语义收敛：写命令不再在 handler 中调用 enforce（以 `ledger.reserve` 作为拒写点），server 维护 tick 做 best-effort enforce；`MEMORY STATS` 字段升级为 `ledger_*` 口径。
 - 2026-02-06：对外协议切换：命令入口改为协议无关 `Command/ReplyWriter`；集合回复改为结构化写出（map/set）以便 Custom Protocol v1 直接映射为 JSON object/array；协议错误策略调整为可恢复（返回 error 并继续读下一帧）。
 - 2026-02-09：命令层依赖收口：路由返回 `DbEngine`，命令实现移除对 `YierdisDb` 的直接依赖；写 preflight 通过 `DbEngine.eviction()` 统一访问。
+- 2026-02-23：执行上下文边界收敛：引入 `CommandContext`，将路由/事务/可观测等输入侧状态从 `ReplyWriter` 迁移到 `CommandContext.session()`，并移除 `ReplyWriter.session()`。

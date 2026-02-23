@@ -5,6 +5,7 @@ import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.ZSetOps;
 import yier.bubu.redis.ops.result.BulkStringSequence;
 import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.util.Objects;
@@ -28,12 +29,13 @@ final class ZSetCommands {
         registry.register("ZREM", this::zrem);
     }
 
-    private void zadd(Command cmd, ReplyWriter out) {
+    private void zadd(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() < 4) {
             CommandSupport.wrongArity(out, "zadd");
             return;
         }
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         for (int i = 2; i < cmd.argc(); i++) {
             extra += Math.max(0, cmd.len(i));
@@ -49,7 +51,8 @@ final class ZSetCommands {
         }
     }
 
-    private void zrange(Command cmd, ReplyWriter out) {
+    private void zrange(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() < 4 || cmd.argc() > 6) {
             CommandSupport.wrongArity(out, "zrange");
             return;
@@ -73,7 +76,7 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        ZSetOps zsets = support.db(out).values().zsets();
+        ZSetOps zsets = support.db(ctx).values().zsets();
         BulkStringSequence seq = rev
                 ? zsets.zrevrange(key, start, stop, withScores)
                 : zsets.zrange(key, start, stop, withScores);
@@ -85,7 +88,8 @@ final class ZSetCommands {
         seq.emitTo(new BulkStringReplyAdapter(out));
     }
 
-    private void zrevrange(Command cmd, ReplyWriter out) {
+    private void zrevrange(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 4 && cmd.argc() != 5) {
             CommandSupport.wrongArity(out, "zrevrange");
             return;
@@ -103,7 +107,7 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        ZSetOps zsets = support.db(out).values().zsets();
+        ZSetOps zsets = support.db(ctx).values().zsets();
         BulkStringSequence seq = zsets.zrevrange(key, start, stop, withScores);
         int count = seq.count();
         out.arrayHeader(count);
@@ -113,7 +117,8 @@ final class ZSetCommands {
         seq.emitTo(new BulkStringReplyAdapter(out));
     }
 
-    private void zrangebyscore(Command cmd, ReplyWriter out) {
+    private void zrangebyscore(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() < 4) {
             CommandSupport.wrongArity(out, "zrangebyscore");
             return;
@@ -148,7 +153,7 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        ZSetOps zsets = support.db(out).values().zsets();
+        ZSetOps zsets = support.db(ctx).values().zsets();
         BulkStringSequence seq = zsets.zrangeByScore(
                 key,
                 min.value,
@@ -167,7 +172,8 @@ final class ZSetCommands {
         seq.emitTo(new BulkStringReplyAdapter(out));
     }
 
-    private void zremrangebyscore(Command cmd, ReplyWriter out) {
+    private void zremrangebyscore(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 4) {
             CommandSupport.wrongArity(out, "zremrangebyscore");
             return;
@@ -175,10 +181,11 @@ final class ZSetCommands {
 
         CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(cmd.toByteArray(2));
         CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(cmd.toByteArray(3));
-        out.integer(support.db(out).values().zsets().zremrangeByScore(cmd.toByteArray(1), min.value, min.exclusive, max.value, max.exclusive));
+        out.integer(support.db(ctx).values().zsets().zremrangeByScore(cmd.toByteArray(1), min.value, min.exclusive, max.value, max.exclusive));
     }
 
-    private void zrevrangebyscore(Command cmd, ReplyWriter out) {
+    private void zrevrangebyscore(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() < 4) {
             CommandSupport.wrongArity(out, "zrevrangebyscore");
             return;
@@ -213,7 +220,7 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        ZSetOps zsets = support.db(out).values().zsets();
+        ZSetOps zsets = support.db(ctx).values().zsets();
         BulkStringSequence seq = zsets.zrevrangeByScore(
                 key,
                 min.value,
@@ -232,17 +239,19 @@ final class ZSetCommands {
         seq.emitTo(new BulkStringReplyAdapter(out));
     }
 
-    private void zremrangebyrank(Command cmd, ReplyWriter out) {
+    private void zremrangebyrank(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 4) {
             CommandSupport.wrongArity(out, "zremrangebyrank");
             return;
         }
         long start = CommandSupport.parseLong(cmd, 2, "start");
         long stop = CommandSupport.parseLong(cmd, 3, "stop");
-        out.integer(support.db(out).values().zsets().zremrangeByRank(cmd.toByteArray(1), start, stop));
+        out.integer(support.db(ctx).values().zsets().zremrangeByRank(cmd.toByteArray(1), start, stop));
     }
 
-    private void zrem(Command cmd, ReplyWriter out) {
+    private void zrem(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, "zrem");
             return;
@@ -250,7 +259,7 @@ final class ZSetCommands {
         int membersLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, membersLen);
         try {
-            out.integer(support.db(out).values().zsets().zrem(cmd.toByteArray(1), support.slice()));
+            out.integer(support.db(ctx).values().zsets().zrem(cmd.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(membersLen);
         }

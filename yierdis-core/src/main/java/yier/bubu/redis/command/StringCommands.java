@@ -6,6 +6,7 @@ import yier.bubu.redis.ops.ExpireOption;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.StringOps;
 import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.util.Arrays;
@@ -33,14 +34,15 @@ final class StringCommands {
         registry.register("DECR", this::decr);
     }
 
-    private void set(Command cmd, ReplyWriter out) {
+    private void set(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, "set");
             return;
         }
 
         byte[] key = cmd.toByteArray(1);
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
 
         SetMode mode = SetMode.NORMAL;
         ExpireOption expire = null;
@@ -190,42 +192,46 @@ final class StringCommands {
         out.simpleString("OK");
     }
 
-    private void get(Command cmd, ReplyWriter out) {
+    private void get(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "get");
             return;
         }
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         engine.values().strings().getStringValue(support.argView(cmd, 1)).writeTo(new BulkStringReplyAdapter(out));
     }
 
-    private void strlen(Command cmd, ReplyWriter out) {
+    private void strlen(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, "strlen");
             return;
         }
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         out.integer(engine.values().strings().strlen(support.argView(cmd, 1)));
     }
 
-    private void append(Command cmd, ReplyWriter out) {
+    private void append(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 3) {
             CommandSupport.wrongArity(out, "append");
             return;
         }
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         engine.eviction().prepareWrite(extra);
         long len = engine.values().strings().append(cmd.toByteArray(1), support.argSlice(cmd, 2));
         out.integer(len);
     }
 
-    private void setbit(Command cmd, ReplyWriter out) {
+    private void setbit(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 4) {
             CommandSupport.wrongArity(out, "setbit");
             return;
         }
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         long offset = CommandSupport.parseNonNegativeLong(cmd, 2, "offset");
         long v = CommandSupport.parseLong(cmd, 3, "value");
         if (v != 0 && v != 1) {
@@ -247,46 +253,49 @@ final class StringCommands {
         out.integer(old);
     }
 
-    private void getbit(Command cmd, ReplyWriter out) {
+    private void getbit(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 3) {
             CommandSupport.wrongArity(out, "getbit");
             return;
         }
         long offset = CommandSupport.parseNonNegativeLong(cmd, 2, "offset");
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         out.integer(engine.values().strings().getBit(support.argView(cmd, 1), offset));
     }
 
-    private void bitcount(Command cmd, ReplyWriter out) {
+    private void bitcount(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 2 && cmd.argc() != 4) {
             CommandSupport.wrongArity(out, "bitcount");
             return;
         }
         if (cmd.argc() == 2) {
-            DbEngine engine = support.db(out);
+            DbEngine engine = support.db(ctx);
             out.integer(engine.values().strings().bitcount(support.argView(cmd, 1)));
             return;
         }
         long start = CommandSupport.parseLong(cmd, 2, "start");
         long end = CommandSupport.parseLong(cmd, 3, "end");
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         out.integer(engine.values().strings().bitcount(support.argView(cmd, 1), start, end));
     }
 
-    private void incr(Command cmd, ReplyWriter out) {
-        incrBy(cmd, out, 1);
+    private void incr(Command cmd, CommandContext ctx) {
+        incrBy(cmd, ctx, 1);
     }
 
-    private void decr(Command cmd, ReplyWriter out) {
-        incrBy(cmd, out, -1);
+    private void decr(Command cmd, CommandContext ctx) {
+        incrBy(cmd, ctx, -1);
     }
 
-    private void incrBy(Command cmd, ReplyWriter out, long delta) {
+    private void incrBy(Command cmd, CommandContext ctx, long delta) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() != 2) {
             CommandSupport.wrongArity(out, delta > 0 ? "incr" : "decr");
             return;
         }
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         engine.eviction().prepareWrite(extra);
         long value = engine.values().strings().incrBy(cmd.toByteArray(1), delta);

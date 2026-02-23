@@ -9,8 +9,7 @@ import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.ops.DbEngine;
-import yier.bubu.redis.protocol.ReplyWriter;
-import yier.bubu.redis.protocol.ServerSession;
+import yier.bubu.redis.protocol.DbIndexProvider;
 
 import java.util.Objects;
 
@@ -99,13 +98,13 @@ public final class YierdisInstance implements AutoCloseable {
 
         YierdisDbRouter router = new YierdisDbRouter() {
             @Override
-            public DbEngine dbFor(ReplyWriter out) {
+            public DbEngine dbFor(DbIndexProvider dbIndexProvider) {
                 if (dbs.length == 0) {
                     throw new IllegalStateException("no dbs");
                 }
                 int idx = 0;
-                if (out != null && out.session() instanceof ServerSession s) {
-                    idx = s.dbIndex();
+                if (dbIndexProvider != null) {
+                    idx = dbIndexProvider.dbIndex();
                 }
                 if (idx < 0 || idx >= dbs.length) {
                     idx = 0;

@@ -9,5 +9,5 @@ import yier.bubu.redis.bytes.BytesSink;
  */
 @FunctionalInterface
 public interface ReplyWriterFactory {
-    ReplyWriter newWriter(BytesSink out, Session session);
+    ReplyWriter newWriter(BytesSink out);
 }

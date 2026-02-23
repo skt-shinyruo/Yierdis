@@ -147,12 +147,12 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                     : TimeUnit.MILLISECONDS.toNanos(config.keysTimeBudgetMillis);
 
             @Override
-            public long keysTimeBudgetNanos(yier.bubu.redis.protocol.ReplyWriter out) {
+            public long keysTimeBudgetNanos(yier.bubu.redis.protocol.CommandContext ctx) {
                 return timeBudgetNanos;
             }
 
             @Override
-            public int keysMaxResults(yier.bubu.redis.protocol.ReplyWriter out) {
+            public int keysMaxResults(yier.bubu.redis.protocol.CommandContext ctx) {
                 return config.keysMaxResults;
             }
         };

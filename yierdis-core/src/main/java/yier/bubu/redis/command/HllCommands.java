@@ -3,6 +3,7 @@ package yier.bubu.redis.command;
 import yier.bubu.redis.db.DbMemoryConstants;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.ReplyWriter;
 
 import java.util.Objects;
@@ -23,12 +24,13 @@ final class HllCommands {
         registry.register("PFMERGE", this::pfmerge);
     }
 
-    private void pfadd(Command cmd, ReplyWriter out) {
+    private void pfadd(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, "pfadd");
             return;
         }
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         engine.eviction().prepareWrite(extra);
         int elementsLen = cmd.argc() - 2;
@@ -40,7 +42,8 @@ final class HllCommands {
         }
     }
 
-    private void pfcount(Command cmd, ReplyWriter out) {
+    private void pfcount(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() < 2) {
             CommandSupport.wrongArity(out, "pfcount");
             return;
@@ -48,19 +51,20 @@ final class HllCommands {
         int len = cmd.argc() - 1;
         support.sliceResetFromCommand(cmd, 1, len);
         try {
-            out.integer(support.db(out).values().hll().pfcount(support.slice()));
+            out.integer(support.db(ctx).values().hll().pfcount(support.slice()));
         } finally {
             support.clearScratch(len);
         }
     }
 
-    private void pfmerge(Command cmd, ReplyWriter out) {
+    private void pfmerge(Command cmd, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         if (cmd.argc() < 3) {
             CommandSupport.wrongArity(out, "pfmerge");
             return;
         }
         long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        DbEngine engine = support.db(out);
+        DbEngine engine = support.db(ctx);
         engine.eviction().prepareWrite(extra);
 
         int sourcesLen = cmd.argc() - 2;

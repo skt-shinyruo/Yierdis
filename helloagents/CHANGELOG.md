@@ -10,6 +10,7 @@
 - 移除 deprecated bytes alias（`YierdisBytesSink/YierdisBytesSource/YierdisDirectBytesSink` 等），bytes SSOT 统一为 `yierdis-bytes`。
 - 删除 legacy 模式：移除 SCAN cursor v1（`ScanCursor`）与相关开关/兼容路径，统一为 `ScanCursorV2`（rehash-aware + 可 time-slice）。
 - server 制品坐标对齐：`yierdis-server` 的 artifactId 从 `yierdis` 调整为 `yierdis-server`（依赖坐标与服务端 jar 名称同步变化）。
+- 执行上下文边界重构：引入 `CommandContext`（输入侧 `Session` + 输出端口 `ReplyWriter`），并移除 `ReplyWriter.session()`；`ReplyWriterFactory.newWriter` 不再接收 session；路由/事务/INFO/慢命令治理等输入侧逻辑统一改为基于 `CommandContext.session()`/`DbIndexProvider`。
 
 ### Added
 - 新增事务队列硬上限：`--transactionQueueMaxCommands/--transactionQueueMaxBytes`，防止 MULTI 大事务/大参数导致 OOM。
