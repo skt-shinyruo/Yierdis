@@ -14,8 +14,9 @@ public class TransactionQueueCleanupTest {
     public void closingConnectionDiscardsTransactionState() {
         EmbeddedChannel ch = new EmbeddedChannel();
         try {
-            ServerConnectionState conn = ServerConnectionState.getOrCreate(ch, 1, 16);
-            TransactionState tx = conn.transaction();
+            ServerSessionState session = ServerSessionState.getOrCreate(ch, 1, 16);
+            ServerRuntimeState runtime = session.runtime();
+            TransactionState tx = session.transaction();
 
             tx.begin();
             Assert.assertTrue(tx.active());
@@ -29,7 +30,7 @@ public class TransactionQueueCleanupTest {
             Assert.assertNotNull(tx.tryEnqueue(new byte[][]{b("GET"), b("k")}));
             Assert.assertTrue(tx.aborted());
 
-            conn.markClosing();
+            runtime.markClosing(session);
             Assert.assertFalse(tx.active());
             Assert.assertFalse(tx.aborted());
             Assert.assertEquals(0, tx.size());

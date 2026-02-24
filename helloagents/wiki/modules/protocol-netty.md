@@ -2,7 +2,7 @@
 
 ## Purpose
 
-为 `yierdis-server` / `yierdis-client` / `yierdis-bench` 提供 Netty 侧的自定义协议编解码与适配层：在不让 SSOT 模块（`yierdis-protocol-model` / `yierdis-protocol-codec` / `yierdis-core`）直接依赖 `io.netty.*` 的前提下，复用 Netty pipeline 的解码能力。
+为 `yierdis-server` / `yierdis-client` / `yierdis-bench` 提供 Netty 侧的自定义协议编解码与适配层：在不让 SSOT 模块（`yierdis-protocol-model` / `yierdis-protocol-codec` / `yierdis-core-*`）直接依赖 `io.netty.*` 的前提下，复用 Netty pipeline 的解码能力。
 
 归属：`yierdis-protocol-netty`（`yier.bubu.redis.protocol.netty.*`），作为 **Netty adapter**（非 SSOT：允许依赖 Netty）。
 
@@ -10,7 +10,7 @@
 
 - **Responsibility:** Custom Protocol v1 decoder（server）+ NDJSON line decoder（client/bench）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-21
+- **Last Updated:** 2026-02-24
 
 ## Specifications
 

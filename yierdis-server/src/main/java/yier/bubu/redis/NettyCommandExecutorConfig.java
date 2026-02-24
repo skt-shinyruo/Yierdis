@@ -16,7 +16,7 @@ record NettyCommandExecutorConfig(
         long backpressureBytesLowWatermark,
         int maxDrainCommands,
         long drainTimeLimitMillis,
-        NettyCommandExecutor.SchedulingPolicy schedulingPolicy
+        yier.bubu.redis.executor.SchedulingPolicy schedulingPolicy
 ) {
     static NettyCommandExecutorConfig from(ServerConfig config) {
         Objects.requireNonNull(config, "config");
@@ -33,4 +33,3 @@ record NettyCommandExecutorConfig(
         );
     }
 }
-

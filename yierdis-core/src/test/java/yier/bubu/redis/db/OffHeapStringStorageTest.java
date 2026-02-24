@@ -1,5 +1,6 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.ops.ValueType;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
@@ -29,7 +30,7 @@ public class OffHeapStringStorageTest {
             Assert.assertTrue(allocator.usedBytes() > 0);
 
             RecordingBulkOutput out = new RecordingBulkOutput();
-            db.values().strings().getStringValue(new BytesView(key)).writeTo(out);
+            db.values().strings().getStringValue(new TestBytesView(key)).writeTo(out);
             Assert.assertTrue(out.usedOffHeapSlice);
             Assert.assertArrayEquals(value, out.bytes);
 
@@ -94,7 +95,7 @@ public class OffHeapStringStorageTest {
             Assert.assertEquals(5L, allocator.usedBytes());
 
             RecordingBulkOutput out = new RecordingBulkOutput();
-            db.values().strings().getStringValue(new BytesView(key)).writeTo(out);
+            db.values().strings().getStringValue(new TestBytesView(key)).writeTo(out);
             Assert.assertTrue(out.usedOffHeapSlice);
             Assert.assertArrayEquals(v2, out.bytes);
         } finally {
@@ -163,20 +164,20 @@ public class OffHeapStringStorageTest {
         }
     }
 
-    private static final class BytesView implements YierdisBytesView {
+    private static final class TestBytesView implements yier.bubu.redis.bytes.BytesView {
         private final byte[] data;
 
-        private BytesView(byte[] data) {
+        private TestBytesView(byte[] data) {
             this.data = data;
         }
 
         @Override
-        public int len() {
+        public int length() {
             return data.length;
         }
 
         @Override
-        public byte byteAt(int index) {
+        public byte getByte(int index) {
             return data[index];
         }
     }

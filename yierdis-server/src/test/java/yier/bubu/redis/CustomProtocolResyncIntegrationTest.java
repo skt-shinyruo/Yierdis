@@ -7,6 +7,7 @@ import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.json.JsonLimits;
 import yier.bubu.redis.protocol.json.JsonObject;
 import yier.bubu.redis.protocol.json.JsonParser;
@@ -64,7 +65,7 @@ public class CustomProtocolResyncIntegrationTest {
                     0,
                     1024,
                     10,
-                    NettyCommandExecutor.SchedulingPolicy.FAIR
+                    SchedulingPolicy.FAIR
             );
             executor.start();
             this.ch = new EmbeddedChannel(

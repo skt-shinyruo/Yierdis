@@ -32,7 +32,12 @@
         <module>yierdis-protocol-codec</module>
         <module>yierdis-protocol</module>
         <module>yierdis-protocol-netty</module>
+        <module>yierdis-core-api</module>
+        <module>yierdis-core-db</module>
+        <module>yierdis-core-command</module>
+        <module>yierdis-core-runtime</module>
         <module>yierdis-core</module>
+        <module>yierdis-executor-core</module>
         <module>yierdis-args</module>
         <module>yierdis-client</module>
         <module>yierdis-server</module>

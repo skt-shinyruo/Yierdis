@@ -7,6 +7,7 @@ import io.netty.util.concurrent.EventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.v1.CustomCommand;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
@@ -37,7 +38,7 @@ public class NettyCommandExecutorTest {
                 0,
                 128,
                 10,
-                NettyCommandExecutor.SchedulingPolicy.FAIR
+                SchedulingPolicy.FAIR
         );
         executor.start();
 
@@ -56,7 +57,7 @@ public class NettyCommandExecutorTest {
         EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
         try {
             ch.writeInbound(new CustomCommand("PING", null));
-            ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
+            ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
             Assert.assertEquals(0L, conn.commandsRejectedCounter().get());
@@ -96,7 +97,7 @@ public class NettyCommandExecutorTest {
                 0,
                 1,
                 1000,
-                NettyCommandExecutor.SchedulingPolicy.FAIR
+                SchedulingPolicy.FAIR
         );
         executor.start();
 
@@ -118,7 +119,7 @@ public class NettyCommandExecutorTest {
             // Enqueue 2 commands while executor is blocked.
             ch.writeInbound(new CustomCommand("PING", null));
             ch.writeInbound(new CustomCommand("PING", null));
-            ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
+            ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
             Assert.assertEquals(2L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
 
@@ -173,7 +174,7 @@ public class NettyCommandExecutorTest {
                 0,
                 128,
                 10,
-                NettyCommandExecutor.SchedulingPolicy.FAIR
+                SchedulingPolicy.FAIR
         );
         executor.start();
 
@@ -191,7 +192,7 @@ public class NettyCommandExecutorTest {
             Assert.assertTrue(ch.config().isAutoRead());
 
             ch.writeInbound(new CustomCommand("PING", null));
-            ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
+            ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
 
             ch.runPendingTasks();
@@ -239,7 +240,7 @@ public class NettyCommandExecutorTest {
                 0,
                 128,
                 10,
-                NettyCommandExecutor.SchedulingPolicy.FAIR
+                SchedulingPolicy.FAIR
         );
         executor.start();
 
@@ -305,7 +306,7 @@ public class NettyCommandExecutorTest {
                 0,
                 128,
                 10,
-                NettyCommandExecutor.SchedulingPolicy.FAIR
+                SchedulingPolicy.FAIR
         );
         executor.start();
 
@@ -324,7 +325,7 @@ public class NettyCommandExecutorTest {
 
             ch.writeInbound(new CustomCommand("PING", null));
 
-            ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
+            ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(1, conn.pendingCounter().get());
             Assert.assertTrue("sanity: pending should be below high watermark, so bytes must be the trigger", conn.pendingCounter().get() < 256);
@@ -375,7 +376,7 @@ public class NettyCommandExecutorTest {
                 0,
                 128,
                 10,
-                NettyCommandExecutor.SchedulingPolicy.FAIR
+                SchedulingPolicy.FAIR
         );
         executor.start();
 
@@ -394,7 +395,7 @@ public class NettyCommandExecutorTest {
             ch.writeInbound(new CustomCommand("QUIT", null));
             ch.writeInbound(new CustomCommand("PING", null));
 
-            ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
+            ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
             Assert.assertEquals(2L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.closeAfterReplyCounter().get());
 

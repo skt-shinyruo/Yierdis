@@ -14,18 +14,12 @@
     <packaging>jar</packaging>
 
     <name>yierdis-core</name>
-    <description>Core database, data structures and command processor logic for Yierdis.</description>
+    <description>Migration aggregator for Yierdis core modules (core-api/core-db/core-command/core-runtime).</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-protocol-model</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-api</artifactId>
+            <artifactId>yierdis-core-runtime</artifactId>
             <version>${project.version}</version>
         </dependency>
 

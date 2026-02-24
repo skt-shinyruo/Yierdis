@@ -12,7 +12,11 @@
 - `yierdis-protocol-codec`：最小 JSON codec + Custom Protocol v1 codec（NDJSON reply writer/encoder）（SSOT，**Netty-free**）
 - `yierdis-protocol`：兼容聚合层（migration；聚合 `protocol-model` + `protocol-codec`）
 - `yierdis-protocol-netty`：Custom Protocol v1 Netty codec（`CustomRequestDecoder` + `JsonLineDecoder`）（adapter，可复用）
-- `yierdis-core`：DB/Keyspace/Value/TTL/maxmemory/命令处理（SSOT）+ embedded instance/runtime（`YierdisInstance`：多 DB 装配/路由/生命周期，Netty-free），**不依赖 Netty**
+- `yierdis-core-api`：core API 边界（`ops/*Ops` + stable types + domain result ports；**Netty-free**）
+- `yierdis-core-db`：DB/Keyspace/Value/TTL/maxmemory 的实现（`yier.bubu.redis.db.*`），依赖 `core-api`/`offheap-api`（**Netty-free**）
+- `yierdis-core-command`：命令处理与路由（`yier.bubu.redis.command.*`），依赖 `core-api`/`protocol-model`（**Netty-free**）
+- `yierdis-core-runtime`：embedded instance/runtime（`YierdisInstance`：多 DB 装配/路由/生命周期），依赖 `core-db`/`core-command`（**Netty-free**）
+- `yierdis-core`：迁移期聚合层（migration aggregator；依赖 `core-runtime`，用于保持历史依赖坐标可用）
 - `yierdis-args`：server 参数模型与校验（picocli，SSOT），供 server/bench 复用
 - `yierdis-client`：Netty client + CLI（调试工具），依赖 `yierdis-protocol-netty`
 - `yierdis-server`：Netty server bootstrap + pipeline + executor（只做执行/治理与装配；DB/instance 装配语义由 core SSOT 提供）
@@ -21,10 +25,10 @@
 
 ### 依赖方向（约束）
 
-- `yierdis-core` / `yierdis-protocol-model` / `yierdis-protocol-codec` 不依赖 `io.netty.*`
+- `yierdis-core-api` / `yierdis-core-db` / `yierdis-core-command` / `yierdis-core-runtime` / `yierdis-protocol-model` / `yierdis-protocol-codec` 不依赖 `io.netty.*`
 - `yierdis-protocol-netty` **可以**依赖 `io.netty.*`，但只允许向下依赖 `yierdis-protocol-codec`（不得反向渗透）
 - `yierdis-offheap-api` 不依赖 `io.netty.*`（Netty 相关 adapter 放在 `yierdis-offheap-netty`）
-- `yierdis-server` 依赖 `yierdis-core` / `yierdis-protocol-netty` / `yierdis-args`
+- `yierdis-server` 依赖 `yierdis-core`（migration aggregator） / `yierdis-protocol-netty` / `yierdis-args`
 - `yierdis-client` / `yierdis-bench` 依赖 `yierdis-protocol-netty`（可选依赖 `yierdis-args` 复用参数 SSOT）
 
 ```mermaid
@@ -38,7 +42,11 @@ flowchart LR
   subgraph SSOT[SSOT Modules]
     Bytes[yierdis-bytes]
     ProtocolModel[yierdis-protocol-model]
-    Core[yierdis-core]
+    CoreApi[yierdis-core-api]
+    CoreDb[yierdis-core-db]
+    CoreCmd[yierdis-core-command]
+    CoreRt[yierdis-core-runtime]
+    CoreCompat[yierdis-core (compat)]
     Args[yierdis-args]
   end
   
@@ -75,9 +83,16 @@ flowchart LR
   ProtocolCodec --> ProtocolModel
 
   ProtocolModel --> Bytes
-  Core --> ProtocolModel
+  CoreApi --> Bytes
+  CoreCmd --> CoreApi
+  CoreDb --> CoreApi
+  CoreCmd --> ProtocolModel
   Args --> ProtocolModel
-  Core --> OffheapApi
+  CoreDb --> OffheapApi
+  CoreRt --> OffheapApi
+  CoreRt --> CoreDb
+  CoreRt --> CoreCmd
+  CoreCompat --> CoreRt
   OffheapApi --> Bytes
 
   OffheapNetty --> OffheapApi
@@ -92,22 +107,22 @@ flowchart LR
 为避免“补齐生产能力时倒逼大改”，Yierdis 将以下内部契约作为演进边界冻结（以代码实现为准）：
 
 - **KeyHandle（key identity SSOT）**
-  - 代码：`yierdis-core` 中 `yier.bubu.redis.db.key.KeyHandle`
+  - 代码：`yierdis-core-db` 中 `yier.bubu.redis.db.key.KeyHandle`
   - 目标：统一 heap/off-heap/bytesview 的 key 表示，支持未来 keyspace/expires/scan 的零拷贝落地
   - 现状：keyspace/expire/scan 已完成 handle 全链路落地；热路径禁止隐式 canonical heap key copy（以回归与 diagnostics 计数锚定）
 - **MemoryLedger（maxmemory SSOT）**
-  - 代码：`yierdis-core` 中 `yier.bubu.redis.db.memory.MemoryLedger`
+  - 代码：`yierdis-core-db` 中 `yier.bubu.redis.db.memory.MemoryLedger`
   - 目标：将预算判定/拒写点/淘汰触发收敛到单点，并以 reserve→commit/rollback 保障异常路径一致性
   - 现状：写路径已落地 `reserve → commit/rollback`；`prepareWrite` 作为命令 preflight 入口；`enforceMaxmemory` 仅作为后台维护入口（server 维护 tick 触发）
 - **ScanCursorV2（SCAN cursor SSOT）**
-  - 代码：`yierdis-core` 中 `yier.bubu.redis.db.ScanCursorV2`
+  - 代码：`yierdis-core-api` 中 `yier.bubu.redis.ops.ScanCursorV2`
   - 目标：锁定 cursor 的“可推进/可终止”语义；cursor v2 为 rehash-aware，并保持“数字 bulk string”生态兼容
 - **Instance / 执行模型（SSOT）**
-  - 代码：`yierdis-core` 中 `yier.bubu.redis.runtime.YierdisInstance` / `YierdisInstanceConfig`
+  - 代码：`yierdis-core-runtime` 中 `yier.bubu.redis.runtime.YierdisInstance` / `YierdisInstanceConfig`
   - 目标：保持 DB 单线程语义不变，将“多 DB 装配/路由/global maxmemory/allocator 生命周期”上移到 instance；server/bench/测试统一复用
   - 现状：server/embedded 场景都通过 instance 装配 DB；未绑定或跨线程访问会 fail-fast（避免静默竞态）
 - **SlowCommandGovernor（慢命令治理 SSOT）**
-  - 代码：`yierdis-core` 中 `yier.bubu.redis.command.SlowCommandGovernor`
+  - 代码：`yierdis-core-command` 中 `yier.bubu.redis.command.SlowCommandGovernor`
   - 目标：为 `KEYS` 等潜在全表扫描命令提供“时间预算/结果上限”，避免极端情况下阻塞 executor；小数据集下尽量保持 Redis 语义
   - 现状：server 通过启动参数下发；embedded 可注入自定义 governor
 
@@ -120,8 +135,8 @@ sequenceDiagram
   participant Decoder as yierdis-protocol-netty (CustomRequestDecoder)
   participant Handler as yierdis-server (YierdisFastCommandHandler)
   participant Exec as yierdis-server (NettyCommandExecutor)
-  participant Processor as yierdis-core (YierdisFastCommandProcessor / CommandRegistry)
-  participant Engine as yierdis-core (DbEngine；impl: YierdisDb)
+  participant Processor as yierdis-core-command (YierdisFastCommandProcessor / CommandRegistry)
+  participant Engine as yierdis-core-db (DbEngine；impl: YierdisDb)
   participant Writer as yierdis-protocol-model (ReplyWriter via ReplyWriterFactory)
 
   Client->>Netty: TCP bytes (Custom Protocol v1: &lt;len&gt;:&lt;json&gt;\\n)
@@ -188,7 +203,7 @@ sequenceDiagram
 | ADR-20260116-05 | QUIT 的 close-after-reply 语义与 post-QUIT backlog 跳过 | 2026-01-16 | ✅ Accepted | yierdis-protocol,yierdis-core,yierdis-server | QUIT 纳入 core 命令；命令层通过 `ReplyWriter` 请求 close-after-reply；执行器 flush 后关闭连接并跳过该连接后续已入队命令（仅回收，不执行） |
 | ADR-20260116-06 | 引入 bytes-netty 适配层（ByteBuf sink 上移） | 2026-01-16 | ✅ Accepted | yierdis-bytes-netty,yierdis-server,yierdis-offheap-netty | 将 ByteBuf→BytesSink/DirectBytesSink 适配器收敛到 `yierdis-bytes-netty`，避免通用写回适配落在 offheap 后端模块，并保持 off-heap slice 写出 fast-path |
 | ADR-20260117-01 | server pipeline 内聚与执行器组件化落地 | 2026-01-17 | ✅ Accepted | yierdis-server | pipeline 装配下沉到 initializer；执行器拆分预算/背压等组件，降低单类复杂度并便于测试 |
-| ADR-20260117-02 | 连接级状态归属 server（连接态 + 调度态） | 2026-01-17 | ✅ Accepted | yierdis-server | 连接级运行时状态收敛到 `ServerConnectionState`；per-channel 调度（队列+scheduled 标志）下沉到 server 私有 `NettyExecutorChannelState`（`Channel.attr`） |
+| ADR-20260117-02 | 连接级状态归属 server（连接态 + 调度态） | 2026-01-17 | ✅ Accepted | yierdis-server | 连接级状态归属 server：会话态 `ServerSessionState` + 运行时态 `ServerRuntimeState`（均 `Channel.attr` 绑定）；per-channel 调度（队列+scheduled 标志）下沉到 server 私有 `NettyExecutorChannelState`（`Channel.attr`） |
 | ADR-20260202-02 | MULTI 入队错误采用 Redis 风格 EXECABORT（事务队列有界） | 2026-02-02 | ✅ Accepted | yierdis-core,yierdis-server,yierdis-args | 事务队列新增 commands/bytes 上限并对齐 EXECABORT；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-002 |
 | ADR-20260202-03 | maxmemory scope 升级为 global（保留 per-db 兼容开关） | 2026-02-02 | ✅ Accepted | yierdis-core,yierdis-server,yierdis-args,helloagents/wiki | 默认 global 更贴近 Redis 全实例预算；per-db 保留旧行为；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-003 |
 | ADR-20260202-04 | busy 错误保持兼容形态但增强原因表达 | 2026-02-02 | ✅ Accepted | yierdis-server,helloagents/wiki | `-ERR busy <reason>` + `STATS` 映射，提升排障能力；details: helloagents/history/2026-02/202602022147_redis_compat_alignment/how.md#adr-004 |
@@ -223,7 +238,7 @@ sequenceDiagram
 
 - **避免 core 引入 Netty internal：**`io.netty.util.internal.PlatformDependent` 属于 Netty internal API，版本升级风险高、语义不稳定；目前 core 通过 `yierdis-offheap-api` 的 capability（`YierdisOffHeapAddressAllocator`）表达 raw memory 能力，具体实现留在后端模块中，便于替换与审计。
 - **bytes 抽象与 off-heap 能力的语义：**bytes 抽象已迁移到 `yierdis-bytes`（SSOT，Netty-free），off-heap allocator/capability API 继续留在 `yierdis-offheap-api`。协议层不再需要通过 “off-heap” 命名模块来复用 bytes 接口，依赖方向更直观，也降低误解成本。
-- **连接级状态与 server 调度边界：**连接级运行时状态（dbIndex/事务队列/pending/backpressure/closing/counters）收敛到 server 私有 `ServerConnectionState`（`Channel.attr` 绑定）。与之相对，执行器调度（per-channel 队列 + scheduled 标志）属于 server 内部实现细节，收敛到 `NettyExecutorChannelState`（`yierdis-server` 私有，`Channel.attr` 绑定），避免跨模块重复维护状态。
+- **连接级状态与 server 调度边界：**连接级状态拆分为 `ServerSessionState`（dbIndex/事务队列/AUTH/name）与 `ServerRuntimeState`（pending/backpressure/closing/counters），均由 server 私有并通过 `Channel.attr` 绑定。与之相对，执行器调度（per-channel 队列 + scheduled 标志）属于 server 内部实现细节，收敛到 `NettyExecutorChannelState`（`yierdis-server` 私有，`Channel.attr` 绑定），避免跨模块重复维护状态。
 
 ### 3) 可插拔性（后端替换/灰度能力）
 

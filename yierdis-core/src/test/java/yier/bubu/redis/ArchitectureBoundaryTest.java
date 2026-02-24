@@ -16,12 +16,12 @@ public class ArchitectureBoundaryTest {
     @Test
     public void dbAndOpsMustNotImportProtocolModel() throws IOException {
         List<String> offenders = new ArrayList<>();
-        Path moduleRoot = resolveYierdisCoreModuleRoot();
-        Assert.assertNotNull("无法定位 yierdis-core 模块根目录（未找到 src/main/java）", moduleRoot);
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
         int scanned = 0;
-        scanned += scanForProtocolImports(moduleRoot.resolve("src/main/java/yier/bubu/redis/db"), offenders);
-        scanned += scanForProtocolImports(moduleRoot.resolve("src/main/java/yier/bubu/redis/ops"), offenders);
+        scanned += scanForProtocolImports(repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db"), offenders);
+        scanned += scanForProtocolImports(repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/ops"), offenders);
         Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
 
         if (!offenders.isEmpty()) {
@@ -51,17 +51,17 @@ public class ArchitectureBoundaryTest {
         return scanned[0];
     }
 
-    private static Path resolveYierdisCoreModuleRoot() {
+    private static Path resolveRepoRoot() {
         // Maven surefire 下通常为 yierdis-core 模块根目录；IDE/自定义运行环境下可能是仓库根目录。
         Path cwd = Paths.get("").toAbsolutePath().normalize();
-        Path direct = tryResolveModuleRoot(cwd);
+        Path direct = tryResolveRepoRoot(cwd);
         if (direct != null) {
             return direct;
         }
 
         String basedir = System.getProperty("basedir");
         if (basedir != null && !basedir.isBlank()) {
-            Path byBasedir = tryResolveModuleRoot(Paths.get(basedir));
+            Path byBasedir = tryResolveRepoRoot(Paths.get(basedir));
             if (byBasedir != null) {
                 return byBasedir;
             }
@@ -69,7 +69,7 @@ public class ArchitectureBoundaryTest {
 
         Path p = cwd;
         for (int i = 0; i < 6 && p != null; i++) {
-            Path candidate = tryResolveModuleRoot(p);
+            Path candidate = tryResolveRepoRoot(p);
             if (candidate != null) {
                 return candidate;
             }
@@ -78,16 +78,15 @@ public class ArchitectureBoundaryTest {
         return null;
     }
 
-    private static Path tryResolveModuleRoot(Path base) {
+    private static Path tryResolveRepoRoot(Path base) {
         if (base == null) {
             return null;
         }
-        if (Files.isDirectory(base.resolve("src/main/java"))) {
+
+        if (Files.isDirectory(base.resolve("yierdis-core-api/src/main/java"))
+                && Files.isDirectory(base.resolve("yierdis-core-db/src/main/java"))
+                && Files.isRegularFile(base.resolve("pom.xml"))) {
             return base;
-        }
-        Path nested = base.resolve("yierdis-core");
-        if (Files.isDirectory(nested.resolve("src/main/java"))) {
-            return nested;
         }
         return null;
     }

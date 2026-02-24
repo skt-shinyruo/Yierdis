@@ -1,6 +1,5 @@
 package yier.bubu.redis.db.offheap.unsafe;
 
-import io.netty.util.internal.PlatformDependent;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
@@ -12,7 +11,7 @@ import yier.bubu.redis.bytes.BytesSource;
 import yier.bubu.redis.bytes.DirectBytesSink;
 
 /**
- * Unsafe-based off-heap allocator backed by Netty's {@link PlatformDependent} utilities.
+ * Unsafe-based off-heap allocator backed by Netty's PlatformDependent utilities (via {@link NettyPlatformDependentMemoryAccess}).
  * <p>
  * This backend avoids Java Foreign Memory API incubator modules while still providing:
  * - deterministic free ({@link YierdisOffHeapBuf#close()})
@@ -88,7 +87,7 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAddres
         int allocBytes = decodeAllocBytes(baseAddress);
         onFreeLive(allocBytes);
         if (closed || allocBytes > MAX_SMALL_BLOCK_BYTES) {
-            PlatformDependent.freeMemory(baseAddress);
+            NettyPlatformDependentMemoryAccess.freeMemory(baseAddress);
             onFree(allocBytes);
             reservedBytes -= allocBytes;
             if (reservedBytes < 0) {
@@ -135,7 +134,7 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAddres
         }
 
         ensureCanReserve(allocBytes);
-        long address = PlatformDependent.allocateMemory(allocBytes + INTERNAL_HEADER_BYTES);
+        long address = NettyPlatformDependentMemoryAccess.allocateMemory(allocBytes + INTERNAL_HEADER_BYTES);
         reservedBytes += allocBytes;
         usedBytes += allocBytes;
         onAllocLive(allocBytes);
@@ -255,7 +254,7 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAddres
                 long next = readLong(head);
                 freeListHeads[classIndex] = next;
                 freeListSizes[classIndex]--;
-                PlatformDependent.freeMemory(head);
+                NettyPlatformDependentMemoryAccess.freeMemory(head);
                 reservedBytes -= allocBytes;
                 remaining -= allocBytes;
             }
@@ -271,7 +270,7 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAddres
             long head = freeListHeads[classIndex];
             while (head != 0) {
                 long next = readLong(head);
-                PlatformDependent.freeMemory(head);
+                NettyPlatformDependentMemoryAccess.freeMemory(head);
                 reservedBytes -= allocBytes;
                 head = next;
             }
@@ -377,14 +376,14 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAddres
     }
 
     private static long readLong(long addr) {
-        long b0 = PlatformDependent.getByte(addr) & 0xffL;
-        long b1 = PlatformDependent.getByte(addr + 1) & 0xffL;
-        long b2 = PlatformDependent.getByte(addr + 2) & 0xffL;
-        long b3 = PlatformDependent.getByte(addr + 3) & 0xffL;
-        long b4 = PlatformDependent.getByte(addr + 4) & 0xffL;
-        long b5 = PlatformDependent.getByte(addr + 5) & 0xffL;
-        long b6 = PlatformDependent.getByte(addr + 6) & 0xffL;
-        long b7 = PlatformDependent.getByte(addr + 7) & 0xffL;
+        long b0 = NettyPlatformDependentMemoryAccess.getByte(addr) & 0xffL;
+        long b1 = NettyPlatformDependentMemoryAccess.getByte(addr + 1) & 0xffL;
+        long b2 = NettyPlatformDependentMemoryAccess.getByte(addr + 2) & 0xffL;
+        long b3 = NettyPlatformDependentMemoryAccess.getByte(addr + 3) & 0xffL;
+        long b4 = NettyPlatformDependentMemoryAccess.getByte(addr + 4) & 0xffL;
+        long b5 = NettyPlatformDependentMemoryAccess.getByte(addr + 5) & 0xffL;
+        long b6 = NettyPlatformDependentMemoryAccess.getByte(addr + 6) & 0xffL;
+        long b7 = NettyPlatformDependentMemoryAccess.getByte(addr + 7) & 0xffL;
         return b0
                 | (b1 << 8)
                 | (b2 << 16)
@@ -396,14 +395,14 @@ public final class YierdisUnsafeOffHeapAllocator implements YierdisOffHeapAddres
     }
 
     private static void writeLong(long addr, long value) {
-        PlatformDependent.putByte(addr, (byte) value);
-        PlatformDependent.putByte(addr + 1, (byte) (value >>> 8));
-        PlatformDependent.putByte(addr + 2, (byte) (value >>> 16));
-        PlatformDependent.putByte(addr + 3, (byte) (value >>> 24));
-        PlatformDependent.putByte(addr + 4, (byte) (value >>> 32));
-        PlatformDependent.putByte(addr + 5, (byte) (value >>> 40));
-        PlatformDependent.putByte(addr + 6, (byte) (value >>> 48));
-        PlatformDependent.putByte(addr + 7, (byte) (value >>> 56));
+        NettyPlatformDependentMemoryAccess.putByte(addr, (byte) value);
+        NettyPlatformDependentMemoryAccess.putByte(addr + 1, (byte) (value >>> 8));
+        NettyPlatformDependentMemoryAccess.putByte(addr + 2, (byte) (value >>> 16));
+        NettyPlatformDependentMemoryAccess.putByte(addr + 3, (byte) (value >>> 24));
+        NettyPlatformDependentMemoryAccess.putByte(addr + 4, (byte) (value >>> 32));
+        NettyPlatformDependentMemoryAccess.putByte(addr + 5, (byte) (value >>> 40));
+        NettyPlatformDependentMemoryAccess.putByte(addr + 6, (byte) (value >>> 48));
+        NettyPlatformDependentMemoryAccess.putByte(addr + 7, (byte) (value >>> 56));
     }
 
     public static final class YierdisUnsafeOffHeapBlock implements YierdisOffHeapBlock {
@@ -467,14 +466,14 @@ final class YierdisUnsafeOffHeapBuf implements YierdisOffHeapBuf {
     public byte getByte(int index) {
         ensureOpen();
         checkIndex(index, 1);
-        return PlatformDependent.getByte(address + index);
+        return NettyPlatformDependentMemoryAccess.getByte(address + index);
     }
 
     @Override
     public void setByte(int index, byte value) {
         ensureOpen();
         checkIndex(index, 1);
-        PlatformDependent.putByte(address + index, value);
+        NettyPlatformDependentMemoryAccess.putByte(address + index, value);
     }
 
     @Override
@@ -493,7 +492,7 @@ final class YierdisUnsafeOffHeapBuf implements YierdisOffHeapBuf {
         if (len == 0) {
             return;
         }
-        PlatformDependent.copyMemory(address + index, dst, dstOff, len);
+        NettyPlatformDependentMemoryAccess.copyMemory(address + index, dst, dstOff, len);
     }
 
     @Override
@@ -512,7 +511,7 @@ final class YierdisUnsafeOffHeapBuf implements YierdisOffHeapBuf {
         if (len == 0) {
             return;
         }
-        PlatformDependent.copyMemory(src, srcOff, address + index, len);
+        NettyPlatformDependentMemoryAccess.copyMemory(src, srcOff, address + index, len);
     }
 
     @Override
@@ -534,7 +533,7 @@ final class YierdisUnsafeOffHeapBuf implements YierdisOffHeapBuf {
 
         long dst = address + index;
         if (src.hasMemoryAddress()) {
-            PlatformDependent.copyMemory(src.memoryAddress() + srcIndex, dst, len);
+            NettyPlatformDependentMemoryAccess.copyMemory(src.memoryAddress() + srcIndex, dst, len);
             return;
         }
 
@@ -544,7 +543,7 @@ final class YierdisUnsafeOffHeapBuf implements YierdisOffHeapBuf {
         while (remaining > 0) {
             int chunk = Math.min(remaining, scratch.length);
             src.getBytes(srcIndex + off, scratch, 0, chunk);
-            PlatformDependent.copyMemory(scratch, 0, dst + off, chunk);
+            NettyPlatformDependentMemoryAccess.copyMemory(scratch, 0, dst + off, chunk);
             off += chunk;
             remaining -= chunk;
         }
@@ -614,7 +613,7 @@ final class YierdisUnsafeOffHeapSlice implements YierdisOffHeapSlice {
         if (index < 0 || index >= len) {
             throw new IndexOutOfBoundsException();
         }
-        return PlatformDependent.getByte(owner.address() + offset + index);
+        return NettyPlatformDependentMemoryAccess.getByte(owner.address() + offset + index);
     }
 
     @Override
@@ -635,7 +634,7 @@ final class YierdisUnsafeOffHeapSlice implements YierdisOffHeapSlice {
         if (readLen == 0) {
             return;
         }
-        PlatformDependent.copyMemory(owner.address() + offset + index, dst, dstOff, readLen);
+        NettyPlatformDependentMemoryAccess.copyMemory(owner.address() + offset + index, dst, dstOff, readLen);
     }
 
     @Override
@@ -653,7 +652,7 @@ final class YierdisUnsafeOffHeapSlice implements YierdisOffHeapSlice {
             int before = directSink.writerIndex();
             directSink.ensureWritable(len);
             long dstAddr = directSink.memoryAddress() + before;
-            PlatformDependent.copyMemory(srcAddr, dstAddr, len);
+            NettyPlatformDependentMemoryAccess.copyMemory(srcAddr, dstAddr, len);
             directSink.writerIndex(before + len);
             return;
         }
@@ -664,7 +663,7 @@ final class YierdisUnsafeOffHeapSlice implements YierdisOffHeapSlice {
         long addr = srcAddr;
         while (remaining > 0) {
             int chunk = Math.min(remaining, scratch.length);
-            PlatformDependent.copyMemory(addr, scratch, 0, chunk);
+            NettyPlatformDependentMemoryAccess.copyMemory(addr, scratch, 0, chunk);
             out.writeBytes(scratch, 0, chunk);
             addr += chunk;
             remaining -= chunk;

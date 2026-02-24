@@ -7,6 +7,7 @@ import io.netty.util.concurrent.EventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.v1.CustomCommand;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
@@ -37,7 +38,7 @@ public class NettyCommandExecutorFairSchedulingTest {
                 0,
                 2,
                 1000,
-                NettyCommandExecutor.SchedulingPolicy.FAIR
+                SchedulingPolicy.FAIR
         );
         executor.start();
 

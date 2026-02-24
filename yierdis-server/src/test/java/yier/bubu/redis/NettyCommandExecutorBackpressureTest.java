@@ -6,6 +6,7 @@ import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.v1.CustomCommand;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
@@ -31,7 +32,7 @@ public class NettyCommandExecutorBackpressureTest {
                     0,
                     1,
                     1,
-                    NettyCommandExecutor.SchedulingPolicy.FAIR
+                    SchedulingPolicy.FAIR
             );
 
             EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
@@ -67,7 +68,7 @@ public class NettyCommandExecutorBackpressureTest {
                     0,
                     1024,
                     10,
-                    NettyCommandExecutor.SchedulingPolicy.FAIR
+                    SchedulingPolicy.FAIR
             );
 
             EmbeddedChannel ch1 = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
@@ -117,7 +118,7 @@ public class NettyCommandExecutorBackpressureTest {
                     0,
                     16,
                     50,
-                    NettyCommandExecutor.SchedulingPolicy.FAIR
+                    SchedulingPolicy.FAIR
             );
 
             EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));

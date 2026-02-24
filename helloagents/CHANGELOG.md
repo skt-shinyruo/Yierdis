@@ -27,6 +27,7 @@
 - 新增慢命令治理 SSOT：`SlowCommandGovernor` + `--keysTimeBudgetMillis/--keysMaxResults`，KEYS 在预算/上限触达时返回部分结果（推荐使用 SCAN 做完整遍历）。
 - 新增生产能力扩展前置接口：`YierdisChangeSink`（事件流）与 `YierdisSnapshot`（time-slice 快照），作为 AOF/RDB/replication/ACL/modules 的 guardrails 基座（本版本不启用真实持久化）。
 - DB core 组件化拆分：引入 `yier.bubu.redis.ops.*`（`DbEngine/ValueOps/*Ops/ExpirationManager/EvictionCoordinator`）并迁移命令层调用，降低存储-命令耦合与修改半径。
+- core 进一步模块化拆分：新增 `yierdis-core-api`（ops/stable types/ports，Netty-free）、`yierdis-core-db`（db impl）、`yierdis-core-command`（command impl）、`yierdis-core-runtime`（instance/runtime 装配）；`yierdis-core` 退化为迁移期聚合层以保持历史依赖坐标可用。
 - 新增 off-heap keys 零 canonical heap copy 回归：`OffHeapKeyCopyDiagnostics` + `OffHeapKeysZeroCopyReadPathTest`，锁定 `GET/EXISTS/TYPE/TTL` 热路径不触发 heap key 拷贝。
 - Maven 多模块拆分：引入协议层模块（`yierdis-protocol-model` 端口/模型 SSOT + `yierdis-protocol-codec` JSON/v1 codec SSOT；`yierdis-protocol` 为兼容聚合层）、`yierdis-core`（DB/命令 SSOT）、`yierdis-args`（参数 SSOT）、`yierdis-client`（client/CLI），并调整 `yierdis-server`/`yierdis-bench` 依赖方向。
 - 新增协议层二次拆分：引入 `yierdis-protocol-model`（端口/Reply IR SSOT）与 `yierdis-protocol-codec`（JSON + Custom Protocol v1 codec SSOT），并保留 `yierdis-protocol` 作为兼容聚合层（migration）。
@@ -36,8 +37,9 @@
 - 引入 `ReplyWriterFactory`（协议写出注入点）：server 的执行器/handler 通过 factory 获取 `ReplyWriter`，避免直接 `new JsonLineReplyWriter(...)`，为后续协议替换/多协议共存提供边界。
 - 新增 `yierdis-protocol-netty`：承载 Netty codec/adapters（Custom Protocol v1 decoder + reply line decoder）。
 - 升级为 Netty 体系内单线程 `NettyCommandExecutor`（`DefaultEventExecutorGroup(1)`）：批量 `write` + 末尾 `flush` 合并、连接级 `autoRead` 背压（high/low 滞回阈值）、全局有界队列与 `-ERR busy` 保护。
+- 新增 `yierdis-executor-core`（Netty-free）：抽取执行器队列/预算/公平调度/背压 tracking 等决策内核；server 侧 `NettyCommandExecutor` 仅保留 Netty adapter（`Channel`/writability/`autoRead`）与写回编排。
 - 增加 off-heap allocator 泄漏回归测试，覆盖淘汰/删除/过期与 shutdown 释放路径。
-- 新增 `ServerConnectionState`（server 私有）：承载 dbIndex/事务队列/pending/backpressure/closing/counters 等连接级运行时状态，避免跨模块重复维护。
+- 新增连接态模型（server 私有）：拆分为 `ServerSessionState`（dbIndex/auth/name/tx queue 等 session/事务状态；owner-thread 语义）与 `ServerRuntimeState`（pending/backpressure/closing/counters；原子字段，多线程可更新），明确跨线程访问语义并降低职责耦合。
 - 新增 `ProtocolLimits`（协议默认安全上限 SSOT）：收敛 `maxRequestPayloadBytes/maxArgs/maxHeaderBytes` 的默认值来源，并通过单测锁定 decoder/args 默认值一致，防止安全参数漂移。
 - 新增 `INFO`/`STATS` 命令（通过 `ServerInfoProvider` 由 server 注入实现），输出执行器/连接级统计摘要（队列/背压/关闭等）。
 - 增加纯 Java 压测工具模块 `yierdis-bench` 与一键脚本 `scripts/bench.sh`，用于对比 `none/netty/unsafe` 后端的吞吐与延迟分位数。
@@ -87,6 +89,7 @@
 - reply bytes value streaming：`CustomProtocolV1NdjsonEncoder` 对 bulk-string(bytes) 的 strict UTF-8 校验 + JSON string escape + `$b64` fallback 改为 streaming；`JsonLineReplyWriter.bulkString(BytesSlice)` 不再按 value 大小 `new byte[len]` 全量拷贝，且在无需 escape 的 UTF-8 场景走 `BytesSlice.writeTo(BytesSink)`，贯通 off-heap/Netty sink fast-path。
 - off-heap：core 通过 `YierdisOffHeapAddressAllocator` capability 选择 keyspace/expires 的 off-heap 路径，避免对具体后端类型的 `instanceof` 耦合；`yierdis-core` 不再编译期依赖 `yierdis-offheap-unsafe`。
 - off-heap 可观测性增强：`YierdisOffHeapAllocators` 增加 ServiceLoader providers 发现摘要；server 启动期输出 backend/providers 诊断信息；缺失后端错误信息附带 discovered providers（摘要在失败路径懒加载，避免成功路径额外 ServiceLoader 扫描）。
+- unsafe off-heap 后端审计加固：将 Netty internal `PlatformDependent` 调用收敛到单一 façade（`NettyPlatformDependentMemoryAccess`），并在类加载失败（`LinkageError`）时输出更可操作的 backend 不可用诊断。
 - 背压语义增强：在全局队列满/bytes 预算耗尽时，触发可恢复的全局 backpressure（禁读 + 滞回恢复），降低 busy 风暴与“禁读后无法恢复”的风险。
 - server args：`--port 0` 允许绑定随机端口（便于测试/开发避免端口冲突）。
 - QUIT 行为收敛：`QUIT` 不再由 server handler 特判，改为 core 命令（通过 `ReplyWriter` 请求 close-after-reply），由执行器在 flush 后关闭连接并丢弃 post-QUIT backlog。
@@ -95,7 +98,7 @@
 - client/CLI 参数解析收敛到 picocli（usage/校验一致，避免手写 parser 漂移）。
 - server bootstrap 内聚：pipeline 组装下沉到 `YierdisServerChannelInitializer`，bootstrap 聚焦启动与生命周期管理，降低装配逻辑分散与测试成本。
 - 协议栈收敛：server/client/bench 统一走 Custom Protocol v1 decoder/line decoder，避免多套 codec 漂移。
-- 连接态收敛：连接级运行时状态统一落到 server 私有 `ServerConnectionState`；执行器调度 state（per-channel 队列 + scheduled 标志）收敛到 `NettyExecutorChannelState`（`Channel.attr`），避免跨模块重复维护状态。
+- 连接态/调度 state 边界明确：连接 session/事务态拆分为 `ServerSessionState`，运行时 pending/backpressure/closing/counters 收敛到 `ServerRuntimeState`（均绑定 `Channel.attr`）；执行器调度 state（per-channel 队列 + scheduled 标志）保留在 `NettyExecutorChannelState`，避免跨模块重复维护状态。
 - request 解码语义明确：严格 schema（`cmd` string + 可选 `args` array，元素仅 `string|null`）；解析/校验错误返回 error 并尽量 resync。
 - 命令路由加速：`CommandRegistry` 从线性扫描升级为开放寻址哈希索引（期望 O(1)，运行时零分配）。
 

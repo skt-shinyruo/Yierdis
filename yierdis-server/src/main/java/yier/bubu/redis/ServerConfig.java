@@ -18,7 +18,7 @@ final class ServerConfig {
     final int ioThreads;
     final int executorQueueCapacity;
     final long executorQueueMaxBytes;
-    final NettyCommandExecutor.SchedulingPolicy executorSchedulingPolicy;
+    final yier.bubu.redis.executor.SchedulingPolicy executorSchedulingPolicy;
     final int backpressureHighWatermark;
     final int backpressureLowWatermark;
     final long backpressureBytesHighWatermark;
@@ -49,7 +49,7 @@ final class ServerConfig {
             int ioThreads,
             int executorQueueCapacity,
             long executorQueueMaxBytes,
-            NettyCommandExecutor.SchedulingPolicy executorSchedulingPolicy,
+            yier.bubu.redis.executor.SchedulingPolicy executorSchedulingPolicy,
             int backpressureHighWatermark,
             int backpressureLowWatermark,
             long backpressureBytesHighWatermark,
@@ -128,10 +128,10 @@ final class ServerConfig {
             throw YierdisCliException.usageError(e.getMessage(), e);
         }
 
-        NettyCommandExecutor.SchedulingPolicy schedulingPolicy =
+        yier.bubu.redis.executor.SchedulingPolicy schedulingPolicy =
                 "global".equals(parsed.executorSchedulingPolicy)
-                        ? NettyCommandExecutor.SchedulingPolicy.GLOBAL
-                        : NettyCommandExecutor.SchedulingPolicy.FAIR;
+                        ? yier.bubu.redis.executor.SchedulingPolicy.GLOBAL
+                        : yier.bubu.redis.executor.SchedulingPolicy.FAIR;
 
         MaxmemoryScope maxmemoryScope =
                 "per-db".equals(parsed.maxmemoryScope) ? MaxmemoryScope.PER_DB : MaxmemoryScope.GLOBAL;

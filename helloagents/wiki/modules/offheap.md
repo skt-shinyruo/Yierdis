@@ -83,3 +83,4 @@ bytes 抽象的 SSOT 已抽取到 `yierdis-bytes`（Netty-free）：
 - 2026-01-16：可观测性增强：增加 providers 发现摘要（ServiceLoader）与 server 启动诊断输出；缺失后端错误信息附带 discovered providers（摘要在失败路径懒加载，避免成功路径额外 ServiceLoader 扫描）。
 - 2026-01-23：off-heap Hash 编码策略对齐 Redis：小 hash 以 packed(listpack-like) 起步，按阈值/oversize 升级到 dict，并增强 SDS 分配/升级路径的异常安全（避免泄漏）。
 - 2026-02-08：foreign-memory 默认启用：默认构建包含 `yierdis-offheap-foreign`；当选择 `--offheapBackend foreign` 且未启用 `--add-modules jdk.incubator.foreign` 时，server 自动重启补齐该参数。
+- 2026-02-24：unsafe 后端审计加固：将 Netty internal `PlatformDependent` 的调用收敛到单一 façade（`NettyPlatformDependentMemoryAccess`），并在 backend 不可用/类加载失败（LinkageError）时输出可操作的诊断信息（避免冗余堆栈）。

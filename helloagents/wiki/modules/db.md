@@ -4,13 +4,13 @@
 
 实现内存数据结构、编码策略、TTL/过期清理、内存估算与淘汰策略。
 
-归属：`yierdis-core`（`yier.bubu.redis.db.*`），作为数据结构与内存语义 SSOT。
+归属：`yierdis-core-db`（`yier.bubu.redis.db.*`），作为数据结构与内存语义 SSOT（`yierdis-core` 为迁移期聚合层）。
 
 ## Module Overview
 
 - **Responsibility:** Keyspace + 过期索引 + 值编码（string/list/set/hash/zset）+ maxmemory
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-22
+- **Last Updated:** 2026-02-24
 
 ## Specifications
 
@@ -54,7 +54,7 @@
   - 写路径已落地 `prepareWrite → ledger.reserve`；mutate 内部负责 commit/rollback；`enforceMaxmemory()` 作为后台维护入口（server 维护 tick 触发）
 
 #### Contract: ScanCursorV2（SCAN cursor SSOT）
-- SSOT 类型：`yier.bubu.redis.db.ScanCursorV2`
+- SSOT 类型：`yier.bubu.redis.ops.ScanCursorV2`
 - 不可变语义：
   - cursor 为数字字符串（ASCII 十进制）；`0` 表示扫描结束
   - best-effort：不保证强一致，但必须“可推进、可终止”；rehash/插入/删除/过期并发下仍可 make progress
@@ -65,7 +65,7 @@
 #### Contract: Snapshot / ChangeEvent（生产扩展护栏）
 - SSOT 接口：
   - 快照：`yier.bubu.redis.db.YierdisSnapshot` / `YierdisSnapshotEntry`
-  - 事件：`yier.bubu.redis.runtime.YierdisChangeSink` / `YierdisChangeEvent`
+  - 事件：`yier.bubu.redis.runtime.api.YierdisChangeSink` / `YierdisChangeEvent`
 - 不可变语义：
   - snapshot 基于 `ScanCursorV2` 做 time-slice（`count + cursor` 分批推进），不得暴露/依赖 keyspace 内部结构
   - change event 不携带 DB 内部对象引用或 raw address（避免消费者误用导致泄漏/越界）

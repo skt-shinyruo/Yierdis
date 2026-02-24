@@ -62,8 +62,8 @@
 - 背压：采用“双约束”：per-connection pending **条数** + pending **bytes** 两套水位线（带滞回阈值 high/low），避免“少量大包积压”导致内存驻留不可解释
 - 公平性：支持连接级公平调度（per-channel queue + round-robin），避免热点连接长期挤占全局 backlog（可配置）
 - 连接关闭语义：`QUIT` 由命令层请求 close-after-reply，执行器在 flush 后关闭连接，并跳过该连接后续已入队命令（仅回收，不执行 DB），保证 pipeline 顺序与无副作用
-- 连接态收敛：`ServerConnectionState`（`Channel.attr` 绑定）统一承载 dbIndex/事务队列/pending/backpressure/closing/counters 等；执行器调度 state（per-channel queue + scheduled 标志）收敛到 server 私有 `NettyExecutorChannelState`（`Channel.attr` 绑定），避免跨模块重复维护状态
-- 组件化实现：背压/预算/调度分别收敛到 `NettyExecutorBackpressureController` / `NettyExecutorBacklogBudget` / `NettyExecutorTaskQueue`，`NettyCommandExecutor` 聚焦编排与可观测性
+- 连接态拆分：`ServerSessionState`（dbIndex/事务队列/AUTH/name；实现 `ServerSession`）与 `ServerRuntimeState`（pending/backpressure/counters/closing）分别通过 `Channel.attr` 绑定，显式区分单线程 session 与跨线程 runtime 的访问边界
+- 组件化实现：队列/预算/调度/autoRead tracking 等 Netty-free 决策下沉到 `yierdis-executor-core`（`ExecutorTaskQueue` / `ExecutorBacklogBudget` / `ExecutorBackpressureController`）；server 侧 `NettyCommandExecutor` 负责 Netty adapter（`Channel`/writability/autoRead）与写回编排；per-channel 调度 state 仍收敛到 server 私有 `NettyExecutorChannelState`（`Channel.attr`）
 - 配置收敛：执行器的队列/背压/drain/调度策略参数收敛到 `NettyCommandExecutorConfig`（由 `ServerConfig` 派生），降低装配与测试的维护成本
 - 可观测性：提供 `INFO`/`STATS` 命令输出执行器/连接级统计摘要（队列、背压 enter/exit、reject、drain budget、close-after-reply 等），用于排障与容量评估
   - `INFO`：返回一个 JSON string（内部仍按“文本分节”拼接）
@@ -145,6 +145,7 @@
 
 - `yierdis-protocol-netty`（Netty codec/adapters；通过其依赖引入 `yierdis-protocol-codec` / `yierdis-protocol-model`）
 - `yierdis-core`
+- `yierdis-executor-core`（Netty-free 执行器调度/背压决策内核）
 - `yierdis-args`
 
 ## Change History
@@ -160,3 +161,4 @@
 - 2026-02-05：兼容性语义调整：`KEYS` 在时间预算/结果上限触达时改为返回部分结果（不再 fail-fast 抛错）；Custom Protocol v1 request 解码为严格 schema + 可恢复 resync（返回 error 并尽量继续读下一帧）。
 - 2026-02-04：bootstrap 装配收敛：server 改为使用 core 的 `YierdisInstance` 统一 DB/路由/生命周期装配语义，为 bench/工具/嵌入式用法提供可复用基座。
 - 2026-02-09：协议边界收敛：引入 `ReplyWriterFactory` 注入点，执行器/handler 不再直接 new 具体协议 writer；flush coalescing 抽离为独立组件以降低执行器维护复杂度。
+- 2026-02-24：executor-core/连接态重构：排队/预算/调度/背压 tracking 迁移到 Netty-free `yierdis-executor-core`；连接态从 `ServerConnectionState` 拆分为 `ServerSessionState` + `ServerRuntimeState`（分别绑定 `Channel.attr`），并补齐 internal error→closing→skip-side-effects 回归测试。

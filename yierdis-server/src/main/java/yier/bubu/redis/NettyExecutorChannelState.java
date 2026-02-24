@@ -5,12 +5,13 @@ package yier.bubu.redis;
 import io.netty.channel.Channel;
 import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
+import yier.bubu.redis.executor.ExecutorKeyState;
 
 import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-final class NettyExecutorChannelState {
+final class NettyExecutorChannelState implements ExecutorKeyState<NettyExecutorTask> {
     private static final AttributeKey<NettyExecutorChannelState> KEY =
             AttributeKey.valueOf("yierdis.executorChannelState");
 
@@ -29,11 +30,13 @@ final class NettyExecutorChannelState {
     private final ConcurrentLinkedQueue<NettyExecutorTask> queue = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean scheduled = new AtomicBoolean(false);
 
-    ConcurrentLinkedQueue<NettyExecutorTask> queue() {
+    @Override
+    public ConcurrentLinkedQueue<NettyExecutorTask> queue() {
         return queue;
     }
 
-    AtomicBoolean scheduled() {
+    @Override
+    public AtomicBoolean scheduled() {
         return scheduled;
     }
 }

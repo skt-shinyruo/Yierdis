@@ -140,6 +140,14 @@ public final class YierdisOffHeapAllocators {
         }
         try {
             return found.create(maxBytes);
+        } catch (YierdisOffHeapBackendUnavailableException e) {
+            throw e;
+        } catch (LinkageError e) {
+            throw new YierdisOffHeapBackendUnavailableException(
+                    "Off-heap 后端 '" + backend.name().toLowerCase() + "' 在当前运行环境不可用（类加载/初始化失败）。"
+                            + "请确认对应模块依赖已引入，且运行环境满足后端要求。"
+                            + "已发现 providers: " + availableProvidersSummary(),
+                    e);
         } catch (RuntimeException e) {
             throw e;
         } catch (Throwable t) {
@@ -149,7 +157,7 @@ public final class YierdisOffHeapAllocators {
 
     private static YierdisOffHeapAllocator createNetty(long maxBytes) {
         return createByReflection(NETTY_ALLOCATOR_CLASS, maxBytes, () ->
-                "Netty off-heap 后端在当前构建中不可用。请确认已引入依赖 'yierdis-offheap-netty'。"
+                "Netty off-heap 后端在当前构建或运行环境中不可用。请确认已引入依赖 'yierdis-offheap-netty'。"
                         + "已发现 providers: " + availableProvidersSummary());
     }
 
@@ -194,7 +202,7 @@ public final class YierdisOffHeapAllocators {
 
     private static YierdisOffHeapAllocator createUnsafe(long maxBytes) {
         return createByReflection(UNSAFE_ALLOCATOR_CLASS, maxBytes, () ->
-                "Unsafe off-heap 后端在当前构建中不可用。请确认已引入依赖 'yierdis-offheap-unsafe'。"
+                "Unsafe off-heap 后端在当前构建或运行环境中不可用。请确认已引入依赖 'yierdis-offheap-unsafe'。"
                         + "已发现 providers: " + availableProvidersSummary());
     }
 
@@ -208,6 +216,13 @@ public final class YierdisOffHeapAllocators {
             return (YierdisOffHeapAllocator) instance;
         } catch (ClassNotFoundException e) {
             throw new YierdisOffHeapBackendUnavailableException(missingMessageSupplier.get(), e);
+        } catch (LinkageError e) {
+            throw new YierdisOffHeapBackendUnavailableException(
+                    missingMessageSupplier.get() + "（类加载/初始化失败："
+                            + e.getClass().getSimpleName()
+                            + (e.getMessage() == null || e.getMessage().isBlank() ? "" : (": " + e.getMessage()))
+                            + "）",
+                    e);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Failed to initialize off-heap backend: " + allocatorClass, e);
         }

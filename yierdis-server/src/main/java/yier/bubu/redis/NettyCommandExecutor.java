@@ -11,6 +11,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.executor.ExecutorBacklogBudget;
+import yier.bubu.redis.executor.ExecutorBackpressureController;
+import yier.bubu.redis.executor.ExecutorBackpressureIo;
+import yier.bubu.redis.executor.ExecutorBackpressureObserver;
+import yier.bubu.redis.executor.ExecutorBackpressureRuntime;
+import yier.bubu.redis.executor.ExecutorTaskQueue;
+import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.Command;
 import yier.bubu.redis.protocol.CommandContext;
 import yier.bubu.redis.protocol.ReplyWriter;
@@ -62,13 +69,8 @@ import java.util.concurrent.atomic.LongAdder;
 public final class NettyCommandExecutor implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(NettyCommandExecutor.class);
 
-    public enum SchedulingPolicy {
-        GLOBAL,
-        FAIR
-    }
-
-    // 连接态：server 运行时连接态 + Redis-like session state 在 ServerConnectionState（server 私有）。
-    // 执行器调度状态在 NettyExecutorChannelState（避免跨层耦合）。
+    // 连接态：ServerSessionState（SELECT/AUTH/MULTI...）与 ServerRuntimeState（pending/backpressure/counters/closing）分离绑定。
+    // 执行器调度状态在 NettyExecutorChannelState（避免跨层耦合/避免把调度细节放入协议层 Session）。
     // 注：Custom Protocol v1 的请求解码为 heap 命令（无 ByteBuf slice 驻留），无需 frame compaction。
 
     private final Runnable bindToCurrentThread;
@@ -81,8 +83,8 @@ public final class NettyCommandExecutor implements AutoCloseable {
 
     // GLOBAL scheduling uses a bounded FIFO queue (legacy behavior).
     private final ArrayBlockingQueue<NettyExecutorTask> queue;
-    private final NettyExecutorTaskQueue taskQueue;
-    private final NettyExecutorBacklogBudget backlogBudget;
+    private final ExecutorTaskQueue<Channel, NettyExecutorTask> taskQueue;
+    private final ExecutorBacklogBudget backlogBudget;
 
     // --- Observability (hot-path friendly counters) ---
     private final LongAdder submitAccepted = new LongAdder();
@@ -108,7 +110,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean drainScheduled = new AtomicBoolean(false);
     private volatile boolean running = true;
-    private final NettyExecutorBackpressureController backpressureController;
+    private final ExecutorBackpressureController<Channel> backpressureController;
 
     public NettyCommandExecutor(
             Runnable bindToCurrentThread,
@@ -189,8 +191,8 @@ public final class NettyCommandExecutor implements AutoCloseable {
         }
 
         this.queue = this.schedulingPolicy == SchedulingPolicy.GLOBAL ? new ArrayBlockingQueue<>(queueCapacity) : null;
-        this.taskQueue = new NettyExecutorTaskQueue(this.schedulingPolicy, this.queue);
-        this.backlogBudget = new NettyExecutorBacklogBudget(queueCapacity, queueMaxBytes);
+        this.taskQueue = new ExecutorTaskQueue<>(this.schedulingPolicy, this.queue, NettyExecutorChannelState::getOrCreate);
+        this.backlogBudget = new ExecutorBacklogBudget(queueCapacity, queueMaxBytes);
         this.backpressureHighWatermark = backpressureHighWatermark;
         this.backpressureLowWatermark = backpressureLowWatermark;
         this.backpressureBytesHighWatermark = backpressureBytesHighWatermark;
@@ -198,14 +200,129 @@ public final class NettyCommandExecutor implements AutoCloseable {
         this.maxDrainCommands = maxDrainCommands;
         this.drainTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(drainTimeLimitMillis);
 
-        this.backpressureController = new NettyExecutorBackpressureController(
+        ExecutorBackpressureIo<Channel> io = new ExecutorBackpressureIo<>() {
+            @Override
+            public boolean isActive(Channel key) {
+                return key != null && key.isActive();
+            }
+
+            @Override
+            public boolean isWritable(Channel key) {
+                return key != null && key.isWritable();
+            }
+
+            @Override
+            public void disableAutoRead(Channel key) {
+                if (key == null) {
+                    return;
+                }
+                key.eventLoop().execute(() -> {
+                    try {
+                        key.config().setAutoRead(false);
+                    } catch (Throwable ignored) {
+                        // ignore
+                    }
+                });
+            }
+
+            @Override
+            public void enableAutoRead(Channel key) {
+                if (key == null) {
+                    return;
+                }
+                key.eventLoop().execute(() -> {
+                    try {
+                        key.config().setAutoRead(true);
+                    } catch (Throwable ignored) {
+                        // ignore
+                    }
+                });
+            }
+
+            @Override
+            public void onClose(Channel key, Runnable callback) {
+                if (key == null || callback == null) {
+                    return;
+                }
+                key.closeFuture().addListener(ignored -> {
+                    try {
+                        callback.run();
+                    } catch (Throwable ignored2) {
+                        // ignore
+                    }
+                });
+            }
+        };
+
+        ExecutorBackpressureRuntime<Channel> runtime = new ExecutorBackpressureRuntime<>() {
+            @Override
+            public int pending(Channel key) {
+                return ServerRuntimeState.getOrCreate(key).pendingCounter().get();
+            }
+
+            @Override
+            public long pendingBytes(Channel key) {
+                return ServerRuntimeState.getOrCreate(key).pendingBytesCounter().get();
+            }
+
+            @Override
+            public boolean isClosing(Channel key) {
+                return ServerRuntimeState.getOrCreate(key).isClosing();
+            }
+
+            @Override
+            public boolean markAutoReadDisabledByExecutor(Channel key) {
+                return ServerRuntimeState.getOrCreate(key).markAutoReadDisabledByExecutor();
+            }
+
+            @Override
+            public boolean autoReadDisabledByExecutor(Channel key) {
+                return ServerRuntimeState.getOrCreate(key).autoReadDisabledByExecutor();
+            }
+
+            @Override
+            public boolean clearAutoReadDisabledByExecutor(Channel key) {
+                return ServerRuntimeState.getOrCreate(key).clearAutoReadDisabledByExecutor();
+            }
+        };
+
+        ExecutorBackpressureObserver<Channel> observer = new ExecutorBackpressureObserver<>() {
+            @Override
+            public void onEnter(Channel key) {
+                if (key == null) {
+                    return;
+                }
+                try {
+                    ServerRuntimeState.getOrCreate(key).backpressureEnterCounter().incrementAndGet();
+                } catch (Throwable ignored) {
+                    // ignore
+                }
+                backpressureEnter.increment();
+            }
+
+            @Override
+            public void onExit(Channel key) {
+                if (key == null) {
+                    return;
+                }
+                try {
+                    ServerRuntimeState.getOrCreate(key).backpressureExitCounter().incrementAndGet();
+                } catch (Throwable ignored) {
+                    // ignore
+                }
+                backpressureExit.increment();
+            }
+        };
+
+        this.backpressureController = new ExecutorBackpressureController<>(
                 this.executor,
                 this.backlogBudget,
                 this.backpressureLowWatermark,
                 this.backpressureBytesHighWatermark,
                 this.backpressureBytesLowWatermark,
-                this.backpressureEnter,
-                this.backpressureExit,
+                io,
+                runtime,
+                observer,
                 () -> this.running
         );
     }
@@ -216,7 +333,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
         return replyWriterFactory.newWriter(new NettyByteBufSink(out));
     }
 
-    private CommandContext context(ServerConnectionState session, ReplyWriter out) {
+    private CommandContext context(ServerSessionState session, ReplyWriter out) {
         CommandContext ctx = execCtx;
         if (ctx == null) {
             ctx = new CommandContext(session, out);
@@ -276,7 +393,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
             return;
         }
 
-        ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
+        ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
         int pending = conn.pendingCounter().get();
         long pendingBytes = conn.pendingBytesCounter().get();
 
@@ -332,7 +449,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
         Objects.requireNonNull(ctx, "ctx");
         Objects.requireNonNull(cmd, "cmd");
         Channel ch = ctx.channel();
-        ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
+        ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
         if (!running) {
             submitRejectedNotRunning.increment();
             conn.commandsRejectedCounter().incrementAndGet();
@@ -504,27 +621,28 @@ public final class NettyCommandExecutor implements AutoCloseable {
             return;
         }
         Channel ch = ctx.channel();
-        if (ch == null || !ch.isActive() || isChannelClosing(ch)) {
-            // 连接已关闭或标记为 closing：只回收已入队的命令帧与预算，不再执行，避免产生副作用。
-            ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
-            conn.commandsSkippedClosingCounter().incrementAndGet();
-            commandsSkippedClosing.increment();
-            recycleAndRelease(task);
-            return;
-        }
+            if (ch == null || !ch.isActive() || isChannelClosing(ch)) {
+                // 连接已关闭或标记为 closing：只回收已入队的命令帧与预算，不再执行，避免产生副作用。
+                ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
+                conn.commandsSkippedClosingCounter().incrementAndGet();
+                commandsSkippedClosing.increment();
+                recycleAndRelease(task);
+                return;
+            }
 
         try {
             ByteBuf out = ctx.alloc().buffer();
             boolean ok = false;
             try {
-                ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
+                ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
+                ServerSessionState session = ServerSessionState.getOrCreate(ch);
                 ReplyWriter writer = replyWriterFactory.newWriter(new NettyByteBufSink(out));
-                commandProcessor.execute(cmd, context(conn, writer));
+                commandProcessor.execute(cmd, context(session, writer));
                 if (writer.closeAfterReplyRequested()) {
                     // close-after-reply：flush 后关闭连接，并标记该 channel 后续任务需要跳过。
                     conn.closeAfterReplyCounter().incrementAndGet();
                     closeAfterReply.increment();
-                    conn.markClosing();
+                    conn.markClosing(session);
                     backpressureController.disableAutoRead(ctx.channel());
                     ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
                 } else {
@@ -568,7 +686,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
     }
 
     private void onCommandFinished(Channel ch, int retainedBytes, boolean executed) {
-        ServerConnectionState conn = ServerConnectionState.getOrCreate(ch);
+        ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
         if (executed) {
             conn.commandsExecutedCounter().incrementAndGet();
             commandsExecuted.increment();
@@ -596,11 +714,11 @@ public final class NettyCommandExecutor implements AutoCloseable {
         if (ch == null) {
             return false;
         }
-        return ServerConnectionState.getOrCreate(ch).isClosing();
+        return ServerRuntimeState.getOrCreate(ch).isClosing();
     }
 
     private void drainLeftoverCommands() {
-        taskQueue.drainLeftoverCommands(this::recycleAndRelease);
+        taskQueue.drainLeftoverTasks(this::recycleAndRelease);
     }
 
     private void recycleAndRelease(NettyExecutorTask t) {
@@ -746,7 +864,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
                 backlogBudget.globalBackpressureBytesLowWatermark(),
                 maxDrainCommands,
                 drainTimeLimitNanos,
-                backpressureController.channelsAutoReadDisabledCount(),
+                backpressureController.keysAutoReadDisabledCount(),
                 submitAccepted.sum(),
                 submitRejectedNotRunning.sum(),
                 submitRejectedQueueFull.sum(),

@@ -1,5 +1,7 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.ops.ValueType;
+import yier.bubu.redis.ops.ScanCursorV2;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;

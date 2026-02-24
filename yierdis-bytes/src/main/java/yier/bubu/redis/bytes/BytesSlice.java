@@ -5,8 +5,6 @@ package yier.bubu.redis.bytes;
  * <p>
  * This is used by the server write path to efficiently stream values without forcing heap copies.
  */
-public interface BytesSlice extends BytesSource {
-    int length();
-
+public interface BytesSlice extends BytesView {
     void writeTo(BytesSink out);
 }

@@ -1,5 +1,6 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.bytes.BytesView;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -16,12 +17,12 @@ public class ByteArrayKeyspaceTest {
         keyspace.compute(storedKey, (k, old) -> 123);
 
         byte[] other = new byte[]{0, (byte) 0xFF, 'k', 'x'};
-        BytesView view = new BytesView(other, 0, 3);
+        BytesView view = new TestBytesView(other, 0, 3);
 
         Assert.assertSame(storedKey, keyspace.canonicalKey(view));
         Assert.assertEquals((Integer) 123, keyspace.get(view));
 
-        BytesView miss = new BytesView(new byte[]{0, (byte) 0xFE, 'k'}, 0, 3);
+        BytesView miss = new TestBytesView(new byte[]{0, (byte) 0xFE, 'k'}, 0, 3);
         Assert.assertNull(keyspace.canonicalKey(miss));
         Assert.assertNull(keyspace.get(miss));
     }
@@ -161,24 +162,24 @@ public class ByteArrayKeyspaceTest {
         return ((byte[][]) f.get(keyspace)).length;
     }
 
-    private static final class BytesView implements YierdisBytesView {
+    private static final class TestBytesView implements yier.bubu.redis.bytes.BytesView {
         private final byte[] data;
         private final int off;
         private final int len;
 
-        private BytesView(byte[] data, int off, int len) {
+        private TestBytesView(byte[] data, int off, int len) {
             this.data = data;
             this.off = off;
             this.len = len;
         }
 
         @Override
-        public int len() {
+        public int length() {
             return len;
         }
 
         @Override
-        public byte byteAt(int index) {
+        public byte getByte(int index) {
             if (index < 0 || index >= len) {
                 throw new IndexOutOfBoundsException();
             }

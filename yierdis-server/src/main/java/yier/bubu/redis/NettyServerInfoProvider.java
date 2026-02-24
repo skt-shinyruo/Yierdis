@@ -1,9 +1,9 @@
 package yier.bubu.redis;
 
-// INFO/STATS 提供器：基于执行器统计与连接态（ServerConnectionState）输出可观测性摘要，避免在热路径做额外分配。
+// INFO/STATS 提供器：基于执行器统计与连接态（ServerSessionState + ServerRuntimeState）输出可观测性摘要，避免在热路径做额外分配。
 
 import yier.bubu.redis.command.ServerInfoProvider;
-import yier.bubu.redis.db.YierdisMemoryStats;
+import yier.bubu.redis.ops.YierdisMemoryStats;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.protocol.Command;
 import yier.bubu.redis.protocol.CommandContext;
@@ -117,9 +117,9 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         NettyCommandExecutor.StatsSnapshot s = ex.statsSnapshot();
-        ServerConnectionState conn = connectionState(ctx);
+        ServerRuntimeState rt = runtimeState(ctx);
 
-        int pairs = 15 + (conn == null ? 0 : 11);
+        int pairs = 15 + (rt == null ? 0 : 11);
         writeHeader(out, pairs);
 
         writePair(out, KEY_QUEUED_TASKS, s.queuedTasks);
@@ -138,21 +138,21 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL, s.drainLimitedByMaxCommands);
         writePair(out, KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL, s.drainLimitedByTimeBudget);
 
-        if (conn == null) {
+        if (rt == null) {
             return;
         }
 
-        writePair(out, KEY_CONN_PENDING, conn.pendingCounter().get());
-        writePair(out, KEY_CONN_PENDING_BYTES, conn.pendingBytesCounter().get());
-        writePair(out, KEY_CONN_AUTOREAD_DISABLED, conn.autoReadDisabledByExecutor() ? 1 : 0);
-        writePair(out, KEY_CONN_CLOSING, conn.isClosing() ? 1 : 0);
-        writePair(out, KEY_CONN_COMMANDS_ENQUEUED, conn.commandsEnqueuedCounter().get());
-        writePair(out, KEY_CONN_COMMANDS_EXECUTED, conn.commandsExecutedCounter().get());
-        writePair(out, KEY_CONN_COMMANDS_REJECTED, conn.commandsRejectedCounter().get());
-        writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, conn.commandsSkippedClosingCounter().get());
-        writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, conn.closeAfterReplyCounter().get());
-        writePair(out, KEY_CONN_BACKPRESSURE_ENTER, conn.backpressureEnterCounter().get());
-        writePair(out, KEY_CONN_BACKPRESSURE_EXIT, conn.backpressureExitCounter().get());
+        writePair(out, KEY_CONN_PENDING, rt.pendingCounter().get());
+        writePair(out, KEY_CONN_PENDING_BYTES, rt.pendingBytesCounter().get());
+        writePair(out, KEY_CONN_AUTOREAD_DISABLED, rt.autoReadDisabledByExecutor() ? 1 : 0);
+        writePair(out, KEY_CONN_CLOSING, rt.isClosing() ? 1 : 0);
+        writePair(out, KEY_CONN_COMMANDS_ENQUEUED, rt.commandsEnqueuedCounter().get());
+        writePair(out, KEY_CONN_COMMANDS_EXECUTED, rt.commandsExecutedCounter().get());
+        writePair(out, KEY_CONN_COMMANDS_REJECTED, rt.commandsRejectedCounter().get());
+        writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, rt.commandsSkippedClosingCounter().get());
+        writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, rt.closeAfterReplyCounter().get());
+        writePair(out, KEY_CONN_BACKPRESSURE_ENTER, rt.backpressureEnterCounter().get());
+        writePair(out, KEY_CONN_BACKPRESSURE_EXIT, rt.backpressureExitCounter().get());
     }
 
     @Override
@@ -452,13 +452,13 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
     }
 
-    private static ServerConnectionState connectionState(CommandContext ctx) {
+    private static ServerRuntimeState runtimeState(CommandContext ctx) {
         if (ctx == null) {
             return null;
         }
         Session session = ctx.session();
-        if (session instanceof ServerConnectionState s) {
-            return s;
+        if (session instanceof ServerSessionState s) {
+            return s.runtime();
         }
         return null;
     }
