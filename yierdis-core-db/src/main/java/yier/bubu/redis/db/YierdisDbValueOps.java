@@ -26,6 +26,7 @@ import yier.bubu.redis.ops.result.BulkStringSequence;
 import yier.bubu.redis.ops.result.BulkStringSequences;
 import yier.bubu.redis.ops.result.BulkStringSink;
 import yier.bubu.redis.ops.result.BulkStringValue;
+import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 
 import java.util.Collections;
 import java.util.List;
@@ -139,15 +140,21 @@ final class YierdisDbValueOps implements ValueOps {
             }
             db.commitWrite(deltaBytes[0]);
             if (didSet[0]) {
+                YierdisChangeTracking.markValueChanged();
                 if (keepTtl && existed[0]) {
                     // KEEPTTL：覆盖写入但保留原有过期时间（仅当 key 原先存在时有意义）。
                     return true;
                 }
                 if (expireAtMillis != null) {
                     db.setExpireAtMillis(handleRef[0], expireAtMillis);
+                    YierdisChangeTracking.markTtlChanged();
                     return true;
                 }
+                Long beforeTtl = db.expires.get(handleRef[0]);
                 db.removeExpire(handleRef[0]);
+                if (beforeTtl != null) {
+                    YierdisChangeTracking.markTtlChanged();
+                }
             }
             return didSet[0];
         }
@@ -204,15 +211,21 @@ final class YierdisDbValueOps implements ValueOps {
             }
             db.commitWrite(deltaBytes[0]);
             if (didSet[0]) {
+                YierdisChangeTracking.markValueChanged();
                 if (keepTtl && existed[0]) {
                     // KEEPTTL：覆盖写入但保留原有过期时间（仅当 key 原先存在时有意义）。
                     return true;
                 }
                 if (expireAtMillis != null) {
                     db.setExpireAtMillis(handleRef[0], expireAtMillis);
+                    YierdisChangeTracking.markTtlChanged();
                     return true;
                 }
+                Long beforeTtl = db.expires.get(handleRef[0]);
                 db.removeExpire(handleRef[0]);
+                if (beforeTtl != null) {
+                    YierdisChangeTracking.markTtlChanged();
+                }
             }
             return didSet[0];
         }
@@ -263,6 +276,7 @@ final class YierdisDbValueOps implements ValueOps {
             db.checkThread();
             long now = System.currentTimeMillis();
             final int[] newLen = new int[]{0};
+            final boolean[] changed = new boolean[]{false};
             final long[] deltaBytes = new long[]{0};
             try {
                 db.store.computeWithHandle(keyBytes, (k, old) -> {
@@ -277,6 +291,7 @@ final class YierdisDbValueOps implements ValueOps {
                     if (old == null) {
                         YierdisObject o = YierdisObject.newString(db.offHeapAllocator, value);
                         newLen[0] = o.stringByteLength();
+                        changed[0] = true;
                         db.touch(o);
                         db.refreshEstimatedBytes(k, o);
                         deltaBytes[0] += o.estimatedBytes;
@@ -287,7 +302,11 @@ final class YierdisDbValueOps implements ValueOps {
                         throw new WrongTypeException();
                     }
                     db.touch(old);
+                    int beforeLen = old.stringByteLength();
                     newLen[0] = old.stringAppend(db.offHeapAllocator, value);
+                    if (newLen[0] != beforeLen) {
+                        changed[0] = true;
+                    }
                     deltaBytes[0] -= oldEstimate;
                     db.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
@@ -298,6 +317,9 @@ final class YierdisDbValueOps implements ValueOps {
                 throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
             db.commitWrite(deltaBytes[0]);
+            if (changed[0]) {
+                YierdisChangeTracking.markValueChanged();
+            }
             return newLen[0];
         }
 
@@ -306,6 +328,7 @@ final class YierdisDbValueOps implements ValueOps {
             db.checkThread();
             long now = System.currentTimeMillis();
             final int[] oldBit = new int[]{0};
+            final boolean[] changed = new boolean[]{false};
             final long[] deltaBytes = new long[]{0};
             try {
                 db.store.computeWithHandle(keyBytes, (k, old) -> {
@@ -318,6 +341,7 @@ final class YierdisDbValueOps implements ValueOps {
                         oldEstimate = 0;
                     }
 
+                    boolean existed = old != null;
                     if (old == null) {
                         old = YierdisObject.newString(db.offHeapAllocator, (byte[]) null);
                         db.touch(old);
@@ -328,7 +352,12 @@ final class YierdisDbValueOps implements ValueOps {
                         db.touch(old);
                     }
 
+                    int beforeLen = old.stringByteLength();
                     oldBit[0] = old.stringSetBit(db.offHeapAllocator, offset, value);
+                    int afterLen = old.stringByteLength();
+                    if (!existed || oldBit[0] != value || afterLen != beforeLen) {
+                        changed[0] = true;
+                    }
                     deltaBytes[0] -= oldEstimate;
                     db.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
@@ -339,6 +368,9 @@ final class YierdisDbValueOps implements ValueOps {
                 throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
             db.commitWrite(deltaBytes[0]);
+            if (changed[0]) {
+                YierdisChangeTracking.markValueChanged();
+            }
             return oldBit[0];
         }
 
@@ -450,6 +482,9 @@ final class YierdisDbValueOps implements ValueOps {
                 return old;
             });
             db.commitWrite(deltaBytes[0]);
+            if (delta != 0) {
+                YierdisChangeTracking.markValueChanged();
+            }
             return result[0];
         }
 
@@ -540,6 +575,7 @@ final class YierdisDbValueOps implements ValueOps {
                 return old;
             });
             db.commitWrite(deltaBytes[0]);
+            YierdisChangeTracking.markValueChanged();
             return added[0];
         }
 
@@ -629,6 +665,9 @@ final class YierdisDbValueOps implements ValueOps {
                 return old;
             });
             db.commitWrite(deltaBytes[0]);
+            if (removed[0] > 0) {
+                YierdisChangeTracking.markValueChanged();
+            }
             return removed[0];
         }
     }
@@ -740,6 +779,7 @@ final class YierdisDbValueOps implements ValueOps {
                 return old;
             });
             db.commitWrite(deltaBytes[0]);
+            YierdisChangeTracking.markValueChanged();
             return len[0];
         }
 
@@ -779,6 +819,9 @@ final class YierdisDbValueOps implements ValueOps {
                 return old;
             });
             db.commitWrite(deltaBytes[0]);
+            if (popped[0] != null && !popped[0].isEmpty()) {
+                YierdisChangeTracking.markValueChanged();
+            }
             return popped[0];
         }
     }
@@ -828,6 +871,9 @@ final class YierdisDbValueOps implements ValueOps {
                 return old;
             });
             db.commitWrite(deltaBytes[0]);
+            if (added[0] > 0) {
+                YierdisChangeTracking.markValueChanged();
+            }
             return added[0];
         }
 
@@ -863,6 +909,9 @@ final class YierdisDbValueOps implements ValueOps {
                 return old;
             });
             db.commitWrite(deltaBytes[0]);
+            if (removed[0] > 0) {
+                YierdisChangeTracking.markValueChanged();
+            }
             return removed[0];
         }
 
@@ -938,6 +987,7 @@ final class YierdisDbValueOps implements ValueOps {
             YierdisOffHeapAddressAllocator addressAllocator =
                     db.offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
             final int[] added = new int[]{0};
+            final boolean[] changedAny = new boolean[]{false};
             final long[] deltaBytes = new long[]{0};
             db.store.computeWithHandle(keyBytes, (k, old) -> {
                 long oldEstimate = old == null ? 0 : old.estimatedBytes;
@@ -951,7 +1001,7 @@ final class YierdisDbValueOps implements ValueOps {
                 if (old == null) {
                     ZSetValue zv = addressAllocator != null ? new ZSetValue(addressAllocator) : new ZSetValue();
                     try {
-                        added[0] = zv.zaddMany(scoreMemberPairs);
+                        added[0] = zv.zaddMany(scoreMemberPairs, changedAny);
                     } catch (RuntimeException e) {
                         zv.close();
                         throw e;
@@ -965,7 +1015,7 @@ final class YierdisDbValueOps implements ValueOps {
                 if (old.type != ValueType.ZSET) {
                     throw new WrongTypeException();
                 }
-                added[0] = ((ZSetValue) old.payload).zaddMany(scoreMemberPairs);
+                added[0] = ((ZSetValue) old.payload).zaddMany(scoreMemberPairs, changedAny);
                 old.refreshCompositeEncodingFromPayload();
                 db.touch(old);
                 deltaBytes[0] -= oldEstimate;
@@ -974,6 +1024,9 @@ final class YierdisDbValueOps implements ValueOps {
                 return old;
             });
             db.commitWrite(deltaBytes[0]);
+            if (changedAny[0]) {
+                YierdisChangeTracking.markValueChanged();
+            }
             return added[0];
         }
 
@@ -1139,6 +1192,9 @@ final class YierdisDbValueOps implements ValueOps {
                 return old;
             });
             db.commitWrite(deltaBytes[0]);
+            if (removed[0] > 0) {
+                YierdisChangeTracking.markValueChanged();
+            }
             return removed[0];
         }
 
@@ -1174,6 +1230,9 @@ final class YierdisDbValueOps implements ValueOps {
                 return old;
             });
             db.commitWrite(deltaBytes[0]);
+            if (removed[0] > 0) {
+                YierdisChangeTracking.markValueChanged();
+            }
             return removed[0];
         }
 
@@ -1209,6 +1268,9 @@ final class YierdisDbValueOps implements ValueOps {
                 return old;
             });
             db.commitWrite(deltaBytes[0]);
+            if (removed[0] > 0) {
+                YierdisChangeTracking.markValueChanged();
+            }
             return removed[0];
         }
     }
@@ -1259,6 +1321,9 @@ final class YierdisDbValueOps implements ValueOps {
                 throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
             db.commitWrite(deltaBytes[0]);
+            if (changed[0]) {
+                YierdisChangeTracking.markValueChanged();
+            }
             return changed[0] ? 1 : 0;
         }
 
@@ -1344,6 +1409,7 @@ final class YierdisDbValueOps implements ValueOps {
             db.commitWrite(deltaBytes[0]);
             // 与 SET 类似：PFMERGE 结果写入后应清除 destKey 的 TTL。
             db.removeExpire(destKeyBytes);
+            YierdisChangeTracking.markValueChanged();
         }
     }
 }

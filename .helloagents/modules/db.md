@@ -72,6 +72,9 @@
 - 不可变语义：
   - snapshot 基于 `ScanCursorV2` 做 time-slice（`count + cursor` 分批推进），不得暴露/依赖 keyspace 内部结构
   - change event 不携带 DB 内部对象引用或 raw address（避免消费者误用导致泄漏/越界）
+  - change event 发射条件（语义冻结）：仅当命令执行成功，且本次命令造成 Keyspace/Value/TTL 元数据的真实变化时才 emit
+    - no-op 示例（不应 emit）：`SET k v NX` 未写入、`DEL missing` 删除 0 个 key、`PERSIST` 无 TTL、`EXPIRE missing`
+    - 维护变更（不应 emit）：过期清理 / maxmemory 淘汰等后台维护逻辑产生的 keyspace 变化不进入事件流
   - 消费者不得跨线程直接触达 DB 引擎实现实例（`DbEngine` 的实现，如 `YierdisDb`）；需要执行命令必须回到 owner thread（instance/executor 调度）
 - 现状：
   - core 已提供最小接口与回归测试锚点，用于后续 RDB/AOF/replication/审计能力接入

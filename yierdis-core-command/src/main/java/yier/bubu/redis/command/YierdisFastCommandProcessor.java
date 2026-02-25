@@ -11,6 +11,7 @@ import yier.bubu.redis.protocol.ReplyWriter;
 import yier.bubu.redis.protocol.ServerSession;
 import yier.bubu.redis.protocol.TransactionState;
 import yier.bubu.redis.runtime.api.YierdisChangeEvent;
+import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 import yier.bubu.redis.runtime.api.YierdisChangeSink;
 
 import java.util.Objects;
@@ -138,10 +139,20 @@ public final class YierdisFastCommandProcessor {
                 out.error(unknownCommandMessage(cmd));
                 return;
             }
-            handler.execute(cmd, ctx);
+            boolean sinkEnabled = changeSink != YierdisChangeSink.NOOP;
+            boolean changed = false;
+            if (sinkEnabled) {
+                try (YierdisChangeTracking.Scope ignored = YierdisChangeTracking.beginScope()) {
+                    handler.execute(cmd, ctx);
+                    changed = YierdisChangeTracking.changedAny();
+                }
+            } else {
+                handler.execute(cmd, ctx);
+            }
 
-            // 变更事件：仅在命令执行成功后触发，并尽量避免对读命令做额外分配。
-            if (changeSink != YierdisChangeSink.NOOP && isWriteCommand(cmd)) {
+            // 变更事件：仅在命令执行成功后触发；仅当本次命令产生“真实变更”（Keyspace/Value/TTL 元数据）时 emit。
+            // 该判定由 DB/ops 层在真实写入点打点，命令层仅按事实 gate emit，避免“写命令名单”漂移。
+            if (sinkEnabled && changed) {
                 int dbIndex = 0;
                 DbIndexProvider provider = ctx.dbIndexProviderOrNull();
                 if (provider != null) {
@@ -174,36 +185,6 @@ public final class YierdisFastCommandProcessor {
                 // best-effort
             }
         }
-    }
-
-    private static boolean isWriteCommand(Command cmd) {
-        // 约定：事件流用于 AOF/replication 等外部能力，因此以“可能改变状态”的命令集合为准。
-        // 这里不在核心层做“是否真实发生变更”的判定（例如 DEL 0 / SET NX 未写入等）。
-        return CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "SET")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "APPEND")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "SETBIT")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "INCR")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "DECR")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "PFADD")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "LPUSH")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "RPUSH")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "LPOP")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "RPOP")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "HSET")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "HDEL")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "SADD")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "SREM")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "ZADD")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "ZREM")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "ZREMRANGEBYSCORE")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "ZREMRANGEBYRANK")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "DEL")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "EXPIRE")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "PEXPIRE")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "EXPIREAT")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "PEXPIREAT")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "PERSIST")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "FLUSHDB");
     }
 
     private static byte[][] copyArgv(Command cmd) {

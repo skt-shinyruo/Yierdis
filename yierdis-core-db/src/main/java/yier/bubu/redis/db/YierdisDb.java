@@ -29,6 +29,7 @@ import yier.bubu.redis.ops.ValueOps;
 import yier.bubu.redis.ops.WrongTypeException;
 import yier.bubu.redis.ops.YierdisMemoryStats;
 import yier.bubu.redis.ops.YierdisCommandException;
+import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -599,12 +600,20 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
 
     public void flushDb() {
         checkThread();
+        boolean hadKeys = store.size() != 0;
+        boolean hadTtl = expires.size() != 0;
         store.forEach((k, e) -> e.releasePayloadIfAny());
         store.clear();
         expires.clear();
         usedBytes = 0;
         reservedBytes = 0;
         activeReservation = null;
+        if (hadKeys) {
+            YierdisChangeTracking.markValueChanged();
+        }
+        if (hadTtl) {
+            YierdisChangeTracking.markTtlChanged();
+        }
     }
 
     public int size() {
@@ -712,6 +721,9 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
                 removed++;
             }
         }
+        if (removed > 0) {
+            YierdisChangeTracking.markValueChanged();
+        }
         return removed;
     }
 
@@ -770,12 +782,14 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
                 e.releasePayloadIfAny();
                 adjustUsedBytes(-e.estimatedBytes);
             }
+            YierdisChangeTracking.markValueChanged();
             return true;
         }
 
         long expireAtMillis = safeExpireAtMillis(nowMillis, seconds);
         setExpireAtMillis(handle, expireAtMillis);
         touch(e);
+        YierdisChangeTracking.markTtlChanged();
         return true;
     }
 
@@ -800,12 +814,14 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
                 e.releasePayloadIfAny();
                 adjustUsedBytes(-e.estimatedBytes);
             }
+            YierdisChangeTracking.markValueChanged();
             return true;
         }
 
         long expireAtMillis = safeExpireAtMillis(nowMillis, seconds);
         setExpireAtMillis(handle, expireAtMillis);
         touch(e);
+        YierdisChangeTracking.markTtlChanged();
         return true;
     }
 
@@ -845,11 +861,13 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
                 e.releasePayloadIfAny();
                 adjustUsedBytes(-e.estimatedBytes);
             }
+            YierdisChangeTracking.markValueChanged();
             return true;
         }
 
         long expireAtMillis = safeAddMillis(System.currentTimeMillis(), milliseconds);
         setExpireAtMillis(keyBytes, expireAtMillis);
+        YierdisChangeTracking.markTtlChanged();
         return true;
     }
 
@@ -914,9 +932,11 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
                 e.releasePayloadIfAny();
                 adjustUsedBytes(-e.estimatedBytes);
             }
+            YierdisChangeTracking.markValueChanged();
             return true;
         }
         setExpireAtMillis(keyBytes, unixMillis);
+        YierdisChangeTracking.markTtlChanged();
         return true;
     }
 
@@ -950,6 +970,7 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         }
         removeExpire(keyBytes);
         touch(e);
+        YierdisChangeTracking.markTtlChanged();
         return true;
     }
 

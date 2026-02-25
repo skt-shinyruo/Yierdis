@@ -26,11 +26,25 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
     }
 
     public int zaddMany(List<byte[]> scoreMemberPairs) {
+        return zaddMany(scoreMemberPairs, null);
+    }
+
+    public int zaddMany(List<byte[]> scoreMemberPairs, boolean[] changedRef) {
         int added = 0;
+        boolean changedAny = false;
         for (int i = 0; i < scoreMemberPairs.size(); i += 2) {
             double score = parseScore(scoreMemberPairs.get(i));
             byte[] memberBytes = scoreMemberPairs.get(i + 1);
-            added += zaddOne(score, memberBytes);
+            int outcome = zaddOne(score, memberBytes);
+            if (outcome != 0) {
+                changedAny = true;
+                if (outcome > 0) {
+                    added++;
+                }
+            }
+        }
+        if (changedRef != null && changedRef.length > 0 && changedAny) {
+            changedRef[0] = true;
         }
         return added;
     }
@@ -416,7 +430,7 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
                 throw new IllegalStateException("failed to delete existing zset node");
             }
             byScore.freeNode(removed);
-            return 0;
+            return -1;
         }
 
         // First insertion: let the dict own key bytes; the node references the canonical dict key pointer.

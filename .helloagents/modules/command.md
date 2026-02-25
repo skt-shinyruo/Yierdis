@@ -7,6 +7,8 @@
 
 负责命令路由、参数校验、调用 DB engine 边界（`DbEngine`），并通过协议无关的 `ReplyWriter` 写出结果（由协议层编码为 Custom Protocol v1 的 NDJSON reply）。
 
+当启用变更事件（`YierdisChangeSink`）时，命令处理器仅在“命令执行成功 + 本次命令产生真实变更（Keyspace/Value/TTL 元数据）”时才 emit `YierdisChangeEvent(dbIndex, argv)`，判定由 core 内部变更追踪契约（`YierdisChangeTracking`）提供事实信号，避免维护“写命令名单”造成漂移。
+
 归属：`yierdis-core-command`（`yier.bubu.redis.command.*`），作为命令语义 SSOT（`yierdis-core` 为迁移期聚合层）；`yierdis-server` 仅负责 Netty 适配与调度。
 补充：为保持分层，命令层负责 reply 形状（array/map header、count 等）；value/db/off-heap 层通过 domain result（`BulkStringValue/BulkStringSequence/BulkStringMapPairs`）与 `BulkStringSink` 表达“可 streaming 的 bulk 值输出”，命令层通过 adapter 将其写入 `ReplyWriter`。
 边界约束：命令层通过 `YierdisDbRouter`（依赖 `DbIndexProvider`）选择 `DbEngine`；路由的输入侧状态来自 `CommandContext.session()`，输出通过 `CommandContext.out()` 写回。

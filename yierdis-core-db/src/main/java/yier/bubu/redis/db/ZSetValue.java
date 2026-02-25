@@ -75,25 +75,42 @@ final class ZSetValue implements YierdisValue {
     }
 
     int zaddMany(List<byte[]> scoreMemberPairs) {
+        return zaddMany(scoreMemberPairs, null);
+    }
+
+    int zaddMany(List<byte[]> scoreMemberPairs, boolean[] changedRef) {
         if (offHeapAllocator != null) {
-            return offHeap.zaddMany(scoreMemberPairs);
+            return offHeap.zaddMany(scoreMemberPairs, changedRef);
         }
         int added = 0;
+        boolean changedAny = false;
         for (int i = 0; i < scoreMemberPairs.size(); i += 2) {
             double score = parseScore(scoreMemberPairs.get(i));
             byte[] memberBytes = scoreMemberPairs.get(i + 1);
 
+            int outcome;
             if (listpack != null) {
                 if (memberBytes != null && memberBytes.length > YierdisEncodingThresholds.ZSET_MAX_LISTPACK_VALUE_BYTES) {
                     convertToSkipList();
                 }
                 if (listpack != null) {
-                    added += listpackZadd(score, memberBytes);
-                    continue;
+                    outcome = listpackZadd(score, memberBytes);
+                } else {
+                    outcome = skiplistZadd(score, memberBytes);
                 }
+            } else {
+                outcome = skiplistZadd(score, memberBytes);
             }
 
-            added += skiplistZadd(score, memberBytes);
+            if (outcome != 0) {
+                changedAny = true;
+                if (outcome > 0) {
+                    added++;
+                }
+            }
+        }
+        if (changedRef != null && changedRef.length > 0 && changedAny) {
+            changedRef[0] = true;
         }
         return added;
     }
@@ -1133,7 +1150,7 @@ final class ZSetValue implements YierdisValue {
         ZSkipList.Node next = byScore.insert(score, member);
         skiplistLevels += next.forward.length;
         byMember.put(member, next);
-        return old == null ? 1 : 0;
+        return old == null ? 1 : -1;
     }
 
     private int listpackZadd(double score, byte[] memberBytes) {
@@ -1146,7 +1163,7 @@ final class ZSetValue implements YierdisValue {
             byte[] member = listpack.memberAt(idx);
             listpack.removeAt(idx);
             insertSorted(member, score);
-            return 0;
+            return -1;
         }
 
         if (listpack.size() >= YierdisEncodingThresholds.ZSET_MAX_LISTPACK_ENTRIES) {
