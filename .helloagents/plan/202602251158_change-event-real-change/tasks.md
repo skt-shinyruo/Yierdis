@@ -24,15 +24,15 @@
 
 ### 1. core-api：变更追踪契约（ChangeScope）
 
-- [√] 1.1 在 `yierdis-core-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeTracking.java` 新增 thread-local 的 command-scope（begin/close + valueChanged/ttlChanged flags）
+- [√] 1.1 在 `yierdis-core/yierdis-core-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeTracking.java` 新增 thread-local 的 command-scope（begin/close + valueChanged/ttlChanged flags）
 - [√] 1.2 定义并文档化语义：无 active scope 时 `mark*` 必须 no-op；`beginScope()` 必须重置 flags；close 必须清理 active（避免泄漏到下一条命令）
   - 依赖: 1.1
-- [√] 1.3 更新 `yierdis-core-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeEvent.java` 的 JavaDoc：事件载荷仍是 argv 快照（可重放），但发射条件升级为“命令成功 + 真实变更才 emit”
+- [√] 1.3 更新 `yierdis-core/yierdis-core-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeEvent.java` 的 JavaDoc：事件载荷仍是 argv 快照（可重放），但发射条件升级为“命令成功 + 真实变更才 emit”
   - 依赖: 2.2
 
 ### 2. core-command：命令层 emit gate（移除 isWriteCommand SSOT）
 
-- [√] 2.1 在 `yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java` 中为 handler.execute 包裹 `YierdisChangeTracking.beginScope()`（try-with-resources），并确保事务 enqueue 早返回路径不打开 scope
+- [√] 2.1 在 `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java` 中为 handler.execute 包裹 `YierdisChangeTracking.beginScope()`（try-with-resources），并确保事务 enqueue 早返回路径不打开 scope
   - 依赖: 1.1
 - [√] 2.2 将 change event 发射条件改为 `YierdisChangeTracking.changedAny()`；保证未变更时不执行 `copyArgv(cmd)`（避免无意义分配）
   - 依赖: 2.1
@@ -41,7 +41,7 @@
 
 ### 3. core-db：真实变更打点（Value/Keyspace/TTL）
 
-- [√] 3.1 Strings：在 `yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbValueOps.java` 的 `Strings#setString` 中，仅当 `didSet==true` 时调用 `YierdisChangeTracking.markValueChanged()`（修复 `SET ... NX` 未写入仍 emit 的虚假事件）
+- [√] 3.1 Strings：在 `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbValueOps.java` 的 `Strings#setString` 中，仅当 `didSet==true` 时调用 `YierdisChangeTracking.markValueChanged()`（修复 `SET ... NX` 未写入仍 emit 的虚假事件）
   - 依赖: 1.1
 - [√] 3.2 Strings：在 `Strings#append/#setBit/#incrBy` 中，当语义上发生“真实写入”时标记 `markValueChanged()`（避免写命令变成漏发）
   - 依赖: 1.1
@@ -55,12 +55,12 @@
   - 依赖: 1.1
 - [√] 3.7 HLL：在 `Hll#pfadd` 中当返回值为 1 时标记 `markValueChanged()`；在 `Hll#pfmerge` 中标记 `markValueChanged()`（修复现状 `isWriteCommand` 漏掉 PFMERGE 的漂移风险）
   - 依赖: 1.1
-- [√] 3.8 Keyspace/TTL：在 `yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDb.java` 的 `del/flushDb/expire/pexpire/expireAt*/persist` 路径按“真实变更”标记 value/ttl（例如 `DEL` 删除 0 个 key 不标记；`PERSIST` 无 TTL 不标记；`EXPIRE missing` 不标记）。注意：不要在过期清理/淘汰等维护路径打点
+- [√] 3.8 Keyspace/TTL：在 `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDb.java` 的 `del/flushDb/expire/pexpire/expireAt*/persist` 路径按“真实变更”标记 value/ttl（例如 `DEL` 删除 0 个 key 不标记；`PERSIST` 无 TTL 不标记；`EXPIRE missing` 不标记）。注意：不要在过期清理/淘汰等维护路径打点
   - 依赖: 1.1
 
 ### 4. tests：回归矩阵（真实变更 vs no-op）
 
-- [√] 4.1 更新 `yierdis-core/src/test/java/yier/bubu/redis/runtime/api/YierdisChangeSinkTest.java`：从 “write commands only” 改为 “real changes only”，补充 `SET NX` 未写入 / `DEL missing` / `EXPIRE missing` / `PERSIST` 无 TTL 的不发射断言
+- [√] 4.1 更新 `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/runtime/api/YierdisChangeSinkTest.java`：从 “write commands only” 改为 “real changes only”，补充 `SET NX` 未写入 / `DEL missing` / `EXPIRE missing` / `PERSIST` 无 TTL 的不发射断言
   - 依赖: 2.2, 3.1, 3.8
 - [√] 4.2 增加事务用例：`MULTI` 入队阶段不发射；`EXEC` 重放时仅对真实写入的命令发射（可新增测试类或扩展现有 test）
   - 依赖: 2.1, 2.2

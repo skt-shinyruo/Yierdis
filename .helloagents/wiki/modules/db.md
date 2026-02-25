@@ -4,13 +4,13 @@
 
 实现内存数据结构、编码策略、TTL/过期清理、内存估算与淘汰策略。
 
-归属：`yierdis-core-db`（`yier.bubu.redis.db.*`），作为数据结构与内存语义 SSOT（`yierdis-core` 为迁移期聚合层）。
+归属：`yierdis-core-db`（`yier.bubu.redis.db.*`），作为数据结构与内存语义 SSOT（`yierdis-core` 为父 POM/聚合层）。
 
 ## Module Overview
 
 - **Responsibility:** Keyspace + 过期索引 + 值编码（string/list/set/hash/zset）+ maxmemory
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-24
+- **Last Updated:** 2026-02-25
 
 ## Specifications
 

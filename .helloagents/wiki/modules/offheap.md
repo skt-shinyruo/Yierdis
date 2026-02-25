@@ -8,17 +8,17 @@
 
 - **Responsibility:** 分配器 API、slice/buf 抽象、unsafe/netty/foreign 等后端
 - **Status:** 🚧In Development
-- **Last Updated:** 2026-02-08
+- **Last Updated:** 2026-02-25
 
 ## Specifications
 
 ### Requirement: bytes 抽象（跨模块复用，不等同于“绑定 off-heap”）
 **Module:** bytes/offheap-api
-bytes 抽象的 SSOT 已抽取到 `yierdis-bytes`（Netty-free）：
+bytes 抽象的 SSOT 位于 `yierdis-bytes-lib`（Netty-free；`yierdis-bytes` 为父 POM/聚合层）：
 - `BytesSource`：统一的只读 bytes view（可由 heap byte[]、Netty ByteBuf、off-heap slice 等实现）
 - `BytesSink/DirectBytesSink`：统一的写入目标（供 `JsonLineReplyWriter`、off-heap buf 写路径等复用）
 
-`yierdis-offheap-api` 不再提供 bytes 兼容别名（Breaking）：所有 bytes 视图/写出接口以 `yierdis-bytes` 为 SSOT；Netty 适配（`ByteBuf` sink/source）位于 `yierdis-bytes-netty`。
+`yierdis-offheap-api` 不再提供 bytes 兼容别名（Breaking）：所有 bytes 视图/写出接口以 `yierdis-bytes-lib` 为 SSOT；Netty 适配（`ByteBuf` sink/source）位于 `yierdis-bytes-netty`。
 
 ### Requirement: 可选启用的堆外存储
 **Module:** offheap
@@ -63,7 +63,7 @@ bytes 抽象的 SSOT 已抽取到 `yierdis-bytes`（Netty-free）：
 
 ## Dependencies
 
-- `yierdis-bytes`：中立 bytes 抽象（SSOT，不依赖 Netty）
+- `yierdis-bytes-lib`：中立 bytes 抽象（SSOT，不依赖 Netty）
 - `yierdis-bytes-netty`：Netty 适配层（可选；依赖 Netty）
 - `yierdis-offheap-api`：核心 API（不依赖 Netty）
 - `yierdis-offheap-netty`：Netty 适配（可选；依赖 Netty）
@@ -75,7 +75,7 @@ bytes 抽象的 SSOT 已抽取到 `yierdis-bytes`（Netty-free）：
 - 2026-01-04：增加 off-heap allocator 泄漏回归测试（shutdown 后 usedBytes 回到基线/归零）。
 - 2026-01-08：写路径增强：支持“从输入源直接写入 off-heap”，减少写路径的 heap 中转分配。
 - 2026-01-14：offheap-api 去 Netty 依赖：写出/适配边界收敛到 bytes 抽象，Netty 适配下沉到 adapter 模块（例如 bytes-netty/offheap-netty）。
-- 2026-01-17：Breaking：移除 deprecated bytes alias（`YierdisBytes*`），bytes SSOT 统一为 `yierdis-bytes`。
+- 2026-01-17：Breaking：移除 deprecated bytes alias（`YierdisBytes*`），bytes SSOT 收敛到中立 bytes 模块（当前坐标为 `yierdis-bytes-lib`）。
 - 2026-01-15：Unsafe 后端补齐 raw memory 访问封装（`YierdisUnsafeAccess`），并将 `PlatformDependent` 等 Netty internal 的使用限制在 off-heap/unsafe 后端实现内，降低依赖外溢风险。
 - 2026-01-16：capabilities 加固：引入 `YierdisOffHeapAddressAllocator/YierdisOffHeapBlock`，core 通过 capability 选择 keyspace/expires 的 off-heap 路径，避免对具体后端的 `instanceof` 耦合。
 - 2026-01-16：默认安全：keys/expires 的 off-heap 使用改为显式开关（`--offheapKeysEnabled`，仅允许 unsafe 后端）。

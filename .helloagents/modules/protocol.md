@@ -9,9 +9,9 @@
 
 ## Module Overview
 
-- **Responsibility:** `protocol-model`（端口/模型 SSOT）+ `protocol-codec`（JSON + v1 codec SSOT）+ `yierdis-protocol`（兼容聚合层）
+- **Responsibility:** `protocol-model`（端口/模型 SSOT）+ `protocol-codec`（JSON + v1 codec SSOT）+ `yierdis-protocol`（父 POM/聚合层）
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-23
+- **Last Updated:** 2026-02-25
 
 ## Specifications
 
@@ -70,9 +70,9 @@ Custom Protocol v1 的 reply 采用 NDJSON（每个 reply 一行 JSON）：
 
 ## Dependencies
 
-- `yierdis-protocol-model`：依赖 `yierdis-bytes`（`BytesSource/BytesSink/BytesSlice` 通用 bytes 抽象）
-- `yierdis-protocol-codec`：依赖 `yierdis-protocol-model` + `yierdis-bytes`
-- `yierdis-protocol`（兼容聚合层）：聚合依赖 `yierdis-protocol-model` + `yierdis-protocol-codec`
+- `yierdis-protocol-model`：依赖 `yierdis-bytes-lib`（`BytesSource/BytesSink/BytesSlice` 通用 bytes 抽象）
+- `yierdis-protocol-codec`：依赖 `yierdis-protocol-model` + `yierdis-bytes-lib`
+- `yierdis-protocol`（父 POM/聚合层）：聚合 `yierdis-protocol-model` / `yierdis-protocol-codec` / `yierdis-protocol-netty`（Maven 多模块 parent）
 
 ## Change History
 
@@ -80,3 +80,4 @@ Custom Protocol v1 的 reply 采用 NDJSON（每个 reply 一行 JSON）：
 - 2026-02-09：reply bytes value 编码贯通 `BytesSlice` 直写/少拷贝链路（streaming strict UTF-8 + JSON escape + `$b64` fallback），详情：`helloagents/history/2026-02/202602092316_reply_byteslice_streaming_encoder/`。
 - 2026-02-21：协议层拆分为 `yierdis-protocol-model` / `yierdis-protocol-codec`，并保留 `yierdis-protocol` 作为兼容聚合层；core 依赖收敛到 model，避免编译期引入 codec。
 - 2026-02-23：引入 `CommandContext`（输入侧 `Session` + 输出端口 `ReplyWriter`），并移除 `ReplyWriter.session()`；路由/事务/可观测等输入侧逻辑改为基于 `CommandContext.session()` / `DbIndexProvider`。
+- 2026-02-25：将 `yierdis-protocol-model` / `yierdis-protocol-codec` / `yierdis-protocol-netty` 迁入 `yierdis-protocol/` 下，并将 `yierdis-protocol` 调整为 pom 父 POM（multi-module parent）；版本由 `yierdis-parent` 的 `dependencyManagement` 统一管理；依赖的 bytes SSOT jar 更新为 `yierdis-bytes-lib`（`yierdis-bytes` 为父 POM/聚合层）。

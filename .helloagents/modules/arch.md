@@ -9,17 +9,18 @@
 
 ### 模块职责（SSOT）
 
-- `yierdis-bytes`：中立 bytes 抽象（`BytesSource/BytesSink/BytesSlice`），供协议层/off-heap/I/O 复用（SSOT，**Netty-free**）
-- `yierdis-bytes-netty`：`yierdis-bytes` 的 Netty 适配层（`ByteBuf` ↔ `DirectBytesSink/BytesSource`），为 server/off-heap 提供 fast-path（adapter）
+- `yierdis-bytes`：bytes 父 POM/聚合层（multi-module parent；聚合 `yierdis-bytes-lib` / `yierdis-bytes-netty`）
+- `yierdis-bytes-lib`：中立 bytes 抽象（`BytesSource/BytesSink/BytesSlice`），供协议层/off-heap/I/O 复用（SSOT，**Netty-free**）
+- `yierdis-bytes-netty`：`yierdis-bytes-lib` 的 Netty 适配层（`ByteBuf` ↔ `DirectBytesSink/BytesSource`），为 server/off-heap 提供 fast-path（adapter）
 - `yierdis-protocol-model`：协议无关抽象（`Command/ReplyWriter/Session`）+ Reply IR（`ReplyValue/*`）（SSOT，**Netty-free**）
 - `yierdis-protocol-codec`：最小 JSON codec + Custom Protocol v1 codec（NDJSON reply writer/encoder）（SSOT，**Netty-free**）
-- `yierdis-protocol`：兼容聚合层（migration；聚合 `protocol-model` + `protocol-codec`）
+- `yierdis-protocol`：protocol 父 POM/聚合层（multi-module parent；聚合 `protocol-model` / `protocol-codec` / `protocol-netty`）
 - `yierdis-protocol-netty`：Custom Protocol v1 Netty codec（`CustomRequestDecoder` + `JsonLineDecoder`）（adapter，可复用）
 - `yierdis-core-api`：core API 边界（`ops/*Ops` + stable types + domain result ports；**Netty-free**）
 - `yierdis-core-db`：DB/Keyspace/Value/TTL/maxmemory 的实现（`yier.bubu.redis.db.*`），依赖 `core-api`/`offheap-api`（**Netty-free**）
 - `yierdis-core-command`：命令处理与路由（`yier.bubu.redis.command.*`），依赖 `core-api`/`protocol-model`（**Netty-free**）
 - `yierdis-core-runtime`：embedded instance/runtime（`YierdisInstance`：多 DB 装配/路由/生命周期），依赖 `core-db`/`core-command`（**Netty-free**）
-- `yierdis-core`：迁移期聚合层（migration aggregator；依赖 `core-runtime`，用于保持历史依赖坐标可用）
+- `yierdis-core`：core 父 POM/聚合层（multi-module parent；聚合 `core-api` / `core-db` / `core-command` / `core-runtime`）
 - `yierdis-args`：server 参数模型与校验（picocli，SSOT），供 server/bench 复用
 - `yierdis-client`：Netty client + CLI（调试工具），依赖 `yierdis-protocol-netty`
 - `yierdis-server`：Netty server bootstrap + pipeline + executor（只做执行/治理与装配；DB/instance 装配语义由 core SSOT 提供）
@@ -31,7 +32,7 @@
 - `yierdis-core-api` / `yierdis-core-db` / `yierdis-core-command` / `yierdis-core-runtime` / `yierdis-protocol-model` / `yierdis-protocol-codec` 不依赖 `io.netty.*`
 - `yierdis-protocol-netty` **可以**依赖 `io.netty.*`，但只允许向下依赖 `yierdis-protocol-codec`（不得反向渗透）
 - `yierdis-offheap-api` 不依赖 `io.netty.*`（Netty 相关 adapter 放在 `yierdis-offheap-netty`）
-- `yierdis-server` 依赖 `yierdis-core`（migration aggregator） / `yierdis-protocol-netty` / `yierdis-args`
+- `yierdis-server` 依赖 `yierdis-core-runtime` / `yierdis-protocol-netty` / `yierdis-args`
 - `yierdis-client` / `yierdis-bench` 依赖 `yierdis-protocol-netty`（可选依赖 `yierdis-args` 复用参数 SSOT）
 
 ```mermaid
@@ -43,19 +44,18 @@ flowchart LR
   end
 
   subgraph SSOT[SSOT Modules]
-    Bytes[yierdis-bytes]
+    BytesLib[yierdis-bytes-lib]
     ProtocolModel[yierdis-protocol-model]
     CoreApi[yierdis-core-api]
     CoreDb[yierdis-core-db]
     CoreCmd[yierdis-core-command]
     CoreRt[yierdis-core-runtime]
-    CoreCompat[yierdis-core (compat)]
     Args[yierdis-args]
   end
   
   subgraph Codec[Protocol Codec]
     ProtocolCodec[yierdis-protocol-codec]
-    ProtocolAgg[yierdis-protocol (compat)]
+    ProtocolAgg[yierdis-protocol (parent)]
   end
 
   subgraph Adapters[Adapters]
@@ -72,7 +72,7 @@ flowchart LR
 
   Server --> ProtocolNetty
   Server --> BytesNetty
-  Server --> Core
+  Server --> CoreRt
   Server --> Args
   Client --> ProtocolNetty
   Bench --> ProtocolNetty
@@ -81,12 +81,13 @@ flowchart LR
   OffheapNetty --> BytesNetty
   ProtocolNetty --> ProtocolCodec
 
-  ProtocolAgg --> ProtocolModel
-  ProtocolAgg --> ProtocolCodec
+  ProtocolAgg -.-> ProtocolModel
+  ProtocolAgg -.-> ProtocolCodec
+  ProtocolAgg -.-> ProtocolNetty
   ProtocolCodec --> ProtocolModel
 
-  ProtocolModel --> Bytes
-  CoreApi --> Bytes
+  ProtocolModel --> BytesLib
+  CoreApi --> BytesLib
   CoreCmd --> CoreApi
   CoreDb --> CoreApi
   CoreCmd --> ProtocolModel
@@ -95,15 +96,16 @@ flowchart LR
   CoreRt --> OffheapApi
   CoreRt --> CoreDb
   CoreRt --> CoreCmd
-  CoreCompat --> CoreRt
-  OffheapApi --> Bytes
+  OffheapApi --> BytesLib
+
+  BytesNetty --> BytesLib
 
   OffheapNetty --> OffheapApi
   OffheapUnsafe --> OffheapApi
   OffheapForeign --> OffheapApi
 ```
 
-> 说明：通用 bytes 抽象已抽取到 `yierdis-bytes`（中立模块）。`yierdis-protocol-model` / `yierdis-protocol-codec` 与 `yierdis-offheap-api` 都依赖该模块，但这不等同于“协议层依赖某个具体 off-heap 后端”，后端选择仍由 server bootstrap 层负责。
+> 说明：通用 bytes 抽象位于 `yierdis-bytes-lib`（`yierdis-bytes` 为父 POM/聚合层）。`yierdis-protocol-model` / `yierdis-protocol-codec` 与 `yierdis-offheap-api` 都依赖该模块，但这不等同于“协议层依赖某个具体 off-heap 后端”，后端选择仍由 server bootstrap 层负责。
 
 ## 内核契约（SSOT Contracts）
 
@@ -240,7 +242,7 @@ sequenceDiagram
 ### 2) 可维护性（依赖/演进成本）
 
 - **避免 core 引入 Netty internal：**`io.netty.util.internal.PlatformDependent` 属于 Netty internal API，版本升级风险高、语义不稳定；目前 core 通过 `yierdis-offheap-api` 的 capability（`YierdisOffHeapAddressAllocator`）表达 raw memory 能力，具体实现留在后端模块中，便于替换与审计。
-- **bytes 抽象与 off-heap 能力的语义：**bytes 抽象已迁移到 `yierdis-bytes`（SSOT，Netty-free），off-heap allocator/capability API 继续留在 `yierdis-offheap-api`。协议层不再需要通过 “off-heap” 命名模块来复用 bytes 接口，依赖方向更直观，也降低误解成本。
+- **bytes 抽象与 off-heap 能力的语义：**bytes 抽象位于 `yierdis-bytes-lib`（SSOT，Netty-free；`yierdis-bytes` 为父 POM），off-heap allocator/capability API 继续留在 `yierdis-offheap-api`。协议层不再需要通过 “off-heap” 命名模块来复用 bytes 接口，依赖方向更直观，也降低误解成本。
 - **连接级状态与 server 调度边界：**连接级状态拆分为 `ServerSessionState`（dbIndex/事务队列/AUTH/name）与 `ServerRuntimeState`（pending/backpressure/closing/counters），均由 server 私有并通过 `Channel.attr` 绑定。与之相对，执行器调度（per-channel 队列 + scheduled 标志）属于 server 内部实现细节，收敛到 `NettyExecutorChannelState`（`yierdis-server` 私有，`Channel.attr` 绑定），避免跨模块重复维护状态。
 
 ### 3) 可插拔性（后端替换/灰度能力）

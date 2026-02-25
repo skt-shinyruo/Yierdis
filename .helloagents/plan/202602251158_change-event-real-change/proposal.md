@@ -14,7 +14,7 @@
 ## 1. 需求
 
 ### 背景
-当前变更事件（`YierdisChangeEvent(dbIndex, argv)`）的发射条件由命令层硬编码名单决定：`yierdis-core-command/.../YierdisFastCommandProcessor#isWriteCommand`。
+当前变更事件（`YierdisChangeEvent(dbIndex, argv)`）的发射条件由命令层硬编码名单决定：`yierdis-core/yierdis-core-command/.../YierdisFastCommandProcessor#isWriteCommand`。
 
 这会产生两类架构问题（“漂移 + 虚假/缺失事件”），并直接阻塞后续 AOF/replication/审计等能力的可信接入：
 

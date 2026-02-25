@@ -9,7 +9,7 @@
 - **Responsibility:** 端口监听、Pipeline 组装、定时任务（如 TTL 清理）的调度入口
 - **ArtifactId:** `yierdis-server`
 - **Status:** ✅Stable
-- **Last Updated:** 2026-02-23
+- **Last Updated:** 2026-02-25
 
 ## Specifications
 
@@ -115,7 +115,7 @@
 - 若只需要查看“当前 backlog 即时快照”：执行 `INFO stats`，观察 `yierdis_queued_tasks/yierdis_queued_bytes`。
 
 ### Requirement: 慢命令治理（KEYS / 全表扫描隔离）
-**Module:** yierdis-core（SSOT） + yierdis-server（配置注入）
+**Module:** yierdis-core-command（SSOT） + yierdis-server（配置注入）
 
 `KEYS` 属于“潜在全表扫描”命令：在大数据集/rehash/过期清理叠加时，容易长时间占用 executor，导致整体 tail latency 飙升甚至触发 backpressure。
 
@@ -144,7 +144,7 @@
 ## Dependencies
 
 - `yierdis-protocol-netty`（Netty codec/adapters；通过其依赖引入 `yierdis-protocol-codec` / `yierdis-protocol-model`）
-- `yierdis-core`
+- `yierdis-core-runtime`
 - `yierdis-executor-core`（Netty-free 执行器调度/背压决策内核）
 - `yierdis-args`
 
