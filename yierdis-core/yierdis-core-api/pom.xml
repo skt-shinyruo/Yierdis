@@ -6,21 +6,20 @@
 
     <parent>
         <groupId>yier.bubu.redis</groupId>
-        <artifactId>yierdis-parent</artifactId>
+        <artifactId>yierdis-core</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>yierdis-protocol-model</artifactId>
+    <artifactId>yierdis-core-api</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis-protocol-model</name>
-    <description>Protocol-agnostic interfaces and Reply IR model for Yierdis (Netty-free).</description>
+    <name>yierdis-core-api</name>
+    <description>Core API boundary for Yierdis (Netty-free).</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-bytes</artifactId>
-            <version>${project.version}</version>
+            <artifactId>yierdis-bytes-lib</artifactId>
         </dependency>
 
         <dependency>
@@ -30,4 +29,3 @@
         </dependency>
     </dependencies>
 </project>
-

@@ -20,49 +20,41 @@
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-protocol-netty</artifactId>
-            <version>${project.version}</version>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-bytes-netty</artifactId>
-            <version>${project.version}</version>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-core</artifactId>
-            <version>${project.version}</version>
+            <artifactId>yierdis-core-runtime</artifactId>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-executor-core</artifactId>
-            <version>${project.version}</version>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-args</artifactId>
-            <version>${project.version}</version>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-offheap-api</artifactId>
-            <version>${project.version}</version>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-offheap-netty</artifactId>
-            <version>${project.version}</version>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-offheap-unsafe</artifactId>
-            <version>${project.version}</version>
         </dependency>
 
         <dependency>
@@ -128,7 +120,6 @@
                 <dependency>
                     <groupId>yier.bubu.redis</groupId>
                     <artifactId>yierdis-offheap-foreign</artifactId>
-                    <version>${project.version}</version>
                 </dependency>
             </dependencies>
         </profile>

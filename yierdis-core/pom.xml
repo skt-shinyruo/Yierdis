@@ -11,56 +11,15 @@
     </parent>
 
     <artifactId>yierdis-core</artifactId>
-    <packaging>jar</packaging>
+    <packaging>pom</packaging>
 
     <name>yierdis-core</name>
-    <description>Migration aggregator for Yierdis core modules (core-api/core-db/core-command/core-runtime).</description>
+    <description>Parent and aggregator for Yierdis core modules.</description>
 
-    <dependencies>
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-core-runtime</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-unsafe</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-netty</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-protocol-netty</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>junit</groupId>
-            <artifactId>junit</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
-
-    <build>
-        <resources>
-            <resource>
-                <directory>src/main/resources</directory>
-                <filtering>false</filtering>
-            </resource>
-            <resource>
-                <directory>src/main/resources-filtered</directory>
-                <filtering>true</filtering>
-            </resource>
-        </resources>
-    </build>
+    <modules>
+        <module>yierdis-core-api</module>
+        <module>yierdis-core-db</module>
+        <module>yierdis-core-command</module>
+        <module>yierdis-core-runtime</module>
+    </modules>
 </project>

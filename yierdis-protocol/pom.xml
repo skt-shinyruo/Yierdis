@@ -11,22 +11,15 @@
     </parent>
 
     <artifactId>yierdis-protocol</artifactId>
-    <packaging>jar</packaging>
+    <packaging>pom</packaging>
 
     <name>yierdis-protocol</name>
-    <description>Compatibility aggregator for protocol model + codec (kept for migration).</description>
+    <description>Parent and aggregator for Yierdis protocol modules (model/codec/netty).</description>
 
-    <dependencies>
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-protocol-model</artifactId>
-            <version>${project.version}</version>
-        </dependency>
+    <modules>
+        <module>yierdis-protocol-model</module>
+        <module>yierdis-protocol-codec</module>
+        <module>yierdis-protocol-netty</module>
+    </modules>
 
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-protocol-codec</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-    </dependencies>
 </project>

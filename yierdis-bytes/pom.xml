@@ -11,16 +11,13 @@
     </parent>
 
     <artifactId>yierdis-bytes</artifactId>
-    <packaging>jar</packaging>
+    <packaging>pom</packaging>
 
     <name>yierdis-bytes</name>
-    <description>Neutral bytes abstractions shared by protocol/off-heap/netty adapters.</description>
+    <description>Parent and aggregator for Yierdis bytes modules.</description>
 
-    <dependencies>
-        <dependency>
-            <groupId>junit</groupId>
-            <artifactId>junit</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
+    <modules>
+        <module>yierdis-bytes-lib</module>
+        <module>yierdis-bytes-netty</module>
+    </modules>
 </project>

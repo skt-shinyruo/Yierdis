@@ -19,8 +19,7 @@
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-bytes</artifactId>
-            <version>${project.version}</version>
+            <artifactId>yierdis-bytes-lib</artifactId>
         </dependency>
 
         <dependency>

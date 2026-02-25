@@ -20,13 +20,11 @@
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-args</artifactId>
-            <version>${project.version}</version>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-protocol-netty</artifactId>
-            <version>${project.version}</version>
         </dependency>
     </dependencies>
 

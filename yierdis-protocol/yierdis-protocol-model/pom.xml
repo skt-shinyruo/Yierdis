@@ -6,27 +6,20 @@
 
     <parent>
         <groupId>yier.bubu.redis</groupId>
-        <artifactId>yierdis-parent</artifactId>
+        <artifactId>yierdis-protocol</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>yierdis-protocol-codec</artifactId>
+    <artifactId>yierdis-protocol-model</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis-protocol-codec</name>
-    <description>JSON codec + Custom Protocol v1 codecs shared by server/client/bench (Netty-free).</description>
+    <name>yierdis-protocol-model</name>
+    <description>Protocol-agnostic interfaces and Reply IR model for Yierdis (Netty-free).</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-protocol-model</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-bytes</artifactId>
-            <version>${project.version}</version>
+            <artifactId>yierdis-bytes-lib</artifactId>
         </dependency>
 
         <dependency>
@@ -36,4 +29,3 @@
         </dependency>
     </dependencies>
 </project>
-

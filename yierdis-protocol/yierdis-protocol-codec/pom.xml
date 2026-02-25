@@ -6,32 +6,25 @@
 
     <parent>
         <groupId>yier.bubu.redis</groupId>
-        <artifactId>yierdis-offheap</artifactId>
+        <artifactId>yierdis-protocol</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>yierdis-offheap-unsafe</artifactId>
+    <artifactId>yierdis-protocol-codec</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis-offheap-unsafe</name>
-    <description>Unsafe-based off-heap backend for Yierdis (no incubator modules).</description>
+    <name>yierdis-protocol-codec</name>
+    <description>JSON codec + Custom Protocol v1 codecs shared by server/client/bench (Netty-free).</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
+            <artifactId>yierdis-protocol-model</artifactId>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-api</artifactId>
-            <classifier>tests</classifier>
-            <scope>test</scope>
+            <artifactId>yierdis-bytes-lib</artifactId>
         </dependency>
 
         <dependency>

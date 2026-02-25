@@ -27,15 +27,7 @@
     <modules>
         <module>yierdis-offheap</module>
         <module>yierdis-bytes</module>
-        <module>yierdis-bytes-netty</module>
-        <module>yierdis-protocol-model</module>
-        <module>yierdis-protocol-codec</module>
         <module>yierdis-protocol</module>
-        <module>yierdis-protocol-netty</module>
-        <module>yierdis-core-api</module>
-        <module>yierdis-core-db</module>
-        <module>yierdis-core-command</module>
-        <module>yierdis-core-runtime</module>
         <module>yierdis-core</module>
         <module>yierdis-executor-core</module>
         <module>yierdis-args</module>
@@ -70,6 +62,92 @@
                 <groupId>info.picocli</groupId>
                 <artifactId>picocli</artifactId>
                 <version>${picocli.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-protocol-model</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-protocol-codec</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-protocol-netty</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-bytes-lib</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-bytes-netty</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-core-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-core-db</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-core-command</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-core-runtime</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-offheap-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-offheap-api</artifactId>
+                <version>${project.version}</version>
+                <classifier>tests</classifier>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-offheap-netty</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-offheap-unsafe</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-offheap-foreign</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-args</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-executor-core</artifactId>
+                <version>${project.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
