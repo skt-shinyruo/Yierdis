@@ -8,6 +8,8 @@
 
 | 时间戳 | 名称 | 类型 | 涉及模块 | 决策 | 结果 |
 |--------|------|------|---------|------|------|
+| 202602251158 | change-event-real-change | - | - | - | ✅完成 |
+| 202602252055 | package-structure-review | - | - | - | ✅完成 |
 | 202601011057 | bitmap_hll | Standard Development | command, db, offheap, test | - | ✅ 完成 |
 | 202601031446 | protocol_error_handling | Lightweight Iteration | - | - | ✅ 完成 |
 | 202601041004 | redis_hardening | Standard Development | - server | - | ✅ 完成 |

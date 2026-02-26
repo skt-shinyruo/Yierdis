@@ -1,5 +1,7 @@
 # 任务清单: change_event_real_change
 
+> **@status:** completed | 2026-02-26 12:27
+
 ```yaml
 @feature: change_event_real_change
 @created: 2026-02-25

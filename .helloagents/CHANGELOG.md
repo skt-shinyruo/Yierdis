@@ -15,6 +15,9 @@
 - bytes/core 模块重构：`yierdis-bytes` / `yierdis-core` 调整为 pom 父 POM（multi-module parent），并将相关子模块内聚到对应目录下；其中 bytes SSOT jar 迁移为 `yierdis-bytes-lib`，server 依赖从 `yierdis-core` 更新为 `yierdis-core-runtime`。
 
 ### Added
+- 新增包结构/模块结构评审概述（overview，无代码改动），用于指导后续护栏与命名/边界治理路线。
+  - 方案: [202602252055_package-structure-review](archive/2026-02/202602252055_package-structure-review/)
+  - 决策: package-structure-review#D001（选择保守治理路线）
 - 新增事务队列硬上限：`--transactionQueueMaxCommands/--transactionQueueMaxBytes`，防止 MULTI 大事务/大参数导致 OOM。
 - 新增 maxmemory 预算口径参数：`--maxmemoryScope global|per-db`（默认 global，更贴近 Redis 全实例口径；保留 per-db 兼容模式）。
 - 新增 Custom Protocol v1 协议栈：length-prefixed JSON request decoder + NDJSON reply writer，并补齐协议错误 resync 的单测与集成测试。
