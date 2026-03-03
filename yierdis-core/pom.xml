@@ -17,6 +17,7 @@
     <description>Parent and aggregator for Yierdis core modules.</description>
 
     <modules>
+        <module>yierdis-core-contract</module>
         <module>yierdis-core-api</module>
         <module>yierdis-core-db</module>
         <module>yierdis-core-command</module>

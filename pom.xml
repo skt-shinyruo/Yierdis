@@ -93,6 +93,11 @@
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-core-contract</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-core-api</artifactId>
                 <version>${project.version}</version>
             </dependency>
