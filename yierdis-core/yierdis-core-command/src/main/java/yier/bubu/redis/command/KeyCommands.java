@@ -3,9 +3,9 @@ package yier.bubu.redis.command;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.YierdisMemoryStats;
 import yier.bubu.redis.ops.ScanCursorV2;
-import yier.bubu.redis.protocol.Command;
-import yier.bubu.redis.protocol.CommandContext;
-import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ReplyWriter;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;

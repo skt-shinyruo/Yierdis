@@ -24,6 +24,12 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-core-contract</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-bytes-netty</artifactId>
         </dependency>
 

@@ -5,7 +5,7 @@ package yier.bubu.redis;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.protocol.netty.ProtocolError;
 
 import java.util.Objects;
@@ -43,4 +43,3 @@ final class ProtocolErrorReplyHandler extends ChannelInboundHandlerAdapter {
         }
     }
 }
-

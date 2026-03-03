@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import yier.bubu.redis.args.YierdisCliException;
 import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocators;
@@ -147,12 +148,12 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                     : TimeUnit.MILLISECONDS.toNanos(config.keysTimeBudgetMillis);
 
             @Override
-            public long keysTimeBudgetNanos(yier.bubu.redis.protocol.CommandContext ctx) {
+            public long keysTimeBudgetNanos(CommandContext ctx) {
                 return timeBudgetNanos;
             }
 
             @Override
-            public int keysMaxResults(yier.bubu.redis.protocol.CommandContext ctx) {
+            public int keysMaxResults(CommandContext ctx) {
                 return config.keysMaxResults;
             }
         };

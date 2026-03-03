@@ -2,7 +2,7 @@ package yier.bubu.redis.protocol.v1;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.protocol.json.JsonWriter;
 import yier.bubu.redis.protocol.reply.ReplyErrorKind;
 

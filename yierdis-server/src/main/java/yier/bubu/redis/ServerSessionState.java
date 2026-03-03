@@ -5,8 +5,8 @@ package yier.bubu.redis;
 import io.netty.channel.Channel;
 import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
-import yier.bubu.redis.protocol.ServerSession;
-import yier.bubu.redis.protocol.TransactionState;
+import yier.bubu.redis.contract.ServerSession;
+import yier.bubu.redis.contract.TransactionState;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -215,4 +215,3 @@ final class ServerSessionState implements ServerSession {
         }
     }
 }
-

@@ -5,7 +5,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.protocol.v1.CustomCommand;
 
 import java.nio.charset.StandardCharsets;

@@ -5,10 +5,10 @@ package yier.bubu.redis;
 import yier.bubu.redis.command.ServerInfoProvider;
 import yier.bubu.redis.ops.YierdisMemoryStats;
 import yier.bubu.redis.ops.DbEngine;
-import yier.bubu.redis.protocol.Command;
-import yier.bubu.redis.protocol.CommandContext;
-import yier.bubu.redis.protocol.ReplyWriter;
-import yier.bubu.redis.protocol.Session;
+import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.contract.Session;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
 
 import java.nio.charset.StandardCharsets;

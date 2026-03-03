@@ -1,8 +1,8 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.protocol.Command;
-import yier.bubu.redis.protocol.CommandContext;
-import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ReplyWriter;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
