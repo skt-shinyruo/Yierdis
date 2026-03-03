@@ -1,6 +1,6 @@
 package yier.bubu.redis.protocol.v1;
 
-import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.contract.Command;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;

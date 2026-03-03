@@ -1,7 +1,7 @@
 package yier.bubu.redis;
 
 import io.netty.channel.ChannelHandlerContext;
-import yier.bubu.redis.protocol.Command;
+import yier.bubu.redis.contract.Command;
 
 /**
  * 执行器内部任务载体：持有命令执行所需的上下文以及 bytes 预算口径。

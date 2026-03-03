@@ -1,8 +1,8 @@
 package yier.bubu.redis.protocol.v1;
 
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.protocol.ReplyWriter;
-import yier.bubu.redis.protocol.ReplyWriterFactory;
+import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.contract.ReplyWriterFactory;
 
 import java.util.Objects;
 

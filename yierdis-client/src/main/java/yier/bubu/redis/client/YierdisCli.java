@@ -3,7 +3,6 @@ package yier.bubu.redis.client;
 // CLI：提供简易的交互与单次执行，基于自定义协议 v1（request: <len>:<json>\n, reply: NDJSON）。
 
 import picocli.CommandLine;
-import yier.bubu.redis.protocol.InlineCommandParser;
 import yier.bubu.redis.protocol.ProtocolLimits;
 import yier.bubu.redis.protocol.json.JsonBoolean;
 import yier.bubu.redis.protocol.json.JsonObject;

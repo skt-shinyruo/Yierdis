@@ -5,7 +5,7 @@ package yier.bubu.redis;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.protocol.TransactionState;
+import yier.bubu.redis.contract.TransactionState;
 
 import java.nio.charset.StandardCharsets;
 

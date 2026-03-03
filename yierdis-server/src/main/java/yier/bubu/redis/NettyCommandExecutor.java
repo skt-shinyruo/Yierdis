@@ -18,10 +18,10 @@ import yier.bubu.redis.executor.ExecutorBackpressureObserver;
 import yier.bubu.redis.executor.ExecutorBackpressureRuntime;
 import yier.bubu.redis.executor.ExecutorTaskQueue;
 import yier.bubu.redis.executor.SchedulingPolicy;
-import yier.bubu.redis.protocol.Command;
-import yier.bubu.redis.protocol.CommandContext;
-import yier.bubu.redis.protocol.ReplyWriter;
-import yier.bubu.redis.protocol.ReplyWriterFactory;
+import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.contract.ReplyWriterFactory;
 
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -57,7 +57,7 @@ import java.util.concurrent.atomic.LongAdder;
  *       The time limit is a <b>budget</b>, not a {@code sleep}. When the budget is hit and the queue is still not
  *       empty, the executor schedules the next drain tick, allowing other tasks on the same executor (e.g. scheduled
  *       TTL cleanup) to run between ticks.</li>
- *     <li><b>Flush coalescing</b>: commands write replies via {@link yier.bubu.redis.protocol.ReplyWriter} into Netty buffers; each tick batches
+ *     <li><b>Flush coalescing</b>: commands write replies via {@link yier.bubu.redis.contract.ReplyWriter} into Netty buffers; each tick batches
  *     {@code write(...)} calls and performs a single {@code flush()} per channel at the end.</li>
  * </ul>
  * <p>

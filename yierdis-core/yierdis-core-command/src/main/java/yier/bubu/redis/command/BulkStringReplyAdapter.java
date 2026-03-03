@@ -4,7 +4,7 @@ package yier.bubu.redis.command;
 
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.ops.result.BulkStringSink;
-import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.contract.ReplyWriter;
 
 import java.util.Objects;
 
@@ -35,4 +35,3 @@ final class BulkStringReplyAdapter implements BulkStringSink {
         out.bulkStringLongAscii(value);
     }
 }
-

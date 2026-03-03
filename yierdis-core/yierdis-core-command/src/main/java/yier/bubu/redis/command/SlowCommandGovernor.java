@@ -2,7 +2,7 @@ package yier.bubu.redis.command;
 
 // SlowCommandGovernor：慢命令治理接口（时间预算/输出上限/可观测），优先用于 KEYS/SCAN 等潜在长耗时命令。
 
-import yier.bubu.redis.protocol.CommandContext;
+import yier.bubu.redis.contract.CommandContext;
 
 /**
  * Slow command governance (minimal contract).

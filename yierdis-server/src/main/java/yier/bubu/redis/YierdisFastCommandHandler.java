@@ -7,8 +7,8 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.DecoderException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import yier.bubu.redis.protocol.Command;
-import yier.bubu.redis.protocol.ReplyWriter;
+import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ReplyWriter;
 
 import java.util.Objects;
 

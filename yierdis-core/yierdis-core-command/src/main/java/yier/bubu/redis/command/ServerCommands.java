@@ -2,10 +2,10 @@ package yier.bubu.redis.command;
 
 // server 侧通用命令实现：包含 PING/ECHO/HELLO/INFO/QUIT 等基础命令，并通过 ReplyWriter 直接写回响应。
 
-import yier.bubu.redis.protocol.Command;
-import yier.bubu.redis.protocol.CommandContext;
-import yier.bubu.redis.protocol.ReplyWriter;
-import yier.bubu.redis.protocol.ServerSession;
+import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
 
 import java.nio.charset.StandardCharsets;
