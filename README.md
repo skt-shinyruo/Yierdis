@@ -18,6 +18,16 @@ Yierdis 的目标是 **教学/演示**：可以用项目内置 CLI 做交互学�
 - JDK 17
 - Maven 3.x
 
+## 开发者：模块边界（契约 / 组装）
+
+本项目内部模块做过一次“边界收敛”，目的是让依赖方向更清晰（契约在 core，协议模型专注协议，组装在 server）：
+
+- **执行契约（Command/ReplyWriter/Session...）**：统一放在 `yierdis-core-contract`（包名 `yier.bubu.redis.contract.*`），不再放在 `yierdis-protocol-model`。
+- **协议模型（limits/build-info/reply IR）**：继续位于 `yierdis-protocol-model`（包名 `yier.bubu.redis.protocol.*`）。
+- **CLI 输入解析**：`InlineCommandParser` 位于 `yierdis-client`（`yier.bubu.redis.client.InlineCommandParser`）。
+- **instance 暴露面**：`YierdisInstance` 尽量只暴露 `DbEngine` 能力视图（`engine(int)` / `engines()` 防御性拷贝），避免上层依赖 `YierdisDb` 具体实现。
+- **off-heap 组装**：`YierdisOffHeapAllocators` 仅通过 `ServiceLoader` 发现 provider；server 侧通过引入对应 backend 模块（如 `yierdis-offheap-netty/unsafe/foreign`）完成组装。
+
 ## 启动
 
 ```bash
