@@ -224,60 +224,6 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         }
     }
 
-    /**
-     * 为 server 多 DB 场景启用“实例级 maxmemory”模式：跨 DB 执行近似淘汰，并将共享 off-heap used bytes 只计一次。
-     * <p>
-     * 设计意图：
-     * - 默认更贴近 Redis：maxmemory 是实例级预算，而不是按 DB 平均分摊
-     * - 兼容：通过 server 参数可切回 per-db 口径
-     */
-    public static void enableGlobalMaxmemory(
-            YierdisDb[] dbs,
-            YierdisOffHeapAllocator offHeapAllocator,
-            long maxmemoryBytes,
-            String maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis
-    ) {
-        Objects.requireNonNull(dbs, "dbs");
-        if (maxmemoryBytes <= 0 || dbs.length == 0) {
-            return;
-        }
-        if (maxmemorySamples <= 0) {
-            throw new IllegalArgumentException("maxmemorySamples must be > 0");
-        }
-        if (evictionTimeLimitMillis <= 0) {
-            throw new IllegalArgumentException("evictionTimeLimitMillis must be > 0");
-        }
-
-        YierdisGlobalMaxmemoryCoordinator coordinator = new YierdisGlobalMaxmemoryCoordinator(
-                dbs,
-                offHeapAllocator,
-                maxmemoryBytes,
-                parseMaxmemoryPolicy(maxmemoryPolicy),
-                maxmemorySamples,
-                TimeUnit.MILLISECONDS.toNanos(evictionTimeLimitMillis)
-        );
-        MaxmemoryCoordinator spiCoordinator = new MaxmemoryCoordinator() {
-            @Override
-            public void prepareWrite(long estimatedExtraBytes) {
-                coordinator.prepareWrite(estimatedExtraBytes);
-            }
-
-            @Override
-            public long nextLruClock() {
-                return coordinator.nextLruClock();
-            }
-        };
-        for (int i = 0; i < dbs.length; i++) {
-            YierdisDb db = dbs[i];
-            if (db == null) {
-                continue;
-            }
-            db.attachMaxmemoryCoordinator(spiCoordinator);
-        }
-    }
-
     @Override
     public void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
         this.maxmemoryCoordinator = coordinator;
