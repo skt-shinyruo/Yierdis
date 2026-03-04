@@ -12,8 +12,8 @@ public class YierdisOffHeapAllocatorsTest {
     }
 
     @Test
-    public void createNettyDependsOnRuntimeClasspath() {
-        boolean nettyPresent = isNettyAllocatorPresent();
+    public void createNettyDependsOnServiceLoaderProviders() {
+        boolean nettyPresent = hasProvider(YierdisOffHeapBackend.NETTY);
         if (nettyPresent) {
             try (YierdisOffHeapAllocator allocator = YierdisOffHeapAllocators.create("netty", 0)) {
                 Assert.assertNotNull(allocator);
@@ -25,45 +25,43 @@ public class YierdisOffHeapAllocatorsTest {
 
         try {
             YierdisOffHeapAllocators.create("netty", 0);
-            Assert.fail("expected IllegalArgumentException");
-        } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("yierdis-offheap-netty"));
+            Assert.fail("expected YierdisOffHeapBackendUnavailableException");
+        } catch (YierdisOffHeapBackendUnavailableException e) {
+            Assert.assertTrue(e.getMessage().contains("ServiceLoader"));
+            Assert.assertTrue(e.getMessage().contains("providers"));
         }
     }
 
     @Test
-    public void createForeignDependsOnBuildProfile() {
-        boolean foreignPresent = isForeignAllocatorPresent();
+    public void createForeignDependsOnServiceLoaderProviders() {
+        boolean foreignPresent = hasProvider(YierdisOffHeapBackend.FOREIGN);
         if (foreignPresent) {
+            // Provider is present; runtime availability depends on JVM flags (incubator module).
+            // We only assert that resolution is attempted (no hard-coded class/reflection fallback here).
             try (YierdisOffHeapAllocator allocator = YierdisOffHeapAllocators.create("foreign", 0)) {
+                Assert.assertNotNull(allocator);
                 Assert.assertEquals(YierdisOffHeapBackend.FOREIGN, allocator.backend());
+            } catch (YierdisOffHeapBackendUnavailableException e) {
+                Assert.assertTrue(e.getMessage().contains("foreign"));
             }
             return;
         }
 
         try {
             YierdisOffHeapAllocators.create("foreign", 0);
-            Assert.fail("expected IllegalArgumentException");
-        } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("foreign-memory"));
+            Assert.fail("expected YierdisOffHeapBackendUnavailableException");
+        } catch (YierdisOffHeapBackendUnavailableException e) {
+            Assert.assertTrue(e.getMessage().contains("ServiceLoader"));
+            Assert.assertTrue(e.getMessage().contains("providers"));
         }
     }
 
-    private static boolean isForeignAllocatorPresent() {
-        try {
-            Class.forName("yier.bubu.redis.db.offheap.foreign.YierdisForeignOffHeapAllocator");
-            return true;
-        } catch (ClassNotFoundException e) {
-            return false;
+    private static boolean hasProvider(YierdisOffHeapBackend backend) {
+        for (YierdisOffHeapAllocators.ProviderInfo info : YierdisOffHeapAllocators.availableProviders()) {
+            if (info != null && info.backend() == backend) {
+                return true;
+            }
         }
-    }
-
-    private static boolean isNettyAllocatorPresent() {
-        try {
-            Class.forName("yier.bubu.redis.db.offheap.netty.YierdisNettyOffHeapAllocator");
-            return true;
-        } catch (ClassNotFoundException e) {
-            return false;
-        }
+        return false;
     }
 }
