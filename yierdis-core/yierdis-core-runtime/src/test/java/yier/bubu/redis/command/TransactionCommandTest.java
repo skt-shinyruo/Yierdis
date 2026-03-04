@@ -2,8 +2,8 @@ package yier.bubu.redis.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.protocol.ServerSession;
-import yier.bubu.redis.protocol.TransactionState;
+import yier.bubu.redis.contract.ServerSession;
+import yier.bubu.redis.contract.TransactionState;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
