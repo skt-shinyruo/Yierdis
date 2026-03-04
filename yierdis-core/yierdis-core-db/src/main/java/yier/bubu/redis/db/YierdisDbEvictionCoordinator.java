@@ -3,10 +3,12 @@ package yier.bubu.redis.db;
 // YierdisDbEvictionCoordinator：将 YierdisDb 的淘汰/预算相关入口收敛为 EvictionCoordinator 边界。
 
 import yier.bubu.redis.ops.EvictionCoordinator;
+import yier.bubu.redis.ops.MaxmemoryCoordinator;
+import yier.bubu.redis.ops.MaxmemoryCoordinatorAware;
 
 import java.util.Objects;
 
-final class YierdisDbEvictionCoordinator implements EvictionCoordinator {
+final class YierdisDbEvictionCoordinator implements EvictionCoordinator, MaxmemoryCoordinatorAware {
     private final YierdisDb db;
 
     YierdisDbEvictionCoordinator(YierdisDb db) {
@@ -27,5 +29,9 @@ final class YierdisDbEvictionCoordinator implements EvictionCoordinator {
     public void rollbackWriteReservationIfAny() {
         db.rollbackWriteReservationIfAny();
     }
-}
 
+    @Override
+    public void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
+        db.attachMaxmemoryCoordinator(coordinator);
+    }
+}

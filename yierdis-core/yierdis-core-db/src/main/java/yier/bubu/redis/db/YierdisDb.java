@@ -22,6 +22,9 @@ import yier.bubu.redis.ops.EvictionCoordinator;
 import yier.bubu.redis.ops.ExpireOption;
 import yier.bubu.redis.ops.ExpirationManager;
 import yier.bubu.redis.ops.KeyspaceOps;
+import yier.bubu.redis.ops.MaxmemoryCoordinator;
+import yier.bubu.redis.ops.MaxmemoryCoordinatorAware;
+import yier.bubu.redis.ops.MaxmemoryErrors;
 import yier.bubu.redis.ops.MemoryOps;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.TtlOps;
@@ -38,7 +41,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
-public final class YierdisDb implements YierdisSnapshot, DbEngine {
+public final class YierdisDb implements YierdisSnapshot, DbEngine, MaxmemoryCoordinatorAware {
     public enum MaxmemoryPolicy {
         NOEVICTION,
         ALLKEYS_RANDOM,
@@ -51,7 +54,11 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
     private final boolean ownsOffHeapAllocator;
     private final boolean keysStoredOffHeap;
 
-    static final String OOM_ERR = "OOM command not allowed when used memory > 'maxmemory'.";
+    /**
+     * @deprecated Use {@link MaxmemoryErrors#OOM_ERR}.
+     */
+    @Deprecated
+    static final String OOM_ERR = MaxmemoryErrors.OOM_ERR;
 
     private final long maxmemoryBytes;
     private final MaxmemoryPolicy maxmemoryPolicy;
@@ -65,7 +72,7 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
     private long lruClock;
 
     private final DbThreadGuard threadGuard = new DbThreadGuard();
-    private volatile YierdisGlobalMaxmemoryCoordinator globalMaxmemory;
+    private volatile MaxmemoryCoordinator maxmemoryCoordinator;
     private final MemoryLedger ledger;
     private MemoryReservation activeReservation;
 
@@ -248,20 +255,38 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
                 maxmemorySamples,
                 TimeUnit.MILLISECONDS.toNanos(evictionTimeLimitMillis)
         );
+        MaxmemoryCoordinator spiCoordinator = new MaxmemoryCoordinator() {
+            @Override
+            public void prepareWrite(long estimatedExtraBytes) {
+                coordinator.prepareWrite(estimatedExtraBytes);
+            }
+
+            @Override
+            public long nextLruClock() {
+                return coordinator.nextLruClock();
+            }
+        };
         for (int i = 0; i < dbs.length; i++) {
             YierdisDb db = dbs[i];
             if (db == null) {
                 continue;
             }
-            db.globalMaxmemory = coordinator;
+            db.attachMaxmemoryCoordinator(spiCoordinator);
         }
+    }
+
+    @Override
+    public void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
+        this.maxmemoryCoordinator = coordinator;
     }
 
     public void ensureWriteAllowed(long additionalBytes) {
         checkThread();
-        YierdisGlobalMaxmemoryCoordinator global = globalMaxmemory;
-        if (global != null) {
-            global.ensureWriteAllowed(additionalBytes);
+        MaxmemoryCoordinator coordinator = maxmemoryCoordinator;
+        if (coordinator != null) {
+            if (maxmemoryPolicy == MaxmemoryPolicy.NOEVICTION) {
+                coordinator.prepareWrite(Math.max(0, additionalBytes));
+            }
             return;
         }
         if (maxmemoryBytes <= 0) {
@@ -272,7 +297,7 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         }
         long extra = Math.max(0, additionalBytes);
         if (usedBytesForMaxmemory() + extra > maxmemoryBytes) {
-            throw new YierdisCommandException(OOM_ERR);
+            throw new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
         }
     }
 
@@ -297,7 +322,7 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         try {
             activeReservation = ledger.reserve(Math.max(0L, estimatedExtraBytes));
         } catch (MemoryLedgerOutOfMemoryException e) {
-            throw new YierdisCommandException(OOM_ERR);
+            throw new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
         }
     }
 
@@ -333,7 +358,7 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         try {
             ledger.reserve(0);
         } catch (MemoryLedgerOutOfMemoryException e) {
-            throw new YierdisCommandException(OOM_ERR);
+            throw new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
         }
     }
 
@@ -537,9 +562,9 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
         if (!lruEnabled || e == null) {
             return;
         }
-        YierdisGlobalMaxmemoryCoordinator global = globalMaxmemory;
-        if (global != null) {
-            e.lruClock = global.nextLruClock();
+        MaxmemoryCoordinator coordinator = maxmemoryCoordinator;
+        if (coordinator != null) {
+            e.lruClock = coordinator.nextLruClock();
             return;
         }
         e.lruClock = ++lruClock;
@@ -2655,10 +2680,10 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine {
                 throw new IllegalArgumentException("estimatedExtraBytes must be >= 0");
             }
 
-            YierdisGlobalMaxmemoryCoordinator global = globalMaxmemory;
-            if (global != null) {
+            MaxmemoryCoordinator coordinator = maxmemoryCoordinator;
+            if (coordinator != null) {
                 try {
-                    global.prepareWrite(estimatedExtraBytes);
+                    coordinator.prepareWrite(estimatedExtraBytes);
                 } catch (YierdisCommandException e) {
                     throw new MemoryLedgerOutOfMemoryException();
                 }
