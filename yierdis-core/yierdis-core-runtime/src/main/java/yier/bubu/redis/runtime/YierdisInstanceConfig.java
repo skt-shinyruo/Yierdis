@@ -3,6 +3,7 @@ package yier.bubu.redis.runtime;
 // YierdisInstanceConfig：定义可嵌入 instance 的装配参数（Netty-free），作为 core runtime 的稳定输入口径。
 
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
+import yier.bubu.redis.ops.DbEngineFactory;
 
 import java.util.Locale;
 
@@ -16,6 +17,7 @@ public final class YierdisInstanceConfig {
     private final YierdisOffHeapAllocator offHeapAllocator;
     private final boolean ownsOffHeapAllocator;
     private final boolean offHeapKeysEnabled;
+    private final DbEngineFactory engineFactory;
 
     private final long maxmemoryBytes;
     private final MaxmemoryScope maxmemoryScope;
@@ -29,6 +31,7 @@ public final class YierdisInstanceConfig {
         this.offHeapAllocator = b.offHeapAllocator;
         this.ownsOffHeapAllocator = b.ownsOffHeapAllocator;
         this.offHeapKeysEnabled = b.offHeapKeysEnabled;
+        this.engineFactory = b.engineFactory;
         this.maxmemoryBytes = b.maxmemoryBytes;
         this.maxmemoryScope = b.maxmemoryScope;
         this.maxmemoryPolicy = b.maxmemoryPolicy;
@@ -55,6 +58,10 @@ public final class YierdisInstanceConfig {
 
     public boolean offHeapKeysEnabled() {
         return offHeapKeysEnabled;
+    }
+
+    public DbEngineFactory engineFactory() {
+        return engineFactory;
     }
 
     public long maxmemoryBytes() {
@@ -86,6 +93,7 @@ public final class YierdisInstanceConfig {
         private YierdisOffHeapAllocator offHeapAllocator;
         private boolean ownsOffHeapAllocator;
         private boolean offHeapKeysEnabled;
+        private DbEngineFactory engineFactory;
 
         private long maxmemoryBytes;
         private MaxmemoryScope maxmemoryScope = MaxmemoryScope.PER_DB;
@@ -114,6 +122,11 @@ public final class YierdisInstanceConfig {
 
         public Builder offHeapKeysEnabled(boolean offHeapKeysEnabled) {
             this.offHeapKeysEnabled = offHeapKeysEnabled;
+            return this;
+        }
+
+        public Builder engineFactory(DbEngineFactory engineFactory) {
+            this.engineFactory = engineFactory;
             return this;
         }
 
@@ -177,4 +190,3 @@ public final class YierdisInstanceConfig {
         }
     }
 }
-
