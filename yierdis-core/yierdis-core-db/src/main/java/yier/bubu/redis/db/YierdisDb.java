@@ -22,9 +22,11 @@ import yier.bubu.redis.ops.EvictionCoordinator;
 import yier.bubu.redis.ops.ExpireOption;
 import yier.bubu.redis.ops.ExpirationManager;
 import yier.bubu.redis.ops.KeyspaceOps;
+import yier.bubu.redis.ops.MaxmemoryCandidate;
 import yier.bubu.redis.ops.MaxmemoryCoordinator;
 import yier.bubu.redis.ops.MaxmemoryCoordinatorAware;
 import yier.bubu.redis.ops.MaxmemoryErrors;
+import yier.bubu.redis.ops.MaxmemoryParticipant;
 import yier.bubu.redis.ops.MemoryOps;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.TtlOps;
@@ -41,7 +43,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
-public final class YierdisDb implements YierdisSnapshot, DbEngine, MaxmemoryCoordinatorAware {
+public final class YierdisDb implements YierdisSnapshot, DbEngine, MaxmemoryCoordinatorAware, MaxmemoryParticipant {
     public enum MaxmemoryPolicy {
         NOEVICTION,
         ALLKEYS_RANDOM,
@@ -544,7 +546,9 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine, MaxmemoryCoor
         return bestKey;
     }
 
-    long usedBytesForMaxmemory() {
+    @Override
+    public long usedBytesForMaxmemory() {
+        checkThread();
         // maxmemory 是 best-effort 预算：当 off-heap allocator 由当前 DB 所拥有时，将堆外 used bytes 也计入预算。
         // 对于 server 的多 DB 场景（allocator 共享且 ownsOffHeapAllocator=false），避免将同一 allocator.usedBytes() 重复计入每个 DB。
         long offHeapUsedBytes = 0;
@@ -556,6 +560,116 @@ public final class YierdisDb implements YierdisSnapshot, DbEngine, MaxmemoryCoor
             }
         }
         return usedBytes + offHeapUsedBytes;
+    }
+
+    @Override
+    public int keyCountEstimate() {
+        checkThread();
+        int size;
+        try {
+            size = store.size();
+        } catch (Throwable ignored) {
+            size = 0;
+        }
+        return Math.max(0, size);
+    }
+
+    @Override
+    public void cleanupExpired(long nowMillis) {
+        cleanupExpired();
+    }
+
+    @Override
+    public MaxmemoryCandidate sampleCandidate(yier.bubu.redis.ops.MaxmemoryPolicy policy, long nowMillis) {
+        checkThread();
+        if (policy == null) {
+            return null;
+        }
+        if (policy == yier.bubu.redis.ops.MaxmemoryPolicy.NOEVICTION) {
+            return null;
+        }
+        if (store.size() == 0) {
+            return null;
+        }
+
+        byte[] key = store.randomKey();
+        if (key == null) {
+            return null;
+        }
+        YierdisObject e = store.get(key);
+        if (e == null) {
+            return null;
+        }
+        if (isKeyExpired(key, nowMillis)) {
+            return null;
+        }
+
+        long lruClock = policy == yier.bubu.redis.ops.MaxmemoryPolicy.ALLKEYS_LRU ? e.lruClock : 0L;
+        return new MaxmemoryCandidate(this, key, lruClock);
+    }
+
+    @Override
+    public MaxmemoryCandidate scanBestCandidate(yier.bubu.redis.ops.MaxmemoryPolicy policy, long nowMillis) {
+        checkThread();
+        if (policy != yier.bubu.redis.ops.MaxmemoryPolicy.ALLKEYS_LRU) {
+            return null;
+        }
+        if (store.size() == 0) {
+            return null;
+        }
+
+        final KeyHandle[] bestKeyHandleRef = new KeyHandle[1];
+        final long[] bestLruRef = new long[]{Long.MAX_VALUE};
+        store.forEachKeyHandle((k, e) -> {
+            if (k == null || e == null) {
+                return;
+            }
+            if (isKeyExpired(k, nowMillis)) {
+                return;
+            }
+            long lru = e.lruClock;
+            if (bestKeyHandleRef[0] == null || lru < bestLruRef[0]) {
+                bestKeyHandleRef[0] = k;
+                bestLruRef[0] = lru;
+            }
+        });
+
+        KeyHandle bestKeyHandle = bestKeyHandleRef[0];
+        if (bestKeyHandle == null) {
+            return null;
+        }
+        byte[] keyBytes = toByteArray(bestKeyHandle);
+        if (keyBytes == null) {
+            return null;
+        }
+        return new MaxmemoryCandidate(this, keyBytes, bestLruRef[0]);
+    }
+
+    @Override
+    public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
+        checkThread();
+        if (candidate == null) {
+            return false;
+        }
+        if (candidate.owner() != this) {
+            return false;
+        }
+
+        byte[] key = candidate.key();
+        YierdisObject e = store.get(key);
+        if (e == null) {
+            return false;
+        }
+        if (removeIfExpired(key, e, nowMillis)) {
+            return true;
+        }
+        removeExpire(key);
+        if (store.remove(key, e)) {
+            e.releasePayloadIfAny();
+            adjustUsedBytes(-e.estimatedBytes);
+            return true;
+        }
+        return false;
     }
 
     void touch(YierdisObject e) {
