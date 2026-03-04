@@ -28,6 +28,7 @@ import yier.bubu.redis.ops.MaxmemoryCoordinatorAware;
 import yier.bubu.redis.ops.MaxmemoryErrors;
 import yier.bubu.redis.ops.MaxmemoryParticipant;
 import yier.bubu.redis.ops.MemoryOps;
+import yier.bubu.redis.ops.RuntimeDbEngine;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.TtlOps;
 import yier.bubu.redis.ops.ValueOps;
@@ -43,7 +44,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
-public final class YierdisDb implements YierdisSnapshot, DbEngine, MaxmemoryCoordinatorAware, MaxmemoryParticipant {
+public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, MaxmemoryCoordinatorAware, MaxmemoryParticipant {
     public enum MaxmemoryPolicy {
         NOEVICTION,
         ALLKEYS_RANDOM,

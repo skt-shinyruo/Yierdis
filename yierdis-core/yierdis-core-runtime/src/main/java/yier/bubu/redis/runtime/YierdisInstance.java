@@ -6,12 +6,15 @@ import yier.bubu.redis.command.ServerInfoProvider;
 import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.db.YierdisDbEngineFactory;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
+import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.MaxmemoryCoordinatorAware;
 import yier.bubu.redis.ops.MaxmemoryParticipant;
 import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.ops.MaxmemoryUsageSource;
+import yier.bubu.redis.ops.RuntimeDbEngine;
 import yier.bubu.redis.contract.DbIndexProvider;
 
 import java.util.Objects;
@@ -25,7 +28,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class YierdisInstance implements AutoCloseable {
     private final YierdisInstanceConfig config;
-    private final YierdisDb[] dbs;
+    private final RuntimeDbEngine[] dbs;
     private final YierdisDbRouter router;
     private final YierdisOffHeapAllocator offHeapAllocator;
     private final boolean closeAllocator;
@@ -34,7 +37,7 @@ public final class YierdisInstance implements AutoCloseable {
 
     private YierdisInstance(
             YierdisInstanceConfig config,
-            YierdisDb[] dbs,
+            RuntimeDbEngine[] dbs,
             YierdisDbRouter router,
             YierdisOffHeapAllocator offHeapAllocator,
             boolean closeAllocator
@@ -51,6 +54,10 @@ public final class YierdisInstance implements AutoCloseable {
         int databases = Math.max(1, config.databases());
 
         YierdisOffHeapAllocator allocator = config.offHeapAllocator();
+        DbEngineFactory engineFactory = config.engineFactory();
+        if (engineFactory == null) {
+            engineFactory = new YierdisDbEngineFactory();
+        }
 
         // 约定：多 DB 场景默认共享 allocator，并由 instance 统一负责 close（避免 double-close 与 usedBytes 双计数）。
         boolean dbOwnsAllocator = config.ownsOffHeapAllocator() && databases == 1;
@@ -67,7 +74,7 @@ public final class YierdisInstance implements AutoCloseable {
             }
         }
 
-        YierdisDb[] dbs = new YierdisDb[databases];
+        RuntimeDbEngine[] dbs = new RuntimeDbEngine[databases];
         for (int i = 0; i < databases; i++) {
             long dbMax = config.maxmemoryBytes();
             if (perDbScope) {
@@ -77,7 +84,8 @@ public final class YierdisInstance implements AutoCloseable {
                     remainder--;
                 }
             }
-            dbs[i] = new YierdisDb(
+            dbs[i] = engineFactory.create(
+                    i,
                     allocator,
                     dbOwnsAllocator,
                     config.offHeapKeysEnabled(),
@@ -92,7 +100,14 @@ public final class YierdisInstance implements AutoCloseable {
         if (!perDbScope && config.maxmemoryBytes() > 0) {
             MaxmemoryParticipant[] participants = new MaxmemoryParticipant[dbs.length];
             for (int i = 0; i < dbs.length; i++) {
-                participants[i] = dbs[i];
+                RuntimeDbEngine engine = dbs[i];
+                if (engine == null) {
+                    continue;
+                }
+                if (!(engine instanceof MaxmemoryParticipant participant)) {
+                    throw new IllegalStateException("GLOBAL maxmemory requires MaxmemoryParticipant: dbIndex=" + i);
+                }
+                participants[i] = participant;
             }
 
             MaxmemoryUsageSource[] sharedUsage = new MaxmemoryUsageSource[0];
@@ -117,11 +132,14 @@ public final class YierdisInstance implements AutoCloseable {
                     TimeUnit.MILLISECONDS.toNanos(config.evictionTimeLimitMillis())
             );
 
-            for (YierdisDb db : dbs) {
-                if (db == null) {
+            for (RuntimeDbEngine engine : dbs) {
+                if (engine == null) {
                     continue;
                 }
-                db.attachMaxmemoryCoordinator(governor);
+                if (!(engine instanceof MaxmemoryCoordinatorAware aware)) {
+                    throw new IllegalStateException("GLOBAL maxmemory requires MaxmemoryCoordinatorAware");
+                }
+                aware.attachMaxmemoryCoordinator(governor);
             }
         }
 
@@ -178,7 +196,7 @@ public final class YierdisInstance implements AutoCloseable {
         return out;
     }
 
-    private YierdisDb dbInternal(int dbIndex) {
+    private RuntimeDbEngine dbInternal(int dbIndex) {
         int idx = Math.max(0, dbIndex);
         if (idx >= dbs.length) {
             throw new IllegalArgumentException("dbIndex out of range: " + dbIndex);
@@ -215,11 +233,11 @@ public final class YierdisInstance implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("YierdisInstance is closed");
         }
-        for (YierdisDb db : dbs) {
-            if (db == null) {
+        for (RuntimeDbEngine engine : dbs) {
+            if (engine == null) {
                 continue;
             }
-            db.bindToCurrentThread();
+            engine.bindToCurrentThread();
         }
     }
 
@@ -235,12 +253,12 @@ public final class YierdisInstance implements AutoCloseable {
         }
         closed = true;
 
-        for (YierdisDb db : dbs) {
-            if (db == null) {
+        for (RuntimeDbEngine engine : dbs) {
+            if (engine == null) {
                 continue;
             }
             try {
-                db.shutdown();
+                engine.shutdown();
             } catch (Throwable ignored) {
                 // best-effort close
             }
