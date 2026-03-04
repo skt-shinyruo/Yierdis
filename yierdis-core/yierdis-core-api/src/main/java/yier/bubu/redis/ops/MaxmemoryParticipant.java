@@ -9,6 +9,11 @@ public interface MaxmemoryParticipant {
      */
     long usedBytesForMaxmemory();
 
+    /**
+     * Returns a non-negative estimate of evictable keys currently held by this participant.
+     * <p>
+     * This value may be approximate and is allowed to saturate at {@link Integer#MAX_VALUE}.
+     */
     int keyCountEstimate();
 
     /**
@@ -39,4 +44,3 @@ public interface MaxmemoryParticipant {
      */
     boolean evict(MaxmemoryCandidate candidate, long nowMillis);
 }
-
