@@ -6,8 +6,8 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
-import yier.bubu.redis.protocol.ServerSession;
-import yier.bubu.redis.protocol.TransactionState;
+import yier.bubu.redis.contract.ServerSession;
+import yier.bubu.redis.contract.TransactionState;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplySimpleString;
@@ -56,7 +56,7 @@ public class YierdisInstanceTest {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder().build();
         try (YierdisInstance instance = YierdisInstance.create(config)) {
             try {
-                instance.db(0).size();
+                instance.engine(0).memory().memoryStats();
                 Assert.fail("expected fail-fast before bind");
             } catch (IllegalStateException e) {
                 Assert.assertTrue(e.getMessage().contains("bindToCurrentThread"));
@@ -67,7 +67,7 @@ public class YierdisInstanceTest {
             AtomicReference<Throwable> errRef = new AtomicReference<>();
             Thread t = new Thread(() -> {
                 try {
-                    instance.db(0).size();
+                    instance.engine(0).memory().memoryStats();
                 } catch (Throwable t1) {
                     errRef.set(t1);
                 }

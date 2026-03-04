@@ -2,11 +2,11 @@ package yier.bubu.redis.testutil;
 
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.protocol.CommandContext;
-import yier.bubu.redis.protocol.Command;
-import yier.bubu.redis.protocol.ReplyWriter;
-import yier.bubu.redis.protocol.ServerSession;
-import yier.bubu.redis.protocol.TransactionState;
+import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.contract.ServerSession;
+import yier.bubu.redis.contract.TransactionState;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;

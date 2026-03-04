@@ -24,6 +24,7 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapBackendUnavailableException;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
+import yier.bubu.redis.runtime.YierdisInstanceMaintenance;
 import yier.bubu.redis.runtime.YierdisInstanceConfig;
 
 import java.net.InetSocketAddress;
@@ -186,8 +187,8 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             // 2) 通过 executeMaintenance 让 cleanup 在 DB 绑定线程中执行。
             // 3) 通过 coalesce 避免在高压下积累多个 cleanup 请求（fixed-rate catch-up storm）。
             long period = config.expirationCleanupIntervalMillis;
-            DbEngine[] enginesForTask = engines;
             NettyCommandExecutor exForTask = executor;
+            YierdisInstanceMaintenance maintenanceForTask = new YierdisInstanceMaintenance(instance);
             java.util.concurrent.atomic.AtomicBoolean cleanupPending = new java.util.concurrent.atomic.AtomicBoolean(false);
             cleanupFuture = workerGroup.next().scheduleWithFixedDelay(() -> {
                 if (!cleanupPending.compareAndSet(false, true)) {
@@ -195,24 +196,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 }
                 exForTask.executeMaintenance(() -> {
                     try {
-                        if (enginesForTask != null) {
-                            DbEngine firstDb = null;
-                            for (DbEngine d : enginesForTask) {
-                                if (d == null) {
-                                    continue;
-                                }
-                                if (firstDb == null) {
-                                    firstDb = d;
-                                }
-                                d.expiration().cleanupExpired();
-                                if (config.maxmemoryBytes > 0 && config.maxmemoryScope == ServerConfig.MaxmemoryScope.PER_DB) {
-                                    d.eviction().enforceMaxmemory();
-                                }
-                            }
-                            if (config.maxmemoryBytes > 0 && config.maxmemoryScope == ServerConfig.MaxmemoryScope.GLOBAL && firstDb != null) {
-                                firstDb.eviction().enforceMaxmemory();
-                            }
-                        }
+                        maintenanceForTask.maintenanceTick();
                     } catch (Exception e) {
                         log.debug("Expiration cleanup error", e);
                     } finally {

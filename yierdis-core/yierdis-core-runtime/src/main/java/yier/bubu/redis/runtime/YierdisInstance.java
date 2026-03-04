@@ -9,7 +9,7 @@ import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.ops.DbEngine;
-import yier.bubu.redis.protocol.DbIndexProvider;
+import yier.bubu.redis.contract.DbIndexProvider;
 
 import java.util.Objects;
 
@@ -133,23 +133,23 @@ public final class YierdisInstance implements AutoCloseable {
      * 获取 DB 的能力视图（依赖倒置到 {@link DbEngine}），避免上层（例如 server/bootstrap）直接依赖具体实现类。
      */
     public DbEngine engine(int dbIndex) {
-        return db(dbIndex);
+        return dbInternal(dbIndex);
     }
 
     /**
      * 获取所有 DB 的能力视图数组（{@link DbEngine}）。
      * <p>
-     * 返回的是底层数组的协变视图（实现类数组），调用方不应向该数组写入非 DB 实现对象。
+     * 返回的是一个防御性拷贝，避免暴露底层实现数组并规避协变数组写入风险。
      */
     public DbEngine[] engines() {
-        return dbs;
+        DbEngine[] out = new DbEngine[dbs.length];
+        for (int i = 0; i < dbs.length; i++) {
+            out[i] = dbs[i];
+        }
+        return out;
     }
 
-    public YierdisDb[] dbs() {
-        return dbs;
-    }
-
-    public YierdisDb db(int dbIndex) {
+    private YierdisDb dbInternal(int dbIndex) {
         int idx = Math.max(0, dbIndex);
         if (idx >= dbs.length) {
             throw new IllegalArgumentException("dbIndex out of range: " + dbIndex);
