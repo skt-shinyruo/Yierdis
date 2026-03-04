@@ -9,9 +9,13 @@ import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.MaxmemoryParticipant;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
+import yier.bubu.redis.ops.MaxmemoryUsageSource;
 import yier.bubu.redis.contract.DbIndexProvider;
 
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 可嵌入（embedded）的 instance API（Netty-free）。
@@ -86,14 +90,39 @@ public final class YierdisInstance implements AutoCloseable {
         }
 
         if (!perDbScope && config.maxmemoryBytes() > 0) {
-            YierdisDb.enableGlobalMaxmemory(
-                    dbs,
-                    allocator,
+            MaxmemoryParticipant[] participants = new MaxmemoryParticipant[dbs.length];
+            for (int i = 0; i < dbs.length; i++) {
+                participants[i] = dbs[i];
+            }
+
+            MaxmemoryUsageSource[] sharedUsage = new MaxmemoryUsageSource[0];
+            if (!dbOwnsAllocator && allocator != null) {
+                sharedUsage = new MaxmemoryUsageSource[]{
+                        () -> {
+                            try {
+                                return Math.max(0L, allocator.usedBytes());
+                            } catch (Throwable ignored) {
+                                return 0L;
+                            }
+                        }
+                };
+            }
+
+            YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
+                    participants,
+                    sharedUsage,
                     config.maxmemoryBytes(),
-                    config.maxmemoryPolicy(),
+                    MaxmemoryPolicy.parse(config.maxmemoryPolicy()),
                     config.maxmemorySamples(),
-                    config.evictionTimeLimitMillis()
+                    TimeUnit.MILLISECONDS.toNanos(config.evictionTimeLimitMillis())
             );
+
+            for (YierdisDb db : dbs) {
+                if (db == null) {
+                    continue;
+                }
+                db.attachMaxmemoryCoordinator(governor);
+            }
         }
 
         YierdisDbRouter router = new YierdisDbRouter() {
