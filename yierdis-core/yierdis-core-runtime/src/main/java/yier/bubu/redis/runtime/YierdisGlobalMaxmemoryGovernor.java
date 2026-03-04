@@ -173,9 +173,23 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
         }
 
         int totalKeys = globalKeyCountEstimate();
-        int maxAttempts = Math.max(64, totalKeys * 2);
+        int maxAttemptsFromKeys;
+        if (totalKeys > Integer.MAX_VALUE / 2) {
+            maxAttemptsFromKeys = Integer.MAX_VALUE;
+        } else {
+            maxAttemptsFromKeys = totalKeys * 2;
+        }
+        int maxAttempts = Math.max(64, maxAttemptsFromKeys);
 
-        long deadline = System.nanoTime() + evictionTimeLimitNanos;
+        long startNanos = System.nanoTime();
+        long deadline;
+        if (evictionTimeLimitNanos <= 0) {
+            deadline = 0;
+        } else if (startNanos > Long.MAX_VALUE - evictionTimeLimitNanos) {
+            deadline = Long.MAX_VALUE;
+        } else {
+            deadline = startNanos + evictionTimeLimitNanos;
+        }
         int attempts = 0;
         while (globalUsedBytesForMaxmemory() > limitBytes && attempts++ < maxAttempts) {
             if (evictionTimeLimitNanos > 0 && System.nanoTime() >= deadline) {
@@ -266,4 +280,3 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
         owner.evict(victim, nowMillis);
     }
 }
-
