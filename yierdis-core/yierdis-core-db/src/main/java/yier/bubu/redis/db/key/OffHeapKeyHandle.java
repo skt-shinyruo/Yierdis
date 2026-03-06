@@ -2,18 +2,18 @@ package yier.bubu.redis.db.key;
 
 // OffHeapKeyHandle：基于 off-heap (address+len) 的 KeyHandle 实现，提供稳定的 bytes view 与 equality 语义。
 
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 
 import java.util.Objects;
 
 final class OffHeapKeyHandle implements KeyHandle {
-    private final YierdisOffHeapAddressAllocator allocator;
+    private final OffHeapAddressAllocator allocator;
     private final long address;
     private final int len;
     private final int dictHash;
     private final int contentHash;
 
-    OffHeapKeyHandle(YierdisOffHeapAddressAllocator allocator, long address, int len, int dictHash) {
+    OffHeapKeyHandle(OffHeapAddressAllocator allocator, long address, int len, int dictHash) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
         if (len < 0) {
             throw new IllegalArgumentException("len must be >= 0");
@@ -77,7 +77,7 @@ final class OffHeapKeyHandle implements KeyHandle {
         return h;
     }
 
-    YierdisOffHeapAddressAllocator allocatorUnsafe() {
+    OffHeapAddressAllocator allocatorUnsafe() {
         return allocator;
     }
 

@@ -2,7 +2,7 @@ package yier.bubu.redis.db;
 
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapListpack;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 import yier.bubu.redis.ops.result.BulkStringSink;
 
 import java.util.ArrayDeque;
@@ -15,7 +15,7 @@ final class ListValue implements YierdisValue {
     // to a quicklist-like deque of nodes once size/element thresholds are crossed.
     private static final int QUICKLIST_NODE_MAX_BYTES = YierdisEncodingThresholds.LIST_MAX_LISTPACK_BYTES;
 
-    private final YierdisOffHeapAddressAllocator offHeapAllocator;
+    private final OffHeapAddressAllocator offHeapAllocator;
 
     private YierdisListpack listpack;
     private ArrayDeque<ListNode> quicklist;
@@ -31,7 +31,7 @@ final class ListValue implements YierdisValue {
         this.listpack = new YierdisListpack();
     }
 
-    ListValue(YierdisOffHeapAddressAllocator allocator) {
+    ListValue(OffHeapAddressAllocator allocator) {
         this.offHeapAllocator = allocator;
         this.listpackOffHeap = new YierdisUnsafeOffHeapListpack(allocator);
     }
@@ -822,7 +822,7 @@ final class ListValue implements YierdisValue {
     private static final class OffHeapListNode implements AutoCloseable {
         private final YierdisUnsafeOffHeapListpack listpack;
 
-        private OffHeapListNode(YierdisOffHeapAddressAllocator allocator) {
+        private OffHeapListNode(OffHeapAddressAllocator allocator) {
             this.listpack = new YierdisUnsafeOffHeapListpack(allocator);
         }
 

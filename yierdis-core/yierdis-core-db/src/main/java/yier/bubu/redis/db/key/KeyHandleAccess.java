@@ -2,7 +2,7 @@ package yier.bubu.redis.db.key;
 
 // KeyHandleAccess：KeyHandle 的内部访问桥接（用于将 handle 落地到 keyspace/expire index 等实现细节）。
 
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 
 /**
  * KeyHandle 的内部访问桥接。
@@ -30,7 +30,7 @@ public final class KeyHandleAccess {
         return null;
     }
 
-    public static YierdisOffHeapAddressAllocator offHeapAllocator(KeyHandle handle) {
+    public static OffHeapAddressAllocator offHeapAllocator(KeyHandle handle) {
         if (!(handle instanceof OffHeapKeyHandle h)) {
             throw new IllegalArgumentException("not an off-heap KeyHandle: " + (handle == null ? "null" : handle.getClass().getName()));
         }
@@ -44,4 +44,3 @@ public final class KeyHandleAccess {
         return h.addressUnsafe();
     }
 }
-

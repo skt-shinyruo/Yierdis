@@ -2,8 +2,8 @@ package yier.bubu.redis.db.offheap;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.DirectBytesSink;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapSlice;
 
 /**
  * A minimal SDS-like off-heap byte buffer: (ptr,len,cap) semantics with an off-heap header.
@@ -18,11 +18,11 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
 public final class YierdisUnsafeOffHeapString implements AutoCloseable {
     private static final int HEADER_BYTES = Integer.BYTES + Integer.BYTES;
 
-    private final YierdisOffHeapAddressAllocator allocator;
+    private final OffHeapAddressAllocator allocator;
     private long baseAddress;
     private boolean closed;
 
-    public YierdisUnsafeOffHeapString(YierdisOffHeapAddressAllocator allocator, int capacity) {
+    public YierdisUnsafeOffHeapString(OffHeapAddressAllocator allocator, int capacity) {
         if (allocator == null) {
             throw new IllegalArgumentException("allocator must not be null");
         }
@@ -38,7 +38,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         writeInt(addr + Integer.BYTES, capacity);
     }
 
-    public static YierdisUnsafeOffHeapString fromBytes(YierdisOffHeapAddressAllocator allocator, byte[] src, int off, int len) {
+    public static YierdisUnsafeOffHeapString fromBytes(OffHeapAddressAllocator allocator, byte[] src, int off, int len) {
         if (src == null) {
             throw new IllegalArgumentException("src must not be null");
         }
@@ -116,7 +116,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         resizeTo(nextCap, length());
     }
 
-    public YierdisOffHeapSlice slice(int index, int len) {
+    public OffHeapSlice slice(int index, int len) {
         ensureOpen();
         if (len < 0) {
             throw new IllegalArgumentException("len must be >= 0");
@@ -131,7 +131,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         return new YierdisUnsafeOffHeapSlice(this, index, len);
     }
 
-    public YierdisOffHeapSlice slice() {
+    public OffHeapSlice slice() {
         ensureOpen();
         int len = length();
         if (len == 0) {
@@ -294,7 +294,7 @@ public final class YierdisUnsafeOffHeapString implements AutoCloseable {
         allocator.putByte(addr + 3, (byte) (value >>> 24));
     }
 
-    private static final class YierdisUnsafeOffHeapSlice implements YierdisOffHeapSlice {
+    private static final class YierdisUnsafeOffHeapSlice implements OffHeapSlice {
         private static final int COPY_CHUNK_BYTES = 8 * 1024;
         private static final ThreadLocal<byte[]> TL_COPY_BUF =
                 ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);

@@ -1,13 +1,12 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
+import yier.bubu.redis.offheap.api.OffHeapBuf;
+import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
 import yier.bubu.redis.ops.ScanCursorV2;
 import yier.bubu.redis.ops.ValueType;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapExpireIndex;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapKeyspace;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapString;
@@ -53,7 +52,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     final YierdisKeyspace<YierdisObject> store;
     final YierdisExpireIndex expires;
-    final YierdisOffHeapAllocator offHeapAllocator;
+    final OffHeapAllocator offHeapAllocator;
     private final boolean ownsOffHeapAllocator;
     private final boolean keysStoredOffHeap;
 
@@ -91,12 +90,12 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         this(null, false, 0, "noeviction", 5, 5, 5);
     }
 
-    public YierdisDb(YierdisOffHeapAllocator offHeapAllocator) {
+    public YierdisDb(OffHeapAllocator offHeapAllocator) {
         this(offHeapAllocator, false, 0, "noeviction", 5, 5, 5);
     }
 
     public YierdisDb(
-            YierdisOffHeapAllocator offHeapAllocator,
+            OffHeapAllocator offHeapAllocator,
             long maxmemoryBytes,
             String maxmemoryPolicy,
             int maxmemorySamples,
@@ -107,7 +106,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     }
 
     public YierdisDb(
-            YierdisOffHeapAllocator offHeapAllocator,
+            OffHeapAllocator offHeapAllocator,
             boolean offHeapKeysEnabled,
             long maxmemoryBytes,
             String maxmemoryPolicy,
@@ -119,7 +118,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     }
 
     public YierdisDb(
-            YierdisOffHeapAllocator offHeapAllocator,
+            OffHeapAllocator offHeapAllocator,
             boolean ownsOffHeapAllocator,
             boolean offHeapKeysEnabled,
             long maxmemoryBytes,
@@ -130,10 +129,10 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     ) {
         this.offHeapAllocator = offHeapAllocator;
         this.ownsOffHeapAllocator = ownsOffHeapAllocator;
-        if (offHeapKeysEnabled && !(offHeapAllocator instanceof YierdisOffHeapAddressAllocator)) {
+        if (offHeapKeysEnabled && !(offHeapAllocator instanceof OffHeapAddressAllocator)) {
             throw new IllegalArgumentException("offHeapKeysEnabled requires an address allocator (unsafe off-heap backend)");
         }
-        if (offHeapKeysEnabled && offHeapAllocator instanceof YierdisOffHeapAddressAllocator addressAllocator) {
+        if (offHeapKeysEnabled && offHeapAllocator instanceof OffHeapAddressAllocator addressAllocator) {
             this.store = new YierdisUnsafeOffHeapKeyspace<>(addressAllocator);
             this.expires = new YierdisUnsafeOffHeapExpireIndex(addressAllocator);
             this.keysStoredOffHeap = true;
@@ -406,7 +405,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             extra += keyLen;
         }
         if (e.type == ValueType.STRING) {
-            if (e.payload instanceof YierdisOffHeapBuf buf) {
+            if (e.payload instanceof OffHeapBuf buf) {
                 extra += buf.capacity();
             } else if (e.payload instanceof YierdisUnsafeOffHeapString s) {
                 extra += s.capacity();
@@ -752,7 +751,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                 return Long.BYTES;
             }
             // 字符串 payload 若存放在 off-heap，则其容量由 allocator.usedBytes() 统计；这里避免重复计入。
-            if (offHeapAllocator != null && (e.payload instanceof YierdisOffHeapBuf || e.payload instanceof YierdisUnsafeOffHeapString)) {
+            if (offHeapAllocator != null && (e.payload instanceof OffHeapBuf || e.payload instanceof YierdisUnsafeOffHeapString)) {
                 return 0;
             }
             return e.rawLen;
@@ -1387,7 +1386,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                 didSet[0] = true;
                 return old;
             });
-        } catch (YierdisOffHeapOutOfMemoryException e) {
+        } catch (OffHeapOutOfMemoryException e) {
             rollbackWrite();
             throw new YierdisCommandException("OOM off-heap memory limit exceeded");
         }
@@ -1476,7 +1475,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                 deltaBytes[0] += old.estimatedBytes;
                 return old;
             });
-        } catch (YierdisOffHeapOutOfMemoryException e) {
+        } catch (OffHeapOutOfMemoryException e) {
             rollbackWrite();
             throw new YierdisCommandException("OOM off-heap memory limit exceeded");
         }
@@ -1540,7 +1539,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                 deltaBytes[0] += old.estimatedBytes;
                 return old;
             });
-        } catch (YierdisOffHeapOutOfMemoryException e) {
+        } catch (OffHeapOutOfMemoryException e) {
             rollbackWrite();
             throw new YierdisCommandException("OOM off-heap memory limit exceeded");
         }
@@ -1683,7 +1682,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             }
             return count;
         }
-        if (e.payload instanceof yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf buf) {
+        if (e.payload instanceof OffHeapBuf buf) {
             int to = Math.min(end, e.rawLen - 1);
             for (int i = start; i <= to; i++) {
                 count += Integer.bitCount(buf.getByte(i) & 0xFF);
@@ -1750,8 +1749,8 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     private int pushInternal(byte[] keyBytes, List<byte[]> values, boolean left) {
         long now = System.currentTimeMillis();
-        YierdisOffHeapAddressAllocator addressAllocator =
-                offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
+        OffHeapAddressAllocator addressAllocator =
+                offHeapAllocator instanceof OffHeapAddressAllocator a ? a : null;
         final int[] len = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         store.computeWithHandle(keyBytes, (k, old) -> {
@@ -1866,8 +1865,8 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             throw new YierdisCommandException("ERR wrong number of arguments for 'hset' command");
         }
         long now = System.currentTimeMillis();
-        YierdisOffHeapAddressAllocator addressAllocator =
-                offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
+        OffHeapAddressAllocator addressAllocator =
+                offHeapAllocator instanceof OffHeapAddressAllocator a ? a : null;
         final int[] added = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         store.computeWithHandle(keyBytes, (k, old) -> {
@@ -1976,8 +1975,8 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     public int sadd(byte[] keyBytes, List<byte[]> members) {
         checkThread();
         long now = System.currentTimeMillis();
-        YierdisOffHeapAddressAllocator addressAllocator =
-                offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
+        OffHeapAddressAllocator addressAllocator =
+                offHeapAllocator instanceof OffHeapAddressAllocator a ? a : null;
         final int[] added = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         store.computeWithHandle(keyBytes, (k, old) -> {
@@ -2089,8 +2088,8 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             throw new YierdisCommandException("ERR wrong number of arguments for 'zadd' command");
         }
         long now = System.currentTimeMillis();
-        YierdisOffHeapAddressAllocator addressAllocator =
-                offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
+        OffHeapAddressAllocator addressAllocator =
+                offHeapAllocator instanceof OffHeapAddressAllocator a ? a : null;
         final int[] added = new int[]{0};
         final long[] deltaBytes = new long[]{0};
         store.computeWithHandle(keyBytes, (k, old) -> {

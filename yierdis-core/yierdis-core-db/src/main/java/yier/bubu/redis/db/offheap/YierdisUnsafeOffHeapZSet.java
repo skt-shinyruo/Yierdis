@@ -1,6 +1,6 @@
 package yier.bubu.redis.db.offheap;
 
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.ops.result.BulkStringSink;
 
@@ -11,11 +11,11 @@ import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 
 public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
-    private final YierdisOffHeapAddressAllocator allocator;
+    private final OffHeapAddressAllocator allocator;
     private final YierdisUnsafeOffHeapDictLong byMember;
     private final UnsafeZSkipList byScore;
 
-    public YierdisUnsafeOffHeapZSet(YierdisOffHeapAddressAllocator allocator) {
+    public YierdisUnsafeOffHeapZSet(OffHeapAddressAllocator allocator) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
         this.byMember = new YierdisUnsafeOffHeapDictLong(allocator);
         this.byScore = new UnsafeZSkipList(allocator);
@@ -632,14 +632,14 @@ public final class YierdisUnsafeOffHeapZSet implements AutoCloseable {
         private static final int LEVEL_OFFSET = 32;
         private static final int HEADER_BYTES = 40;
 
-        private final YierdisOffHeapAddressAllocator allocator;
+        private final OffHeapAddressAllocator allocator;
         private final long header;
 
         private long tail;
         private int level = 1;
         private int length = 0;
 
-        UnsafeZSkipList(YierdisOffHeapAddressAllocator allocator) {
+        UnsafeZSkipList(OffHeapAddressAllocator allocator) {
             this.allocator = allocator;
             this.header = allocateNode(MAX_LEVEL, 0L, 0, 0, 0L);
         }

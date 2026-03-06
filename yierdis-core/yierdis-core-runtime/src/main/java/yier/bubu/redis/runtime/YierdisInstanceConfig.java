@@ -2,7 +2,7 @@ package yier.bubu.redis.runtime;
 
 // YierdisInstanceConfig：定义可嵌入 instance 的装配参数（Netty-free），作为 core runtime 的稳定输入口径。
 
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.ops.DbEngineFactory;
 
 import java.util.Locale;
@@ -14,7 +14,7 @@ public final class YierdisInstanceConfig {
     }
 
     private final int databases;
-    private final YierdisOffHeapAllocator offHeapAllocator;
+    private final OffHeapAllocator offHeapAllocator;
     private final boolean ownsOffHeapAllocator;
     private final boolean offHeapKeysEnabled;
     private final DbEngineFactory engineFactory;
@@ -48,7 +48,7 @@ public final class YierdisInstanceConfig {
         return databases;
     }
 
-    public YierdisOffHeapAllocator offHeapAllocator() {
+    public OffHeapAllocator offHeapAllocator() {
         return offHeapAllocator;
     }
 
@@ -90,7 +90,7 @@ public final class YierdisInstanceConfig {
 
     public static final class Builder {
         private int databases = 1;
-        private YierdisOffHeapAllocator offHeapAllocator;
+        private OffHeapAllocator offHeapAllocator;
         private boolean ownsOffHeapAllocator;
         private boolean offHeapKeysEnabled;
         private DbEngineFactory engineFactory;
@@ -110,7 +110,7 @@ public final class YierdisInstanceConfig {
             return this;
         }
 
-        public Builder offHeapAllocator(YierdisOffHeapAllocator allocator) {
+        public Builder offHeapAllocator(OffHeapAllocator allocator) {
             this.offHeapAllocator = allocator;
             return this;
         }

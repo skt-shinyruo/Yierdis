@@ -2,6 +2,7 @@ package yier.bubu.redis.runtime;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.RuntimeDbEngine;
 import yier.bubu.redis.ops.DbLifecycleOps;
@@ -25,7 +26,7 @@ public class DbEngineFactoryInjectionTest {
             @Override
             public RuntimeDbEngine create(
                     int dbIndex,
-                    Object offHeapAllocator,
+                    OffHeapAllocator offHeapAllocator,
                     boolean ownsOffHeapAllocator,
                     boolean offHeapKeysEnabled,
                     long maxmemoryBytes,

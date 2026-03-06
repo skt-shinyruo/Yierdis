@@ -1,7 +1,7 @@
 package yier.bubu.redis.db.offheap;
 
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapSlice;
 
 /**
  * Helpers for SDS-like raw off-heap strings stored as a single allocation:
@@ -15,7 +15,7 @@ public final class YierdisUnsafeOffHeapSds {
     private YierdisUnsafeOffHeapSds() {
     }
 
-    public static long allocate(YierdisOffHeapAddressAllocator allocator, byte[] src, int off, int len) {
+    public static long allocate(OffHeapAddressAllocator allocator, byte[] src, int off, int len) {
         if (allocator == null) {
             throw new IllegalArgumentException("allocator must not be null");
         }
@@ -39,7 +39,7 @@ public final class YierdisUnsafeOffHeapSds {
         return base;
     }
 
-    public static void free(YierdisOffHeapAddressAllocator allocator, long baseAddr) {
+    public static void free(OffHeapAddressAllocator allocator, long baseAddr) {
         if (allocator == null) {
             throw new IllegalArgumentException("allocator must not be null");
         }
@@ -50,7 +50,7 @@ public final class YierdisUnsafeOffHeapSds {
         allocator.freeAddress(baseAddr, Math.max(8, totalBytes(cap)));
     }
 
-    public static int len(YierdisOffHeapAddressAllocator allocator, long baseAddr) {
+    public static int len(OffHeapAddressAllocator allocator, long baseAddr) {
         if (allocator == null) {
             throw new IllegalArgumentException("allocator must not be null");
         }
@@ -61,7 +61,7 @@ public final class YierdisUnsafeOffHeapSds {
         return baseAddr + HEADER_BYTES;
     }
 
-    public static YierdisOffHeapSlice slice(YierdisOffHeapAddressAllocator allocator, long baseAddr) {
+    public static OffHeapSlice slice(OffHeapAddressAllocator allocator, long baseAddr) {
         int len = len(allocator, baseAddr);
         if (len == 0) {
             return new YierdisUnsafeOffHeapRawSlice(allocator, baseAddr + HEADER_BYTES, 0);
@@ -69,7 +69,7 @@ public final class YierdisUnsafeOffHeapSds {
         return new YierdisUnsafeOffHeapRawSlice(allocator, baseAddr + HEADER_BYTES, len);
     }
 
-    public static void getBytes(YierdisOffHeapAddressAllocator allocator, long baseAddr, byte[] dst, int dstOff, int len) {
+    public static void getBytes(OffHeapAddressAllocator allocator, long baseAddr, byte[] dst, int dstOff, int len) {
         if (allocator == null) {
             throw new IllegalArgumentException("allocator must not be null");
         }
@@ -92,7 +92,7 @@ public final class YierdisUnsafeOffHeapSds {
         return HEADER_BYTES + Math.max(0, cap);
     }
 
-    private static int readInt(YierdisOffHeapAddressAllocator allocator, long addr) {
+    private static int readInt(OffHeapAddressAllocator allocator, long addr) {
         int b0 = allocator.getByte(addr) & 0xff;
         int b1 = allocator.getByte(addr + 1) & 0xff;
         int b2 = allocator.getByte(addr + 2) & 0xff;
@@ -100,7 +100,7 @@ public final class YierdisUnsafeOffHeapSds {
         return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
     }
 
-    private static void writeInt(YierdisOffHeapAddressAllocator allocator, long addr, int value) {
+    private static void writeInt(OffHeapAddressAllocator allocator, long addr, int value) {
         allocator.putByte(addr, (byte) value);
         allocator.putByte(addr + 1, (byte) (value >>> 8));
         allocator.putByte(addr + 2, (byte) (value >>> 16));

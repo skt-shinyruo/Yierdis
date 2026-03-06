@@ -2,8 +2,8 @@ package yier.bubu.redis.db.offheap;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.DirectBytesSink;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapSlice;
 
 /**
  * A raw off-heap slice backed by an absolute address.
@@ -11,16 +11,16 @@ import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
  * This slice does not provide ownership/lifecycle management; callers MUST ensure the underlying
  * memory remains valid for the duration of usage (typically within a single command execution).
  */
-public final class YierdisUnsafeOffHeapRawSlice implements YierdisOffHeapSlice {
+public final class YierdisUnsafeOffHeapRawSlice implements OffHeapSlice {
     private static final int COPY_CHUNK_BYTES = 8 * 1024;
     private static final ThreadLocal<byte[]> TL_COPY_BUF =
             ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
 
-    private final YierdisOffHeapAddressAllocator allocator;
+    private final OffHeapAddressAllocator allocator;
     private final long address;
     private final int len;
 
-    public YierdisUnsafeOffHeapRawSlice(YierdisOffHeapAddressAllocator allocator, long address, int len) {
+    public YierdisUnsafeOffHeapRawSlice(OffHeapAddressAllocator allocator, long address, int len) {
         if (allocator == null) {
             throw new IllegalArgumentException("allocator must not be null");
         }

@@ -1,7 +1,7 @@
 package yier.bubu.redis.db.offheap;
 
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapBlock;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapBlock;
 
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
@@ -27,12 +27,12 @@ public final class YierdisUnsafeOffHeapDictLong implements AutoCloseable {
     private static final int INT_BYTES = Integer.BYTES;
     private static final int LONG_BYTES = Long.BYTES;
 
-    private final YierdisOffHeapAddressAllocator allocator;
+    private final OffHeapAddressAllocator allocator;
     private final int seed;
 
     private Table table;
 
-    public YierdisUnsafeOffHeapDictLong(YierdisOffHeapAddressAllocator allocator) {
+    public YierdisUnsafeOffHeapDictLong(OffHeapAddressAllocator allocator) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
         this.seed = ThreadLocalRandom.current().nextInt();
     }
@@ -467,11 +467,11 @@ public final class YierdisUnsafeOffHeapDictLong implements AutoCloseable {
         int size;
         int used;
 
-        final YierdisOffHeapBlock statesBlock;
-        final YierdisOffHeapBlock hashesBlock;
-        final YierdisOffHeapBlock keyPtrBlock;
-        final YierdisOffHeapBlock keyLenBlock;
-        final YierdisOffHeapBlock valuesBlock;
+        final OffHeapBlock statesBlock;
+        final OffHeapBlock hashesBlock;
+        final OffHeapBlock keyPtrBlock;
+        final OffHeapBlock keyLenBlock;
+        final OffHeapBlock valuesBlock;
 
         final long statesAddr;
         final long hashesAddr;

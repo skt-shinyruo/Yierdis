@@ -7,7 +7,7 @@ import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDbEngineFactory;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.MaxmemoryCoordinatorAware;
@@ -30,7 +30,7 @@ public final class YierdisInstance implements AutoCloseable {
     private final YierdisInstanceConfig config;
     private final RuntimeDbEngine[] dbs;
     private final YierdisDbRouter router;
-    private final YierdisOffHeapAllocator offHeapAllocator;
+    private final OffHeapAllocator offHeapAllocator;
     private final boolean closeAllocator;
 
     private boolean closed;
@@ -39,7 +39,7 @@ public final class YierdisInstance implements AutoCloseable {
             YierdisInstanceConfig config,
             RuntimeDbEngine[] dbs,
             YierdisDbRouter router,
-            YierdisOffHeapAllocator offHeapAllocator,
+            OffHeapAllocator offHeapAllocator,
             boolean closeAllocator
     ) {
         this.config = Objects.requireNonNull(config, "config");
@@ -53,7 +53,7 @@ public final class YierdisInstance implements AutoCloseable {
         Objects.requireNonNull(config, "config");
         int databases = Math.max(1, config.databases());
 
-        YierdisOffHeapAllocator allocator = config.offHeapAllocator();
+        OffHeapAllocator allocator = config.offHeapAllocator();
         DbEngineFactory engineFactory = config.engineFactory();
         if (engineFactory == null) {
             engineFactory = new YierdisDbEngineFactory();

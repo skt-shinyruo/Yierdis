@@ -3,6 +3,10 @@ package yier.bubu.redis.db;
 // YierdisDbValueOps：将 YierdisDb 的 value 操作按类型拆分为 ops 边界（String/Hash/List/Set/ZSet/HLL）。
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapBuf;
+import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
+import yier.bubu.redis.offheap.api.OffHeapSlice;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.HashOps;
 import yier.bubu.redis.ops.HllOps;
@@ -16,9 +20,6 @@ import yier.bubu.redis.ops.WrongTypeException;
 import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.ops.ZSetOps;
 import yier.bubu.redis.db.key.KeyHandle;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapOutOfMemoryException;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.ops.result.BulkStringMapPairs;
 import yier.bubu.redis.ops.result.BulkStringMapPairsSupport;
@@ -134,7 +135,7 @@ final class YierdisDbValueOps implements ValueOps {
                     didSet[0] = true;
                     return old;
                 });
-            } catch (YierdisOffHeapOutOfMemoryException e) {
+            } catch (OffHeapOutOfMemoryException e) {
                 db.rollbackWrite();
                 throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
@@ -205,7 +206,7 @@ final class YierdisDbValueOps implements ValueOps {
                     didSet[0] = true;
                     return old;
                 });
-            } catch (YierdisOffHeapOutOfMemoryException e) {
+            } catch (OffHeapOutOfMemoryException e) {
                 db.rollbackWrite();
                 throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
@@ -250,7 +251,7 @@ final class YierdisDbValueOps implements ValueOps {
             if (e.encoding == ValueEncoding.STRING_INT) {
                 return BulkStringValue.longAscii(e.intValue);
             }
-            YierdisOffHeapSlice slice = e.stringOffHeapSlice();
+            OffHeapSlice slice = e.stringOffHeapSlice();
             if (slice != null) {
                 return BulkStringValue.slice(slice);
             }
@@ -312,7 +313,7 @@ final class YierdisDbValueOps implements ValueOps {
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
-            } catch (YierdisOffHeapOutOfMemoryException e) {
+            } catch (OffHeapOutOfMemoryException e) {
                 db.rollbackWrite();
                 throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
@@ -363,7 +364,7 @@ final class YierdisDbValueOps implements ValueOps {
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
-            } catch (YierdisOffHeapOutOfMemoryException e) {
+            } catch (OffHeapOutOfMemoryException e) {
                 db.rollbackWrite();
                 throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
@@ -509,7 +510,7 @@ final class YierdisDbValueOps implements ValueOps {
                 }
                 return count;
             }
-            if (e.payload instanceof yier.bubu.redis.db.offheap.api.YierdisOffHeapBuf buf) {
+            if (e.payload instanceof OffHeapBuf buf) {
                 int to = Math.min(end, e.rawLen - 1);
                 for (int i = start; i <= to; i++) {
                     count += Integer.bitCount(buf.getByte(i) & 0xFF);
@@ -541,8 +542,8 @@ final class YierdisDbValueOps implements ValueOps {
                 throw new YierdisCommandException("ERR wrong number of arguments for 'hset' command");
             }
             long now = System.currentTimeMillis();
-            YierdisOffHeapAddressAllocator addressAllocator =
-                    db.offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
+            OffHeapAddressAllocator addressAllocator =
+                    db.offHeapAllocator instanceof OffHeapAddressAllocator a ? a : null;
             final int[] added = new int[]{0};
             final long[] deltaBytes = new long[]{0};
             db.store.computeWithHandle(keyBytes, (k, old) -> {
@@ -733,8 +734,8 @@ final class YierdisDbValueOps implements ValueOps {
 
         private long pushInternal(byte[] keyBytes, List<byte[]> values, boolean left) {
             long now = System.currentTimeMillis();
-            YierdisOffHeapAddressAllocator addressAllocator =
-                    db.offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
+            OffHeapAddressAllocator addressAllocator =
+                    db.offHeapAllocator instanceof OffHeapAddressAllocator a ? a : null;
             final int[] len = new int[]{0};
             final long[] deltaBytes = new long[]{0};
             db.store.computeWithHandle(keyBytes, (k, old) -> {
@@ -837,8 +838,8 @@ final class YierdisDbValueOps implements ValueOps {
         public long sadd(byte[] keyBytes, List<byte[]> members) {
             db.checkThread();
             long now = System.currentTimeMillis();
-            YierdisOffHeapAddressAllocator addressAllocator =
-                    db.offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
+            OffHeapAddressAllocator addressAllocator =
+                    db.offHeapAllocator instanceof OffHeapAddressAllocator a ? a : null;
             final int[] added = new int[]{0};
             final long[] deltaBytes = new long[]{0};
             db.store.computeWithHandle(keyBytes, (k, old) -> {
@@ -984,8 +985,8 @@ final class YierdisDbValueOps implements ValueOps {
                 throw new YierdisCommandException("ERR wrong number of arguments for 'zadd' command");
             }
             long now = System.currentTimeMillis();
-            YierdisOffHeapAddressAllocator addressAllocator =
-                    db.offHeapAllocator instanceof YierdisOffHeapAddressAllocator a ? a : null;
+            OffHeapAddressAllocator addressAllocator =
+                    db.offHeapAllocator instanceof OffHeapAddressAllocator a ? a : null;
             final int[] added = new int[]{0};
             final boolean[] changedAny = new boolean[]{false};
             final long[] deltaBytes = new long[]{0};
@@ -1316,7 +1317,7 @@ final class YierdisDbValueOps implements ValueOps {
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
-            } catch (YierdisOffHeapOutOfMemoryException e) {
+            } catch (OffHeapOutOfMemoryException e) {
                 db.rollbackWrite();
                 throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }
@@ -1402,7 +1403,7 @@ final class YierdisDbValueOps implements ValueOps {
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
-            } catch (YierdisOffHeapOutOfMemoryException e) {
+            } catch (OffHeapOutOfMemoryException e) {
                 db.rollbackWrite();
                 throw new YierdisCommandException("OOM off-heap memory limit exceeded");
             }

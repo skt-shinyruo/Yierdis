@@ -3,7 +3,7 @@ package yier.bubu.redis.db;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapDictLong;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapRawSlice;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 import yier.bubu.redis.ops.result.BulkStringSink;
 
 import java.nio.charset.StandardCharsets;
@@ -15,7 +15,7 @@ final class SetValue implements YierdisValue {
     private static final byte[] LONG_MIN_VALUE_BYTES = "-9223372036854775808".getBytes(StandardCharsets.US_ASCII);
     private static final int LONG_BYTES = Long.BYTES;
 
-    private final YierdisOffHeapAddressAllocator offHeapAllocator;
+    private final OffHeapAddressAllocator offHeapAllocator;
 
     private short[] intset16 = new short[0];
     private int[] intset32;
@@ -37,7 +37,7 @@ final class SetValue implements YierdisValue {
         this.offHeapAllocator = null;
     }
 
-    SetValue(YierdisOffHeapAddressAllocator allocator) {
+    SetValue(OffHeapAddressAllocator allocator) {
         this.offHeapAllocator = allocator;
     }
 
