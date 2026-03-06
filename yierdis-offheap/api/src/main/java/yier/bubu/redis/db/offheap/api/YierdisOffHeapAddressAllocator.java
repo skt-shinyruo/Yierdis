@@ -8,7 +8,8 @@ package yier.bubu.redis.db.offheap.api;
  * Implementations must provide a consistent view over the returned addresses for the lifetime of the blocks,
  * and {@link #close()} MUST free the underlying memory exactly once.
  */
-public interface YierdisOffHeapAddressAllocator extends YierdisOffHeapAllocator {
+public interface YierdisOffHeapAddressAllocator
+        extends yier.bubu.redis.offheap.api.OffHeapAddressAllocator, YierdisOffHeapAllocator {
     /**
      * Allocates a raw block and returns an owning handle that will free memory on {@link YierdisOffHeapBlock#close()}.
      */
@@ -30,4 +31,3 @@ public interface YierdisOffHeapAddressAllocator extends YierdisOffHeapAllocator 
 
     void copyMemory(long srcAddress, byte[] dst, int dstIndex, int len);
 }
-
