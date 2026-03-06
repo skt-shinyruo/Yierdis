@@ -5,8 +5,8 @@ import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapDictLong;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapListpack;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapRawSlice;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapSds;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapSlice;
 import yier.bubu.redis.ops.result.BulkStringSink;
 
 import java.util.ArrayList;
@@ -16,7 +16,7 @@ final class HashValue implements YierdisValue {
     // Redis stores small hashes in a compact encoding (listpack) and upgrades to hashtable as needed.
     // We approximate that behavior by starting with small parallel arrays (packed) and upgrading to a hash map.
 
-    private final YierdisOffHeapAddressAllocator offHeapAllocator;
+    private final OffHeapAddressAllocator offHeapAllocator;
 
     // Packed form uses a listpack-like contiguous buffer containing [field][value] pairs.
     // This preserves binary-safe semantics while avoiding per-entry byte[] objects.
@@ -32,7 +32,7 @@ final class HashValue implements YierdisValue {
         this.packed = new YierdisListpack();
     }
 
-    HashValue(YierdisOffHeapAddressAllocator allocator) {
+    HashValue(OffHeapAddressAllocator allocator) {
         this.offHeapAllocator = allocator;
         this.packedOffHeap = new YierdisUnsafeOffHeapListpack(allocator);
     }
@@ -305,7 +305,7 @@ final class HashValue implements YierdisValue {
                     if (valueAddr == 0L) {
                         out.bulkStringNull();
                     } else {
-                        YierdisOffHeapSlice slice = YierdisUnsafeOffHeapSds.slice(offHeapAllocator, valueAddr);
+                        OffHeapSlice slice = YierdisUnsafeOffHeapSds.slice(offHeapAllocator, valueAddr);
                         out.bulkString(slice);
                     }
                 });

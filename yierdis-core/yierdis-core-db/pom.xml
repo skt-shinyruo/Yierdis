@@ -26,10 +26,5 @@
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-bytes-lib</artifactId>
         </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-api</artifactId>
-        </dependency>
     </dependencies>
 </project>

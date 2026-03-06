@@ -4,6 +4,7 @@ package yier.bubu.redis.db;
 
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.YierdisCommandException;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
 
 import java.util.List;
 
@@ -66,7 +67,7 @@ final class YierdisHyperLogLog {
     }
 
     static boolean pfAdd(YierdisObject o,
-                         yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator offHeapAllocator,
+                         OffHeapAllocator offHeapAllocator,
                          List<byte[]> elements) {
         if (o == null) {
             throw new IllegalArgumentException("o must not be null");
@@ -226,7 +227,7 @@ final class YierdisHyperLogLog {
     }
 
     private static boolean pfAddSparseRewrite(YierdisObject o,
-                                              yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator offHeapAllocator,
+                                              OffHeapAllocator offHeapAllocator,
                                               List<byte[]> elements) {
         byte[] raw = o.stringBytesView();
         if (!isValidHllBytes(raw)) {

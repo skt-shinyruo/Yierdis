@@ -5,6 +5,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.db.offheap.netty.YierdisNettyOffHeapAllocator;
+import yier.bubu.redis.offheap.api.OffHeapSlice;
 import yier.bubu.redis.ops.ExpireOption;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.YierdisCommandException;
@@ -148,7 +149,7 @@ public class OffHeapStringStorageTest {
 
         @Override
         public void bulkString(BytesSlice slice) {
-            usedOffHeapSlice = slice instanceof yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+            usedOffHeapSlice = slice instanceof OffHeapSlice;
             if (slice == null) {
                 bytes = null;
                 return;

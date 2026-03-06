@@ -5,8 +5,8 @@ import yier.bubu.redis.db.YierdisKeyspace;
 import yier.bubu.redis.ops.ScanCursorV2;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.db.key.KeyHandleAccess;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapBlock;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapBlock;
 
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
@@ -33,14 +33,14 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
     private static final ThreadLocal<byte[]> TL_ZERO_CHUNK =
             ThreadLocal.withInitial(() -> new byte[ZERO_CHUNK_BYTES]);
 
-    private final YierdisOffHeapAddressAllocator allocator;
+    private final OffHeapAddressAllocator allocator;
     private final int seed;
 
     private Table table0;
     private Table table1;
     private int rehashIndex = -1;
 
-    public YierdisUnsafeOffHeapKeyspace(YierdisOffHeapAddressAllocator allocator) {
+    public YierdisUnsafeOffHeapKeyspace(OffHeapAddressAllocator allocator) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
         this.seed = ThreadLocalRandom.current().nextInt();
     }
@@ -1212,10 +1212,10 @@ public final class YierdisUnsafeOffHeapKeyspace<V> implements YierdisKeyspace<V>
 
     private final class Table {
         final int capacity;
-        final YierdisOffHeapBlock statesBlock;
-        final YierdisOffHeapBlock hashesBlock;
-        final YierdisOffHeapBlock keyPtrBlock;
-        final YierdisOffHeapBlock keyLenBlock;
+        final OffHeapBlock statesBlock;
+        final OffHeapBlock hashesBlock;
+        final OffHeapBlock keyPtrBlock;
+        final OffHeapBlock keyLenBlock;
 
         final long statesAddr;
         final long hashesAddr;

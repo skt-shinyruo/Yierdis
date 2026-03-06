@@ -1,7 +1,7 @@
 package yier.bubu.redis.db.offheap;
 
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapSlice;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapSlice;
 import yier.bubu.redis.ops.result.BulkStringSink;
 
 /**
@@ -18,12 +18,12 @@ public final class YierdisUnsafeOffHeapListpack implements AutoCloseable {
     private static final ThreadLocal<byte[]> TL_COPY_BUF =
             ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
 
-    private final YierdisOffHeapAddressAllocator allocator;
+    private final OffHeapAddressAllocator allocator;
     private YierdisUnsafeOffHeapString data;
     private int size;
     private int rawBytes;
 
-    public YierdisUnsafeOffHeapListpack(YierdisOffHeapAddressAllocator allocator) {
+    public YierdisUnsafeOffHeapListpack(OffHeapAddressAllocator allocator) {
         this.allocator = allocator;
         this.data = new YierdisUnsafeOffHeapString(allocator, 0);
     }
@@ -459,7 +459,7 @@ public final class YierdisUnsafeOffHeapListpack implements AutoCloseable {
                 out.bulkStringNull();
                 return;
             }
-            YierdisOffHeapSlice slice = owner.data.slice(h.dataOffset, h.len);
+            OffHeapSlice slice = owner.data.slice(h.dataOffset, h.len);
             out.bulkString(slice);
         }
     }

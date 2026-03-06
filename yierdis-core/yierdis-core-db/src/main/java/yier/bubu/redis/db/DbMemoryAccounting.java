@@ -1,6 +1,6 @@
 package yier.bubu.redis.db;
 
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAllocator;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.ops.YierdisMemoryStats;
 
 /**
@@ -18,7 +18,7 @@ final class DbMemoryAccounting {
             long maxmemoryBytes,
             long heapDataBytesEstimate,
             long reservedBytes,
-            YierdisOffHeapAllocator offHeapAllocator,
+            OffHeapAllocator offHeapAllocator,
             YierdisKeyspace<?> store,
             YierdisExpireIndex expires,
             boolean keysStoredOffHeap,
@@ -87,7 +87,7 @@ final class DbMemoryAccounting {
         );
     }
 
-    private static long safeOffHeapUsedBytes(YierdisOffHeapAllocator allocator) {
+    private static long safeOffHeapUsedBytes(OffHeapAllocator allocator) {
         if (allocator == null) {
             return 0;
         }

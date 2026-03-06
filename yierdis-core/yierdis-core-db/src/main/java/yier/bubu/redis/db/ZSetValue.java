@@ -2,7 +2,7 @@ package yier.bubu.redis.db;
 
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapZSet;
-import yier.bubu.redis.db.offheap.api.YierdisOffHeapAddressAllocator;
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.ops.result.BulkStringSink;
 
@@ -14,7 +14,7 @@ import java.nio.charset.StandardCharsets;
 final class ZSetValue implements YierdisValue {
     private static final int REF_BYTES = 8;
 
-    private final YierdisOffHeapAddressAllocator offHeapAllocator;
+    private final OffHeapAddressAllocator offHeapAllocator;
     private final YierdisUnsafeOffHeapZSet offHeap;
 
     // Redis uses listpack for small ZSETs and upgrades to dict+skiplist as needed.
@@ -32,7 +32,7 @@ final class ZSetValue implements YierdisValue {
         this.listpack = new PackedZSet();
     }
 
-    ZSetValue(YierdisOffHeapAddressAllocator allocator) {
+    ZSetValue(OffHeapAddressAllocator allocator) {
         this.offHeapAllocator = allocator;
         this.offHeap = new YierdisUnsafeOffHeapZSet(allocator);
         this.listpack = null;
