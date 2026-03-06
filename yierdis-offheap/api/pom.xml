@@ -19,6 +19,11 @@
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-core-api</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-bytes-lib</artifactId>
         </dependency>
 
