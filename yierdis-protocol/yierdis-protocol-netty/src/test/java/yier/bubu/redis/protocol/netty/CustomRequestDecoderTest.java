@@ -98,6 +98,35 @@ public class CustomRequestDecoderTest {
     }
 
     @Test
+    public void rawNewlineInPayloadIsRejectedAndNextFrameIsStillDecoded() {
+        EmbeddedChannel ch = new EmbeddedChannel(new CustomRequestDecoder(1024, 16, 64));
+        try {
+            byte[] bad = frame("{\"cmd\":\"PING\",\n\"args\":[]}");
+            byte[] good = frame("{\"cmd\":\"PING\",\"args\":[]}");
+            byte[] both = new byte[bad.length + good.length];
+            System.arraycopy(bad, 0, both, 0, bad.length);
+            System.arraycopy(good, 0, both, bad.length, good.length);
+
+            Assert.assertTrue(ch.writeInbound(Unpooled.wrappedBuffer(both)));
+
+            Object e = ch.readInbound();
+            Assert.assertNotNull(e);
+            Assert.assertTrue(e instanceof ProtocolError);
+            Assert.assertTrue(((ProtocolError) e).message().startsWith("Protocol error"));
+
+            Command cmd = ch.readInbound();
+            Assert.assertNotNull(cmd);
+            Assert.assertEquals("PING", new String(cmd.toByteArray(0), StandardCharsets.UTF_8));
+            cmd.close();
+
+            Assert.assertNull(ch.readInbound());
+            Assert.assertNull(ch.readOutbound());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void invalidJsonReturnsErrorAndContinues() {
         EmbeddedChannel ch = new EmbeddedChannel(new CustomRequestDecoder(1024, 16, 64));
         try {
@@ -146,6 +175,39 @@ public class CustomRequestDecoderTest {
             Assert.assertEquals("PING", new String(cmd.toByteArray(0), StandardCharsets.UTF_8));
             cmd.close();
             Assert.assertNull(ch.readOutbound());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void decodesArgsBeyondJsonDefaultWhenMaxArgsAllows() {
+        int args = 1500;
+        EmbeddedChannel ch = new EmbeddedChannel(new CustomRequestDecoder(1024 * 1024, 2000, 64));
+        try {
+            StringBuilder sb = new StringBuilder(16 * args);
+            sb.append("{\"cmd\":\"ECHO\",\"args\":[");
+            for (int i = 0; i < args; i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                sb.append("\"a").append(i).append('"');
+            }
+            sb.append("]}");
+            byte[] frame = frame(sb.toString());
+
+            Assert.assertTrue(ch.writeInbound(Unpooled.wrappedBuffer(frame)));
+
+            Object inbound = ch.readInbound();
+            Assert.assertNotNull(inbound);
+            Assert.assertTrue(inbound instanceof Command);
+            Command cmd = (Command) inbound;
+            Assert.assertTrue(cmd instanceof CustomCommand);
+            Assert.assertEquals(1 + args, cmd.argc());
+            Assert.assertEquals("ECHO", new String(cmd.toByteArray(0), StandardCharsets.UTF_8));
+            Assert.assertEquals("a0", new String(cmd.toByteArray(1), StandardCharsets.UTF_8));
+            Assert.assertEquals("a" + (args - 1), new String(cmd.toByteArray(args), StandardCharsets.UTF_8));
+            cmd.close();
         } finally {
             ch.finishAndReleaseAll();
         }

@@ -191,7 +191,23 @@ public final class YierdisFastCommandProcessor {
         int argc = cmd == null ? 0 : cmd.argc();
         byte[][] argv = new byte[argc][];
         for (int i = 0; i < argc; i++) {
-            argv[i] = cmd.toByteArray(i);
+            if (cmd.isNull(i)) {
+                argv[i] = null;
+                continue;
+            }
+            int len = cmd.len(i);
+            if (len < 0) {
+                // Defensive: treat negative length as a null bulk string.
+                argv[i] = null;
+                continue;
+            }
+            if (len == 0) {
+                argv[i] = new byte[0];
+                continue;
+            }
+            byte[] out = new byte[len];
+            cmd.copyToByteArray(i, out, 0);
+            argv[i] = out;
         }
         return argv;
     }
