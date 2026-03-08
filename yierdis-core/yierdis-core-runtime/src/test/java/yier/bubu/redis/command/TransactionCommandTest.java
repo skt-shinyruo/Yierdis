@@ -74,6 +74,31 @@ public class TransactionCommandTest {
         });
     }
 
+    @Test
+    public void multiQueueCopiesArgvToPreventMutationAfterEnqueue() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            TestSession session = new TestSession();
+            try (FastTestClient client = new FastTestClient(processor, session)) {
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
+
+                byte[] key = b("k");
+                byte[] value = b("v1");
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), key, value))).value());
+
+                // Mutate the original value buffer after it was enqueued.
+                value[1] = (byte) '2';
+
+                ReplyArray exec = (ReplyArray) client.execute(Arrays.asList(b("EXEC")));
+                Assert.assertNotNull(exec.values());
+                Assert.assertEquals(1, exec.values().size());
+                Assert.assertEquals("OK", ((ReplySimpleString) exec.values().get(0)).value());
+
+                Assert.assertEquals("v1", ((ReplyBulkString) client.execute(Arrays.asList(b("GET"), key))).asString());
+            }
+        });
+    }
+
     private static final class TestSession implements ServerSession {
         private int dbIndex;
         private String clientName;

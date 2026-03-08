@@ -656,15 +656,22 @@ public final class NettyCommandExecutor implements AutoCloseable {
                 }
             }
         } catch (Throwable t) {
-            // Best-effort: try to return a generic error and keep the channel alive.
+            // Internal error on the executor thread: mark closing and close the connection to avoid side effects
+            // from already-queued commands (align with handler.exceptionCaught behavior).
+            try {
+                ServerSessionState session = ServerSessionState.getOrCreate(ch);
+                session.runtime().markClosing(session);
+                backpressureController.disableAutoRead(ch);
+            } catch (Throwable ignored) {
+                // ignore
+            }
             try {
                 ByteBuf out = ctx.alloc().buffer();
                 boolean ok = false;
                 try {
                     ReplyWriter writer = newReplyWriter(out, ch);
                     writer.internalError("ERR internal error");
-                    ctx.write(out, ctx.voidPromise());
-                    flushBatch.record(ctx);
+                    ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
                     ok = true;
                 } finally {
                     if (!ok) {

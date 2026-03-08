@@ -40,6 +40,7 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
     private final int maxArgs;
     private final int maxHeaderBytes;
     private final int maxDiscardBytes;
+    private final JsonLimits jsonLimits;
 
     private State state = State.READ_HEADER;
     private int expectedPayloadLen;
@@ -54,6 +55,7 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
         this.maxArgs = Math.max(0, maxArgs);
         this.maxHeaderBytes = Math.max(0, maxHeaderBytes);
         this.maxDiscardBytes = Math.max(0, maxDiscardBytes);
+        this.jsonLimits = buildJsonLimits(this.maxPayloadBytes, this.maxArgs);
     }
 
     @Override
@@ -97,7 +99,11 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
                 // Enforce "single line payload": reject raw CR/LF bytes inside payload to keep resync predictable.
                 if (containsCrLf(payload)) {
                     enterDiscard(out, "Protocol error: payload must be a single line");
-                    state = State.DISCARD_TO_LF;
+                    // We already consumed the full length-prefixed payload and its '\n' terminator,
+                    // so we are positioned at the next frame boundary. Discarding to the next LF would
+                    // incorrectly drop subsequent frames.
+                    expectedPayloadLen = 0;
+                    state = State.READ_HEADER;
                     continue;
                 }
 
@@ -233,6 +239,11 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
         } else if (argsVal instanceof JsonArray arr) {
             List<JsonValue> values = arr.values();
             if (values != null && !values.isEmpty()) {
+                int argc = 1 + values.size();
+                if (maxArgs > 0 && argc > maxArgs) {
+                    throw new IllegalArgumentException("too many args");
+                }
+                args = new ArrayList<>(values.size());
                 for (JsonValue a : values) {
                     if (a == null || a instanceof JsonNull) {
                         args.add(null);
@@ -256,7 +267,7 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
         return new CustomCommand(cmd, args);
     }
 
-    private static JsonValue parsePayloadJson(ByteBuf payload) {
+    private JsonValue parsePayloadJson(ByteBuf payload) {
         if (payload == null) {
             throw new IllegalArgumentException("payload must not be null");
         }
@@ -269,18 +280,33 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
         if (payload.hasArray()) {
             byte[] arr = payload.array();
             int base = payload.arrayOffset() + off;
-            return JsonParser.parseStrictUtf8(arr, base, len, JsonLimits.DEFAULT);
+            return JsonParser.parseStrictUtf8(arr, base, len, jsonLimits);
         }
 
         if (payload.nioBufferCount() == 1) {
             ByteBuffer buf = payload.nioBuffer(off, len);
-            return JsonParser.parseStrictUtf8(buf, JsonLimits.DEFAULT);
+            return JsonParser.parseStrictUtf8(buf, jsonLimits);
         }
 
         // Fallback: some composite buffers can't expose a single ByteBuffer view for the payload range.
         byte[] copy = new byte[len];
         payload.getBytes(off, copy);
-        return JsonParser.parseStrictUtf8(copy, 0, copy.length, JsonLimits.DEFAULT);
+        return JsonParser.parseStrictUtf8(copy, 0, copy.length, jsonLimits);
+    }
+
+    private static JsonLimits buildJsonLimits(int maxPayloadBytes, int maxArgs) {
+        int maxNestingDepth = JsonLimits.DEFAULT.maxNestingDepth();
+        int maxArrayLen = JsonLimits.DEFAULT.maxArrayLen();
+        if (maxArgs > 0) {
+            // args array length is <= maxArgs-1, but allow maxArgs to keep a stable schema error for off-by-one.
+            maxArrayLen = maxArgs;
+        }
+        int maxObjectPairs = JsonLimits.DEFAULT.maxObjectPairs();
+        int maxStringChars = JsonLimits.DEFAULT.maxStringChars();
+        if (maxPayloadBytes > 0) {
+            maxStringChars = Math.min(maxStringChars, maxPayloadBytes);
+        }
+        return new JsonLimits(maxNestingDepth, maxArrayLen, maxObjectPairs, maxStringChars);
     }
 
     private static boolean containsCrLf(ByteBuf payload) {

@@ -176,6 +176,10 @@ final class StringCommands {
 
         if (willSet) {
             long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+            if (expire != null && !expire.isKeepTtl()) {
+                // TTL metadata is accounted separately from value bytes; reserve a best-effort budget for it too.
+                extra += DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+            }
             engine.eviction().prepareWrite(extra);
         }
 
