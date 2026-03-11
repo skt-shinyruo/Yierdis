@@ -49,17 +49,17 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-api</artifactId>
+            <artifactId>yierdis-memory-api</artifactId>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-netty</artifactId>
+            <artifactId>yierdis-memory-netty</artifactId>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-unsafe</artifactId>
+            <artifactId>yierdis-memory-unsafe</artifactId>
         </dependency>
 
         <dependency>
@@ -124,7 +124,7 @@
             <dependencies>
                 <dependency>
                     <groupId>yier.bubu.redis</groupId>
-                    <artifactId>yierdis-offheap-foreign</artifactId>
+                    <artifactId>yierdis-memory-foreign</artifactId>
                 </dependency>
             </dependencies>
         </profile>

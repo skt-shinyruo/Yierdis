@@ -40,13 +40,13 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-unsafe</artifactId>
+            <artifactId>yierdis-memory-unsafe</artifactId>
             <scope>test</scope>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-netty</artifactId>
+            <artifactId>yierdis-memory-netty</artifactId>
             <scope>test</scope>
         </dependency>
 

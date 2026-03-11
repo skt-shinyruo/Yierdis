@@ -26,7 +26,7 @@ Yierdis 的目标是 **教学/演示**：可以用项目内置 CLI 做交互学�
 - **协议模型（limits/build-info/reply IR）**：继续位于 `yierdis-protocol-model`（包名 `yier.bubu.redis.protocol.*`）。
 - **CLI 输入解析**：`InlineCommandParser` 位于 `yierdis-client`（`yier.bubu.redis.client.InlineCommandParser`）。
 - **instance 暴露面**：`YierdisInstance` 尽量只暴露 `DbEngine` 能力视图（`engine(int)` / `engines()` 防御性拷贝），避免上层依赖 `YierdisDb` 具体实现。
-- **off-heap 组装**：`YierdisOffHeapAllocators` 仅通过 `ServiceLoader` 发现 provider；server 侧通过引入对应 backend 模块（如 `yierdis-offheap-netty/unsafe/foreign`）完成组装。
+- **off-heap 组装**：`YierdisOffHeapAllocators` 仅通过 `ServiceLoader` 发现 provider；server 侧通过引入对应 backend 模块（如 `yierdis-memory-netty/unsafe/foreign`）完成组装。
 
 ## 启动
 
@@ -241,7 +241,7 @@ busy 可诊断性（排障）：
 
 项目内置一层“堆外内存操作”抽象 API，并提供多个后端实现：
 
-- `netty`：基于 Netty direct `ByteBuf`（适配层在 `yierdis-offheap-netty`；`yierdis-offheap-api` 不依赖 Netty）
+- `netty`：基于 Netty direct `ByteBuf`（适配层在 `yierdis-memory-netty`；`yierdis-memory-api` 不依赖 Netty）
 - `unsafe`：基于 `sun.misc.Unsafe`（通过 Netty `PlatformDependent`）管理 native memory（无需 incubator modules）
 - `foreign`：基于 Java 17 incubator 的 Foreign Memory API（默认构建已包含；运行时需要启用模块，server 可自动补齐）
 

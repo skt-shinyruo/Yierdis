@@ -192,9 +192,9 @@ Expected: PASS.
 ### Task 7: Make `YierdisOffHeapAllocators` ServiceLoader-only (pure API)
 
 **Files:**
-- Modify: `yierdis-offheap/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapAllocators.java`
-- Modify: `yierdis-offheap/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapBackendUnavailableException.java` (if message needs)
-- Test: update/add tests in `yierdis-offheap/api/src/test/java` as needed
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapAllocators.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapBackendUnavailableException.java` (if message needs)
+- Test: update/add tests in `yierdis-memory/api/src/test/java` as needed
 
 **Step 1: Remove implementation-class knowledge**
 
@@ -214,7 +214,7 @@ On error:
 **Step 2: Run off-heap API tests**
 
 Run:
-- `mvn -q -pl yierdis-offheap/api test -Dmaven.repo.local=/tmp/m2repo-yierdis`
+- `mvn -q -pl yierdis-memory/api test -Dmaven.repo.local=/tmp/m2repo-yierdis`
 
 Expected: PASS.
 
@@ -320,4 +320,3 @@ Run:
 - `mvn -q test -Dmaven.repo.local=/tmp/m2repo-yierdis`
 
 Expected: PASS.
-

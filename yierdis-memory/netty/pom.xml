@@ -6,20 +6,25 @@
 
     <parent>
         <groupId>yier.bubu.redis</groupId>
-        <artifactId>yierdis-offheap</artifactId>
+        <artifactId>yierdis-memory</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>yierdis-offheap-unsafe</artifactId>
+    <artifactId>yierdis-memory-netty</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis-offheap-unsafe</name>
-    <description>Unsafe-based off-heap backend for Yierdis (no incubator modules).</description>
+    <name>yierdis-memory-netty</name>
+    <description>Netty memory backend for Yierdis.</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-api</artifactId>
+            <artifactId>yierdis-bytes-netty</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-memory-api</artifactId>
         </dependency>
 
         <dependency>
@@ -29,7 +34,7 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-api</artifactId>
+            <artifactId>yierdis-memory-api</artifactId>
             <classifier>tests</classifier>
             <scope>test</scope>
         </dependency>

@@ -25,7 +25,7 @@
     </properties>
 
     <modules>
-        <module>yierdis-offheap</module>
+        <module>yierdis-memory</module>
         <module>yierdis-bytes</module>
         <module>yierdis-protocol</module>
         <module>yierdis-core</module>
@@ -119,28 +119,28 @@
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-offheap-api</artifactId>
+                <artifactId>yierdis-memory-api</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-offheap-api</artifactId>
+                <artifactId>yierdis-memory-api</artifactId>
                 <version>${project.version}</version>
                 <classifier>tests</classifier>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-offheap-netty</artifactId>
+                <artifactId>yierdis-memory-netty</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-offheap-unsafe</artifactId>
+                <artifactId>yierdis-memory-unsafe</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-offheap-foreign</artifactId>
+                <artifactId>yierdis-memory-foreign</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

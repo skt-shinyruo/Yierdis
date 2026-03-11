@@ -9,7 +9,7 @@ Refactor module boundaries so that:
 
 1. “Execution contracts” (command IR + reply writer + session/transaction state) live in a dedicated, stable contract module, not in `protocol-model`.
 2. `protocol-model` becomes “protocol model only” (limits + reply IR model + build info), and no longer contains CLI parsing utilities.
-3. `yierdis-offheap-api` becomes a pure contract module (no hard-coded implementation class names / reflection fallbacks).
+3. `yierdis-memory-api` becomes a pure contract module (no hard-coded implementation class names / reflection fallbacks).
 4. Instance-level background maintenance (expire cleanup + maxmemory enforcement) is an explicit runtime component, reusable outside the Netty server bootstrap.
 5. `YierdisInstance` exposes only safe, implementation-agnostic views (no leaking `YierdisDb[]` / covariant array hazards).
 
@@ -30,7 +30,7 @@ This blurs boundaries and widens the dependency surface for components that shou
 
 ### 2) off-heap “API” is not pure
 
-`yierdis-offheap-api` currently contains `YierdisOffHeapAllocators` which:
+`yierdis-memory-api` currently contains `YierdisOffHeapAllocators` which:
 
 - uses `ServiceLoader` (good)
 - but also hard-codes backend implementation class names + reflection fallback (not a pure contract)
@@ -93,7 +93,7 @@ Update `YierdisCli` to import it from `yier.bubu.redis.client`.
 
 ### C) Make off-heap API pure: `ServiceLoader` only
 
-Refactor `yierdis-offheap-api`:
+Refactor `yierdis-memory-api`:
 
 - `YierdisOffHeapAllocators` becomes “provider resolver” only:
   - discover available providers via `ServiceLoader<YierdisOffHeapAllocatorProvider>`
@@ -159,4 +159,3 @@ This keeps server/runtime consumers working with `DbEngine` only.
 - **Widespread compile breakage** (imports/poms): do the refactor in small commits and keep `mvn test` green frequently.
 - **Boundary test drift**: update the guard tests explicitly to forbid the new contract package where appropriate.
 - **off-heap backend availability errors**: keep error messages clear by surfacing available providers and backend requirements.
-

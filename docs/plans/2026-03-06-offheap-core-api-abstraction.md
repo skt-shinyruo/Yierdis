@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Move the off-heap allocator boundary into `yierdis-core-api` as a neutral SPI so core modules stop leaking `Object`/implementation types across boundaries, and so `yierdis-offheap-*` becomes a pluggable implementation layer.
+**Goal:** Move the off-heap allocator boundary into `yierdis-core-api` as a neutral SPI so core modules stop leaking `Object`/implementation types across boundaries, and so `yierdis-memory-*` becomes a pluggable implementation layer.
 
-**Architecture:** Introduce a neutral `yier.bubu.redis.offheap.api` contract (`OffHeapAllocator`, `OffHeapBuf`, `OffHeapSlice`, `OffHeapAddressAllocator`, etc.) in `yierdis-core-api`. Make `yierdis-offheap-api` types (`YierdisOffHeapAllocator`, `YierdisOffHeapBuf`, …) extend these contracts, keeping backend selection/ServiceLoader in `yierdis-offheap-api`. Then migrate core modules to depend only on core-api off-heap contracts, including making `DbEngineFactory` type-safe by accepting `OffHeapAllocator` instead of `Object`.
+**Architecture:** Introduce a neutral `yier.bubu.redis.offheap.api` contract (`OffHeapAllocator`, `OffHeapBuf`, `OffHeapSlice`, `OffHeapAddressAllocator`, etc.) in `yierdis-core-api`. Make `yierdis-memory-api` types (`YierdisOffHeapAllocator`, `YierdisOffHeapBuf`, …) extend these contracts, keeping backend selection/ServiceLoader in `yierdis-memory-api`. Then migrate core modules to depend only on core-api off-heap contracts, including making `DbEngineFactory` type-safe by accepting `OffHeapAllocator` instead of `Object`.
 
 **Tech Stack:** Java 17, Maven multi-module build, JUnit4 tests.
 
@@ -177,20 +177,20 @@ Run:
 
 ---
 
-### Task 2: Make `yierdis-offheap-api` extend the neutral core-api contracts
+### Task 2: Make `yierdis-memory-api` extend the neutral core-api contracts
 
 **Files:**
-- Modify: `yierdis-offheap/api/pom.xml`
-- Modify: `yierdis-offheap/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapAllocator.java`
-- Modify: `yierdis-offheap/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapBuf.java`
-- Modify: `yierdis-offheap/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapSlice.java`
-- Modify: `yierdis-offheap/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapAddressAllocator.java`
-- Modify: `yierdis-offheap/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapBlock.java`
-- Modify: `yierdis-offheap/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapOutOfMemoryException.java`
+- Modify: `yierdis-memory/api/pom.xml`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapAllocator.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapBuf.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapSlice.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapAddressAllocator.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapBlock.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapOutOfMemoryException.java`
 
 **Step 1: Add dependency to core-api**
 
-In `yierdis-offheap/api/pom.xml`, add:
+In `yierdis-memory/api/pom.xml`, add:
 
 ```xml
 <dependency>
@@ -227,14 +227,14 @@ Change `YierdisOffHeapOutOfMemoryException`:
 
 **Step 4: Run offheap-api tests**
 
-Run: `mvn -q -pl yierdis-offheap/api test -Dmaven.repo.local=/tmp/m2repo-yierdis`
+Run: `mvn -q -pl yierdis-memory/api test -Dmaven.repo.local=/tmp/m2repo-yierdis`
 
 Expected: PASS.
 
 **Step 5: Commit (optional)**
 
 Run:
-`git add yierdis-offheap/api/pom.xml yierdis-offheap/api/src/main/java/yier/bubu/redis/db/offheap/api`  
+`git add yierdis-memory/api/pom.xml yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api`  
 `git commit -m "refactor(offheap-api): extend neutral core-api off-heap contracts"`
 
 ---
@@ -288,7 +288,7 @@ Expected: PASS.
 - Modify: `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisHyperLogLog.java`
 - Modify: `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/*Value.java` (Hash/List/Set/ZSet as needed)
 - Modify: `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/key/*` (KeyHandle, OffHeapKeyHandle, KeyHandleAccess)
-- Modify: `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/offheap/*` (unsafe off-heap internals that currently import `yierdis-offheap-api` types)
+- Modify: `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/offheap/*` (unsafe off-heap internals that currently import `yierdis-memory-api` types)
 
 **Step 1: Switch imports from `yier.bubu.redis.db.offheap.api.*` to `yier.bubu.redis.offheap.api.*`**
 
@@ -313,14 +313,14 @@ In `YierdisDbValueOps` and any other code catching off-heap OOM:
 - catch `OffHeapOutOfMemoryException` (neutral)
 - keep user-visible error messages stable (existing tests assert message fragments)
 
-**Step 4: Drop `yierdis-offheap-api` dependency**
+**Step 4: Drop `yierdis-memory-api` dependency**
 
 In `yierdis-core-db/pom.xml` remove:
 
 ```xml
 <dependency>
   <groupId>yier.bubu.redis</groupId>
-  <artifactId>yierdis-offheap-api</artifactId>
+  <artifactId>yierdis-memory-api</artifactId>
 </dependency>
 ```
 
@@ -361,7 +361,7 @@ In `yierdis-core-runtime/pom.xml` remove:
 ```xml
 <dependency>
   <groupId>yier.bubu.redis</groupId>
-  <artifactId>yierdis-offheap-api</artifactId>
+  <artifactId>yierdis-memory-api</artifactId>
 </dependency>
 ```
 
@@ -394,7 +394,7 @@ In `yierdis-core-command/pom.xml` remove:
 ```xml
 <dependency>
   <groupId>yier.bubu.redis</groupId>
-  <artifactId>yierdis-offheap-api</artifactId>
+  <artifactId>yierdis-memory-api</artifactId>
 </dependency>
 ```
 
@@ -440,4 +440,3 @@ Expected: PASS.
 Run: `mvn -q -DskipTests package -Dmaven.repo.local=/tmp/m2repo-yierdis`
 
 Expected: PASS.
-

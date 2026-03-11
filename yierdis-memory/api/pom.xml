@@ -6,37 +6,25 @@
 
     <parent>
         <groupId>yier.bubu.redis</groupId>
-        <artifactId>yierdis-offheap</artifactId>
+        <artifactId>yierdis-memory</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>yierdis-offheap-netty</artifactId>
+    <artifactId>yierdis-memory-api</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis-offheap-netty</name>
-    <description>Netty off-heap backend for Yierdis.</description>
+    <name>yierdis-memory-api</name>
+    <description>Memory API contracts for Yierdis.</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-bytes-netty</artifactId>
+            <artifactId>yierdis-core-api</artifactId>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-api</artifactId>
-            <classifier>tests</classifier>
-            <scope>test</scope>
+            <artifactId>yierdis-bytes-lib</artifactId>
         </dependency>
 
         <dependency>
@@ -45,4 +33,21 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>test-jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

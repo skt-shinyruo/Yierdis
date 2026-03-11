@@ -6,25 +6,25 @@
 
     <parent>
         <groupId>yier.bubu.redis</groupId>
-        <artifactId>yierdis-offheap</artifactId>
+        <artifactId>yierdis-memory</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>yierdis-offheap-foreign</artifactId>
+    <artifactId>yierdis-memory-foreign</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis-offheap-foreign</name>
-    <description>Foreign Memory API off-heap backend for Yierdis (Java 17 incubator).</description>
+    <name>yierdis-memory-foreign</name>
+    <description>Foreign Memory API backend for Yierdis (Java 17 incubator).</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-api</artifactId>
+            <artifactId>yierdis-memory-api</artifactId>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-offheap-api</artifactId>
+            <artifactId>yierdis-memory-api</artifactId>
             <classifier>tests</classifier>
             <scope>test</scope>
         </dependency>
