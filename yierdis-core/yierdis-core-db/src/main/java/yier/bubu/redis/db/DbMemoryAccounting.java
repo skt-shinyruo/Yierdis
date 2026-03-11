@@ -1,6 +1,7 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
+import yier.bubu.redis.ops.DbMemoryConstants;
 import yier.bubu.redis.ops.YierdisMemoryStats;
 
 /**
@@ -55,6 +56,14 @@ final class DbMemoryAccounting {
         }
 
         long usedBytesForMaxmemory = heapDataBytesEstimate + (includeOffHeapInMaxmemory ? offHeapUsedBytes : 0);
+        long ttlBytesEstimate = estimateTtlBytesForMaxmemory(expireCount);
+        if (ttlBytesEstimate > 0) {
+            if (Long.MAX_VALUE - usedBytesForMaxmemory < ttlBytesEstimate) {
+                usedBytesForMaxmemory = Long.MAX_VALUE;
+            } else {
+                usedBytesForMaxmemory += ttlBytesEstimate;
+            }
+        }
         long effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + Math.max(0L, reservedBytes);
         long totalEstimatedBytes =
                 heapDataBytesEstimate
@@ -108,5 +117,17 @@ final class DbMemoryAccounting {
 
     private static long align8(long bytes) {
         return (bytes + 7L) & ~7L;
+    }
+
+    private static long estimateTtlBytesForMaxmemory(int expireCount) {
+        long perEntry = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+        if (perEntry <= 0 || expireCount <= 0) {
+            return 0;
+        }
+        try {
+            return Math.multiplyExact((long) expireCount, perEntry);
+        } catch (ArithmeticException e) {
+            return Long.MAX_VALUE;
+        }
     }
 }

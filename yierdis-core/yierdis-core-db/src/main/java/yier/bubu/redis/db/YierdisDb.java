@@ -1135,20 +1135,52 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     public boolean pexpire(BytesView keyView, long milliseconds) {
         checkThread();
-        YierdisObject e = store.get(keyView);
+        KeyHandle handle = store.keyHandle(keyView);
+        if (handle == null) {
+            return false;
+        }
+        YierdisObject e = store.get(handle);
         if (e == null) {
             return false;
         }
         long nowMillis = System.currentTimeMillis();
-        Long expireAtMillis = expires.get(keyView);
-        if (expireAtMillis != null && expireAtMillis <= nowMillis) {
+        if (removeIfExpired(handle, e, nowMillis)) {
             return false;
         }
-        byte[] keyBytes = toByteArray(keyView);
-        if (keyBytes == null) {
-            return false;
+        touch(e);
+
+        if (milliseconds <= 0) {
+            // Redis-compatible: milliseconds<=0 means the key is deleted immediately (if it exists).
+            removeExpire(handle);
+            if (store.remove(handle, e)) {
+                e.releasePayloadIfAny();
+                adjustUsedBytes(-e.estimatedBytes);
+            }
+            YierdisChangeTracking.markValueChanged();
+            return true;
         }
-        return pexpire(keyBytes, milliseconds);
+
+        boolean reserved = false;
+        boolean ok = false;
+        long expireAtMillis = safeAddMillis(nowMillis, milliseconds);
+        try {
+            if (expires.get(handle) == null) {
+                prepareWrite(TTL_ENTRY_BYTES_ESTIMATE);
+                reserved = true;
+            }
+            setExpireAtMillis(handle, expireAtMillis);
+            YierdisChangeTracking.markTtlChanged();
+            ok = true;
+            return true;
+        } finally {
+            if (reserved) {
+                if (ok) {
+                    commitWrite(0);
+                } else {
+                    rollbackWrite();
+                }
+            }
+        }
     }
 
     public boolean expireAtSeconds(byte[] keyBytes, long unixSeconds) {
@@ -1164,20 +1196,13 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     public boolean expireAtSeconds(BytesView keyView, long unixSeconds) {
         checkThread();
-        YierdisObject e = store.get(keyView);
-        if (e == null) {
-            return false;
+        long expireAtMillis;
+        try {
+            expireAtMillis = Math.multiplyExact(unixSeconds, 1000L);
+        } catch (ArithmeticException e) {
+            expireAtMillis = Long.MAX_VALUE;
         }
-        long nowMillis = System.currentTimeMillis();
-        Long expireAtMillis = expires.get(keyView);
-        if (expireAtMillis != null && expireAtMillis <= nowMillis) {
-            return false;
-        }
-        byte[] keyBytes = toByteArray(keyView);
-        if (keyBytes == null) {
-            return false;
-        }
-        return expireAtSeconds(keyBytes, unixSeconds);
+        return expireAtMillis(keyView, expireAtMillis);
     }
 
     public boolean expireAtMillis(byte[] keyBytes, long unixMillis) {
@@ -1226,20 +1251,51 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     public boolean expireAtMillis(BytesView keyView, long unixMillis) {
         checkThread();
-        YierdisObject e = store.get(keyView);
+        KeyHandle handle = store.keyHandle(keyView);
+        if (handle == null) {
+            return false;
+        }
+        YierdisObject e = store.get(handle);
         if (e == null) {
             return false;
         }
-        long nowMillis = System.currentTimeMillis();
-        Long expireAtMillis = expires.get(keyView);
-        if (expireAtMillis != null && expireAtMillis <= nowMillis) {
+        long now = System.currentTimeMillis();
+        if (removeIfExpired(handle, e, now)) {
             return false;
         }
-        byte[] keyBytes = toByteArray(keyView);
-        if (keyBytes == null) {
-            return false;
+        touch(e);
+
+        if (unixMillis <= now) {
+            // 过期时间在过去/现在：按 Redis 语义立刻删除 key（如果存在）。
+            removeExpire(handle);
+            if (store.remove(handle, e)) {
+                e.releasePayloadIfAny();
+                adjustUsedBytes(-e.estimatedBytes);
+            }
+            YierdisChangeTracking.markValueChanged();
+            return true;
         }
-        return expireAtMillis(keyBytes, unixMillis);
+
+        boolean reserved = false;
+        boolean ok = false;
+        try {
+            if (expires.get(handle) == null) {
+                prepareWrite(TTL_ENTRY_BYTES_ESTIMATE);
+                reserved = true;
+            }
+            setExpireAtMillis(handle, unixMillis);
+            YierdisChangeTracking.markTtlChanged();
+            ok = true;
+            return true;
+        } finally {
+            if (reserved) {
+                if (ok) {
+                    commitWrite(0);
+                } else {
+                    rollbackWrite();
+                }
+            }
+        }
     }
 
     public boolean persist(byte[] keyBytes) {
@@ -1260,23 +1316,27 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     public boolean persist(BytesView keyView) {
         checkThread();
-        YierdisObject e = store.get(keyView);
+        KeyHandle handle = store.keyHandle(keyView);
+        if (handle == null) {
+            return false;
+        }
+        YierdisObject e = store.get(handle);
         if (e == null) {
             return false;
         }
         long nowMillis = System.currentTimeMillis();
-        Long expireAtMillis = expires.get(keyView);
+        if (removeIfExpired(handle, e, nowMillis)) {
+            return false;
+        }
+
+        touch(e);
+        Long expireAtMillis = expires.get(handle);
         if (expireAtMillis == null) {
             return false;
         }
-        if (expireAtMillis <= nowMillis) {
-            return false;
-        }
-        byte[] keyBytes = toByteArray(keyView);
-        if (keyBytes == null) {
-            return false;
-        }
-        return persist(keyBytes);
+        removeExpire(handle);
+        YierdisChangeTracking.markTtlChanged();
+        return true;
     }
 
     public long ttlSeconds(byte[] keyBytes) {
