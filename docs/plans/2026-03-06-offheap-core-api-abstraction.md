@@ -290,7 +290,7 @@ Expected: PASS.
 - Modify: `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/key/*` (KeyHandle, OffHeapKeyHandle, KeyHandleAccess)
 - Modify: `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/offheap/*` (unsafe off-heap internals that currently import `yierdis-memory-api` types)
 
-**Step 1: Switch imports from `yier.bubu.redis.db.offheap.api.*` to `yier.bubu.redis.offheap.api.*`**
+**Step 1: Switch imports from `yier.bubu.redis.db.memory.api.*` to `yier.bubu.redis.offheap.api.*`**
 
 Mechanical change across the module:
 - `YierdisOffHeapAllocator` → `OffHeapAllocator`

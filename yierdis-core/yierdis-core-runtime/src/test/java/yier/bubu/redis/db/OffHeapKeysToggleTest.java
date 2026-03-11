@@ -2,8 +2,8 @@ package yier.bubu.redis.db;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.db.offheap.netty.YierdisNettyOffHeapAllocator;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.db.memory.netty.YierdisNettyOffHeapAllocator;
+import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
 import yier.bubu.redis.ops.SetMode;
 
 import static yier.bubu.redis.testutil.TestBytes.b;

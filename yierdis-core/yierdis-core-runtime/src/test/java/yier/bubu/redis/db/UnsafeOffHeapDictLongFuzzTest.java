@@ -4,7 +4,7 @@ import io.netty.util.internal.PlatformDependent;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapDictLong;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;

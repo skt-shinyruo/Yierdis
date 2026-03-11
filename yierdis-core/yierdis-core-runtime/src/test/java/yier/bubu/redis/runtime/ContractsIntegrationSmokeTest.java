@@ -3,7 +3,7 @@ package yier.bubu.redis.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
 import yier.bubu.redis.testutil.FastTestClient;

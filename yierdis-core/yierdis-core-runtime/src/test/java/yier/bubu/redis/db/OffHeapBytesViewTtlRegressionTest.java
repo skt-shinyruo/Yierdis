@@ -3,7 +3,7 @@ package yier.bubu.redis.db;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.ops.SetMode;
 

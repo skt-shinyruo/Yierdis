@@ -48,7 +48,7 @@ public class CoreCommandBoundaryGuardTest {
                                     break;
                                 }
                                 if (trimmed.startsWith("import yier.bubu.redis.db.")
-                                        && !trimmed.startsWith("import yier.bubu.redis.db.offheap.api.")) {
+                                        && !trimmed.startsWith("import yier.bubu.redis.db.memory.api.")) {
                                     offenders.add(p.toString());
                                     break;
                                 }

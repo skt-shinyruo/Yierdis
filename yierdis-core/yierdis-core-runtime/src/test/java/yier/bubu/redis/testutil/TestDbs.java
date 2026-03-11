@@ -1,7 +1,7 @@
 package yier.bubu.redis.testutil;
 
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.db.offheap.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
 
 import java.util.Objects;
 import java.util.function.Consumer;

@@ -4,7 +4,7 @@ import yier.bubu.redis.ops.ValueType;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.db.offheap.netty.YierdisNettyOffHeapAllocator;
+import yier.bubu.redis.db.memory.netty.YierdisNettyOffHeapAllocator;
 import yier.bubu.redis.offheap.api.OffHeapSlice;
 import yier.bubu.redis.ops.ExpireOption;
 import yier.bubu.redis.ops.SetMode;
