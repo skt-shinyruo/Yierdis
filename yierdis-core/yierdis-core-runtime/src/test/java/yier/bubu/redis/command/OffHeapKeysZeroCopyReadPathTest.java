@@ -3,7 +3,7 @@ package yier.bubu.redis.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.db.offheap.OffHeapKeyCopyDiagnostics;
+import yier.bubu.redis.db.memory.offheap.OffHeapKeyCopyDiagnostics;
 import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;

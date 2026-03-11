@@ -3,7 +3,7 @@ package yier.bubu.redis.db;
 import io.netty.util.internal.PlatformDependent;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapDictLong;
+import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapDictLong;
 import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
 
 import java.nio.charset.StandardCharsets;

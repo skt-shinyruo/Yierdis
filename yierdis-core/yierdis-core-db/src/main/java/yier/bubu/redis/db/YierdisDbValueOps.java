@@ -517,7 +517,7 @@ final class YierdisDbValueOps implements ValueOps {
                 }
                 return count;
             }
-            if (e.payload instanceof yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapString s) {
+            if (e.payload instanceof yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapString s) {
                 int to = Math.min(end, e.rawLen - 1);
                 for (int i = start; i <= to; i++) {
                     count += Integer.bitCount(s.getByte(i) & 0xFF);

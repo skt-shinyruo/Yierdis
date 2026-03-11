@@ -192,8 +192,8 @@ Expected: PASS.
 ### Task 7: Make `YierdisOffHeapAllocators` ServiceLoader-only (pure API)
 
 **Files:**
-- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapAllocators.java`
-- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapBackendUnavailableException.java` (if message needs)
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/memory/api/YierdisOffHeapAllocators.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/memory/api/YierdisOffHeapBackendUnavailableException.java` (if message needs)
 - Test: update/add tests in `yierdis-memory/api/src/test/java` as needed
 
 **Step 1: Remove implementation-class knowledge**

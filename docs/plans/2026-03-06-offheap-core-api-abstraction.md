@@ -181,12 +181,12 @@ Run:
 
 **Files:**
 - Modify: `yierdis-memory/api/pom.xml`
-- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapAllocator.java`
-- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapBuf.java`
-- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapSlice.java`
-- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapAddressAllocator.java`
-- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapBlock.java`
-- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api/YierdisOffHeapOutOfMemoryException.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/memory/api/YierdisOffHeapAllocator.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/memory/api/YierdisOffHeapBuf.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/memory/api/YierdisOffHeapSlice.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/memory/api/YierdisOffHeapAddressAllocator.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/memory/api/YierdisOffHeapBlock.java`
+- Modify: `yierdis-memory/api/src/main/java/yier/bubu/redis/db/memory/api/YierdisOffHeapOutOfMemoryException.java`
 
 **Step 1: Add dependency to core-api**
 
@@ -234,7 +234,7 @@ Expected: PASS.
 **Step 5: Commit (optional)**
 
 Run:
-`git add yierdis-memory/api/pom.xml yierdis-memory/api/src/main/java/yier/bubu/redis/db/offheap/api`  
+`git add yierdis-memory/api/pom.xml yierdis-memory/api/src/main/java/yier/bubu/redis/db/memory/api`  
 `git commit -m "refactor(offheap-api): extend neutral core-api off-heap contracts"`
 
 ---
@@ -288,7 +288,7 @@ Expected: PASS.
 - Modify: `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisHyperLogLog.java`
 - Modify: `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/*Value.java` (Hash/List/Set/ZSet as needed)
 - Modify: `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/key/*` (KeyHandle, OffHeapKeyHandle, KeyHandleAccess)
-- Modify: `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/offheap/*` (unsafe off-heap internals that currently import `yierdis-memory-api` types)
+- Modify: `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/memory/offheap/*` (unsafe off-heap internals that currently import `yierdis-memory-api` types)
 
 **Step 1: Switch imports from `yier.bubu.redis.db.memory.api.*` to `yier.bubu.redis.offheap.api.*`**
 

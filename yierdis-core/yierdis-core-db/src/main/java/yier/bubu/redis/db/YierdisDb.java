@@ -7,9 +7,9 @@ import yier.bubu.redis.offheap.api.OffHeapBuf;
 import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
 import yier.bubu.redis.ops.ScanCursorV2;
 import yier.bubu.redis.ops.ValueType;
-import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapExpireIndex;
-import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapKeyspace;
-import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapString;
+import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapExpireIndex;
+import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapKeyspace;
+import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapString;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.db.memory.MemoryLedger;
 import yier.bubu.redis.db.memory.MemoryLedgerOutOfMemoryException;
@@ -1958,7 +1958,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             }
             return count;
         }
-        if (e.payload instanceof yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapString s) {
+        if (e.payload instanceof yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapString s) {
             int to = Math.min(end, e.rawLen - 1);
             for (int i = start; i <= to; i++) {
                 count += Integer.bitCount(s.getByte(i) & 0xFF);

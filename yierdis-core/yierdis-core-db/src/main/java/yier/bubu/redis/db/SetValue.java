@@ -1,8 +1,8 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.ops.ValueType;
-import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapDictLong;
-import yier.bubu.redis.db.offheap.YierdisUnsafeOffHeapRawSlice;
+import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapDictLong;
+import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapRawSlice;
 import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 import yier.bubu.redis.ops.result.BulkStringSink;
 

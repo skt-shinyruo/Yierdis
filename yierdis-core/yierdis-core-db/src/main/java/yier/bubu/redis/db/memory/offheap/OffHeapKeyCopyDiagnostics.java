@@ -1,4 +1,4 @@
-package yier.bubu.redis.db.offheap;
+package yier.bubu.redis.db.memory.offheap;
 
 // OffHeapKeyCopyDiagnostics：用于测试与诊断“off-heap keys 是否发生 canonical heap copy”。
 

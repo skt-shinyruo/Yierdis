@@ -1,4 +1,4 @@
-package yier.bubu.redis.db.offheap;
+package yier.bubu.redis.db.memory.offheap;
 
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.db.YierdisKeyspace;

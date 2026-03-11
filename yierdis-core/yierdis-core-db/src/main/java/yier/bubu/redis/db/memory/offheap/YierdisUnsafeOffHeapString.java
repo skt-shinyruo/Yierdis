@@ -1,4 +1,4 @@
-package yier.bubu.redis.db.offheap;
+package yier.bubu.redis.db.memory.offheap;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.DirectBytesSink;
