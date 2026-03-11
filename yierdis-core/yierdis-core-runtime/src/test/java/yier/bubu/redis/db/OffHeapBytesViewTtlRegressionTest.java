@@ -64,6 +64,16 @@ public class OffHeapBytesViewTtlRegressionTest {
             }
         } finally {
             if (dummyKeyAddrs != null) {
+                // Make sure the expire index no longer references the dummy off-heap key bytes before we free them.
+                // (Future-proof against any shutdown/cleanup path that may iterate/dereference expire index entries.)
+                for (int i = 0; i < dummyKeyAddrs.length; i++) {
+                    long addr = dummyKeyAddrs[i];
+                    if (addr == 0) {
+                        continue;
+                    }
+                    KeyHandle handle = KeyHandle.forOffHeap(allocator, addr, targetKeyLen, i);
+                    db.expires.removeExpire(handle);
+                }
                 for (long addr : dummyKeyAddrs) {
                     if (addr != 0) {
                         allocator.freeAddress(addr, targetKeyLen);
