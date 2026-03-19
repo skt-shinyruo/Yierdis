@@ -10,9 +10,23 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 
 public class OffHeapKeysToggleTest {
     @Test
-    public void unsafeBackendDoesNotStoreKeysOffHeapByDefault() {
+    public void singleArgConstructorRemainsNonOwningForCompatibility() {
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
         YierdisDb db = new YierdisDb(allocator);
+        assertAllocatorStillUsableAfterShutdown(db, allocator);
+    }
+
+    @Test
+    public void maxmemoryConstructorRemainsNonOwningForCompatibility() {
+        YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
+        YierdisDb db = new YierdisDb(allocator, 64, "noeviction", 5, 5, 5);
+        assertAllocatorStillUsableAfterShutdown(db, allocator);
+    }
+
+    @Test
+    public void unsafeBackendDoesNotStoreKeysOffHeapByDefault() {
+        YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
+        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             db.setString(b("k"), b("v"), SetMode.NORMAL, null);
@@ -25,7 +39,7 @@ public class OffHeapKeysToggleTest {
     @Test
     public void offHeapKeysEnabledStoresKeysAndExpiresOffHeap() {
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator, true, 0, "noeviction", 5, 5, 5);
+        YierdisDb db = new YierdisDb(allocator, true, true, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             db.setString(b("k"), b("v"), SetMode.NORMAL, null);
@@ -44,6 +58,29 @@ public class OffHeapKeysToggleTest {
         } catch (IllegalArgumentException expected) {
             Assert.assertTrue(expected.getMessage().contains("offHeapKeysEnabled"));
         } finally {
+            allocator.close();
+        }
+    }
+
+    @Test
+    public void explicitNonOwningConstructorLeavesAllocatorUsableAfterShutdown() {
+        YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
+        YierdisDb db = new YierdisDb(allocator, false, true, 0, "noeviction", 5, 5, 5);
+        assertAllocatorStillUsableAfterShutdown(db, allocator);
+    }
+
+    private static void assertAllocatorStillUsableAfterShutdown(YierdisDb db, YierdisUnsafeOffHeapAllocator allocator) {
+        try {
+            db.bindToCurrentThread();
+        } finally {
+            db.shutdown();
+        }
+
+        long address = allocator.allocateAddress(1);
+        try {
+            Assert.assertTrue(address != 0L);
+        } finally {
+            allocator.freeAddress(address, 1);
             allocator.close();
         }
     }

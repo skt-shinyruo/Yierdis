@@ -10,6 +10,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
+import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -219,12 +220,14 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     @Override
     public void close() {
         // Closing is best-effort: this class is used in tests/tools where leaks are worse than double-close.
+        Throwable failure = null;
+
         Channel ch = serverChannel;
         if (ch != null) {
             try {
                 ch.close().syncUninterruptibly();
-            } catch (Throwable ignored) {
-                // ignore
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
             }
         }
         serverChannel = null;
@@ -239,8 +242,8 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         if (ex != null) {
             try {
                 ex.shutdownGracefully().syncUninterruptibly();
-            } catch (Throwable ignored) {
-                // ignore
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
             }
         }
 
@@ -248,12 +251,20 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         if (inst != null) {
             try {
                 if (ex != null) {
-                    ex.executor().submit(inst::close).syncUninterruptibly();
+                    Future<?> closeFuture = ex.executor().submit(() -> {
+                        inst.close();
+                        return null;
+                    });
+                    closeFuture.awaitUninterruptibly();
+                    Throwable cause = closeFuture.cause();
+                    if (cause != null) {
+                        throw cause;
+                    }
                 } else {
                     inst.close();
                 }
-            } catch (Throwable ignored) {
-                // ignore
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
             }
         }
         instance = null;
@@ -262,19 +273,31 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
         EventExecutorGroup cg = commandGroup;
         if (cg != null) {
-            cg.shutdownGracefully().syncUninterruptibly();
+            try {
+                cg.shutdownGracefully().syncUninterruptibly();
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
+            }
         }
         commandGroup = null;
 
         EventLoopGroup boss = bossGroup;
         if (boss != null) {
-            boss.shutdownGracefully().syncUninterruptibly();
+            try {
+                boss.shutdownGracefully().syncUninterruptibly();
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
+            }
         }
         bossGroup = null;
 
         EventLoopGroup workers = workerGroup;
         if (workers != null) {
-            workers.shutdownGracefully().syncUninterruptibly();
+            try {
+                workers.shutdownGracefully().syncUninterruptibly();
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
+            }
         }
         workerGroup = null;
 
@@ -282,10 +305,36 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         if (allocator != null) {
             try {
                 allocator.close();
-            } catch (Exception ignored) {
-                // ignore
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
             }
         }
         offHeapAllocator = null;
+
+        rethrowIfNeeded(failure);
+    }
+
+    private static Throwable recordCloseFailure(Throwable current, Throwable next) {
+        if (next == null) {
+            return current;
+        }
+        if (current == null) {
+            return next;
+        }
+        current.addSuppressed(next);
+        return current;
+    }
+
+    private static void rethrowIfNeeded(Throwable failure) {
+        if (failure == null) {
+            return;
+        }
+        if (failure instanceof RuntimeException runtimeException) {
+            throw runtimeException;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw new IllegalStateException("close failed", failure);
     }
 }

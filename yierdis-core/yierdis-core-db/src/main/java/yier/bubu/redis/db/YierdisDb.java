@@ -93,7 +93,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     }
 
     public YierdisDb(OffHeapAllocator offHeapAllocator) {
-        this(offHeapAllocator, false, 0, "noeviction", 5, 5, 5);
+        this(offHeapAllocator, false, false, 0, "noeviction", 5, 5, 5);
     }
 
     public YierdisDb(
@@ -104,7 +104,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        this(offHeapAllocator, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+        this(offHeapAllocator, false, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
     }
 
     public YierdisDb(

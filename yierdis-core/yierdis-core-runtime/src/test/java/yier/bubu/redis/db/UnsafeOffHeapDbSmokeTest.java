@@ -13,7 +13,7 @@ public class UnsafeOffHeapDbSmokeTest {
     @Test
     public void offHeapCompositeTypesWorkAndShutdownDoesNotLeak() {
             YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-            YierdisDb db = new YierdisDb(allocator);
+            YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
             try {
                 db.bindToCurrentThread();
                 Assert.assertTrue(db.setString(b("s"), b("v"), SetMode.NORMAL, null));

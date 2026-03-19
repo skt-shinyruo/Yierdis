@@ -46,6 +46,12 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-memory-api</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-memory-netty</artifactId>
             <scope>test</scope>
         </dependency>

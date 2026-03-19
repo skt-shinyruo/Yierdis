@@ -6,6 +6,7 @@ import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
@@ -27,7 +28,7 @@ public class ContractsIntegrationSmokeTest {
     }
 
     private static void runCase(boolean offHeapValues, YierdisInstanceConfig.MaxmemoryScope scope) {
-        YierdisUnsafeOffHeapAllocator allocator = offHeapValues ? new YierdisUnsafeOffHeapAllocator(5_000) : null;
+        OffHeapAllocator allocator = offHeapValues ? new YierdisUnsafeOffHeapAllocator(5_000) : null;
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
                 .offHeapAllocator(allocator)

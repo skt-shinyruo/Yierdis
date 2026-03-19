@@ -12,7 +12,7 @@ public class UnsafeOffHeapKeyspaceTest {
     @Test
     public void cleanupExpiredAndShutdownDoNotLeakOffHeapMemory() {
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator);
+        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             db.setString(b("k"), b("v"), SetMode.NORMAL, ExpireOption.px(0));

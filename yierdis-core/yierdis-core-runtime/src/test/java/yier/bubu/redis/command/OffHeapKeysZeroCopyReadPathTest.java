@@ -16,7 +16,7 @@ public class OffHeapKeysZeroCopyReadPathTest {
     @Test
     public void readPathDoesNotCopyCanonicalKeyBytesWhenKeysStoredOffHeap() {
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator, true, 0, "noeviction", 5, 5, 5);
+        YierdisDb db = new YierdisDb(allocator, true, true, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);

@@ -21,7 +21,7 @@ public class OffHeapStringStorageTest {
     @Test
     public void setGetUsesOffHeapSliceAndDelFrees() {
         YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator);
+        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
@@ -45,7 +45,7 @@ public class OffHeapStringStorageTest {
     @Test
     public void cleanupExpiredFreesOffHeapStrings() {
         YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator);
+        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
@@ -63,7 +63,7 @@ public class OffHeapStringStorageTest {
     @Test
     public void expiredKeyStringPayloadIsReleasedWhenOverwrittenByOtherCommand() {
         YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator);
+        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
@@ -82,7 +82,7 @@ public class OffHeapStringStorageTest {
     @Test
     public void overwriteReusesOffHeapBufferUnderHardCap() {
         YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(5);
-        YierdisDb db = new YierdisDb(allocator);
+        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
@@ -107,7 +107,7 @@ public class OffHeapStringStorageTest {
     @Test
     public void offHeapMaxBytesRejectsOversizedSet() {
         YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(4);
-        YierdisDb db = new YierdisDb(allocator);
+        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             try {

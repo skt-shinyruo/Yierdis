@@ -18,7 +18,7 @@ public class MaxmemoryDoubleReplyRegressionTest {
         // Intentionally run with the unsafe off-heap backend: it can under-estimate additional bytes due to
         // size class rounding, which previously could trigger "normal reply + OOM error reply" corruption.
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator, 40, "noeviction", 5, 5, 5);
+        YierdisDb db = new YierdisDb(allocator, true, false, 40, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);

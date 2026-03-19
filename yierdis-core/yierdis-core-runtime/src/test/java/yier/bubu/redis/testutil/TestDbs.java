@@ -30,7 +30,7 @@ public final class TestDbs {
     public static void runUnsafeOffHeap(Consumer<YierdisDb> test) {
         Objects.requireNonNull(test, "test");
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator);
+        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             test.accept(db);
@@ -50,7 +50,7 @@ public final class TestDbs {
         }
 
         YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-        YierdisDb offHeap = new YierdisDb(allocator, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, 5, 5);
+        YierdisDb offHeap = new YierdisDb(allocator, true, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, 5, 5);
         try {
             offHeap.bindToCurrentThread();
             test.accept(offHeap);

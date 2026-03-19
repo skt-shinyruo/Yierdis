@@ -8,11 +8,24 @@ import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
+import yier.bubu.redis.offheap.api.OffHeapBuf;
+import yier.bubu.redis.ops.DbEngineFactory;
+import yier.bubu.redis.ops.DbLifecycleOps;
+import yier.bubu.redis.ops.EvictionCoordinator;
+import yier.bubu.redis.ops.ExpirationManager;
+import yier.bubu.redis.ops.KeyspaceOps;
+import yier.bubu.redis.ops.MemoryOps;
+import yier.bubu.redis.ops.RuntimeDbEngine;
+import yier.bubu.redis.ops.TtlOps;
+import yier.bubu.redis.ops.ValueOps;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
@@ -20,7 +33,7 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 public class YierdisInstanceTest {
     @Test
     public void globalMaxmemoryCountsSharedOffheapOnceAcrossDbs() {
-        YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
+        OffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
                 .offHeapAllocator(allocator)
@@ -46,7 +59,6 @@ public class YierdisInstanceTest {
                 Assert.assertFalse("expected not OOM (no double-count off-heap)", reply instanceof ReplyError);
                 Assert.assertEquals("OK", ((ReplySimpleString) reply).value());
             }
-
             Assert.assertTrue("expected off-heap allocations", allocator.usedBytes() > 0);
         }
     }
@@ -79,6 +91,39 @@ public class YierdisInstanceTest {
             Assert.assertNotNull("expected error from non-owner thread", err);
             Assert.assertTrue("expected IllegalStateException", err instanceof IllegalStateException);
             Assert.assertTrue(err.getMessage().contains("non-owner thread"));
+        }
+    }
+
+    @Test
+    public void closePropagatesDbAndAllocatorFailuresAfterBestEffortCleanup() {
+        List<String> closeOrder = new ArrayList<>();
+        DbEngineFactory factory = (dbIndex,
+                                   offHeapAllocator,
+                                   ownsOffHeapAllocator,
+                                   offHeapKeysEnabled,
+                                   maxmemoryBytes,
+                                   maxmemoryPolicy,
+                                   maxmemorySamples,
+                                   evictionTimeLimitMillis,
+                                   expireCleanupTimeLimitMillis) -> new FailingRuntimeDbEngine("db-" + dbIndex, closeOrder);
+        ThrowingAllocator allocator = new ThrowingAllocator(closeOrder);
+
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
+                .databases(2)
+                .engineFactory(factory)
+                .offHeapAllocator(allocator)
+                .ownsOffHeapAllocator(true)
+                .build());
+
+        try {
+            instance.close();
+            Assert.fail("expected close failure");
+        } catch (IllegalStateException e) {
+            Assert.assertEquals("db-0", e.getMessage());
+            Assert.assertEquals(Arrays.asList("db-0", "db-1", "allocator"), closeOrder);
+            Assert.assertEquals(2, e.getSuppressed().length);
+            Assert.assertEquals("db-1", e.getSuppressed()[0].getMessage());
+            Assert.assertEquals("allocator", e.getSuppressed()[1].getMessage());
         }
     }
 
@@ -155,6 +200,90 @@ public class YierdisInstanceTest {
         @Override
         public java.util.List<byte[][]> drain() {
             return java.util.Collections.emptyList();
+        }
+    }
+
+    private static final class FailingRuntimeDbEngine implements RuntimeDbEngine {
+        private final String name;
+        private final List<String> closeOrder;
+
+        private FailingRuntimeDbEngine(String name, List<String> closeOrder) {
+            this.name = name;
+            this.closeOrder = closeOrder;
+        }
+
+        @Override
+        public void bindToCurrentThread() {
+        }
+
+        @Override
+        public void shutdown() {
+            closeOrder.add(name);
+            throw new IllegalStateException(name);
+        }
+
+        @Override
+        public ValueOps values() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ExpirationManager expiration() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public EvictionCoordinator eviction() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public KeyspaceOps keyspace() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public TtlOps ttl() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public MemoryOps memory() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbLifecycleOps lifecycle() {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class ThrowingAllocator implements OffHeapAllocator {
+        private final List<String> closeOrder;
+
+        private ThrowingAllocator(List<String> closeOrder) {
+            this.closeOrder = closeOrder;
+        }
+
+        @Override
+        public OffHeapBuf allocate(int capacity) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public long usedBytes() {
+            return 0;
+        }
+
+        @Override
+        public long maxBytes() {
+            return 0;
+        }
+
+        @Override
+        public void close() {
+            closeOrder.add("allocator");
+            throw new IllegalStateException("allocator");
         }
     }
 }

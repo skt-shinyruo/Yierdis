@@ -253,23 +253,50 @@ public final class YierdisInstance implements AutoCloseable {
         }
         closed = true;
 
+        Throwable failure = null;
         for (RuntimeDbEngine engine : dbs) {
             if (engine == null) {
                 continue;
             }
             try {
                 engine.shutdown();
-            } catch (Throwable ignored) {
-                // best-effort close
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
             }
         }
 
         if (closeAllocator && offHeapAllocator != null) {
             try {
                 offHeapAllocator.close();
-            } catch (Throwable ignored) {
-                // best-effort close
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
             }
         }
+
+        rethrowIfNeeded(failure);
+    }
+
+    private static Throwable recordCloseFailure(Throwable current, Throwable next) {
+        if (next == null) {
+            return current;
+        }
+        if (current == null) {
+            return next;
+        }
+        current.addSuppressed(next);
+        return current;
+    }
+
+    private static void rethrowIfNeeded(Throwable failure) {
+        if (failure == null) {
+            return;
+        }
+        if (failure instanceof RuntimeException runtimeException) {
+            throw runtimeException;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw new IllegalStateException("close failed", failure);
     }
 }
