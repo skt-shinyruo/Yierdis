@@ -5,6 +5,8 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesSource;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.DbReads;
+import yier.bubu.redis.ops.DbWrites;
 import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.Command;
@@ -52,6 +54,14 @@ final class CommandSupport {
     DbEngine db(CommandContext ctx) {
         java.util.Objects.requireNonNull(ctx, "ctx");
         return dbRouter.dbFor(ctx.dbIndexProviderOrNull());
+    }
+
+    DbReads dbReads(CommandContext ctx) {
+        return db(ctx).reads();
+    }
+
+    DbWrites dbWrites(CommandContext ctx) {
+        return db(ctx).writes();
     }
 
     int databases() {

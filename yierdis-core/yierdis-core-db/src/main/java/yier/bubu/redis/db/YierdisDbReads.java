@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Objects;
 
 final class YierdisDbReads implements DbReads {
+    private final YierdisDb db;
     private final StringReadOps strings;
     private final HashReadOps hashes;
     private final ListReadOps lists;
@@ -38,16 +39,17 @@ final class YierdisDbReads implements DbReads {
     private final KeyspaceReadOps keyspace;
     private final TtlReadOps ttl;
 
-    YierdisDbReads(ValueOps values, KeyspaceOps keyspaceOps, TtlOps ttlOps) {
+    YierdisDbReads(YierdisDb db, ValueOps values, KeyspaceOps keyspaceOps, TtlOps ttlOps) {
+        this.db = Objects.requireNonNull(db, "db");
         Objects.requireNonNull(values, "values");
-        this.strings = new StringReads(values.strings());
+        this.strings = new StringReads(this.db);
         this.hashes = new HashReads(values.hashes());
         this.lists = new ListReads(values.lists());
         this.sets = new SetReads(values.sets());
         this.zsets = new ZSetReads(values.zsets());
         this.hll = new HllReads(values.hll());
-        this.keyspace = new KeyspaceReads(keyspaceOps);
-        this.ttl = new TtlReads(ttlOps);
+        this.keyspace = new KeyspaceReads(this.db);
+        this.ttl = new TtlReads(this.db);
     }
 
     @Override
@@ -91,40 +93,40 @@ final class YierdisDbReads implements DbReads {
     }
 
     private static final class StringReads implements StringReadOps {
-        private final StringOps delegate;
+        private final YierdisDb db;
 
-        private StringReads(StringOps delegate) {
-            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        private StringReads(YierdisDb db) {
+            this.db = Objects.requireNonNull(db, "db");
         }
 
         @Override
         public byte[] getStringBytes(byte[] keyBytes) {
-            return delegate.getStringBytes(keyBytes);
+            return db.getStringBytes(keyBytes);
         }
 
         @Override
         public BulkStringValue getStringValue(BytesView keyView) {
-            return delegate.getStringValue(keyView);
+            return db.values().strings().getStringValue(keyView);
         }
 
         @Override
         public long strlen(BytesView keyView) {
-            return delegate.strlen(keyView);
+            return db.strlen(keyView);
         }
 
         @Override
         public int getBit(BytesView keyView, long offset) {
-            return delegate.getBit(keyView, offset);
+            return db.getBit(keyView, offset);
         }
 
         @Override
         public long bitcount(BytesView keyView) {
-            return delegate.bitcount(keyView);
+            return db.bitcount(keyView);
         }
 
         @Override
         public long bitcount(BytesView keyView, long start, long end) {
-            return delegate.bitcount(keyView, start, end);
+            return db.bitcount(keyView, start, end);
         }
     }
 
@@ -247,48 +249,48 @@ final class YierdisDbReads implements DbReads {
     }
 
     private static final class KeyspaceReads implements KeyspaceReadOps {
-        private final KeyspaceOps delegate;
+        private final YierdisDb db;
 
-        private KeyspaceReads(KeyspaceOps delegate) {
-            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        private KeyspaceReads(YierdisDb db) {
+            this.db = Objects.requireNonNull(db, "db");
         }
 
         @Override
         public ValueType typeOf(BytesView keyView) {
-            return delegate.typeOf(keyView);
+            return db.typeOf(keyView);
         }
 
         @Override
         public boolean existsKey(BytesView keyView) {
-            return delegate.existsKey(keyView);
+            return db.existsKey(keyView);
         }
 
         @Override
         public List<byte[]> keys(byte[] globPattern, int maxMatches, long timeBudgetNanos) {
-            return delegate.keys(globPattern, maxMatches, timeBudgetNanos);
+            return db.keys(globPattern, maxMatches, timeBudgetNanos);
         }
 
         @Override
         public ScanCursorV2 scan(ScanCursorV2 cursor, byte[] globPattern, int count, List<byte[]> out) {
-            return delegate.scan(cursor, globPattern, count, out);
+            return db.scan(cursor, globPattern, count, out);
         }
     }
 
     private static final class TtlReads implements TtlReadOps {
-        private final TtlOps delegate;
+        private final YierdisDb db;
 
-        private TtlReads(TtlOps delegate) {
-            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        private TtlReads(YierdisDb db) {
+            this.db = Objects.requireNonNull(db, "db");
         }
 
         @Override
         public long ttlSeconds(BytesView keyView) {
-            return delegate.ttlSeconds(keyView);
+            return db.ttlSeconds(keyView);
         }
 
         @Override
         public long ttlMillis(BytesView keyView) {
-            return delegate.ttlMillis(keyView);
+            return db.ttlMillis(keyView);
         }
     }
 }

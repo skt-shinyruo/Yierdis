@@ -1,10 +1,7 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.ops.DbMemoryConstants;
-import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.ExpireOption;
 import yier.bubu.redis.ops.SetMode;
-import yier.bubu.redis.ops.StringOps;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ReplyWriter;
@@ -12,7 +9,7 @@ import yier.bubu.redis.contract.ReplyWriter;
 import java.util.Arrays;
 import java.util.Objects;
 
-final class StringCommands {
+final class StringCommands implements CommandModule {
     private static final long MAX_STRING_BYTES = 512L * 1024 * 1024;
 
     private final CommandSupport support;
@@ -21,17 +18,18 @@ final class StringCommands {
         this.support = Objects.requireNonNull(support, "support");
     }
 
-    void register(CommandRegistry registry) {
-        Objects.requireNonNull(registry, "registry");
-        registry.register("SET", this::set);
-        registry.register("GET", this::get);
-        registry.register("STRLEN", this::strlen);
-        registry.register("APPEND", this::append);
-        registry.register("SETBIT", this::setbit);
-        registry.register("GETBIT", this::getbit);
-        registry.register("BITCOUNT", this::bitcount);
-        registry.register("INCR", this::incr);
-        registry.register("DECR", this::decr);
+    @Override
+    public void register(CommandModule.Registration registration) {
+        Objects.requireNonNull(registration, "registration");
+        registration.register("SET", this::set);
+        registration.register("GET", this::get);
+        registration.register("STRLEN", this::strlen);
+        registration.register("APPEND", this::append);
+        registration.register("SETBIT", this::setbit);
+        registration.register("GETBIT", this::getbit);
+        registration.register("BITCOUNT", this::bitcount);
+        registration.register("INCR", this::incr);
+        registration.register("DECR", this::decr);
     }
 
     private void set(Command cmd, CommandContext ctx) {
@@ -42,8 +40,6 @@ final class StringCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        DbEngine engine = support.db(ctx);
-
         SetMode mode = SetMode.NORMAL;
         ExpireOption expire = null;
         boolean getOld = false;
@@ -161,30 +157,20 @@ final class StringCommands {
 
         boolean willSet = true;
         if (mode == SetMode.NX) {
-            willSet = !engine.keyspace().existsKey(support.argView(cmd, 1));
+            willSet = !support.dbReads(ctx).keyspace().existsKey(support.argView(cmd, 1));
         } else if (mode == SetMode.XX) {
-            willSet = engine.keyspace().existsKey(support.argView(cmd, 1));
+            willSet = support.dbReads(ctx).keyspace().existsKey(support.argView(cmd, 1));
         }
 
         byte[] oldValueForGet = null;
         if (getOld && willSet) {
-            byte[] old = engine.values().strings().getStringBytes(key);
+            byte[] old = support.dbReads(ctx).strings().getStringBytes(key);
             if (old != null) {
                 oldValueForGet = Arrays.copyOf(old, old.length);
             }
         }
 
-        if (willSet) {
-            long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-            if (expire != null && !expire.isKeepTtl()) {
-                // TTL metadata is accounted separately from value bytes; reserve a best-effort budget for it too.
-                extra += DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-            }
-            engine.eviction().prepareWrite(extra);
-        }
-
-        StringOps strings = engine.values().strings();
-        boolean ok = strings.setString(key, support.argSlice(cmd, 2), mode, expire);
+        boolean ok = support.dbWrites(ctx).strings().setString(key, support.argSlice(cmd, 2), mode, expire);
         if (!ok) {
             out.bulkString((byte[]) null);
             return;
@@ -202,8 +188,7 @@ final class StringCommands {
             CommandSupport.wrongArity(out, "get");
             return;
         }
-        DbEngine engine = support.db(ctx);
-        engine.values().strings().getStringValue(support.argView(cmd, 1)).writeTo(new BulkStringReplyAdapter(out));
+        support.dbReads(ctx).strings().getStringValue(support.argView(cmd, 1)).writeTo(new BulkStringReplyAdapter(out));
     }
 
     private void strlen(Command cmd, CommandContext ctx) {
@@ -212,8 +197,7 @@ final class StringCommands {
             CommandSupport.wrongArity(out, "strlen");
             return;
         }
-        DbEngine engine = support.db(ctx);
-        out.integer(engine.values().strings().strlen(support.argView(cmd, 1)));
+        out.integer(support.dbReads(ctx).strings().strlen(support.argView(cmd, 1)));
     }
 
     private void append(Command cmd, CommandContext ctx) {
@@ -222,10 +206,7 @@ final class StringCommands {
             CommandSupport.wrongArity(out, "append");
             return;
         }
-        DbEngine engine = support.db(ctx);
-        long extra = (long) Math.max(0, cmd.len(1)) + Math.max(0, cmd.len(2)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        engine.eviction().prepareWrite(extra);
-        long len = engine.values().strings().append(cmd.toByteArray(1), support.argSlice(cmd, 2));
+        long len = support.dbWrites(ctx).strings().append(cmd.toByteArray(1), support.argSlice(cmd, 2));
         out.integer(len);
     }
 
@@ -235,7 +216,6 @@ final class StringCommands {
             CommandSupport.wrongArity(out, "setbit");
             return;
         }
-        DbEngine engine = support.db(ctx);
         long offset = CommandSupport.parseNonNegativeLong(cmd, 2, "offset");
         long v = CommandSupport.parseLong(cmd, 3, "value");
         if (v != 0 && v != 1) {
@@ -243,17 +223,12 @@ final class StringCommands {
             return;
         }
 
-        long currentLen = engine.values().strings().strlen(support.argView(cmd, 1));
         long requiredBytes = (offset >>> 3) + 1;
         if (requiredBytes > MAX_STRING_BYTES) {
             out.error("ERR string exceeds maximum allowed size");
             return;
         }
-        long growth = Math.max(0L, requiredBytes - currentLen);
-        long extra = (long) Math.max(0, cmd.len(1)) + growth + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        engine.eviction().prepareWrite(extra);
-
-        int old = engine.values().strings().setBit(cmd.toByteArray(1), offset, (int) v);
+        int old = support.dbWrites(ctx).strings().setBit(cmd.toByteArray(1), offset, (int) v);
         out.integer(old);
     }
 
@@ -264,8 +239,7 @@ final class StringCommands {
             return;
         }
         long offset = CommandSupport.parseNonNegativeLong(cmd, 2, "offset");
-        DbEngine engine = support.db(ctx);
-        out.integer(engine.values().strings().getBit(support.argView(cmd, 1), offset));
+        out.integer(support.dbReads(ctx).strings().getBit(support.argView(cmd, 1), offset));
     }
 
     private void bitcount(Command cmd, CommandContext ctx) {
@@ -275,14 +249,12 @@ final class StringCommands {
             return;
         }
         if (cmd.argc() == 2) {
-            DbEngine engine = support.db(ctx);
-            out.integer(engine.values().strings().bitcount(support.argView(cmd, 1)));
+            out.integer(support.dbReads(ctx).strings().bitcount(support.argView(cmd, 1)));
             return;
         }
         long start = CommandSupport.parseLong(cmd, 2, "start");
         long end = CommandSupport.parseLong(cmd, 3, "end");
-        DbEngine engine = support.db(ctx);
-        out.integer(engine.values().strings().bitcount(support.argView(cmd, 1), start, end));
+        out.integer(support.dbReads(ctx).strings().bitcount(support.argView(cmd, 1), start, end));
     }
 
     private void incr(Command cmd, CommandContext ctx) {
@@ -299,10 +271,7 @@ final class StringCommands {
             CommandSupport.wrongArity(out, delta > 0 ? "incr" : "decr");
             return;
         }
-        DbEngine engine = support.db(ctx);
-        long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        engine.eviction().prepareWrite(extra);
-        long value = engine.values().strings().incrBy(cmd.toByteArray(1), delta);
+        long value = support.dbWrites(ctx).strings().incrBy(cmd.toByteArray(1), delta);
         out.integer(value);
     }
 }

@@ -1,5 +1,6 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
@@ -81,6 +82,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     private volatile MaxmemoryCoordinator maxmemoryCoordinator;
     private final MemoryLedger ledger;
     private MemoryReservation activeReservation;
+    private final YierdisDbMutationExecutor mutationExecutor;
 
     private final DbReads reads;
     private final DbWrites writes;
@@ -167,11 +169,12 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         this.evictionTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(evictionTimeLimitMillis);
         this.expireCleanupTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(expireCleanupTimeLimitMillis);
         this.ledger = new DbMemoryLedger();
+        this.mutationExecutor = new YierdisDbMutationExecutor(this);
         this.values = new YierdisDbValueOps(this);
         this.keyspaceOps = new YierdisDbKeyspaceOps(this);
         this.ttlOps = new YierdisDbTtlOps(this);
-        this.reads = new YierdisDbReads(values, keyspaceOps, ttlOps);
-        this.writes = new YierdisDbWrites(values, keyspaceOps, ttlOps);
+        this.reads = new YierdisDbReads(this, values, keyspaceOps, ttlOps);
+        this.writes = new YierdisDbWrites(this, values, keyspaceOps, ttlOps);
         this.expirationManager = new YierdisDbExpirationManager(this);
         this.evictionCoordinator = new YierdisDbEvictionCoordinator(this);
         this.memoryOps = new YierdisDbMemoryOps(this);
@@ -314,6 +317,19 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     void adjustUsedBytes(long deltaBytes) {
         ledger.commit(null, deltaBytes);
+    }
+
+    MemoryReservation reserveMutation(long estimatedUpperBoundBytes) {
+        checkThread();
+        return ledger.reserve(Math.max(0L, estimatedUpperBoundBytes));
+    }
+
+    void commitMutation(MemoryReservation reservation, long actualDeltaBytes) {
+        ledger.commit(reservation, actualDeltaBytes);
+    }
+
+    void rollbackMutation(MemoryReservation reservation) {
+        ledger.rollback(reservation);
     }
 
     public void enforceMaxmemory() {
@@ -931,27 +947,38 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     public long del(Collection<byte[]> keys) {
         checkThread();
-        long now = System.currentTimeMillis();
-        long removed = 0;
-        for (byte[] keyBytes : keys) {
-            YierdisObject e = store.get(keyBytes);
-            if (e == null) {
-                continue;
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Long>() {
+            @Override
+            public long upperBoundBytes() {
+                return 0;
             }
-            if (removeIfExpired(keyBytes, e, now)) {
-                continue;
+
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Long> apply() {
+                long now = System.currentTimeMillis();
+                long removed = 0;
+                long deltaBytes = 0;
+                for (byte[] keyBytes : keys) {
+                    YierdisObject e = store.get(keyBytes);
+                    if (e == null) {
+                        continue;
+                    }
+                    if (removeIfExpired(keyBytes, e, now)) {
+                        continue;
+                    }
+                    removeExpire(keyBytes);
+                    if (store.remove(keyBytes, e)) {
+                        e.releasePayloadIfAny();
+                        deltaBytes -= e.estimatedBytes;
+                        removed++;
+                    }
+                }
+                if (removed > 0) {
+                    YierdisChangeTracking.markValueChanged();
+                }
+                return YierdisDbMutationExecutor.MutationResult.of(removed, deltaBytes);
             }
-            removeExpire(keyBytes);
-            if (store.remove(keyBytes, e)) {
-                e.releasePayloadIfAny();
-                adjustUsedBytes(-e.estimatedBytes);
-                removed++;
-            }
-        }
-        if (removed > 0) {
-            YierdisChangeTracking.markValueChanged();
-        }
-        return removed;
+        });
     }
 
     public boolean existsKey(BytesView keyView) {
@@ -1004,37 +1031,42 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         }
         if (seconds <= 0) {
             // Redis-compatible: seconds<=0 means the key is deleted immediately (if it exists).
-            removeExpire(handle);
-            if (store.remove(handle, e)) {
-                e.releasePayloadIfAny();
-                adjustUsedBytes(-e.estimatedBytes);
-            }
-            YierdisChangeTracking.markValueChanged();
-            return true;
+            return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+                @Override
+                public long upperBoundBytes() {
+                    return 0;
+                }
+
+                @Override
+                public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                    long deltaBytes = 0;
+                    removeExpire(handle);
+                    if (store.remove(handle, e)) {
+                        e.releasePayloadIfAny();
+                        deltaBytes -= e.estimatedBytes;
+                    }
+                    YierdisChangeTracking.markValueChanged();
+                    return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes);
+                }
+            });
         }
 
-        boolean reserved = false;
-        boolean ok = false;
         long expireAtMillis = safeExpireAtMillis(nowMillis, seconds);
-        try {
-            if (expires.get(handle) == null) {
-                prepareWrite(TTL_ENTRY_BYTES_ESTIMATE);
-                reserved = true;
+        long upperBound = expires.get(handle) == null ? TTL_ENTRY_BYTES_ESTIMATE : 0;
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+            @Override
+            public long upperBoundBytes() {
+                return upperBound;
             }
-            setExpireAtMillis(handle, expireAtMillis);
-            touch(e);
-            YierdisChangeTracking.markTtlChanged();
-            ok = true;
-            return true;
-        } finally {
-            if (reserved) {
-                if (ok) {
-                    commitWrite(0);
-                } else {
-                    rollbackWrite();
-                }
+
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                setExpireAtMillis(handle, expireAtMillis);
+                touch(e);
+                YierdisChangeTracking.markTtlChanged();
+                return YierdisDbMutationExecutor.MutationResult.of(true, 0);
             }
-        }
+        });
     }
 
     public boolean expire(BytesView keyView, long seconds) {
@@ -1053,37 +1085,42 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         }
         if (seconds <= 0) {
             // Redis-compatible: seconds<=0 means the key is deleted immediately (if it exists).
-            removeExpire(handle);
-            if (store.remove(handle, e)) {
-                e.releasePayloadIfAny();
-                adjustUsedBytes(-e.estimatedBytes);
-            }
-            YierdisChangeTracking.markValueChanged();
-            return true;
+            return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+                @Override
+                public long upperBoundBytes() {
+                    return 0;
+                }
+
+                @Override
+                public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                    long deltaBytes = 0;
+                    removeExpire(handle);
+                    if (store.remove(handle, e)) {
+                        e.releasePayloadIfAny();
+                        deltaBytes -= e.estimatedBytes;
+                    }
+                    YierdisChangeTracking.markValueChanged();
+                    return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes);
+                }
+            });
         }
 
-        boolean reserved = false;
-        boolean ok = false;
         long expireAtMillis = safeExpireAtMillis(nowMillis, seconds);
-        try {
-            if (expires.get(handle) == null) {
-                prepareWrite(TTL_ENTRY_BYTES_ESTIMATE);
-                reserved = true;
+        long upperBound = expires.get(handle) == null ? TTL_ENTRY_BYTES_ESTIMATE : 0;
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+            @Override
+            public long upperBoundBytes() {
+                return upperBound;
             }
-            setExpireAtMillis(handle, expireAtMillis);
-            touch(e);
-            YierdisChangeTracking.markTtlChanged();
-            ok = true;
-            return true;
-        } finally {
-            if (reserved) {
-                if (ok) {
-                    commitWrite(0);
-                } else {
-                    rollbackWrite();
-                }
+
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                setExpireAtMillis(handle, expireAtMillis);
+                touch(e);
+                YierdisChangeTracking.markTtlChanged();
+                return YierdisDbMutationExecutor.MutationResult.of(true, 0);
             }
-        }
+        });
     }
 
     private static long safeExpireAtMillis(long nowMillis, long seconds) {
@@ -1109,6 +1146,10 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         }
     }
 
+    private static long estimateStringWriteUpperBound(int keyLength, int valueLength) {
+        return (long) Math.max(0, keyLength) + Math.max(0, valueLength) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+    }
+
     public boolean pexpire(byte[] keyBytes, long milliseconds) {
         checkThread();
         YierdisObject e = getObjectIfNotExpired(keyBytes);
@@ -1117,41 +1158,46 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         }
         if (milliseconds <= 0) {
             // Redis-compatible: milliseconds<=0 means the key is deleted immediately (if it exists).
-            removeExpire(keyBytes);
-            if (store.remove(keyBytes, e)) {
-                e.releasePayloadIfAny();
-                adjustUsedBytes(-e.estimatedBytes);
-            }
-            YierdisChangeTracking.markValueChanged();
-            return true;
+            return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+                @Override
+                public long upperBoundBytes() {
+                    return 0;
+                }
+
+                @Override
+                public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                    long deltaBytes = 0;
+                    removeExpire(keyBytes);
+                    if (store.remove(keyBytes, e)) {
+                        e.releasePayloadIfAny();
+                        deltaBytes -= e.estimatedBytes;
+                    }
+                    YierdisChangeTracking.markValueChanged();
+                    return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes);
+                }
+            });
         }
 
         KeyHandle handle = store.keyHandle(keyBytes);
-        boolean reserved = false;
-        boolean ok = false;
         long expireAtMillis = safeAddMillis(System.currentTimeMillis(), milliseconds);
-        try {
-            if (handle != null && expires.get(handle) == null) {
-                prepareWrite(TTL_ENTRY_BYTES_ESTIMATE);
-                reserved = true;
+        long upperBound = handle != null && expires.get(handle) == null ? TTL_ENTRY_BYTES_ESTIMATE : 0;
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+            @Override
+            public long upperBoundBytes() {
+                return upperBound;
             }
-            if (handle != null) {
-                setExpireAtMillis(handle, expireAtMillis);
-            } else {
-                setExpireAtMillis(keyBytes, expireAtMillis);
-            }
-            YierdisChangeTracking.markTtlChanged();
-            ok = true;
-            return true;
-        } finally {
-            if (reserved) {
-                if (ok) {
-                    commitWrite(0);
+
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                if (handle != null) {
+                    setExpireAtMillis(handle, expireAtMillis);
                 } else {
-                    rollbackWrite();
+                    setExpireAtMillis(keyBytes, expireAtMillis);
                 }
+                YierdisChangeTracking.markTtlChanged();
+                return YierdisDbMutationExecutor.MutationResult.of(true, 0);
             }
-        }
+        });
     }
 
     public boolean pexpire(BytesView keyView, long milliseconds) {
@@ -1172,36 +1218,41 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
         if (milliseconds <= 0) {
             // Redis-compatible: milliseconds<=0 means the key is deleted immediately (if it exists).
-            removeExpire(handle);
-            if (store.remove(handle, e)) {
-                e.releasePayloadIfAny();
-                adjustUsedBytes(-e.estimatedBytes);
-            }
-            YierdisChangeTracking.markValueChanged();
-            return true;
+            return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+                @Override
+                public long upperBoundBytes() {
+                    return 0;
+                }
+
+                @Override
+                public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                    long deltaBytes = 0;
+                    removeExpire(handle);
+                    if (store.remove(handle, e)) {
+                        e.releasePayloadIfAny();
+                        deltaBytes -= e.estimatedBytes;
+                    }
+                    YierdisChangeTracking.markValueChanged();
+                    return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes);
+                }
+            });
         }
 
-        boolean reserved = false;
-        boolean ok = false;
         long expireAtMillis = safeAddMillis(nowMillis, milliseconds);
-        try {
-            if (expires.get(handle) == null) {
-                prepareWrite(TTL_ENTRY_BYTES_ESTIMATE);
-                reserved = true;
+        long upperBound = expires.get(handle) == null ? TTL_ENTRY_BYTES_ESTIMATE : 0;
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+            @Override
+            public long upperBoundBytes() {
+                return upperBound;
             }
-            setExpireAtMillis(handle, expireAtMillis);
-            YierdisChangeTracking.markTtlChanged();
-            ok = true;
-            return true;
-        } finally {
-            if (reserved) {
-                if (ok) {
-                    commitWrite(0);
-                } else {
-                    rollbackWrite();
-                }
+
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                setExpireAtMillis(handle, expireAtMillis);
+                YierdisChangeTracking.markTtlChanged();
+                return YierdisDbMutationExecutor.MutationResult.of(true, 0);
             }
-        }
+        });
     }
 
     public boolean expireAtSeconds(byte[] keyBytes, long unixSeconds) {
@@ -1235,39 +1286,44 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         long now = System.currentTimeMillis();
         if (unixMillis <= now) {
             // 过期时间在过去/现在：按 Redis 语义立刻删除 key（如果存在）。
-            removeExpire(keyBytes);
-            if (store.remove(keyBytes, e)) {
-                e.releasePayloadIfAny();
-                adjustUsedBytes(-e.estimatedBytes);
-            }
-            YierdisChangeTracking.markValueChanged();
-            return true;
+            return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+                @Override
+                public long upperBoundBytes() {
+                    return 0;
+                }
+
+                @Override
+                public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                    long deltaBytes = 0;
+                    removeExpire(keyBytes);
+                    if (store.remove(keyBytes, e)) {
+                        e.releasePayloadIfAny();
+                        deltaBytes -= e.estimatedBytes;
+                    }
+                    YierdisChangeTracking.markValueChanged();
+                    return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes);
+                }
+            });
         }
         KeyHandle handle = store.keyHandle(keyBytes);
-        boolean reserved = false;
-        boolean ok = false;
-        try {
-            if (handle != null && expires.get(handle) == null) {
-                prepareWrite(TTL_ENTRY_BYTES_ESTIMATE);
-                reserved = true;
+        long upperBound = handle != null && expires.get(handle) == null ? TTL_ENTRY_BYTES_ESTIMATE : 0;
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+            @Override
+            public long upperBoundBytes() {
+                return upperBound;
             }
-            if (handle != null) {
-                setExpireAtMillis(handle, unixMillis);
-            } else {
-                setExpireAtMillis(keyBytes, unixMillis);
-            }
-            YierdisChangeTracking.markTtlChanged();
-            ok = true;
-            return true;
-        } finally {
-            if (reserved) {
-                if (ok) {
-                    commitWrite(0);
+
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                if (handle != null) {
+                    setExpireAtMillis(handle, unixMillis);
                 } else {
-                    rollbackWrite();
+                    setExpireAtMillis(keyBytes, unixMillis);
                 }
+                YierdisChangeTracking.markTtlChanged();
+                return YierdisDbMutationExecutor.MutationResult.of(true, 0);
             }
-        }
+        });
     }
 
     public boolean expireAtMillis(BytesView keyView, long unixMillis) {
@@ -1288,35 +1344,40 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
         if (unixMillis <= now) {
             // 过期时间在过去/现在：按 Redis 语义立刻删除 key（如果存在）。
-            removeExpire(handle);
-            if (store.remove(handle, e)) {
-                e.releasePayloadIfAny();
-                adjustUsedBytes(-e.estimatedBytes);
-            }
-            YierdisChangeTracking.markValueChanged();
-            return true;
+            return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+                @Override
+                public long upperBoundBytes() {
+                    return 0;
+                }
+
+                @Override
+                public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                    long deltaBytes = 0;
+                    removeExpire(handle);
+                    if (store.remove(handle, e)) {
+                        e.releasePayloadIfAny();
+                        deltaBytes -= e.estimatedBytes;
+                    }
+                    YierdisChangeTracking.markValueChanged();
+                    return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes);
+                }
+            });
         }
 
-        boolean reserved = false;
-        boolean ok = false;
-        try {
-            if (expires.get(handle) == null) {
-                prepareWrite(TTL_ENTRY_BYTES_ESTIMATE);
-                reserved = true;
+        long upperBound = expires.get(handle) == null ? TTL_ENTRY_BYTES_ESTIMATE : 0;
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+            @Override
+            public long upperBoundBytes() {
+                return upperBound;
             }
-            setExpireAtMillis(handle, unixMillis);
-            YierdisChangeTracking.markTtlChanged();
-            ok = true;
-            return true;
-        } finally {
-            if (reserved) {
-                if (ok) {
-                    commitWrite(0);
-                } else {
-                    rollbackWrite();
-                }
+
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                setExpireAtMillis(handle, unixMillis);
+                YierdisChangeTracking.markTtlChanged();
+                return YierdisDbMutationExecutor.MutationResult.of(true, 0);
             }
-        }
+        });
     }
 
     public boolean persist(byte[] keyBytes) {
@@ -1329,10 +1390,20 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         if (expireAtMillis == null) {
             return false;
         }
-        removeExpire(keyBytes);
-        touch(e);
-        YierdisChangeTracking.markTtlChanged();
-        return true;
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+            @Override
+            public long upperBoundBytes() {
+                return 0;
+            }
+
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                removeExpire(keyBytes);
+                touch(e);
+                YierdisChangeTracking.markTtlChanged();
+                return YierdisDbMutationExecutor.MutationResult.of(true, 0);
+            }
+        });
     }
 
     public boolean persist(BytesView keyView) {
@@ -1355,9 +1426,19 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         if (expireAtMillis == null) {
             return false;
         }
-        removeExpire(handle);
-        YierdisChangeTracking.markTtlChanged();
-        return true;
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+            @Override
+            public long upperBoundBytes() {
+                return 0;
+            }
+
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                removeExpire(handle);
+                YierdisChangeTracking.markTtlChanged();
+                return YierdisDbMutationExecutor.MutationResult.of(true, 0);
+            }
+        });
     }
 
     public long ttlSeconds(byte[] keyBytes) {
@@ -1636,63 +1717,159 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         long now = System.currentTimeMillis();
         boolean keepTtl = expireOption != null && expireOption.isKeepTtl();
         Long expireAtMillis = (expireOption == null || keepTtl) ? null : expireOption.toExpireAtMillis(now);
+        long upperBound = estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, value == null ? 0 : value.length);
+        if (expireAtMillis != null) {
+            upperBound += TTL_ENTRY_BYTES_ESTIMATE;
+        }
+        final long finalUpperBound = upperBound;
 
-        final boolean[] didSet = new boolean[]{false};
-        final boolean[] existed = new boolean[]{false};
-        final KeyHandle[] handleRef = new KeyHandle[]{null};
-        final long[] deltaBytes = new long[]{0};
-        try {
-            store.computeWithHandle(keyBytes, (k, old) -> {
-                handleRef[0] = k;
-                long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                if (old != null && isKeyExpired(k, now)) {
-                    old.releasePayloadIfAny();
-                    removeExpire(k);
-                    deltaBytes[0] -= oldEstimate;
-                    old = null;
-                    oldEstimate = 0;
-                }
-                existed[0] = old != null;
-                if (mode == SetMode.NX && old != null) {
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+            @Override
+            public long upperBoundBytes() {
+                return finalUpperBound;
+            }
+
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                final boolean[] didSet = new boolean[]{false};
+                final boolean[] existed = new boolean[]{false};
+                final KeyHandle[] handleRef = new KeyHandle[]{null};
+                final long[] deltaBytes = new long[]{0};
+
+                store.computeWithHandle(keyBytes, (k, old) -> {
+                    handleRef[0] = k;
+                    long oldEstimate = old == null ? 0 : old.estimatedBytes;
+                    if (old != null && isKeyExpired(k, now)) {
+                        old.releasePayloadIfAny();
+                        removeExpire(k);
+                        deltaBytes[0] -= oldEstimate;
+                        old = null;
+                        oldEstimate = 0;
+                    }
+                    existed[0] = old != null;
+                    if (mode == SetMode.NX && old != null) {
+                        touch(old);
+                        return old;
+                    }
+                    if (mode == SetMode.XX && old == null) {
+                        return null;
+                    }
+                    if (old == null) {
+                        didSet[0] = true;
+                        YierdisObject next = YierdisObject.newString(offHeapAllocator, value);
+                        touch(next);
+                        refreshEstimatedBytes(k, next);
+                        deltaBytes[0] += next.estimatedBytes;
+                        return next;
+                    }
+                    old.overwriteWithString(offHeapAllocator, value);
                     touch(old);
-                    return old;
-                }
-                if (mode == SetMode.XX && old == null) {
-                    return null;
-                }
-                if (old == null) {
+                    deltaBytes[0] -= oldEstimate;
+                    refreshEstimatedBytes(k, old);
+                    deltaBytes[0] += old.estimatedBytes;
                     didSet[0] = true;
-                    YierdisObject next = YierdisObject.newString(offHeapAllocator, value);
-                    touch(next);
-                    refreshEstimatedBytes(k, next);
-                    deltaBytes[0] += next.estimatedBytes;
-                    return next;
+                    return old;
+                });
+
+                if (didSet[0]) {
+                    YierdisChangeTracking.markValueChanged();
+                    if (keepTtl && existed[0]) {
+                        return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes[0]);
+                    }
+                    if (expireAtMillis != null) {
+                        setExpireAtMillis(handleRef[0], expireAtMillis);
+                        YierdisChangeTracking.markTtlChanged();
+                        return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes[0]);
+                    }
+                    Long beforeTtl = expires.get(handleRef[0]);
+                    removeExpire(handleRef[0]);
+                    if (beforeTtl != null) {
+                        YierdisChangeTracking.markTtlChanged();
+                    }
                 }
-                old.overwriteWithString(offHeapAllocator, value);
-                touch(old);
-                deltaBytes[0] -= oldEstimate;
-                refreshEstimatedBytes(k, old);
-                deltaBytes[0] += old.estimatedBytes;
-                didSet[0] = true;
-                return old;
-            });
-        } catch (OffHeapOutOfMemoryException e) {
-            rollbackWrite();
-            throw new YierdisCommandException("OOM off-heap memory limit exceeded");
-        }
-        commitWrite(deltaBytes[0]);
-        if (didSet[0]) {
-            if (keepTtl && existed[0]) {
-                // KEEPTTL：覆盖写入但保留原有过期时间（仅当 key 原先存在时有意义）。
-                return true;
+                return YierdisDbMutationExecutor.MutationResult.of(didSet[0], deltaBytes[0]);
             }
-            if (expireAtMillis != null) {
-                setExpireAtMillis(handleRef[0], expireAtMillis);
-                return true;
-            }
-            removeExpire(handleRef[0]);
+        });
+    }
+
+    public boolean setString(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
+        checkThread();
+        long now = System.currentTimeMillis();
+        boolean keepTtl = expireOption != null && expireOption.isKeepTtl();
+        Long expireAtMillis = (expireOption == null || keepTtl) ? null : expireOption.toExpireAtMillis(now);
+        long upperBound = estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, value == null ? 0 : value.len());
+        if (expireAtMillis != null) {
+            upperBound += TTL_ENTRY_BYTES_ESTIMATE;
         }
-        return didSet[0];
+        final long finalUpperBound = upperBound;
+
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+            @Override
+            public long upperBoundBytes() {
+                return finalUpperBound;
+            }
+
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+                final boolean[] didSet = new boolean[]{false};
+                final boolean[] existed = new boolean[]{false};
+                final KeyHandle[] handleRef = new KeyHandle[]{null};
+                final long[] deltaBytes = new long[]{0};
+
+                store.computeWithHandle(keyBytes, (k, old) -> {
+                    handleRef[0] = k;
+                    long oldEstimate = old == null ? 0 : old.estimatedBytes;
+                    if (old != null && isKeyExpired(k, now)) {
+                        old.releasePayloadIfAny();
+                        removeExpire(k);
+                        deltaBytes[0] -= oldEstimate;
+                        old = null;
+                        oldEstimate = 0;
+                    }
+                    existed[0] = old != null;
+                    if (mode == SetMode.NX && old != null) {
+                        touch(old);
+                        return old;
+                    }
+                    if (mode == SetMode.XX && old == null) {
+                        return null;
+                    }
+                    if (old == null) {
+                        didSet[0] = true;
+                        YierdisObject next = YierdisObject.newString(offHeapAllocator, value);
+                        touch(next);
+                        refreshEstimatedBytes(k, next);
+                        deltaBytes[0] += next.estimatedBytes;
+                        return next;
+                    }
+                    old.overwriteWithString(offHeapAllocator, value);
+                    touch(old);
+                    deltaBytes[0] -= oldEstimate;
+                    refreshEstimatedBytes(k, old);
+                    deltaBytes[0] += old.estimatedBytes;
+                    didSet[0] = true;
+                    return old;
+                });
+
+                if (didSet[0]) {
+                    YierdisChangeTracking.markValueChanged();
+                    if (keepTtl && existed[0]) {
+                        return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes[0]);
+                    }
+                    if (expireAtMillis != null) {
+                        setExpireAtMillis(handleRef[0], expireAtMillis);
+                        YierdisChangeTracking.markTtlChanged();
+                        return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes[0]);
+                    }
+                    Long beforeTtl = expires.get(handleRef[0]);
+                    removeExpire(handleRef[0]);
+                    if (beforeTtl != null) {
+                        YierdisChangeTracking.markTtlChanged();
+                    }
+                }
+                return YierdisDbMutationExecutor.MutationResult.of(didSet[0], deltaBytes[0]);
+            }
+        });
     }
 
     public byte[] getStringBytes(byte[] keyBytes) {
@@ -1733,44 +1910,70 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     public int append(byte[] keyBytes, byte[] appendValue) {
         checkThread();
-        long now = System.currentTimeMillis();
-        final int[] newLen = new int[]{0};
-        final long[] deltaBytes = new long[]{0};
-        try {
-            store.computeWithHandle(keyBytes, (k, old) -> {
-                long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                if (old != null && isKeyExpired(k, now)) {
-                    old.releasePayloadIfAny();
-                    removeExpire(k);
-                    deltaBytes[0] -= oldEstimate;
-                    old = null;
-                    oldEstimate = 0;
-                }
-                if (old == null) {
-                    YierdisObject o = YierdisObject.newString(offHeapAllocator, appendValue);
-                    newLen[0] = o.stringByteLength();
-                    touch(o);
-                    refreshEstimatedBytes(k, o);
-                    deltaBytes[0] += o.estimatedBytes;
-                    return o;
-                }
+        return append(keyBytes, new BytesSlice() {
+            @Override
+            public void writeTo(yier.bubu.redis.bytes.BytesSink out) {
+                out.writeBytes(appendValue, 0, appendValue.length);
+            }
 
-                if (old.type != ValueType.STRING) {
-                    throw new WrongTypeException();
-                }
-                touch(old);
-                newLen[0] = old.stringAppend(offHeapAllocator, appendValue);
-                deltaBytes[0] -= oldEstimate;
-                refreshEstimatedBytes(k, old);
-                deltaBytes[0] += old.estimatedBytes;
-                return old;
-            });
-        } catch (OffHeapOutOfMemoryException e) {
-            rollbackWrite();
-            throw new YierdisCommandException("OOM off-heap memory limit exceeded");
-        }
-        commitWrite(deltaBytes[0]);
-        return newLen[0];
+            @Override
+            public int length() {
+                return appendValue.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                return appendValue[index];
+            }
+        });
+    }
+
+    public int append(byte[] keyBytes, BytesSlice appendValue) {
+        checkThread();
+        long now = System.currentTimeMillis();
+        long upperBound = estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, appendValue == null ? 0 : appendValue.len());
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Integer>() {
+            @Override
+            public long upperBoundBytes() {
+                return upperBound;
+            }
+
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+                final int[] newLen = new int[]{0};
+                final long[] deltaBytes = new long[]{0};
+                store.computeWithHandle(keyBytes, (k, old) -> {
+                    long oldEstimate = old == null ? 0 : old.estimatedBytes;
+                    if (old != null && isKeyExpired(k, now)) {
+                        old.releasePayloadIfAny();
+                        removeExpire(k);
+                        deltaBytes[0] -= oldEstimate;
+                        old = null;
+                        oldEstimate = 0;
+                    }
+                    if (old == null) {
+                        YierdisObject o = YierdisObject.newString(offHeapAllocator, appendValue);
+                        newLen[0] = o.stringByteLength();
+                        touch(o);
+                        refreshEstimatedBytes(k, o);
+                        deltaBytes[0] += o.estimatedBytes;
+                        return o;
+                    }
+
+                    if (old.type != ValueType.STRING) {
+                        throw new WrongTypeException();
+                    }
+                    touch(old);
+                    newLen[0] = old.stringAppend(offHeapAllocator, appendValue);
+                    deltaBytes[0] -= oldEstimate;
+                    refreshEstimatedBytes(k, old);
+                    deltaBytes[0] += old.estimatedBytes;
+                    return old;
+                });
+                YierdisChangeTracking.markValueChanged();
+                return YierdisDbMutationExecutor.MutationResult.of(newLen[0], deltaBytes[0]);
+            }
+        });
     }
 
     public int getBit(BytesView keyView, long offset) {
@@ -1800,41 +2003,50 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     public int setBit(byte[] keyBytes, long offset, int value) {
         checkThread();
         long now = System.currentTimeMillis();
-        final int[] oldBit = new int[]{0};
-        final long[] deltaBytes = new long[]{0};
-        try {
-            store.computeWithHandle(keyBytes, (k, old) -> {
-                long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                if (old != null && isKeyExpired(k, now)) {
-                    old.releasePayloadIfAny();
-                    removeExpire(k);
-                    deltaBytes[0] -= oldEstimate;
-                    old = null;
-                    oldEstimate = 0;
-                }
+        long currentLen = strlen(keyBytes);
+        long requiredBytes = (offset >>> 3) + 1;
+        long growth = Math.max(0L, requiredBytes - currentLen);
+        long upperBound = estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, (int) growth);
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Integer>() {
+            @Override
+            public long upperBoundBytes() {
+                return upperBound;
+            }
 
-                if (old == null) {
-                    old = YierdisObject.newString(offHeapAllocator, (byte[]) null);
-                    touch(old);
-                } else {
-                    if (old.type != ValueType.STRING) {
-                        throw new WrongTypeException();
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+                final int[] oldBit = new int[]{0};
+                final long[] deltaBytes = new long[]{0};
+                store.computeWithHandle(keyBytes, (k, old) -> {
+                    long oldEstimate = old == null ? 0 : old.estimatedBytes;
+                    if (old != null && isKeyExpired(k, now)) {
+                        old.releasePayloadIfAny();
+                        removeExpire(k);
+                        deltaBytes[0] -= oldEstimate;
+                        old = null;
+                        oldEstimate = 0;
                     }
-                    touch(old);
-                }
 
-                oldBit[0] = old.stringSetBit(offHeapAllocator, offset, value);
-                deltaBytes[0] -= oldEstimate;
-                refreshEstimatedBytes(k, old);
-                deltaBytes[0] += old.estimatedBytes;
-                return old;
-            });
-        } catch (OffHeapOutOfMemoryException e) {
-            rollbackWrite();
-            throw new YierdisCommandException("OOM off-heap memory limit exceeded");
-        }
-        commitWrite(deltaBytes[0]);
-        return oldBit[0];
+                    if (old == null) {
+                        old = YierdisObject.newString(offHeapAllocator, (byte[]) null);
+                        touch(old);
+                    } else {
+                        if (old.type != ValueType.STRING) {
+                            throw new WrongTypeException();
+                        }
+                        touch(old);
+                    }
+
+                    oldBit[0] = old.stringSetBit(offHeapAllocator, offset, value);
+                    deltaBytes[0] -= oldEstimate;
+                    refreshEstimatedBytes(k, old);
+                    deltaBytes[0] += old.estimatedBytes;
+                    return old;
+                });
+                YierdisChangeTracking.markValueChanged();
+                return YierdisDbMutationExecutor.MutationResult.of(oldBit[0], deltaBytes[0]);
+            }
+        });
     }
 
     public long bitcount(BytesView keyView) {
@@ -1992,39 +2204,52 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     public long incrBy(byte[] keyBytes, long delta) {
         checkThread();
         long now = System.currentTimeMillis();
-        final long[] result = new long[]{0L};
-        final long[] deltaBytes = new long[]{0};
-        store.computeWithHandle(keyBytes, (k, old) -> {
-            long oldEstimate = old == null ? 0 : old.estimatedBytes;
-            if (old != null && isKeyExpired(k, now)) {
-                old.releasePayloadIfAny();
-                removeExpire(k);
-                deltaBytes[0] -= oldEstimate;
-                old = null;
-                oldEstimate = 0;
-            }
-            if (old == null) {
-                long next = delta;
-                result[0] = next;
-                YierdisObject o = YierdisObject.newStringInt(next);
-                touch(o);
-                refreshEstimatedBytes(k, o);
-                deltaBytes[0] += o.estimatedBytes;
-                return o;
+        long upperBound = estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, 0);
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Long>() {
+            @Override
+            public long upperBoundBytes() {
+                return upperBound;
             }
 
-            if (old.type != ValueType.STRING) {
-                throw new WrongTypeException();
+            @Override
+            public YierdisDbMutationExecutor.MutationResult<Long> apply() {
+                final long[] result = new long[]{0L};
+                final long[] deltaBytes = new long[]{0};
+                store.computeWithHandle(keyBytes, (k, old) -> {
+                    long oldEstimate = old == null ? 0 : old.estimatedBytes;
+                    if (old != null && isKeyExpired(k, now)) {
+                        old.releasePayloadIfAny();
+                        removeExpire(k);
+                        deltaBytes[0] -= oldEstimate;
+                        old = null;
+                        oldEstimate = 0;
+                    }
+                    if (old == null) {
+                        long next = delta;
+                        result[0] = next;
+                        YierdisObject o = YierdisObject.newStringInt(next);
+                        touch(o);
+                        refreshEstimatedBytes(k, o);
+                        deltaBytes[0] += o.estimatedBytes;
+                        return o;
+                    }
+
+                    if (old.type != ValueType.STRING) {
+                        throw new WrongTypeException();
+                    }
+                    touch(old);
+                    result[0] = old.stringIncrBy(offHeapAllocator, delta);
+                    deltaBytes[0] -= oldEstimate;
+                    refreshEstimatedBytes(k, old);
+                    deltaBytes[0] += old.estimatedBytes;
+                    return old;
+                });
+                if (delta != 0) {
+                    YierdisChangeTracking.markValueChanged();
+                }
+                return YierdisDbMutationExecutor.MutationResult.of(result[0], deltaBytes[0]);
             }
-            touch(old);
-            result[0] = old.stringIncrBy(offHeapAllocator, delta);
-            deltaBytes[0] -= oldEstimate;
-            refreshEstimatedBytes(k, old);
-            deltaBytes[0] += old.estimatedBytes;
-            return old;
         });
-        commitWrite(deltaBytes[0]);
-        return result[0];
     }
 
     public int lpush(byte[] keyBytes, List<byte[]> values) {

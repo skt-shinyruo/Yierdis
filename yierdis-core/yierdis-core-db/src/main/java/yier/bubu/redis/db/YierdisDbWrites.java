@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Objects;
 
 final class YierdisDbWrites implements DbWrites {
+    private final YierdisDb db;
     private final StringWriteOps strings;
     private final HashWriteOps hashes;
     private final ListWriteOps lists;
@@ -37,16 +38,17 @@ final class YierdisDbWrites implements DbWrites {
     private final KeyspaceWriteOps keyspace;
     private final TtlWriteOps ttl;
 
-    YierdisDbWrites(ValueOps values, KeyspaceOps keyspaceOps, TtlOps ttlOps) {
+    YierdisDbWrites(YierdisDb db, ValueOps values, KeyspaceOps keyspaceOps, TtlOps ttlOps) {
+        this.db = Objects.requireNonNull(db, "db");
         Objects.requireNonNull(values, "values");
-        this.strings = new StringWrites(values.strings());
+        this.strings = new StringWrites(this.db);
         this.hashes = new HashWrites(values.hashes());
         this.lists = new ListWrites(values.lists());
         this.sets = new SetWrites(values.sets());
         this.zsets = new ZSetWrites(values.zsets());
         this.hll = new HllWrites(values.hll());
-        this.keyspace = new KeyspaceWrites(keyspaceOps);
-        this.ttl = new TtlWrites(ttlOps);
+        this.keyspace = new KeyspaceWrites(this.db);
+        this.ttl = new TtlWrites(this.db);
     }
 
     @Override
@@ -90,35 +92,35 @@ final class YierdisDbWrites implements DbWrites {
     }
 
     private static final class StringWrites implements StringWriteOps {
-        private final StringOps delegate;
+        private final YierdisDb db;
 
-        private StringWrites(StringOps delegate) {
-            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        private StringWrites(YierdisDb db) {
+            this.db = Objects.requireNonNull(db, "db");
         }
 
         @Override
         public boolean setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption) {
-            return delegate.setString(keyBytes, value, mode, expireOption);
+            return db.setString(keyBytes, value, mode, expireOption);
         }
 
         @Override
         public boolean setString(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
-            return delegate.setString(keyBytes, value, mode, expireOption);
+            return db.setString(keyBytes, value, mode, expireOption);
         }
 
         @Override
         public long append(byte[] keyBytes, BytesSlice value) {
-            return delegate.append(keyBytes, value);
+            return db.append(keyBytes, value);
         }
 
         @Override
         public int setBit(byte[] keyBytes, long offset, int value) {
-            return delegate.setBit(keyBytes, offset, value);
+            return db.setBit(keyBytes, offset, value);
         }
 
         @Override
         public long incrBy(byte[] keyBytes, long delta) {
-            return delegate.incrBy(keyBytes, delta);
+            return db.incrBy(keyBytes, delta);
         }
     }
 
@@ -233,48 +235,48 @@ final class YierdisDbWrites implements DbWrites {
     }
 
     private static final class KeyspaceWrites implements KeyspaceWriteOps {
-        private final KeyspaceOps delegate;
+        private final YierdisDb db;
 
-        private KeyspaceWrites(KeyspaceOps delegate) {
-            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        private KeyspaceWrites(YierdisDb db) {
+            this.db = Objects.requireNonNull(db, "db");
         }
 
         @Override
         public long del(Collection<byte[]> keys) {
-            return delegate.del(keys);
+            return db.del(keys);
         }
     }
 
     private static final class TtlWrites implements TtlWriteOps {
-        private final TtlOps delegate;
+        private final YierdisDb db;
 
-        private TtlWrites(TtlOps delegate) {
-            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        private TtlWrites(YierdisDb db) {
+            this.db = Objects.requireNonNull(db, "db");
         }
 
         @Override
         public boolean expire(BytesView keyView, long seconds) {
-            return delegate.expire(keyView, seconds);
+            return db.expire(keyView, seconds);
         }
 
         @Override
         public boolean pexpire(BytesView keyView, long milliseconds) {
-            return delegate.pexpire(keyView, milliseconds);
+            return db.pexpire(keyView, milliseconds);
         }
 
         @Override
         public boolean expireAtSeconds(BytesView keyView, long unixSeconds) {
-            return delegate.expireAtSeconds(keyView, unixSeconds);
+            return db.expireAtSeconds(keyView, unixSeconds);
         }
 
         @Override
         public boolean expireAtMillis(BytesView keyView, long unixMillis) {
-            return delegate.expireAtMillis(keyView, unixMillis);
+            return db.expireAtMillis(keyView, unixMillis);
         }
 
         @Override
         public boolean persist(BytesView keyView) {
-            return delegate.persist(keyView);
+            return db.persist(keyView);
         }
     }
 }

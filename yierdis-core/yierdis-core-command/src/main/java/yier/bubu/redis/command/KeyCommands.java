@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
-final class KeyCommands {
+final class KeyCommands implements CommandModule {
     private static final byte[] MEMORY_STATS_MAXMEMORY_BYTES = "maxmemory_bytes".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_USED_BYTES_FOR_MAXMEMORY = "used_bytes_for_maxmemory".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_EFFECTIVE_USED_BYTES_FOR_MAXMEMORY = "effective_used_bytes_for_maxmemory".getBytes(StandardCharsets.US_ASCII);
@@ -41,22 +41,23 @@ final class KeyCommands {
         this.support = Objects.requireNonNull(support, "support");
     }
 
-    void register(CommandRegistry registry) {
-        Objects.requireNonNull(registry, "registry");
-        registry.register("TYPE", this::type);
-        registry.register("MEMORY", this::memory);
-        registry.register("OBJECT", this::object);
-        registry.register("KEYS", this::keys);
-        registry.register("SCAN", this::scan);
-        registry.register("DEL", this::del);
-        registry.register("EXISTS", this::exists);
-        registry.register("EXPIRE", this::expire);
-        registry.register("PEXPIRE", this::pexpire);
-        registry.register("EXPIREAT", this::expireat);
-        registry.register("PEXPIREAT", this::pexpireat);
-        registry.register("PERSIST", this::persist);
-        registry.register("TTL", this::ttl);
-        registry.register("PTTL", this::pttl);
+    @Override
+    public void register(CommandModule.Registration registration) {
+        Objects.requireNonNull(registration, "registration");
+        registration.register("TYPE", this::type);
+        registration.register("MEMORY", this::memory);
+        registration.register("OBJECT", this::object);
+        registration.register("KEYS", this::keys);
+        registration.register("SCAN", this::scan);
+        registration.register("DEL", this::del);
+        registration.register("EXISTS", this::exists);
+        registration.register("EXPIRE", this::expire);
+        registration.register("PEXPIRE", this::pexpire);
+        registration.register("EXPIREAT", this::expireat);
+        registration.register("PEXPIREAT", this::pexpireat);
+        registration.register("PERSIST", this::persist);
+        registration.register("TTL", this::ttl);
+        registration.register("PTTL", this::pttl);
     }
 
     private void type(Command cmd, CommandContext ctx) {
@@ -65,7 +66,7 @@ final class KeyCommands {
             CommandSupport.wrongArity(out, "type");
             return;
         }
-        ValueType t = support.db(ctx).keyspace().typeOf(support.argView(cmd, 1));
+        ValueType t = support.dbReads(ctx).keyspace().typeOf(support.argView(cmd, 1));
         if (t == null) {
             out.simpleString("none");
             return;
@@ -201,7 +202,7 @@ final class KeyCommands {
             return;
         }
         SlowCommandGovernor governor = support.slowGovernor();
-        out.bulkStringArray(support.db(ctx).keyspace().keys(
+        out.bulkStringArray(support.dbReads(ctx).keyspace().keys(
                 cmd.toByteArray(1),
                 governor.keysMaxResults(ctx),
                 governor.keysTimeBudgetNanos(ctx)
@@ -244,7 +245,7 @@ final class KeyCommands {
         }
 
         List<byte[]> keys = new ArrayList<>();
-        ScanCursorV2 next = support.db(ctx).keyspace().scan(ScanCursorV2.of(cursor), match, count, keys);
+        ScanCursorV2 next = support.dbReads(ctx).keyspace().scan(ScanCursorV2.of(cursor), match, count, keys);
 
         // Redis-compatible: reply is [cursor, keys].
         out.arrayHeader(2);
@@ -261,7 +262,7 @@ final class KeyCommands {
         int len = cmd.argc() - 1;
         support.sliceResetFromCommand(cmd, 1, len);
         try {
-            out.integer(support.db(ctx).keyspace().del(support.slice()));
+            out.integer(support.dbWrites(ctx).keyspace().del(support.slice()));
         } finally {
             support.clearScratch(len);
         }
@@ -276,7 +277,7 @@ final class KeyCommands {
 
         long count = 0;
         for (int i = 1; i < cmd.argc(); i++) {
-            if (support.db(ctx).keyspace().existsKey(support.argView(cmd, i))) {
+            if (support.dbReads(ctx).keyspace().existsKey(support.argView(cmd, i))) {
                 count++;
             }
         }
@@ -290,7 +291,7 @@ final class KeyCommands {
             return;
         }
         long seconds = CommandSupport.parseLong(cmd, 2, "seconds");
-        out.integer(support.db(ctx).ttl().expire(support.argView(cmd, 1), seconds) ? 1 : 0);
+        out.integer(support.dbWrites(ctx).ttl().expire(support.argView(cmd, 1), seconds) ? 1 : 0);
     }
 
     private void pexpire(Command cmd, CommandContext ctx) {
@@ -300,7 +301,7 @@ final class KeyCommands {
             return;
         }
         long millis = CommandSupport.parseLong(cmd, 2, "milliseconds");
-        out.integer(support.db(ctx).ttl().pexpire(support.argView(cmd, 1), millis) ? 1 : 0);
+        out.integer(support.dbWrites(ctx).ttl().pexpire(support.argView(cmd, 1), millis) ? 1 : 0);
     }
 
     private void expireat(Command cmd, CommandContext ctx) {
@@ -310,7 +311,7 @@ final class KeyCommands {
             return;
         }
         long seconds = CommandSupport.parseLong(cmd, 2, "seconds");
-        out.integer(support.db(ctx).ttl().expireAtSeconds(support.argView(cmd, 1), seconds) ? 1 : 0);
+        out.integer(support.dbWrites(ctx).ttl().expireAtSeconds(support.argView(cmd, 1), seconds) ? 1 : 0);
     }
 
     private void pexpireat(Command cmd, CommandContext ctx) {
@@ -320,7 +321,7 @@ final class KeyCommands {
             return;
         }
         long millis = CommandSupport.parseLong(cmd, 2, "milliseconds");
-        out.integer(support.db(ctx).ttl().expireAtMillis(support.argView(cmd, 1), millis) ? 1 : 0);
+        out.integer(support.dbWrites(ctx).ttl().expireAtMillis(support.argView(cmd, 1), millis) ? 1 : 0);
     }
 
     private void persist(Command cmd, CommandContext ctx) {
@@ -329,7 +330,7 @@ final class KeyCommands {
             CommandSupport.wrongArity(out, "persist");
             return;
         }
-        out.integer(support.db(ctx).ttl().persist(support.argView(cmd, 1)) ? 1 : 0);
+        out.integer(support.dbWrites(ctx).ttl().persist(support.argView(cmd, 1)) ? 1 : 0);
     }
 
     private void ttl(Command cmd, CommandContext ctx) {
@@ -338,7 +339,7 @@ final class KeyCommands {
             CommandSupport.wrongArity(out, "ttl");
             return;
         }
-        out.integer(support.db(ctx).ttl().ttlSeconds(support.argView(cmd, 1)));
+        out.integer(support.dbReads(ctx).ttl().ttlSeconds(support.argView(cmd, 1)));
     }
 
     private void pttl(Command cmd, CommandContext ctx) {
@@ -347,6 +348,6 @@ final class KeyCommands {
             CommandSupport.wrongArity(out, "pttl");
             return;
         }
-        out.integer(support.db(ctx).ttl().ttlMillis(support.argView(cmd, 1)));
+        out.integer(support.dbReads(ctx).ttl().ttlMillis(support.argView(cmd, 1)));
     }
 }
