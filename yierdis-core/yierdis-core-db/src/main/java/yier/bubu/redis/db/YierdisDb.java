@@ -1842,6 +1842,9 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                     if (mode == SetMode.XX && old == null) {
                         return null;
                     }
+                    if (returnOldValue && old != null && old.type != ValueType.STRING) {
+                        throw new WrongTypeException();
+                    }
                     if (returnOldValue && old != null) {
                         byte[] raw = old.stringBytesView();
                         oldValue[0] = raw == null ? null : java.util.Arrays.copyOf(raw, raw.length);

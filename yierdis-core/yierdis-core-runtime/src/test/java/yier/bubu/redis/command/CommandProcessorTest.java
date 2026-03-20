@@ -354,6 +354,21 @@ public class CommandProcessorTest {
     }
 
     @Test
+    public void setGetOnNonStringKeyReturnsWrongType() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                ReplyObject push = client.execute(cmd("LPUSH", "k", "x"));
+                Assert.assertTrue(push instanceof ReplyInteger);
+
+                ReplyObject res = client.execute(cmd("SET", "k", "v", "GET"));
+                Assert.assertTrue(res instanceof ReplyError);
+                Assert.assertTrue(((ReplyError) res).message().startsWith("WRONGTYPE"));
+            }
+        });
+    }
+
+    @Test
     public void wrongTypeReturnsError() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
