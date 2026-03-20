@@ -1,7 +1,5 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.ops.DbMemoryConstants;
-import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.result.BulkStringSequence;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
@@ -10,20 +8,21 @@ import yier.bubu.redis.contract.ReplyWriter;
 import java.util.List;
 import java.util.Objects;
 
-final class ListCommands {
+final class ListCommands implements CommandModule {
     private final CommandSupport support;
 
     ListCommands(CommandSupport support) {
         this.support = Objects.requireNonNull(support, "support");
     }
 
-    void register(CommandRegistry registry) {
-        Objects.requireNonNull(registry, "registry");
-        registry.register("LPUSH", this::lpush);
-        registry.register("RPUSH", this::rpush);
-        registry.register("LRANGE", this::lrange);
-        registry.register("LPOP", this::lpop);
-        registry.register("RPOP", this::rpop);
+    @Override
+    public void register(CommandModule.Registration registration) {
+        Objects.requireNonNull(registration, "registration");
+        registration.register("LPUSH", this::lpush);
+        registration.register("RPUSH", this::rpush);
+        registration.register("LRANGE", this::lrange);
+        registration.register("LPOP", this::lpop);
+        registration.register("RPOP", this::rpop);
     }
 
     private void lpush(Command cmd, CommandContext ctx) {
@@ -48,18 +47,12 @@ final class ListCommands {
             CommandSupport.wrongArity(out, left ? "lpush" : "rpush");
             return;
         }
-        DbEngine engine = support.db(ctx);
-        long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        for (int i = 2; i < cmd.argc(); i++) {
-            extra += Math.max(0, cmd.len(i));
-        }
-        engine.eviction().prepareWrite(extra);
         int valuesLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, valuesLen);
         try {
             long len = left
-                    ? engine.values().lists().lpush(cmd.toByteArray(1), support.slice())
-                    : engine.values().lists().rpush(cmd.toByteArray(1), support.slice());
+                    ? support.dbWrites(ctx).lists().lpush(cmd.toByteArray(1), support.slice())
+                    : support.dbWrites(ctx).lists().rpush(cmd.toByteArray(1), support.slice());
             out.integer(len);
         } finally {
             support.clearScratch(valuesLen);
@@ -76,8 +69,7 @@ final class ListCommands {
         int stop = CommandSupport.parseIntClamped(cmd, 3, "stop");
 
         byte[] key = cmd.toByteArray(1);
-        DbEngine engine = support.db(ctx);
-        BulkStringSequence seq = engine.values().lists().lrange(key, start, stop);
+        BulkStringSequence seq = support.dbReads(ctx).lists().lrange(key, start, stop);
         int count = seq.count();
         out.arrayHeader(count);
         if (count == 0) {
@@ -106,10 +98,9 @@ final class ListCommands {
             }
         }
 
-        DbEngine engine = support.db(ctx);
         List<byte[]> popped = left
-                ? engine.values().lists().lpop(cmd.toByteArray(1), count)
-                : engine.values().lists().rpop(cmd.toByteArray(1), count);
+                ? support.dbWrites(ctx).lists().lpop(cmd.toByteArray(1), count)
+                : support.dbWrites(ctx).lists().rpop(cmd.toByteArray(1), count);
         popResponse(out, popped, hasCount);
     }
 

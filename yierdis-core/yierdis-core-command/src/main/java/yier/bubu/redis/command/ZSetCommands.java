@@ -1,8 +1,5 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.ops.DbMemoryConstants;
-import yier.bubu.redis.ops.DbEngine;
-import yier.bubu.redis.ops.ZSetOps;
 import yier.bubu.redis.ops.result.BulkStringSequence;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
@@ -10,23 +7,24 @@ import yier.bubu.redis.contract.ReplyWriter;
 
 import java.util.Objects;
 
-final class ZSetCommands {
+final class ZSetCommands implements CommandModule {
     private final CommandSupport support;
 
     ZSetCommands(CommandSupport support) {
         this.support = Objects.requireNonNull(support, "support");
     }
 
-    void register(CommandRegistry registry) {
-        Objects.requireNonNull(registry, "registry");
-        registry.register("ZADD", this::zadd);
-        registry.register("ZRANGE", this::zrange);
-        registry.register("ZREVRANGE", this::zrevrange);
-        registry.register("ZRANGEBYSCORE", this::zrangebyscore);
-        registry.register("ZREVRANGEBYSCORE", this::zrevrangebyscore);
-        registry.register("ZREMRANGEBYSCORE", this::zremrangebyscore);
-        registry.register("ZREMRANGEBYRANK", this::zremrangebyrank);
-        registry.register("ZREM", this::zrem);
+    @Override
+    public void register(CommandModule.Registration registration) {
+        Objects.requireNonNull(registration, "registration");
+        registration.register("ZADD", this::zadd);
+        registration.register("ZRANGE", this::zrange);
+        registration.register("ZREVRANGE", this::zrevrange);
+        registration.register("ZRANGEBYSCORE", this::zrangebyscore);
+        registration.register("ZREVRANGEBYSCORE", this::zrevrangebyscore);
+        registration.register("ZREMRANGEBYSCORE", this::zremrangebyscore);
+        registration.register("ZREMRANGEBYRANK", this::zremrangebyrank);
+        registration.register("ZREM", this::zrem);
     }
 
     private void zadd(Command cmd, CommandContext ctx) {
@@ -35,16 +33,10 @@ final class ZSetCommands {
             CommandSupport.wrongArity(out, "zadd");
             return;
         }
-        DbEngine engine = support.db(ctx);
-        long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        for (int i = 2; i < cmd.argc(); i++) {
-            extra += Math.max(0, cmd.len(i));
-        }
-        engine.eviction().prepareWrite(extra);
         int pairsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, pairsLen);
         try {
-            long added = engine.values().zsets().zadd(cmd.toByteArray(1), support.slice());
+            long added = support.dbWrites(ctx).zsets().zadd(cmd.toByteArray(1), support.slice());
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
@@ -76,10 +68,9 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        ZSetOps zsets = support.db(ctx).values().zsets();
         BulkStringSequence seq = rev
-                ? zsets.zrevrange(key, start, stop, withScores)
-                : zsets.zrange(key, start, stop, withScores);
+                ? support.dbReads(ctx).zsets().zrevrange(key, start, stop, withScores)
+                : support.dbReads(ctx).zsets().zrange(key, start, stop, withScores);
         int count = seq.count();
         out.arrayHeader(count);
         if (count == 0) {
@@ -107,8 +98,7 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        ZSetOps zsets = support.db(ctx).values().zsets();
-        BulkStringSequence seq = zsets.zrevrange(key, start, stop, withScores);
+        BulkStringSequence seq = support.dbReads(ctx).zsets().zrevrange(key, start, stop, withScores);
         int count = seq.count();
         out.arrayHeader(count);
         if (count == 0) {
@@ -153,8 +143,7 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        ZSetOps zsets = support.db(ctx).values().zsets();
-        BulkStringSequence seq = zsets.zrangeByScore(
+        BulkStringSequence seq = support.dbReads(ctx).zsets().zrangeByScore(
                 key,
                 min.value,
                 min.exclusive,
@@ -181,7 +170,7 @@ final class ZSetCommands {
 
         CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(cmd.toByteArray(2));
         CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(cmd.toByteArray(3));
-        out.integer(support.db(ctx).values().zsets().zremrangeByScore(cmd.toByteArray(1), min.value, min.exclusive, max.value, max.exclusive));
+        out.integer(support.dbWrites(ctx).zsets().zremrangeByScore(cmd.toByteArray(1), min.value, min.exclusive, max.value, max.exclusive));
     }
 
     private void zrevrangebyscore(Command cmd, CommandContext ctx) {
@@ -220,8 +209,7 @@ final class ZSetCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        ZSetOps zsets = support.db(ctx).values().zsets();
-        BulkStringSequence seq = zsets.zrevrangeByScore(
+        BulkStringSequence seq = support.dbReads(ctx).zsets().zrevrangeByScore(
                 key,
                 min.value,
                 min.exclusive,
@@ -247,7 +235,7 @@ final class ZSetCommands {
         }
         long start = CommandSupport.parseLong(cmd, 2, "start");
         long stop = CommandSupport.parseLong(cmd, 3, "stop");
-        out.integer(support.db(ctx).values().zsets().zremrangeByRank(cmd.toByteArray(1), start, stop));
+        out.integer(support.dbWrites(ctx).zsets().zremrangeByRank(cmd.toByteArray(1), start, stop));
     }
 
     private void zrem(Command cmd, CommandContext ctx) {
@@ -259,7 +247,7 @@ final class ZSetCommands {
         int membersLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, membersLen);
         try {
-            out.integer(support.db(ctx).values().zsets().zrem(cmd.toByteArray(1), support.slice()));
+            out.integer(support.dbWrites(ctx).zsets().zrem(cmd.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(membersLen);
         }

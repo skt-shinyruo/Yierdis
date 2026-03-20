@@ -1,7 +1,5 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.ops.DbMemoryConstants;
-import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.result.BulkStringMapPairs;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
@@ -9,20 +7,21 @@ import yier.bubu.redis.contract.ReplyWriter;
 
 import java.util.Objects;
 
-final class HashCommands {
+final class HashCommands implements CommandModule {
     private final CommandSupport support;
 
     HashCommands(CommandSupport support) {
         this.support = Objects.requireNonNull(support, "support");
     }
 
-    void register(CommandRegistry registry) {
-        Objects.requireNonNull(registry, "registry");
-        registry.register("HSET", this::hset);
-        registry.register("HGET", this::hget);
-        registry.register("HGETALL", this::hgetall);
-        registry.register("HLEN", this::hlen);
-        registry.register("HDEL", this::hdel);
+    @Override
+    public void register(CommandModule.Registration registration) {
+        Objects.requireNonNull(registration, "registration");
+        registration.register("HSET", this::hset);
+        registration.register("HGET", this::hget);
+        registration.register("HGETALL", this::hgetall);
+        registration.register("HLEN", this::hlen);
+        registration.register("HDEL", this::hdel);
     }
 
     private void hset(Command cmd, CommandContext ctx) {
@@ -31,16 +30,10 @@ final class HashCommands {
             CommandSupport.wrongArity(out, "hset");
             return;
         }
-        DbEngine engine = support.db(ctx);
-        long extra = (long) Math.max(0, cmd.len(1)) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        for (int i = 2; i < cmd.argc(); i++) {
-            extra += Math.max(0, cmd.len(i));
-        }
-        engine.eviction().prepareWrite(extra);
         int pairsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, pairsLen);
         try {
-            long added = engine.values().hashes().hset(cmd.toByteArray(1), support.slice());
+            long added = support.dbWrites(ctx).hashes().hset(cmd.toByteArray(1), support.slice());
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
@@ -53,8 +46,7 @@ final class HashCommands {
             CommandSupport.wrongArity(out, "hget");
             return;
         }
-        DbEngine engine = support.db(ctx);
-        out.bulkString(engine.values().hashes().hget(cmd.toByteArray(1), cmd.toByteArray(2)));
+        out.bulkString(support.dbReads(ctx).hashes().hget(cmd.toByteArray(1), cmd.toByteArray(2)));
     }
 
     private void hgetall(Command cmd, CommandContext ctx) {
@@ -65,8 +57,7 @@ final class HashCommands {
         }
 
         byte[] key = cmd.toByteArray(1);
-        DbEngine engine = support.db(ctx);
-        BulkStringMapPairs pairsResult = engine.values().hashes().hgetall(key);
+        BulkStringMapPairs pairsResult = support.dbReads(ctx).hashes().hgetall(key);
         int pairs = pairsResult.pairCount();
         out.mapHeader(pairs);
         if (pairs == 0) {
@@ -81,8 +72,7 @@ final class HashCommands {
             CommandSupport.wrongArity(out, "hlen");
             return;
         }
-        DbEngine engine = support.db(ctx);
-        out.integer(engine.values().hashes().hlen(cmd.toByteArray(1)));
+        out.integer(support.dbReads(ctx).hashes().hlen(cmd.toByteArray(1)));
     }
 
     private void hdel(Command cmd, CommandContext ctx) {
@@ -94,8 +84,7 @@ final class HashCommands {
         int fieldsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, fieldsLen);
         try {
-            DbEngine engine = support.db(ctx);
-            out.integer(engine.values().hashes().hdel(cmd.toByteArray(1), support.slice()));
+            out.integer(support.dbWrites(ctx).hashes().hdel(cmd.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(fieldsLen);
         }

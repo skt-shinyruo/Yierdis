@@ -8,6 +8,9 @@ import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
@@ -15,6 +18,16 @@ import static yier.bubu.redis.testutil.TestBytes.cmd;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class HllCommandTest {
+    @Test
+    public void hllCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
+        String source = Files.readString(Path.of(
+                "..", "yierdis-core-command", "src", "main", "java", "yier", "bubu", "redis", "command", "HllCommands.java"
+        ));
+
+        Assert.assertFalse(source.contains("eviction().prepareWrite("));
+        Assert.assertFalse(source.contains("values().hll()."));
+    }
+
     @Test
     public void pfaddCreatesAndUpdates() {
         forEachDb(db -> {

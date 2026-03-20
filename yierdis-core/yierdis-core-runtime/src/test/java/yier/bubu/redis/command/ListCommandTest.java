@@ -10,6 +10,9 @@ import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -18,6 +21,16 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class ListCommandTest {
+    @Test
+    public void listCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
+        String source = Files.readString(Path.of(
+                "..", "yierdis-core-command", "src", "main", "java", "yier", "bubu", "redis", "command", "ListCommands.java"
+        ));
+
+        Assert.assertFalse(source.contains("eviction().prepareWrite("));
+        Assert.assertFalse(source.contains("values().lists()."));
+    }
+
     @Test
     public void lpopRpopCountVariantsAndDeleteWhenEmpty() {
         forEachDb(db -> {

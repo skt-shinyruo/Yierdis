@@ -1,27 +1,24 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.ops.DbMemoryConstants;
-import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ReplyWriter;
 
 import java.util.Objects;
 
-final class HllCommands {
-    private static final int HLL_DENSE_BYTES = 8 + 12288;
-
+final class HllCommands implements CommandModule {
     private final CommandSupport support;
 
     HllCommands(CommandSupport support) {
         this.support = Objects.requireNonNull(support, "support");
     }
 
-    void register(CommandRegistry registry) {
-        Objects.requireNonNull(registry, "registry");
-        registry.register("PFADD", this::pfadd);
-        registry.register("PFCOUNT", this::pfcount);
-        registry.register("PFMERGE", this::pfmerge);
+    @Override
+    public void register(CommandModule.Registration registration) {
+        Objects.requireNonNull(registration, "registration");
+        registration.register("PFADD", this::pfadd);
+        registration.register("PFCOUNT", this::pfcount);
+        registration.register("PFMERGE", this::pfmerge);
     }
 
     private void pfadd(Command cmd, CommandContext ctx) {
@@ -30,13 +27,10 @@ final class HllCommands {
             CommandSupport.wrongArity(out, "pfadd");
             return;
         }
-        DbEngine engine = support.db(ctx);
-        long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        engine.eviction().prepareWrite(extra);
         int elementsLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, elementsLen);
         try {
-            out.integer(engine.values().hll().pfadd(cmd.toByteArray(1), support.slice()));
+            out.integer(support.dbWrites(ctx).hll().pfadd(cmd.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(elementsLen);
         }
@@ -51,7 +45,7 @@ final class HllCommands {
         int len = cmd.argc() - 1;
         support.sliceResetFromCommand(cmd, 1, len);
         try {
-            out.integer(support.db(ctx).values().hll().pfcount(support.slice()));
+            out.integer(support.dbReads(ctx).hll().pfcount(support.slice()));
         } finally {
             support.clearScratch(len);
         }
@@ -63,14 +57,10 @@ final class HllCommands {
             CommandSupport.wrongArity(out, "pfmerge");
             return;
         }
-        long extra = (long) Math.max(0, cmd.len(1)) + HLL_DENSE_BYTES + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-        DbEngine engine = support.db(ctx);
-        engine.eviction().prepareWrite(extra);
-
         int sourcesLen = cmd.argc() - 2;
         support.sliceResetFromCommand(cmd, 2, sourcesLen);
         try {
-            engine.values().hll().pfmerge(cmd.toByteArray(1), support.slice());
+            support.dbWrites(ctx).hll().pfmerge(cmd.toByteArray(1), support.slice());
         } finally {
             support.clearScratch(sourcesLen);
         }
