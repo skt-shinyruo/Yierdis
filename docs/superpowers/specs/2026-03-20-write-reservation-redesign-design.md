@@ -65,11 +65,50 @@
 - `memory()`
 - `lifecycle()`
 
+一个建议的 API 形状如下：
+
+```java
+interface DbEngine {
+    DbReads reads();
+    DbWrites writes();
+    ExpirationManager expiration();
+    MemoryOps memory();
+    DbLifecycleOps lifecycle();
+}
+
+interface DbReads {
+    StringReadOps strings();
+    HashReadOps hashes();
+    ListReadOps lists();
+    SetReadOps sets();
+    ZSetReadOps zsets();
+    HllReadOps hll();
+    KeyspaceReadOps keyspace();
+    TtlReadOps ttl();
+}
+
+interface DbWrites {
+    StringWriteOps strings();
+    HashWriteOps hashes();
+    ListWriteOps lists();
+    SetWriteOps sets();
+    ZSetWriteOps zsets();
+    HllWriteOps hll();
+    KeyspaceWriteOps keyspace();
+    TtlWriteOps ttl();
+}
+```
+
 新的设计目标是：
 
 - 命令层中的读命令只能依赖 `reads()`
 - 命令层中的写命令只能依赖 `writes()`
 - maxmemory / reservation 不再是 command-facing capability
+
+`memory()` 与 `expiration()` 继续保留在 `DbEngine` 上，但它们不属于新的业务读写主通道：
+
+- `memory()` 属于 command-facing 的诊断/观测边界（如 `MEMORY` / `OBJECT`）
+- `expiration()` 属于 runtime-facing 的维护边界（如后台 cleanup tick）
 
 ### 2. Remove Old Mixed Read/Write Interfaces
 
@@ -97,10 +136,11 @@
 - `KeyspaceReadOps` / `KeyspaceWriteOps`
 - `TtlReadOps` / `TtlWriteOps`
 
-`DbLifecycleOps` 保留独立边界，`FLUSHDB` 不并入 `DbWrites`。此外，当前由 runtime maintenance 通过
-`engine.eviction().enforceMaxmemory()` 触发的后台 maxmemory enforcement，将迁移到 `DbLifecycleOps`
-这一类管理边界，例如 `lifecycle().enforceMaxmemoryMaintenance()`，避免在删除 `eviction()` 后让 runtime
-失去明确入口。
+`DbLifecycleOps` 保留独立边界，`FLUSHDB` 不并入 `DbWrites`。
+
+runtime 后台 maintenance 使用的 maxmemory enforcement 不再挂在 `DbEngine` 的公开契约上。它将迁移到
+`RuntimeDbEngine` 这一类 runtime-facing 扩展边界，例如 `RuntimeDbEngine.enforceMaxmemoryMaintenance()`，
+避免在删除 `eviction()` 后仍把 runtime-only 能力重新暴露给 command-facing `DbEngine`。
 
 ### 3. Semantic Writes Instead of Infrastructure Protocol
 
@@ -119,6 +159,10 @@
 - 显式 prepare / rollback
 - 为预算服务做额外 DB 预读
 
+需要特别明确的是：`reads()` 表达的是“command-facing read boundary”，而不是“绝对无副作用”。它仍允许
+DB 内部保留现有的 lazy expiration cleanup 和 read-touch 语义，只要这些行为不走 write reservation
+协议，也不要求命令层显式参与。
+
 ### 4. Internal Mutation Executor
 
 `YierdisDb` 内部引入统一 mutation executor，作为所有写入路径唯一允许的 reservation 生命周期入口。
@@ -131,6 +175,17 @@
 - 成功路径 `commit`
 - 异常路径 `rollback`
 - `noeviction`、OOM、淘汰失败等异常的统一收敛
+
+为了在移除命令层 hint 后仍保留“先拒写、再回包”的语义，这个执行器将采用私有的两阶段 mutation 机制，而不是
+在命令层保留任何 budget hint。推荐形态是：
+
+- 每个语义化 write API 先在 DB 内部构造私有 `MutationPlan`
+- `MutationPlan` 必须提供一个 DB 内部可计算的上界预算（upper-bound estimate），供 mutation executor
+  在真正落盘前做 reservation / noeviction 判定
+- `MutationPlan` 再执行实际 mutation，并返回实际 `deltaBytes` 与必要的附带结果
+- executor 用上界预算做 reservation，用实际 `deltaBytes` 做最终 commit；若 mutation 抛异常则统一 rollback
+
+这意味着“预算估算”不会消失，而是从 command 层协议下沉为 DB 内部的私有 planning 机制。
 
 结构型 mutation 逻辑依然分布在 string/list/hash/set/zset/hll/keyspace/ttl 对应实现中，但这些实现降级为私有 mutator：
 
@@ -150,7 +205,8 @@
 
 ## Command Migration
 
-所有写命令一次性迁移，不保留旧路径：
+所有写命令一次性迁移，不保留旧路径。下面的迁移列表被视为当前写命令面的穷尽清单；implementation
+plan 应以它为 done criteria，而不是在执行阶段重新判断哪些 mutation 算“真正的写命令”：
 
 ### String
 
@@ -203,8 +259,8 @@
 ### Lifecycle
 
 - `FLUSHDB` 继续走 `DbLifecycleOps`
-- runtime 后台 maintenance 的 maxmemory enforcement 也继续走 `DbLifecycleOps`，而不是 `DbWrites`
-  或任何 command-facing 能力
+- runtime 后台 maintenance 的 maxmemory enforcement 迁移到 `RuntimeDbEngine` 的 runtime-facing hook，
+  而不是 `DbWrites` 或任何 command-facing 能力
 
 ## Allowed Behavioral Corrections
 
@@ -261,6 +317,9 @@
   - 旧的混合 `StringOps/HashOps/ListOps/SetOps/ZSetOps/HllOps`
 - `YierdisFastCommandProcessor` 禁止再出现 reservation 兜底 `finally`
 - `core-command` 中不应再出现仅为预算估算服务的 `DbMemoryConstants` 使用
+
+护栏机制以 targeted architecture tests 为主；若某些旧接口仍可能通过编译期回流，再补充 Maven enforcer /
+编译期依赖规则作为第二层防线。
 
 ## Risks and Tradeoffs
 
