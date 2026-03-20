@@ -9,12 +9,8 @@ import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.RuntimeDbEngine;
 import yier.bubu.redis.ops.DbLifecycleOps;
 import yier.bubu.redis.ops.DbEngine;
-import yier.bubu.redis.ops.EvictionCoordinator;
 import yier.bubu.redis.ops.ExpirationManager;
-import yier.bubu.redis.ops.KeyspaceOps;
 import yier.bubu.redis.ops.MemoryOps;
-import yier.bubu.redis.ops.TtlOps;
-import yier.bubu.redis.ops.ValueOps;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -88,27 +84,7 @@ public class DbEngineFactoryInjectionTest {
         }
 
         @Override
-        public ValueOps values() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public ExpirationManager expiration() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public EvictionCoordinator eviction() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public KeyspaceOps keyspace() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public TtlOps ttl() {
             throw new UnsupportedOperationException();
         }
 

@@ -31,7 +31,7 @@ public class OffHeapStringStorageTest {
             Assert.assertTrue(allocator.usedBytes() > 0);
 
             RecordingBulkOutput out = new RecordingBulkOutput();
-            db.values().strings().getStringValue(new TestBytesView(key)).writeTo(out);
+            db.reads().strings().getStringValue(new TestBytesView(key)).writeTo(out);
             Assert.assertTrue(out.usedOffHeapSlice);
             Assert.assertArrayEquals(value, out.bytes);
 
@@ -96,7 +96,7 @@ public class OffHeapStringStorageTest {
             Assert.assertEquals(5L, allocator.usedBytes());
 
             RecordingBulkOutput out = new RecordingBulkOutput();
-            db.values().strings().getStringValue(new TestBytesView(key)).writeTo(out);
+            db.reads().strings().getStringValue(new TestBytesView(key)).writeTo(out);
             Assert.assertTrue(out.usedOffHeapSlice);
             Assert.assertArrayEquals(v2, out.bytes);
         } finally {

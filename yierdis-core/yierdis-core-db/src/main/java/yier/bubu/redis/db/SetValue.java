@@ -138,6 +138,10 @@ final class SetValue implements YierdisValue {
             if (hashsetOffHeap != null) {
                 List<byte[]> out = new ArrayList<>(hashsetOffHeap.size());
                 hashsetOffHeap.forEach((keyPtr, keyLen, value) -> {
+                    if (keyLen == 0) {
+                        out.add(new byte[0]);
+                        return;
+                    }
                     byte[] k = new byte[keyLen];
                     offHeapAllocator.copyMemory(keyPtr, k, 0, keyLen);
                     out.add(k);

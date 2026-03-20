@@ -45,7 +45,11 @@ public final class YierdisFastCommandProcessor {
     }
 
     public YierdisFastCommandProcessor(DbEngine engine, ServerInfoProvider infoProvider, YierdisChangeSink changeSink, SlowCommandGovernor slowGovernor) {
-        this(singleDbRouter(engine), infoProvider, changeSink, slowGovernor);
+        this(singleDbRouter(engine), infoProvider, changeSink, slowGovernor, new CommandModule[0]);
+    }
+
+    public YierdisFastCommandProcessor(DbEngine engine, ServerInfoProvider infoProvider, SlowCommandGovernor slowGovernor, CommandModule... extraModules) {
+        this(singleDbRouter(engine), infoProvider, YierdisChangeSink.NOOP, slowGovernor, extraModules);
     }
 
     public YierdisFastCommandProcessor(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider) {
@@ -61,13 +65,21 @@ public final class YierdisFastCommandProcessor {
     }
 
     public YierdisFastCommandProcessor(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider, YierdisChangeSink changeSink, SlowCommandGovernor slowGovernor) {
+        this(dbRouter, infoProvider, changeSink, slowGovernor, new CommandModule[0]);
+    }
+
+    public YierdisFastCommandProcessor(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider, SlowCommandGovernor slowGovernor, CommandModule... extraModules) {
+        this(dbRouter, infoProvider, YierdisChangeSink.NOOP, slowGovernor, extraModules);
+    }
+
+    public YierdisFastCommandProcessor(YierdisDbRouter dbRouter, ServerInfoProvider infoProvider, YierdisChangeSink changeSink, SlowCommandGovernor slowGovernor, CommandModule... extraModules) {
         Objects.requireNonNull(dbRouter, "dbRouter");
         this.dbRouter = dbRouter;
         this.changeSink = changeSink == null ? YierdisChangeSink.NOOP : changeSink;
         CommandSupport support = new CommandSupport(dbRouter, infoProvider, slowGovernor);
         CommandRegistry registry = new CommandRegistry();
         new TransactionCommands(support, this).register(registry);
-        new ServerCommands(support).register(registry);
+        new CoreConnectionCommands(support).register(registry);
         new KeyCommands(support).register(registry);
         new StringCommands(support).register(registry);
         new HllCommands(support).register(registry);
@@ -75,6 +87,7 @@ public final class YierdisFastCommandProcessor {
         new HashCommands(support).register(registry);
         new SetCommands(support).register(registry);
         new ZSetCommands(support).register(registry);
+        registerExtraModules(registry, extraModules);
         this.registry = registry;
     }
 
@@ -116,11 +129,10 @@ public final class YierdisFastCommandProcessor {
             boolean isExec = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "EXEC");
             boolean isDiscard = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "DISCARD");
             if (!isMulti && !isExec && !isDiscard) {
-                // HELLO 属于连接级握手/协商类命令。为避免事务语义被“连接态变更”干扰，保持与 Redis 类似的限制：
-                // MULTI 队列中不允许出现 HELLO。
-                if (CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "HELLO")) {
+                String disallowedInMultiError = registry.disallowedInMultiError(cmd);
+                if (disallowedInMultiError != null) {
                     tx.markAborted();
-                    out.error("ERR HELLO is not allowed in MULTI");
+                    out.error(disallowedInMultiError);
                     return;
                 }
                 String enqueueErr = tx.tryEnqueue(copyArgv(cmd));
@@ -134,7 +146,7 @@ public final class YierdisFastCommandProcessor {
         }
 
         try {
-            CommandRegistry.CommandHandler handler = registry.find(cmd);
+            CommandModule.Handler handler = registry.find(cmd);
             if (handler == null) {
                 out.error(unknownCommandMessage(cmd));
                 return;
@@ -172,18 +184,6 @@ public final class YierdisFastCommandProcessor {
             out.error("OOM off-heap memory limit exceeded");
         } catch (IllegalArgumentException e) {
             out.error("ERR " + e.getMessage());
-        } finally {
-            // Ensure a command never leaks a pending maxmemory reservation to the next command.
-            // Command implementations are expected to finish (commit/rollback) their own reservations,
-            // but this is a defensive last line to keep invariants stable.
-            try {
-                DbEngine engine = dbRouter.dbFor(ctx.dbIndexProviderOrNull());
-                if (engine != null) {
-                    engine.eviction().rollbackWriteReservationIfAny();
-                }
-            } catch (Throwable ignored) {
-                // best-effort
-            }
         }
     }
 
@@ -245,5 +245,43 @@ public final class YierdisFastCommandProcessor {
                 return 1;
             }
         };
+    }
+
+    private static void registerExtraModules(CommandRegistry registry, CommandModule... extraModules) {
+        if (extraModules == null || extraModules.length == 0) {
+            return;
+        }
+        CommandModule.Registration registrar = new CommandModule.Registration() {
+            @Override
+            public void register(String name, CommandModule.Handler handler) {
+                registry.register(name, handler);
+            }
+
+            @Override
+            public void registerDisallowedInMulti(String name, CommandModule.Handler handler, String errorMessage) {
+                registry.registerDisallowedInMulti(name, handler, errorMessage);
+            }
+
+            @Override
+            public int commandCount() {
+                return registry.commandCount();
+            }
+
+            @Override
+            public boolean containsUpperName(String nameUpper) {
+                return registry.containsUpperName(nameUpper);
+            }
+
+            @Override
+            public String[] upperNamesSorted() {
+                return registry.upperNamesSorted();
+            }
+        };
+        for (CommandModule extraModule : extraModules) {
+            if (extraModule == null) {
+                throw new IllegalArgumentException("extraModules must not contain null");
+            }
+            extraModule.register(registrar);
+        }
     }
 }

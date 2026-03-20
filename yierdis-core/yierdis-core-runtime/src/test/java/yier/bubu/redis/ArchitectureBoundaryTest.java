@@ -14,41 +14,210 @@ import java.util.stream.Stream;
 
 public class ArchitectureBoundaryTest {
     @Test
-    public void dbAndOpsMustNotImportProtocolModel() throws IOException {
+    public void dbOpsAndCoreCommandMustNotImportProtocolModel() throws IOException {
         List<String> offenders = new ArrayList<>();
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
         int scanned = 0;
-        scanned += scanForProtocolImports(repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db"), offenders);
-        scanned += scanForProtocolImports(repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/ops"), offenders);
+        scanned += scanForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db"),
+                offenders,
+                "import yier.bubu.redis.protocol."
+        );
+        scanned += scanForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/ops"),
+                offenders,
+                "import yier.bubu.redis.protocol."
+        );
+        scanned += scanForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-command/src/main/java"),
+                offenders,
+                "import yier.bubu.redis.protocol."
+        );
         Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
 
         if (!offenders.isEmpty()) {
-            Assert.fail("检测到协议层依赖泄漏（禁止 import yier.bubu.redis.protocol.*）：\n" + String.join("\n", offenders));
+            Assert.fail(
+                    "检测到协议模型依赖泄漏（core-db/core-api/core-command 禁止 import yier.bubu.redis.protocol.*）：\n"
+                            + String.join("\n", offenders)
+            );
         }
     }
 
-    private static int scanForProtocolImports(Path root, List<String> offenders) throws IOException {
+    @Test
+    public void runtimeMustNotOwnCommandAssemblyAgain() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path instanceFile = repoRoot.resolve(
+                "yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java"
+        );
+        Assert.assertTrue("缺少 YierdisInstance.java，无法执行 runtime 边界护栏", Files.isRegularFile(instanceFile));
+
+        List<String> offenders = new ArrayList<>();
+        scanFileForForbiddenText(
+                repoRoot,
+                instanceFile,
+                offenders,
+                "import yier.bubu.redis.command.ServerInfoProvider;",
+                "import yier.bubu.redis.command.SlowCommandGovernor;",
+                "import yier.bubu.redis.command.YierdisFastCommandProcessor;",
+                "new YierdisFastCommandProcessor(",
+                "newCommandProcessor("
+        );
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 core-runtime 重新承担命令处理器组装/装配职责（YierdisInstance 应只负责 DB 生命周期与路由）：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void coreDefaultsMustNotOwnServerFacingCommands() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        List<String> offenders = new ArrayList<>();
+        Path serverCommands = repoRoot.resolve(
+                "yierdis-core-command/src/main/java/yier/bubu/redis/command/ServerCommands.java"
+        );
+        if (Files.exists(serverCommands)) {
+            offenders.add(relativePath(repoRoot, serverCommands) + " (server-facing commands should live in yierdis-server)");
+        }
+
+        Path processorFile = repoRoot.resolve(
+                "yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java"
+        );
+        Assert.assertTrue("缺少 YierdisFastCommandProcessor.java，无法执行 core-command 默认装配护栏", Files.isRegularFile(processorFile));
+        scanFileForForbiddenText(
+                repoRoot,
+                processorFile,
+                offenders,
+                "new ServerCommands(",
+                "ERR HELLO is not allowed in MULTI",
+                "asciiEqualsIgnoreCase(cmd, 0, \"HELLO\")"
+        );
+        scanForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-command/src/main/java"),
+                offenders,
+                "register(\"HELLO\"",
+                "register(\"INFO\"",
+                "register(\"STATS\""
+        );
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 server-facing commands 回流到 core 默认装配（这些命令应由 yierdis-server 组装）：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void coreCommandMustNotReferenceLegacyWriteReservationApis() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-command/src/main/java"),
+                offenders,
+                ".values()",
+                ".eviction()",
+                "prepareWrite(",
+                "rollbackWriteReservationIfAny(",
+                "DbMemoryConstants"
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 core-command 仍依赖 legacy 写预留/混合 DB API：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void yierdisDbMustNotRetainLegacyReservationHelpers() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path dbFile = repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDb.java");
+        Assert.assertTrue("缺少 YierdisDb.java", Files.exists(dbFile));
+
+        String source = Files.readString(dbFile);
+        List<String> offenders = new ArrayList<>();
+        if (source.contains("MemoryReservation activeReservation")) {
+            offenders.add("activeReservation");
+        }
+        if (source.contains("public void ensureWriteAllowed(")) {
+            offenders.add("ensureWriteAllowed(");
+        }
+        if (source.contains("public void prepareWrite(")) {
+            offenders.add("prepareWrite(");
+        }
+        if (source.contains("public void rollbackWriteReservationIfAny(")) {
+            offenders.add("rollbackWriteReservationIfAny(");
+        }
+        if (source.contains("void commitWrite(")) {
+            offenders.add("commitWrite(");
+        }
+        if (source.contains("void rollbackWrite(")) {
+            offenders.add("rollbackWrite(");
+        }
+
+        if (!offenders.isEmpty()) {
+            Assert.fail("检测到 YierdisDb 仍保留 legacy reservation helper：\n" + String.join("\n", offenders));
+        }
+    }
+
+    private static int scanForForbiddenText(Path repoRoot, Path root, List<String> offenders, String... forbiddenSnippets) throws IOException {
         if (root == null || !Files.exists(root)) {
             return 0;
         }
         int[] scanned = new int[]{0};
         try (Stream<Path> paths = Files.walk(root)) {
             paths.filter(p -> p != null && p.toString().endsWith(".java"))
+                    .sorted()
                     .forEach(p -> {
                         try {
                             scanned[0]++;
-                            String s = Files.readString(p, StandardCharsets.UTF_8);
-                            if (s.contains("import yier.bubu.redis.protocol.")) {
-                                offenders.add(p.toString());
-                            }
+                            scanFileForForbiddenText(repoRoot, p, offenders, forbiddenSnippets);
                         } catch (IOException e) {
                             throw new RuntimeException(e);
                         }
                     });
         }
         return scanned[0];
+    }
+
+    private static void scanFileForForbiddenText(Path repoRoot, Path file, List<String> offenders, String... forbiddenSnippets)
+            throws IOException {
+        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            for (String snippet : forbiddenSnippets) {
+                if (line.contains(snippet)) {
+                    offenders.add(relativePath(repoRoot, file) + ":" + (i + 1) + " -> " + snippet);
+                }
+            }
+        }
+    }
+
+    private static String relativePath(Path repoRoot, Path file) {
+        if (repoRoot == null || file == null) {
+            return String.valueOf(file);
+        }
+        return repoRoot.relativize(file).toString().replace('\\', '/');
     }
 
     private static Path resolveRepoRoot() {

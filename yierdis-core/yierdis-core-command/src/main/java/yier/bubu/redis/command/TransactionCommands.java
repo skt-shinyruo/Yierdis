@@ -16,7 +16,7 @@ import java.util.Objects;
  * - 连接级状态通过 {@link ServerSession} 暴露，避免 core 依赖 server/Netty
  * - MULTI 态下，普通命令由 {@link YierdisFastCommandProcessor} 负责入队并返回 QUEUED
  */
-final class TransactionCommands {
+final class TransactionCommands implements CommandModule {
     private final CommandSupport support;
     private final YierdisFastCommandProcessor processor;
 
@@ -25,11 +25,12 @@ final class TransactionCommands {
         this.processor = Objects.requireNonNull(processor, "processor");
     }
 
-    void register(CommandRegistry registry) {
-        Objects.requireNonNull(registry, "registry");
-        registry.register("MULTI", this::multi);
-        registry.register("DISCARD", this::discard);
-        registry.register("EXEC", this::exec);
+    @Override
+    public void register(CommandModule.Registration registration) {
+        Objects.requireNonNull(registration, "registration");
+        registration.register("MULTI", this::multi);
+        registration.register("DISCARD", this::discard);
+        registration.register("EXEC", this::exec);
     }
 
     private void multi(Command cmd, CommandContext ctx) {

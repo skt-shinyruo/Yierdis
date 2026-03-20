@@ -28,11 +28,6 @@
         </dependency>
 
         <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-protocol-model</artifactId>
-        </dependency>
-
-        <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
             <scope>test</scope>
@@ -56,6 +51,7 @@
                                 <bannedDependencies>
                                     <excludes>
                                         <exclude>yier.bubu.redis:yierdis-core-db</exclude>
+                                        <exclude>yier.bubu.redis:yierdis-protocol-model</exclude>
                                     </excludes>
                                     <searchTransitive>true</searchTransitive>
                                 </bannedDependencies>

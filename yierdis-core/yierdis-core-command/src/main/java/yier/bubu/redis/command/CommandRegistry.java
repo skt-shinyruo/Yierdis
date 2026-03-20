@@ -1,8 +1,6 @@
 package yier.bubu.redis.command;
 
 import yier.bubu.redis.contract.Command;
-import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.contract.ReplyWriter;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -17,7 +15,7 @@ import java.util.Set;
  * Runtime lookup is allocation-free: the registry builds an open-addressed hash table at registration time,
  * then matches commands directly against the request {@link Command} bytes (ASCII case-insensitive).
  */
-final class CommandRegistry {
+final class CommandRegistry implements CommandModule.Registration {
     private static final int MIN_TABLE_SIZE = 16;
     private static final int LOAD_FACTOR_NUM = 2; // ~= 0.66
     private static final int LOAD_FACTOR_DEN = 3;
@@ -25,20 +23,17 @@ final class CommandRegistry {
     private static final long FNV64_OFFSET_BASIS = 0xcbf29ce484222325L;
     private static final long FNV64_PRIME = 0x100000001b3L;
 
-    @FunctionalInterface
-    interface CommandHandler {
-        void execute(Command cmd, CommandContext ctx);
-    }
-
     private static final class Entry {
         private final byte[] nameUpperAscii;
         private final long hash;
-        private final CommandHandler handler;
+        private final CommandModule.Handler handler;
+        private final String disallowedInMultiError;
 
-        private Entry(byte[] nameUpperAscii, long hash, CommandHandler handler) {
+        private Entry(byte[] nameUpperAscii, long hash, CommandModule.Handler handler, String disallowedInMultiError) {
             this.nameUpperAscii = Objects.requireNonNull(nameUpperAscii, "nameUpperAscii");
             this.hash = hash;
             this.handler = Objects.requireNonNull(handler, "handler");
+            this.disallowedInMultiError = disallowedInMultiError;
         }
     }
 
@@ -48,7 +43,20 @@ final class CommandRegistry {
     private int resizeThreshold = threshold(table.length);
     private int size = 0;
 
-    void register(String name, CommandHandler handler) {
+    @Override
+    public void register(String name, CommandModule.Handler handler) {
+        registerInternal(name, handler, null);
+    }
+
+    @Override
+    public void registerDisallowedInMulti(String name, CommandModule.Handler handler, String errorMessage) {
+        if (errorMessage == null || errorMessage.isBlank()) {
+            throw new IllegalArgumentException("errorMessage must not be blank");
+        }
+        registerInternal(name, handler, errorMessage);
+    }
+
+    private void registerInternal(String name, CommandModule.Handler handler, String disallowedInMultiError) {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(handler, "handler");
         String nameUpper = name.trim().toUpperCase(Locale.ROOT);
@@ -65,10 +73,20 @@ final class CommandRegistry {
 
         byte[] ascii = asciiUpperBytes(nameUpper);
         long hash = hashUpperAscii(ascii, 0, ascii.length);
-        insert(new Entry(ascii, hash, handler));
+        insert(new Entry(ascii, hash, handler, disallowedInMultiError));
     }
 
-    CommandHandler find(Command cmd) {
+    CommandModule.Handler find(Command cmd) {
+        Entry entry = findEntry(cmd);
+        return entry == null ? null : entry.handler;
+    }
+
+    String disallowedInMultiError(Command cmd) {
+        Entry entry = findEntry(cmd);
+        return entry == null ? null : entry.disallowedInMultiError;
+    }
+
+    private Entry findEntry(Command cmd) {
         if (cmd == null || cmd.argc() <= 0) {
             return null;
         }
@@ -88,24 +106,27 @@ final class CommandRegistry {
                 return null;
             }
             if (e.hash == hash && e.nameUpperAscii.length == len && asciiEqualsIgnoreCase(cmd, 0, e.nameUpperAscii)) {
-                return e.handler;
+                return e;
             }
             idx = (idx + 1) & mask;
         }
     }
 
-    int commandCount() {
+    @Override
+    public int commandCount() {
         return namesUpper.size();
     }
 
-    boolean containsUpperName(String nameUpper) {
+    @Override
+    public boolean containsUpperName(String nameUpper) {
         if (nameUpper == null || nameUpper.isBlank()) {
             return false;
         }
         return namesUpper.contains(nameUpper.trim().toUpperCase(Locale.ROOT));
     }
 
-    String[] upperNamesSorted() {
+    @Override
+    public String[] upperNamesSorted() {
         String[] out = namesUpper.toArray(new String[0]);
         Arrays.sort(out);
         return out;

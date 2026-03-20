@@ -1,0 +1,322 @@
+package yier.bubu.redis.command;
+
+import org.junit.Assert;
+import org.junit.Test;
+import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.DbIndexProvider;
+import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.runtime.api.YierdisChangeSink;
+
+import java.lang.reflect.Array;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
+public class YierdisFastCommandProcessorRegistrationTest {
+    private static final YierdisDbRouter TEST_ROUTER = new YierdisDbRouter() {
+        @Override
+        public DbEngine dbFor(DbIndexProvider dbIndexProvider) {
+            return null;
+        }
+
+        @Override
+        public int databases() {
+            return 1;
+        }
+    };
+
+    @Test
+    public void constructorRegistersDefaultAndCallerSuppliedModules() throws Exception {
+        Class<?> moduleType = loadRequiredType("yier.bubu.redis.command.CommandModule");
+        Class<?> registrationType = loadRequiredType("yier.bubu.redis.command.CommandModule$Registration");
+        Class<?> handlerType = loadRequiredType("yier.bubu.redis.command.CommandModule$Handler");
+
+        Object extraModule = Proxy.newProxyInstance(
+                moduleType.getClassLoader(),
+                new Class[]{moduleType},
+                newExtraModuleHandler(registrationType, handlerType)
+        );
+
+        Class<?> moduleArrayType = Array.newInstance(moduleType, 0).getClass();
+        Constructor<YierdisFastCommandProcessor> constructor = loadRequiredConstructor(moduleArrayType);
+        Object extraModules = Array.newInstance(moduleType, 1);
+        Array.set(extraModules, 0, extraModule);
+
+        YierdisFastCommandProcessor processor = constructor.newInstance(
+                TEST_ROUTER,
+                null,
+                YierdisChangeSink.NOOP,
+                null,
+                extraModules
+        );
+
+        Assert.assertEquals("PONG", executeSimpleString(processor, "PING"));
+        Assert.assertEquals("TRACE-OK", executeSimpleString(processor, "TRACE"));
+    }
+
+    private static Class<?> loadRequiredType(String className) {
+        try {
+            return Class.forName(className);
+        } catch (ClassNotFoundException e) {
+            Assert.fail("missing command registration extension point type: " + className);
+            return null;
+        }
+    }
+
+    private static Constructor<YierdisFastCommandProcessor> loadRequiredConstructor(Class<?> moduleArrayType) {
+        try {
+            return YierdisFastCommandProcessor.class.getConstructor(
+                    YierdisDbRouter.class,
+                    ServerInfoProvider.class,
+                    YierdisChangeSink.class,
+                    SlowCommandGovernor.class,
+                    moduleArrayType
+            );
+        } catch (NoSuchMethodException e) {
+            Assert.fail("missing constructor overload for caller-supplied command modules");
+            return null;
+        }
+    }
+
+    private static InvocationHandler newExtraModuleHandler(Class<?> registrationType, Class<?> handlerType) {
+        return (proxy, method, args) -> {
+            if (method.getDeclaringClass() == Object.class) {
+                return handleObjectMethod(proxy, method, args);
+            }
+            Assert.assertEquals("register", method.getName());
+            Assert.assertNotNull(args);
+            Assert.assertEquals(1, args.length);
+
+            Object registration = args[0];
+            Object traceHandler = Proxy.newProxyInstance(
+                    handlerType.getClassLoader(),
+                    new Class[]{handlerType},
+                    (handlerProxy, handlerMethod, handlerArgs) -> {
+                        if (handlerMethod.getDeclaringClass() == Object.class) {
+                            return handleObjectMethod(handlerProxy, handlerMethod, handlerArgs);
+                        }
+                        Assert.assertEquals("execute", handlerMethod.getName());
+                        Assert.assertNotNull(handlerArgs);
+                        Assert.assertEquals(2, handlerArgs.length);
+                        CommandContext ctx = (CommandContext) handlerArgs[1];
+                        ctx.out().simpleString("TRACE-OK");
+                        return null;
+                    }
+            );
+            Method register = registrationType.getMethod("register", String.class, handlerType);
+            register.invoke(registration, "TRACE", traceHandler);
+            return null;
+        };
+    }
+
+    private static Object handleObjectMethod(Object proxy, Method method, Object[] args) {
+        String name = method.getName();
+        if ("toString".equals(name)) {
+            return proxy.getClass().getName();
+        }
+        if ("hashCode".equals(name)) {
+            return System.identityHashCode(proxy);
+        }
+        if ("equals".equals(name)) {
+            return proxy == args[0];
+        }
+        throw new UnsupportedOperationException("unexpected Object method: " + name);
+    }
+
+    private static String executeSimpleString(YierdisFastCommandProcessor processor, String... argv) {
+        TestReplyWriter writer = new TestReplyWriter();
+        processor.execute(new ArrayCommand(argv), new CommandContext(null, writer));
+        if (writer.error() != null) {
+            Assert.fail("expected simple string reply, got error: " + writer.error());
+        }
+        Assert.assertNotNull("expected simple string reply", writer.simpleString());
+        return writer.simpleString();
+    }
+
+    private static final class ArrayCommand implements Command {
+        private final byte[][] argv;
+
+        private ArrayCommand(String... argv) {
+            this.argv = new byte[argv.length][];
+            for (int i = 0; i < argv.length; i++) {
+                this.argv[i] = argv[i] == null ? null : argv[i].getBytes(StandardCharsets.US_ASCII);
+            }
+        }
+
+        @Override
+        public int argc() {
+            return argv.length;
+        }
+
+        @Override
+        public boolean isNull(int index) {
+            return argv[index] == null;
+        }
+
+        @Override
+        public int len(int index) {
+            byte[] arg = argv[index];
+            return arg == null ? -1 : arg.length;
+        }
+
+        @Override
+        public byte byteAt(int index, int offset) {
+            return argv[index][offset];
+        }
+
+        @Override
+        public void copyToByteArray(int index, byte[] dst, int dstOff) {
+            byte[] arg = argv[index];
+            System.arraycopy(arg, 0, dst, dstOff, arg.length);
+        }
+
+        @Override
+        public byte[] toByteArray(int index) {
+            return argv[index];
+        }
+
+        @Override
+        public void close() {
+            // no-op
+        }
+    }
+
+    private static final class TestReplyWriter implements ReplyWriter {
+        private String simpleString;
+        private String error;
+        private boolean closeAfterReplyRequested;
+
+        private String simpleString() {
+            return simpleString;
+        }
+
+        private String error() {
+            return error;
+        }
+
+        @Override
+        public void requestCloseAfterReply() {
+            closeAfterReplyRequested = true;
+        }
+
+        @Override
+        public boolean closeAfterReplyRequested() {
+            return closeAfterReplyRequested;
+        }
+
+        @Override
+        public void simpleString(String value) {
+            this.simpleString = value;
+        }
+
+        @Override
+        public void error(String message) {
+            this.error = message;
+        }
+
+        @Override
+        public void integer(long value) {
+            throw unsupported();
+        }
+
+        @Override
+        public void booleanValue(boolean value) {
+            throw unsupported();
+        }
+
+        @Override
+        public void doubleValue(double value) {
+            throw unsupported();
+        }
+
+        @Override
+        public void bigNumberAscii(String value) {
+            throw unsupported();
+        }
+
+        @Override
+        public void verbatimString(String format, byte[] data) {
+            throw unsupported();
+        }
+
+        @Override
+        public void blobError(String message) {
+            throw unsupported();
+        }
+
+        @Override
+        public void nullValue() {
+            throw unsupported();
+        }
+
+        @Override
+        public void nullArray() {
+            throw unsupported();
+        }
+
+        @Override
+        public void arrayHeader(int count) {
+            throw unsupported();
+        }
+
+        @Override
+        public void bulkStringArray(List<byte[]> values) {
+            throw unsupported();
+        }
+
+        @Override
+        public void emptyArray() {
+            throw unsupported();
+        }
+
+        @Override
+        public void mapHeader(int pairs) {
+            throw unsupported();
+        }
+
+        @Override
+        public void setHeader(int count) {
+            throw unsupported();
+        }
+
+        @Override
+        public void pushHeader(int count) {
+            throw unsupported();
+        }
+
+        @Override
+        public void attributeHeader(int pairs) {
+            throw unsupported();
+        }
+
+        @Override
+        public void bulkString(byte[] data) {
+            throw unsupported();
+        }
+
+        @Override
+        public void bulkString(byte[] data, int off, int len) {
+            throw unsupported();
+        }
+
+        @Override
+        public void bulkString(BytesSlice slice) {
+            throw unsupported();
+        }
+
+        @Override
+        public void bulkStringLongAscii(long value) {
+            throw unsupported();
+        }
+
+        private UnsupportedOperationException unsupported() {
+            return new UnsupportedOperationException("reply shape not used by this test");
+        }
+    }
+}

@@ -14,13 +14,9 @@ import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.DbLifecycleOps;
 import yier.bubu.redis.ops.DbReads;
 import yier.bubu.redis.ops.DbWrites;
-import yier.bubu.redis.ops.EvictionCoordinator;
 import yier.bubu.redis.ops.ExpirationManager;
-import yier.bubu.redis.ops.KeyspaceOps;
 import yier.bubu.redis.ops.MemoryOps;
 import yier.bubu.redis.ops.RuntimeDbEngine;
-import yier.bubu.redis.ops.TtlOps;
-import yier.bubu.redis.ops.ValueOps;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplySimpleString;
@@ -266,27 +262,7 @@ public class YierdisInstanceTest {
         }
 
         @Override
-        public ValueOps values() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public ExpirationManager expiration() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public EvictionCoordinator eviction() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public KeyspaceOps keyspace() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public TtlOps ttl() {
             throw new UnsupportedOperationException();
         }
 
@@ -358,43 +334,8 @@ public class YierdisInstanceTest {
         }
 
         @Override
-        public ValueOps values() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public ExpirationManager expiration() {
             return () -> expirationCleanupCalls++;
-        }
-
-        @Override
-        public EvictionCoordinator eviction() {
-            return new EvictionCoordinator() {
-                @Override
-                public void prepareWrite(long estimatedExtraBytes) {
-                    throw new UnsupportedOperationException();
-                }
-
-                @Override
-                public void enforceMaxmemory() {
-                    throw new AssertionError("maintenance must use RuntimeDbEngine hook");
-                }
-
-                @Override
-                public void rollbackWriteReservationIfAny() {
-                    throw new UnsupportedOperationException();
-                }
-            };
-        }
-
-        @Override
-        public KeyspaceOps keyspace() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public TtlOps ttl() {
-            throw new UnsupportedOperationException();
         }
 
         @Override

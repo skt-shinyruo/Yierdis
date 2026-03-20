@@ -40,7 +40,7 @@ public class ContractsIntegrationSmokeTest {
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = instance.newCommandProcessor();
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
             TestSession session = new TestSession();
 
             try (FastTestClient client = new FastTestClient(processor, session)) {

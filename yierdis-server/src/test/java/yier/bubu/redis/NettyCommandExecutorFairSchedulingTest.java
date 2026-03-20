@@ -24,7 +24,7 @@ public class NettyCommandExecutorFairSchedulingTest {
         EventExecutor eventExecutor = group.next();
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
-        YierdisFastCommandProcessor processor = instance.newCommandProcessor();
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
         NettyCommandExecutor executor = new NettyCommandExecutor(
                 instance::bindToCurrentThread,
                 processor,

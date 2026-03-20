@@ -99,6 +99,34 @@ public class TransactionCommandTest {
         });
     }
 
+    @Test
+    public void modulesCanRejectCommandsInsideMultiAndAbortTransaction() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+                    db,
+                    null,
+                    SlowCommandGovernor.DEFAULT,
+                    registration -> registration.registerDisallowedInMulti(
+                            "HELLO",
+                            (cmd, ctx) -> ctx.out().simpleString("HELLO"),
+                            "ERR HELLO is not allowed in MULTI"
+                    )
+            );
+            TestSession session = new TestSession();
+            try (FastTestClient client = new FastTestClient(processor, session)) {
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
+
+                ReplyObject hello = client.execute(Arrays.asList(b("HELLO")));
+                Assert.assertTrue(hello instanceof ReplyError);
+                Assert.assertEquals("ERR HELLO is not allowed in MULTI", ((ReplyError) hello).message());
+
+                ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
+                Assert.assertTrue(exec instanceof ReplyError);
+                Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", ((ReplyError) exec).message());
+            }
+        });
+    }
+
     private static final class TestSession implements ServerSession {
         private int dbIndex;
         private String clientName;
@@ -148,6 +176,7 @@ public class TransactionCommandTest {
 
     private static final class TestTransactionState implements TransactionState {
         private boolean active;
+        private boolean aborted;
         private final ArrayList<byte[][]> queue = new ArrayList<>();
 
         @Override
@@ -158,18 +187,30 @@ public class TransactionCommandTest {
         @Override
         public void begin() {
             active = true;
+            aborted = false;
             queue.clear();
         }
 
         @Override
         public void discard() {
             active = false;
+            aborted = false;
             queue.clear();
         }
 
         @Override
         public void enqueue(byte[][] argv) {
             queue.add(argv);
+        }
+
+        @Override
+        public boolean aborted() {
+            return aborted;
+        }
+
+        @Override
+        public void markAborted() {
+            aborted = true;
         }
 
         @Override
@@ -182,6 +223,7 @@ public class TransactionCommandTest {
             ArrayList<byte[][]> out = new ArrayList<>(queue);
             queue.clear();
             active = false;
+            aborted = false;
             return out;
         }
     }

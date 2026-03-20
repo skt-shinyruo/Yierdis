@@ -27,6 +27,28 @@ public class CoreCommandBoundaryGuardTest {
         }
     }
 
+    @Test
+    public void coreCommandMustNotContainLegacyWriteReservationFallbacks() throws IOException {
+        Path moduleRoot = resolveModuleRoot();
+        Assert.assertNotNull("无法定位 yierdis-core-command 模块根目录（未找到 src/main/java）", moduleRoot);
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                moduleRoot.resolve("src/main/java"),
+                offenders,
+                ".values()",
+                ".eviction()",
+                "prepareWrite(",
+                "rollbackWriteReservationIfAny(",
+                "DbMemoryConstants"
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
+
+        if (!offenders.isEmpty()) {
+            Assert.fail("检测到 core-command 仍包含 legacy 写预留/混合 API 引用：\n" + String.join("\n", offenders));
+        }
+    }
+
     private static int scanForForbiddenImports(Path srcRoot, List<String> offenders) throws IOException {
         if (srcRoot == null || !Files.isDirectory(srcRoot)) {
             return 0;
@@ -51,6 +73,33 @@ public class CoreCommandBoundaryGuardTest {
                                         && !trimmed.startsWith("import yier.bubu.redis.db.memory.api.")) {
                                     offenders.add(p.toString());
                                     break;
+                                }
+                            }
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+        }
+        return scanned[0];
+    }
+
+    private static int scanForForbiddenText(Path srcRoot, List<String> offenders, String... forbiddenSnippets) throws IOException {
+        if (srcRoot == null || !Files.isDirectory(srcRoot)) {
+            return 0;
+        }
+        int[] scanned = new int[]{0};
+        try (Stream<Path> paths = Files.walk(srcRoot)) {
+            paths.filter(p -> p != null && p.toString().endsWith(".java"))
+                    .forEach(p -> {
+                        try {
+                            scanned[0]++;
+                            List<String> lines = Files.readAllLines(p, StandardCharsets.UTF_8);
+                            for (int i = 0; i < lines.size(); i++) {
+                                String line = lines.get(i);
+                                for (String snippet : forbiddenSnippets) {
+                                    if (line.contains(snippet)) {
+                                        offenders.add(p.toString() + ":" + (i + 1) + " -> " + snippet);
+                                    }
                                 }
                             }
                         } catch (IOException e) {
@@ -102,4 +151,3 @@ public class CoreCommandBoundaryGuardTest {
         return null;
     }
 }
-

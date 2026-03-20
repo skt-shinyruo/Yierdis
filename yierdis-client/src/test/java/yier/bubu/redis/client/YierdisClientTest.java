@@ -64,6 +64,29 @@ public class YierdisClientTest {
     }
 
     @Test
+    public void infoAndStatsCommandsExposeServerObservabilityOverTcp() throws Exception {
+        try (TestServer server = TestServer.start()) {
+            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+                YierdisClient.JsonReply info = client.execute(Arrays.asList(b("INFO")), 1000);
+                Assert.assertTrue(ok(info.envelope()));
+                String infoText = stringResult(info.envelope());
+                Assert.assertTrue(infoText.contains("# Server\r\n"));
+                Assert.assertTrue(infoText.contains("redis_version:"));
+                Assert.assertTrue(infoText.contains("# Stats\r\n"));
+                Assert.assertTrue(infoText.contains("yierdis_queued_tasks:"));
+
+                YierdisClient.JsonReply stats = client.execute(Arrays.asList(b("STATS")), 1000);
+                Assert.assertTrue(ok(stats.envelope()));
+                JsonObject statsObject = objectResult(stats.envelope());
+                Assert.assertTrue(longField(statsObject, "queued_tasks") >= 0);
+                Assert.assertTrue(longField(statsObject, "commands_executed_total") >= 0);
+                Assert.assertTrue(longField(statsObject, "conn_commands_enqueued") >= 0);
+                Assert.assertTrue(longField(statsObject, "conn_commands_executed") >= 0);
+            }
+        }
+    }
+
+    @Test
     public void setGetWorkOverTcpUsingUtf8Strings() throws Exception {
         try (TestServer server = TestServer.start()) {
             try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {

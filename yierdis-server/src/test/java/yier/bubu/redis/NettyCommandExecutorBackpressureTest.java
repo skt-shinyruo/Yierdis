@@ -18,7 +18,7 @@ public class NettyCommandExecutorBackpressureTest {
     @Test
     public void queueFullReturnsErrBusy() {
         try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
-            YierdisFastCommandProcessor processor = instance.newCommandProcessor();
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
             NettyCommandExecutor executor = new NettyCommandExecutor(
                     instance::bindToCurrentThread,
                     processor,
@@ -54,7 +54,7 @@ public class NettyCommandExecutorBackpressureTest {
     @Test
     public void globalBackpressureRecoversAutoReadOnRejectedChannel() {
         try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
-            YierdisFastCommandProcessor processor = instance.newCommandProcessor();
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
             NettyCommandExecutor executor = new NettyCommandExecutor(
                     instance::bindToCurrentThread,
                     processor,
@@ -104,7 +104,7 @@ public class NettyCommandExecutorBackpressureTest {
     @Test
     public void backpressureDisablesAndReenablesAutoRead() {
         try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
-            YierdisFastCommandProcessor processor = instance.newCommandProcessor();
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
             NettyCommandExecutor executor = new NettyCommandExecutor(
                     instance::bindToCurrentThread,
                     processor,

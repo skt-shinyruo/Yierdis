@@ -27,6 +27,33 @@ public class CoreApiBoundaryGuardTest {
         }
     }
 
+    @Test
+    public void coreApiMustNotRetainLegacyMixedOpsInterfaces() throws IOException {
+        Path moduleRoot = resolveModuleRoot();
+        Assert.assertNotNull("无法定位 yierdis-core-api 模块根目录（未找到 src/main/java）", moduleRoot);
+
+        List<String> legacyInterfaces = List.of(
+                "StringOps.java",
+                "HashOps.java",
+                "ListOps.java",
+                "SetOps.java",
+                "ZSetOps.java",
+                "HllOps.java"
+        );
+
+        List<String> offenders = new ArrayList<>();
+        for (String fileName : legacyInterfaces) {
+            Path path = moduleRoot.resolve("src/main/java/yier/bubu/redis/ops").resolve(fileName);
+            if (Files.exists(path)) {
+                offenders.add(path.toString());
+            }
+        }
+
+        if (!offenders.isEmpty()) {
+            Assert.fail("检测到 core-api 仍保留 legacy mixed ops 接口：\n" + String.join("\n", offenders));
+        }
+    }
+
     private static int scanForForbiddenImports(Path srcRoot, List<String> offenders) throws IOException {
         if (srcRoot == null || !Files.isDirectory(srcRoot)) {
             return 0;
@@ -98,4 +125,3 @@ public class CoreApiBoundaryGuardTest {
         return null;
     }
 }
-

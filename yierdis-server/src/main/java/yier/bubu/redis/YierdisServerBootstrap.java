@@ -15,6 +15,7 @@ import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.args.YierdisCliException;
+import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.CommandContext;
@@ -159,7 +160,12 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 return config.keysMaxResults;
             }
         };
-        YierdisFastCommandProcessor processor = instance.newCommandProcessor(infoProvider, slowGovernor);
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+                dbRouter(instance),
+                infoProvider,
+                slowGovernor,
+                new ServerCommandModule(infoProvider)
+        );
         commandGroup = new DefaultEventExecutorGroup(1);
         NettyCommandExecutorConfig executorConfig = NettyCommandExecutorConfig.from(config);
         executor = new NettyCommandExecutor(
@@ -312,6 +318,29 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         offHeapAllocator = null;
 
         rethrowIfNeeded(failure);
+    }
+
+    private static YierdisDbRouter dbRouter(YierdisInstance instance) {
+        Objects.requireNonNull(instance, "instance");
+        DbEngine[] engines = instance.engines();
+        return new YierdisDbRouter() {
+            @Override
+            public DbEngine dbFor(yier.bubu.redis.contract.DbIndexProvider dbIndexProvider) {
+                if (engines.length == 0) {
+                    throw new IllegalStateException("no dbs");
+                }
+                int idx = dbIndexProvider == null ? 0 : dbIndexProvider.dbIndex();
+                if (idx < 0 || idx >= engines.length) {
+                    idx = 0;
+                }
+                return engines[idx];
+            }
+
+            @Override
+            public int databases() {
+                return Math.max(1, engines.length);
+            }
+        };
     }
 
     private static Throwable recordCloseFailure(Throwable current, Throwable next) {

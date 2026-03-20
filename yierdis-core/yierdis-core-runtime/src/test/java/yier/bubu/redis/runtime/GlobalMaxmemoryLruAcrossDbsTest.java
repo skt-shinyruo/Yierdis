@@ -34,7 +34,7 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = instance.newCommandProcessor();
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
 
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("a"), value))).value());
@@ -62,4 +62,3 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
         }
     }
 }
-

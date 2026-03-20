@@ -51,7 +51,7 @@ public class CustomProtocolResyncIntegrationTest {
 
         private TestEnv() {
             this.instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
-            YierdisFastCommandProcessor processor = instance.newCommandProcessor();
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
             this.executor = new NettyCommandExecutor(
                     instance::bindToCurrentThread,
                     processor,

@@ -2,10 +2,6 @@ package yier.bubu.redis.runtime;
 
 // YierdisInstance：提供可嵌入（embedded）的 instance API（Netty-free），负责装配多 DB、路由与资源生命周期。
 
-import yier.bubu.redis.command.ServerInfoProvider;
-import yier.bubu.redis.command.SlowCommandGovernor;
-import yier.bubu.redis.command.YierdisDbRouter;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDbEngineFactory;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.ops.DbEngineFactory;
@@ -15,8 +11,6 @@ import yier.bubu.redis.ops.MaxmemoryParticipant;
 import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.ops.MaxmemoryUsageSource;
 import yier.bubu.redis.ops.RuntimeDbEngine;
-import yier.bubu.redis.contract.DbIndexProvider;
-
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -29,7 +23,6 @@ import java.util.concurrent.TimeUnit;
 public final class YierdisInstance implements AutoCloseable {
     private final YierdisInstanceConfig config;
     private final RuntimeDbEngine[] dbs;
-    private final YierdisDbRouter router;
     private final OffHeapAllocator offHeapAllocator;
     private final boolean closeAllocator;
 
@@ -38,13 +31,11 @@ public final class YierdisInstance implements AutoCloseable {
     private YierdisInstance(
             YierdisInstanceConfig config,
             RuntimeDbEngine[] dbs,
-            YierdisDbRouter router,
             OffHeapAllocator offHeapAllocator,
             boolean closeAllocator
     ) {
         this.config = Objects.requireNonNull(config, "config");
         this.dbs = Objects.requireNonNull(dbs, "dbs");
-        this.router = Objects.requireNonNull(router, "router");
         this.offHeapAllocator = offHeapAllocator;
         this.closeAllocator = closeAllocator;
     }
@@ -143,29 +134,7 @@ public final class YierdisInstance implements AutoCloseable {
             }
         }
 
-        YierdisDbRouter router = new YierdisDbRouter() {
-            @Override
-            public DbEngine dbFor(DbIndexProvider dbIndexProvider) {
-                if (dbs.length == 0) {
-                    throw new IllegalStateException("no dbs");
-                }
-                int idx = 0;
-                if (dbIndexProvider != null) {
-                    idx = dbIndexProvider.dbIndex();
-                }
-                if (idx < 0 || idx >= dbs.length) {
-                    idx = 0;
-                }
-                return dbs[idx];
-            }
-
-            @Override
-            public int databases() {
-                return Math.max(1, dbs.length);
-            }
-        };
-
-        return new YierdisInstance(config, dbs, router, allocator, instanceClosesAllocator);
+        return new YierdisInstance(config, dbs, allocator, instanceClosesAllocator);
     }
 
     public YierdisInstanceConfig config() {
@@ -202,26 +171,6 @@ public final class YierdisInstance implements AutoCloseable {
             throw new IllegalArgumentException("dbIndex out of range: " + dbIndex);
         }
         return dbs[idx];
-    }
-
-    public YierdisDbRouter router() {
-        return router;
-    }
-
-    public YierdisFastCommandProcessor newCommandProcessor() {
-        return newCommandProcessor((ServerInfoProvider) null);
-    }
-
-    public YierdisFastCommandProcessor newCommandProcessor(ServerInfoProvider infoProvider) {
-        return new YierdisFastCommandProcessor(router, infoProvider);
-    }
-
-    public YierdisFastCommandProcessor newCommandProcessor(SlowCommandGovernor slowGovernor) {
-        return newCommandProcessor((ServerInfoProvider) null, slowGovernor);
-    }
-
-    public YierdisFastCommandProcessor newCommandProcessor(ServerInfoProvider infoProvider, SlowCommandGovernor slowGovernor) {
-        return new YierdisFastCommandProcessor(router, infoProvider, slowGovernor);
     }
 
     /**

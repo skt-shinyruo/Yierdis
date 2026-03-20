@@ -33,6 +33,8 @@ public class DbEngineReadWriteBoundaryTest {
 
         Assert.assertEquals(DbReads.class, reads.getReturnType());
         Assert.assertEquals(DbWrites.class, writes.getReturnType());
+        Assert.assertNull(findMethod(DbEngine.class, "values"));
+        Assert.assertNull(findMethod(DbEngine.class, "eviction"));
         Assert.assertNull(findMethod(DbEngine.class, "enforceMaxmemoryMaintenance"));
     }
 
