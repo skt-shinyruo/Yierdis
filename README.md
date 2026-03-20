@@ -24,8 +24,9 @@ Yierdis 的目标是 **教学/演示**：可以用项目内置 CLI 做交互学�
 
 - **执行契约（Command/ReplyWriter/Session...）**：统一放在 `yierdis-core-contract`（包名 `yier.bubu.redis.contract.*`），不再放在 `yierdis-protocol-model`。
 - **协议模型（limits/build-info/reply IR）**：继续位于 `yierdis-protocol-model`（包名 `yier.bubu.redis.protocol.*`）。
+- **core-command 默认装配**：`yierdis-core-command` 仅保留传输无关的默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server`，而 `PING/ECHO/COMMAND/SELECT/QUIT/FLUSHDB` 这类传输无关或 DB 生命周期命令继续留在 core。
 - **CLI 输入解析**：`InlineCommandParser` 位于 `yierdis-client`（`yier.bubu.redis.client.InlineCommandParser`）。
-- **instance 暴露面**：`YierdisInstance` 尽量只暴露 `DbEngine` 能力视图（`engine(int)` / `engines()` 防御性拷贝），避免上层依赖 `YierdisDb` 具体实现。
+- **instance 暴露面**：`YierdisInstance` 仅负责 DB 生命周期、资源 ownership 与 `DbEngine` 能力视图（`engine(int)` / `engines()` 防御性拷贝），避免上层依赖 `YierdisDb` 具体实现，也不再承担 command processor 组装。
 - **off-heap 组装**：`YierdisOffHeapAllocators` 仅通过 `ServiceLoader` 发现 provider；server 侧通过引入对应 backend 模块（如 `yierdis-memory-netty/unsafe/foreign`）完成组装。
 
 ## 启动
