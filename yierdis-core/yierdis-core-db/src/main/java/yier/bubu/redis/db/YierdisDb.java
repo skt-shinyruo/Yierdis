@@ -32,6 +32,7 @@ import yier.bubu.redis.ops.MaxmemoryParticipant;
 import yier.bubu.redis.ops.MemoryOps;
 import yier.bubu.redis.ops.RuntimeDbEngine;
 import yier.bubu.redis.ops.SetMode;
+import yier.bubu.redis.ops.StringWriteOps;
 import yier.bubu.redis.ops.TtlOps;
 import yier.bubu.redis.ops.ValueOps;
 import yier.bubu.redis.ops.WrongTypeException;
@@ -1792,7 +1793,13 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         });
     }
 
-    public boolean setString(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
+    StringWriteOps.SetStringResult setStringWithResult(
+            byte[] keyBytes,
+            BytesSlice value,
+            SetMode mode,
+            ExpireOption expireOption,
+            boolean returnOldValue
+    ) {
         checkThread();
         long now = System.currentTimeMillis();
         boolean keepTtl = expireOption != null && expireOption.isKeepTtl();
@@ -1803,18 +1810,19 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         }
         final long finalUpperBound = upperBound;
 
-        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+        return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<StringWriteOps.SetStringResult>() {
             @Override
             public long upperBoundBytes() {
                 return finalUpperBound;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+            public YierdisDbMutationExecutor.MutationResult<StringWriteOps.SetStringResult> apply() {
                 final boolean[] didSet = new boolean[]{false};
                 final boolean[] existed = new boolean[]{false};
                 final KeyHandle[] handleRef = new KeyHandle[]{null};
                 final long[] deltaBytes = new long[]{0};
+                final byte[][] oldValue = new byte[1][];
 
                 store.computeWithHandle(keyBytes, (k, old) -> {
                     handleRef[0] = k;
@@ -1833,6 +1841,10 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                     }
                     if (mode == SetMode.XX && old == null) {
                         return null;
+                    }
+                    if (returnOldValue && old != null) {
+                        byte[] raw = old.stringBytesView();
+                        oldValue[0] = raw == null ? null : java.util.Arrays.copyOf(raw, raw.length);
                     }
                     if (old == null) {
                         didSet[0] = true;
@@ -1854,12 +1866,18 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                 if (didSet[0]) {
                     YierdisChangeTracking.markValueChanged();
                     if (keepTtl && existed[0]) {
-                        return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes[0]);
+                        return YierdisDbMutationExecutor.MutationResult.of(
+                                StringWriteOps.SetStringResult.of(true, oldValue[0]),
+                                deltaBytes[0]
+                        );
                     }
                     if (expireAtMillis != null) {
                         setExpireAtMillis(handleRef[0], expireAtMillis);
                         YierdisChangeTracking.markTtlChanged();
-                        return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes[0]);
+                        return YierdisDbMutationExecutor.MutationResult.of(
+                                StringWriteOps.SetStringResult.of(true, oldValue[0]),
+                                deltaBytes[0]
+                        );
                     }
                     Long beforeTtl = expires.get(handleRef[0]);
                     removeExpire(handleRef[0]);
@@ -1867,9 +1885,16 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                         YierdisChangeTracking.markTtlChanged();
                     }
                 }
-                return YierdisDbMutationExecutor.MutationResult.of(didSet[0], deltaBytes[0]);
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        StringWriteOps.SetStringResult.of(didSet[0], oldValue[0]),
+                        deltaBytes[0]
+                );
             }
         });
+    }
+
+    public boolean setString(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
+        return setStringWithResult(keyBytes, value, mode, expireOption, false).applied();
     }
 
     public byte[] getStringBytes(byte[] keyBytes) {
@@ -1941,6 +1966,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             @Override
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
                 final int[] newLen = new int[]{0};
+                final boolean[] changed = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
                 store.computeWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
@@ -1954,6 +1980,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                     if (old == null) {
                         YierdisObject o = YierdisObject.newString(offHeapAllocator, appendValue);
                         newLen[0] = o.stringByteLength();
+                        changed[0] = true;
                         touch(o);
                         refreshEstimatedBytes(k, o);
                         deltaBytes[0] += o.estimatedBytes;
@@ -1964,13 +1991,19 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                         throw new WrongTypeException();
                     }
                     touch(old);
+                    int beforeLen = old.stringByteLength();
                     newLen[0] = old.stringAppend(offHeapAllocator, appendValue);
+                    if (newLen[0] != beforeLen) {
+                        changed[0] = true;
+                    }
                     deltaBytes[0] -= oldEstimate;
                     refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
-                YierdisChangeTracking.markValueChanged();
+                if (changed[0]) {
+                    YierdisChangeTracking.markValueChanged();
+                }
                 return YierdisDbMutationExecutor.MutationResult.of(newLen[0], deltaBytes[0]);
             }
         });
@@ -2016,6 +2049,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             @Override
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
                 final int[] oldBit = new int[]{0};
+                final boolean[] changed = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
                 store.computeWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
@@ -2037,13 +2071,21 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                         touch(old);
                     }
 
+                    int beforeLen = old.stringByteLength();
+                    boolean existed = oldEstimate > 0;
                     oldBit[0] = old.stringSetBit(offHeapAllocator, offset, value);
+                    int afterLen = old.stringByteLength();
+                    if (!existed || oldBit[0] != value || afterLen != beforeLen) {
+                        changed[0] = true;
+                    }
                     deltaBytes[0] -= oldEstimate;
                     refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
-                YierdisChangeTracking.markValueChanged();
+                if (changed[0]) {
+                    YierdisChangeTracking.markValueChanged();
+                }
                 return YierdisDbMutationExecutor.MutationResult.of(oldBit[0], deltaBytes[0]);
             }
         });

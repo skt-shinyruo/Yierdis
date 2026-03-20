@@ -336,6 +336,24 @@ public class CommandProcessorTest {
 	    }
 
     @Test
+    public void setGetAndKeepTtlSemanticsRemainIntact() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                Assert.assertTrue(client.execute(cmd("SET", "k", "v", "EX", "5")) instanceof ReplySimpleString);
+                Assert.assertTrue(((ReplyInteger) client.execute(cmd("TTL", "k"))).value() > 0L);
+
+                ReplyBulkString old = (ReplyBulkString) client.execute(cmd("SET", "k", "v2", "KEEPTTL", "GET"));
+                Assert.assertEquals("v", old.asString());
+                Assert.assertTrue(((ReplyInteger) client.execute(cmd("TTL", "k"))).value() > 0L);
+
+                ReplyObject nxGet = client.execute(cmd("SET", "k", "v3", "NX", "GET"));
+                Assert.assertTrue(nxGet instanceof ReplyNull);
+            }
+        });
+    }
+
+    @Test
     public void wrongTypeReturnsError() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);

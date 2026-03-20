@@ -99,6 +99,11 @@ final class YierdisDbWrites implements DbWrites {
         }
 
         @Override
+        public SetStringResult set(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption, boolean returnOldValue) {
+            return db.setStringWithResult(keyBytes, value, mode, expireOption, returnOldValue);
+        }
+
+        @Override
         public boolean setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption) {
             return db.setString(keyBytes, value, mode, expireOption);
         }

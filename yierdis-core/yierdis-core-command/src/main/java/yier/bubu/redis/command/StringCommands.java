@@ -6,7 +6,6 @@ import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ReplyWriter;
 
-import java.util.Arrays;
 import java.util.Objects;
 
 final class StringCommands implements CommandModule {
@@ -155,28 +154,13 @@ final class StringCommands implements CommandModule {
             return;
         }
 
-        boolean willSet = true;
-        if (mode == SetMode.NX) {
-            willSet = !support.dbReads(ctx).keyspace().existsKey(support.argView(cmd, 1));
-        } else if (mode == SetMode.XX) {
-            willSet = support.dbReads(ctx).keyspace().existsKey(support.argView(cmd, 1));
-        }
-
-        byte[] oldValueForGet = null;
-        if (getOld && willSet) {
-            byte[] old = support.dbReads(ctx).strings().getStringBytes(key);
-            if (old != null) {
-                oldValueForGet = Arrays.copyOf(old, old.length);
-            }
-        }
-
-        boolean ok = support.dbWrites(ctx).strings().setString(key, support.argSlice(cmd, 2), mode, expire);
-        if (!ok) {
+        var result = support.dbWrites(ctx).strings().set(key, support.argSlice(cmd, 2), mode, expire, getOld);
+        if (!result.applied()) {
             out.bulkString((byte[]) null);
             return;
         }
         if (getOld) {
-            out.bulkString(oldValueForGet);
+            out.bulkString(result.oldValue());
             return;
         }
         out.simpleString("OK");

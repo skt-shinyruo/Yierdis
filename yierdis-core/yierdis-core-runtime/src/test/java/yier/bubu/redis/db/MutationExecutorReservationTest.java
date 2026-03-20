@@ -5,6 +5,7 @@ import org.junit.Test;
 import yier.bubu.redis.ops.MaxmemoryErrors;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.YierdisCommandException;
+import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 
 import java.nio.charset.StandardCharsets;
 
@@ -74,6 +75,33 @@ public class MutationExecutorReservationTest {
             Assert.assertFalse(mutated[0]);
             Assert.assertNull(db.reads().strings().getStringBytes(bytes("oom")));
             Assert.assertEquals(0L, db.memory().memoryStats().reservedBytes());
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void appendAndSetbitNoopsDoNotMarkValueChanged() {
+        YierdisDb db = new YierdisDb();
+        db.bindToCurrentThread();
+        try {
+            byte[] appendKey = bytes("append");
+            byte[] bitKey = bytes("bit");
+
+            Assert.assertTrue(db.setString(appendKey, bytes("v"), SetMode.NORMAL, null));
+            Assert.assertEquals(0, db.setBit(bitKey, 0, 1));
+
+            try (YierdisChangeTracking.Scope ignored = YierdisChangeTracking.beginScope()) {
+                Assert.assertEquals(1, db.append(appendKey, bytes("")));
+                Assert.assertFalse(YierdisChangeTracking.changedValue());
+                Assert.assertFalse(YierdisChangeTracking.changedAny());
+            }
+
+            try (YierdisChangeTracking.Scope ignored = YierdisChangeTracking.beginScope()) {
+                Assert.assertEquals(1, db.setBit(bitKey, 0, 1));
+                Assert.assertFalse(YierdisChangeTracking.changedValue());
+                Assert.assertFalse(YierdisChangeTracking.changedAny());
+            }
         } finally {
             db.shutdown();
         }
