@@ -3,6 +3,8 @@ package yier.bubu.redis.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
+import yier.bubu.redis.ops.DbReads;
+import yier.bubu.redis.ops.DbWrites;
 import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.RuntimeDbEngine;
 import yier.bubu.redis.ops.DbLifecycleOps;
@@ -68,7 +70,21 @@ public class DbEngineFactoryInjectionTest {
         }
 
         @Override
+        public void enforceMaxmemoryMaintenance() {
+        }
+
+        @Override
         public void shutdown() {
+        }
+
+        @Override
+        public DbReads reads() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbWrites writes() {
+            throw new UnsupportedOperationException();
         }
 
         @Override

@@ -12,6 +12,8 @@ import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.offheap.api.OffHeapBuf;
 import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.DbLifecycleOps;
+import yier.bubu.redis.ops.DbReads;
+import yier.bubu.redis.ops.DbWrites;
 import yier.bubu.redis.ops.EvictionCoordinator;
 import yier.bubu.redis.ops.ExpirationManager;
 import yier.bubu.redis.ops.KeyspaceOps;
@@ -45,7 +47,7 @@ public class YierdisInstanceTest {
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = instance.newCommandProcessor();
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
             TestSession session = new TestSession();
             byte[] value = new byte[4000];
             Arrays.fill(value, (byte) 'a');
@@ -125,6 +127,33 @@ public class YierdisInstanceTest {
             Assert.assertEquals("db-1", e.getSuppressed()[0].getMessage());
             Assert.assertEquals("allocator", e.getSuppressed()[1].getMessage());
         }
+    }
+
+    @Test
+    public void maintenanceUsesRuntimeMaxmemoryHookForPerDbScope() {
+        TrackingRuntimeDbEngine engine = new TrackingRuntimeDbEngine();
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(1)
+                .engineFactory((dbIndex,
+                                offHeapAllocator,
+                                ownsOffHeapAllocator,
+                                offHeapKeysEnabled,
+                                maxmemoryBytes,
+                                maxmemoryPolicy,
+                                maxmemorySamples,
+                                evictionTimeLimitMillis,
+                                expireCleanupTimeLimitMillis) -> engine)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
+                .maxmemoryBytes(128)
+                .build();
+
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
+            instance.bindToCurrentThread();
+            new YierdisInstanceMaintenance(instance).maintenanceTick();
+        }
+
+        Assert.assertEquals(1, engine.expirationCleanupCalls);
+        Assert.assertEquals(1, engine.maxmemoryMaintenanceCalls);
     }
 
     private static final class TestSession implements ServerSession {
@@ -217,9 +246,23 @@ public class YierdisInstanceTest {
         }
 
         @Override
+        public void enforceMaxmemoryMaintenance() {
+        }
+
+        @Override
         public void shutdown() {
             closeOrder.add(name);
             throw new IllegalStateException(name);
+        }
+
+        @Override
+        public DbReads reads() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbWrites writes() {
+            throw new UnsupportedOperationException();
         }
 
         @Override
@@ -284,6 +327,84 @@ public class YierdisInstanceTest {
         public void close() {
             closeOrder.add("allocator");
             throw new IllegalStateException("allocator");
+        }
+    }
+
+    private static final class TrackingRuntimeDbEngine implements RuntimeDbEngine {
+        private int expirationCleanupCalls;
+        private int maxmemoryMaintenanceCalls;
+
+        @Override
+        public void bindToCurrentThread() {
+        }
+
+        @Override
+        public void enforceMaxmemoryMaintenance() {
+            maxmemoryMaintenanceCalls++;
+        }
+
+        @Override
+        public void shutdown() {
+        }
+
+        @Override
+        public DbReads reads() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbWrites writes() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ValueOps values() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ExpirationManager expiration() {
+            return () -> expirationCleanupCalls++;
+        }
+
+        @Override
+        public EvictionCoordinator eviction() {
+            return new EvictionCoordinator() {
+                @Override
+                public void prepareWrite(long estimatedExtraBytes) {
+                    throw new UnsupportedOperationException();
+                }
+
+                @Override
+                public void enforceMaxmemory() {
+                    throw new AssertionError("maintenance must use RuntimeDbEngine hook");
+                }
+
+                @Override
+                public void rollbackWriteReservationIfAny() {
+                    throw new UnsupportedOperationException();
+                }
+            };
+        }
+
+        @Override
+        public KeyspaceOps keyspace() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public TtlOps ttl() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public MemoryOps memory() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbLifecycleOps lifecycle() {
+            throw new UnsupportedOperationException();
         }
     }
 }

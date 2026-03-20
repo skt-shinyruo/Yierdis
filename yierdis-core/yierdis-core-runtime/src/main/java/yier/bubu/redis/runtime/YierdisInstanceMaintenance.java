@@ -1,6 +1,7 @@
 package yier.bubu.redis.runtime;
 
 import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.RuntimeDbEngine;
 
 import java.util.Objects;
 
@@ -42,24 +43,32 @@ public final class YierdisInstanceMaintenance {
         boolean perDb = maxmemoryEnabled && cfg.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
         boolean global = maxmemoryEnabled && cfg.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
 
-        DbEngine firstEngine = null;
+        RuntimeDbEngine firstEngine = null;
         for (int i = 0; i < databases; i++) {
-            DbEngine engine = inst.engine(i);
-            if (engine == null) {
+            DbEngine publicEngine = inst.engine(i);
+            if (publicEngine == null) {
                 continue;
             }
+            RuntimeDbEngine engine = requireRuntimeEngine(publicEngine, i);
             if (firstEngine == null) {
                 firstEngine = engine;
             }
 
             engine.expiration().cleanupExpired();
             if (perDb) {
-                engine.eviction().enforceMaxmemory();
+                engine.enforceMaxmemoryMaintenance();
             }
         }
 
         if (global && firstEngine != null) {
-            firstEngine.eviction().enforceMaxmemory();
+            firstEngine.enforceMaxmemoryMaintenance();
         }
+    }
+
+    private static RuntimeDbEngine requireRuntimeEngine(DbEngine engine, int dbIndex) {
+        if (engine instanceof RuntimeDbEngine runtimeEngine) {
+            return runtimeEngine;
+        }
+        throw new IllegalStateException("YierdisInstance exposed non-runtime engine at dbIndex=" + dbIndex);
     }
 }

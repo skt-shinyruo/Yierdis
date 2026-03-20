@@ -11,6 +11,8 @@ import yier.bubu.redis.db.memory.api.YierdisOffHeapBuf;
 import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.DbLifecycleOps;
+import yier.bubu.redis.ops.DbReads;
+import yier.bubu.redis.ops.DbWrites;
 import yier.bubu.redis.ops.EvictionCoordinator;
 import yier.bubu.redis.ops.ExpirationManager;
 import yier.bubu.redis.ops.KeyspaceOps;
@@ -77,7 +79,7 @@ public class YierdisServerBootstrapCloseTest {
                     .ownsOffHeapAllocator(false)
                     .build());
 
-            YierdisFastCommandProcessor processor = instance.newCommandProcessor();
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
             NettyCommandExecutor executor = new NettyCommandExecutor(
                     instance::bindToCurrentThread,
                     processor,
@@ -198,9 +200,23 @@ public class YierdisServerBootstrapCloseTest {
         }
 
         @Override
+        public void enforceMaxmemoryMaintenance() {
+        }
+
+        @Override
         public void shutdown() {
             closeOrder.add(name);
             throw new IllegalStateException(name);
+        }
+
+        @Override
+        public DbReads reads() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbWrites writes() {
+            throw new UnsupportedOperationException();
         }
 
         @Override

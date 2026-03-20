@@ -14,8 +14,12 @@ public interface RuntimeDbEngine extends DbEngine {
     void bindToCurrentThread();
 
     /**
+     * Runtime-only maintenance hook for background maxmemory enforcement.
+     */
+    void enforceMaxmemoryMaintenance();
+
+    /**
      * Best-effort shutdown / resource release.
      */
     void shutdown();
 }
-

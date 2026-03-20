@@ -15,8 +15,10 @@ import yier.bubu.redis.db.memory.MemoryLedger;
 import yier.bubu.redis.db.memory.MemoryLedgerOutOfMemoryException;
 import yier.bubu.redis.db.memory.MemoryReservation;
 import yier.bubu.redis.ops.DbLifecycleOps;
+import yier.bubu.redis.ops.DbReads;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.DbMemoryConstants;
+import yier.bubu.redis.ops.DbWrites;
 import yier.bubu.redis.ops.EvictionCoordinator;
 import yier.bubu.redis.ops.ExpireOption;
 import yier.bubu.redis.ops.ExpirationManager;
@@ -80,6 +82,8 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     private final MemoryLedger ledger;
     private MemoryReservation activeReservation;
 
+    private final DbReads reads;
+    private final DbWrites writes;
     private final ValueOps values;
     private final ExpirationManager expirationManager;
     private final EvictionCoordinator evictionCoordinator;
@@ -164,13 +168,25 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         this.expireCleanupTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(expireCleanupTimeLimitMillis);
         this.ledger = new DbMemoryLedger();
         this.values = new YierdisDbValueOps(this);
-        this.expirationManager = new YierdisDbExpirationManager(this);
-        this.evictionCoordinator = new YierdisDbEvictionCoordinator(this);
         this.keyspaceOps = new YierdisDbKeyspaceOps(this);
         this.ttlOps = new YierdisDbTtlOps(this);
+        this.reads = new YierdisDbReads(values, keyspaceOps, ttlOps);
+        this.writes = new YierdisDbWrites(values, keyspaceOps, ttlOps);
+        this.expirationManager = new YierdisDbExpirationManager(this);
+        this.evictionCoordinator = new YierdisDbEvictionCoordinator(this);
         this.memoryOps = new YierdisDbMemoryOps(this);
         this.lifecycleOps = new YierdisDbLifecycleOps(this);
         // Scheduling (if any) is done by the Netty event loop in YierdisServer, not by a dedicated thread.
+    }
+
+    @Override
+    public DbReads reads() {
+        return reads;
+    }
+
+    @Override
+    public DbWrites writes() {
+        return writes;
     }
 
     @Override
@@ -310,6 +326,11 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         } catch (MemoryLedgerOutOfMemoryException e) {
             throw new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
         }
+    }
+
+    @Override
+    public void enforceMaxmemoryMaintenance() {
+        enforceMaxmemory();
     }
 
     private void evictUntilUnder(long limitBytes) {
