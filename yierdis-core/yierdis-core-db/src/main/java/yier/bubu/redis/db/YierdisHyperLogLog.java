@@ -43,6 +43,30 @@ final class YierdisHyperLogLog {
         return out;
     }
 
+    static int denseLength() {
+        return HEADER_BYTES + DENSE_DATA_BYTES;
+    }
+
+    static int sparseLengthUpperBoundForElements(List<byte[]> elements) {
+        int nonEmpty = 0;
+        if (elements != null) {
+            for (byte[] element : elements) {
+                if (element != null && element.length > 0) {
+                    nonEmpty++;
+                }
+            }
+        }
+        int sparseLength = HEADER_BYTES + nonEmpty * SPARSE_ENTRY_BYTES;
+        return Math.max(HEADER_BYTES, Math.min(denseLength(), sparseLength));
+    }
+
+    static boolean isDense(YierdisObject o) {
+        if (!isHllString(o)) {
+            return false;
+        }
+        return (o.stringByteAt(HEADER_ENCODING_OFFSET) & 0xFF) == ENCODING_DENSE;
+    }
+
     static boolean isHllString(YierdisObject o) {
         if (o == null) {
             return false;

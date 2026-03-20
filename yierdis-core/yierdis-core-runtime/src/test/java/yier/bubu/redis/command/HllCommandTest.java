@@ -2,6 +2,7 @@ package yier.bubu.redis.command;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyInteger;
@@ -88,6 +89,29 @@ public class HllCommandTest {
                 Assert.assertEquals(3, count.value());
             }
         });
+    }
+
+    @Test
+    public void densePfaddNearMaxmemoryDoesNotFalseOom() {
+        YierdisDb db = new YierdisDb(null, 13000, "noeviction", 5, 5, 5);
+        db.bindToCurrentThread();
+        try {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                client.execute(cmd("PFADD", "src", "a", "b"));
+                client.execute(cmd("PFMERGE", "dense", "src"));
+                client.execute(cmd("DEL", "src"));
+
+                ReplyObject add = client.execute(cmd("PFADD", "dense", "c"));
+                Assert.assertTrue(add instanceof ReplyInteger);
+                Assert.assertEquals(1, ((ReplyInteger) add).value());
+
+                ReplyInteger count = (ReplyInteger) client.execute(cmd("PFCOUNT", "dense"));
+                Assert.assertEquals(3, count.value());
+            }
+        } finally {
+            db.shutdown();
+        }
     }
 
     @Test
