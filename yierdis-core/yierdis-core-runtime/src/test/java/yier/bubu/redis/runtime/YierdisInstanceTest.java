@@ -126,6 +126,42 @@ public class YierdisInstanceTest {
     }
 
     @Test
+    public void runtimeAccessExposesOwnerThreadLifecycleHooks() {
+        TrackingRuntimeDbEngine engine = new TrackingRuntimeDbEngine();
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
+                .databases(1)
+                .engineFactory((dbIndex,
+                                offHeapAllocator,
+                                ownsOffHeapAllocator,
+                                offHeapKeysEnabled,
+                                maxmemoryBytes,
+                                maxmemoryPolicy,
+                                maxmemorySamples,
+                                evictionTimeLimitMillis,
+                                expireCleanupTimeLimitMillis) -> engine)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
+                .maxmemoryBytes(128)
+                .build());
+
+        try {
+            YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
+            runtimeAccess.bindToCurrentThread();
+            runtimeAccess.maintenanceTick();
+            runtimeAccess.close();
+        } finally {
+            try {
+                instance.close();
+            } catch (Throwable ignored) {
+            }
+        }
+
+        Assert.assertEquals(1, engine.bindCalls);
+        Assert.assertEquals(1, engine.expirationCleanupCalls);
+        Assert.assertEquals(1, engine.maxmemoryMaintenanceCalls);
+        Assert.assertEquals(1, engine.shutdownCalls);
+    }
+
+    @Test
     public void maintenanceUsesRuntimeMaxmemoryHookForPerDbScope() {
         TrackingRuntimeDbEngine engine = new TrackingRuntimeDbEngine();
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
@@ -307,11 +343,14 @@ public class YierdisInstanceTest {
     }
 
     private static final class TrackingRuntimeDbEngine implements RuntimeDbEngine {
+        private int bindCalls;
         private int expirationCleanupCalls;
         private int maxmemoryMaintenanceCalls;
+        private int shutdownCalls;
 
         @Override
         public void bindToCurrentThread() {
+            bindCalls++;
         }
 
         @Override
@@ -321,6 +360,7 @@ public class YierdisInstanceTest {
 
         @Override
         public void shutdown() {
+            shutdownCalls++;
         }
 
         @Override

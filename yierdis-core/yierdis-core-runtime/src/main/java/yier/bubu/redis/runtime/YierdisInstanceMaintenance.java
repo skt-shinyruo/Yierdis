@@ -1,8 +1,5 @@
 package yier.bubu.redis.runtime;
 
-import yier.bubu.redis.ops.DbEngine;
-import yier.bubu.redis.ops.RuntimeDbEngine;
-
 import java.util.Objects;
 
 /**
@@ -18,10 +15,14 @@ import java.util.Objects;
  * before invoking {@link #maintenanceTick()} (see {@link YierdisInstance#bindToCurrentThread()}).
  */
 public final class YierdisInstanceMaintenance {
-    private final YierdisInstance instance;
+    private final YierdisInstanceRuntimeAccess runtimeAccess;
 
     public YierdisInstanceMaintenance(YierdisInstance instance) {
-        this.instance = Objects.requireNonNull(instance, "instance");
+        this(Objects.requireNonNull(instance, "instance").runtimeAccess());
+    }
+
+    YierdisInstanceMaintenance(YierdisInstanceRuntimeAccess runtimeAccess) {
+        this.runtimeAccess = Objects.requireNonNull(runtimeAccess, "runtimeAccess");
     }
 
     /**
@@ -32,43 +33,6 @@ public final class YierdisInstanceMaintenance {
      * </ul>
      */
     public void maintenanceTick() {
-        YierdisInstance inst = instance;
-        YierdisInstanceConfig cfg = inst.config();
-        int databases = Math.max(0, inst.databases());
-        if (databases == 0) {
-            return;
-        }
-
-        boolean maxmemoryEnabled = cfg.maxmemoryBytes() > 0;
-        boolean perDb = maxmemoryEnabled && cfg.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
-        boolean global = maxmemoryEnabled && cfg.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
-
-        RuntimeDbEngine firstEngine = null;
-        for (int i = 0; i < databases; i++) {
-            DbEngine publicEngine = inst.engine(i);
-            if (publicEngine == null) {
-                continue;
-            }
-            RuntimeDbEngine engine = requireRuntimeEngine(publicEngine, i);
-            if (firstEngine == null) {
-                firstEngine = engine;
-            }
-
-            engine.expiration().cleanupExpired();
-            if (perDb) {
-                engine.enforceMaxmemoryMaintenance();
-            }
-        }
-
-        if (global && firstEngine != null) {
-            firstEngine.enforceMaxmemoryMaintenance();
-        }
-    }
-
-    private static RuntimeDbEngine requireRuntimeEngine(DbEngine engine, int dbIndex) {
-        if (engine instanceof RuntimeDbEngine runtimeEngine) {
-            return runtimeEngine;
-        }
-        throw new IllegalStateException("YierdisInstance exposed non-runtime engine at dbIndex=" + dbIndex);
+        runtimeAccess.maintenanceTick();
     }
 }

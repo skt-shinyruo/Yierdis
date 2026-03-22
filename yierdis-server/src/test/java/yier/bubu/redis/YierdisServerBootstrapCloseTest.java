@@ -53,6 +53,39 @@ public class YierdisServerBootstrapCloseTest {
     }
 
     @Test
+    public void closeWithoutExecutorStillPropagatesInstanceAndAllocatorFailures() throws Exception {
+        List<String> closeOrder = Collections.synchronizedList(new ArrayList<>());
+        YierdisServerBootstrap bootstrap = newBootstrap(ServerConfig.fromArgs(new String[0]));
+
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
+                .databases(1)
+                .engineFactory((dbIndex,
+                                offHeapAllocator,
+                                ownsOffHeapAllocator,
+                                offHeapKeysEnabled,
+                                maxmemoryBytes,
+                                maxmemoryPolicy,
+                                maxmemorySamples,
+                                evictionTimeLimitMillis,
+                                expireCleanupTimeLimitMillis) -> new FailingRuntimeDbEngine("db-" + dbIndex, closeOrder))
+                .ownsOffHeapAllocator(false)
+                .build());
+
+        setField(bootstrap, "instance", instance);
+        setField(bootstrap, "offHeapAllocator", new ThrowingAllocator(closeOrder));
+
+        try {
+            bootstrap.close();
+            Assert.fail("expected close failure");
+        } catch (IllegalStateException e) {
+            Assert.assertEquals("db-0", e.getMessage());
+            Assert.assertEquals(Arrays.asList("db-0", "allocator"), closeOrder);
+            Assert.assertEquals(1, e.getSuppressed().length);
+            Assert.assertEquals("allocator", e.getSuppressed()[0].getMessage());
+        }
+    }
+
+    @Test
     public void closePropagatesInstanceAndAllocatorFailuresAfterBestEffortCleanup() throws Exception {
         List<String> closeOrder = Collections.synchronizedList(new ArrayList<>());
         DefaultEventExecutorGroup commandGroup = new DefaultEventExecutorGroup(1);

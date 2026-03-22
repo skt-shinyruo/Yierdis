@@ -25,6 +25,7 @@ public final class YierdisInstance implements AutoCloseable {
     private final RuntimeDbEngine[] dbs;
     private final OffHeapAllocator offHeapAllocator;
     private final boolean closeAllocator;
+    private final YierdisInstanceRuntimeAccess runtimeAccess;
 
     private boolean closed;
 
@@ -38,6 +39,7 @@ public final class YierdisInstance implements AutoCloseable {
         this.dbs = Objects.requireNonNull(dbs, "dbs");
         this.offHeapAllocator = offHeapAllocator;
         this.closeAllocator = closeAllocator;
+        this.runtimeAccess = new YierdisInstanceRuntimeAccess(this);
     }
 
     public static YierdisInstance create(YierdisInstanceConfig config) {
@@ -146,6 +148,13 @@ public final class YierdisInstance implements AutoCloseable {
     }
 
     /**
+     * Owner-thread-only runtime seam for maintenance and shutdown orchestration.
+     */
+    public YierdisInstanceRuntimeAccess runtimeAccess() {
+        return runtimeAccess;
+    }
+
+    /**
      * 获取 DB 的能力视图（依赖倒置到 {@link DbEngine}），避免上层（例如 server/bootstrap）直接依赖具体实现类。
      */
     public DbEngine engine(int dbIndex) {
@@ -179,15 +188,7 @@ public final class YierdisInstance implements AutoCloseable {
      * 该操作通常由 server executor 在线程启动阶段执行；embedded 场景需在执行命令前显式调用。
      */
     public void bindToCurrentThread() {
-        if (closed) {
-            throw new IllegalStateException("YierdisInstance is closed");
-        }
-        for (RuntimeDbEngine engine : dbs) {
-            if (engine == null) {
-                continue;
-            }
-            engine.bindToCurrentThread();
-        }
+        runtimeAccess.bindToCurrentThread();
     }
 
     /**
@@ -197,55 +198,32 @@ public final class YierdisInstance implements AutoCloseable {
      */
     @Override
     public void close() {
+        runtimeAccess.close();
+    }
+
+    RuntimeDbEngine runtimeEngine(int dbIndex) {
+        return dbInternal(dbIndex);
+    }
+
+    OffHeapAllocator runtimeOffHeapAllocator() {
+        return offHeapAllocator;
+    }
+
+    boolean runtimeClosesAllocator() {
+        return closeAllocator;
+    }
+
+    void requireOpenRuntimeAccess() {
         if (closed) {
-            return;
+            throw new IllegalStateException("YierdisInstance is closed");
+        }
+    }
+
+    boolean markClosed() {
+        if (closed) {
+            return false;
         }
         closed = true;
-
-        Throwable failure = null;
-        for (RuntimeDbEngine engine : dbs) {
-            if (engine == null) {
-                continue;
-            }
-            try {
-                engine.shutdown();
-            } catch (Throwable t) {
-                failure = recordCloseFailure(failure, t);
-            }
-        }
-
-        if (closeAllocator && offHeapAllocator != null) {
-            try {
-                offHeapAllocator.close();
-            } catch (Throwable t) {
-                failure = recordCloseFailure(failure, t);
-            }
-        }
-
-        rethrowIfNeeded(failure);
-    }
-
-    private static Throwable recordCloseFailure(Throwable current, Throwable next) {
-        if (next == null) {
-            return current;
-        }
-        if (current == null) {
-            return next;
-        }
-        current.addSuppressed(next);
-        return current;
-    }
-
-    private static void rethrowIfNeeded(Throwable failure) {
-        if (failure == null) {
-            return;
-        }
-        if (failure instanceof RuntimeException runtimeException) {
-            throw runtimeException;
-        }
-        if (failure instanceof Error error) {
-            throw error;
-        }
-        throw new IllegalStateException("close failed", failure);
+        return true;
     }
 }

@@ -180,6 +180,69 @@ public class ArchitectureBoundaryTest {
         }
     }
 
+    @Test
+    public void runtimeMaintenanceMustNotCastPublicDbViewsBackToRuntime() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path runtimeAccessFile = repoRoot.resolve(
+                "yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java"
+        );
+        Assert.assertTrue("缺少 YierdisInstanceRuntimeAccess.java，说明 runtime 显式访问 seam 未建立", Files.isRegularFile(runtimeAccessFile));
+
+        Path maintenanceFile = repoRoot.resolve(
+                "yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstanceMaintenance.java"
+        );
+        Assert.assertTrue("缺少 YierdisInstanceMaintenance.java", Files.isRegularFile(maintenanceFile));
+
+        List<String> offenders = new ArrayList<>();
+        scanFileForForbiddenText(
+                repoRoot,
+                maintenanceFile,
+                offenders,
+                "instanceof RuntimeDbEngine",
+                "requireRuntimeEngine(",
+                "DbEngine publicEngine = inst.engine("
+        );
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 runtime maintenance 仍通过公开 DbEngine 视图回退到 RuntimeDbEngine：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void serverBootstrapMustNotInlineOwnerThreadLifecycleAgain() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path runtimeAccessFile = repoRoot.resolve(
+                "yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java"
+        );
+        Assert.assertTrue("缺少 YierdisInstanceRuntimeAccess.java，无法约束 bootstrap 生命周期边界", Files.isRegularFile(runtimeAccessFile));
+
+        Path bootstrapFile = repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java").normalize();
+        Assert.assertTrue("缺少 YierdisServerBootstrap.java", Files.isRegularFile(bootstrapFile));
+
+        List<String> offenders = new ArrayList<>();
+        scanFileForForbiddenText(
+                repoRoot,
+                bootstrapFile,
+                offenders,
+                "inst.bindToCurrentThread()",
+                "inst.close()"
+        );
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 bootstrap 重新内联 owner-thread 生命周期逻辑，而不是通过 runtime seam 协作：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
     private static int scanForForbiddenText(Path repoRoot, Path root, List<String> offenders, String... forbiddenSnippets) throws IOException {
         if (root == null || !Files.exists(root)) {
             return 0;

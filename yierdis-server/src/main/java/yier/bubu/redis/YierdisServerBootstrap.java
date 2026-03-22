@@ -26,8 +26,8 @@ import yier.bubu.redis.db.memory.api.YierdisOffHeapBackendUnavailableException;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
-import yier.bubu.redis.runtime.YierdisInstanceMaintenance;
 import yier.bubu.redis.runtime.YierdisInstanceConfig;
+import yier.bubu.redis.runtime.YierdisInstanceRuntimeAccess;
 
 import java.net.InetSocketAddress;
 import java.util.Locale;
@@ -141,6 +141,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .evictionTimeLimitMillis(config.evictionTimeLimitMillis)
                 .expireCleanupTimeLimitMillis(config.expireCleanupTimeLimitMillis)
                 .build());
+        YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
         engines = instance.engines();
 
         NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(config);
@@ -169,12 +170,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         commandGroup = new DefaultEventExecutorGroup(1);
         NettyCommandExecutorConfig executorConfig = NettyCommandExecutorConfig.from(config);
         executor = new NettyCommandExecutor(
-                () -> {
-                    YierdisInstance inst = instance;
-                    if (inst != null) {
-                        inst.bindToCurrentThread();
-                    }
-                },
+                runtimeAccess::bindToCurrentThread,
                 processor,
                 commandGroup.next(),
                 new JsonLineReplyWriterFactory(),
@@ -195,7 +191,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             // 3) 通过 coalesce 避免在高压下积累多个 cleanup 请求（fixed-rate catch-up storm）。
             long period = config.expirationCleanupIntervalMillis;
             NettyCommandExecutor exForTask = executor;
-            YierdisInstanceMaintenance maintenanceForTask = new YierdisInstanceMaintenance(instance);
             java.util.concurrent.atomic.AtomicBoolean cleanupPending = new java.util.concurrent.atomic.AtomicBoolean(false);
             cleanupFuture = workerGroup.next().scheduleWithFixedDelay(() -> {
                 if (!cleanupPending.compareAndSet(false, true)) {
@@ -203,7 +198,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 }
                 exForTask.executeMaintenance(() -> {
                     try {
-                        maintenanceForTask.maintenanceTick();
+                        runtimeAccess.maintenanceTick();
                     } catch (Exception e) {
                         log.debug("Expiration cleanup error", e);
                     } finally {
@@ -256,19 +251,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         YierdisInstance inst = instance;
         if (inst != null) {
             try {
-                if (ex != null) {
-                    Future<?> closeFuture = ex.executor().submit(() -> {
-                        inst.close();
-                        return null;
-                    });
-                    closeFuture.awaitUninterruptibly();
-                    Throwable cause = closeFuture.cause();
-                    if (cause != null) {
-                        throw cause;
-                    }
-                } else {
-                    inst.close();
-                }
+                closeRuntimeAccess(ex, inst.runtimeAccess());
             } catch (Throwable t) {
                 failure = recordCloseFailure(failure, t);
             }
@@ -318,6 +301,24 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         offHeapAllocator = null;
 
         rethrowIfNeeded(failure);
+    }
+
+    private static void closeRuntimeAccess(NettyCommandExecutor executor, YierdisInstanceRuntimeAccess runtimeAccess) throws Throwable {
+        Objects.requireNonNull(runtimeAccess, "runtimeAccess");
+        if (executor == null) {
+            runtimeAccess.close();
+            return;
+        }
+
+        Future<?> closeFuture = executor.executor().submit(() -> {
+            runtimeAccess.close();
+            return null;
+        });
+        closeFuture.awaitUninterruptibly();
+        Throwable cause = closeFuture.cause();
+        if (cause != null) {
+            throw cause;
+        }
     }
 
     private static YierdisDbRouter dbRouter(YierdisInstance instance) {

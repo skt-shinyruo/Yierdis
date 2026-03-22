@@ -7,15 +7,14 @@ import yier.bubu.redis.ops.ExpirationManager;
 import java.util.Objects;
 
 final class YierdisDbExpirationManager implements ExpirationManager {
-    private final YierdisDb db;
+    private final YierdisDbExpirationSupport expirationSupport;
 
-    YierdisDbExpirationManager(YierdisDb db) {
-        this.db = Objects.requireNonNull(db, "db");
+    YierdisDbExpirationManager(YierdisDbExpirationSupport expirationSupport) {
+        this.expirationSupport = Objects.requireNonNull(expirationSupport, "expirationSupport");
     }
 
     @Override
     public void cleanupExpired() {
-        db.cleanupExpired();
+        expirationSupport.cleanupExpired();
     }
 }
-

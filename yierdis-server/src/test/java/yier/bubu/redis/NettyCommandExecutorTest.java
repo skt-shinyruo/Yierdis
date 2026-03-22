@@ -7,6 +7,7 @@ import io.netty.util.concurrent.EventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.v1.CustomCommand;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
@@ -75,6 +76,11 @@ public class NettyCommandExecutorTest {
             group.shutdownGracefully().syncUninterruptibly();
             ch.finishAndReleaseAll();
         }
+    }
+
+    @Test
+    public void safeRetainedBytesFallsBackToZeroWhenCommandThrows() {
+        Assert.assertEquals(0, NettyCommandExecutor.safeRetainedBytes(new ThrowingRetainedBytesCommand()));
     }
 
     @Test
@@ -456,5 +462,47 @@ public class NettyCommandExecutorTest {
 
     private static byte[] ascii(String s) {
         return s.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static final class ThrowingRetainedBytesCommand implements Command {
+        @Override
+        public int retainedBytes() {
+            throw new RuntimeException("boom");
+        }
+
+        @Override
+        public int argc() {
+            return 1;
+        }
+
+        @Override
+        public boolean isNull(int index) {
+            return false;
+        }
+
+        @Override
+        public int len(int index) {
+            return 4;
+        }
+
+        @Override
+        public byte byteAt(int index, int offset) {
+            return 'P';
+        }
+
+        @Override
+        public void copyToByteArray(int index, byte[] dst, int dstOff) {
+            // no-op
+        }
+
+        @Override
+        public byte[] toByteArray(int index) {
+            return ascii("PING");
+        }
+
+        @Override
+        public void close() {
+            // no-op
+        }
     }
 }
