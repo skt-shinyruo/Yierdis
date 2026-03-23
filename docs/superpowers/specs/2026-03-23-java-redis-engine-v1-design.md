@@ -1,89 +1,89 @@
-# Java Redis-Class Engine V1 Design
+# Java Redis 级引擎 V1 设计
 
-**Date:** 2026-03-23
+**日期：** 2026-03-23
 
-## Goal
+## 目标
 
-Design a pure in-memory Java engine that can plausibly compete with Redis on memory density and tail latency for mixed read/write workloads with medium-sized values, while keeping the first implementation wave focused enough to build and verify.
+设计一个纯内存的 Java 引擎，在中等 value、混合读写负载下，能够在内存密度和尾延迟上具备与 Redis 竞争的可能性，同时把第一阶段实现范围控制在可构建、可验证的尺度内。
 
-The V1 target is not "a Redis-like Java service built from standard library collections." It is "a Java implementation of a compact, low-latency, self-managed in-memory engine" with Redis-style semantics for a core command subset.
+这里的 V1 目标不是“一个基于标准库集合实现的 Redis-like Java 服务”，而是“一个使用 Java 编写、但具备紧凑内存布局、低延迟、自主管理内存能力的内存引擎”，并对一组核心 Redis 语义提供支持。
 
-## Problem Summary
+## 问题总结
 
-A conventional JVM design built around `HashMap<String, Object>`, boxed metadata, and per-element heap objects can deliver Redis-like behavior, but it will usually fail on the two metrics that matter for this project:
+如果采用传统 JVM 设计，例如围绕 `HashMap<String, Object>`、装箱元数据和大量按元素分配的堆对象来组织数据，虽然可以做出 Redis 风格的行为语义，但在这个项目真正关心的两个指标上通常会失败：
 
-1. Memory density: object headers, references, node wrappers, and repeated byte copies inflate per-key overhead.
-2. Tail latency: large object graphs and allocation churn make GC a visible participant in p99/p999 behavior.
+1. 内存密度：对象头、引用、节点包装和重复字节拷贝会显著抬高单 key 开销。
+2. 尾延迟：庞大的对象图和频繁分配会让 GC 成为 p99/p999 延迟上的显式参与者。
 
-For this project, those tradeoffs are not acceptable. The data plane therefore cannot rely on ordinary Java object graphs as its steady-state storage model.
+对这个项目来说，这些代价是不可接受的。因此，数据面不能依赖普通 Java 对象图作为稳态存储模型。
 
-## Scope
+## 范围
 
-### In Scope for V1
+### V1 范围内
 
-- Single-process, single-thread event-loop execution model.
-- Pure in-memory engine.
-- RESP2 as the canonical wire protocol for V1 so existing Redis tooling can be used for basic interoperability checks and benchmark comparisons.
-- Redis-style core types:
+- 单进程、单线程事件循环执行模型。
+- 纯内存引擎。
+- 以 RESP2 作为 V1 的规范协议，便于使用现有 Redis 工具做基础互操作验证和 benchmark 对比。
+- Redis 风格核心类型：
   - `String`
   - `Hash`
   - `Set`
   - `List`
   - `ZSet`
-- Redis-style TTL support:
+- Redis 风格 TTL 支持：
   - lazy expiration
   - active expiration
-- RESP-oriented request/response execution path.
-- Compact storage encodings and one-way encoding upgrades.
-- Custom memory management for the data plane.
-- Benchmarking and observability sufficient to compare memory usage and tail latency against a Redis baseline.
+- 面向 RESP 的 request/response 执行路径。
+- 紧凑存储编码与单向编码升级。
+- 面向数据面的自定义内存管理。
+- 足以与 Redis 基线对比内存占用和尾延迟的 benchmark 与观测能力。
 
-### Out of Scope for V1
+### V1 范围外
 
-- Persistence (`AOF`, `RDB`)
-- Replication, clustering, or sharding
-- Multi-threaded shared-state execution
+- 持久化（`AOF`、`RDB`）
+- 复制、集群或分片
+- 多线程共享状态执行
 - Lua / scripting
 - ACL / TLS / PubSub
-- Full Redis command coverage
-- Automatic encoding downgrade
-- Final `maxmemory` eviction policy work
+- 完整 Redis 命令覆盖
+- 自动编码降级
+- 最终版 `maxmemory` 淘汰策略
 
-## Non-Goals
+## 非目标
 
-- Do not optimize for fastest possible time-to-market at the expense of memory layout quality.
-- Do not preserve a "mostly Java collections, a little off-heap" architecture in the hot data path.
-- Do not chase every Redis feature before the storage core, allocator, and benchmark harness are stable.
+- 不为了最快交付速度而牺牲内存布局质量。
+- 不保留“主要依赖 Java 集合，只在局部补一点 off-heap”的热路径架构。
+- 不在存储核心、allocator 和压测基础设施还没稳定时就追逐所有 Redis 特性。
 
-## Design Constraints
+## 设计约束
 
-The design is anchored by these explicit constraints:
+本设计明确建立在以下约束上：
 
-1. Primary workload:
-   - medium-sized values
-   - mixed reads and writes
-   - general-purpose usage rather than an ultra-specialized microbenchmark profile
-2. First-wave data structures:
+1. 主要负载画像：
+   - 中等大小 value
+   - 混合读写
+   - 更强调通用性，而不是极度特化的 microbenchmark 场景
+2. 第一波数据结构范围：
    - `String / Hash / Set / ZSet / List`
-3. Runtime model:
-   - single process
-   - single-thread event loop
-4. Durability:
-   - no persistence in V1
-5. Performance target:
-   - memory density and p99/p999 latency are first-class metrics, not secondary diagnostics
+3. 运行模型：
+   - 单进程
+   - 单线程事件循环
+4. 持久化边界：
+   - V1 不做持久化
+5. 性能目标：
+   - 内存密度与 p99/p999 延迟是第一等公民指标，而不是附属诊断项
 
-## Protocol and Command Subset
+## 协议与命令子集
 
-V1 should be narrow but explicit. The planning phase should not need to rediscover which commands are in scope.
+V1 需要刻意收窄，但边界必须明确。后续 planning 不应该重新猜测哪些命令在范围内。
 
-### Protocol
+### 协议
 
-- RESP2 is the only required wire protocol for V1.
-- The engine should be usable with common Redis-compatible clients for the supported command subset.
-- RESP3 and non-Redis wire formats are out of scope for this design.
+- RESP2 是 V1 唯一要求支持的协议。
+- 对于支持的命令子集，引擎应能被常见 Redis 兼容客户端使用。
+- RESP3 与非 Redis 协议格式不在本设计范围内。
 
-### Minimum Command Subset
+### 最小命令子集
 
 #### Core / Keyspace / TTL
 
@@ -126,93 +126,93 @@ V1 should be narrow but explicit. The planning phase should not need to rediscov
 - `ZREM`
 - `ZRANGE`
 
-Anything beyond this subset should be treated as follow-up scope unless explicitly added in the implementation plan.
+超出这一子集的内容，除非在实现计划中被显式加入，否则一律视为后续范围。
 
-## Recommended Approach
+## 推荐方案
 
-Use a split architecture:
+采用一套拆分式架构：
 
-- heap-resident control plane
-- off-heap-first compact data plane
+- 控制面驻留在 heap
+- 数据面按 off-heap-first 的紧凑模型设计
 
-The control plane may use normal Java objects where that improves maintainability and does not dominate steady-state memory behavior:
+在不会主导稳态内存和尾延迟表现的地方，控制面可以放心使用普通 Java 对象，例如：
 
-- protocol decode/encode state
-- command registry
-- connection state
-- logging
-- metrics wiring
-- test harnesses
+- 协议编解码状态
+- 命令注册表
+- 连接状态
+- 日志
+- 指标接线
+- 测试工具链
 
-The data plane must not depend on Java standard collections as its steady-state storage representation:
+数据面则不能依赖 Java 标准集合作为稳态存储表示：
 
-- primary keyspace
-- TTL index
-- type payloads
-- object metadata
-- packed encodings
-- upgraded hash/set/zset/list structures
+- 主 keyspace
+- TTL 索引
+- 各类型负载数据
+- 对象元数据
+- 紧凑编码
+- 升级后的 hash/set/zset/list 结构
 
-This is the minimum architecture that keeps the project on a path where Redis-class memory density and latency remain realistic goals.
+这是能让项目继续朝“Redis 级内存密度与延迟”方向推进的最小正确架构，而不是过度设计。
 
-## Architecture Overview
+## 架构概览
 
-### 1. Execution Model
+### 1. 执行模型
 
-The engine runs as a single-thread event loop:
+引擎运行在单线程事件循环上：
 
-- all commands execute serially on one owner thread
-- the hot path stays lock-free
-- maintenance is incremental and piggybacks on command execution
+- 所有命令都在同一个 owner 线程上串行执行
+- 热路径保持无锁
+- 维护任务以增量方式挂靠在命令执行过程中推进
 
-This keeps correctness and tail-latency analysis tractable in V1. It also avoids prematurely mixing storage-engine work with concurrency-control work.
+这让 V1 的正确性和尾延迟分析保持可控，也避免过早把存储引擎问题和并发控制问题混在一起。
 
-### 2. Control Plane vs Data Plane
+### 2. 控制面与数据面
 
-The architecture must keep these responsibilities separate:
+架构必须清晰分离这两类职责：
 
-- Control plane:
-  - network I/O
-  - protocol state
-  - command dispatch
-  - connection/session state
-  - diagnostics wiring
-- Data plane:
-  - keyspace lookup
-  - TTL ownership
-  - compact payload storage
-  - encoding upgrades
-  - memory accounting
-  - deletion and reclamation
+- 控制面：
+  - 网络 I/O
+  - 协议状态
+  - 命令分发
+  - 连接 / 会话状态
+  - 诊断与观测接线
+- 数据面：
+  - keyspace 查找
+  - TTL 所有权
+  - 紧凑负载存储
+  - 编码升级
+  - 内存记账
+  - 删除与回收
 
-The command layer talks to the engine through semantic operations. It does not manipulate allocators, raw addresses, or low-level storage layouts.
+命令层只能通过语义化 API 与引擎交互，不直接操作 allocator、裸地址或底层存储布局。
 
-## Core Components
+## 核心组件
 
 ### `RedisServer`
 
-Owns the single-thread event loop and drives:
+拥有单线程事件循环，并负责驱动：
 
-- protocol read/decode
-- command dispatch
-- bounded maintenance work per command
-- response writeback
+- 协议读取与解码
+- 命令分发
+- 每条命令附带的有界维护任务
+- 响应写回
 
 ### `ConnectionContext`
 
-Heap-resident per-connection state:
+驻留在 heap 上的连接级状态：
 
-- protocol parser state
-- output buffering
-- transaction/session state if later added
+- 协议解析状态
+- 输出缓冲
+- 若后续加入事务，则承载事务 / 会话状态
 
 ### `CommandRegistry`
 
-Maps command names to handlers. This stays in the control plane.
+维护命令名到处理器的映射。这一层属于控制面。
 
 ### `DbEngine`
 
-The only public data-plane entry point. It exposes semantic operations such as:
+唯一的公开数据面入口。它暴露语义化操作，例如：
 
 - `get/set/del`
 - `expire/ttl`
@@ -221,33 +221,33 @@ The only public data-plane entry point. It exposes semantic operations such as:
 - `lpush/rpush/lpop/rpop/lrange`
 - `zadd/zrem/zrange`
 
-`DbEngine` coordinates:
+`DbEngine` 负责协调：
 
 - `KeyspaceTable`
 - `ExpireIndex`
 - `MemoryManager`
-- type-specific `*Ops`
+- 按类型拆分的 `*Ops`
 
 ### `KeyspaceTable`
 
-Owns the primary key dictionary:
+拥有主 key 字典：
 
-- off-heap open-addressing hash table
-- slot metadata optimized for scan locality
-- stable `entryHandle` references
-- incremental rehash
+- off-heap 开放寻址哈希表
+- 面向 scan locality 优化的 slot 元数据
+- 稳定的 `entryHandle` 引用
+- 增量 rehash
 
 ### `ExpireIndex`
 
-Owns active expiration scheduling:
+拥有 active expiration 的调度职责：
 
-- secondary time-based index
-- no independent key ownership
-- resolves to entry handles only
+- 二级时间索引
+- 不独立拥有 key
+- 只解析到 entry handle
 
 ### `MemoryManager`
 
-Owns allocator composition and memory statistics:
+拥有 allocator 组合和内存统计：
 
 - `EntryArena`
 - `SmallObjectArena`
@@ -255,11 +255,11 @@ Owns allocator composition and memory statistics:
 
 ### `EntryLayout`
 
-Defines the fixed-size entry header and exposes static offset-based read/write helpers. This should behave more like a layout/access module than a heap object model.
+定义固定大小 entry header 的内存布局，并暴露基于静态偏移的读写助手。它更像一个 layout/access 模块，而不是传统 heap 对象模型。
 
-### Type-Specific Ops
+### 类型专属 `Ops`
 
-Separate internal components interpret payloads by type:
+按类型拆分负载解释逻辑：
 
 - `StringOps`
 - `HashOps`
@@ -267,101 +267,101 @@ Separate internal components interpret payloads by type:
 - `ListOps`
 - `ZSetOps`
 
-These components share the same entry lifecycle protocol and memory ownership rules.
+这些组件共享统一的 entry 生命周期协议和内存所有权规则。
 
-## Memory Model
+## 内存模型
 
-### Handle-Based Access
+### 基于 Handle 的访问
 
-The engine should use stable 64-bit handles instead of leaking raw addresses through higher layers.
+引擎应统一使用稳定的 64 位 handle，而不是把裸地址泄漏到高层。
 
-Recommended properties:
+推荐性质：
 
-- handle encodes arena/page/type identity
-- handle can be validated in debug mode
-- handle remains stable across hash-table rehash
-- upper layers never need raw addresses
+- handle 编码 arena / page / type 等身份信息
+- debug 模式下可以做 handle 合法性校验
+- hash table rehash 后 handle 仍保持稳定
+- 上层不需要知道原始地址
 
-The engine may decode a handle into an address internally on the hot path, but the system boundary is handle-based.
+热路径内部可以把 handle 解码为地址，但系统边界必须保持为基于 handle 的访问模型。
 
-### Allocator Strategy
+### Allocator 策略
 
-V1 should not use a single generic allocator policy for all object shapes. It should split responsibilities:
+V1 不应使用一套单一的通用 allocator 策略来承载所有对象形状，而应显式拆分职责：
 
 #### `EntryArena`
 
-- fixed-size blocks
-- stores primary entries only
-- page-based management
-- free-list recycling
+- 固定大小块
+- 只存储主 entry
+- 以 page 为单位管理
+- 通过 free-list 回收
 
 #### `SmallObjectArena`
 
-- size-class based
-- stores packed blobs, small string blocks, list segments, small nodes
-- optimized for low overhead and predictable reclamation
+- 基于 size class
+- 存储 packed blob、小字符串块、list segment、小节点
+- 目标是低额外开销和可预测回收
 
 #### `LargeObjectAllocator`
 
-- stores large strings and large blobs
-- coarser-grained allocation policy
-- exposes fragmentation visibility
+- 存储大字符串和大块 blob
+- 使用更粗粒度的分配策略
+- 必须暴露碎片可见性
 
-This separation avoids mixing fixed-width metadata with variable-size payload lifecycles.
+这样可以避免把固定宽度元数据和变长负载的生命周期混在同一套分配路径里。
 
-### Required Allocator Diagnostics
+### 必要的 Allocator 诊断能力
 
-The memory system must expose at least:
+内存系统至少要暴露这些指标：
 
 - `allocatedBytes`
 - `activeBytes`
 - `fragmentBytes`
 - `residentPages`
 - `objectCountByEncoding`
-- size-class utilization
-- leak report at shutdown in debug/test mode
+- 各 size class 利用率
+- debug/test 模式下的退出时泄漏报告
 
-## Keyspace Design
+## Keyspace 设计
 
-### Hash Table Strategy
+### 哈希表策略
 
-The primary dictionary should be:
+主字典应满足以下特征：
 
 - off-heap
-- open addressing
-- optimized for locality
-- incrementally rehashed
+- 开放寻址
+- 为 locality 优化
+- 支持增量 rehash
 
-`Robin Hood` probing is a strong default because it reduces lookup variance and probe tail behavior.
+`Robin Hood` probing 是一个很强的默认方案，因为它有助于降低 lookup 方差和 probe tail。
 
-Each slot stores only minimal metadata, such as:
+每个 slot 只存储最小必要元数据，例如：
 
 - hash fingerprint
 - entry handle
 - probe metadata
 
-The slot does not own the full object payload. The actual key/value state lives in the stable entry referenced by the handle.
+slot 本身不拥有完整对象负载。真正的 key/value 状态存放在 handle 指向的稳定 entry 中。
 
-### Stable Entry Ownership
+### 稳定的 Entry 所有权
 
-Each key has exactly one owning entry. That entry owns:
+每个 key 只能有一个 owning entry。这个 entry 负责拥有：
 
 - key bytes
-- value reference
-- expiration metadata
-- type/encoding metadata
+- value 引用
+- expiration 元数据
+- type / encoding 元数据
 
-The design must avoid duplicating key bytes across:
+设计上必须避免在以下位置重复复制 key bytes：
 
 - primary keyspace
 - TTL structures
-- command-layer copies
+- command-layer 临时副本
 
-## Entry Layout
+## Entry 布局
 
-Each primary entry is fixed-size and contains the minimum hot metadata required for common operations.
+每个 primary entry 都是固定大小，包含常见操作所需的最小热元数据。
 
-Recommended fields:
+推荐字段：
 
 - `type`
 - `encoding`
@@ -375,288 +375,288 @@ Recommended fields:
 - `accessMeta`
 - `aux/count`
 
-The exact byte layout may evolve, but V1 should target a stable, inspectable header rather than a hierarchy of small heap wrapper objects.
+具体字节布局后续可以继续细化，但 V1 应优先建立一个稳定、可检查的 header，而不是一层层小 heap wrapper 对象。
 
-## TTL Design
+## TTL 设计
 
 ### Lazy Expiration
 
-`expireAt` lives inside the primary entry. That makes lazy expiration a single-entry read rather than a secondary hash-table lookup.
+`expireAt` 直接内联在 primary entry 中。这样 lazy expiration 只需要读取一次 entry，而不是再做一次独立哈希查找。
 
 ### Active Expiration
 
-Use a secondary time index implemented as an off-heap min-heap.
+active expiration 使用一个 off-heap min-heap 作为二级时间索引。
 
-Each heap node stores:
+每个 heap node 存储：
 
 - `expireAt`
 - `entryHandle`
 - `ttlVersion`
 
-On TTL overwrite:
+当 TTL 被覆盖时：
 
-1. update `entry.expireAt`
-2. increment `entry.ttlVersion`
-3. push a new heap node
+1. 更新 `entry.expireAt`
+2. 递增 `entry.ttlVersion`
+3. 压入一个新的 heap node
 
-Old heap nodes become stale and are discarded lazily when popped.
+旧 heap node 在后续弹出时按过期版本节点惰性丢弃。
 
-This model keeps ownership simple and avoids copying keys into a separate TTL dictionary.
+这套模型能保持所有权简单，并避免为了 TTL 单独复制 key。
 
-## Type and Encoding Strategy
+## 类型与编码策略
 
-All values are represented as:
+所有 value 都统一表示为：
 
 - `type`
 - `encoding`
 - `valueRef`
 
-Encodings upgrade in one direction only. V1 does not perform automatic downgrade.
+编码只做单向升级，V1 不做自动降级。
 
 ### `String`
 
-Two encodings:
+两种编码：
 
-- `INLINE/EMBSTR` for small strings
-- `RAW` contiguous block for medium/large strings
+- `INLINE/EMBSTR`：用于小字符串
+- `RAW`：用于中大字符串的连续块
 
 ### `Hash`
 
-Two encodings:
+两种编码：
 
-- `PACKED` sequential blob for small objects
-- off-heap hash table for larger objects
+- `PACKED`：用于小对象的顺序 blob
+- off-heap 哈希表：用于较大对象
 
-Upgrade triggers should consider:
+升级阈值应至少考虑：
 
-- field count
-- maximum field/value size
+- field 数量
+- 单个 field/value 的最大尺寸
 
 ### `Set`
 
-Two encodings:
+两种编码：
 
-- `PACKED` member blob for small objects
-- off-heap hash table for larger objects
+- `PACKED`：用于小对象的 member blob
+- off-heap 哈希表：用于较大对象
 
 ### `List`
 
-Do not use a traditional linked list.
+不要使用传统链表。
 
-Use a `quicklist-like` design:
+建议采用 `quicklist-like` 设计：
 
-- top-level segment chain
-- packed entries within each segment
-- efficient push/pop at both ends
-- acceptable locality for range reads
+- 顶层 segment 链
+- segment 内部使用 packed entries
+- 两端 push/pop 高效
+- range 读取具备可接受的 locality
 
 ### `ZSet`
 
-Two encodings:
+两种编码：
 
-- `PACKED` sequential member/score representation for small objects
-- `DICT + SKIPLIST` for larger objects
+- `PACKED`：用于小对象的顺序 member/score 表示
+- `DICT + SKIPLIST`：用于较大对象
 
-Large `ZSet` mode must not duplicate payload ownership unnecessarily.
+大 `ZSet` 模式不能产生不必要的负载重复所有权。
 
-## Command Path
+## 命令路径
 
-The steady-state command path should be:
+稳态命令路径应固定为：
 
 `decode -> argv views -> dispatch -> expire check -> lookup/mutate -> encode`
 
-Key rules:
+关键规则：
 
-- request arguments stay as views as long as possible
-- command handlers call semantic engine APIs only
-- large replies stream directly to the reply writer where practical
-- each command advances bounded maintenance work
+- 请求参数尽可能长时间保持为 view
+- 命令处理器只调用语义化 engine API
+- 大回复在可行时直接流式写给 reply writer
+- 每条命令推进有限预算的维护任务
 
-This avoids both large temporary heap object creation and maintenance spikes.
+这样可以同时避免大规模临时 heap 对象和维护尖刺。
 
-## Mutation Discipline
+## Mutation 纪律
 
-All writes should follow the same invariant:
+所有写入都必须遵守同一条不变式：
 
-1. validate and locate
-2. allocate/build new representation
-3. switch entry references only after the new value is complete
-4. release old representation last
+1. 校验并定位
+2. 分配 / 构建新表示
+3. 只有当新 value 完整可用后，才切换 entry 引用
+4. 最后再释放旧表示
 
-This applies to:
+这条纪律适用于：
 
-- overwrite writes
-- type changes
-- expiration deletes
-- explicit deletes
-- encoding upgrades
+- overwrite 写入
+- type change
+- expiration delete
+- 显式删除
+- 编码升级
 
-The goal is not transaction isolation. The goal is deterministic, leak-free state transitions under failure.
+目标不是事务隔离，而是保证失败场景下的确定性、无泄漏状态迁移。
 
-## Failure and Debug Invariants
+## 失败场景与调试不变式
 
-The data plane should treat these as mandatory debug-time invariants:
+数据面应把以下约束视为 debug 期的强制不变式：
 
-- no double free
-- no use-after-free through stale handles
-- no silent handle forgery
-- no leaked pages on clean shutdown
-- no dangling payload after entry deletion
+- 不允许 double free
+- 不允许通过 stale handle 发生 use-after-free
+- 不允许 silent handle forgery
+- 不允许 clean shutdown 后仍残留 leaked page
+- 不允许 entry 删除后仍悬挂负载引用
 
-Recommended debug aids:
+推荐调试能力：
 
 - handle generation/version checks
-- poisoned memory on free
-- allocator dumps
-- integrity checks at startup/shutdown in test mode
+- free 后 poison memory
+- allocator dump
+- test 模式下的启动 / 退出一致性检查
 
-## Benchmarking and Observability
+## Benchmark 与可观测性
 
-V1 benchmarking must track more than throughput.
+V1 的 benchmark 不能只看吞吐。
 
-### Required Metrics
+### 必要指标
 
 - `ops/s`
 - `p50/p95/p99/p999`
-- resident bytes per key
-- bytes per payload byte
-- fragmentation ratio
-- encoding distribution
-- maintenance cost under TTL and rehash activity
+- 每个 key 的常驻字节数
+- 每个负载字节对应的总字节开销
+- 碎片率
+- encoding 分布
+- TTL 和 rehash 活动下的维护成本
 
-### Required Benchmark Profiles
+### 必要的 Benchmark Profile
 
-1. `String` mixed workload:
-   - medium values
-   - approximately `70/30` read/write
-2. mixed structure workload:
+1. `String` 混合负载：
+   - 中等大小 value
+   - 大约 `70/30` 读写比例
+2. 混合结构负载：
    - `Hash/Set/List/ZSet`
-   - mixed read/write
-3. TTL-heavy workload:
-   - sustained short-lived key churn
+   - 混合读写
+3. TTL-heavy 负载：
+   - 持续的短 TTL key churn
 
-### Required Stability Runs
+### 必要的稳定性运行
 
-Run longer soak tests, not just short bursts, to observe:
+必须执行长时间 soak test，而不仅仅是短时间冲分，以观察：
 
-- latency drift
-- memory growth
-- fragmentation creep
-- allocator health under repeated churn
+- 延迟漂移
+- 内存增长
+- 碎片率爬升
+- allocator 在持续 churn 下的健康度
 
-## Delivery Strategy
+## 交付策略
 
-V1 should be delivered in distinct implementation phases with hard gates between them.
+V1 应按明确阶段推进，并在阶段之间设置硬门槛。
 
-### Phase 0: Skeleton and Observability
+### Phase 0：骨架与观测
 
-Build:
+实现：
 
-- event loop skeleton
-- RESP path
-- benchmark harness
-- allocator debug infrastructure
-- baseline memory stats
+- 事件循环骨架
+- RESP 路径
+- 压测工具链
+- allocator debug 基础设施
+- 基线内存统计
 
-Gate:
+门槛：
 
-- leak-free clean startup/shutdown
-- repeatable benchmark harness
-- inspectable allocator state
+- 启动与退出无泄漏
+- 压测工具链可重复运行
+- allocator 状态可检查
 
-### Phase 1: `String + TTL + Keyspace`
+### Phase 1：`String + TTL + Keyspace`
 
-Build:
+实现：
 
-- memory manager
-- entry arena
-- keyspace table
-- entry layout
+- `MemoryManager`
+- `EntryArena`
+- `KeyspaceTable`
+- `EntryLayout`
 - expire heap
 - `GET/SET/DEL/EXPIRE/TTL`
-- incremental rehash
+- 增量 rehash
 
-Gate:
+门槛：
 
-- semantic correctness
-- no leaks under overwrite/delete/expire
-- no severe TTL maintenance spikes
+- 语义正确
+- overwrite / delete / expire 场景无泄漏
+- 不出现明显 TTL 维护尖刺
 
-### Phase 2: `Hash` and `Set`
+### Phase 2：`Hash` 与 `Set`
 
-Build:
+实现：
 
-- packed encodings
-- upgrade path to off-heap hash table
+- 紧凑编码
+- 升级到 off-heap 哈希表的路径
 
-Gate:
+门槛：
 
-- packed and upgraded forms remain behaviorally equivalent
-- upgrade path is stable and one-way
+- packed 形态与升级后形态的行为保持一致
+- 升级路径稳定且单向
 
-### Phase 3: `List`
+### Phase 3：`List`
 
-Build:
+实现：
 
-- quicklist-like segmented list
-- push/pop/range path
+- quicklist-like 分段链表
+- push/pop/range 路径
 
-Gate:
+门槛：
 
-- no allocator pathologies under churn
-- acceptable range-read latency
+- churn 下 allocator 不出现明显病理行为
+- range 读取延迟可接受
 
-### Phase 4: `ZSet`
+### Phase 4：`ZSet`
 
-Build:
+实现：
 
 - packed `ZSet`
-- `DICT + SKIPLIST` upgrade path
+- `DICT + SKIPLIST` 升级路径
 
-Gate:
+门槛：
 
-- member lookup and ordered range semantics are stable
-- no obvious payload duplication regressions
+- member 查找与有序 range 语义稳定
+- 不出现明显负载重复持有回归
 
-### Phase 5: Hardening
+### Phase 5：加固
 
-Build:
+实现：
 
-- memory/encoding inspection commands
-- traversal support
+- memory/encoding 检查命令
+- 遍历支持
 - fuzzing
-- long-run soak validation
-- Redis baseline comparisons
+- 长稳 soak 验证
+- Redis 基线对比
 
-Gate:
+门槛：
 
-- stable multi-hour runs
-- allocator/accounting consistency
-- benchmark results good enough to justify maxmemory/eviction follow-up work
+- 多小时运行稳定
+- allocator / accounting 一致
+- benchmark 结果足以支撑继续进入 maxmemory / eviction 后续工作
 
-## Risks and Tradeoffs
+## 风险与权衡
 
-### Benefits
+### 收益
 
-- Keeps the project aligned with Redis-class memory-density goals from day one.
-- Avoids a later rewrite from heap-object data structures to compact storage layouts.
-- Makes tail-latency work visible early instead of as a late-stage surprise.
+- 从第一天起就让项目沿着 Redis 级内存密度目标前进。
+- 避免后期从 heap-object 数据结构重写到紧凑布局。
+- 更早暴露尾延迟问题，而不是等到后期才发现。
 
-### Costs
+### 代价
 
-- Much higher implementation complexity than a Java-collections-first design.
-- More difficult debugging and test infrastructure requirements.
-- Requires allocator discipline before many user-facing features can be added safely.
+- 实现复杂度远高于 Java-collections-first 设计。
+- 调试和测试基础设施要求明显更高。
+- 在很多用户可见特性加入之前，必须先把 allocator discipline 做扎实。
 
-### Rejected Alternative
+### 拒绝的替代方案
 
-The rejected baseline is a mostly heap-based design that stores steady-state data in Java collections and only opportunistically moves some values off-heap. That design is acceptable for a Redis-like JVM service, but not for a project whose explicit goal is to compete with Redis on memory density and latency.
+本设计明确拒绝“主要把稳态数据存放在 Java 集合里，只在局部机会式使用 off-heap”的基线方案。那条路线适合做一个 Redis-like JVM 服务，但不适合一个明确以 Redis 级内存密度和低延迟为目标的引擎项目。
 
-## Follow-Up
+## 后续
 
-After this design is accepted, the next artifact should be an implementation plan that:
+当这份设计被接受后，下一份产物应是实现计划，并明确：
 
-- turns each phase into executable tasks
-- names the first concrete file/module boundaries
-- defines the first benchmark commands and expected failure modes
-- keeps `maxmemory/eviction` explicitly deferred until the allocator, keyspace, TTL, and memory accounting paths are stable
+- 把每个 phase 展开成可执行任务
+- 指定第一批具体文件 / 模块边界
+- 定义第一批 benchmark 命令与预期失败模式
+- 明确把 `maxmemory/eviction` 继续延后，直到 allocator、keyspace、TTL 与内存记账路径稳定
