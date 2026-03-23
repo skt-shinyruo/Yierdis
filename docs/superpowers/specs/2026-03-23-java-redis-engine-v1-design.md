@@ -275,6 +275,203 @@ V1 需要刻意收窄，但边界必须明确。后续 planning 不应该重新�
 
 这些组件共享统一的 entry 生命周期协议和内存所有权规则。
 
+## 推荐模块边界与类职责
+
+为了避免后续实现再次退化成“一个超大 `DbEngine` + 若干辅助类”的结构，本设计建议在实现阶段遵守以下模块边界。这里的“模块”不强制对应 Maven module，更主要表达代码职责边界与依赖方向。
+
+### 1. `server/runtime`
+
+职责：
+
+- 单线程事件循环
+- RESP2 解码与回包
+- 命令分发
+- 每条命令后的 maintenance 调度
+- 运行期参数与指标暴露
+
+允许依赖：
+
+- `engine/api`
+- 少量 runtime-local 配置对象
+
+不应直接依赖：
+
+- allocator 具体实现
+- keyspace slot 布局
+- packed/large encoding 内部结构
+
+说明：
+
+`server/runtime` 是主线的最外层 owner。它驱动命令，但不拥有数据结构细节，也不绕过 facade 直接去操作 storage 或 memory。
+
+### 2. `engine/api`
+
+职责：
+
+- 对命令层暴露语义化读写接口
+- 屏蔽底层 handle、page、slot、extent
+- 固定命令语义与失败语义边界
+
+建议类：
+
+- `DbEngine`
+- `DbReadFacade`
+- `DbWriteFacade`
+- `DbMaintenanceFacade`
+
+说明：
+
+命令层应只看 facade，不应该直接拿到 `KeyspaceTable`、`MemoryManager`、`ExpireHeap` 或任何 `*Access` 类。这样后续调 layout、rehash、eviction、defragment 时，不需要回头改命令层。
+
+### 3. `engine/core`
+
+职责：
+
+- 编排一次命令在数据面的完整执行
+- 串联 keyspace、TTL、allocator、各 type ops
+- 驱动 `Plan -> Build -> Commit -> Cleanup`
+
+建议类：
+
+- `DbCommandExecutor`
+- `MutationPlanner`
+- `MutationBuilder`
+- `MutationCommitter`
+- `DeletionCoordinator`
+- `MaintenanceScheduler`
+
+说明：
+
+`engine/core` 是整个引擎的控制流中心，但它不直接决定字节布局，也不直接承担命令解析。它负责把“语义操作”落到“稳定的数据面执行序列”。
+
+### 4. `engine/storage`
+
+职责：
+
+- 主 entry
+- keyspace
+- TTL heap
+- rehash
+- 随机候选与遍历基础能力
+
+建议类：
+
+- `EntryLayout`
+- `EntryAccess`
+- `KeyspaceTable`
+- `KeyspaceRehasher`
+- `ExpireHeap`
+- `ExpireCoordinator`
+
+说明：
+
+`engine/storage` 只关心 entry、slot、handle、索引和删除一致性，不应该理解 `Hash`、`List`、`ZSet` 的高层命令语义。
+
+### 5. `engine/memory`
+
+职责：
+
+- arena / allocator / extent
+- handle 编码与校验
+- page 利用率与碎片统计
+- debug 检查与 dump
+
+建议类：
+
+- `MemoryManager`
+- `HandleCodec`
+- `EntryArena`
+- `SmallObjectArena`
+- `LargeObjectAllocator`
+- `MemoryStatsTracker`
+- `AllocatorDebugInspector`
+
+说明：
+
+`engine/memory` 不应该理解 Redis 命令，也不应该做任何命令级语义判断。它只对分配、释放、统计、校验负责。
+
+### 6. `engine/types`
+
+职责：
+
+- `String / Hash / Set / List / ZSet` 的 encoding 解释
+- packed -> large 升级
+- 类型级 free / 复制 / streaming
+- 类型级 memory usage 估算
+
+建议类：
+
+- `StringOps`
+- `HashOps`
+- `SetOps`
+- `ListOps`
+- `ZSetOps`
+
+每个类型下进一步建议拆为：
+
+- `XxxEncoding`
+- `XxxPackedAccess`
+- `XxxLargeAccess`
+- `XxxUpgrade`
+- `XxxFree`
+
+说明：
+
+不要把 packed 解析、large 结构维护、升级逻辑、删除逻辑、回包 streaming 全塞进一个 `XxxOps` 超大类。类型模块内部也必须继续分层。
+
+### 推荐依赖方向
+
+推荐维持以下依赖关系：
+
+`server/runtime -> engine/api -> engine/core -> engine/storage + engine/memory + engine/types`
+
+其中：
+
+- `engine/types` 可以依赖 `engine/storage` 与 `engine/memory`
+- `engine/storage` 可以依赖 `engine/memory`
+- `engine/memory` 不反向依赖任何上层模块
+
+### 推荐类图草案
+
+下面这段不是最终 Java API，而是实现阶段建议遵守的骨架草案：
+
+```java
+interface DbEngine {
+    DbReadFacade reads();
+    DbWriteFacade writes();
+    DbMaintenanceFacade maintenance();
+}
+
+final class DbCommandExecutor {
+    private final KeyspaceTable keyspace;
+    private final ExpireCoordinator expire;
+    private final MemoryManager memory;
+    private final StringOps strings;
+    private final HashOps hashes;
+    private final SetOps sets;
+    private final ListOps lists;
+    private final ZSetOps zsets;
+}
+
+final class KeyspaceTable { }
+final class KeyspaceRehasher { }
+final class ExpireHeap { }
+final class ExpireCoordinator { }
+
+final class MemoryManager { }
+final class EntryArena { }
+final class SmallObjectArena { }
+final class LargeObjectAllocator { }
+
+final class StringOps { }
+final class HashOps { }
+final class SetOps { }
+final class ListOps { }
+final class ZSetOps { }
+```
+
+这套类图的价值在于，它能直接支撑后续 implementation plan 的任务切分，不会让实现阶段又回到“所有逻辑都先塞到 `DbEngine` 里再说”。
+
 ## 内存模型
 
 ### 基于 Handle 的访问
@@ -484,6 +681,239 @@ key 应视为不可变字节块，建议布局：
 - key hash 可以缓存，减少重复计算
 
 主字典、TTL、value 结构都不能再持有第二份 key bytes。
+
+## 对象层级与内存所有权模型
+
+为了让删除路径、编码升级、TTL 回收和后续 `defragment` 都能保持可推理，本设计建议明确把数据面对象划分为四层，而不是把“entry / blob / 节点 / handle”混在一起。
+
+### 第一层：`Entry`
+
+`Entry` 是逻辑根对象，也是主 key 生命周期的唯一 owner。
+
+它负责：
+
+- 拥有 key 的逻辑所有权
+- 拥有 value 的逻辑所有权
+- 持有 TTL 与 access metadata
+- 作为 keyspace、TTL、eviction、defragment 的统一根引用
+
+重要约束：
+
+- `Entry` 自身固定大小
+- `Entry` 不直接嵌入变长 key/value 字节
+- `Entry` 在 rehash 期间必须保持稳定 handle
+
+### 第二层：`KeyBlock`
+
+`KeyBlock` 是只读变长对象，保存：
+
+- key bytes
+- 缓存 hash
+- 长度
+
+语义上由 `Entry` 唯一拥有，但可被以下组件共享读取：
+
+- keyspace 查找
+- TTL / eviction 候选比较
+- 各 type ops 中的 debug/inspection 路径
+
+重要约束：
+
+- 第一波设计中，`KeyBlock` 视为不可变
+- 不允许存在第二份同 key 字节副本
+- 删除 `Entry` 时必须统一释放其 `KeyBlock`
+
+### 第三层：`ValueRoot`
+
+`ValueRoot` 是 `entry.valueRef` 指向的二级根对象。
+
+它可能是：
+
+- 小字符串块
+- `PACKED_HASH` blob
+- `PACKED_SET` blob
+- `PACKED_ZSET` blob
+- `List` 的头部根对象
+- large `Hash/Set/ZSet` 的根结构
+
+重要约束：
+
+- `ValueRoot` 由 `Entry` 唯一拥有
+- 编码升级的本质是 `Entry` 从旧 `ValueRoot` 切换到新 `ValueRoot`
+- 删除路径总是从 `ValueRoot` 开始向下递归 free
+
+### 第四层：`Node / Segment / Record`
+
+这是具体编码内部的三级对象，例如：
+
+- `Hash` 的 `fieldRecord`
+- `Set` 的 `memberRecord`
+- `List` 的 `segment`
+- `ZSet` 的 `zsetRecord`
+- `skiplist node`
+
+这些对象不应被命令层、TTL、keyspace 直接感知，只由所属 `ValueRoot` 或对应 `*Ops` 管理。
+
+### 所有权规则
+
+建议统一采用以下规则：
+
+- `Entry` 逻辑拥有 `KeyBlock` 与 `ValueRoot`
+- `ValueRoot` 逻辑拥有其下的 `Node / Segment / Record`
+- 索引结构持有“可达引用”，但不持有“释放所有权”
+
+例如：
+
+- keyspace slot 持有 `entryHandle`，但不拥有 entry
+- TTL heap node 持有 `entryHandle`，但不拥有 entry
+- large `ZSet` 中的 dict 和 skiplist 都引用同一个 `zsetRecord`，但不应各自都把自己视为 payload owner
+
+### 删除顺序
+
+统一删除顺序建议写死为：
+
+1. 从外部索引摘除可见性
+2. 释放 `ValueRoot` 及其子对象
+3. 释放 `KeyBlock`
+4. 释放 `Entry`
+
+这里的“外部索引”包括：
+
+- keyspace
+- TTL heap 的逻辑可见性
+- `Hash/Set/ZSet/List` 内部子索引
+
+### 可移动性规则
+
+为了给后续 `defragment` 留出稳定边界，建议现在就把对象的默认可移动性写清楚：
+
+- `Entry`：默认不可移动，至少在 `Phase 0 ~ Phase 5` 保持稳定
+- `KeyBlock`：第一波默认不可移动
+- `ValueRoot`：部分可移动，视编码而定
+- `Node / Segment / Record`：只在各自结构实现明确支持的情况下可移动
+
+这意味着：
+
+- 第一波 defragment 优先移动 `ValueRoot` 和 packed/segment 对象
+- 不要求一开始就支持“全对象可移动”
+- 任何对象是否可移动，都必须由所属 `*Ops` 显式声明
+
+## 核心状态机
+
+本设计建议把当前主线中最关键的四条状态机写死在设计文档里，而不是留到实现阶段靠隐式约定维持。
+
+### `Entry` 生命周期状态机
+
+建议的最小状态集合：
+
+- `EMPTY`
+- `LIVE`
+- `EXPIRED_PENDING_DELETE`
+- `DELETING`
+- `DELETED`
+
+含义：
+
+- `EMPTY`：arena 槽位尚未被分配为有效 entry
+- `LIVE`：正常对外可见
+- `EXPIRED_PENDING_DELETE`：已确认过期，但尚未完成统一删除
+- `DELETING`：正在执行删除路径，防止重复 free
+- `DELETED`：已完成逻辑删除，仅用于 debug/校验，随后回收到 arena
+
+允许的迁移：
+
+- `EMPTY -> LIVE`
+- `LIVE -> EXPIRED_PENDING_DELETE`
+- `LIVE -> DELETING`
+- `EXPIRED_PENDING_DELETE -> DELETING`
+- `DELETING -> DELETED`
+- `DELETED -> EMPTY`
+
+不允许的迁移：
+
+- `EXPIRED_PENDING_DELETE -> LIVE`
+- `DELETING -> LIVE`
+- `DELETED -> LIVE`
+
+### `Mutation` 状态机
+
+建议的最小状态集合：
+
+- `PLAN`
+- `RESERVE`
+- `BUILD`
+- `COMMIT`
+- `RELEASE_OLD`
+- `DONE`
+- `ABORT`
+
+含义：
+
+- `PLAN`：查找、类型判断、升级判断、预算估算
+- `RESERVE`：为增长写预留预算
+- `BUILD`：构建新 value 或新 encoding
+- `COMMIT`：切换 entry 引用
+- `RELEASE_OLD`：释放旧对象
+- `DONE`：完成
+- `ABORT`：失败收口
+
+关键约束：
+
+- `COMMIT` 之前旧值必须仍然可读
+- `RELEASE_OLD` 只能发生在 `COMMIT` 成功后
+- `ABORT` 必须能从 `PLAN/RESERVE/BUILD` 任一点收口
+- 不允许在“半提交”状态下回退成旧语义
+
+### `Rehash` 状态机
+
+建议的最小状态集合：
+
+- `IDLE`
+- `PREPARE_NEW_TABLE`
+- `MIGRATING`
+- `CUTOVER`
+- `CLEANUP`
+
+含义：
+
+- `PREPARE_NEW_TABLE`：分配新表并初始化
+- `MIGRATING`：每条命令推进少量 bucket 迁移
+- `CUTOVER`：old table 已迁完，切换主表引用
+- `CLEANUP`：释放 old table
+
+关键约束：
+
+- `MIGRATING` 期间 lookup 必须对新旧表一致可见
+- insert 一律进入新表
+- delete 必须能从新旧表一致删除
+- TTL、eviction 和 defragment 都不能依赖 slot 稳定，只能依赖 `entryHandle`
+
+### `Defragment` 状态机
+
+建议的最小状态集合：
+
+- `IDLE`
+- `SELECT_SOURCE_PAGE`
+- `MOVE_OBJECT`
+- `REWRITE_REF`
+- `FREE_OLD`
+- `RELEASE_PAGE`
+- `PAUSE`
+
+含义：
+
+- `SELECT_SOURCE_PAGE`：选择低利用率 page
+- `MOVE_OBJECT`：复制活对象到新位置
+- `REWRITE_REF`：更新 owning reference
+- `FREE_OLD`：释放旧对象
+- `RELEASE_PAGE`：当 page 被清空后回收
+- `PAUSE`：预算耗尽，等待下一轮 maintenance
+
+关键约束：
+
+- `REWRITE_REF` 成功前不能 free old object
+- source page 只有在活对象数归零后才能 `RELEASE_PAGE`
+- defragment 与 split/merge/rehash 的交错必须通过显式状态检查保护，而不是靠“应该不会同时发生”的隐式假设
 
 ## Keyspace 设计
 
