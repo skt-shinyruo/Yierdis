@@ -1230,6 +1230,436 @@ V1 应按明确阶段推进，并在阶段之间设置硬门槛。
 - allocator / accounting 一致
 - benchmark 结果足以支撑继续进入 maxmemory / eviction 后续工作
 
+## 后续设计：`maxmemory / eviction`
+
+本节属于当前总设计文档中的后续设计延展，用来记录 V1 主线完成后最直接相邻的能力设计。它不改变前文“最终版 `maxmemory` 淘汰策略不在 V1 初始实现范围内”的边界，只是把后续设计先固定在同一份总文档中，避免后面重新发散。
+
+### 目标
+
+`maxmemory / eviction` 要解决的是“活数据总量超过预算时如何保持引擎语义稳定、内存可控、尾延迟可接受”。
+
+对本引擎而言，这一能力不是“JVM 快没内存时临时删几个 key”，而是：
+
+- 引擎自己维护一套可信的数据面内存预算
+- 每个增长写入都在提交前经过预算判定
+- 当预算不足时，要么拒绝写入，要么在可控预算内淘汰足够多的 key
+- 整个过程不能把事件循环拖成明显尖刺
+
+### 前置条件
+
+只有在以下前置条件成立后，才应开始实现 `maxmemory / eviction`：
+
+- allocator 统计已经稳定，`allocatedBytes / activeBytes / fragmentBytes` 可信
+- keyspace、TTL、删除路径、编码升级路径已经无明显泄漏
+- entry header 中已经有稳定的 `accessMeta`
+- `payloadLen` 与各 encoding 的对象计数可以回推出单 key 的 memory usage
+- 事件循环已经具备“每条命令推进有限 maintenance 预算”的基础框架
+
+如果这些前提不成立，`maxmemory` 只会变成“不精确地删东西”，而不是稳定的预算系统。
+
+### 预算口径
+
+`maxmemory` 统计口径应明确为“数据面内存预算”，而不是整个 JVM 进程的总内存占用。
+
+建议计入预算的内容：
+
+- `EntryArena`
+- `SmallObjectArena`
+- `LargeObjectAllocator`
+- 主 keyspace table
+- TTL heap
+- 各类 value block
+- allocator 元数据本身
+
+建议暂不计入预算的内容：
+
+- Netty / 协议层缓冲
+- 连接状态
+- 命令注册表与控制面对象
+- 日志与监控接线对象
+
+原因：
+
+- 这些对象不由数据面单 key 生命周期控制
+- 如果把控制面内存混入预算，写入是否成功就会依赖连接数、日志行为等非数据语义因素
+- 这种行为很难测试，也很难向用户解释
+
+建议在观测上区分两个指标：
+
+- `usedMemoryForMaxmemory`
+- `processResidentMemory`
+
+前者用于策略决策，后者用于运维观测。
+
+### 策略范围
+
+本后续设计推荐按如下顺序实现，而不是一口气做全量 Redis 策略：
+
+1. `noeviction`
+2. `allkeys-random`
+3. 采样式 `allkeys-lru`
+
+不建议在第一波进入以下策略：
+
+- `volatile-random`
+- `volatile-lru`
+- `allkeys-lfu`
+- `volatile-lfu`
+- `volatile-ttl`
+
+这些策略并非永远不做，而是它们会引入额外候选池、频率衰减、TTL 口径差异和更复杂的测试矩阵。对当前路线来说，优先级不如先把统一预算系统做稳。
+
+### 写路径与预算判定
+
+增长写入必须在真正提交前完成预算判定。推荐沿用当前文档中已经定义的 mutation 分层：
+
+- `Plan`
+- `Build`
+- `Commit`
+
+对于 `maxmemory`，需要在 `Plan` 阶段额外提供：
+
+- `upperBoundDeltaBytes`
+- `expectedReleaseBytes`
+- `mayTriggerEncodingUpgrade`
+- `mayRequireEviction`
+
+推荐写路径顺序如下：
+
+1. 命令进入 `Plan`
+2. 计算本次 mutation 的上界内存增量
+3. 若 `usedMemoryForMaxmemory + upperBoundDeltaBytes <= maxmemory`，直接进入 `Build`
+4. 若超限，则先执行一小段 active expire
+5. 若 active expire 后仍超限，则进入 eviction 流程
+6. 若 eviction 在预算内释放出足够空间，则继续 `Build`
+7. 若到达尝试上限或时间预算后仍无法腾出空间，则按策略失败
+
+关键要求：
+
+- 不允许“先写进去，再补救”
+- 不允许“写了一半后才发现超限”
+- `noeviction` 下所有增长写都必须在提交前稳定失败
+
+### 淘汰候选选择
+
+本引擎是单线程事件循环，不适合第一阶段实现精确全局 LRU 树或全局优先队列。更合理的路线是采样式候选选择。
+
+#### `allkeys-random`
+
+策略非常直接：
+
+- 从 keyspace 随机抽若干 key
+- 直接删除其中一个
+
+适合作为第一批验证预算系统和删除路径的策略，因为它不依赖复杂元数据。
+
+#### 采样式 `allkeys-lru`
+
+推荐做法：
+
+- 随机抽取 `N` 个候选
+- 优先回收已经过期但尚未被清理的 key
+- 若候选都未过期，则比较 `accessMeta`
+- 选择“最旧”的那个 key 进行淘汰
+
+建议默认采样数从 `5` 或 `8` 开始。
+
+原因：
+
+- 足够逼近“近似 LRU”
+- 不会把单次候选选择成本抬太高
+- 更接近 Redis sampled eviction 的工程思路
+
+### `accessMeta` 设计要求
+
+为了支持后续采样式 `LRU/LFU`，entry 中的 `accessMeta` 不能只是一个模糊的保留字段，而应具备明确可扩展语义。
+
+推荐第一阶段先按近似 LRU 设计：
+
+- 保存压缩后的最近访问时钟
+- 时钟精度以“够区分冷热”为准，而不是追求纳秒级
+
+后续若需要演进到 LFU，可把该字段扩展为：
+
+- 访问频率计数
+- 衰减时间戳
+
+但在采样式 `LRU` 没跑稳之前，不建议提前引入 LFU。
+
+### 淘汰循环预算
+
+eviction 本身必须是有预算的。不能为了让一条写命令成功，就无限循环删除 key。
+
+每次写入前的淘汰循环都应至少受两个条件约束：
+
+- 最大淘汰 key 数
+- 最大 CPU 时间预算
+
+推荐默认控制项：
+
+- `evictionMaxKeysPerWrite = 16 ~ 64`
+- `evictionNanosBudgetPerWrite = 50us ~ 300us`
+
+执行顺序建议固定为：
+
+1. 先做少量 active expire
+2. 再进入 eviction sample loop
+3. 每删除一个 key，就立刻更新 `usedMemoryForMaxmemory`
+4. 一旦回到预算内，立即结束 eviction
+5. 若超过预算仍无法回落，则失败返回
+
+### 与 TTL、rehash、编码升级的交互
+
+`maxmemory / eviction` 不能孤立实现，必须与现有数据面路径对齐。
+
+#### 与 TTL 的关系
+
+- eviction 前应先尝试回收已过期 key
+- 已过期 key 不应与普通活 key 在候选排序上等价对待
+- TTL heap 负责发现可回收对象，但真正 free 仍走统一删除路径
+
+#### 与 rehash 的关系
+
+- rehash 期间随机采样必须能从新旧表中获得一致可见的候选
+- eviction 删除的 key 不能破坏 rehash 状态机
+- entry handle 稳定性必须保持，eviction 只能删除 entry，不能依赖 slot 稳定
+
+#### 与编码升级的关系
+
+- packed -> large 的升级是典型增长写
+- 如果升级会显著增大内存占用，必须在升级前参与预算判定
+- 不能“先升级成功，再触发 OOM”
+
+### 观测与命令面
+
+一旦实现 `maxmemory / eviction`，需要新增最少一组稳定观测指标：
+
+- `maxmemoryBytes`
+- `usedMemoryForMaxmemory`
+- `evictedKeys`
+- `evictionAttempts`
+- `evictionRejectedWrites`
+- `evictionCandidateSamples`
+- `expiredKeysReclaimedBeforeEviction`
+
+建议同时支持最小观测命令输出：
+
+- 当前策略名
+- 当前预算与使用量
+- 累计淘汰 key 数
+- 最近一段时间的淘汰失败 / 拒写数
+
+### 验收标准
+
+进入 `maxmemory / eviction` 阶段时，建议以以下标准验收：
+
+- `noeviction` 下，所有增长写都在提交前稳定失败
+- `allkeys-random` 下，删除路径无泄漏，内存能回落
+- 采样式 `allkeys-lru` 下，热点 key 不会像随机淘汰一样被频繁误删
+- 在 `95% ~ 105% maxmemory` 压边负载下，p99 不出现明显灾难性抖动
+- 开启 eviction 后，吞吐下降和尾延迟上升都应处于可接受区间，而不是说明实现本身失衡
+
+## 后续设计：`defragment`
+
+本节同样属于记录在总设计文档中的后续设计延展。它不改变“V1 初始主线先把 allocator、keyspace、TTL、核心类型和 benchmark 跑稳”的边界，而是提前固定长期内存形态治理的方向。
+
+### 目标
+
+`defragment` 解决的问题不是“数据太多”，而是“活数据没超预算，但布局太碎，导致 resident memory、分配效率和尾延迟都变差”。
+
+它的目标是：
+
+- 逐步压实低利用率 page
+- 回收可腾空的 page 或 extent
+- 提升 `largestFreeExtentBytes`
+- 降低 `fragmentBytes`
+- 在不改变逻辑语义的前提下改善长期内存形态
+
+这与 `eviction` 完全不同。`eviction` 是删数据，`defragment` 是搬数据。
+
+### 前置条件
+
+`defragment` 比 `maxmemory / eviction` 更晚进入实现阶段，因为它对底层稳定性要求更高。
+
+必须满足以下前置条件：
+
+- handle 间接层已经稳定
+- delete / overwrite / encoding upgrade 路径已无明显泄漏
+- allocator 已经有 page/extent 级利用率统计
+- 明确知道哪些对象可移动，哪些对象暂时不移动
+- 事件循环已支持“有预算的后台维护工作”
+
+如果这些条件不满足，defragment 几乎等于主动制造悬挂引用和 use-after-free 风险。
+
+### 第一波范围
+
+建议把 defragment 分成多波，而不是“一开始全对象可移动”。
+
+第一波优先支持：
+
+- 小字符串块
+- `PACKED_HASH` blob
+- `PACKED_SET` blob
+- `PACKED_ZSET` blob
+- `List` segment
+
+第一波暂不主动迁移：
+
+- primary entry
+- key block
+- `LargeObjectAllocator` 中的大对象
+- `DICT + SKIPLIST` 里的复杂双向引用节点
+
+理由：
+
+- 第一波对象通常只有少量 owner 引用
+- 迁移后引用更新路径较短
+- 它们对小对象 arena 的碎片率影响最大
+
+### 可移动对象与引用更新模型
+
+对本引擎来说，defragment 不是“把页复制一下”这么简单。关键在于：对象搬迁后，所有引用都必须保持一致。
+
+建议采用以下原则：
+
+- `entryHandle` 保持稳定
+- 第一波 defragment 优先搬迁 entry 指向的 value block，而不是搬迁 entry 本身
+- 迁移完成后，只更新 owning entry 或 owning container 的字段
+
+这样可以避免全系统都通过一张重量级全局 indirection table 解析对象位置，也能显著降低 defragment 的实现面。
+
+### 触发条件
+
+不建议让 defragment 高频常驻运行，而应基于“信号触发 + 小预算执行”。
+
+推荐触发信号：
+
+- 某个 `SmallObjectArena` size class 的 page 平均利用率长期低于阈值
+- `fragmentBytes / activeBytes` 高于阈值
+- 总空闲很多，但 `largestFreeExtentBytes` 很小
+- soak test 中 resident memory 长期明显高于 active memory
+
+推荐保守默认阈值：
+
+- page 平均利用率 `< 50%`
+- 碎片率 `> 20%`
+- 大对象总空闲充足但最大连续 extent 不足以满足常见大块申请
+
+这些阈值不是最终真理，但足够支撑第一版 maintenance 设计。
+
+### Small Object 压实策略
+
+第一波 defragment 的最主要工作流应是“page 级压实”。
+
+推荐步骤：
+
+1. 选择一个低利用率 source page
+2. 为它选择一个或多个 target page
+3. 从 source page 中逐个选择活对象
+4. 为每个对象分配新位置并复制数据
+5. 更新 owning reference
+6. 释放旧对象
+7. 当 source page 被清空后，整页归还 page pool
+
+要点：
+
+- 一次 maintenance 不要求处理完整个 page
+- 可以中断、恢复、继续
+- source page 只有在完全清空后才真正回收
+
+### `List` Segment 的特殊处理
+
+`List` segment 不是单纯 blob，因为它还处于链结构中。
+
+因此第一波 `List` defragment 至少要支持：
+
+- 更新 segment 前驱 / 后继引用
+- 更新 owning entry 指向的头尾 segment
+- 保证 split / merge 与 defragment 不交错破坏结构
+
+建议规则：
+
+- 正在参与 split/merge 的 segment 暂不加入 defragment
+- segment 搬迁完成后，统一做一次局部链一致性校验
+
+### `DICT + SKIPLIST` 的后续波次
+
+对于大 `ZSet` 的双结构，推荐放到 defragment 后续波次再做，而不是第一波进入。
+
+原因：
+
+- `dict` 与 `skiplist` 存在双重引用关系
+- `member bytes` 通常还要维持单份所有权
+- 迁移步骤更像“局部重建”，而不是简单块复制
+
+第二波若要支持，建议优先迁移：
+
+- `zsetRecord`
+- skiplist node
+
+但前提是已经有足够强的引用更新与一致性校验框架。
+
+### 大对象碎片与大对象搬迁
+
+不建议第一波把 `LargeObjectAllocator` 的 relocation 当作 defragment 核心能力。
+
+原因：
+
+- 大对象复制成本高
+- 单次搬迁更容易形成尾延迟尖刺
+- 大对象常常更适合通过 free extent 合并和分配策略优化来缓解碎片，而不是主动迁移
+
+因此推荐顺序是：
+
+1. 先做 small-object compaction
+2. 再做好 large allocator 的 free extent 合并
+3. 只有 benchmark 明确证明“大对象碎片是主瓶颈”时，才设计 large relocation
+
+### 执行预算
+
+defragment 和 TTL、rehash 一样，必须是“渐进式、可中断、有预算”的后台维护任务。
+
+推荐每轮限制至少包含：
+
+- 最多迁移对象数
+- 最多迁移字节数
+- 最大 CPU 时间预算
+
+推荐初始预算：
+
+- 每轮迁移 `1 ~ 4` 个 small object
+- 或最多迁移 `4 ~ 16 KiB`
+- 或最多消耗 `50 ~ 100us`
+
+重点不是“尽快整理完”，而是“不让整理本身变成新的尾延迟源”。
+
+### 观测指标
+
+一旦实现 defragment，至少要新增这些可观测指标：
+
+- `defragAttempts`
+- `defragMoves`
+- `defragBytesMoved`
+- `defragPagesFreed`
+- `defragSkips`
+- `fragmentationBefore`
+- `fragmentationAfter`
+- 各 arena 的 page 利用率分布
+
+没有这些指标，就无法判断 defragment 是真的在改善内存形态，还是只是在白白复制数据。
+
+### 验收标准
+
+进入 defragment 阶段时，建议至少满足以下验收标准：
+
+- 压实后 `fragmentBytes` 能稳定回落
+- `residentPages` 或 page 利用率分布有可观改善
+- `largestFreeExtentBytes` 不再长期停留在极小值
+- soak test 下 resident memory 曲线更平稳
+- defragment 开启后 p99/p999 不会显著恶化
+
+如果 defragment 只能轻微降碎片，却明显恶化尾延迟，那这套设计就不值得继续推进。
+
 ## 风险与权衡
 
 ### 收益
@@ -1255,4 +1685,5 @@ V1 应按明确阶段推进，并在阶段之间设置硬门槛。
 - 把每个 phase 展开成可执行任务
 - 指定第一批具体文件 / 模块边界
 - 定义第一批 benchmark 命令与预期失败模式
-- 明确把 `maxmemory/eviction` 继续延后，直到 allocator、keyspace、TTL 与内存记账路径稳定
+- 以当前文档中的“`maxmemory / eviction`”与“`defragment`”章节作为后续工作流边界
+- 明确把 `maxmemory/eviction` 与 `defragment` 的真正实现继续延后，直到 allocator、keyspace、TTL 与内存记账路径稳定
