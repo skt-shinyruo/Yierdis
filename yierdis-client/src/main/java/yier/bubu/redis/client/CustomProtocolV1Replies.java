@@ -64,4 +64,3 @@ public final class CustomProtocolV1Replies {
         return new String(bytes, StandardCharsets.UTF_8);
     }
 }
-

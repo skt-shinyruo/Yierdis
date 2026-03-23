@@ -14,13 +14,14 @@ import io.netty.util.ReferenceCountUtil;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.YierdisServerBootstrap;
-import yier.bubu.redis.protocol.json.JsonBoolean;
+import yier.bubu.redis.protocol.json.JsonArray;
+import yier.bubu.redis.protocol.json.JsonLimits;
 import yier.bubu.redis.protocol.json.JsonLong;
 import yier.bubu.redis.protocol.json.JsonNull;
 import yier.bubu.redis.protocol.json.JsonObject;
+import yier.bubu.redis.protocol.json.JsonParser;
 import yier.bubu.redis.protocol.json.JsonString;
 import yier.bubu.redis.protocol.json.JsonValue;
-import yier.bubu.redis.protocol.v1.CustomProtocolV1TaggedValue;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -97,6 +98,18 @@ public class YierdisClientTest {
                 YierdisClient.JsonReply get = client.execute(Arrays.asList(b("GET"), b("k")), 1000);
                 Assert.assertTrue(ok(get.envelope()));
                 Assert.assertEquals("v", stringResult(get.envelope()));
+            }
+        }
+    }
+
+    @Test
+    public void rawByteExecuteNormalizesMalformedUtf8ArgsBeforeSending() throws Exception {
+        try (TestServer server = TestServer.start()) {
+            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+                YierdisClient.JsonReply reply = client.execute(Arrays.asList(b("ECHO"), new byte[]{(byte) 0xFF}), 1000);
+
+                Assert.assertTrue(ok(reply.envelope()));
+                Assert.assertEquals("\uFFFD", stringResult(reply.envelope()));
             }
         }
     }
@@ -212,15 +225,71 @@ public class YierdisClientTest {
         }
     }
 
+    @Test
+    public void jsonReplyLineAccessorReturnsDefensiveCopy() throws Exception {
+        try (TestServer server = TestServer.start()) {
+            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+                YierdisClient.JsonReply reply = client.execute(Arrays.asList(b("PING")), 1000);
+                String original = reply.lineUtf8();
+
+                byte[] line = reply.line();
+                line[0] = 'x';
+
+                Assert.assertEquals(original, reply.lineUtf8());
+            }
+        }
+    }
+
+    @Test
+    public void decodeResultMapStringKeysReturnsLivePlainObjectValuesForClientCompatibility() {
+        byte[] line = "{\"ok\":true,\"result\":{\"outer\":{\"x\":1}}}".getBytes(StandardCharsets.UTF_8);
+        JsonValue envelope = JsonParser.parseStrictUtf8(line, 0, line.length, JsonLimits.DEFAULT);
+
+        Map<String, JsonValue> result = CustomProtocolV1Replies.decodeResultMapStringKeys(envelope);
+        JsonObject resultObject = (JsonObject) CustomProtocolV1Replies.resultValue(envelope);
+
+        Assert.assertSame(resultObject.values(), result);
+        result.put("evil", new JsonLong(2));
+        ((JsonObject) result.get("outer")).values().put("y", new JsonLong(2));
+
+        Assert.assertEquals(new JsonLong(2), resultObject.values().get("evil"));
+        Assert.assertEquals(new JsonLong(2), ((JsonObject) resultObject.values().get("outer")).values().get("y"));
+    }
+
+    @Test
+    public void decodeResultMapStringKeysReturnsMutableDecodedTaggedMapValuesForClientCompatibility() {
+        byte[] line = "{\"ok\":true,\"result\":{\"$map\":[[\"outer\",{\"items\":[1]}]]}}".getBytes(StandardCharsets.UTF_8);
+        JsonValue envelope = JsonParser.parseStrictUtf8(line, 0, line.length, JsonLimits.DEFAULT);
+
+        Map<String, JsonValue> result = CustomProtocolV1Replies.decodeResultMapStringKeys(envelope);
+        JsonObject outer = (JsonObject) result.get("outer");
+        JsonArray items = (JsonArray) outer.values().get("items");
+
+        result.put("evil", new JsonLong(2));
+        items.values().add(new JsonLong(2));
+
+        Assert.assertEquals(new JsonLong(2), result.get("evil"));
+        Assert.assertEquals(2, items.values().size());
+        Assert.assertEquals(new JsonLong(2), items.values().get(1));
+    }
+
+    @Test
+    public void jsonReplyPublicConstructorAcceptsNonObjectEnvelopeForCompatibility() {
+        byte[] line = "scalar".getBytes(StandardCharsets.UTF_8);
+        JsonValue envelope = new JsonString("not-an-object");
+
+        YierdisClient.JsonReply reply = new YierdisClient.JsonReply(line, envelope);
+
+        Assert.assertSame(envelope, reply.envelope());
+        Assert.assertEquals("scalar", reply.lineUtf8());
+    }
+
     private static boolean ok(JsonValue envelope) {
-        JsonObject obj = envelopeObject(envelope);
-        JsonValue v = obj.values().get("ok");
-        return v instanceof JsonBoolean b && b.value();
+        return CustomProtocolV1Replies.isOkEnvelope(envelope);
     }
 
     private static JsonValue resultValue(JsonValue envelope) {
-        JsonObject obj = envelopeObject(envelope);
-        return obj.values().get("result");
+        return CustomProtocolV1Replies.resultValue(envelope);
     }
 
     private static String stringResult(JsonValue envelope) {
@@ -230,25 +299,15 @@ public class YierdisClientTest {
     }
 
     private static JsonObject objectResult(JsonValue envelope) {
-        JsonValue v = resultValue(envelope);
-        Assert.assertTrue(v instanceof JsonObject);
-        JsonObject obj = (JsonObject) v;
-        if (CustomProtocolV1TaggedValue.isTaggedMap(obj)) {
-            return new JsonObject(CustomProtocolV1TaggedValue.decodeTaggedMapToStringKeyedObject(obj));
-        }
-        return obj;
+        return new JsonObject(CustomProtocolV1Replies.decodeResultMapStringKeys(envelope));
     }
 
     private static JsonObject errorObject(JsonValue envelope) {
-        JsonObject obj = envelopeObject(envelope);
-        JsonValue v = obj.values().get("error");
-        Assert.assertTrue(v instanceof JsonObject);
-        return (JsonObject) v;
+        return CustomProtocolV1Replies.errorObject(envelope);
     }
 
     private static JsonObject envelopeObject(JsonValue envelope) {
-        Assert.assertTrue(envelope instanceof JsonObject);
-        return (JsonObject) envelope;
+        return CustomProtocolV1Replies.envelopeObject(envelope);
     }
 
     private static String stringField(JsonObject obj, String key) {
