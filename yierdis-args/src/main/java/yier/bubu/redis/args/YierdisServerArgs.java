@@ -6,7 +6,6 @@ import yier.bubu.redis.protocol.ProtocolLimits;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 @Command(
         name = "yierdis",
@@ -212,14 +211,7 @@ public final class YierdisServerArgs {
         if (executorQueueMaxBytes < 0) {
             throw new IllegalArgumentException("executorQueueMaxBytes must be >= 0");
         }
-        if (executorSchedulingPolicy == null || executorSchedulingPolicy.isBlank()) {
-            throw new IllegalArgumentException("executorSchedulingPolicy must not be blank");
-        }
-        String executorPolicy = executorSchedulingPolicy.trim().toLowerCase(Locale.ROOT);
-        if (!executorPolicy.equals("global") && !executorPolicy.equals("fair")) {
-            throw new IllegalArgumentException("unsupported executorSchedulingPolicy: " + executorSchedulingPolicy);
-        }
-        executorSchedulingPolicy = executorPolicy;
+        executorSchedulingPolicy = normalizeExecutorSchedulingPolicy(executorSchedulingPolicy);
         if (backpressureHighWatermark <= 0) {
             throw new IllegalArgumentException("backpressureHighWatermark must be > 0");
         }
@@ -262,14 +254,7 @@ public final class YierdisServerArgs {
         if (protocolMaxLineBytes <= 0) {
             throw new IllegalArgumentException("protocolMaxLineBytes must be > 0");
         }
-        if (offheapBackend == null || offheapBackend.isBlank()) {
-            throw new IllegalArgumentException("offheapBackend must not be blank");
-        }
-
-        String backend = offheapBackend.trim().toLowerCase(Locale.ROOT);
-        if (!backend.equals("none") && !backend.equals("netty") && !backend.equals("unsafe") && !backend.equals("foreign")) {
-            throw new IllegalArgumentException("unsupported offheapBackend: " + offheapBackend);
-        }
+        String backend = normalizeOffheapBackend(offheapBackend);
         offheapBackend = backend;
 
         if (offheapMaxBytes < 0) {
@@ -284,25 +269,8 @@ public final class YierdisServerArgs {
         if (maxmemoryBytes < 0) {
             throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
         }
-        if (maxmemoryScope == null || maxmemoryScope.isBlank()) {
-            throw new IllegalArgumentException("maxmemoryScope must not be blank");
-        }
-        String scope = maxmemoryScope.trim().toLowerCase(Locale.ROOT).replace('_', '-');
-        if ("perdb".equals(scope)) {
-            scope = "per-db";
-        }
-        if (!scope.equals("global") && !scope.equals("per-db")) {
-            throw new IllegalArgumentException("unsupported maxmemoryScope: " + maxmemoryScope);
-        }
-        maxmemoryScope = scope;
-        if (maxmemoryPolicy == null || maxmemoryPolicy.isBlank()) {
-            throw new IllegalArgumentException("maxmemoryPolicy must not be blank");
-        }
-        String policy = maxmemoryPolicy.trim().toLowerCase(Locale.ROOT);
-        if (!policy.equals("noeviction") && !policy.equals("allkeys-random") && !policy.equals("allkeys-lru")) {
-            throw new IllegalArgumentException("unsupported maxmemoryPolicy: " + maxmemoryPolicy);
-        }
-        maxmemoryPolicy = policy;
+        maxmemoryScope = normalizeMaxmemoryScope(maxmemoryScope);
+        maxmemoryPolicy = normalizeMaxmemoryPolicy(maxmemoryPolicy);
         if (maxmemorySamples <= 0) {
             throw new IllegalArgumentException("maxmemorySamples must be > 0");
         }
@@ -354,6 +322,45 @@ public final class YierdisServerArgs {
         out.keysTimeBudgetMillis = keysTimeBudgetMillis;
         out.keysMaxResults = keysMaxResults;
         return out;
+    }
+
+    /**
+     * Convert normalized CLI args into the canonical runtime config.
+     * <p>
+     * Callers should invoke {@link #normalizeAndValidate()} first so the config reflects stable argv values.
+     */
+    public YierdisServerRuntimeConfig toRuntimeConfig() {
+        return new YierdisServerRuntimeConfig(
+                port,
+                databases,
+                cleanupIntervalMillis,
+                ioThreads,
+                executorQueueCapacity,
+                executorQueueMaxBytes,
+                YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.fromArgvValue(executorSchedulingPolicy),
+                backpressureHighWatermark,
+                backpressureLowWatermark,
+                backpressureBytesHighWatermark,
+                backpressureBytesLowWatermark,
+                executorMaxDrainCommands,
+                executorDrainTimeLimitMillis,
+                transactionQueueMaxCommands,
+                transactionQueueMaxBytes,
+                protocolMaxBulkBytes,
+                protocolMaxArgs,
+                protocolMaxLineBytes,
+                YierdisServerRuntimeConfig.OffheapBackend.fromArgvValue(offheapBackend),
+                offheapMaxBytes,
+                offheapKeysEnabled,
+                maxmemoryBytes,
+                YierdisServerRuntimeConfig.MaxmemoryScope.fromArgvValue(maxmemoryScope),
+                YierdisServerRuntimeConfig.MaxmemoryPolicy.fromArgvValue(maxmemoryPolicy),
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                keysTimeBudgetMillis,
+                keysMaxResults
+        );
     }
 
     /**
@@ -443,5 +450,21 @@ public final class YierdisServerArgs {
         out.add(Integer.toString(keysMaxResults));
 
         return out;
+    }
+
+    private static String normalizeExecutorSchedulingPolicy(String rawValue) {
+        return YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.parseCliValue(rawValue).argvValue();
+    }
+
+    private static String normalizeOffheapBackend(String rawValue) {
+        return YierdisServerRuntimeConfig.OffheapBackend.parseCliValue(rawValue).argvValue();
+    }
+
+    private static String normalizeMaxmemoryScope(String rawValue) {
+        return YierdisServerRuntimeConfig.MaxmemoryScope.parseCliValue(rawValue).argvValue();
+    }
+
+    private static String normalizeMaxmemoryPolicy(String rawValue) {
+        return YierdisServerRuntimeConfig.MaxmemoryPolicy.parseCliValue(rawValue).argvValue();
     }
 }

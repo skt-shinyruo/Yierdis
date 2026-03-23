@@ -15,6 +15,7 @@ import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.args.YierdisCliException;
+import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
@@ -43,6 +44,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(YierdisServerBootstrap.class);
 
     private final ServerConfig config;
+    private final YierdisServerRuntimeConfig runtimeConfig;
 
     private Channel serverChannel;
     private ScheduledFuture<?> cleanupFuture;
@@ -58,6 +60,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
     private YierdisServerBootstrap(ServerConfig config) {
         this.config = Objects.requireNonNull(config, "config");
+        this.runtimeConfig = config.runtimeConfig();
     }
 
     public static YierdisServerBootstrap start(String... args) throws Exception {
@@ -85,12 +88,12 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     public int port() {
         Channel ch = serverChannel;
         if (ch == null) {
-            return config.port;
+            return runtimeConfig.port();
         }
         if (ch.localAddress() instanceof InetSocketAddress addr) {
             return addr.getPort();
         }
-        return config.port;
+        return runtimeConfig.port();
     }
 
     public void awaitClose() throws InterruptedException {
@@ -102,16 +105,16 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     }
 
     private void startInternal() throws Exception {
-        final YierdisOffHeapBackend backend = YierdisOffHeapBackend.fromString(config.offheapBackend);
+        final YierdisOffHeapBackend backend = YierdisOffHeapBackend.fromString(runtimeConfig.offheapBackend().argvValue());
         log.info("off-heap backend: {} (maxBytes={}, keysOffHeapEnabled={})",
                 backend.name().toLowerCase(Locale.ROOT),
-                config.offheapMaxBytes,
-                config.offheapKeysEnabled);
+                runtimeConfig.offheapMaxBytes(),
+                runtimeConfig.offheapKeysEnabled());
         log.info("off-heap providers: {}", YierdisOffHeapAllocators.availableProvidersSummary());
 
         try {
-            offHeapAllocator = YierdisOffHeapAllocators.create(backend, config.offheapMaxBytes);
-            if (backend != YierdisOffHeapBackend.NONE && config.offheapMaxBytes == 0) {
+            offHeapAllocator = YierdisOffHeapAllocators.create(backend, runtimeConfig.offheapMaxBytes());
+            if (backend != YierdisOffHeapBackend.NONE && runtimeConfig.offheapMaxBytes() == 0) {
                 log.warn("off-heap backend '{}' is enabled but offheapMaxBytes=0 (no hard cap). "
                                 + "If you rely on maxmemoryBytes, consider setting --offheapMaxBytes to avoid surprises.",
                         backend.name().toLowerCase(Locale.ROOT));
@@ -125,31 +128,31 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             throw e;
         }
 
-        boolean perDbScope = config.maxmemoryScope == ServerConfig.MaxmemoryScope.PER_DB;
-        int databases = Math.max(1, config.databases);
+        boolean perDbScope = runtimeConfig.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB;
+        int databases = Math.max(1, runtimeConfig.databases());
         YierdisInstanceConfig.MaxmemoryScope scope =
                 perDbScope ? YierdisInstanceConfig.MaxmemoryScope.PER_DB : YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
         instance = YierdisInstance.create(YierdisInstanceConfig.builder()
                 .databases(databases)
                 .offHeapAllocator(offHeapAllocator)
                 .ownsOffHeapAllocator(false)
-                .offHeapKeysEnabled(config.offheapKeysEnabled)
-                .maxmemoryBytes(config.maxmemoryBytes)
+                .offHeapKeysEnabled(runtimeConfig.offheapKeysEnabled())
+                .maxmemoryBytes(runtimeConfig.maxmemoryBytes())
                 .maxmemoryScope(scope)
-                .maxmemoryPolicy(config.maxmemoryPolicy)
-                .maxmemorySamples(config.maxmemorySamples)
-                .evictionTimeLimitMillis(config.evictionTimeLimitMillis)
-                .expireCleanupTimeLimitMillis(config.expireCleanupTimeLimitMillis)
+                .maxmemoryPolicy(runtimeConfig.maxmemoryPolicy().argvValue())
+                .maxmemorySamples(runtimeConfig.maxmemorySamples())
+                .evictionTimeLimitMillis(runtimeConfig.evictionTimeLimitMillis())
+                .expireCleanupTimeLimitMillis(runtimeConfig.expireCleanupTimeLimitMillis())
                 .build());
         YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
         engines = instance.engines();
 
-        NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(config);
+        NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(runtimeConfig);
         infoProvider.bindEngines(engines);
         SlowCommandGovernor slowGovernor = new SlowCommandGovernor() {
-            private final long timeBudgetNanos = config.keysTimeBudgetMillis <= 0
+            private final long timeBudgetNanos = runtimeConfig.keysTimeBudgetMillis() <= 0
                     ? 0
-                    : TimeUnit.MILLISECONDS.toNanos(config.keysTimeBudgetMillis);
+                    : TimeUnit.MILLISECONDS.toNanos(runtimeConfig.keysTimeBudgetMillis());
 
             @Override
             public long keysTimeBudgetNanos(CommandContext ctx) {
@@ -158,7 +161,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
             @Override
             public int keysMaxResults(CommandContext ctx) {
-                return config.keysMaxResults;
+                return runtimeConfig.keysMaxResults();
             }
         };
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
@@ -168,7 +171,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 new ServerCommandModule(infoProvider)
         );
         commandGroup = new DefaultEventExecutorGroup(1);
-        NettyCommandExecutorConfig executorConfig = NettyCommandExecutorConfig.from(config);
+        NettyCommandExecutorConfig executorConfig = NettyCommandExecutorConfig.from(runtimeConfig);
         executor = new NettyCommandExecutor(
                 runtimeAccess::bindToCurrentThread,
                 processor,
@@ -179,17 +182,17 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         infoProvider.bindExecutor(executor);
 
         bossGroup = new NioEventLoopGroup(1);
-        workerGroup = new NioEventLoopGroup(config.ioThreads);
+        workerGroup = new NioEventLoopGroup(runtimeConfig.ioThreads());
 
         // 命令执行器线程是 DB 的唯一访问者（保持单线程命令语义）。
         executor.start();
 
-        if (config.expirationCleanupIntervalMillis > 0) {
+        if (runtimeConfig.cleanupIntervalMillis() > 0) {
             // 关键点：
             // 1) 使用 worker event loop 作为“定时器线程”，避免 command executor 忙碌导致定时器自身无法触发。
             // 2) 通过 executeMaintenance 让 cleanup 在 DB 绑定线程中执行。
             // 3) 通过 coalesce 避免在高压下积累多个 cleanup 请求（fixed-rate catch-up storm）。
-            long period = config.expirationCleanupIntervalMillis;
+            long period = runtimeConfig.cleanupIntervalMillis();
             NettyCommandExecutor exForTask = executor;
             java.util.concurrent.atomic.AtomicBoolean cleanupPending = new java.util.concurrent.atomic.AtomicBoolean(false);
             cleanupFuture = workerGroup.next().scheduleWithFixedDelay(() -> {
@@ -213,9 +216,9 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .channel(NioServerSocketChannel.class)
                 .childOption(ChannelOption.TCP_NODELAY, true)
                 .childOption(ChannelOption.SO_KEEPALIVE, true)
-                .childHandler(new YierdisServerChannelInitializer(config, executor));
+                .childHandler(new YierdisServerChannelInitializer(runtimeConfig, executor));
 
-        serverChannel = bootstrap.bind(config.port).sync().channel();
+        serverChannel = bootstrap.bind(runtimeConfig.port()).sync().channel();
     }
 
     @Override

@@ -1,6 +1,7 @@
 package yier.bubu.redis;
 
 import yier.bubu.redis.args.YierdisCliException;
+import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
@@ -22,7 +23,6 @@ import java.util.List;
  * boot layer。由于模块解析发生在 JVM 启动期，进程内无法“动态补齐”，因此只能通过自动重启追加 JVM 参数来解决。
  */
 final class ForeignMemoryAutoModules {
-    private static final String FOREIGN_BACKEND = "foreign";
     private static final String FOREIGN_MODULE = "jdk.incubator.foreign";
     private static final String RELAUNCH_MARKER_PROP = "yierdis.foreign.relaunch";
 
@@ -32,11 +32,11 @@ final class ForeignMemoryAutoModules {
     /**
      * @return 若发生自动重启，返回子进程退出码；否则返回 null（继续当前进程启动流程）。
      */
-    static Integer maybeRelaunchIfNeeded(ServerConfig config, String[] appArgs) {
+    static Integer maybeRelaunchIfNeeded(YierdisServerRuntimeConfig config, String[] appArgs) {
         if (config == null) {
             return null;
         }
-        if (!FOREIGN_BACKEND.equalsIgnoreCase(config.offheapBackend)) {
+        if (config.offheapBackend() != YierdisServerRuntimeConfig.OffheapBackend.FOREIGN) {
             return null;
         }
         if (isModuleResolvedInBootLayer(FOREIGN_MODULE)) {
@@ -171,4 +171,3 @@ final class ForeignMemoryAutoModules {
         }
     }
 }
-

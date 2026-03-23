@@ -4,15 +4,16 @@ package yier.bubu.redis;
 
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
+import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
 
 import java.util.Objects;
 
 final class YierdisServerChannelInitializer extends ChannelInitializer<SocketChannel> {
-    private final ServerConfig config;
+    private final YierdisServerRuntimeConfig config;
     private final NettyCommandExecutor executor;
 
-    YierdisServerChannelInitializer(ServerConfig config, NettyCommandExecutor executor) {
+    YierdisServerChannelInitializer(YierdisServerRuntimeConfig config, NettyCommandExecutor executor) {
         this.config = Objects.requireNonNull(config, "config");
         this.executor = Objects.requireNonNull(executor, "executor");
     }
@@ -22,8 +23,8 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
         // server 会话状态（SELECT/MULTI/...）与运行时状态（背压/统计/closing 等）分离绑定。
         ServerSessionState.getOrCreate(
                 ch,
-                config.transactionQueueMaxCommands,
-                config.transactionQueueMaxBytes
+                config.transactionQueueMaxCommands(),
+                config.transactionQueueMaxBytes()
         );
         ServerRuntimeState.getOrCreate(ch);
         // 执行器调度状态（server 私有，避免放入 ConnectionContext）
@@ -32,9 +33,9 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
         ch.pipeline()
                 .addLast("writeBufferBackpressure", new WriteBufferBackpressureHandler(executor))
                 .addLast("customRequestDecoder", new CustomRequestDecoder(
-                        config.protocolMaxBulkBytes,
-                        config.protocolMaxArgs,
-                        config.protocolMaxLineBytes
+                        config.protocolMaxBulkBytes(),
+                        config.protocolMaxArgs(),
+                        config.protocolMaxLineBytes()
                 ))
                 .addLast("protocolErrorReply", new ProtocolErrorReplyHandler(executor))
                 .addLast("commandHandler", new YierdisFastCommandHandler(executor));

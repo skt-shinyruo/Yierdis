@@ -3,6 +3,7 @@ package yier.bubu.redis;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.args.YierdisCliException;
+import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 
 public final class YierdisServer {
     private static final Logger log = LoggerFactory.getLogger(YierdisServer.class);
@@ -19,9 +20,10 @@ public final class YierdisServer {
         if (config == null) {
             return;
         }
+        YierdisServerRuntimeConfig runtimeConfig = config.runtimeConfig();
 
         try {
-            Integer exitCode = ForeignMemoryAutoModules.maybeRelaunchIfNeeded(config, args);
+            Integer exitCode = ForeignMemoryAutoModules.maybeRelaunchIfNeeded(runtimeConfig, args);
             if (exitCode != null) {
                 System.exit(exitCode);
                 return;

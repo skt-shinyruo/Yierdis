@@ -2,6 +2,8 @@ package yier.bubu.redis;
 
 // NettyCommandExecutorConfig：收敛执行器的构造参数（队列/背压/drain/调度策略），避免 call site 参数爆炸。
 
+import yier.bubu.redis.args.YierdisServerRuntimeConfig;
+
 import java.util.Objects;
 
 /**
@@ -18,18 +20,21 @@ record NettyCommandExecutorConfig(
         long drainTimeLimitMillis,
         yier.bubu.redis.executor.SchedulingPolicy schedulingPolicy
 ) {
-    static NettyCommandExecutorConfig from(ServerConfig config) {
+    static NettyCommandExecutorConfig from(YierdisServerRuntimeConfig config) {
         Objects.requireNonNull(config, "config");
         return new NettyCommandExecutorConfig(
-                config.executorQueueCapacity,
-                config.executorQueueMaxBytes,
-                config.backpressureHighWatermark,
-                config.backpressureLowWatermark,
-                config.backpressureBytesHighWatermark,
-                config.backpressureBytesLowWatermark,
-                config.executorMaxDrainCommands,
-                config.executorDrainTimeLimitMillis,
-                config.executorSchedulingPolicy
+                config.executorQueueCapacity(),
+                config.executorQueueMaxBytes(),
+                config.backpressureHighWatermark(),
+                config.backpressureLowWatermark(),
+                config.backpressureBytesHighWatermark(),
+                config.backpressureBytesLowWatermark(),
+                config.executorMaxDrainCommands(),
+                config.executorDrainTimeLimitMillis(),
+                switch (config.executorSchedulingPolicy()) {
+                    case GLOBAL -> yier.bubu.redis.executor.SchedulingPolicy.GLOBAL;
+                    case FAIR -> yier.bubu.redis.executor.SchedulingPolicy.FAIR;
+                }
         );
     }
 }
