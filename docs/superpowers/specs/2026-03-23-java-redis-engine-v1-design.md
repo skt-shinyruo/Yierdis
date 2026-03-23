@@ -2510,6 +2510,102 @@ defragment 和 TTL、rehash 一样，必须是“渐进式、可中断、有预�
 
 如果 defragment 只能轻微降碎片，却明显恶化尾延迟，那这套设计就不值得继续推进。
 
+## Phase 测试策略矩阵
+
+为了避免实现阶段只写功能代码、不建立对应验证闭环，本主线要求每个 phase 都明确覆盖四类验证：
+
+- 单测：针对局部数据结构、状态机、失败收口的窄范围测试
+- 集成测：经过 `DbEngine` 或 server/runtime 路径的语义级测试
+- soak：长时间运行、验证内存与延迟曲线稳定性的测试
+- benchmark：带固定输入模型的可重复性能测试
+
+总原则：
+
+- 越靠前的 phase，单测密度越高，soak/benchmark 范围可相对小
+- 越靠后的 phase，集成测与 soak 权重越高
+- 每个 phase 通过前，前一 phase 的 benchmark 基线必须重新跑一遍，防止“新增类型把老路径打坏”
+
+### Phase 0 测试矩阵
+
+| 维度 | 必测内容 | 目标 |
+|------|----------|------|
+| 单测 | `HandleCodec`、arena 分配/释放、size class 复用、generation 校验、double free 检测 | allocator 和 handle 语义稳定 |
+| 集成测 | 最小 `PING/SET/GET` 闭环、启动/关闭资源释放、异常路径不会污染下一条命令 | 骨架可运行 |
+| Soak | 短时 `5~10 min` 空载与轻载运行，观察内存是否单调增长 | 排除基础泄漏 |
+| Benchmark | 建立空基线：请求往返、空 DB `GET/SET`、allocator 分配吞吐 | 为后续 phase 提供基准点 |
+
+### Phase 1 测试矩阵
+
+| 维度 | 必测内容 | 目标 |
+|------|----------|------|
+| 单测 | keyspace lookup/insert/delete、backward-shift deletion、TTL heap stale node 丢弃、lazy/active expire、`String` 小值/大值覆盖写回滚 | `String + TTL + Keyspace` 热路径正确 |
+| 集成测 | `GET/SET/DEL/TYPE/EXPIRE/TTL/PTTL` 语义回归、rehash 中读写一致性、过期后 miss 语义 | 客户端可见行为稳定 |
+| Soak | `30 min` 的 `String 70/30` 与短 TTL churn，两组都看内存曲线和 p99 | 没有明显 TTL 尖刺和持续泄漏 |
+| Benchmark | `64B key / 256B value` 的 `70/30 GET/SET`、`String + TTL` 压边场景 | 形成主基线 |
+
+### Phase 2 测试矩阵
+
+| 维度 | 必测内容 | 目标 |
+|------|----------|------|
+| 单测 | `PACKED_HASH / HT_HASH`、`PACKED_SET / HT_SET` 的查找、插入、删除、升级失败回滚、删空自动删 key | `Hash/Set` 编码和升级规则正确 |
+| 集成测 | `HSET/HGET/HDEL`、`SADD/SREM/SISMEMBER` 的 miss/wrongtype/删空语义，packed 与 large 形态等价 | 行为一致，不受内部编码影响 |
+| Soak | 混合小 hash/set churn、packed->large 升级反复触发的 `30~60 min` 场景 | 升级路径不泄漏、不抖动 |
+| Benchmark | 小对象密集负载、大对象负载、升级负载三组对比 | 观察 packed 优势和升级成本 |
+
+### Phase 3 测试矩阵
+
+| 维度 | 必测内容 | 目标 |
+|------|----------|------|
+| 单测 | segment push/pop、split/merge、头尾指针维护、删空释放、split/merge 失败回滚 | `List` 结构拓扑稳定 |
+| 集成测 | `LPUSH/RPUSH/LPOP/RPOP/LRANGE` 的边界索引、空 list、删空自动删 key、wrongtype | 对外语义正确 |
+| Soak | 高频双端操作、长 list `LRANGE`、segment churn 的 `30~60 min` 场景 | 没有 segment 泄漏和显著尾延迟恶化 |
+| Benchmark | 双端 push/pop 吞吐、大范围 `LRANGE` 延迟、segment split 触发成本 | 量化 list 设计的真实代价 |
+
+### Phase 4 测试矩阵
+
+| 维度 | 必测内容 | 目标 |
+|------|----------|------|
+| 单测 | `PACKED_ZSET` 重建、`DICT + SKIPLIST` 插删、双结构一致性、upgrade rollback、score/member tie-break | `ZSet` 双结构一致 |
+| 集成测 | `ZADD/ZREM/ZRANGE` 的 miss/wrongtype/更新已有 score/删空语义 | 客户端结果稳定 |
+| Soak | score 高频变动、packed->large 频繁升级、长 range 读取的 `30~60 min` 场景 | 没有双结构漂移和内存重复持有 |
+| Benchmark | 小 zset、大 zset、更新已有 member score、长范围读取 | 量化 `DICT + SKIPLIST` 成本 |
+
+### Phase 5 测试矩阵
+
+| 维度 | 必测内容 | 目标 |
+|------|----------|------|
+| 单测 | inspection 命令、统计口径、debug 一致性检查、fuzz 最小种子覆盖 | 观测能力可信 |
+| 集成测 | `MEMORY/ENCODING` 风格输出、遍历支持、故障注入后的稳定性 | 运行期工具可用 |
+| Soak | `2~4 h` 混合 workload、长期 TTL churn、混合类型共存 | 验证 resident memory、fragmentation、p99 曲线 |
+| Benchmark | 对比 Redis 基线，重跑 `Phase 1~4` 主基线并汇总放大倍数 | 证明主线值得继续 |
+
+### Phase 6 测试矩阵
+
+| 维度 | 必测内容 | 目标 |
+|------|----------|------|
+| 单测 | 预算判定、reservation 上界估算、`noeviction` 拒写、候选采样、淘汰循环预算收口 | `maxmemory / eviction` 逻辑稳定 |
+| 集成测 | `noeviction`、`allkeys-random`、`allkeys-lru` 下增长写语义，过期 key 优先回收，删 key 后统计更新 | 对外预算行为一致 |
+| Soak | `95%~105% maxmemory` 压边运行 `1~2 h`，观察拒写/淘汰/p99 曲线 | 验证不会抖成锯齿 |
+| Benchmark | 有预算和无预算对照、不同采样数对吞吐和 p99 的影响 | 量化 eviction 成本 |
+
+### Phase 7 测试矩阵
+
+| 维度 | 必测内容 | 目标 |
+|------|----------|------|
+| 单测 | page 迁移、引用重写、对象释放、source page 回收、失败中断恢复、不可移动对象保护 | `defragment` 过程安全 |
+| 集成测 | defragment 开启时读写语义不变、split/merge/rehash 与 defragment 交错保护 | 维护任务不改变语义 |
+| Soak | 长时间 churn 下开启/关闭 defragment 对比，至少 `2~4 h` | 验证碎片率和 resident memory 是否改善 |
+| Benchmark | defragment 开关对吞吐、p99/p999、`fragmentBytes`、`largestFreeExtentBytes` 的影响 | 判断这项维护是否值得保留 |
+
+### 测试交付要求
+
+每个 phase 在进入下一阶段前，都应至少满足以下交付要求：
+
+- 单测失败不能被“集成测通过”掩盖
+- 新 phase 的集成测必须复跑上一 phase 的关键回归场景
+- soak 与 benchmark 结果必须形成可比较的记录，而不是口头结论
+- 若新 phase 导致旧基线明显恶化，必须先回到设计或实现层纠偏，不能继续向后堆 phase
+
 ## 风险与权衡
 
 ### 收益
