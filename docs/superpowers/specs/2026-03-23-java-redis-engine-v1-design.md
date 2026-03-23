@@ -1213,6 +1213,46 @@ TTL heap 本身不直接拥有 key 或 value，因此不会参与最终 free，�
 - 编码升级只做单向，不自动降级
 - 删除路径必须从 encoding 根句柄开始，递归释放
 
+### 类型级编码状态机总原则
+
+为了让不同类型的实现策略保持一致，本设计建议所有类型都遵守统一的编码级状态约束：
+
+- 每个 `Entry` 在任一时刻只能有一个当前 `encoding`
+- `encoding` 的切换只能通过 `Build -> Commit -> Release Old` 完成
+- packed -> large 是单向升级
+- 删除路径总是从当前 `encoding` 对应的 `ValueRoot` 开始
+- 升级失败时必须保留旧 `encoding` 完整可读
+
+可以把类型级编码状态统一理解为：
+
+- `ABSENT`
+- `PACKED`
+- `LARGE`
+- `DELETING`
+- `DELETED`
+
+其中：
+
+- `ABSENT` 表示 key 不存在
+- `PACKED` 表示当前 key 采用紧凑编码
+- `LARGE` 表示当前 key 采用大对象编码
+- `DELETING` / `DELETED` 复用前面 `Entry` 生命周期规则
+
+统一允许的迁移：
+
+- `ABSENT -> PACKED`
+- `ABSENT -> LARGE`
+- `PACKED -> LARGE`
+- `PACKED -> DELETING`
+- `LARGE -> DELETING`
+- `DELETING -> DELETED`
+
+统一禁止的迁移：
+
+- `LARGE -> PACKED`
+- `DELETED -> PACKED`
+- `DELETED -> LARGE`
+
 ### `String`
 
 #### 编码 1：`EMBSTR-like`
@@ -1260,6 +1300,26 @@ TTL heap 本身不直接拥有 key 或 value，因此不会参与最终 free，�
 - `SET` 覆盖时总是先构建新块，再切换 `valueRef`
 - `GET` 不复制到长期 heap 对象；尽量直接流式写回
 - `DEL` / 过期删除直接 free string block
+
+#### `String` 编码状态表
+
+| 当前状态 | 触发条件 | 目标状态 | 负责方 | 备注 |
+|----------|----------|----------|--------|------|
+| `ABSENT` | `SET` 写入且 `len <= 64B` | `EMBSTR-like` | `StringOps` | 默认走小块分配 |
+| `ABSENT` | `SET` 写入且 `len > 64B` | `RAW` | `StringOps` | 直接走连续块 |
+| `EMBSTR-like` | 覆盖写且新值仍小 | `EMBSTR-like` | `StringOps` | 构建新小块后替换 |
+| `EMBSTR-like` | 覆盖写或增长写导致超阈值 | `RAW` | `StringOps` | 单向升级 |
+| `RAW` | 覆盖写 | `RAW` | `StringOps` | 不做自动降级 |
+| `EMBSTR-like/RAW` | `DEL`、过期删除 | `DELETING` | `DeletionCoordinator` | 随后进入统一删除 |
+
+#### `String` 删除与回滚表
+
+| 场景 | 必须执行的动作 | 绝对禁止 |
+|------|----------------|----------|
+| `EMBSTR-like` 覆盖失败 | 释放新小块，保留旧 `valueRef` | 部分覆盖旧块内容 |
+| `EMBSTR-like -> RAW` 升级失败 | 释放新 `RAW` 块，保留旧小块 | 已切换 `encoding` 后再回滚 |
+| `RAW` 覆盖失败 | 释放新块，旧 `RAW` 保持完整可读 | 原地修改旧 `RAW.cap/len` 后失败 |
+| `String` 删除 | 从 entry 摘 `valueRef` 后 free 块 | free 后仍把旧块作为可读结果返回 |
 
 ### `Hash`
 
@@ -1310,6 +1370,26 @@ TTL heap 本身不直接拥有 key 或 value，因此不会参与最终 free，�
 3. 切换 entry 的 `encoding/valueRef`
 4. 释放旧 packed blob
 
+#### `Hash` 编码状态表
+
+| 当前状态 | 触发条件 | 目标状态 | 负责方 | 备注 |
+|----------|----------|----------|--------|------|
+| `ABSENT` | `HSET` 首次写入且对象仍小 | `PACKED_HASH` | `HashOps` | 默认先走 packed |
+| `ABSENT` | 首次写入即超阈值 | `HT_HASH` | `HashOps` | 直接 large |
+| `PACKED_HASH` | `HSET/HDEL` 后仍在阈值内 | `PACKED_HASH` | `HashOps` | 允许整块重建 |
+| `PACKED_HASH` | 触发升级阈值 | `HT_HASH` | `HashUpgrade` | 单向升级 |
+| `HT_HASH` | 后续增删改 | `HT_HASH` | `HashOps` | 不自动降级 |
+| `PACKED_HASH/HT_HASH` | 删除或过期 | `DELETING` | `DeletionCoordinator` | 统一走释放路径 |
+
+#### `Hash` 删除与回滚表
+
+| 场景 | 必须执行的动作 | 绝对禁止 |
+|------|----------------|----------|
+| `PACKED_HASH` 重建失败 | 释放新 blob，保留旧 blob | 原地改旧 blob 再失败 |
+| `PACKED_HASH -> HT_HASH` 升级失败 | 释放新 hash table，保留旧 blob | 切换 `encoding` 后再尝试回退 |
+| `HT_HASH` 写入失败 | 释放新 `fieldRecord/value`，旧 table 保持一致 | 只插入 dict 或只插入 payload 的半状态 |
+| `Hash` 删除 | 先释放 field/value 记录，再释放根结构 | 先 free 根结构再访问子记录 |
+
 ### `Set`
 
 #### 编码 1：`PACKED_SET`
@@ -1343,6 +1423,26 @@ V1 推荐把 members 按字典序排序存放：
 - member record 只保存一份 member bytes
 
 `SADD/SREM/SISMEMBER` 都走哈希查找，不需要为 set 额外引入树结构。
+
+#### `Set` 编码状态表
+
+| 当前状态 | 触发条件 | 目标状态 | 负责方 | 备注 |
+|----------|----------|----------|--------|------|
+| `ABSENT` | `SADD` 首次写入且对象仍小 | `PACKED_SET` | `SetOps` | 默认 packed |
+| `ABSENT` | 首次写入即超阈值 | `HT_SET` | `SetOps` | 直接 large |
+| `PACKED_SET` | `SADD/SREM` 后仍在阈值内 | `PACKED_SET` | `SetOps` | 允许整块重建 |
+| `PACKED_SET` | 触发升级阈值 | `HT_SET` | `SetUpgrade` | 单向升级 |
+| `HT_SET` | 后续增删改 | `HT_SET` | `SetOps` | 不自动降级 |
+| `PACKED_SET/HT_SET` | 删除或过期 | `DELETING` | `DeletionCoordinator` | 统一释放 |
+
+#### `Set` 删除与回滚表
+
+| 场景 | 必须执行的动作 | 绝对禁止 |
+|------|----------------|----------|
+| `PACKED_SET` 重建失败 | 释放新 member blob，保留旧 blob | 原地修改旧 blob 后失败 |
+| `PACKED_SET -> HT_SET` 升级失败 | 释放新 table / member record，保留旧 blob | 出现一半 member 在新表、一半还在旧 blob |
+| `HT_SET` 写入失败 | 释放新 member record，旧 table 保持可读 | 写入 slot 后找不到对应 member bytes |
+| `Set` 删除 | 先释放 members，再释放根结构 | free 根结构后继续枚举 members |
 
 ### `List`
 
@@ -1384,6 +1484,43 @@ segment payload 是一个“小型双端块”，而不是只能一端写入的�
 - 命中范围后再解析 segment 内 payload
 
 不要把 list 先完全 materialize 到 heap 再回包。
+
+#### `List` 编码状态表
+
+V1 主线下 `List` 只定义一种主编码：`QUICKLIST-like`。它内部仍然存在 segment 级局部状态机。
+
+| 当前状态 | 触发条件 | 目标状态 | 负责方 | 备注 |
+|----------|----------|----------|--------|------|
+| `ABSENT` | 首次 `LPUSH/RPUSH` | `QUICKLIST-like` | `ListOps` | 构建首个 root + segment |
+| `QUICKLIST-like` | `LPUSH/RPUSH` 未超 segment 阈值 | `QUICKLIST-like` | `ListOps` | 原 segment 内写入 |
+| `QUICKLIST-like` | segment 超阈值 | `QUICKLIST-like` | `ListOps` | 触发 split，但 encoding 不变 |
+| `QUICKLIST-like` | 相邻 segment 可合并 | `QUICKLIST-like` | `ListOps` / `MaintenanceScheduler` | merge 是内部整理，不算编码切换 |
+| `QUICKLIST-like` | 删除或过期 | `DELETING` | `DeletionCoordinator` | 统一释放 segment 链 |
+
+#### `List` segment 局部状态
+
+每个 segment 建议再有一条局部状态机：
+
+- `ACTIVE`
+- `SPLITTING`
+- `MERGING`
+- `DETACHED`
+- `FREED`
+
+关键约束：
+
+- `SPLITTING` 中不能进入 defragment
+- `MERGING` 中不能再次被选为 merge 目标
+- `DETACHED` 后才允许真正 free
+
+#### `List` 删除与回滚表
+
+| 场景 | 必须执行的动作 | 绝对禁止 |
+|------|----------------|----------|
+| push 导致 split 失败 | 释放新 segment，保留旧链结构 | 改坏前后指针后再中断 |
+| merge 失败 | 保持两段原状，回滚临时连接 | 一端已摘链，另一端未恢复 |
+| `LRANGE` 流式输出中遇到并发维护 | 由于单线程语义，应保证结构在本次命令内稳定可遍历 | 一边遍历一边改 segment 拓扑 |
+| `List` 删除 | 从头到尾释放 segment，再释放 root | free 一半 segment 后丢失剩余链引用 |
 
 ### `ZSet`
 
@@ -1438,6 +1575,40 @@ V1 推荐：
 - 最大层高先取 `16`
 
 如果 benchmark 表明 rank/range tail 明显偏大，再评估是否升到 `32` 层上限。V1 不需要一开始就把 skiplist 参数抠到极限。
+
+#### `ZSet` 编码状态表
+
+| 当前状态 | 触发条件 | 目标状态 | 负责方 | 备注 |
+|----------|----------|----------|--------|------|
+| `ABSENT` | `ZADD` 首次写入且对象仍小 | `PACKED_ZSET` | `ZSetOps` | 默认 packed |
+| `ABSENT` | 首次写入即超阈值 | `DICT + SKIPLIST` | `ZSetOps` | 直接 large |
+| `PACKED_ZSET` | `ZADD/ZREM` 后仍在阈值内 | `PACKED_ZSET` | `ZSetOps` | 允许整块重建 |
+| `PACKED_ZSET` | 触发升级阈值 | `DICT + SKIPLIST` | `ZSetUpgrade` | 单向升级 |
+| `DICT + SKIPLIST` | 后续增删改 | `DICT + SKIPLIST` | `ZSetOps` | 不自动降级 |
+| `PACKED_ZSET/DICT + SKIPLIST` | 删除或过期 | `DELETING` | `DeletionCoordinator` | 统一释放 |
+
+#### `ZSet` 删除与回滚表
+
+| 场景 | 必须执行的动作 | 绝对禁止 |
+|------|----------------|----------|
+| `PACKED_ZSET` 重建失败 | 释放新 blob，保留旧 blob | 原地改旧 score/member 顺序后失败 |
+| `PACKED_ZSET -> DICT + SKIPLIST` 升级失败 | 释放新 dict/skiplist/zsetRecord，保留旧 blob | member bytes 在新旧结构中同时形成活引用 |
+| `DICT + SKIPLIST` 写入失败 | 回收新 node / record，旧双结构保持一致 | 只插入 dict 或只插入 skiplist 的半状态 |
+| `ZSet` 删除 | 先按记录释放 dict/skiplist 子节点，再释放根结构 | 先 free 根结构再尝试遍历 skiplist |
+
+#### `ZSet` 双结构一致性要求
+
+进入 `DICT + SKIPLIST` 后，必须保持以下恒等式：
+
+- 每个 `member` 恰好对应一个 `zsetRecord`
+- 每个 `zsetRecord` 恰好被 dict 和 skiplist 各引用一次
+- score 的真源数据只能在一个位置定义，其他位置只能缓存或索引
+
+任何写入失败都不能让系统落到以下非法状态：
+
+- dict 有记录但 skiplist 没有
+- skiplist 有 node 但 dict 没有
+- 同一个 member 对应多个 `zsetRecord`
 
 ## 命令路径
 
