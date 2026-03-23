@@ -835,6 +835,22 @@ key 应视为不可变字节块，建议布局：
 - `DELETING -> LIVE`
 - `DELETED -> LIVE`
 
+#### `Entry` 状态约束表
+
+| 状态 | 进入条件 | 允许的出边 | 负责方 | 必须保持的约束 |
+|------|----------|------------|--------|----------------|
+| `EMPTY` | arena 槽位尚未被分配 | `LIVE` | `EntryArena` / `DbCommandExecutor` | 槽位不能被 keyspace、TTL、value 结构引用 |
+| `LIVE` | entry 已完成构建并对外可见 | `EXPIRED_PENDING_DELETE`、`DELETING` | `DbCommandExecutor` / `ExpireCoordinator` | `keyRef`、`valueRef`、`type`、`encoding` 必须自洽；对命令路径可见 |
+| `EXPIRED_PENDING_DELETE` | TTL 检查确认过期但尚未完成删除 | `DELETING` | `ExpireCoordinator` / `DeletionCoordinator` | 不再作为正常命中结果返回给读写命令 |
+| `DELETING` | 已进入统一删除路径 | `DELETED` | `DeletionCoordinator` | 不能再次进入删除；所有外部索引必须先摘可见性 |
+| `DELETED` | 逻辑删除已完成 | `EMPTY` | `EntryArena` | 仅允许 debug/校验短暂可见，随后回收 |
+
+#### `Entry` 删除收口规则
+
+- 从 `LIVE` 或 `EXPIRED_PENDING_DELETE` 进入删除路径时，必须先摘除 keyspace 可见性。
+- 只有在 `ValueRoot` 与 `KeyBlock` 都成功释放后，entry 才能进入 `DELETED`。
+- `DELETED -> EMPTY` 的回收动作不得保留任何可达引用，否则 debug 校验必须失败。
+
 ### `Mutation` 状态机
 
 建议的最小状态集合：
@@ -864,6 +880,34 @@ key 应视为不可变字节块，建议布局：
 - `ABORT` 必须能从 `PLAN/RESERVE/BUILD` 任一点收口
 - 不允许在“半提交”状态下回退成旧语义
 
+#### `Mutation` 状态转移表
+
+| 状态 | 入口条件 | 成功出边 | 失败出边 | 负责方 | 资源责任 |
+|------|----------|----------|----------|--------|----------|
+| `PLAN` | 命令已完成语义解析并进入数据面 | `RESERVE` 或直接 `BUILD` | `ABORT` | `MutationPlanner` | 只允许读取与估算，不允许分配不可回滚资源 |
+| `RESERVE` | 该 mutation 可能增长内存或进入 `Phase 6` 预算路径 | `BUILD` | `ABORT` | `MutationPlanner` / `MemoryManager` | 只能持有 reservation，不允许修改 entry 引用 |
+| `BUILD` | 预算已通过，允许构建新表示 | `COMMIT` | `ABORT` | `MutationBuilder` / `*Ops` | 可以分配新对象，但旧对象仍必须保持可读 |
+| `COMMIT` | 新表示已经完整可用 | `RELEASE_OLD` | 无正常回滚出边 | `MutationCommitter` | 负责切换 `entry.valueRef`、`encoding`、`payloadLen`、`aux` 等字段 |
+| `RELEASE_OLD` | `COMMIT` 已完成 | `DONE` | `DONE`（记录降级告警并进入一致性补救） | `DeletionCoordinator` / `*Free` | 释放旧对象、结束 reservation、更新统计 |
+| `DONE` | mutation 逻辑完成 | 无 | 无 | `DbCommandExecutor` | 返回结果，允许下条命令进入 |
+| `ABORT` | `PLAN/RESERVE/BUILD` 任一阶段失败 | 无 | 无 | `DbCommandExecutor` | 统一 rollback reservation、释放新分配但未提交对象 |
+
+#### `Mutation` 失败收口表
+
+| 失败点 | 必须执行的收口动作 | 绝对禁止 |
+|--------|-------------------|----------|
+| `PLAN` | 返回错误，不保留任何部分状态 | 修改 entry、写入 keyspace、写入 TTL |
+| `RESERVE` | 释放 reservation，返回稳定失败 | 已持有 reservation 却进入 `BUILD` |
+| `BUILD` | 释放新分配对象、rollback reservation、保留旧值 | 修改旧 `valueRef`、部分提交新 `encoding` |
+| `COMMIT` 前的最后校验 | 若校验失败则回到 `ABORT` | 在校验失败后继续进入 `RELEASE_OLD` |
+| `RELEASE_OLD` | 允许记录告警并进入补救，但逻辑提交不能回滚 | 因旧对象释放失败而把 entry 回退到旧值 |
+
+#### `Mutation` 幂等要求
+
+- `ABORT` 必须幂等。重复调用不得重复 free 或重复 rollback reservation。
+- `RELEASE_OLD` 对同一旧对象只能成功一次；若被重复调用，必须在 debug 模式下被发现。
+- `COMMIT` 必须具备“只切换一次”的保护，防止同一 mutation plan 被重复提交。
+
 ### `Rehash` 状态机
 
 建议的最小状态集合：
@@ -887,6 +931,32 @@ key 应视为不可变字节块，建议布局：
 - insert 一律进入新表
 - delete 必须能从新旧表一致删除
 - TTL、eviction 和 defragment 都不能依赖 slot 稳定，只能依赖 `entryHandle`
+
+#### `Rehash` 状态转移表
+
+| 状态 | 入口条件 | 成功出边 | 失败出边 | 负责方 | 资源责任 |
+|------|----------|----------|----------|--------|----------|
+| `IDLE` | 当前没有 rehash 任务 | `PREPARE_NEW_TABLE` | 无 | `KeyspaceRehasher` | 旧表是唯一可见表 |
+| `PREPARE_NEW_TABLE` | 装载因子或 probe 分布触发扩容 | `MIGRATING` | `IDLE` | `KeyspaceRehasher` / `MemoryManager` | 分配新表，但旧表仍保持完整可用 |
+| `MIGRATING` | 新表已可用 | `CUTOVER` | 保持 `MIGRATING` 并在下轮重试 | `KeyspaceRehasher` | 每轮只迁移预算内 bucket；lookup 要查双表 |
+| `CUTOVER` | oldTable 已迁移完 | `CLEANUP` | 保持 `CUTOVER` 并重试切换 | `KeyspaceRehasher` | 切换主表引用，但 oldTable 仍暂存，直到 cleanup |
+| `CLEANUP` | 主表已切换成功 | `IDLE` | 保持 `CLEANUP` 并重试释放 | `KeyspaceRehasher` / `MemoryManager` | 释放 oldTable，清空 rehash 元数据 |
+
+#### `Rehash` 运行期约束
+
+- `MIGRATING` 期间：
+  - lookup 顺序固定为“先新表，后旧表”
+  - insert 固定进入新表
+  - delete 必须能命中新旧表中的任一位置
+- 任意时刻都不能要求 TTL、eviction、defragment 通过 slot 地址识别对象；它们只能使用 `entryHandle`。
+- rehash 预算耗尽不是失败，而是正常的 `PAUSE/CONTINUE` 型行为，下条命令继续推进。
+
+#### `Rehash` 失败收口规则
+
+- `PREPARE_NEW_TABLE` 分配失败时，必须原地回到 `IDLE`，旧表保持完全可用。
+- `MIGRATING` 中单个 bucket 迁移失败时，不允许丢失 oldTable 内容；必须保持当前双表状态，等待下一轮重试。
+- `CUTOVER` 成功前，不允许释放 oldTable。
+- `CLEANUP` 失败时，可以延后释放 oldTable，但不允许再次把主表引用切回去。
 
 ### `Defragment` 状态机
 
@@ -914,6 +984,39 @@ key 应视为不可变字节块，建议布局：
 - `REWRITE_REF` 成功前不能 free old object
 - source page 只有在活对象数归零后才能 `RELEASE_PAGE`
 - defragment 与 split/merge/rehash 的交错必须通过显式状态检查保护，而不是靠“应该不会同时发生”的隐式假设
+
+#### `Defragment` 状态转移表
+
+| 状态 | 入口条件 | 成功出边 | 失败出边 | 负责方 | 资源责任 |
+|------|----------|----------|----------|--------|----------|
+| `IDLE` | 当前没有可运行 defragment 任务 | `SELECT_SOURCE_PAGE` | 无 | `MaintenanceScheduler` / `AllocatorDebugInspector` | 不持有任何迁移上下文 |
+| `SELECT_SOURCE_PAGE` | 触发信号满足且预算允许 | `MOVE_OBJECT` 或 `PAUSE` | `IDLE` | `MaintenanceScheduler` | 只选 page，不移动对象 |
+| `MOVE_OBJECT` | 已锁定 source/target page | `REWRITE_REF` | `PAUSE` 或 `IDLE` | `MemoryManager` / `*Ops` | 复制新对象，但旧对象仍保持有效 |
+| `REWRITE_REF` | 新对象已构建完成 | `FREE_OLD` | `PAUSE` 或 `IDLE` | `*Ops` / owning container | 更新 owning entry 或 container 引用 |
+| `FREE_OLD` | 引用已重写成功 | `RELEASE_PAGE` 或 `SELECT_SOURCE_PAGE` | `PAUSE` | `MemoryManager` | 释放旧对象，更新 page 活跃计数 |
+| `RELEASE_PAGE` | source page 活对象数已归零 | `SELECT_SOURCE_PAGE` 或 `IDLE` | `PAUSE` | `MemoryManager` | 回收整页并更新碎片统计 |
+| `PAUSE` | 达到对象数/字节数/时间预算上限 | `SELECT_SOURCE_PAGE` 或恢复到先前状态 | `IDLE` | `MaintenanceScheduler` | 保存足够上下文，保证下轮可继续或放弃 |
+
+#### `Defragment` 失败与中断收口表
+
+| 失败点 | 必须执行的收口动作 | 绝对禁止 |
+|--------|-------------------|----------|
+| `SELECT_SOURCE_PAGE` | 丢弃本轮候选，回到 `IDLE` 或 `PAUSE` | 记录了 source page 却不校验其当前状态 |
+| `MOVE_OBJECT` | 释放新分配位置，保留旧对象 | 已复制部分数据却把旧对象标为无效 |
+| `REWRITE_REF` | 保留旧引用，释放新对象或进入 `PAUSE` | 更新了一半 owning reference 后继续 free old |
+| `FREE_OLD` | 若旧对象释放失败，记录告警并保留后续补救上下文 | 因释放失败把引用回写到旧对象 |
+| `RELEASE_PAGE` | 若 page 仍有活对象，必须放弃释放并回到 `SELECT_SOURCE_PAGE` 或 `PAUSE` | 活对象未清零却回收整页 |
+
+#### `Defragment` 并发交错保护
+
+虽然主线是单线程事件循环，但 defragment 仍然会与其他维护行为交错出现，因此必须定义显式禁止条件：
+
+- 正在参与 `split/merge` 的 `List segment` 不进入 `MOVE_OBJECT`
+- 正在被 rehash 改写的结构根对象不进入迁移
+- 正在 `COMMIT/RELEASE_OLD` 的 mutation 对象不进入 defragment
+- 对同一 owning entry，不允许同时存在“mutation builder 持有的新对象”和“defragment 持有的新对象”
+
+这些保护必须由显式状态位或上下文登记实现，而不是依赖“代码路径通常不会撞上”的经验假设。
 
 ## Keyspace 设计
 
