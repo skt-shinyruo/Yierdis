@@ -2,13 +2,17 @@ package yier.bubu.redis.bench;
 
 import picocli.CommandLine;
 import picocli.CommandLine.ParameterException;
+import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.args.YierdisServerArgs;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1ReplyInspector;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1RequestEncoder;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -17,6 +21,7 @@ import java.nio.file.Path;
 import java.text.DecimalFormat;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -520,57 +525,28 @@ public final class YierdisBench {
 
     private static final byte[] OK_PREFIX = "{\"ok\":true,\"result\":".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] ERR_PREFIX = "{\"ok\":false,\"error\":".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] REPLY_OK = "{\"ok\":true,\"result\":\"OK\"}".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] REPLY_PONG = "{\"ok\":true,\"result\":\"PONG\"}".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] RESULT_B64_PREFIX = "{\"$b64\":\"".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] PONG = "PONG".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] OK = "OK".getBytes(StandardCharsets.US_ASCII);
 
-    private static boolean validateStrictReply(Workload workload, byte[] line, int lineLen, int expectedDataSize) {
+    static boolean validateStrictReply(Workload workload, byte[] line, int lineLen, int expectedDataSize) {
         if (workload == null || line == null || lineLen <= 0) {
-            return false;
-        }
-        if (!startsWith(line, lineLen, OK_PREFIX)) {
             return false;
         }
         switch (workload) {
             case PING:
-                return bytesEqual(line, lineLen, REPLY_PONG);
+                return CustomProtocolV1ReplyInspector.matchesOkAsciiStringResult(line, 0, lineLen, PONG);
             case SET_RANDOM:
             case SET_SEQUENTIAL:
-                return bytesEqual(line, lineLen, REPLY_OK);
+                return CustomProtocolV1ReplyInspector.matchesOkAsciiStringResult(line, 0, lineLen, OK);
             case GET_RANDOM: {
-                int prefixLen = OK_PREFIX.length;
-                if (lineLen < prefixLen + 2) {
+                int decodedLen = CustomProtocolV1ReplyInspector.decodedOkResultByteLength(line, 0, lineLen);
+                if (decodedLen == CustomProtocolV1ReplyInspector.INVALID_RESULT) {
                     return false;
                 }
-                byte first = line[prefixLen];
-                if (first == 'n') {
-                    // {"ok":true,"result":null}
-                    return lineLen == prefixLen + 5
-                            && line[prefixLen] == 'n'
-                            && line[prefixLen + 1] == 'u'
-                            && line[prefixLen + 2] == 'l'
-                            && line[prefixLen + 3] == 'l'
-                            && line[prefixLen + 4] == '}';
+                if (decodedLen == CustomProtocolV1ReplyInspector.NULL_RESULT) {
+                    return true;
                 }
-                if (first == '{') {
-                    // {"ok":true,"result":{"$b64":"..."}}  (non-UTF8 bytes are tagged as base64)
-                    if (!startsWithAt(line, lineLen, prefixLen, RESULT_B64_PREFIX)) {
-                        return false;
-                    }
-                    // Minimal structural validation: ..."}} (result object + envelope)
-                    if (lineLen < prefixLen + RESULT_B64_PREFIX.length + 3) {
-                        return false;
-                    }
-                    return line[lineLen - 3] == '"' && line[lineLen - 2] == '}' && line[lineLen - 1] == '}';
-                }
-                if (first != '"') {
-                    return false;
-                }
-                int expectedLen = prefixLen + Math.max(0, expectedDataSize) + 3; // prefix + " + value + " + }
-                if (expectedDataSize >= 0 && lineLen != expectedLen) {
-                    return false;
-                }
-                return line[lineLen - 2] == '"' && line[lineLen - 1] == '}';
+                return expectedDataSize < 0 || decodedLen == expectedDataSize;
             }
             default:
                 return true;
@@ -590,39 +566,6 @@ public final class YierdisBench {
         }
         for (int i = 0; i < prefix.length; i++) {
             if (line[i] != prefix[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean startsWithAt(byte[] line, int lineLen, int offset, byte[] prefix) {
-        if (line == null || prefix == null) {
-            return false;
-        }
-        if (offset < 0 || lineLen < 0) {
-            return false;
-        }
-        if (lineLen < offset + prefix.length) {
-            return false;
-        }
-        for (int i = 0; i < prefix.length; i++) {
-            if (line[offset + i] != prefix[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean bytesEqual(byte[] line, int lineLen, byte[] expected) {
-        if (line == null || expected == null) {
-            return false;
-        }
-        if (lineLen != expected.length) {
-            return false;
-        }
-        for (int i = 0; i < expected.length; i++) {
-            if (line[i] != expected[i]) {
                 return false;
             }
         }
@@ -1033,100 +976,93 @@ public final class YierdisBench {
         private static final byte[] CMD_PING = "PING".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] CMD_GET = "GET".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] CMD_SET = "SET".getBytes(StandardCharsets.US_ASCII);
-
-        private static final byte[] PREFIX_CMD = "{\"cmd\":\"".getBytes(StandardCharsets.US_ASCII);
-        private static final byte[] MID_ARGS = "\",\"args\":[".getBytes(StandardCharsets.US_ASCII);
-        private static final byte[] SUFFIX = "]}".getBytes(StandardCharsets.US_ASCII);
+        private static final byte[] FRAME_PING = CustomProtocolV1RequestEncoder.encodeRequestFrame(List.of(CMD_PING));
 
         private final OutputStream out;
+        private final BytesSink sink;
         private final byte[] intBuf = new byte[16];
+        private final MutableRequestArgs requestArgs = new MutableRequestArgs();
 
         CustomCommandWriter(OutputStream out) {
             this.out = Objects.requireNonNull(out, "out");
+            this.sink = (src, srcIndex, len) -> {
+                try {
+                    this.out.write(src, srcIndex, len);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            };
         }
 
         void writePing() throws IOException {
-            writeFrame(CMD_PING, null, null);
+            out.write(FRAME_PING);
         }
 
         void writeGet(byte[] key) throws IOException {
-            writeFrame(CMD_GET, key, null);
+            writeFrame(requestArgs.with(CMD_GET, key));
         }
 
         void writeSet(byte[] key, byte[] value) throws IOException {
-            writeFrame(CMD_SET, key, value);
+            writeFrame(requestArgs.with(CMD_SET, key, value));
         }
 
-        private void writeFrame(byte[] cmd, byte[] arg1, byte[] arg2) throws IOException {
-            int payloadLen = payloadLen(cmd, arg1, arg2);
-            writeIntAscii(payloadLen);
-            out.write(':');
-
-            out.write(PREFIX_CMD);
-            out.write(cmd);
-            out.write(MID_ARGS);
-
-            if (arg1 != null) {
-                writeJsonStringBytes(arg1);
-                if (arg2 != null) {
-                    out.write(',');
-                    writeJsonStringBytes(arg2);
-                }
+        private void writeFrame(List<byte[]> args) throws IOException {
+            try {
+                CustomProtocolV1RequestEncoder.writeRequestFrame(sink, args, intBuf);
+            } catch (UncheckedIOException e) {
+                throw e.getCause();
             }
-
-            out.write(SUFFIX);
-            out.write('\n');
-        }
-
-        private static int payloadLen(byte[] cmd, byte[] arg1, byte[] arg2) {
-            int cmdLen = cmd == null ? 0 : cmd.length;
-            int argsLen = 0;
-            if (arg1 != null) {
-                argsLen += 2 + arg1.length;
-                if (arg2 != null) {
-                    argsLen += 1 + 2 + arg2.length; // ',' + second string
-                }
-            }
-            return PREFIX_CMD.length + cmdLen + MID_ARGS.length + argsLen + SUFFIX.length;
-        }
-
-        private void writeJsonStringBytes(byte[] utf8) throws IOException {
-            if (utf8 == null) {
-                out.write('n');
-                out.write('u');
-                out.write('l');
-                out.write('l');
-                return;
-            }
-            for (int i = 0; i < utf8.length; i++) {
-                int b = utf8[i] & 0xFF;
-                if (b < 0x20 || b == '"' || b == '\\') {
-                    throw new IOException("bench payload contains unsupported characters");
-                }
-            }
-            out.write('"');
-            out.write(utf8);
-            out.write('"');
-        }
-
-        private void writeIntAscii(int value) throws IOException {
-            int v = Math.max(0, value);
-            int pos = intBuf.length;
-            if (v == 0) {
-                intBuf[--pos] = '0';
-            } else {
-                while (v > 0) {
-                    int digit = v % 10;
-                    intBuf[--pos] = (byte) ('0' + digit);
-                    v /= 10;
-                }
-            }
-            out.write(intBuf, pos, intBuf.length - pos);
         }
 
         @Override
         public void close() {
             // no-op
+        }
+
+        private static final class MutableRequestArgs extends AbstractList<byte[]> {
+            private byte[] cmd;
+            private byte[] arg1;
+            private byte[] arg2;
+            private int size;
+
+            MutableRequestArgs with(byte[] cmd, byte[] arg1) {
+                this.cmd = cmd;
+                this.arg1 = arg1;
+                this.arg2 = null;
+                this.size = 2;
+                return this;
+            }
+
+            MutableRequestArgs with(byte[] cmd, byte[] arg1, byte[] arg2) {
+                this.cmd = cmd;
+                this.arg1 = arg1;
+                this.arg2 = arg2;
+                this.size = 3;
+                return this;
+            }
+
+            @Override
+            public byte[] get(int index) {
+                switch (index) {
+                    case 0:
+                        return cmd;
+                    case 1:
+                        return arg1;
+                    case 2:
+                        if (size >= 3) {
+                            return arg2;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+                throw new IndexOutOfBoundsException("index=" + index + ", size=" + size);
+            }
+
+            @Override
+            public int size() {
+                return size;
+            }
         }
     }
 

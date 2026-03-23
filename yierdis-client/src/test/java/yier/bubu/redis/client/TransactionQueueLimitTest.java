@@ -6,7 +6,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.YierdisServerBootstrap;
 import yier.bubu.redis.protocol.json.JsonArray;
-import yier.bubu.redis.protocol.json.JsonBoolean;
 import yier.bubu.redis.protocol.json.JsonNull;
 import yier.bubu.redis.protocol.json.JsonObject;
 import yier.bubu.redis.protocol.json.JsonString;
@@ -84,14 +83,11 @@ public class TransactionQueueLimitTest {
     }
 
     private static boolean okEnvelope(JsonValue envelope) {
-        Assert.assertTrue(envelope instanceof JsonObject);
-        JsonValue ok = ((JsonObject) envelope).values().get("ok");
-        return ok instanceof JsonBoolean b && b.value();
+        return CustomProtocolV1Replies.isOkEnvelope(envelope);
     }
 
     private static JsonValue resultValue(JsonValue envelope) {
-        Assert.assertTrue(envelope instanceof JsonObject);
-        return ((JsonObject) envelope).values().get("result");
+        return CustomProtocolV1Replies.resultValue(envelope);
     }
 
     private static String stringResult(JsonValue envelope) {
@@ -103,10 +99,7 @@ public class TransactionQueueLimitTest {
 
     private static JsonObject errorObject(JsonValue envelope) {
         Assert.assertFalse(okEnvelope(envelope));
-        Assert.assertTrue(envelope instanceof JsonObject);
-        JsonValue e = ((JsonObject) envelope).values().get("error");
-        Assert.assertTrue(e instanceof JsonObject);
-        return (JsonObject) e;
+        return CustomProtocolV1Replies.errorObject(envelope);
     }
 
     private static String stringField(JsonObject obj, String key) {
@@ -149,4 +142,3 @@ public class TransactionQueueLimitTest {
         }
     }
 }
-

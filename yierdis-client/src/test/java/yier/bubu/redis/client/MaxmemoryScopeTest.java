@@ -5,13 +5,10 @@ package yier.bubu.redis.client;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.YierdisServerBootstrap;
-import yier.bubu.redis.protocol.json.JsonBoolean;
 import yier.bubu.redis.protocol.json.JsonLong;
 import yier.bubu.redis.protocol.json.JsonNull;
-import yier.bubu.redis.protocol.json.JsonObject;
 import yier.bubu.redis.protocol.json.JsonString;
 import yier.bubu.redis.protocol.json.JsonValue;
-import yier.bubu.redis.protocol.v1.CustomProtocolV1TaggedValue;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -112,12 +109,7 @@ public class MaxmemoryScopeTest {
 
     private static HashMap<String, Long> parseMemoryStats(JsonValue envelope) {
         Assert.assertTrue(okEnvelope(envelope));
-        JsonValue result = resultValue(envelope);
-        Assert.assertTrue(result instanceof JsonObject);
-        JsonObject obj = (JsonObject) result;
-        Map<String, JsonValue> values = CustomProtocolV1TaggedValue.isTaggedMap(obj)
-                ? CustomProtocolV1TaggedValue.decodeTaggedMapToStringKeyedObject(obj)
-                : obj.values();
+        Map<String, JsonValue> values = CustomProtocolV1Replies.decodeResultMapStringKeys(envelope);
 
         HashMap<String, Long> out = new HashMap<>();
         for (Map.Entry<String, JsonValue> e : values.entrySet()) {
@@ -140,14 +132,11 @@ public class MaxmemoryScopeTest {
     }
 
     private static boolean okEnvelope(JsonValue envelope) {
-        Assert.assertTrue(envelope instanceof JsonObject);
-        JsonValue ok = ((JsonObject) envelope).values().get("ok");
-        return ok instanceof JsonBoolean b && b.value();
+        return CustomProtocolV1Replies.isOkEnvelope(envelope);
     }
 
     private static JsonValue resultValue(JsonValue envelope) {
-        Assert.assertTrue(envelope instanceof JsonObject);
-        return ((JsonObject) envelope).values().get("result");
+        return CustomProtocolV1Replies.resultValue(envelope);
     }
 
     private static String stringResult(JsonValue envelope) {

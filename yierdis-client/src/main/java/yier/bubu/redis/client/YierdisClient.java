@@ -11,15 +11,11 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
-import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.protocol.json.JsonLimits;
-import yier.bubu.redis.protocol.json.JsonParseException;
-import yier.bubu.redis.protocol.json.JsonParser;
 import yier.bubu.redis.protocol.json.JsonValue;
-import yier.bubu.redis.protocol.json.JsonWriter;
 import yier.bubu.redis.protocol.netty.JsonLineDecoder;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1ReplyParser;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1RequestEncoder;
 
-import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -110,7 +106,7 @@ public final class YierdisClient implements AutoCloseable {
             // 1-at-a-time request/response model: drain anything unexpected to keep the pairing strict.
             drainAndCloseResponses();
 
-            byte[] frame = encodeRequestFrame(args);
+            byte[] frame = CustomProtocolV1RequestEncoder.encodeRequestFrame(args);
             ByteBuf out = channel.alloc().buffer(frame.length);
             try {
                 out.writeBytes(frame);
@@ -139,9 +135,8 @@ public final class YierdisClient implements AutoCloseable {
 
             byte[] line = event.line();
             try {
-                JsonValue envelope = JsonParser.parseStrictUtf8(line, 0, line.length, JsonLimits.DEFAULT);
-                return new JsonReply(line, envelope);
-            } catch (JsonParseException e) {
+                return new JsonReply(CustomProtocolV1ReplyParser.parse(line));
+            } catch (RuntimeException e) {
                 closeSilently();
                 throw new IllegalStateException("Invalid JSON reply (connection closed to prevent desync)", e);
             }
@@ -192,60 +187,20 @@ public final class YierdisClient implements AutoCloseable {
         }
     }
 
-    private static byte[] encodeRequestFrame(List<byte[]> args) {
-        if (args == null || args.isEmpty()) {
-            throw new IllegalArgumentException("args must not be empty");
-        }
-
-        byte[] cmdBytes = args.get(0);
-        if (cmdBytes == null || cmdBytes.length == 0) {
-            throw new IllegalArgumentException("command name must not be null/empty");
-        }
-        String cmd = new String(cmdBytes, StandardCharsets.UTF_8).trim();
-        if (cmd.isEmpty()) {
-            throw new IllegalArgumentException("command name must not be blank");
-        }
-
-        ByteArrayOutputStream payload = new ByteArrayOutputStream(64);
-        BytesSink sink = (src, srcIndex, len) -> payload.write(src, srcIndex, len);
-
-        writeAscii(sink, "{\"cmd\":");
-        JsonWriter.writeString(sink, cmd);
-        writeAscii(sink, ",\"args\":[");
-        for (int i = 1; i < args.size(); i++) {
-            if (i > 1) {
-                writeAscii(sink, ",");
-            }
-            byte[] a = args.get(i);
-            if (a == null) {
-                JsonWriter.writeString(sink, null);
-                continue;
-            }
-            String s = new String(a, StandardCharsets.UTF_8);
-            JsonWriter.writeString(sink, s);
-        }
-        writeAscii(sink, "]}");
-
-        byte[] payloadBytes = payload.toByteArray();
-        byte[] lenAscii = Integer.toString(payloadBytes.length).getBytes(StandardCharsets.US_ASCII);
-
-        ByteArrayOutputStream frame = new ByteArrayOutputStream(lenAscii.length + 1 + payloadBytes.length + 1);
-        frame.writeBytes(lenAscii);
-        frame.write(':');
-        frame.writeBytes(payloadBytes);
-        frame.write('\n');
-        return frame.toByteArray();
-    }
-
-    private static void writeAscii(BytesSink sink, String s) {
-        byte[] bytes = s.getBytes(StandardCharsets.US_ASCII);
-        sink.writeBytes(bytes, 0, bytes.length);
-    }
-
     public record JsonReply(byte[] line, JsonValue envelope) {
         public JsonReply {
             Objects.requireNonNull(line, "line");
             Objects.requireNonNull(envelope, "envelope");
+            line = line.clone();
+        }
+
+        public JsonReply(CustomProtocolV1ReplyParser.ParsedReply reply) {
+            this(reply.line(), reply.envelope());
+        }
+
+        @Override
+        public byte[] line() {
+            return line.clone();
         }
 
         public String lineUtf8() {
@@ -338,4 +293,3 @@ public final class YierdisClient implements AutoCloseable {
         }
     }
 }
-
