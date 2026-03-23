@@ -9,6 +9,7 @@ import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.Session;
+import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
 
 import java.nio.charset.StandardCharsets;
@@ -69,12 +70,12 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private static final byte[] KEY_CONN_BACKPRESSURE_ENTER = ascii("conn_backpressure_enter");
     private static final byte[] KEY_CONN_BACKPRESSURE_EXIT = ascii("conn_backpressure_exit");
 
-    private final ServerConfig config;
+    private final YierdisServerRuntimeConfig config;
     private final long startedMillis;
     private volatile NettyCommandExecutor executor;
     private volatile DbEngine[] engines;
 
-    NettyServerInfoProvider(ServerConfig config) {
+    NettyServerInfoProvider(YierdisServerRuntimeConfig config) {
         this.config = Objects.requireNonNull(config, "config");
         this.startedMillis = System.currentTimeMillis();
     }
@@ -157,14 +158,14 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
     @Override
     public YierdisMemoryStats memoryStats(CommandContext ctx) {
-        if (config.maxmemoryScope != ServerConfig.MaxmemoryScope.GLOBAL) {
+        if (config.maxmemoryScope() != YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL) {
             return null;
         }
 
         DbEngine[] local = engines;
         if (local == null || local.length == 0) {
             return new YierdisMemoryStats(
-                    config.maxmemoryBytes,
+                    config.maxmemoryBytes(),
                     0,
                     0,
                     0,
@@ -231,7 +232,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         long totalEstimatedBytes = heap + offHeap + keyspaceOverhead + expireOverhead + expireValueObjects;
 
         return new YierdisMemoryStats(
-                config.maxmemoryBytes,
+                config.maxmemoryBytes(),
                 usedBytesForMaxmemory,
                 heap,
                 offHeap,
@@ -265,8 +266,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
         writePair(out, KEY_SERVER, VALUE_SERVER);
         writePair(out, KEY_VERSION, VALUE_VERSION);
-        writePair(out, KEY_PORT, config.port);
-        writePair(out, KEY_IO_THREADS, config.ioThreads);
+        writePair(out, KEY_PORT, config.port());
+        writePair(out, KEY_IO_THREADS, config.ioThreads());
         writePair(out, KEY_EXECUTOR_POLICY, ascii(String.valueOf(s.schedulingPolicy)));
         writePair(out, KEY_EXECUTOR_QUEUE_CAPACITY, s.queueCapacity);
         writePair(out, KEY_EXECUTOR_QUEUE_MAX_BYTES, s.queueMaxBytes);
@@ -298,7 +299,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         if (server) {
             sb.append("# Server\r\n");
             sb.append("redis_version:").append(YierdisBuildInfo.version()).append("\r\n");
-            sb.append("tcp_port:").append(config.port).append("\r\n");
+            sb.append("tcp_port:").append(config.port()).append("\r\n");
             sb.append("uptime_in_seconds:").append(uptimeSeconds).append("\r\n");
             sb.append("uptime_in_milliseconds:").append(uptimeMillis).append("\r\n");
             sb.append("\r\n");
@@ -316,8 +317,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             long ledgerReservedBytes = 0;
             long maxmemoryUsedBytes = 0;
             long maxmemoryEffectiveUsedBytes = 0;
-            boolean offHeapIncludedInMaxmemory = config.maxmemoryScope == ServerConfig.MaxmemoryScope.GLOBAL;
-            if (config.maxmemoryScope == ServerConfig.MaxmemoryScope.GLOBAL) {
+            boolean offHeapIncludedInMaxmemory = config.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL;
+            if (config.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL) {
                 YierdisMemoryStats memStats = memoryStats(null);
                 if (memStats != null) {
                     ledgerReservedBytes = memStats.reservedBytes();
@@ -344,13 +345,13 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             sb.append("used_memory:").append(m.usedMemoryBytes).append("\r\n");
             sb.append("used_memory_dataset:").append(m.heapDataBytesEstimate).append("\r\n");
             sb.append("used_memory_overhead:").append(m.overheadBytesEstimate).append("\r\n");
-            sb.append("maxmemory:").append(config.maxmemoryBytes).append("\r\n");
-            sb.append("maxmemory_policy:").append(config.maxmemoryPolicy).append("\r\n");
+            sb.append("maxmemory:").append(config.maxmemoryBytes()).append("\r\n");
+            sb.append("maxmemory_policy:").append(config.maxmemoryPolicy().argvValue()).append("\r\n");
             sb.append("yierdis_maxmemory_scope:")
-                    .append(config.maxmemoryScope == ServerConfig.MaxmemoryScope.PER_DB ? "per-db" : "global")
+                    .append(config.maxmemoryScope().argvValue())
                     .append("\r\n");
-            if (config.maxmemoryScope == ServerConfig.MaxmemoryScope.PER_DB && config.maxmemoryBytes > 0) {
-                long perDb = config.maxmemoryBytes / Math.max(1L, (long) config.databases);
+            if (config.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB && config.maxmemoryBytes() > 0) {
+                long perDb = config.maxmemoryBytes() / Math.max(1L, (long) config.databases());
                 sb.append("yierdis_maxmemory_per_db_bytes:").append(perDb).append("\r\n");
             }
             sb.append("yierdis_ledger_used_bytes:").append(m.heapDataBytesEstimate).append("\r\n");
@@ -360,7 +361,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             sb.append("yierdis_maxmemory_effective_used_bytes:").append(maxmemoryEffectiveUsedBytes).append("\r\n");
             sb.append("yierdis_offheap_included_in_maxmemory:").append(offHeapIncludedInMaxmemory ? 1 : 0).append("\r\n");
             sb.append("yierdis_offheap_used_bytes:").append(m.offHeapUsedBytes).append("\r\n");
-            sb.append("yierdis_offheap_max_bytes:").append(config.offheapMaxBytes).append("\r\n");
+            sb.append("yierdis_offheap_max_bytes:").append(config.offheapMaxBytes()).append("\r\n");
             sb.append("\r\n");
         }
 
