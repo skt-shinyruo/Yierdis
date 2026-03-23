@@ -38,6 +38,13 @@
 - 面向数据面的自定义内存管理。
 - 足以与 Redis 基线对比内存占用和尾延迟的 benchmark 与观测能力。
 
+### 同一主线的后续阶段
+
+以下内容不属于当前第一波落地范围，但明确属于同一主线下的后续 phase，而不是独立项目或主线之外内容：
+
+- `maxmemory / eviction`
+- `defragment`
+
 ### V1 范围外
 
 - 持久化（`AOF`、`RDB`）
@@ -47,7 +54,6 @@
 - ACL / TLS / PubSub
 - 完整 Redis 命令覆盖
 - 自动编码降级
-- 最终版 `maxmemory` 淘汰策略
 
 ## 非目标
 
@@ -1228,11 +1234,11 @@ V1 应按明确阶段推进，并在阶段之间设置硬门槛。
 
 - 多小时运行稳定
 - allocator / accounting 一致
-- benchmark 结果足以支撑继续进入 maxmemory / eviction 后续工作
+- benchmark 结果足以支撑继续进入 `Phase 6`
 
-## 后续设计：`maxmemory / eviction`
+### Phase 6：`maxmemory / eviction`
 
-本节属于当前总设计文档中的后续设计延展，用来记录 V1 主线完成后最直接相邻的能力设计。它不改变前文“最终版 `maxmemory` 淘汰策略不在 V1 初始实现范围内”的边界，只是把后续设计先固定在同一份总文档中，避免后面重新发散。
+本节属于同一主线下的后续 phase 设计。它不是独立 spec，也不是主线之外内容；它表达的是“在前五个 phase 把 allocator、keyspace、TTL 与核心类型跑稳后，主线继续推进到内存预算与淘汰机制”。
 
 ### 目标
 
@@ -1247,7 +1253,7 @@ V1 应按明确阶段推进，并在阶段之间设置硬门槛。
 
 ### 前置条件
 
-只有在以下前置条件成立后，才应开始实现 `maxmemory / eviction`：
+只有在以下前置条件成立后，才应进入 `Phase 6`：
 
 - allocator 统计已经稳定，`allocatedBytes / activeBytes / fragmentBytes` 可信
 - keyspace、TTL、删除路径、编码升级路径已经无明显泄漏
@@ -1293,7 +1299,7 @@ V1 应按明确阶段推进，并在阶段之间设置硬门槛。
 
 ### 策略范围
 
-本后续设计推荐按如下顺序实现，而不是一口气做全量 Redis 策略：
+`Phase 6` 推荐按如下顺序实现，而不是一口气做全量 Redis 策略：
 
 1. `noeviction`
 2. `allkeys-random`
@@ -1451,7 +1457,7 @@ eviction 本身必须是有预算的。不能为了让一条写命令成功，�
 
 ### 验收标准
 
-进入 `maxmemory / eviction` 阶段时，建议以以下标准验收：
+进入 `Phase 6` 时，建议以以下标准验收：
 
 - `noeviction` 下，所有增长写都在提交前稳定失败
 - `allkeys-random` 下，删除路径无泄漏，内存能回落
@@ -1459,9 +1465,9 @@ eviction 本身必须是有预算的。不能为了让一条写命令成功，�
 - 在 `95% ~ 105% maxmemory` 压边负载下，p99 不出现明显灾难性抖动
 - 开启 eviction 后，吞吐下降和尾延迟上升都应处于可接受区间，而不是说明实现本身失衡
 
-## 后续设计：`defragment`
+### Phase 7：`defragment`
 
-本节同样属于记录在总设计文档中的后续设计延展。它不改变“V1 初始主线先把 allocator、keyspace、TTL、核心类型和 benchmark 跑稳”的边界，而是提前固定长期内存形态治理的方向。
+本节同样属于同一主线下的后续 phase 设计。它建立在 `Phase 6` 或至少 `Phase 5` 后的稳定 allocator 与引用模型之上，目标是解决长期运行下的碎片与内存形态问题，而不是作为独立项目另起一条线。
 
 ### 目标
 
@@ -1481,7 +1487,7 @@ eviction 本身必须是有预算的。不能为了让一条写命令成功，�
 
 `defragment` 比 `maxmemory / eviction` 更晚进入实现阶段，因为它对底层稳定性要求更高。
 
-必须满足以下前置条件：
+必须满足以下前置条件后，才应进入 `Phase 7`：
 
 - handle 间接层已经稳定
 - delete / overwrite / encoding upgrade 路径已无明显泄漏
@@ -1493,7 +1499,7 @@ eviction 本身必须是有预算的。不能为了让一条写命令成功，�
 
 ### 第一波范围
 
-建议把 defragment 分成多波，而不是“一开始全对象可移动”。
+建议把 `Phase 7` 内部也拆成多波，而不是“一开始全对象可移动”。
 
 第一波优先支持：
 
@@ -1650,7 +1656,7 @@ defragment 和 TTL、rehash 一样，必须是“渐进式、可中断、有预�
 
 ### 验收标准
 
-进入 defragment 阶段时，建议至少满足以下验收标准：
+进入 `Phase 7` 时，建议至少满足以下验收标准：
 
 - 压实后 `fragmentBytes` 能稳定回落
 - `residentPages` 或 page 利用率分布有可观改善
@@ -1685,5 +1691,5 @@ defragment 和 TTL、rehash 一样，必须是“渐进式、可中断、有预�
 - 把每个 phase 展开成可执行任务
 - 指定第一批具体文件 / 模块边界
 - 定义第一批 benchmark 命令与预期失败模式
-- 以当前文档中的“`maxmemory / eviction`”与“`defragment`”章节作为后续工作流边界
-- 明确把 `maxmemory/eviction` 与 `defragment` 的真正实现继续延后，直到 allocator、keyspace、TTL 与内存记账路径稳定
+- 以当前文档中的 `Phase 0 ~ Phase 7` 作为同一主线的总体边界
+- 明确 `Phase 6` 与 `Phase 7` 的进入条件，避免在前五个 phase 未稳定时强行并行推进
