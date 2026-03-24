@@ -22,6 +22,110 @@ public class YierdisServerArgsTest {
     }
 
     @Test
+    public void normalizedArgsConvertToStableRuntimeConfig() {
+        YierdisServerArgs args = parse(
+                "--port", "6380",
+                "--databases", "32",
+                "--noCleanup",
+                "--ioThreads", "4",
+                "--executorQueueCapacity", "2048",
+                "--executorQueueMaxBytes", "4096",
+                "--executorSchedulingPolicy", "GLOBAL",
+                "--backpressureHigh", "512",
+                "--backpressureLow", "64",
+                "--backpressureBytesHigh", "8192",
+                "--backpressureBytesLow", "2048",
+                "--executorMaxDrain", "256",
+                "--executorDrainMillis", "7",
+                "--transactionQueueMaxCommands", "128",
+                "--transactionQueueMaxBytes", "16384",
+                "--protocolMaxBulkBytes", "32768",
+                "--protocolMaxArgs", "128",
+                "--protocolMaxLineBytes", "4096",
+                "--offheapBackend", "UNSAFE",
+                "--offheapMaxBytes", "65536",
+                "--offheapKeysEnabled",
+                "--maxmemoryBytes", "1048576",
+                "--maxmemoryScope", "Per_Db",
+                "--maxmemoryPolicy", "ALLKEYS-RANDOM",
+                "--maxmemorySamples", "9",
+                "--evictionTimeLimitMillis", "11",
+                "--expireCleanupTimeLimitMillis", "13",
+                "--keysTimeBudgetMillis", "17",
+                "--keysMaxResults", "23"
+        );
+
+        args.normalizeAndValidate();
+
+        Assert.assertEquals("global", args.executorSchedulingPolicy);
+        Assert.assertEquals("unsafe", args.offheapBackend);
+        Assert.assertEquals("per-db", args.maxmemoryScope);
+        Assert.assertEquals("allkeys-random", args.maxmemoryPolicy);
+        Assert.assertEquals(0, args.cleanupIntervalMillis);
+
+        Assert.assertEquals(
+                new YierdisServerRuntimeConfig(
+                        6380,
+                        32,
+                        0,
+                        4,
+                        2048,
+                        4096,
+                        YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.GLOBAL,
+                        512,
+                        64,
+                        8192,
+                        2048,
+                        256,
+                        7,
+                        128,
+                        16384,
+                        32768,
+                        128,
+                        4096,
+                        YierdisServerRuntimeConfig.OffheapBackend.UNSAFE,
+                        65536,
+                        true,
+                        1048576,
+                        YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB,
+                        YierdisServerRuntimeConfig.MaxmemoryPolicy.ALLKEYS_RANDOM,
+                        9,
+                        11,
+                        13,
+                        17,
+                        23
+                ),
+                args.toRuntimeConfig()
+        );
+    }
+
+    @Test
+    public void toArgvRoundTripsNormalizedSettingsUsedByBench() {
+        YierdisServerArgs args = parse(
+                "--port", "6381",
+                "--noCleanup",
+                "--executorSchedulingPolicy", "FAIR",
+                "--offheapBackend", "NETTY",
+                "--offheapMaxBytes", "2048",
+                "--maxmemoryScope", "perdb",
+                "--maxmemoryPolicy", "ALLKEYS-LRU",
+                "--keysTimeBudgetMillis", "0",
+                "--keysMaxResults", "0"
+        );
+
+        args.normalizeAndValidate();
+
+        YierdisServerArgs copied = args.copy();
+        Assert.assertEquals(args.toArgv(), copied.toArgv());
+
+        YierdisServerArgs reparsed = parse(copied.toArgv().toArray(new String[0]));
+        reparsed.normalizeAndValidate();
+
+        Assert.assertEquals(copied.toArgv(), reparsed.toArgv());
+        Assert.assertEquals(copied.toRuntimeConfig(), reparsed.toRuntimeConfig());
+    }
+
+    @Test
     public void invalidPortIsRejected() {
         YierdisServerArgs args = parse("--port", "-1");
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);

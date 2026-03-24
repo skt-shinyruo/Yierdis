@@ -1,7 +1,14 @@
 package yier.bubu.redis;
 
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.args.YierdisServerRuntimeConfig;
+import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.contract.TransactionState;
+import yier.bubu.redis.executor.SchedulingPolicy;
+import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
 import yier.bubu.redis.protocol.json.JsonArray;
 import yier.bubu.redis.protocol.json.JsonBoolean;
 import yier.bubu.redis.protocol.json.JsonLimits;
@@ -10,11 +17,15 @@ import yier.bubu.redis.protocol.json.JsonObject;
 import yier.bubu.redis.protocol.json.JsonParser;
 import yier.bubu.redis.protocol.json.JsonString;
 import yier.bubu.redis.protocol.json.JsonValue;
+import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
+import yier.bubu.redis.runtime.YierdisInstance;
+import yier.bubu.redis.runtime.YierdisInstanceConfig;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -60,6 +71,76 @@ public class YierdisServerBootstrapCommandWiringTest {
                 JsonObject select = roundTrip(out, in, "{\"cmd\":\"SELECT\",\"args\":[\"1\"]}");
                 Assert.assertTrue(booleanField(select, "ok"));
                 Assert.assertEquals("OK", stringField(select, "result"));
+            }
+        }
+    }
+
+    @Test
+    public void observabilityUsesNormalizedRuntimeConfigValues() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--databases", "2",
+                "--ioThreads", "2",
+                "--executorSchedulingPolicy", "GLOBAL",
+                "--maxmemoryBytes", "4096",
+                "--maxmemoryScope", "perdb",
+                "--maxmemoryPolicy", "ALLKEYS-LRU"
+        )) {
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+                socket.setSoTimeout(2000);
+
+                OutputStream out = socket.getOutputStream();
+                InputStream in = socket.getInputStream();
+
+                JsonObject info = roundTrip(out, in, "{\"cmd\":\"INFO\",\"args\":[\"yierdis\"]}");
+                Assert.assertTrue(booleanField(info, "ok"));
+                JsonObject infoResult = objectField(info, "result");
+                Assert.assertEquals(2L, longValue(mapValue(infoResult, "io_threads")));
+                Assert.assertEquals("GLOBAL", stringValue(mapValue(infoResult, "executor_policy")));
+
+                JsonObject memory = roundTrip(out, in, "{\"cmd\":\"INFO\",\"args\":[\"memory\"]}");
+                Assert.assertTrue(booleanField(memory, "ok"));
+                String memorySection = stringField(memory, "result");
+                Assert.assertTrue(memorySection.contains("maxmemory_policy:allkeys-lru\r\n"));
+                Assert.assertTrue(memorySection.contains("yierdis_maxmemory_scope:per-db\r\n"));
+            }
+        }
+    }
+
+    @Test
+    public void channelInitializerUsesRuntimeConfigForSessionAndProtocolLimits() throws Exception {
+        try (InitializerTestEnv env = new InitializerTestEnv()) {
+            YierdisServerRuntimeConfig commandLimitedConfig = runtimeConfig(1, 0, 3, 2, 4);
+            NioSocketChannel commandLimitedChannel = new NioSocketChannel();
+            try {
+                new YierdisServerChannelInitializer(commandLimitedConfig, env.executor).initChannel(commandLimitedChannel);
+
+                TransactionState tx = ServerSessionState.getOrCreate(commandLimitedChannel).transaction();
+                tx.begin();
+                Assert.assertNull(tx.tryEnqueue(argv("SET", "k", "v")));
+                Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(argv("GET", "k")));
+            } finally {
+                commandLimitedChannel.unsafe().closeForcibly();
+            }
+
+            YierdisServerRuntimeConfig byteLimitedConfig = runtimeConfig(0, 4, 3, 2, 4);
+            NioSocketChannel byteLimitedChannel = new NioSocketChannel();
+            try {
+                new YierdisServerChannelInitializer(byteLimitedConfig, env.executor).initChannel(byteLimitedChannel);
+
+                TransactionState tx = ServerSessionState.getOrCreate(byteLimitedChannel).transaction();
+                tx.begin();
+                Assert.assertNull(tx.tryEnqueue(argv("GET", "k")));
+                Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(argv("SET", "x", "y")));
+
+                CustomRequestDecoder decoder = byteLimitedChannel.pipeline().get(CustomRequestDecoder.class);
+                Assert.assertNotNull(decoder);
+                Assert.assertEquals(3, intField(decoder, "maxPayloadBytes"));
+                Assert.assertEquals(2, intField(decoder, "maxArgs"));
+                Assert.assertEquals(4, intField(decoder, "maxHeaderBytes"));
+            } finally {
+                byteLimitedChannel.unsafe().closeForcibly();
             }
         }
     }
@@ -168,5 +249,94 @@ public class YierdisServerBootstrapCommandWiringTest {
         JsonValue v = map.get(key);
         Assert.assertNotNull("missing field: " + key, v);
         return v;
+    }
+
+    private static YierdisServerRuntimeConfig runtimeConfig(
+            int transactionQueueMaxCommands,
+            long transactionQueueMaxBytes,
+            int protocolMaxBulkBytes,
+            int protocolMaxArgs,
+            int protocolMaxLineBytes
+    ) {
+        return new YierdisServerRuntimeConfig(
+                0,
+                1,
+                1000,
+                1,
+                1024,
+                0,
+                YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.FAIR,
+                256,
+                128,
+                0,
+                0,
+                128,
+                10,
+                transactionQueueMaxCommands,
+                transactionQueueMaxBytes,
+                protocolMaxBulkBytes,
+                protocolMaxArgs,
+                protocolMaxLineBytes,
+                YierdisServerRuntimeConfig.OffheapBackend.NONE,
+                0,
+                false,
+                0,
+                YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL,
+                YierdisServerRuntimeConfig.MaxmemoryPolicy.NOEVICTION,
+                5,
+                5,
+                5,
+                0,
+                0
+        );
+    }
+
+    private static byte[][] argv(String... values) {
+        byte[][] argv = new byte[values.length][];
+        for (int i = 0; i < values.length; i++) {
+            argv[i] = values[i].getBytes(StandardCharsets.UTF_8);
+        }
+        return argv;
+    }
+
+    private static int intField(Object target, String fieldName) throws Exception {
+        Field field = target.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return field.getInt(target);
+    }
+
+    private static final class InitializerTestEnv implements AutoCloseable {
+        private final YierdisInstance instance;
+        private final NettyCommandExecutor executor;
+
+        private InitializerTestEnv() {
+            this.instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+            this.executor = new NettyCommandExecutor(
+                    instance::bindToCurrentThread,
+                    processor,
+                    ImmediateEventExecutor.INSTANCE,
+                    new JsonLineReplyWriterFactory(),
+                    1024,
+                    0,
+                    256,
+                    128,
+                    0,
+                    0,
+                    1024,
+                    10,
+                    SchedulingPolicy.FAIR
+            );
+            executor.start();
+        }
+
+        @Override
+        public void close() {
+            try {
+                executor.close();
+            } finally {
+                instance.close();
+            }
+        }
     }
 }

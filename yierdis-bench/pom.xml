@@ -24,7 +24,18 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-protocol-codec</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-protocol-netty</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

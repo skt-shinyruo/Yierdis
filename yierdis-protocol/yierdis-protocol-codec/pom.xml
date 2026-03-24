@@ -14,7 +14,7 @@
     <packaging>jar</packaging>
 
     <name>yierdis-protocol-codec</name>
-    <description>JSON codec + Custom Protocol v1 codecs shared by server/client/bench (Netty-free).</description>
+    <description>JSON codec + Custom Protocol v1 request/reply helpers shared by server/client/bench (Netty-free).</description>
 
     <dependencies>
         <dependency>
