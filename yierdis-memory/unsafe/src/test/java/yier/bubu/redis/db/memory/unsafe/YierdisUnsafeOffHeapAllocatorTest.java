@@ -2,27 +2,27 @@ package yier.bubu.redis.db.memory.unsafe;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocatorContractTest;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocators;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocatorProvider;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBlock;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapOutOfMemoryException;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
 
 import java.util.ServiceLoader;
 
 public class YierdisUnsafeOffHeapAllocatorTest extends YierdisOffHeapAllocatorContractTest {
     @Override
-    protected YierdisOffHeapAllocator newAllocator(long maxBytes) {
+    protected OffHeapAllocator newAllocator(long maxBytes) {
         return new YierdisUnsafeOffHeapAllocator(maxBytes);
     }
 
     @Test
     public void factoryCreatesUnsafeAllocatorWhenAvailable() {
-        try (YierdisOffHeapAllocator allocator = YierdisOffHeapAllocators.create("unsafe", 0)) {
+        try (OffHeapAllocator allocator = YierdisOffHeapAllocators.create("unsafe", 0)) {
             Assert.assertNotNull(allocator);
-            Assert.assertEquals(YierdisOffHeapBackend.UNSAFE, allocator.backend());
+            Assert.assertTrue(allocator instanceof YierdisUnsafeOffHeapAllocator);
         }
     }
 

@@ -20,11 +20,11 @@ import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocators;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBackendUnavailableException;
 import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
 import yier.bubu.redis.runtime.YierdisInstanceConfig;
@@ -52,7 +52,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     // Core resources (closed in reverse order).
     private YierdisInstance instance;
     private DbEngine[] engines;
-    private YierdisOffHeapAllocator offHeapAllocator;
+    private OffHeapAllocator offHeapAllocator;
     private NettyCommandExecutor executor;
     private EventExecutorGroup commandGroup;
     private EventLoopGroup bossGroup;
@@ -293,7 +293,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         }
         workerGroup = null;
 
-        YierdisOffHeapAllocator allocator = offHeapAllocator;
+        OffHeapAllocator allocator = offHeapAllocator;
         if (allocator != null) {
             try {
                 allocator.close();

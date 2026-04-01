@@ -3,15 +3,15 @@ package yier.bubu.redis.db.memory.netty;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapSlice;
 import yier.bubu.redis.bytes.BytesSource;
 import yier.bubu.redis.bytes.netty.NettyByteBufSink;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
 
-public final class YierdisNettyOffHeapAllocator implements YierdisOffHeapAllocator {
+public final class YierdisNettyOffHeapAllocator implements OffHeapAllocator {
     private final long maxBytes;
 
     private boolean closed;
@@ -58,7 +58,6 @@ public final class YierdisNettyOffHeapAllocator implements YierdisOffHeapAllocat
         return maxBytes;
     }
 
-    @Override
     public YierdisOffHeapBackend backend() {
         return YierdisOffHeapBackend.NETTY;
     }

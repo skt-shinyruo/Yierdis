@@ -1,5 +1,7 @@
 package yier.bubu.redis.db.memory.api;
 
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -77,12 +79,12 @@ public final class YierdisOffHeapAllocators {
         return sb.toString();
     }
 
-    public static YierdisOffHeapAllocator create(String backendName, long maxBytes) {
+    public static OffHeapAllocator create(String backendName, long maxBytes) {
         YierdisOffHeapBackend backend = YierdisOffHeapBackend.fromString(backendName);
         return create(backend, maxBytes);
     }
 
-    public static YierdisOffHeapAllocator create(YierdisOffHeapBackend backend, long maxBytes) {
+    public static OffHeapAllocator create(YierdisOffHeapBackend backend, long maxBytes) {
         if (backend == null || backend == YierdisOffHeapBackend.NONE) {
             return null;
         }

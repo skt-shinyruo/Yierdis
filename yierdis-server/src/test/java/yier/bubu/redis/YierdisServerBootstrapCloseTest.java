@@ -5,10 +5,9 @@ import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocator;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapBackend;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapBuf;
 import yier.bubu.redis.executor.SchedulingPolicy;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
+import yier.bubu.redis.offheap.api.OffHeapBuf;
 import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.DbLifecycleOps;
 import yier.bubu.redis.ops.DbReads;
@@ -264,7 +263,7 @@ public class YierdisServerBootstrapCloseTest {
         }
     }
 
-    private static final class ThrowingAllocator implements YierdisOffHeapAllocator {
+    private static final class ThrowingAllocator implements OffHeapAllocator {
         private final List<String> closeOrder;
 
         private ThrowingAllocator(List<String> closeOrder) {
@@ -272,7 +271,7 @@ public class YierdisServerBootstrapCloseTest {
         }
 
         @Override
-        public YierdisOffHeapBuf allocate(int capacity) {
+        public OffHeapBuf allocate(int capacity) {
             throw new UnsupportedOperationException();
         }
 
@@ -284,11 +283,6 @@ public class YierdisServerBootstrapCloseTest {
         @Override
         public long maxBytes() {
             return 0;
-        }
-
-        @Override
-        public YierdisOffHeapBackend backend() {
-            return YierdisOffHeapBackend.NONE;
         }
 
         @Override

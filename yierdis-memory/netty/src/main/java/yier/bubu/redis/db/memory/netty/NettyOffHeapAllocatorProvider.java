@@ -1,8 +1,8 @@
 package yier.bubu.redis.db.memory.netty;
 
-import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocatorProvider;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBackend;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
 
 public final class NettyOffHeapAllocatorProvider implements YierdisOffHeapAllocatorProvider {
     @Override
@@ -11,8 +11,7 @@ public final class NettyOffHeapAllocatorProvider implements YierdisOffHeapAlloca
     }
 
     @Override
-    public YierdisOffHeapAllocator create(long maxBytes) {
+    public OffHeapAllocator create(long maxBytes) {
         return new YierdisNettyOffHeapAllocator(maxBytes);
     }
 }
-

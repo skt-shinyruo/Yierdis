@@ -2,14 +2,18 @@ package yier.bubu.redis.db.memory.api;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
+import yier.bubu.redis.offheap.api.OffHeapBuf;
+import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
+import yier.bubu.redis.offheap.api.OffHeapSlice;
 
 public abstract class YierdisOffHeapAllocatorContractTest {
-    protected abstract YierdisOffHeapAllocator newAllocator(long maxBytes);
+    protected abstract OffHeapAllocator newAllocator(long maxBytes);
 
     @Test
     public void allocateWriteReadRoundTripWorks() {
-        try (YierdisOffHeapAllocator allocator = newAllocator(0)) {
-            try (YierdisOffHeapBuf buf = allocator.allocate(16)) {
+        try (OffHeapAllocator allocator = newAllocator(0)) {
+            try (OffHeapBuf buf = allocator.allocate(16)) {
                 byte[] src = new byte[16];
                 for (int i = 0; i < src.length; i++) {
                     src[i] = (byte) i;
@@ -26,15 +30,15 @@ public abstract class YierdisOffHeapAllocatorContractTest {
 
     @Test
     public void sliceReadAndWriteToByteBufWork() {
-        try (YierdisOffHeapAllocator allocator = newAllocator(0)) {
-            try (YierdisOffHeapBuf buf = allocator.allocate(16)) {
+        try (OffHeapAllocator allocator = newAllocator(0)) {
+            try (OffHeapBuf buf = allocator.allocate(16)) {
                 byte[] src = new byte[16];
                 for (int i = 0; i < src.length; i++) {
                     src[i] = (byte) (i + 1);
                 }
                 buf.setBytes(0, src, 0, src.length);
 
-                YierdisOffHeapSlice slice = buf.slice(3, 5);
+                OffHeapSlice slice = buf.slice(3, 5);
                 byte[] sliced = new byte[5];
                 slice.getBytes(0, sliced, 0, sliced.length);
                 Assert.assertArrayEquals(new byte[]{4, 5, 6, 7, 8}, sliced);
@@ -48,8 +52,8 @@ public abstract class YierdisOffHeapAllocatorContractTest {
 
     @Test
     public void accessAfterCloseThrows() {
-        YierdisOffHeapAllocator allocator = newAllocator(0);
-        YierdisOffHeapBuf buf = allocator.allocate(8);
+        OffHeapAllocator allocator = newAllocator(0);
+        OffHeapBuf buf = allocator.allocate(8);
         buf.close();
 
         try {
@@ -64,14 +68,14 @@ public abstract class YierdisOffHeapAllocatorContractTest {
 
     @Test
     public void memoryLimitIsEnforced() {
-        try (YierdisOffHeapAllocator allocator = newAllocator(8)) {
-            try (YierdisOffHeapBuf ignored = allocator.allocate(8)) {
+        try (OffHeapAllocator allocator = newAllocator(8)) {
+            try (OffHeapBuf ignored = allocator.allocate(8)) {
                 // ok
             }
             try {
                 allocator.allocate(9);
                 Assert.fail("expected YierdisOffHeapOutOfMemoryException");
-            } catch (YierdisOffHeapOutOfMemoryException ignored) {
+            } catch (OffHeapOutOfMemoryException ignored) {
                 // expected
             }
         }
@@ -79,8 +83,8 @@ public abstract class YierdisOffHeapAllocatorContractTest {
 
     @Test
     public void allocatorCloseDetectsLeaks() {
-        YierdisOffHeapAllocator allocator = newAllocator(0);
-        YierdisOffHeapBuf buf = allocator.allocate(8);
+        OffHeapAllocator allocator = newAllocator(0);
+        OffHeapBuf buf = allocator.allocate(8);
         try {
             allocator.close();
             Assert.fail("expected IllegalStateException");

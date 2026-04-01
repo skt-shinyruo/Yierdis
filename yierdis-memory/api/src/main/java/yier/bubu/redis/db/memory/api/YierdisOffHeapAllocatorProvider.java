@@ -1,5 +1,7 @@
 package yier.bubu.redis.db.memory.api;
 
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
+
 /**
  * Service provider interface for off-heap allocator backends.
  * <p>
@@ -9,6 +11,5 @@ package yier.bubu.redis.db.memory.api;
 public interface YierdisOffHeapAllocatorProvider {
     YierdisOffHeapBackend backend();
 
-    YierdisOffHeapAllocator create(long maxBytes);
+    OffHeapAllocator create(long maxBytes);
 }
-

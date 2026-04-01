@@ -4,16 +4,16 @@ import jdk.incubator.foreign.MemoryAccess;
 import jdk.incubator.foreign.MemorySegment;
 import jdk.incubator.foreign.ResourceScope;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocator;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapSlice;
 import yier.bubu.redis.bytes.BytesSource;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
 
 import java.nio.ByteBuffer;
 
-public final class YierdisForeignOffHeapAllocator implements YierdisOffHeapAllocator {
+public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
     private final long maxBytes;
 
     private boolean closed;
@@ -56,7 +56,6 @@ public final class YierdisForeignOffHeapAllocator implements YierdisOffHeapAlloc
         return maxBytes;
     }
 
-    @Override
     public YierdisOffHeapBackend backend() {
         return YierdisOffHeapBackend.FOREIGN;
     }

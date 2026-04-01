@@ -1,5 +1,7 @@
 package yier.bubu.redis.db.memory.api;
 
+import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+
 /**
  * Optional capability interface for off-heap allocators that expose raw address-based memory operations.
  * <p>
@@ -8,8 +10,7 @@ package yier.bubu.redis.db.memory.api;
  * Implementations must provide a consistent view over the returned addresses for the lifetime of the blocks,
  * and {@link #close()} MUST free the underlying memory exactly once.
  */
-public interface YierdisOffHeapAddressAllocator
-        extends yier.bubu.redis.offheap.api.OffHeapAddressAllocator, YierdisOffHeapAllocator {
+public interface YierdisOffHeapAddressAllocator extends OffHeapAddressAllocator {
     /**
      * Allocates a raw block and returns an owning handle that will free memory on {@link YierdisOffHeapBlock#close()}.
      */

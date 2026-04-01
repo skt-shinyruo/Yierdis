@@ -2,6 +2,7 @@ package yier.bubu.redis.db.memory.api;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.offheap.api.OffHeapAllocator;
 
 public class YierdisOffHeapAllocatorsTest {
     @Test
@@ -15,9 +16,8 @@ public class YierdisOffHeapAllocatorsTest {
     public void createNettyDependsOnServiceLoaderProviders() {
         boolean nettyPresent = hasProvider(YierdisOffHeapBackend.NETTY);
         if (nettyPresent) {
-            try (YierdisOffHeapAllocator allocator = YierdisOffHeapAllocators.create("netty", 0)) {
+            try (OffHeapAllocator allocator = YierdisOffHeapAllocators.create("netty", 0)) {
                 Assert.assertNotNull(allocator);
-                Assert.assertEquals(YierdisOffHeapBackend.NETTY, allocator.backend());
                 Assert.assertEquals(0L, allocator.usedBytes());
             }
             return;
@@ -38,9 +38,8 @@ public class YierdisOffHeapAllocatorsTest {
         if (foreignPresent) {
             // Provider is present; runtime availability depends on JVM flags (incubator module).
             // We only assert that resolution is attempted (no hard-coded class/reflection fallback here).
-            try (YierdisOffHeapAllocator allocator = YierdisOffHeapAllocators.create("foreign", 0)) {
+            try (OffHeapAllocator allocator = YierdisOffHeapAllocators.create("foreign", 0)) {
                 Assert.assertNotNull(allocator);
-                Assert.assertEquals(YierdisOffHeapBackend.FOREIGN, allocator.backend());
             } catch (YierdisOffHeapBackendUnavailableException e) {
                 Assert.assertTrue(e.getMessage().contains("foreign"));
             }
