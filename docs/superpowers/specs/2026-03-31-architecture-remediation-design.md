@@ -20,7 +20,7 @@ The current codebase has three linked architecture problems:
 
 1. Connection ownership is fragmented across multiple `Channel.attr(...)` state holders in `yierdis-server`, so transaction state, closing state, backpressure state, and scheduling state do not have a single owner.
 2. `YierdisDb` still concentrates too many responsibilities. The public `DbReads` and `DbWrites` split exists, but the implementation still routes most behavior back into one very large state owner.
-3. Protocol and reply abstractions drift in two directions at once. Protocol decoding already produces executable `Command` objects, while reply semantics are split between `ReplyWriter` and `ReplyValue`.
+3. Protocol and reply abstractions had drifted in two directions at once. Protocol decoding already produced executable `Command` objects, while reply semantics had been blurred between `ReplyWriter` and `ReplyValue`.
 
 These issues amplify each other. If the DB is split before connection ownership is stabilized, the project will keep refining code on top of unclear boundaries. If protocol abstractions are changed before the core ownership boundaries are fixed, the refactor will add more adapters without actually reducing coupling.
 
@@ -164,7 +164,7 @@ The protocol decode flow should become:
 3. server adapter to execution contract
 4. command execution
 
-For replies, the server write path should use `ReplyWriter` as the single semantic source of truth. `ReplyValue` should remain for client/tooling/parser use and optional encoding helpers, but it should no longer be treated as a parallel command-layer IR.
+For replies, the server write path should use `ReplyWriter` as the single semantic source of truth. `ReplyValue` should remain for client/tooling/parser use and optional encoding helpers, but it should not be treated as a parallel command-layer IR or alternate server write-path authority.
 
 `CustomProtocolV1NdjsonEncoder` remains useful for client, bench, parser, and `ReplyValue` support, but it should not coexist with the main server write path as an alternate semantic authority.
 

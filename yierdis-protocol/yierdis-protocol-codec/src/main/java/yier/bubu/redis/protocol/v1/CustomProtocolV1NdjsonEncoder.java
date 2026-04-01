@@ -13,11 +13,12 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Custom Protocol v1 的 NDJSON 编码器（SSOT）。
+ * Custom Protocol v1 的 NDJSON 协议编码器/辅助类。
  * <p>
  * 说明：
  * - reply framing：每条 reply 为一个 JSON object，并以 {@code '\n'} 结尾
  * - bytes/map/nested error 采用显式 tagged value，避免 JSON 语义限制导致的 best-effort 漂移
+ * - server 主写回路径的语义 owner 仍是 {@code ReplyWriter}；这里提供协议侧编码辅助能力
  */
 public final class CustomProtocolV1NdjsonEncoder {
     public static final String TAG_B64 = "$b64";
@@ -78,6 +79,9 @@ public final class CustomProtocolV1NdjsonEncoder {
     private CustomProtocolV1NdjsonEncoder() {
     }
 
+    /**
+     * Writes an ok envelope for protocol-side callers that already operate on {@link ReplyValue}.
+     */
     public static void writeOkEnvelope(BytesSink out, ReplyValue value) {
         Objects.requireNonNull(out, "out");
         out.writeBytes(OK_PREFIX);

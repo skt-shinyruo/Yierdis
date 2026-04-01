@@ -3,10 +3,10 @@ package yier.bubu.redis.protocol.reply;
 import java.util.List;
 
 /**
- * Reply IR（协议语义中间层）的值模型。
+ * 协议侧 reply 值模型，供客户端、工具、解析器与协议编解码辅助逻辑使用。
  * <p>
- * 该模型用于表达“命令层回包语义”，避免将 JSON/RESP 的限制泄露到命令层假设里。
- * Custom Protocol v1 的 NDJSON encoder 负责将其映射到 wire 表示。
+ * 它不是 server 命令写回语义的单一事实来源；server 命令执行写回仍以 {@code ReplyWriter} 为准。
+ * Custom Protocol v1 的 NDJSON encoder 可以将其映射到 wire 表示。
  */
 public sealed interface ReplyValue permits ReplyNull, ReplyBoolean, ReplyLong, ReplyDouble, ReplyString, ReplyBytes, ReplyArray, ReplyMap, ReplyError {
     static ReplyNull nullValue() {
