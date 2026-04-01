@@ -49,7 +49,7 @@ Thumbs.db
 
 # Local tools
 .serena/
-.codex/
+.codex
 
 # Git worktrees
 .worktrees/
