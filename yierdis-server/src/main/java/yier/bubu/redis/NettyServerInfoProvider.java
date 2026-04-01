@@ -1,6 +1,6 @@
 package yier.bubu.redis;
 
-// INFO/STATS 提供器：基于执行器统计与连接态（ServerSessionState + ServerRuntimeState）输出可观测性摘要，避免在热路径做额外分配。
+// INFO/STATS 提供器：基于执行器统计与连接态（由 ServerConnectionContext 持有的 session/runtime）输出可观测性摘要，避免在热路径做额外分配。
 
 import yier.bubu.redis.command.ServerInfoProvider;
 import yier.bubu.redis.ops.YierdisMemoryStats;

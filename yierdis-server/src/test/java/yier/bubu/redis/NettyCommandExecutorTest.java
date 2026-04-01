@@ -58,7 +58,7 @@ public class NettyCommandExecutorTest {
         EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
         try {
             ch.writeInbound(new CustomCommand("PING", null));
-            ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
+            ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
             Assert.assertEquals(0L, conn.commandsRejectedCounter().get());
@@ -125,7 +125,7 @@ public class NettyCommandExecutorTest {
             // Enqueue 2 commands while executor is blocked.
             ch.writeInbound(new CustomCommand("PING", null));
             ch.writeInbound(new CustomCommand("PING", null));
-            ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
+            ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
             Assert.assertEquals(2L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
 
@@ -198,7 +198,7 @@ public class NettyCommandExecutorTest {
             Assert.assertTrue(ch.config().isAutoRead());
 
             ch.writeInbound(new CustomCommand("PING", null));
-            ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
+            ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
 
             ch.runPendingTasks();
@@ -331,7 +331,7 @@ public class NettyCommandExecutorTest {
 
             ch.writeInbound(new CustomCommand("PING", null));
 
-            ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
+            ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(1, conn.pendingCounter().get());
             Assert.assertTrue("sanity: pending should be below high watermark, so bytes must be the trigger", conn.pendingCounter().get() < 256);
@@ -401,7 +401,7 @@ public class NettyCommandExecutorTest {
             ch.writeInbound(new CustomCommand("QUIT", null));
             ch.writeInbound(new CustomCommand("PING", null));
 
-            ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
+            ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
             Assert.assertEquals(2L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.closeAfterReplyCounter().get());
 

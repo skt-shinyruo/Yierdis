@@ -2,31 +2,11 @@ package yier.bubu.redis;
 
 // Server 连接运行时状态（server 私有）：承载背压/计数/closing 等语义；跨线程写入仅限原子字段。
 
-import io.netty.channel.Channel;
-import io.netty.util.Attribute;
-import io.netty.util.AttributeKey;
-
-import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 final class ServerRuntimeState {
-    private static final AttributeKey<ServerRuntimeState> KEY =
-            AttributeKey.valueOf("yierdis.serverRuntimeState");
-
-    static ServerRuntimeState getOrCreate(Channel channel) {
-        Objects.requireNonNull(channel, "channel");
-        Attribute<ServerRuntimeState> attr = channel.attr(KEY);
-        ServerRuntimeState existing = attr.get();
-        if (existing != null) {
-            return existing;
-        }
-        ServerRuntimeState created = new ServerRuntimeState();
-        ServerRuntimeState raced = attr.setIfAbsent(created);
-        return raced == null ? created : raced;
-    }
-
     // --- Executor / backpressure (跨线程读写，使用原子类型) ---
     private final AtomicInteger pending = new AtomicInteger(0);
     private final AtomicLong pendingBytes = new AtomicLong(0);
@@ -42,7 +22,7 @@ final class ServerRuntimeState {
     private final AtomicLong backpressureEnter = new AtomicLong(0);
     private final AtomicLong backpressureExit = new AtomicLong(0);
 
-    private ServerRuntimeState() {
+    ServerRuntimeState() {
     }
 
     AtomicInteger pendingCounter() {
@@ -105,4 +85,3 @@ final class ServerRuntimeState {
         return backpressureExit;
     }
 }
-

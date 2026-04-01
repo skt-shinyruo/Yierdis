@@ -116,7 +116,7 @@ public class YierdisServerBootstrapCommandWiringTest {
             try {
                 new YierdisServerChannelInitializer(commandLimitedConfig, env.executor).initChannel(commandLimitedChannel);
 
-                TransactionState tx = ServerSessionState.getOrCreate(commandLimitedChannel).transaction();
+                TransactionState tx = ServerConnectionContext.getOrCreate(commandLimitedChannel).session().transaction();
                 tx.begin();
                 Assert.assertNull(tx.tryEnqueue(argv("SET", "k", "v")));
                 Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(argv("GET", "k")));
@@ -129,7 +129,7 @@ public class YierdisServerBootstrapCommandWiringTest {
             try {
                 new YierdisServerChannelInitializer(byteLimitedConfig, env.executor).initChannel(byteLimitedChannel);
 
-                TransactionState tx = ServerSessionState.getOrCreate(byteLimitedChannel).transaction();
+                TransactionState tx = ServerConnectionContext.getOrCreate(byteLimitedChannel).session().transaction();
                 tx.begin();
                 Assert.assertNull(tx.tryEnqueue(argv("GET", "k")));
                 Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(argv("SET", "x", "y")));

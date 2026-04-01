@@ -20,15 +20,12 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
 
     @Override
     protected void initChannel(SocketChannel ch) {
-        // server 会话状态（SELECT/MULTI/...）与运行时状态（背压/统计/closing 等）分离绑定。
-        ServerSessionState.getOrCreate(
+        // 统一连接态入口：会话（SELECT/MULTI/...）、运行时（背压/统计/closing）与调度状态在同一 context 内初始化。
+        ServerConnectionContext.getOrCreate(
                 ch,
                 config.transactionQueueMaxCommands(),
                 config.transactionQueueMaxBytes()
         );
-        ServerRuntimeState.getOrCreate(ch);
-        // 执行器调度状态（server 私有，避免放入 ConnectionContext）
-        NettyExecutorChannelState.getOrCreate(ch);
 
         ch.pipeline()
                 .addLast("writeBufferBackpressure", new WriteBufferBackpressureHandler(executor))

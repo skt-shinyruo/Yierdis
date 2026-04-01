@@ -2,9 +2,6 @@ package yier.bubu.redis;
 
 // Server 会话状态（server 私有）：实现协议层 ServerSession，承载 SELECT/AUTH/MULTI 等 Redis-like 连接态。
 
-import io.netty.channel.Channel;
-import io.netty.util.Attribute;
-import io.netty.util.AttributeKey;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
 
@@ -14,37 +11,9 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 
 final class ServerSessionState implements ServerSession {
-    private static final AttributeKey<ServerSessionState> KEY =
-            AttributeKey.valueOf("yierdis.serverSessionState");
     private static final AtomicLong NEXT_CLIENT_ID = new AtomicLong(1);
-    private static final int DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS = 1024;
-    private static final long DEFAULT_TRANSACTION_QUEUE_MAX_BYTES = 64L * 1024 * 1024; // 64 MiB
-
-    static ServerSessionState getOrCreate(Channel channel) {
-        return getOrCreate(channel, DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS, DEFAULT_TRANSACTION_QUEUE_MAX_BYTES);
-    }
-
-    static ServerSessionState getOrCreate(
-            Channel channel,
-            int transactionQueueMaxCommands,
-            long transactionQueueMaxBytes
-    ) {
-        Objects.requireNonNull(channel, "channel");
-        Attribute<ServerSessionState> attr = channel.attr(KEY);
-        ServerSessionState existing = attr.get();
-        if (existing != null) {
-            return existing;
-        }
-
-        ServerRuntimeState runtime = ServerRuntimeState.getOrCreate(channel);
-        ServerSessionState created = new ServerSessionState(
-                runtime,
-                Math.max(0, transactionQueueMaxCommands),
-                Math.max(0, transactionQueueMaxBytes)
-        );
-        ServerSessionState raced = attr.setIfAbsent(created);
-        return raced == null ? created : raced;
-    }
+    static final int DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS = 1024;
+    static final long DEFAULT_TRANSACTION_QUEUE_MAX_BYTES = 64L * 1024 * 1024; // 64 MiB
 
     // --- Redis-like connection state（通过 ServerSession 暴露给命令层） ---
     private final long clientId = NEXT_CLIENT_ID.getAndIncrement();
@@ -55,7 +24,7 @@ final class ServerSessionState implements ServerSession {
 
     private final ServerRuntimeState runtime;
 
-    private ServerSessionState(ServerRuntimeState runtime, int transactionQueueMaxCommands, long transactionQueueMaxBytes) {
+    ServerSessionState(ServerRuntimeState runtime, int transactionQueueMaxCommands, long transactionQueueMaxBytes) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.transaction = new ConnectionTransactionState(transactionQueueMaxCommands, transactionQueueMaxBytes);
     }

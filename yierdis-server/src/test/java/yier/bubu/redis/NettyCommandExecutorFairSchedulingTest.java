@@ -62,6 +62,8 @@ public class NettyCommandExecutorFairSchedulingTest {
             ch1.writeInbound(new CustomCommand("PING", null));
             ch1.writeInbound(new CustomCommand("PING", null));
             ch2.writeInbound(new CustomCommand("PING", null));
+            Assert.assertEquals(2L, ServerConnectionContext.getOrCreate(ch1).runtime().commandsEnqueuedCounter().get());
+            Assert.assertEquals(1L, ServerConnectionContext.getOrCreate(ch2).runtime().commandsEnqueuedCounter().get());
 
             // Queue a second blocker behind the first drain tick.
             eventExecutor.submit(() -> {

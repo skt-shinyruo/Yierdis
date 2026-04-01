@@ -243,6 +243,50 @@ public class ArchitectureBoundaryTest {
         }
     }
 
+    @Test
+    public void serverMustOwnChannelAttrOnlyInServerConnectionContext() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path serverRoot = repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis").normalize();
+        Assert.assertTrue("缺少 yierdis-server/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
+
+        Path allowedOwner = serverRoot.resolve("ServerConnectionContext.java");
+        Assert.assertTrue("缺少 ServerConnectionContext.java，无法执行 Channel.attr 归一化护栏", Files.isRegularFile(allowedOwner));
+
+        List<String> offenders = new ArrayList<>();
+        int[] scanned = new int[]{0};
+        try (Stream<Path> paths = Files.walk(serverRoot)) {
+            paths.filter(p -> p != null && p.toString().endsWith(".java"))
+                    .sorted()
+                    .forEach(file -> {
+                        if (allowedOwner.equals(file)) {
+                            return;
+                        }
+                        scanned[0]++;
+                        try {
+                            scanFileForForbiddenText(
+                                    repoRoot,
+                                    file,
+                                    offenders,
+                                    ".attr(",
+                                    "AttributeKey.valueOf("
+                            );
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+        }
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server Java 文件", scanned[0] > 0);
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 yierdis-server 存在分散的 Channel.attr 所有权（仅允许 ServerConnectionContext.java 持有）：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
     private static int scanForForbiddenText(Path repoRoot, Path root, List<String> offenders, String... forbiddenSnippets) throws IOException {
         if (root == null || !Files.exists(root)) {
             return 0;

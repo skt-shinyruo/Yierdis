@@ -182,7 +182,11 @@ public final class NettyCommandExecutor implements AutoCloseable {
         }
 
         this.queue = this.schedulingPolicy == SchedulingPolicy.GLOBAL ? new ArrayBlockingQueue<>(queueCapacity) : null;
-        this.taskQueue = new ExecutorTaskQueue<>(this.schedulingPolicy, this.queue, NettyExecutorChannelState::getOrCreate);
+        this.taskQueue = new ExecutorTaskQueue<>(
+                this.schedulingPolicy,
+                this.queue,
+                channel -> ServerConnectionContext.getOrCreate(channel).scheduling()
+        );
         this.backlogBudget = new ExecutorBacklogBudget(queueCapacity, queueMaxBytes);
         this.backpressureHighWatermark = backpressureHighWatermark;
         this.backpressureLowWatermark = backpressureLowWatermark;
@@ -248,32 +252,32 @@ public final class NettyCommandExecutor implements AutoCloseable {
         ExecutorBackpressureRuntime<Channel> runtime = new ExecutorBackpressureRuntime<>() {
             @Override
             public int pending(Channel key) {
-                return ServerRuntimeState.getOrCreate(key).pendingCounter().get();
+                return ServerConnectionContext.getOrCreate(key).runtime().pendingCounter().get();
             }
 
             @Override
             public long pendingBytes(Channel key) {
-                return ServerRuntimeState.getOrCreate(key).pendingBytesCounter().get();
+                return ServerConnectionContext.getOrCreate(key).runtime().pendingBytesCounter().get();
             }
 
             @Override
             public boolean isClosing(Channel key) {
-                return ServerRuntimeState.getOrCreate(key).isClosing();
+                return ServerConnectionContext.getOrCreate(key).runtime().isClosing();
             }
 
             @Override
             public boolean markAutoReadDisabledByExecutor(Channel key) {
-                return ServerRuntimeState.getOrCreate(key).markAutoReadDisabledByExecutor();
+                return ServerConnectionContext.getOrCreate(key).runtime().markAutoReadDisabledByExecutor();
             }
 
             @Override
             public boolean autoReadDisabledByExecutor(Channel key) {
-                return ServerRuntimeState.getOrCreate(key).autoReadDisabledByExecutor();
+                return ServerConnectionContext.getOrCreate(key).runtime().autoReadDisabledByExecutor();
             }
 
             @Override
             public boolean clearAutoReadDisabledByExecutor(Channel key) {
-                return ServerRuntimeState.getOrCreate(key).clearAutoReadDisabledByExecutor();
+                return ServerConnectionContext.getOrCreate(key).runtime().clearAutoReadDisabledByExecutor();
             }
         };
 
@@ -284,7 +288,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
                     return;
                 }
                 try {
-                    ServerRuntimeState.getOrCreate(key).backpressureEnterCounter().incrementAndGet();
+                    ServerConnectionContext.getOrCreate(key).runtime().backpressureEnterCounter().incrementAndGet();
                 } catch (Throwable ignored) {
                     // ignore
                 }
@@ -297,7 +301,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
                     return;
                 }
                 try {
-                    ServerRuntimeState.getOrCreate(key).backpressureExitCounter().incrementAndGet();
+                    ServerConnectionContext.getOrCreate(key).runtime().backpressureExitCounter().incrementAndGet();
                 } catch (Throwable ignored) {
                     // ignore
                 }
@@ -412,7 +416,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
             return;
         }
 
-        ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
+        ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
         int pending = conn.pendingCounter().get();
         long pendingBytes = conn.pendingBytesCounter().get();
 

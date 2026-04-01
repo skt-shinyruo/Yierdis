@@ -14,8 +14,9 @@ public class TransactionQueueCleanupTest {
     public void closingConnectionDiscardsTransactionState() {
         EmbeddedChannel ch = new EmbeddedChannel();
         try {
-            ServerSessionState session = ServerSessionState.getOrCreate(ch, 1, 16);
-            ServerRuntimeState runtime = session.runtime();
+            ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch, 1, 16);
+            ServerSessionState session = context.session();
+            ServerRuntimeState runtime = context.runtime();
             TransactionState tx = session.transaction();
 
             tx.begin();

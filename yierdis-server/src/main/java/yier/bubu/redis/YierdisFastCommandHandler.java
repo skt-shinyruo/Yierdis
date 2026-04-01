@@ -76,8 +76,8 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
                 writer.protocolError(rawMessage);
             } else {
                 // 标记该连接进入 closing：避免 internal error 触发 close 后，已入队命令仍在 executor 中继续执行产生副作用。
-                ServerSessionState session = ServerSessionState.getOrCreate(ctx.channel());
-                session.runtime().markClosing(session);
+                ServerConnectionContext context = ServerConnectionContext.getOrCreate(ctx.channel());
+                context.runtime().markClosing(context.session());
                 nettyExecutor.disableAutoRead(ctx.channel());
                 writer.internalError("ERR internal error");
             }

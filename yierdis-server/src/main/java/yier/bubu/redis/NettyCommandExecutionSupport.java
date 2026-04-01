@@ -71,7 +71,7 @@ final class NettyCommandExecutionSupport {
         Objects.requireNonNull(cmd, "cmd");
         Objects.requireNonNull(ch, "ch");
         Objects.requireNonNull(writer, "writer");
-        ServerSessionState session = ServerSessionState.getOrCreate(ch);
+        ServerSessionState session = ServerConnectionContext.getOrCreate(ch).session();
         commandProcessor.execute(cmd, context(session, writer));
     }
 
@@ -79,7 +79,7 @@ final class NettyCommandExecutionSupport {
         if (ch == null) {
             return;
         }
-        ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
+        ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
         conn.commandsSkippedClosingCounter().incrementAndGet();
         commandsSkippedClosing.increment();
     }
@@ -88,8 +88,9 @@ final class NettyCommandExecutionSupport {
         if (ch == null) {
             return;
         }
-        ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
-        ServerSessionState session = ServerSessionState.getOrCreate(ch);
+        ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
+        ServerRuntimeState conn = context.runtime();
+        ServerSessionState session = context.session();
         conn.closeAfterReplyCounter().incrementAndGet();
         closeAfterReply.increment();
         conn.markClosing(session);
@@ -99,8 +100,8 @@ final class NettyCommandExecutionSupport {
     void handleExecutionFailure(ChannelHandlerContext ctx, Channel ch, Throwable t) {
         try {
             if (ch != null) {
-                ServerSessionState session = ServerSessionState.getOrCreate(ch);
-                session.runtime().markClosing(session);
+                ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
+                context.runtime().markClosing(context.session());
                 backpressureController.disableAutoRead(ch);
             }
         } catch (Throwable ignored) {
@@ -128,7 +129,7 @@ final class NettyCommandExecutionSupport {
     }
 
     void onCommandFinished(Channel ch, int retainedBytes, boolean executed) {
-        ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
+        ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
         if (executed) {
             conn.commandsExecutedCounter().incrementAndGet();
             commandsExecuted.increment();
@@ -171,7 +172,7 @@ final class NettyCommandExecutionSupport {
         if (ch == null) {
             return false;
         }
-        return ServerRuntimeState.getOrCreate(ch).isClosing();
+        return ServerConnectionContext.getOrCreate(ch).runtime().isClosing();
     }
 
     static int safeRetainedBytes(Command cmd) {

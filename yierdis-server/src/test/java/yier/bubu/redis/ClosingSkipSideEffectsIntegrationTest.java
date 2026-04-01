@@ -61,8 +61,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
             ch.writeInbound(new CustomCommand("PING", null));
             Assert.assertNull("expected no reply while executor is blocked", readOutbound(ch));
 
-            ServerSessionState session = ServerSessionState.getOrCreate(ch);
-            ServerRuntimeState rt = session.runtime();
+            ServerRuntimeState rt = ServerConnectionContext.getOrCreate(ch).runtime();
             Assert.assertEquals(2L, rt.commandsEnqueuedCounter().get());
 
             // Trigger an internal error: handler should mark closing and close the channel after replying.
@@ -129,8 +128,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
             ch.writeInbound(new CustomCommand("PING", null));
             Assert.assertNull("expected no reply while executor is blocked", readOutbound(ch));
 
-            ServerSessionState session = ServerSessionState.getOrCreate(ch);
-            ServerRuntimeState rt = session.runtime();
+            ServerRuntimeState rt = ServerConnectionContext.getOrCreate(ch).runtime();
             Assert.assertEquals(2L, rt.commandsEnqueuedCounter().get());
 
             // Allow the executor to drain: the first task triggers an internal error on the executor thread.

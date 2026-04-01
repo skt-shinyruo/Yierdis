@@ -63,7 +63,7 @@ final class NettyCommandSubmitter {
         Objects.requireNonNull(ctx, "ctx");
         Objects.requireNonNull(cmd, "cmd");
         Channel ch = ctx.channel();
-        ServerRuntimeState conn = ServerRuntimeState.getOrCreate(ch);
+        ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
         if (!running.getAsBoolean()) {
             submitRejectedNotRunning.increment();
             conn.commandsRejectedCounter().incrementAndGet();
