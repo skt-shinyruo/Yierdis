@@ -8,6 +8,13 @@
 
 **Tech Stack:** Java 17, Maven multi-module reactor, Netty 4, JUnit 4
 
+**Status:** Completed in worktree `architecture-remediation`.
+
+**Verification completed on 2026-04-01:**
+- `mvn -pl yierdis-core/yierdis-core-runtime,yierdis-server -am -Dtest=YierdisInstanceTest,YierdisServerBootstrapCloseTest,NettyCommandExecutorTest,NettyCommandExecutorBackpressureTest,NettyCommandExecutorFairSchedulingTest,ClosingSkipSideEffectsIntegrationTest,ExpireIndexTest,ExpireSemanticsTest,MaxmemoryDoubleReplyRegressionTest,GlobalMaxmemoryLruAcrossDbsTest,ArchitectureBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test`
+- `mvn test`
+- `./scripts/smoke.sh`
+
 ---
 
 ### Task 1: Runtime Lifecycle Boundary Cleanup
@@ -20,25 +27,25 @@
 - Modify: `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/runtime/YierdisInstanceTest.java`
 - Modify: `yierdis-server/src/test/java/yier/bubu/redis/YierdisServerBootstrapCloseTest.java`
 
-- [ ] **Step 1: Add focused regression coverage**
+- [x] **Step 1: Add focused regression coverage**
 
 Cover:
 - maintenance should not require `DbEngine -> RuntimeDbEngine` cast at call sites
 - owner-thread close still runs on the executor thread
 - server bootstrap still schedules maintenance and shutdown correctly after the refactor
 
-- [ ] **Step 2: Introduce explicit runtime-only access**
+- [x] **Step 2: Introduce explicit runtime-only access**
 
 Add a package-local runtime access helper in `yierdis-core-runtime` that exposes runtime engines and owner-thread-only operations without reusing the public `DbEngine` API surface.
 
-- [ ] **Step 3: Refactor maintenance and close flows**
+- [x] **Step 3: Refactor maintenance and close flows**
 
 Update `YierdisInstanceMaintenance` and `YierdisServerBootstrap` so they use the new runtime helper instead of:
 - reading public `DbEngine` views
 - casting them back to `RuntimeDbEngine`
 - manually scattering owner-thread rules across bootstrap code
 
-- [ ] **Step 4: Run focused runtime/server tests**
+- [x] **Step 4: Run focused runtime/server tests**
 
 Run: `mvn -pl yierdis-core/yierdis-core-runtime,yierdis-server -am -Dtest=YierdisInstanceTest,YierdisServerBootstrapCloseTest -Dsurefire.failIfNoSpecifiedTests=false test`
 Expected: PASS
@@ -56,7 +63,7 @@ Expected: PASS
 - Modify: `yierdis-server/src/test/java/yier/bubu/redis/NettyCommandExecutorFairSchedulingTest.java`
 - Modify: `yierdis-server/src/test/java/yier/bubu/redis/ClosingSkipSideEffectsIntegrationTest.java`
 
-- [ ] **Step 1: Preserve current behavior with focused tests**
+- [x] **Step 1: Preserve current behavior with focused tests**
 
 Use the existing executor suites as the guardrail for:
 - reject reasons and busy replies
@@ -64,15 +71,15 @@ Use the existing executor suites as the guardrail for:
 - close-after-reply and skip-on-closing semantics
 - backpressure enter/exit behavior
 
-- [ ] **Step 2: Extract submission/backpressure orchestration**
+- [x] **Step 2: Extract submission/backpressure orchestration**
 
 Move the `trySubmitWithReason(...)` path plus the associated budget/accounting transitions into `NettyCommandSubmitter`, keeping `NettyCommandExecutor` as the façade.
 
-- [ ] **Step 3: Extract drain/execution orchestration**
+- [x] **Step 3: Extract drain/execution orchestration**
 
 Move `scheduleDrain`, `drainLoop`, `executeOne`, and the related reply/finish bookkeeping into a dedicated drain-loop collaborator. Keep public behavior and constructor signatures stable unless tests require a minimal adjustment.
 
-- [ ] **Step 4: Re-run focused executor/server tests**
+- [x] **Step 4: Re-run focused executor/server tests**
 
 Run: `mvn -pl yierdis-server -am -Dtest=NettyCommandExecutorTest,NettyCommandExecutorBackpressureTest,NettyCommandExecutorFairSchedulingTest,ClosingSkipSideEffectsIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`
 Expected: PASS
@@ -90,22 +97,22 @@ Expected: PASS
 - Modify: `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/ExpireSemanticsTest.java`
 - Modify: `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/MaxmemoryDoubleReplyRegressionTest.java`
 
-- [ ] **Step 1: Lock behavior with focused regression tests**
+- [x] **Step 1: Lock behavior with focused regression tests**
 
 Cover:
 - expiration cleanup still respects time budgets and lazy-delete semantics
 - maxmemory candidate sampling/eviction behavior is unchanged
 - global maxmemory integration still works across DBs
 
-- [ ] **Step 2: Extract expiration support**
+- [x] **Step 2: Extract expiration support**
 
 Move expiration-cleanup-specific logic out of `YierdisDb` into a package-local collaborator that owns the cleanup loop and related helper methods, while keeping the DB as the state owner.
 
-- [ ] **Step 3: Extract maxmemory support**
+- [x] **Step 3: Extract maxmemory support**
 
 Move maxmemory candidate selection, eviction, and related helper logic out of `YierdisDb` into a package-local collaborator. The DB should delegate to it rather than inline the full algorithm.
 
-- [ ] **Step 4: Re-run focused DB/runtime tests**
+- [x] **Step 4: Re-run focused DB/runtime tests**
 
 Run: `mvn -pl yierdis-core/yierdis-core-runtime -am -Dtest=ExpireIndexTest,ExpireSemanticsTest,MaxmemoryDoubleReplyRegressionTest,GlobalMaxmemoryLruAcrossDbsTest -Dsurefire.failIfNoSpecifiedTests=false test`
 Expected: PASS
@@ -118,18 +125,18 @@ Expected: PASS
 - Modify: `README.md`
 - Modify: `docs/superpowers/specs/2026-03-19-architecture-boundary-repair-design.md` (only if boundary wording is now stale)
 
-- [ ] **Step 1: Extend guardrails for the new seams**
+- [x] **Step 1: Extend guardrails for the new seams**
 
 Add checks that fail when:
 - runtime maintenance code casts public `DbEngine` views back to `RuntimeDbEngine`
 - `YierdisServerBootstrap` regains inline owner-thread lifecycle logic that belongs in runtime helpers
 - the extracted DB collaborators drift back into `YierdisDb`
 
-- [ ] **Step 2: Update the documented architecture**
+- [x] **Step 2: Update the documented architecture**
 
 Document the new runtime helper seam and the extracted DB collaborators so future changes follow the same direction instead of re-inlining logic.
 
-- [ ] **Step 3: Run focused guardrail tests**
+- [x] **Step 3: Run focused guardrail tests**
 
 Run: `mvn -pl yierdis-core/yierdis-core-runtime -am -Dtest=ArchitectureBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test`
 Expected: PASS
@@ -140,17 +147,17 @@ Expected: PASS
 **Files:**
 - No new files expected
 
-- [ ] **Step 1: Run the targeted multi-module suites**
+- [x] **Step 1: Run the targeted multi-module suites**
 
 Run: `mvn -pl yierdis-core/yierdis-core-runtime,yierdis-server -am test`
 Expected: PASS
 
-- [ ] **Step 2: Review diff shape**
+- [x] **Step 2: Review diff shape**
 
 Run: `git diff --stat`
 Expected: runtime/server/core-db changes align with the three planned tracks and guardrail/docs updates.
 
-- [ ] **Step 3: Run repository smoke verification if targeted suites pass cleanly**
+- [x] **Step 3: Run repository smoke verification if targeted suites pass cleanly**
 
 Run: `mvn test`
 Expected: PASS
