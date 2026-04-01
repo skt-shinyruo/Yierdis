@@ -59,14 +59,8 @@ public final class CommandDescriptor {
                 return -1;
             case "ECHO":
                 return 2;
-            case "HELLO":
-                return -1;
             case "COMMAND":
                 return -1;
-            case "INFO":
-                return -1;
-            case "STATS":
-                return 1;
             case "SELECT":
                 return 2;
             case "QUIT":
@@ -133,10 +127,7 @@ public final class CommandDescriptor {
         switch (nameUpper) {
             case "PING":
             case "ECHO":
-            case "HELLO":
             case "COMMAND":
-            case "INFO":
-            case "STATS":
             case "QUIT":
             case "FLUSHDB":
             case "SELECT":
@@ -161,10 +152,7 @@ public final class CommandDescriptor {
                 return -1;
             case "PING":
             case "ECHO":
-            case "HELLO":
             case "COMMAND":
-            case "INFO":
-            case "STATS":
             case "SELECT":
             case "QUIT":
             case "FLUSHDB":
@@ -184,10 +172,7 @@ public final class CommandDescriptor {
         switch (nameUpper) {
             case "PING":
             case "ECHO":
-            case "HELLO":
             case "COMMAND":
-            case "INFO":
-            case "STATS":
             case "QUIT":
             case "FLUSHDB":
             case "SELECT":

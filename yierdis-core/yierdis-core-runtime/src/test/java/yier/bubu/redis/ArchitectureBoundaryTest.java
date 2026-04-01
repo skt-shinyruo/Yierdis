@@ -123,6 +123,18 @@ public class ArchitectureBoundaryTest {
                 "case \"INFO\":",
                 "case \"STATS\":"
         );
+        Path descriptorFile = repoRoot.resolve(
+                "yierdis-core-command/src/main/java/yier/bubu/redis/command/CommandDescriptor.java"
+        );
+        Assert.assertTrue("缺少 CommandDescriptor.java，无法执行 COMMAND descriptor 护栏", Files.isRegularFile(descriptorFile));
+        scanFileForForbiddenText(
+                repoRoot,
+                descriptorFile,
+                offenders,
+                "case \"HELLO\":",
+                "case \"INFO\":",
+                "case \"STATS\":"
+        );
 
         if (!offenders.isEmpty()) {
             Assert.fail(
