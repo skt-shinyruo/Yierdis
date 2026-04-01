@@ -111,6 +111,18 @@ public class ArchitectureBoundaryTest {
                 "register(\"INFO\"",
                 "register(\"STATS\""
         );
+        Path coreConnectionFile = repoRoot.resolve(
+                "yierdis-core-command/src/main/java/yier/bubu/redis/command/CoreConnectionCommands.java"
+        );
+        Assert.assertTrue("缺少 CoreConnectionCommands.java，无法执行 COMMAND metadata 护栏", Files.isRegularFile(coreConnectionFile));
+        scanFileForForbiddenText(
+                repoRoot,
+                coreConnectionFile,
+                offenders,
+                "case \"HELLO\":",
+                "case \"INFO\":",
+                "case \"STATS\":"
+        );
 
         if (!offenders.isEmpty()) {
             Assert.fail(

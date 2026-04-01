@@ -5,6 +5,8 @@ import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ServerSession;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -122,7 +124,7 @@ final class CoreConnectionCommands {
             String[] names = registry.upperNamesSorted();
             out.arrayHeader(names.length);
             for (String upper : names) {
-                writeCommandInfo(out, upper);
+                writeCommandInfo(out, upper, registry.descriptorByUpperName(upper));
             }
             return;
         }
@@ -149,12 +151,13 @@ final class CoreConnectionCommands {
                     out.nullArray();
                     continue;
                 }
-                upper = upper.trim().toUpperCase(java.util.Locale.ROOT);
-                if (!registry.containsUpperName(upper)) {
+                upper = upper.trim().toUpperCase(Locale.ROOT);
+                CommandDescriptor descriptor = registry.descriptorByUpperName(upper);
+                if (descriptor == null) {
                     out.nullArray();
                     continue;
                 }
-                writeCommandInfo(out, upper);
+                writeCommandInfo(out, upper, descriptor);
             }
             return;
         }
@@ -162,168 +165,16 @@ final class CoreConnectionCommands {
         out.error("ERR syntax error");
     }
 
-    private static void writeCommandInfo(ReplyWriter out, String nameUpper) {
-        int arity = commandArity(nameUpper);
-        int firstKey = firstKeyIndex(nameUpper);
-        int lastKey = lastKeyIndex(nameUpper);
-        int step = keyStep(nameUpper);
-
+    private static void writeCommandInfo(ReplyWriter out, String nameUpper, CommandDescriptor descriptor) {
+        CommandDescriptor effective = descriptor == null
+                ? CommandDescriptor.defaultForNameUpper(nameUpper)
+                : descriptor;
         out.arrayHeader(6);
-        out.bulkString(nameUpper.toLowerCase(java.util.Locale.ROOT).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
-        out.integer(arity);
+        out.bulkString(nameUpper.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII));
+        out.integer(effective.arity());
         out.arrayHeader(0);
-        out.integer(firstKey);
-        out.integer(lastKey);
-        out.integer(step);
-    }
-
-    private static int commandArity(String nameUpper) {
-        if (nameUpper == null) {
-            return -1;
-        }
-        switch (nameUpper) {
-            case "PING":
-                return -1;
-            case "ECHO":
-                return 2;
-            case "HELLO":
-                return -1;
-            case "COMMAND":
-                return -1;
-            case "INFO":
-                return -1;
-            case "STATS":
-                return 1;
-            case "SELECT":
-                return 2;
-            case "QUIT":
-            case "FLUSHDB":
-                return 1;
-            case "TYPE":
-            case "KEYS":
-            case "TTL":
-            case "GET":
-            case "STRLEN":
-            case "INCR":
-            case "DECR":
-            case "SMEMBERS":
-            case "SCARD":
-            case "HGETALL":
-            case "HLEN":
-                return 2;
-            case "EXPIRE":
-            case "APPEND":
-            case "HGET":
-            case "SISMEMBER":
-            case "GETBIT":
-                return 3;
-            case "SETBIT":
-            case "LRANGE":
-            case "ZREMRANGEBYRANK":
-            case "ZREMRANGEBYSCORE":
-                return 4;
-            case "DEL":
-            case "EXISTS":
-            case "MEMORY":
-            case "OBJECT":
-            case "BITCOUNT":
-            case "LPOP":
-            case "RPOP":
-            case "PFCOUNT":
-                return -2;
-            case "SET":
-            case "LPUSH":
-            case "RPUSH":
-            case "SADD":
-            case "SREM":
-            case "HDEL":
-            case "ZREM":
-            case "PFADD":
-            case "PFMERGE":
-                return -3;
-            case "HSET":
-            case "ZADD":
-            case "ZRANGE":
-            case "ZREVRANGE":
-            case "ZRANGEBYSCORE":
-            case "ZREVRANGEBYSCORE":
-                return -4;
-            default:
-                return -1;
-        }
-    }
-
-    private static int firstKeyIndex(String nameUpper) {
-        if (nameUpper == null) {
-            return 0;
-        }
-        switch (nameUpper) {
-            case "PING":
-            case "ECHO":
-            case "HELLO":
-            case "COMMAND":
-            case "INFO":
-            case "STATS":
-            case "QUIT":
-            case "FLUSHDB":
-            case "SELECT":
-            case "KEYS":
-            case "MEMORY":
-            case "OBJECT":
-                return 0;
-            default:
-                return 1;
-        }
-    }
-
-    private static int lastKeyIndex(String nameUpper) {
-        if (nameUpper == null) {
-            return 0;
-        }
-        switch (nameUpper) {
-            case "DEL":
-            case "EXISTS":
-            case "PFCOUNT":
-            case "PFMERGE":
-                return -1;
-            case "PING":
-            case "ECHO":
-            case "HELLO":
-            case "COMMAND":
-            case "INFO":
-            case "STATS":
-            case "SELECT":
-            case "QUIT":
-            case "FLUSHDB":
-            case "KEYS":
-            case "MEMORY":
-            case "OBJECT":
-                return 0;
-            default:
-                return 1;
-        }
-    }
-
-    private static int keyStep(String nameUpper) {
-        if (nameUpper == null) {
-            return 0;
-        }
-        switch (nameUpper) {
-            case "PING":
-            case "ECHO":
-            case "HELLO":
-            case "COMMAND":
-            case "INFO":
-            case "STATS":
-            case "QUIT":
-            case "FLUSHDB":
-            case "SELECT":
-            case "KEYS":
-            case "MEMORY":
-            case "OBJECT":
-                return 0;
-            default:
-                return 1;
-        }
+        out.integer(effective.firstKeyIndex());
+        out.integer(effective.lastKeyIndex());
+        out.integer(effective.keyStep());
     }
 }

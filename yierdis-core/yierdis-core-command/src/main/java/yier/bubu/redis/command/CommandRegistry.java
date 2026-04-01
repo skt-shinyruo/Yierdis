@@ -27,12 +27,20 @@ final class CommandRegistry implements CommandModule.Registration {
         private final byte[] nameUpperAscii;
         private final long hash;
         private final CommandModule.Handler handler;
+        private final CommandDescriptor descriptor;
         private final String disallowedInMultiError;
 
-        private Entry(byte[] nameUpperAscii, long hash, CommandModule.Handler handler, String disallowedInMultiError) {
+        private Entry(
+                byte[] nameUpperAscii,
+                long hash,
+                CommandModule.Handler handler,
+                CommandDescriptor descriptor,
+                String disallowedInMultiError
+        ) {
             this.nameUpperAscii = Objects.requireNonNull(nameUpperAscii, "nameUpperAscii");
             this.hash = hash;
             this.handler = Objects.requireNonNull(handler, "handler");
+            this.descriptor = Objects.requireNonNull(descriptor, "descriptor");
             this.disallowedInMultiError = disallowedInMultiError;
         }
     }
@@ -45,7 +53,12 @@ final class CommandRegistry implements CommandModule.Registration {
 
     @Override
     public void register(String name, CommandModule.Handler handler) {
-        registerInternal(name, handler, null);
+        registerInternal(name, handler, null, null);
+    }
+
+    @Override
+    public void register(String name, CommandModule.Handler handler, CommandDescriptor descriptor) {
+        registerInternal(name, handler, descriptor, null);
     }
 
     @Override
@@ -53,10 +66,28 @@ final class CommandRegistry implements CommandModule.Registration {
         if (errorMessage == null || errorMessage.isBlank()) {
             throw new IllegalArgumentException("errorMessage must not be blank");
         }
-        registerInternal(name, handler, errorMessage);
+        registerInternal(name, handler, null, errorMessage);
     }
 
-    private void registerInternal(String name, CommandModule.Handler handler, String disallowedInMultiError) {
+    @Override
+    public void registerDisallowedInMulti(
+            String name,
+            CommandModule.Handler handler,
+            CommandDescriptor descriptor,
+            String errorMessage
+    ) {
+        if (errorMessage == null || errorMessage.isBlank()) {
+            throw new IllegalArgumentException("errorMessage must not be blank");
+        }
+        registerInternal(name, handler, descriptor, errorMessage);
+    }
+
+    private void registerInternal(
+            String name,
+            CommandModule.Handler handler,
+            CommandDescriptor descriptor,
+            String disallowedInMultiError
+    ) {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(handler, "handler");
         String nameUpper = name.trim().toUpperCase(Locale.ROOT);
@@ -73,7 +104,10 @@ final class CommandRegistry implements CommandModule.Registration {
 
         byte[] ascii = asciiUpperBytes(nameUpper);
         long hash = hashUpperAscii(ascii, 0, ascii.length);
-        insert(new Entry(ascii, hash, handler, disallowedInMultiError));
+        CommandDescriptor effectiveDescriptor = descriptor == null
+                ? CommandDescriptor.defaultForNameUpper(nameUpper)
+                : descriptor;
+        insert(new Entry(ascii, hash, handler, effectiveDescriptor, disallowedInMultiError));
     }
 
     CommandModule.Handler find(Command cmd) {
@@ -84,6 +118,29 @@ final class CommandRegistry implements CommandModule.Registration {
     String disallowedInMultiError(Command cmd) {
         Entry entry = findEntry(cmd);
         return entry == null ? null : entry.disallowedInMultiError;
+    }
+
+    CommandDescriptor descriptor(Command cmd) {
+        Entry entry = findEntry(cmd);
+        return entry == null ? null : entry.descriptor;
+    }
+
+    CommandDescriptor descriptorByUpperName(String nameUpper) {
+        if (nameUpper == null || nameUpper.isBlank()) {
+            return null;
+        }
+        String normalized = nameUpper.trim().toUpperCase(Locale.ROOT);
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        byte[] ascii;
+        try {
+            ascii = asciiUpperBytes(normalized);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+        Entry entry = findEntry(ascii);
+        return entry == null ? null : entry.descriptor;
     }
 
     private Entry findEntry(Command cmd) {
@@ -106,6 +163,24 @@ final class CommandRegistry implements CommandModule.Registration {
                 return null;
             }
             if (e.hash == hash && e.nameUpperAscii.length == len && asciiEqualsIgnoreCase(cmd, 0, e.nameUpperAscii)) {
+                return e;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+
+    private Entry findEntry(byte[] nameUpperAscii) {
+        if (nameUpperAscii == null || nameUpperAscii.length == 0) {
+            return null;
+        }
+        long hash = hashUpperAscii(nameUpperAscii, 0, nameUpperAscii.length);
+        int idx = index(hash);
+        for (; ; ) {
+            Entry e = table[idx];
+            if (e == null) {
+                return null;
+            }
+            if (e.hash == hash && Arrays.equals(e.nameUpperAscii, nameUpperAscii)) {
                 return e;
             }
             idx = (idx + 1) & mask;

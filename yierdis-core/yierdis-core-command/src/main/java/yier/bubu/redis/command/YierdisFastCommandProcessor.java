@@ -258,8 +258,23 @@ public final class YierdisFastCommandProcessor {
             }
 
             @Override
+            public void register(String name, CommandModule.Handler handler, CommandDescriptor descriptor) {
+                registry.register(name, handler, descriptor);
+            }
+
+            @Override
             public void registerDisallowedInMulti(String name, CommandModule.Handler handler, String errorMessage) {
                 registry.registerDisallowedInMulti(name, handler, errorMessage);
+            }
+
+            @Override
+            public void registerDisallowedInMulti(
+                    String name,
+                    CommandModule.Handler handler,
+                    CommandDescriptor descriptor,
+                    String errorMessage
+            ) {
+                registry.registerDisallowedInMulti(name, handler, descriptor, errorMessage);
             }
 
             @Override

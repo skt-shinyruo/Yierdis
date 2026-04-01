@@ -60,13 +60,13 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertTrue(mapContainsKey(statsResult, "queued_tasks"));
                 Assert.assertTrue(mapContainsKey(statsResult, "commands_executed_total"));
 
-                JsonObject command = roundTrip(out, in, "{\"cmd\":\"COMMAND\",\"args\":[\"INFO\",\"HELLO\"]}");
+                JsonObject command = roundTrip(out, in, "{\"cmd\":\"COMMAND\",\"args\":[\"INFO\",\"HELLO\",\"INFO\",\"STATS\"]}");
                 Assert.assertTrue(booleanField(command, "ok"));
                 JsonArray commandResult = arrayField(command, "result");
-                Assert.assertEquals(1, commandResult.values().size());
-                Assert.assertTrue(commandResult.values().get(0) instanceof JsonArray);
-                JsonArray helloInfo = (JsonArray) commandResult.values().get(0);
-                Assert.assertEquals("hello", stringValue(helloInfo.values().get(0)));
+                Assert.assertEquals(3, commandResult.values().size());
+                assertCommandInfo(commandResult.values().get(0), "hello", -1L, 0L, 0L, 0L);
+                assertCommandInfo(commandResult.values().get(1), "info", -1L, 0L, 0L, 0L);
+                assertCommandInfo(commandResult.values().get(2), "stats", 1L, 0L, 0L, 0L);
 
                 JsonObject select = roundTrip(out, in, "{\"cmd\":\"SELECT\",\"args\":[\"1\"]}");
                 Assert.assertTrue(booleanField(select, "ok"));
@@ -249,6 +249,25 @@ public class YierdisServerBootstrapCommandWiringTest {
         JsonValue v = map.get(key);
         Assert.assertNotNull("missing field: " + key, v);
         return v;
+    }
+
+    private static void assertCommandInfo(
+            JsonValue value,
+            String expectedName,
+            long expectedArity,
+            long expectedFirstKey,
+            long expectedLastKey,
+            long expectedStep
+    ) {
+        Assert.assertTrue("expected command info array", value instanceof JsonArray);
+        JsonArray info = (JsonArray) value;
+        Assert.assertEquals(6, info.values().size());
+        Assert.assertEquals(expectedName, stringValue(info.values().get(0)));
+        Assert.assertEquals(expectedArity, longValue(info.values().get(1)));
+        Assert.assertTrue("expected flags array", info.values().get(2) instanceof JsonArray);
+        Assert.assertEquals(expectedFirstKey, longValue(info.values().get(3)));
+        Assert.assertEquals(expectedLastKey, longValue(info.values().get(4)));
+        Assert.assertEquals(expectedStep, longValue(info.values().get(5)));
     }
 
     private static YierdisServerRuntimeConfig runtimeConfig(

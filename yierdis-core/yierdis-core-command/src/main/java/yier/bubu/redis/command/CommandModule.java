@@ -16,8 +16,21 @@ public interface CommandModule {
     interface Registration {
         void register(String name, Handler handler);
 
+        default void register(String name, Handler handler, CommandDescriptor descriptor) {
+            register(name, handler);
+        }
+
         default void registerDisallowedInMulti(String name, Handler handler, String errorMessage) {
             register(name, handler);
+        }
+
+        default void registerDisallowedInMulti(
+                String name,
+                Handler handler,
+                CommandDescriptor descriptor,
+                String errorMessage
+        ) {
+            registerDisallowedInMulti(name, handler, errorMessage);
         }
 
         int commandCount();
