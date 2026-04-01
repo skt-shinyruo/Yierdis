@@ -21,7 +21,11 @@ public class CommandMetadataRegressionTest {
                     db,
                     null,
                     SlowCommandGovernor.DEFAULT,
-                    registration -> registration.register("HELLO", (cmd, ctx) -> ctx.out().simpleString("OK"))
+                    registration -> registration.register(
+                            "HELLO",
+                            (cmd, ctx) -> ctx.out().simpleString("OK"),
+                            CommandDescriptor.of(-1, 0, 0, 0)
+                    )
             );
             try (FastTestClient client = new FastTestClient(processor)) {
                 ReplyArray info = (ReplyArray) client.execute(Arrays.asList(
