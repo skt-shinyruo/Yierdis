@@ -20,18 +20,40 @@ public class ReplySsoTGuardTest {
 
         List<String> offenders = new ArrayList<>();
         int scanned = 0;
-        scanned += scanForForbiddenText(
+        scanned += scanForForbiddenTexts(
                 workspaceRoot,
                 workspaceRoot.resolve("yierdis-server/src/main/java"),
                 offenders,
-                "ReplyValue"
+                "import yier.bubu.redis.protocol.reply.ReplyValue;",
+                "import yier.bubu.redis.protocol.reply.ReplyNull;",
+                "import yier.bubu.redis.protocol.reply.ReplyBoolean;",
+                "import yier.bubu.redis.protocol.reply.ReplyLong;",
+                "import yier.bubu.redis.protocol.reply.ReplyDouble;",
+                "import yier.bubu.redis.protocol.reply.ReplyString;",
+                "import yier.bubu.redis.protocol.reply.ReplyBytes;",
+                "import yier.bubu.redis.protocol.reply.ReplyArray;",
+                "import yier.bubu.redis.protocol.reply.ReplyMap;",
+                "import yier.bubu.redis.protocol.reply.ReplyError;"
         );
-        scanned += scanCoreModulesForForbiddenText(workspaceRoot, offenders, "ReplyValue");
+        scanned += scanCoreModulesForForbiddenTexts(
+                workspaceRoot,
+                offenders,
+                "import yier.bubu.redis.protocol.reply.ReplyValue;",
+                "import yier.bubu.redis.protocol.reply.ReplyNull;",
+                "import yier.bubu.redis.protocol.reply.ReplyBoolean;",
+                "import yier.bubu.redis.protocol.reply.ReplyLong;",
+                "import yier.bubu.redis.protocol.reply.ReplyDouble;",
+                "import yier.bubu.redis.protocol.reply.ReplyString;",
+                "import yier.bubu.redis.protocol.reply.ReplyBytes;",
+                "import yier.bubu.redis.protocol.reply.ReplyArray;",
+                "import yier.bubu.redis.protocol.reply.ReplyMap;",
+                "import yier.bubu.redis.protocol.reply.ReplyError;"
+        );
 
         Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 server/core 生产代码重新引用 ReplyValue，可能将其作为 ReplyWriter 之外的回包语义 authority：\n"
+                    "检测到 server/core 生产代码重新引用 protocol reply model，可能将其作为 ReplyWriter 之外的回包语义 authority：\n"
                             + String.join("\n", offenders)
             );
         }
@@ -50,16 +72,22 @@ public class ReplySsoTGuardTest {
                 offenders,
                 "CustomProtocolV1NdjsonEncoder.writeOkEnvelope(",
                 "CustomProtocolV1NdjsonEncoder.writeValue(",
+                "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.*;",
                 "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.writeOkEnvelope;",
-                "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.writeValue;"
+                "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.writeValue;",
+                "writeOkEnvelope(",
+                "writeValue("
         );
         scanned += scanCoreModulesForForbiddenTexts(
                 workspaceRoot,
                 offenders,
                 "CustomProtocolV1NdjsonEncoder.writeOkEnvelope(",
                 "CustomProtocolV1NdjsonEncoder.writeValue(",
+                "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.*;",
                 "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.writeOkEnvelope;",
-                "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.writeValue;"
+                "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.writeValue;",
+                "writeOkEnvelope(",
+                "writeValue("
         );
 
         Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
