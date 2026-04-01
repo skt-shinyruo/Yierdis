@@ -87,6 +87,43 @@ public class ReplySsoTGuardTest {
     }
 
     @Test
+    public void protocolReplyModelDocumentationMustNotUseIrFraming() throws IOException {
+        Path workspaceRoot = resolveWorkspaceRoot();
+        Assert.assertNotNull("无法定位仓库根目录", workspaceRoot);
+
+        Path pomFile = workspaceRoot.resolve("yierdis-protocol/yierdis-protocol-model/pom.xml");
+        Assert.assertTrue("缺少 yierdis-protocol-model/pom.xml", Files.isRegularFile(pomFile));
+
+        String pom = Files.readString(pomFile, StandardCharsets.UTF_8);
+        Assert.assertFalse("protocol-model 模块描述不应再使用 Reply IR wording", pom.contains("Reply IR model"));
+
+        Path replyPackage = workspaceRoot.resolve(
+                "yierdis-protocol/yierdis-protocol-model/src/main/java/yier/bubu/redis/protocol/reply"
+        );
+        Assert.assertTrue("缺少 protocol reply package", Files.isDirectory(replyPackage));
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenTexts(
+                workspaceRoot,
+                replyPackage,
+                offenders,
+                "IR array 值",
+                "IR boolean 值",
+                "IR bytes 值",
+                "IR double 值",
+                "IR error 值",
+                "IR integer 值",
+                "IR map 值",
+                "IR null 值",
+                "IR string 值"
+        );
+        Assert.assertTrue("未扫描到任何 reply model Java 文件", scanned > 0);
+        if (!offenders.isEmpty()) {
+            Assert.fail("检测到 protocol reply model 仍使用 IR framing：\n" + String.join("\n", offenders));
+        }
+    }
+
+    @Test
     public void ndjsonEncoderDocumentationMustNotClaimServerReplySsot() throws IOException {
         Path workspaceRoot = resolveWorkspaceRoot();
         Assert.assertNotNull("无法定位仓库根目录", workspaceRoot);

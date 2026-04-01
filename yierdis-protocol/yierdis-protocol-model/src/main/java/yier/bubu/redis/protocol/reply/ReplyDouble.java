@@ -1,7 +1,7 @@
 package yier.bubu.redis.protocol.reply;
 
 /**
- * IR double 值（必须为 finite）。
+ * 协议侧 double 值（必须为 finite）。
  */
 public record ReplyDouble(double value) implements ReplyValue {
     public ReplyDouble {

@@ -4,7 +4,7 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * IR bytes 值（bulk string 语义）。
+ * 协议侧 bytes 值（bulk string 语义）。
  * <p>
  * 注意：该类型表达“字节序列”的语义，encoder 可以选择 UTF-8 string 或 base64 tagged value 的 wire 表示。
  */

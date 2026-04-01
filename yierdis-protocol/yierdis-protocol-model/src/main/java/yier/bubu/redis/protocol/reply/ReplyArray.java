@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * IR array 值。
+ * 协议侧 array 值。
  */
 public final class ReplyArray implements ReplyValue {
     private final List<ReplyValue> values;

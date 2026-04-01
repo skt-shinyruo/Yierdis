@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * IR map 值（entry 列表，key/value 均为 ReplyValue）。
+ * 协议侧 map 值（entry 列表，key/value 均为 ReplyValue）。
  * <p>
  * 注意：该模型不依赖 JSON object key 只能为 string 的限制。
  */
