@@ -19,7 +19,7 @@ public class OffHeapCollectionReadStreamingTest {
     @Test
     public void lrangeStreamsOffHeapSlices() {
         withDb(db -> {
-            db.rpush(b("list"), List.of(b("a"), b("b"), b("c")));
+            db.writes().lists().rpush(b("list"), List.of(b("a"), b("b"), b("c")));
 
             RecordingBulkSequenceOutput out = new RecordingBulkSequenceOutput();
             BulkStringSequence seq = db.reads().lists().lrange(b("list"), 0, -1);
@@ -34,7 +34,7 @@ public class OffHeapCollectionReadStreamingTest {
     @Test
     public void smembersStreamsOffHeapSlices() {
         withDb(db -> {
-            db.sadd(b("set"), List.of(b("alpha"), b("beta")));
+            db.writes().sets().sadd(b("set"), List.of(b("alpha"), b("beta")));
 
             RecordingBulkSequenceOutput out = new RecordingBulkSequenceOutput();
             BulkStringSequence seq = db.reads().sets().smembers(b("set"));
@@ -50,7 +50,7 @@ public class OffHeapCollectionReadStreamingTest {
     @Test
     public void hgetallStreamsOffHeapSlices() {
         withDb(db -> {
-            db.hset(b("hash"), List.of(b("field"), b("value")));
+            db.writes().hashes().hset(b("hash"), List.of(b("field"), b("value")));
 
             RecordingBulkSequenceOutput out = new RecordingBulkSequenceOutput();
             BulkStringMapPairs pairs = db.reads().hashes().hgetall(b("hash"));
@@ -65,7 +65,7 @@ public class OffHeapCollectionReadStreamingTest {
     @Test
     public void zrangeStreamsOffHeapSlices() {
         withDb(db -> {
-            db.zadd(b("z"), List.of(b("1"), b("m1"), b("2"), b("m2")));
+            db.writes().zsets().zadd(b("z"), List.of(b("1"), b("m1"), b("2"), b("m2")));
 
             RecordingBulkSequenceOutput out = new RecordingBulkSequenceOutput();
             BulkStringSequence seq = db.reads().zsets().zrange(b("z"), 0, -1, false);

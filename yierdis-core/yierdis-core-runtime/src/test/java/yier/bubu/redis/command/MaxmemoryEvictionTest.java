@@ -58,23 +58,23 @@ public class MaxmemoryEvictionTest {
     @Test
     public void noevictionAllowsCollectionWritesWhenHeadroomMatchesRealDelta() {
         assertCollectionWriteSucceedsAtRealDelta(
-                db -> db.rpush(b("l"), List.of(b("a"), b("b"), b("c"), b("d"))),
-                db -> db.lpush(b("l"), List.of(repeat((byte) 'x', 24))),
+                db -> db.writes().lists().rpush(b("l"), List.of(b("a"), b("b"), b("c"), b("d"))),
+                db -> db.writes().lists().lpush(b("l"), List.of(repeat((byte) 'x', 24))),
                 List.of(b("LPUSH"), b("l"), repeat((byte) 'x', 24))
         );
         assertCollectionWriteSucceedsAtRealDelta(
-                db -> db.hset(b("h"), List.of(b("f1"), b("v1"), b("f2"), b("v2"))),
-                db -> db.hset(b("h"), List.of(b("f3"), repeat((byte) 'v', 24))),
+                db -> db.writes().hashes().hset(b("h"), List.of(b("f1"), b("v1"), b("f2"), b("v2"))),
+                db -> db.writes().hashes().hset(b("h"), List.of(b("f3"), repeat((byte) 'v', 24))),
                 List.of(b("HSET"), b("h"), b("f3"), repeat((byte) 'v', 24))
         );
         assertCollectionWriteSucceedsAtRealDelta(
-                db -> db.sadd(b("s"), List.of(b("alpha"), b("beta"), b("gamma"))),
-                db -> db.sadd(b("s"), List.of(repeat((byte) 'm', 24))),
+                db -> db.writes().sets().sadd(b("s"), List.of(b("alpha"), b("beta"), b("gamma"))),
+                db -> db.writes().sets().sadd(b("s"), List.of(repeat((byte) 'm', 24))),
                 List.of(b("SADD"), b("s"), repeat((byte) 'm', 24))
         );
         assertCollectionWriteSucceedsAtRealDelta(
-                db -> db.zadd(b("z"), List.of(b("1"), b("alpha"), b("2"), b("beta"), b("3"), b("gamma"))),
-                db -> db.zadd(b("z"), List.of(b("4"), repeat((byte) 'z', 24))),
+                db -> db.writes().zsets().zadd(b("z"), List.of(b("1"), b("alpha"), b("2"), b("beta"), b("3"), b("gamma"))),
+                db -> db.writes().zsets().zadd(b("z"), List.of(b("4"), repeat((byte) 'z', 24))),
                 List.of(b("ZADD"), b("z"), b("4"), repeat((byte) 'z', 24))
         );
     }

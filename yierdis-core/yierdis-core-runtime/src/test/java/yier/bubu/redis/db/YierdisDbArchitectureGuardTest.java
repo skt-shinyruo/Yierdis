@@ -22,6 +22,16 @@ public class YierdisDbArchitectureGuardTest {
         Assert.assertNull(findDeclaredMethod(YierdisDb.class, "getStringBytes", byte[].class));
         Assert.assertNull(findDeclaredMethod(YierdisDb.class, "expire", BytesView.class, long.class));
         Assert.assertNull(findDeclaredMethod(YierdisDb.class, "keys", byte[].class, int.class, long.class));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "hset", byte[].class, java.util.List.class));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "hget", byte[].class, byte[].class));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "lpush", byte[].class, java.util.List.class));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "lrange", byte[].class, int.class, int.class));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "sadd", byte[].class, java.util.List.class));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "smembers", byte[].class));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "zadd", byte[].class, java.util.List.class));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "zrange", byte[].class, long.class, long.class, boolean.class));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "pfadd", byte[].class, java.util.List.class));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "pfcount", java.util.List.class));
     }
 
     private static Method findDeclaredMethod(Class<?> type, String name, Class<?>... parameterTypes) {

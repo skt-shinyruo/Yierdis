@@ -70,7 +70,7 @@ public class OffHeapStringStorageTest {
             db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
             Assert.assertTrue(allocator.usedBytes() > 0);
 
-            db.lpush(key, List.of(b("a")));
+            db.writes().lists().lpush(key, List.of(b("a")));
 
             Assert.assertEquals(0L, allocator.usedBytes());
             Assert.assertEquals(ValueType.LIST, db.reads().keyspace().typeOf(new TestBytesView(key)));

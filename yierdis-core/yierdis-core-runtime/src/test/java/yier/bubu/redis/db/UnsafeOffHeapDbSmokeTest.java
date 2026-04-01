@@ -19,34 +19,79 @@ public class UnsafeOffHeapDbSmokeTest {
             Assert.assertTrue(db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null));
             Assert.assertArrayEquals(b("v"), db.reads().strings().getStringBytes(b("s")));
 
-            Assert.assertEquals(3, db.rpush(b("l"), List.of(b("a"), b("b"), b("c"))));
-            List<byte[]> range = db.lrange(b("l"), 0, -1);
-            Assert.assertEquals(3, range.size());
-            Assert.assertArrayEquals(b("a"), range.get(0));
-            Assert.assertArrayEquals(b("b"), range.get(1));
-            Assert.assertArrayEquals(b("c"), range.get(2));
+            Assert.assertEquals(3, db.writes().lists().rpush(b("l"), List.of(b("a"), b("b"), b("c"))));
+            var range = db.reads().lists().lrange(b("l"), 0, -1);
+            Assert.assertEquals(3, range.count());
+            RecordingBulkSequenceOutput rangeOut = new RecordingBulkSequenceOutput();
+            range.emitTo(rangeOut);
+            Assert.assertEquals(3, rangeOut.values.size());
+            Assert.assertArrayEquals(b("a"), rangeOut.values.get(0));
+            Assert.assertArrayEquals(b("b"), rangeOut.values.get(1));
+            Assert.assertArrayEquals(b("c"), rangeOut.values.get(2));
 
-            Assert.assertEquals(2, db.hset(b("h"), List.of(b("f1"), b("v1"), b("f2"), b("v2"))));
-            Assert.assertArrayEquals(b("v1"), db.hget(b("h"), b("f1")));
+            Assert.assertEquals(2, db.writes().hashes().hset(b("h"), List.of(b("f1"), b("v1"), b("f2"), b("v2"))));
+            Assert.assertArrayEquals(b("v1"), db.reads().hashes().hget(b("h"), b("f1")));
             Assert.assertEquals(2, db.reads().hashes().hgetall(b("h")).pairCount());
 
-            Assert.assertEquals(3, db.sadd(b("set"), List.of(b("x"), b("y"), b("z"))));
-            Assert.assertTrue(db.sismember(b("set"), b("y")));
-            Assert.assertEquals(3, db.scard(b("set")));
+            Assert.assertEquals(3, db.writes().sets().sadd(b("set"), List.of(b("x"), b("y"), b("z"))));
+            Assert.assertTrue(db.reads().sets().sismember(b("set"), b("y")));
+            Assert.assertEquals(3, db.reads().sets().scard(b("set")));
 
-            Assert.assertEquals(3, db.zadd(b("z"), List.of(
+            Assert.assertEquals(3, db.writes().zsets().zadd(b("z"), List.of(
                     b("1"), b("a"),
                     b("1"), b("b"),
                     b("0"), b("c")
             )));
-            List<byte[]> zrange = db.zrange(b("z"), 0, -1, false);
-            Assert.assertEquals(3, zrange.size());
-            Assert.assertArrayEquals(b("c"), zrange.get(0));
-            Assert.assertArrayEquals(b("a"), zrange.get(1));
-            Assert.assertArrayEquals(b("b"), zrange.get(2));
+            var zrange = db.reads().zsets().zrange(b("z"), 0, -1, false);
+            Assert.assertEquals(3, zrange.count());
+            RecordingBulkSequenceOutput zrangeOut = new RecordingBulkSequenceOutput();
+            zrange.emitTo(zrangeOut);
+            Assert.assertEquals(3, zrangeOut.values.size());
+            Assert.assertArrayEquals(b("c"), zrangeOut.values.get(0));
+            Assert.assertArrayEquals(b("a"), zrangeOut.values.get(1));
+            Assert.assertArrayEquals(b("b"), zrangeOut.values.get(2));
         } finally {
             // 关闭 allocator；如果有内存泄漏会抛异常。
             db.shutdown();
+        }
+    }
+
+    private static final class RecordingBulkSequenceOutput implements yier.bubu.redis.ops.result.BulkStringSink {
+        private final java.util.List<byte[]> values = new java.util.ArrayList<>();
+
+        @Override
+        public void bulkString(byte[] data) {
+            values.add(copy(data, 0, data == null ? 0 : data.length));
+        }
+
+        @Override
+        public void bulkString(byte[] data, int off, int len) {
+            values.add(copy(data, off, len));
+        }
+
+        @Override
+        public void bulkString(yier.bubu.redis.bytes.BytesSlice slice) {
+            if (slice == null) {
+                values.add(null);
+                return;
+            }
+            byte[] data = new byte[slice.length()];
+            slice.getBytes(0, data, 0, data.length);
+            values.add(data);
+        }
+
+        @Override
+        public void bulkStringLongAscii(long value) {
+            values.add(Long.toString(value).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        }
+
+        private static byte[] copy(byte[] data, int off, int len) {
+            if (data == null) {
+                return null;
+            }
+            byte[] copy = new byte[len];
+            System.arraycopy(data, off, copy, 0, len);
+            return copy;
         }
     }
 }
