@@ -20,34 +20,14 @@ public class ReplySsoTGuardTest {
 
         List<String> offenders = new ArrayList<>();
         int scanned = 0;
-        scanned += scanForForbiddenTexts(
+        scanned += scanForProtocolReplyModelAuthorityLeaks(
                 workspaceRoot,
                 workspaceRoot.resolve("yierdis-server/src/main/java"),
-                offenders,
-                "import yier.bubu.redis.protocol.reply.ReplyValue;",
-                "import yier.bubu.redis.protocol.reply.ReplyNull;",
-                "import yier.bubu.redis.protocol.reply.ReplyBoolean;",
-                "import yier.bubu.redis.protocol.reply.ReplyLong;",
-                "import yier.bubu.redis.protocol.reply.ReplyDouble;",
-                "import yier.bubu.redis.protocol.reply.ReplyString;",
-                "import yier.bubu.redis.protocol.reply.ReplyBytes;",
-                "import yier.bubu.redis.protocol.reply.ReplyArray;",
-                "import yier.bubu.redis.protocol.reply.ReplyMap;",
-                "import yier.bubu.redis.protocol.reply.ReplyError;"
+                offenders
         );
-        scanned += scanCoreModulesForForbiddenTexts(
+        scanned += scanCoreModulesForProtocolReplyModelAuthorityLeaks(
                 workspaceRoot,
-                offenders,
-                "import yier.bubu.redis.protocol.reply.ReplyValue;",
-                "import yier.bubu.redis.protocol.reply.ReplyNull;",
-                "import yier.bubu.redis.protocol.reply.ReplyBoolean;",
-                "import yier.bubu.redis.protocol.reply.ReplyLong;",
-                "import yier.bubu.redis.protocol.reply.ReplyDouble;",
-                "import yier.bubu.redis.protocol.reply.ReplyString;",
-                "import yier.bubu.redis.protocol.reply.ReplyBytes;",
-                "import yier.bubu.redis.protocol.reply.ReplyArray;",
-                "import yier.bubu.redis.protocol.reply.ReplyMap;",
-                "import yier.bubu.redis.protocol.reply.ReplyError;"
+                offenders
         );
 
         Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
@@ -66,28 +46,14 @@ public class ReplySsoTGuardTest {
 
         List<String> offenders = new ArrayList<>();
         int scanned = 0;
-        scanned += scanForForbiddenTexts(
+        scanned += scanForEncoderAuthorityHelperLeaks(
                 workspaceRoot,
                 workspaceRoot.resolve("yierdis-server/src/main/java"),
-                offenders,
-                "CustomProtocolV1NdjsonEncoder.writeOkEnvelope(",
-                "CustomProtocolV1NdjsonEncoder.writeValue(",
-                "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.*;",
-                "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.writeOkEnvelope;",
-                "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.writeValue;",
-                "writeOkEnvelope(",
-                "writeValue("
+                offenders
         );
-        scanned += scanCoreModulesForForbiddenTexts(
+        scanned += scanCoreModulesForEncoderAuthorityHelperLeaks(
                 workspaceRoot,
-                offenders,
-                "CustomProtocolV1NdjsonEncoder.writeOkEnvelope(",
-                "CustomProtocolV1NdjsonEncoder.writeValue(",
-                "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.*;",
-                "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.writeOkEnvelope;",
-                "import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.writeValue;",
-                "writeOkEnvelope(",
-                "writeValue("
+                offenders
         );
 
         Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
@@ -203,6 +169,44 @@ public class ReplySsoTGuardTest {
         return scanned;
     }
 
+    private static int scanCoreModulesForProtocolReplyModelAuthorityLeaks(Path workspaceRoot, List<String> offenders)
+            throws IOException {
+        Path coreRoot = workspaceRoot.resolve("yierdis-core");
+        Assert.assertTrue("缺少 yierdis-core 模块目录", Files.isDirectory(coreRoot));
+
+        int scanned = 0;
+        try (Stream<Path> modules = Files.list(coreRoot)) {
+            List<Path> moduleRoots = modules
+                    .filter(Files::isDirectory)
+                    .map(module -> module.resolve("src/main/java"))
+                    .filter(Files::isDirectory)
+                    .toList();
+            for (Path sourceRoot : moduleRoots) {
+                scanned += scanForProtocolReplyModelAuthorityLeaks(workspaceRoot, sourceRoot, offenders);
+            }
+        }
+        return scanned;
+    }
+
+    private static int scanCoreModulesForEncoderAuthorityHelperLeaks(Path workspaceRoot, List<String> offenders)
+            throws IOException {
+        Path coreRoot = workspaceRoot.resolve("yierdis-core");
+        Assert.assertTrue("缺少 yierdis-core 模块目录", Files.isDirectory(coreRoot));
+
+        int scanned = 0;
+        try (Stream<Path> modules = Files.list(coreRoot)) {
+            List<Path> moduleRoots = modules
+                    .filter(Files::isDirectory)
+                    .map(module -> module.resolve("src/main/java"))
+                    .filter(Files::isDirectory)
+                    .toList();
+            for (Path sourceRoot : moduleRoots) {
+                scanned += scanForEncoderAuthorityHelperLeaks(workspaceRoot, sourceRoot, offenders);
+            }
+        }
+        return scanned;
+    }
+
     private static int scanForForbiddenText(Path workspaceRoot, Path sourceRoot, List<String> offenders, String forbiddenText)
             throws IOException {
         if (!Files.isDirectory(sourceRoot)) {
@@ -245,6 +249,48 @@ public class ReplySsoTGuardTest {
         return scanned[0];
     }
 
+    private static int scanForProtocolReplyModelAuthorityLeaks(Path workspaceRoot, Path sourceRoot, List<String> offenders)
+            throws IOException {
+        if (!Files.isDirectory(sourceRoot)) {
+            return 0;
+        }
+
+        int[] scanned = {0};
+        try (Stream<Path> files = Files.walk(sourceRoot)) {
+            files.filter(path -> Files.isRegularFile(path) && path.toString().endsWith(".java"))
+                    .forEach(path -> {
+                        scanned[0]++;
+                        try {
+                            scanFileForProtocolReplyModelAuthorityLeaks(workspaceRoot, path, offenders);
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+        }
+        return scanned[0];
+    }
+
+    private static int scanForEncoderAuthorityHelperLeaks(Path workspaceRoot, Path sourceRoot, List<String> offenders)
+            throws IOException {
+        if (!Files.isDirectory(sourceRoot)) {
+            return 0;
+        }
+
+        int[] scanned = {0};
+        try (Stream<Path> files = Files.walk(sourceRoot)) {
+            files.filter(path -> Files.isRegularFile(path) && path.toString().endsWith(".java"))
+                    .forEach(path -> {
+                        scanned[0]++;
+                        try {
+                            scanFileForEncoderAuthorityHelperLeaks(workspaceRoot, path, offenders);
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+        }
+        return scanned[0];
+    }
+
     private static void scanFileForForbiddenText(Path workspaceRoot, Path file, List<String> offenders, String forbiddenText)
             throws IOException {
         List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
@@ -264,6 +310,43 @@ public class ReplySsoTGuardTest {
                 if (line.contains(forbiddenText)) {
                     offenders.add(relativePath(workspaceRoot, file) + ":" + (i + 1) + " -> " + forbiddenText);
                 }
+            }
+        }
+    }
+
+    private static void scanFileForProtocolReplyModelAuthorityLeaks(Path workspaceRoot, Path file, List<String> offenders)
+            throws IOException {
+        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (!line.contains("yier.bubu.redis.protocol.reply.")) {
+                continue;
+            }
+            if (line.contains("ReplyErrorKind") || line.contains("ReplyErrorSanitizer")) {
+                continue;
+            }
+            offenders.add(relativePath(workspaceRoot, file) + ":" + (i + 1) + " -> protocol.reply authority");
+        }
+    }
+
+    private static void scanFileForEncoderAuthorityHelperLeaks(Path workspaceRoot, Path file, List<String> offenders)
+            throws IOException {
+        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        boolean hasStaticImport = lines.stream().anyMatch(line ->
+                line.contains("import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.writeOkEnvelope;")
+                        || line.contains("import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.writeValue;")
+                        || line.contains("import static yier.bubu.redis.protocol.v1.CustomProtocolV1NdjsonEncoder.*;")
+        );
+
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (line.contains("CustomProtocolV1NdjsonEncoder.writeOkEnvelope(")
+                    || line.contains("CustomProtocolV1NdjsonEncoder.writeValue(")) {
+                offenders.add(relativePath(workspaceRoot, file) + ":" + (i + 1) + " -> encoder authority helper");
+                continue;
+            }
+            if (hasStaticImport && (line.contains("writeOkEnvelope(") || line.contains("writeValue("))) {
+                offenders.add(relativePath(workspaceRoot, file) + ":" + (i + 1) + " -> encoder authority helper");
             }
         }
     }

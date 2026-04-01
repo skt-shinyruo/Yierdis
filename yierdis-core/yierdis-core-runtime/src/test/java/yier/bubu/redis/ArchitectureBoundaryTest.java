@@ -189,7 +189,8 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 codecPom.getParent().resolve("src/main/java"),
                 offenders,
-                "import yier.bubu.redis.contract."
+                "import yier.bubu.redis.contract.",
+                "yier.bubu.redis.contract."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
 
