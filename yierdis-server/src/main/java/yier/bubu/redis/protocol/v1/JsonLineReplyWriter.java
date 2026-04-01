@@ -12,8 +12,8 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.ArrayDeque;
+import java.util.Base64;
 import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
@@ -83,8 +83,6 @@ public final class JsonLineReplyWriter implements ReplyWriter {
         return closeAfterReplyRequested;
     }
 
-    // --- Scalars ---
-
     @Override
     public void simpleString(String value) {
         writeStringValue(value);
@@ -127,7 +125,6 @@ public final class JsonLineReplyWriter implements ReplyWriter {
 
     @Override
     public void bigNumberAscii(String value) {
-        // Best-effort: represent as a JSON string to avoid integer overflow / precision loss.
         writeStringValue(value == null ? null : value.trim());
     }
 
@@ -146,8 +143,6 @@ public final class JsonLineReplyWriter implements ReplyWriter {
     public void blobError(String message) {
         writeErrorValue(ReplyErrorKind.COMMAND, message);
     }
-
-    // --- Bulk / bytes ---
 
     @Override
     public void bulkString(byte[] data) {
@@ -186,11 +181,8 @@ public final class JsonLineReplyWriter implements ReplyWriter {
 
     @Override
     public void bulkStringLongAscii(long value) {
-        // Bulk-string semantics: represent the long as an ASCII decimal string (encoded as JSON string).
         writeStringValue(Long.toString(value));
     }
-
-    // --- Aggregates ---
 
     @Override
     public void nullValue() {
@@ -264,21 +256,17 @@ public final class JsonLineReplyWriter implements ReplyWriter {
         mapHeader(pairs);
     }
 
-    // --- Internals ---
-
     private void writeErrorValue(ReplyErrorKind kind, String message) {
         if (finished) {
             return;
         }
 
         if (stack.isEmpty() && !envelopeStarted) {
-            // Top-level error: write the error envelope and finish the reply.
             CustomProtocolV1NdjsonEncoder.writeErrorEnvelope(out, kind, message);
             finished = true;
             return;
         }
 
-        // Nested error value (e.g., EXEC array element): encode as a tagged JSON object value.
         beginValueOrKey();
         CustomProtocolV1NdjsonEncoder.writeNestedErrorValue(out, kind, message);
         finishValue();
@@ -332,7 +320,6 @@ public final class JsonLineReplyWriter implements ReplyWriter {
         }
 
         if (stack.isEmpty()) {
-            // Envelope started and no container: the next value write would be a duplicate top-level result.
             return;
         }
 
@@ -368,7 +355,6 @@ public final class JsonLineReplyWriter implements ReplyWriter {
         }
 
         if (stack.isEmpty()) {
-            // Top-level success value finished.
             if (envelopeStarted) {
                 out.writeBytes(OK_SUFFIX);
                 finished = true;
@@ -393,12 +379,10 @@ public final class JsonLineReplyWriter implements ReplyWriter {
 
         if (c.type == ContainerType.MAP) {
             if (c.expectingKey) {
-                // Finishing a key: next value will be the pair's value.
                 c.expectingKey = false;
                 return;
             }
 
-            // Finishing a value completes one pair.
             out.writeBytes(RBRACKET);
             c.remaining--;
             c.expectingKey = true;

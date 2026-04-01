@@ -9,12 +9,13 @@ import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.executor.SchedulingPolicy;
-import yier.bubu.redis.protocol.v1.CustomCommand;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
 import yier.bubu.redis.runtime.YierdisInstanceConfig;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -54,11 +55,11 @@ public class ClosingSkipSideEffectsIntegrationTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
         try {
             // Enqueue commands while executor is blocked (no replies yet).
-            ch.writeInbound(new CustomCommand("PING", null));
-            ch.writeInbound(new CustomCommand("PING", null));
+            ch.writeInbound(request("PING"));
+            ch.writeInbound(request("PING"));
             Assert.assertNull("expected no reply while executor is blocked", readOutbound(ch));
 
             ServerRuntimeState rt = ServerConnectionContext.getOrCreate(ch).runtime();
@@ -121,11 +122,11 @@ public class ClosingSkipSideEffectsIntegrationTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
         try {
             // Enqueue commands while executor is blocked (no replies yet).
             ch.writeInbound(new ExplodingCommand());
-            ch.writeInbound(new CustomCommand("PING", null));
+            ch.writeInbound(request("PING"));
             Assert.assertNull("expected no reply while executor is blocked", readOutbound(ch));
 
             ServerRuntimeState rt = ServerConnectionContext.getOrCreate(ch).runtime();
@@ -241,5 +242,9 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
     private static byte[] ascii(String s) {
         return s.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static CustomProtocolV1Request request(String cmd, String... args) {
+        return new CustomProtocolV1Request(cmd, Arrays.asList(args));
     }
 }

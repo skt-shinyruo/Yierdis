@@ -24,11 +24,6 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-core-contract</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-bytes-lib</artifactId>
         </dependency>
 

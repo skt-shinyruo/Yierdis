@@ -70,6 +70,7 @@ public class CustomProtocolResyncIntegrationTest {
             executor.start();
             this.ch = new EmbeddedChannel(
                     new CustomRequestDecoder(1024 * 1024, 1024, 256),
+                    new ProtocolCommandAdapter(),
                     new ProtocolErrorReplyHandler(executor),
                     new YierdisFastCommandHandler(executor)
             );

@@ -5,10 +5,10 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.contract.Command;
-import yier.bubu.redis.protocol.v1.CustomCommand;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 public class CustomRequestDecoderTest {
     @Test
@@ -18,12 +18,10 @@ public class CustomRequestDecoderTest {
             byte[] frame = frame("{\"cmd\":\"PING\",\"args\":[]}");
             Assert.assertTrue(ch.writeInbound(Unpooled.wrappedBuffer(frame)));
 
-            Command cmd = ch.readInbound();
-            Assert.assertNotNull(cmd);
-            Assert.assertTrue(cmd instanceof CustomCommand);
-            Assert.assertEquals(1, cmd.argc());
-            Assert.assertArrayEquals("PING".getBytes(StandardCharsets.UTF_8), cmd.toByteArray(0));
-            cmd.close();
+            CustomProtocolV1Request request = ch.readInbound();
+            Assert.assertNotNull(request);
+            Assert.assertEquals("PING", request.cmd());
+            Assert.assertEquals(List.of(), request.args());
 
             Assert.assertNull(ch.readOutbound());
         } finally {
@@ -40,12 +38,10 @@ public class CustomRequestDecoderTest {
             direct.writeBytes(frame);
             Assert.assertTrue(ch.writeInbound(direct));
 
-            Command cmd = ch.readInbound();
-            Assert.assertNotNull(cmd);
-            Assert.assertTrue(cmd instanceof CustomCommand);
-            Assert.assertEquals(1, cmd.argc());
-            Assert.assertArrayEquals("PING".getBytes(StandardCharsets.UTF_8), cmd.toByteArray(0));
-            cmd.close();
+            CustomProtocolV1Request request = ch.readInbound();
+            Assert.assertNotNull(request);
+            Assert.assertEquals("PING", request.cmd());
+            Assert.assertEquals(List.of(), request.args());
 
             Assert.assertNull(ch.readOutbound());
         } finally {
@@ -64,16 +60,14 @@ public class CustomRequestDecoderTest {
             System.arraycopy(f2, 0, both, f1.length, f2.length);
             Assert.assertTrue(ch.writeInbound(Unpooled.wrappedBuffer(both)));
 
-            Command c1 = ch.readInbound();
-            Command c2 = ch.readInbound();
-            Assert.assertNotNull(c1);
-            Assert.assertNotNull(c2);
-            Assert.assertEquals("PING", new String(c1.toByteArray(0), StandardCharsets.UTF_8));
-            Assert.assertEquals("ECHO", new String(c2.toByteArray(0), StandardCharsets.UTF_8));
-            Assert.assertEquals(2, c2.argc());
-            Assert.assertEquals("hi", new String(c2.toByteArray(1), StandardCharsets.UTF_8));
-            c1.close();
-            c2.close();
+            CustomProtocolV1Request request1 = ch.readInbound();
+            CustomProtocolV1Request request2 = ch.readInbound();
+            Assert.assertNotNull(request1);
+            Assert.assertNotNull(request2);
+            Assert.assertEquals("PING", request1.cmd());
+            Assert.assertEquals(List.of(), request1.args());
+            Assert.assertEquals("ECHO", request2.cmd());
+            Assert.assertEquals(List.of("hi"), request2.args());
         } finally {
             ch.finishAndReleaseAll();
         }
@@ -114,10 +108,10 @@ public class CustomRequestDecoderTest {
             Assert.assertTrue(e instanceof ProtocolError);
             Assert.assertTrue(((ProtocolError) e).message().startsWith("Protocol error"));
 
-            Command cmd = ch.readInbound();
-            Assert.assertNotNull(cmd);
-            Assert.assertEquals("PING", new String(cmd.toByteArray(0), StandardCharsets.UTF_8));
-            cmd.close();
+            CustomProtocolV1Request request = ch.readInbound();
+            Assert.assertNotNull(request);
+            Assert.assertEquals("PING", request.cmd());
+            Assert.assertEquals(List.of(), request.args());
 
             Assert.assertNull(ch.readInbound());
             Assert.assertNull(ch.readOutbound());
@@ -143,10 +137,10 @@ public class CustomRequestDecoderTest {
             Assert.assertTrue(e instanceof ProtocolError);
             Assert.assertTrue(((ProtocolError) e).message().startsWith("Protocol error"));
 
-            Command cmd = ch.readInbound();
-            Assert.assertNotNull(cmd);
-            Assert.assertEquals("PING", new String(cmd.toByteArray(0), StandardCharsets.UTF_8));
-            cmd.close();
+            CustomProtocolV1Request request = ch.readInbound();
+            Assert.assertNotNull(request);
+            Assert.assertEquals("PING", request.cmd());
+            Assert.assertEquals(List.of(), request.args());
             Assert.assertNull(ch.readOutbound());
         } finally {
             ch.finishAndReleaseAll();
@@ -170,10 +164,10 @@ public class CustomRequestDecoderTest {
             Assert.assertTrue(e instanceof ProtocolError);
             Assert.assertTrue(((ProtocolError) e).message().startsWith("Protocol error"));
 
-            Command cmd = ch.readInbound();
-            Assert.assertNotNull(cmd);
-            Assert.assertEquals("PING", new String(cmd.toByteArray(0), StandardCharsets.UTF_8));
-            cmd.close();
+            CustomProtocolV1Request request = ch.readInbound();
+            Assert.assertNotNull(request);
+            Assert.assertEquals("PING", request.cmd());
+            Assert.assertEquals(List.of(), request.args());
             Assert.assertNull(ch.readOutbound());
         } finally {
             ch.finishAndReleaseAll();
@@ -200,14 +194,12 @@ public class CustomRequestDecoderTest {
 
             Object inbound = ch.readInbound();
             Assert.assertNotNull(inbound);
-            Assert.assertTrue(inbound instanceof Command);
-            Command cmd = (Command) inbound;
-            Assert.assertTrue(cmd instanceof CustomCommand);
-            Assert.assertEquals(1 + args, cmd.argc());
-            Assert.assertEquals("ECHO", new String(cmd.toByteArray(0), StandardCharsets.UTF_8));
-            Assert.assertEquals("a0", new String(cmd.toByteArray(1), StandardCharsets.UTF_8));
-            Assert.assertEquals("a" + (args - 1), new String(cmd.toByteArray(args), StandardCharsets.UTF_8));
-            cmd.close();
+            Assert.assertTrue(inbound instanceof CustomProtocolV1Request);
+            CustomProtocolV1Request request = (CustomProtocolV1Request) inbound;
+            Assert.assertEquals("ECHO", request.cmd());
+            Assert.assertEquals(args, request.args().size());
+            Assert.assertEquals("a0", request.args().get(0));
+            Assert.assertEquals("a" + (args - 1), request.args().get(args - 1));
         } finally {
             ch.finishAndReleaseAll();
         }

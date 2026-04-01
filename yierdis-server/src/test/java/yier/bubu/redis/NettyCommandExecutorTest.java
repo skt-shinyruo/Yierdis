@@ -9,12 +9,13 @@ import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.executor.SchedulingPolicy;
-import yier.bubu.redis.protocol.v1.CustomCommand;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
 import yier.bubu.redis.runtime.YierdisInstanceConfig;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -55,16 +56,16 @@ public class NettyCommandExecutorTest {
         CountDownLatch blocker2Started = new CountDownLatch(1);
         CountDownLatch unblock2 = new CountDownLatch(1);
 
-        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
         try {
-            ch.writeInbound(new CustomCommand("PING", null));
+            ch.writeInbound(request("PING"));
             ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
             Assert.assertEquals(0L, conn.commandsRejectedCounter().get());
             Assert.assertNull("first command should be queued (no reply yet)", ch.readOutbound());
 
-            ch.writeInbound(new CustomCommand("PING", null));
+            ch.writeInbound(request("PING"));
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
             Assert.assertEquals(1L, conn.commandsRejectedCounter().get());
@@ -120,11 +121,11 @@ public class NettyCommandExecutorTest {
         CountDownLatch blocker2Started = new CountDownLatch(1);
         CountDownLatch unblock2 = new CountDownLatch(1);
 
-        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
         try {
             // Enqueue 2 commands while executor is blocked.
-            ch.writeInbound(new CustomCommand("PING", null));
-            ch.writeInbound(new CustomCommand("PING", null));
+            ch.writeInbound(request("PING"));
+            ch.writeInbound(request("PING"));
             ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
             Assert.assertEquals(2L, conn.commandsEnqueuedCounter().get());
             Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
@@ -193,11 +194,11 @@ public class NettyCommandExecutorTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
         try {
             Assert.assertTrue(ch.config().isAutoRead());
 
-            ch.writeInbound(new CustomCommand("PING", null));
+            ch.writeInbound(request("PING"));
             ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
 
@@ -259,15 +260,15 @@ public class NettyCommandExecutorTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
         try {
-            ch.writeInbound(new CustomCommand("PING", null));
+            ch.writeInbound(request("PING"));
             Assert.assertNull("first command should be queued (no reply yet)", ch.readOutbound());
 
             NettyCommandExecutor.StatsSnapshot s1 = executor.statsSnapshot();
             Assert.assertTrue("expected queued bytes > 0 when queueMaxBytes is enabled", s1.queuedBytes > 0);
 
-            ch.writeInbound(new CustomCommand("PING", null));
+            ch.writeInbound(request("PING"));
             Assert.assertArrayEquals(ascii("{\"ok\":false,\"error\":{\"kind\":\"command\",\"message\":\"ERR busy bytes_budget\"}}\n"), readOutbound(ch));
 
             NettyCommandExecutor.StatsSnapshot s2 = executor.statsSnapshot();
@@ -281,7 +282,7 @@ public class NettyCommandExecutorTest {
             Assert.assertEquals("after drain, queued tasks should be released", 0, s3.queuedTasks);
             Assert.assertEquals("after drain, queued bytes should be released", 0L, s3.queuedBytes);
 
-            ch.writeInbound(new CustomCommand("PING", null));
+            ch.writeInbound(request("PING"));
             Assert.assertArrayEquals("budget should recover after drain", ascii("{\"ok\":true,\"result\":\"PONG\"}\n"), awaitOutbound(ch, 1000));
         } finally {
             unblock.countDown();
@@ -325,11 +326,11 @@ public class NettyCommandExecutorTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
         try {
             Assert.assertTrue(ch.config().isAutoRead());
 
-            ch.writeInbound(new CustomCommand("PING", null));
+            ch.writeInbound(request("PING"));
 
             ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
             Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
@@ -395,11 +396,11 @@ public class NettyCommandExecutorTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
         try {
             // Enqueue QUIT + PING while executor is blocked, so both are accepted.
-            ch.writeInbound(new CustomCommand("QUIT", null));
-            ch.writeInbound(new CustomCommand("PING", null));
+            ch.writeInbound(request("QUIT"));
+            ch.writeInbound(request("PING"));
 
             ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
             Assert.assertEquals(2L, conn.commandsEnqueuedCounter().get());
@@ -462,6 +463,10 @@ public class NettyCommandExecutorTest {
 
     private static byte[] ascii(String s) {
         return s.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static CustomProtocolV1Request request(String cmd, String... args) {
+        return new CustomProtocolV1Request(cmd, Arrays.asList(args));
     }
 
     private static final class ThrowingRetainedBytesCommand implements Command {

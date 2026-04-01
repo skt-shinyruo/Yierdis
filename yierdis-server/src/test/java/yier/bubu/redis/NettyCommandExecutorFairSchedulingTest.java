@@ -8,12 +8,13 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.executor.SchedulingPolicy;
-import yier.bubu.redis.protocol.v1.CustomCommand;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
 import yier.bubu.redis.runtime.YierdisInstanceConfig;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -55,13 +56,13 @@ public class NettyCommandExecutorFairSchedulingTest {
         CountDownLatch blocker2Started = new CountDownLatch(1);
         CountDownLatch unblock2 = new CountDownLatch(1);
 
-        EmbeddedChannel ch1 = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
-        EmbeddedChannel ch2 = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch1 = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch2 = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
         try {
             // Enqueue commands while the executor is blocked.
-            ch1.writeInbound(new CustomCommand("PING", null));
-            ch1.writeInbound(new CustomCommand("PING", null));
-            ch2.writeInbound(new CustomCommand("PING", null));
+            ch1.writeInbound(request("PING"));
+            ch1.writeInbound(request("PING"));
+            ch2.writeInbound(request("PING"));
             Assert.assertEquals(2L, ServerConnectionContext.getOrCreate(ch1).runtime().commandsEnqueuedCounter().get());
             Assert.assertEquals(1L, ServerConnectionContext.getOrCreate(ch2).runtime().commandsEnqueuedCounter().get());
 
@@ -130,5 +131,9 @@ public class NettyCommandExecutorFairSchedulingTest {
 
     private static byte[] ascii(String s) {
         return s.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static CustomProtocolV1Request request(String cmd, String... args) {
+        return new CustomProtocolV1Request(cmd, Arrays.asList(args));
     }
 }

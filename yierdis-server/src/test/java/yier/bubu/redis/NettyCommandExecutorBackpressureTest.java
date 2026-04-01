@@ -7,12 +7,13 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.executor.SchedulingPolicy;
-import yier.bubu.redis.protocol.v1.CustomCommand;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
 import yier.bubu.redis.runtime.YierdisInstanceConfig;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 public class NettyCommandExecutorBackpressureTest {
     @Test
@@ -35,15 +36,15 @@ public class NettyCommandExecutorBackpressureTest {
                     SchedulingPolicy.FAIR
             );
 
-            EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+            EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
             try {
                 // 第一次入队成功（执行器未 start，因此不会产生响应）。
-                ch.writeInbound(new CustomCommand("PING", null));
+                ch.writeInbound(request("PING"));
                 Assert.assertNull(ch.readOutbound());
                 Assert.assertEquals(1L, ServerConnectionContext.getOrCreate(ch).runtime().commandsEnqueuedCounter().get());
 
                 // 第二次入队失败，立刻返回 busy 错误。
-                ch.writeInbound(new CustomCommand("PING", null));
+                ch.writeInbound(request("PING"));
                 Assert.assertArrayEquals(ascii("{\"ok\":false,\"error\":{\"kind\":\"command\",\"message\":\"ERR busy queue_full\"}}\n"), readOutbound(ch));
             } finally {
                 executor.close();
@@ -72,18 +73,18 @@ public class NettyCommandExecutorBackpressureTest {
                     SchedulingPolicy.FAIR
             );
 
-            EmbeddedChannel ch1 = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
-            EmbeddedChannel ch2 = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+            EmbeddedChannel ch1 = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
+            EmbeddedChannel ch2 = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
             try {
                 Assert.assertTrue(ch1.config().isAutoRead());
                 Assert.assertTrue(ch2.config().isAutoRead());
 
                 // Fill the global queue with ch1 while executor is not started (no drain).
-                ch1.writeInbound(new CustomCommand("PING", null));
+                ch1.writeInbound(request("PING"));
                 Assert.assertNull(ch1.readOutbound());
 
                 // ch2 is rejected: should return busy and enter backpressure (autoRead disabled).
-                ch2.writeInbound(new CustomCommand("PING", null));
+                ch2.writeInbound(request("PING"));
                 Assert.assertArrayEquals(ascii("{\"ok\":false,\"error\":{\"kind\":\"command\",\"message\":\"ERR busy queue_full\"}}\n"), readOutbound(ch2));
                 Assert.assertEquals(1L, ServerConnectionContext.getOrCreate(ch2).runtime().commandsRejectedCounter().get());
                 ch1.runPendingTasks();
@@ -123,13 +124,13 @@ public class NettyCommandExecutorBackpressureTest {
                     SchedulingPolicy.FAIR
             );
 
-            EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+            EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
             try {
                 Assert.assertTrue(ch.config().isAutoRead());
 
                 // executor 未 start 时不会 drain，pending 会累积并触发 backpressure。
-                ch.writeInbound(new CustomCommand("PING", null));
-                ch.writeInbound(new CustomCommand("PING", null));
+                ch.writeInbound(request("PING"));
+                ch.writeInbound(request("PING"));
                 Assert.assertEquals(2, ServerConnectionContext.getOrCreate(ch).runtime().pendingCounter().get());
                 ch.runPendingTasks();
                 Assert.assertFalse("autoRead should be disabled when pending >= high watermark", ch.config().isAutoRead());
@@ -161,5 +162,9 @@ public class NettyCommandExecutorBackpressureTest {
 
     private static byte[] ascii(String s) {
         return s.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static CustomProtocolV1Request request(String cmd, String... args) {
+        return new CustomProtocolV1Request(cmd, Arrays.asList(args));
     }
 }

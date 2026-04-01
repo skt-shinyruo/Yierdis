@@ -2,8 +2,8 @@ package yier.bubu.redis.protocol.v1;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.bytes.BytesSlice;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -118,7 +118,6 @@ public class JsonLineReplyWriterTest {
             bytes[i] = (byte) 0xC3;
             bytes[i + 1] = 0x28;
         }
-        // 若长度为奇数，末尾再补一个裸 continuation，确保 strict UTF-8 校验失败
         if ((bytes.length & 1) == 1) {
             bytes[bytes.length - 1] = (byte) 0x80;
         }

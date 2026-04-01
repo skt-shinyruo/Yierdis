@@ -171,6 +171,37 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void protocolCodecMustNotDependOnCoreContract() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path codecPom = repoRoot.resolve("yierdis-protocol/yierdis-protocol-codec/pom.xml");
+        if (!Files.isRegularFile(codecPom) && repoRoot.getParent() != null) {
+            codecPom = repoRoot.getParent().resolve("yierdis-protocol/yierdis-protocol-codec/pom.xml");
+        }
+        Assert.assertTrue("缺少 yierdis-protocol-codec/pom.xml", Files.isRegularFile(codecPom));
+
+        String pom = Files.readString(codecPom, StandardCharsets.UTF_8);
+        Assert.assertFalse("protocol-codec 不应再依赖 yierdis-core-contract", pom.contains("<artifactId>yierdis-core-contract</artifactId>"));
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                codecPom.getParent().resolve("src/main/java"),
+                offenders,
+                "import yier.bubu.redis.contract."
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 protocol-codec 仍依赖 core-contract：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
     public void yierdisDbMustNotRetainLegacyReservationHelpers() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);

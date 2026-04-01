@@ -29,6 +29,7 @@ import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 
 public class YierdisServerBootstrapCommandWiringTest {
@@ -136,6 +137,18 @@ public class YierdisServerBootstrapCommandWiringTest {
 
                 CustomRequestDecoder decoder = byteLimitedChannel.pipeline().get(CustomRequestDecoder.class);
                 Assert.assertNotNull(decoder);
+                Assert.assertNotNull(byteLimitedChannel.pipeline().get(ProtocolCommandAdapter.class));
+                List<String> pipelineNames = byteLimitedChannel.pipeline().names();
+                int backpressureIndex = pipelineNames.indexOf("writeBufferBackpressure");
+                int decoderIndex = pipelineNames.indexOf("customRequestDecoder");
+                int adapterIndex = pipelineNames.indexOf("protocolCommandAdapter");
+                int protocolErrorIndex = pipelineNames.indexOf("protocolErrorReply");
+                int commandHandlerIndex = pipelineNames.indexOf("commandHandler");
+                Assert.assertTrue(backpressureIndex >= 0);
+                Assert.assertTrue(decoderIndex > backpressureIndex);
+                Assert.assertTrue(adapterIndex > decoderIndex);
+                Assert.assertTrue(protocolErrorIndex > adapterIndex);
+                Assert.assertTrue(commandHandlerIndex > protocolErrorIndex);
                 Assert.assertEquals(3, intField(decoder, "maxPayloadBytes"));
                 Assert.assertEquals(2, intField(decoder, "maxArgs"));
                 Assert.assertEquals(4, intField(decoder, "maxHeaderBytes"));

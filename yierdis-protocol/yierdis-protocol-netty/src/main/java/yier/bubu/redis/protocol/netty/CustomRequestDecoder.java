@@ -11,7 +11,7 @@ import yier.bubu.redis.protocol.json.JsonParseException;
 import yier.bubu.redis.protocol.json.JsonParser;
 import yier.bubu.redis.protocol.json.JsonString;
 import yier.bubu.redis.protocol.json.JsonValue;
-import yier.bubu.redis.protocol.v1.CustomCommand;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -108,8 +108,8 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
                 }
 
                 try {
-                    CustomCommand cmd = parseCommandPayload(payload);
-                    out.add(cmd);
+                    CustomProtocolV1Request request = parseCommandPayload(payload);
+                    out.add(request);
                 } catch (JsonParseException e) {
                     enterDiscard(out, "Protocol error: invalid JSON");
                 } catch (IllegalArgumentException e) {
@@ -219,7 +219,7 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
         out.add(new ProtocolError(message));
     }
 
-    private CustomCommand parseCommandPayload(ByteBuf payload) {
+    private CustomProtocolV1Request parseCommandPayload(ByteBuf payload) {
         JsonValue v = parsePayloadJson(payload);
         if (!(v instanceof JsonObject obj)) {
             throw new IllegalArgumentException("request must be a JSON object");
@@ -231,6 +231,10 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
             throw new IllegalArgumentException("cmd must be a string");
         }
         String cmd = ((JsonString) cmdVal).value();
+        String normalizedCmd = cmd.trim();
+        if (normalizedCmd.isEmpty()) {
+            throw new IllegalArgumentException("cmd must not be blank");
+        }
 
         JsonValue argsVal = map.get("args");
         ArrayList<String> args = new ArrayList<>();
@@ -264,7 +268,7 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
         if (maxArgs > 0 && argc > maxArgs) {
             throw new IllegalArgumentException("too many args");
         }
-        return new CustomCommand(cmd, args);
+        return new CustomProtocolV1Request(normalizedCmd, args);
     }
 
     private JsonValue parsePayloadJson(ByteBuf payload) {

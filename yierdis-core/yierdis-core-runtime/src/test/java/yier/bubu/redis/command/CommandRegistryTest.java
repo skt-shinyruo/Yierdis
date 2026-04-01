@@ -2,8 +2,9 @@ package yier.bubu.redis.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.protocol.v1.CustomCommand;
+import yier.bubu.redis.contract.Command;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 public class CommandRegistryTest {
@@ -13,13 +14,13 @@ public class CommandRegistryTest {
         registry.register("PING", (cmd, out) -> {
         });
 
-        try (CustomCommand c1 = new CustomCommand("PING", null)) {
+        try (TestCommand c1 = new TestCommand("PING")) {
             Assert.assertNotNull(registry.find(c1));
         }
-        try (CustomCommand c2 = new CustomCommand("ping", null)) {
+        try (TestCommand c2 = new TestCommand("ping")) {
             Assert.assertNotNull(registry.find(c2));
         }
-        try (CustomCommand c3 = new CustomCommand("PiNg", null)) {
+        try (TestCommand c3 = new TestCommand("PiNg")) {
             Assert.assertNotNull(registry.find(c3));
         }
     }
@@ -30,7 +31,7 @@ public class CommandRegistryTest {
         registry.register("PING", (cmd, out) -> {
         });
 
-        try (CustomCommand cmd = new CustomCommand("NOPE", null)) {
+        try (TestCommand cmd = new TestCommand("NOPE")) {
             Assert.assertNull(registry.find(cmd));
         }
     }
@@ -85,9 +86,52 @@ public class CommandRegistryTest {
         }
 
         for (String name : names) {
-            try (CustomCommand cmd = new CustomCommand(name.toLowerCase(Locale.ROOT), null)) {
+            try (TestCommand cmd = new TestCommand(name.toLowerCase(Locale.ROOT))) {
                 Assert.assertNotNull("expected handler for " + name, registry.find(cmd));
             }
+        }
+    }
+
+    private static final class TestCommand implements Command {
+        private final byte[] commandName;
+
+        private TestCommand(String commandName) {
+            this.commandName = commandName.getBytes(StandardCharsets.UTF_8);
+        }
+
+        @Override
+        public int argc() {
+            return 1;
+        }
+
+        @Override
+        public boolean isNull(int index) {
+            return false;
+        }
+
+        @Override
+        public int len(int index) {
+            return commandName.length;
+        }
+
+        @Override
+        public byte byteAt(int index, int offset) {
+            return commandName[offset];
+        }
+
+        @Override
+        public void copyToByteArray(int index, byte[] dst, int dstOff) {
+            System.arraycopy(commandName, 0, dst, dstOff, commandName.length);
+        }
+
+        @Override
+        public byte[] toByteArray(int index) {
+            return commandName.clone();
+        }
+
+        @Override
+        public void close() {
+            // no-op
         }
     }
 }
