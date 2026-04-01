@@ -27,7 +27,7 @@ public class OffHeapStringStorageTest {
             byte[] key = b("k");
             byte[] value = b("hello");
 
-            Assert.assertTrue(db.setString(key, value, SetMode.NORMAL, null));
+            Assert.assertTrue(db.writes().strings().setString(key, value, SetMode.NORMAL, null));
             Assert.assertTrue(allocator.usedBytes() > 0);
 
             RecordingBulkOutput out = new RecordingBulkOutput();
@@ -35,7 +35,7 @@ public class OffHeapStringStorageTest {
             Assert.assertTrue(out.usedOffHeapSlice);
             Assert.assertArrayEquals(value, out.bytes);
 
-            Assert.assertEquals(1L, db.del(Collections.singletonList(key)));
+            Assert.assertEquals(1L, db.writes().keyspace().del(Collections.singletonList(key)));
             Assert.assertEquals(0L, allocator.usedBytes());
         } finally {
             db.shutdown();
@@ -49,7 +49,7 @@ public class OffHeapStringStorageTest {
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
-            db.setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
+            db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
             Assert.assertTrue(allocator.usedBytes() > 0);
 
             db.cleanupExpired();
@@ -67,13 +67,13 @@ public class OffHeapStringStorageTest {
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
-            db.setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
+            db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
             Assert.assertTrue(allocator.usedBytes() > 0);
 
             db.lpush(key, List.of(b("a")));
 
             Assert.assertEquals(0L, allocator.usedBytes());
-            Assert.assertEquals(ValueType.LIST, db.typeOf(key));
+            Assert.assertEquals(ValueType.LIST, db.reads().keyspace().typeOf(new TestBytesView(key)));
         } finally {
             db.shutdown();
         }
@@ -89,10 +89,10 @@ public class OffHeapStringStorageTest {
             byte[] v1 = b("hello");
             byte[] v2 = b("world");
 
-            Assert.assertTrue(db.setString(key, v1, SetMode.NORMAL, null));
+            Assert.assertTrue(db.writes().strings().setString(key, v1, SetMode.NORMAL, null));
             Assert.assertEquals(5L, allocator.usedBytes());
 
-            Assert.assertTrue(db.setString(key, v2, SetMode.NORMAL, null));
+            Assert.assertTrue(db.writes().strings().setString(key, v2, SetMode.NORMAL, null));
             Assert.assertEquals(5L, allocator.usedBytes());
 
             RecordingBulkOutput out = new RecordingBulkOutput();
@@ -111,7 +111,7 @@ public class OffHeapStringStorageTest {
         try {
             db.bindToCurrentThread();
             try {
-                db.setString(b("k"), b("hello"), SetMode.NORMAL, null);
+                db.writes().strings().setString(b("k"), b("hello"), SetMode.NORMAL, null);
                 Assert.fail("expected YierdisCommandException");
             } catch (YierdisCommandException e) {
                 Assert.assertTrue(e.getMessage().contains("off-heap"));

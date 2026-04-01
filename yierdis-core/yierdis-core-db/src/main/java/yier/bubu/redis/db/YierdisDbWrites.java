@@ -19,7 +19,6 @@ import java.util.List;
 import java.util.Objects;
 
 final class YierdisDbWrites implements DbWrites {
-    private final YierdisDb db;
     private final StringWriteOps strings;
     private final HashWriteOps hashes;
     private final ListWriteOps lists;
@@ -29,16 +28,16 @@ final class YierdisDbWrites implements DbWrites {
     private final KeyspaceWriteOps keyspace;
     private final TtlWriteOps ttl;
 
-    YierdisDbWrites(YierdisDb db) {
-        this.db = Objects.requireNonNull(db, "db");
-        this.strings = new StringWrites(this.db);
-        this.hashes = new HashWrites(this.db);
-        this.lists = new ListWrites(this.db);
-        this.sets = new SetWrites(this.db);
-        this.zsets = new ZSetWrites(this.db);
-        this.hll = new HllWrites(this.db);
-        this.keyspace = new KeyspaceWrites(this.db);
-        this.ttl = new TtlWrites(this.db);
+    YierdisDbWrites(YierdisDb db, YierdisStringOps strings, YierdisKeyspaceOps keyspace, YierdisTtlOps ttl) {
+        YierdisDb engine = Objects.requireNonNull(db, "db");
+        this.strings = Objects.requireNonNull(strings, "strings");
+        this.hashes = new HashWrites(engine);
+        this.lists = new ListWrites(engine);
+        this.sets = new SetWrites(engine);
+        this.zsets = new ZSetWrites(engine);
+        this.hll = new HllWrites(engine);
+        this.keyspace = Objects.requireNonNull(keyspace, "keyspace");
+        this.ttl = Objects.requireNonNull(ttl, "ttl");
     }
 
     @Override
@@ -79,44 +78,6 @@ final class YierdisDbWrites implements DbWrites {
     @Override
     public TtlWriteOps ttl() {
         return ttl;
-    }
-
-    private static final class StringWrites implements StringWriteOps {
-        private final YierdisDb db;
-
-        private StringWrites(YierdisDb db) {
-            this.db = Objects.requireNonNull(db, "db");
-        }
-
-        @Override
-        public SetStringResult set(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption, boolean returnOldValue) {
-            return db.setStringWithResult(keyBytes, value, mode, expireOption, returnOldValue);
-        }
-
-        @Override
-        public boolean setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption) {
-            return db.setString(keyBytes, value, mode, expireOption);
-        }
-
-        @Override
-        public boolean setString(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
-            return db.setString(keyBytes, value, mode, expireOption);
-        }
-
-        @Override
-        public long append(byte[] keyBytes, BytesSlice value) {
-            return db.append(keyBytes, value);
-        }
-
-        @Override
-        public int setBit(byte[] keyBytes, long offset, int value) {
-            return db.setBit(keyBytes, offset, value);
-        }
-
-        @Override
-        public long incrBy(byte[] keyBytes, long delta) {
-            return db.incrBy(keyBytes, delta);
-        }
     }
 
     private static final class HashWrites implements HashWriteOps {
@@ -229,49 +190,4 @@ final class YierdisDbWrites implements DbWrites {
         }
     }
 
-    private static final class KeyspaceWrites implements KeyspaceWriteOps {
-        private final YierdisDb db;
-
-        private KeyspaceWrites(YierdisDb db) {
-            this.db = Objects.requireNonNull(db, "db");
-        }
-
-        @Override
-        public long del(Collection<byte[]> keys) {
-            return db.del(keys);
-        }
-    }
-
-    private static final class TtlWrites implements TtlWriteOps {
-        private final YierdisDb db;
-
-        private TtlWrites(YierdisDb db) {
-            this.db = Objects.requireNonNull(db, "db");
-        }
-
-        @Override
-        public boolean expire(BytesView keyView, long seconds) {
-            return db.expire(keyView, seconds);
-        }
-
-        @Override
-        public boolean pexpire(BytesView keyView, long milliseconds) {
-            return db.pexpire(keyView, milliseconds);
-        }
-
-        @Override
-        public boolean expireAtSeconds(BytesView keyView, long unixSeconds) {
-            return db.expireAtSeconds(keyView, unixSeconds);
-        }
-
-        @Override
-        public boolean expireAtMillis(BytesView keyView, long unixMillis) {
-            return db.expireAtMillis(keyView, unixMillis);
-        }
-
-        @Override
-        public boolean persist(BytesView keyView) {
-            return db.persist(keyView);
-        }
-    }
 }

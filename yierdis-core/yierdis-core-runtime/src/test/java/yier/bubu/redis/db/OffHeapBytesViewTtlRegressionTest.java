@@ -21,7 +21,7 @@ public class OffHeapBytesViewTtlRegressionTest {
             db.bindToCurrentThread();
             byte[] emptyValue = new byte[0];
 
-            db.setString(targetKey, emptyValue, SetMode.NORMAL, null);
+            db.writes().strings().setString(targetKey, emptyValue, SetMode.NORMAL, null);
 
             // Populate the off-heap expire index without growing the keyspace:
             // `YierdisUnsafeOffHeapExpireIndex.get(BytesView)` uses a full-table content scan, so a large TTL set will
@@ -58,7 +58,7 @@ public class OffHeapBytesViewTtlRegressionTest {
             };
 
             try {
-                Assert.assertTrue(db.pexpire(view, 60_000));
+                Assert.assertTrue(db.writes().ttl().pexpire(view, 60_000));
             } catch (IllegalStateException e) {
                 Assert.fail(e.getMessage());
             }

@@ -2,6 +2,7 @@ package yier.bubu.redis.db;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.ops.SetMode;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
@@ -12,8 +13,8 @@ public class MemoryStatsAccountingConsistencyTest {
         YierdisDb db = new YierdisDb();
         try {
             db.bindToCurrentThread();
-            db.setString(b("k"), b("v"), SetMode.NORMAL, null);
-            Assert.assertTrue(db.pexpire(b("k"), 10_000));
+            db.writes().strings().setString(b("k"), b("v"), SetMode.NORMAL, null);
+            Assert.assertTrue(db.writes().ttl().pexpire(view(b("k")), 10_000));
 
             long enforcement = db.usedBytesForMaxmemory();
             long stats = db.memoryStats().usedBytesForMaxmemory();
@@ -22,5 +23,21 @@ public class MemoryStatsAccountingConsistencyTest {
             db.shutdown();
         }
     }
-}
 
+    private static BytesView view(byte[] data) {
+        return new BytesView() {
+            @Override
+            public int length() {
+                return data.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                if (index < 0 || index >= data.length) {
+                    throw new IndexOutOfBoundsException();
+                }
+                return data[index];
+            }
+        };
+    }
+}

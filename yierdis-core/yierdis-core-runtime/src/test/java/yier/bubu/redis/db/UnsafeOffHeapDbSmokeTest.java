@@ -12,12 +12,12 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 public class UnsafeOffHeapDbSmokeTest {
     @Test
     public void offHeapCompositeTypesWorkAndShutdownDoesNotLeak() {
-            YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-            YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
-            try {
-                db.bindToCurrentThread();
-                Assert.assertTrue(db.setString(b("s"), b("v"), SetMode.NORMAL, null));
-                Assert.assertArrayEquals(b("v"), db.getStringBytes(b("s")));
+        YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
+        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
+        try {
+            db.bindToCurrentThread();
+            Assert.assertTrue(db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null));
+            Assert.assertArrayEquals(b("v"), db.reads().strings().getStringBytes(b("s")));
 
             Assert.assertEquals(3, db.rpush(b("l"), List.of(b("a"), b("b"), b("c"))));
             List<byte[]> range = db.lrange(b("l"), 0, -1);

@@ -2,6 +2,8 @@ package yier.bubu.redis.db;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.ops.MaxmemoryErrors;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.YierdisCommandException;
@@ -88,17 +90,17 @@ public class MutationExecutorReservationTest {
             byte[] appendKey = bytes("append");
             byte[] bitKey = bytes("bit");
 
-            Assert.assertTrue(db.setString(appendKey, bytes("v"), SetMode.NORMAL, null));
-            Assert.assertEquals(0, db.setBit(bitKey, 0, 1));
+            Assert.assertTrue(db.writes().strings().setString(appendKey, bytes("v"), SetMode.NORMAL, null));
+            Assert.assertEquals(0, db.writes().strings().setBit(bitKey, 0, 1));
 
             try (YierdisChangeTracking.Scope ignored = YierdisChangeTracking.beginScope()) {
-                Assert.assertEquals(1, db.append(appendKey, bytes("")));
+                Assert.assertEquals(1, db.writes().strings().append(appendKey, slice(bytes(""))));
                 Assert.assertFalse(YierdisChangeTracking.changedValue());
                 Assert.assertFalse(YierdisChangeTracking.changedAny());
             }
 
             try (YierdisChangeTracking.Scope ignored = YierdisChangeTracking.beginScope()) {
-                Assert.assertEquals(1, db.setBit(bitKey, 0, 1));
+                Assert.assertEquals(1, db.writes().strings().setBit(bitKey, 0, 1));
                 Assert.assertFalse(YierdisChangeTracking.changedValue());
                 Assert.assertFalse(YierdisChangeTracking.changedAny());
             }
@@ -109,5 +111,29 @@ public class MutationExecutorReservationTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static BytesSlice slice(byte[] data) {
+        return new BytesSlice() {
+            private final byte[] payload = data;
+
+            @Override
+            public int length() {
+                return payload.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                if (index < 0 || index >= payload.length) {
+                    throw new IndexOutOfBoundsException();
+                }
+                return payload[index];
+            }
+
+            @Override
+            public void writeTo(BytesSink out) {
+                out.writeBytes(payload, 0, payload.length);
+            }
+        };
     }
 }

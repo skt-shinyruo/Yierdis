@@ -2,6 +2,7 @@ package yier.bubu.redis.db;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.ops.SetMode;
 
 import java.lang.reflect.Field;
@@ -18,8 +19,8 @@ public class ExpireKeySharingTest {
             byte[] key2 = b("k");
             Assert.assertNotSame(key1, key2);
 
-            db.setString(key1, b("v"), SetMode.NORMAL, null);
-            Assert.assertTrue(db.expire(key2, 60));
+            db.writes().strings().setString(key1, b("v"), SetMode.NORMAL, null);
+            Assert.assertTrue(db.writes().ttl().expire(view(key2), 60));
 
             ByteArrayKeyspace<?> store = storeKeyspace(db);
             ByteArrayKeyspace<?> expires = expiresKeyspace(db);
@@ -43,7 +44,7 @@ public class ExpireKeySharingTest {
             byte[] key2 = b("k");
             Assert.assertNotSame(key1, key2);
 
-            db.setString(key1, b("v"), SetMode.NORMAL, null);
+            db.writes().strings().setString(key1, b("v"), SetMode.NORMAL, null);
 
             ByteArrayKeyspace<?> store = storeKeyspace(db);
             ByteArrayKeyspace<Long> expires = expiresKeyspace(db);
@@ -53,7 +54,7 @@ public class ExpireKeySharingTest {
             Assert.assertSame(key2, expires.canonicalKey(key1));
 
             // Now update TTL through the DB API; it should migrate to the store-canonical key reference.
-            Assert.assertTrue(db.expire(key2, 60));
+            Assert.assertTrue(db.writes().ttl().expire(view(key2), 60));
 
             byte[] canonical = store.canonicalKey(key1);
             Assert.assertSame(key1, canonical);
@@ -67,6 +68,20 @@ public class ExpireKeySharingTest {
         Field f = YierdisDb.class.getDeclaredField("store");
         f.setAccessible(true);
         return (ByteArrayKeyspace<?>) f.get(db);
+    }
+
+    private static BytesView view(byte[] bytes) {
+        return new BytesView() {
+            @Override
+            public int length() {
+                return bytes.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                return bytes[index];
+            }
+        };
     }
 
     @SuppressWarnings("unchecked")

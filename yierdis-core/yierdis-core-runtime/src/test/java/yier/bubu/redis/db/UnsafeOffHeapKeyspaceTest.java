@@ -15,7 +15,7 @@ public class UnsafeOffHeapKeyspaceTest {
         YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
-            db.setString(b("k"), b("v"), SetMode.NORMAL, ExpireOption.px(0));
+            db.writes().strings().setString(b("k"), b("v"), SetMode.NORMAL, ExpireOption.px(0));
             Assert.assertEquals(1, db.size());
             Assert.assertTrue(allocator.usedBytes() > 0);
 

@@ -16,7 +16,7 @@ public class ExpireIndexTest {
         db.bindToCurrentThread();
 
         byte[] key = b("k");
-        db.setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
+        db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
         Assert.assertEquals(1, db.size());
 
         db.cleanupExpired();
@@ -31,13 +31,13 @@ public class ExpireIndexTest {
         db.bindToCurrentThread();
 
         byte[] key = b("k");
-        db.setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
-        db.setString(key, b("v2"), SetMode.NORMAL, null);
+        db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
+        db.writes().strings().setString(key, b("v2"), SetMode.NORMAL, null);
 
         db.cleanupExpired();
 
         Assert.assertEquals(1, db.size());
-        Assert.assertArrayEquals(b("v2"), db.getStringBytes(key));
+        Assert.assertArrayEquals(b("v2"), db.reads().strings().getStringBytes(key));
 
         db.shutdown();
     }
@@ -50,7 +50,7 @@ public class ExpireIndexTest {
         int n = 200;
         for (int i = 0; i < n; i++) {
             byte[] key = b("k" + i);
-        db.setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
+            db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
         }
         Assert.assertEquals(n, db.size());
 
@@ -68,12 +68,12 @@ public class ExpireIndexTest {
         db.bindToCurrentThread();
 
         byte[] key = b("k");
-        db.setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(60_000));
+        db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(60_000));
 
         db.cleanupExpired();
 
         Assert.assertEquals(1, db.size());
-        Assert.assertArrayEquals(b("v"), db.getStringBytes(key));
+        Assert.assertArrayEquals(b("v"), db.reads().strings().getStringBytes(key));
 
         db.shutdown();
     }
@@ -84,25 +84,15 @@ public class ExpireIndexTest {
         db.bindToCurrentThread();
 
         byte[] key = b("k");
-        db.setString(key, b("v"), SetMode.NORMAL, null);
+        db.writes().strings().setString(key, b("v"), SetMode.NORMAL, null);
         Assert.assertEquals(1, db.size());
 
         long nowMillis = System.currentTimeMillis();
         db.setExpireAtMillis(key, nowMillis - 1);
 
-        BytesView view = new BytesView() {
-            @Override
-            public int length() {
-                return key.length;
-            }
+        BytesView view = viewOf(key);
 
-            @Override
-            public byte getByte(int index) {
-                return key[index];
-            }
-        };
-
-        Assert.assertEquals(-2L, db.ttlSeconds(view));
+        Assert.assertEquals(-2L, db.reads().ttl().ttlSeconds(view));
         Assert.assertEquals(0, db.size());
 
         db.shutdown();
@@ -114,18 +104,19 @@ public class ExpireIndexTest {
         db.bindToCurrentThread();
 
         byte[] key = b("k");
-        db.setString(key, b("v"), SetMode.NORMAL, null);
+        db.writes().strings().setString(key, b("v"), SetMode.NORMAL, null);
         long usedBeforeTtl = db.usedBytesForMaxmemory();
+        BytesView keyView = viewOf(key);
 
-        Assert.assertTrue(db.expire(key, 60));
+        Assert.assertTrue(db.writes().ttl().expire(keyView, 60));
         long usedAfterTtl = db.usedBytesForMaxmemory();
         Assert.assertEquals(usedBeforeTtl + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE, usedAfterTtl);
 
         // Updating TTL should not add more metadata entries.
-        Assert.assertTrue(db.expire(key, 120));
+        Assert.assertTrue(db.writes().ttl().expire(keyView, 120));
         Assert.assertEquals(usedAfterTtl, db.usedBytesForMaxmemory());
 
-        Assert.assertTrue(db.persist(key));
+        Assert.assertTrue(db.writes().ttl().persist(keyView));
         Assert.assertEquals(usedBeforeTtl, db.usedBytesForMaxmemory());
 
         db.shutdown();
@@ -137,7 +128,7 @@ public class ExpireIndexTest {
         db.bindToCurrentThread();
 
         byte[] key = b("k");
-        db.setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(60_000));
+        db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(60_000));
         Assert.assertEquals(1, db.size());
 
         long now = System.currentTimeMillis();
@@ -146,5 +137,19 @@ public class ExpireIndexTest {
 
         Assert.assertEquals(0, db.size());
         db.shutdown();
+    }
+
+    private static BytesView viewOf(byte[] data) {
+        return new BytesView() {
+            @Override
+            public int length() {
+                return data.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                return data[index];
+            }
+        };
     }
 }

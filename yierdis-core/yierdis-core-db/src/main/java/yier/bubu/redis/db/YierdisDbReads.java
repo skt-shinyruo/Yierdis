@@ -31,16 +31,16 @@ final class YierdisDbReads implements DbReads {
     private final KeyspaceReadOps keyspace;
     private final TtlReadOps ttl;
 
-    YierdisDbReads(YierdisDb db) {
+    YierdisDbReads(YierdisDb db, YierdisStringOps strings, YierdisKeyspaceOps keyspace, YierdisTtlOps ttl) {
         YierdisDb engine = Objects.requireNonNull(db, "db");
-        this.strings = new StringReads(engine);
+        this.strings = Objects.requireNonNull(strings, "strings");
         this.hashes = new HashReads(engine);
         this.lists = new ListReads(engine);
         this.sets = new SetReads(engine);
         this.zsets = new ZSetReads(engine);
         this.hll = new HllReads(engine);
-        this.keyspace = new KeyspaceReads(engine);
-        this.ttl = new TtlReads(engine);
+        this.keyspace = Objects.requireNonNull(keyspace, "keyspace");
+        this.ttl = Objects.requireNonNull(ttl, "ttl");
     }
 
     @Override
@@ -81,44 +81,6 @@ final class YierdisDbReads implements DbReads {
     @Override
     public TtlReadOps ttl() {
         return ttl;
-    }
-
-    private static final class StringReads implements StringReadOps {
-        private final YierdisDb db;
-
-        private StringReads(YierdisDb db) {
-            this.db = Objects.requireNonNull(db, "db");
-        }
-
-        @Override
-        public byte[] getStringBytes(byte[] keyBytes) {
-            return db.getStringBytes(keyBytes);
-        }
-
-        @Override
-        public BulkStringValue getStringValue(BytesView keyView) {
-            return db.getStringValue(keyView);
-        }
-
-        @Override
-        public long strlen(BytesView keyView) {
-            return db.strlen(keyView);
-        }
-
-        @Override
-        public int getBit(BytesView keyView, long offset) {
-            return db.getBit(keyView, offset);
-        }
-
-        @Override
-        public long bitcount(BytesView keyView) {
-            return db.bitcount(keyView);
-        }
-
-        @Override
-        public long bitcount(BytesView keyView, long start, long end) {
-            return db.bitcount(keyView, start, end);
-        }
     }
 
     private static final class HashReads implements HashReadOps {
@@ -257,52 +219,6 @@ final class YierdisDbReads implements DbReads {
         @Override
         public long pfcount(List<byte[]> keys) {
             return db.pfcount(keys);
-        }
-    }
-
-    private static final class KeyspaceReads implements KeyspaceReadOps {
-        private final YierdisDb db;
-
-        private KeyspaceReads(YierdisDb db) {
-            this.db = Objects.requireNonNull(db, "db");
-        }
-
-        @Override
-        public ValueType typeOf(BytesView keyView) {
-            return db.typeOf(keyView);
-        }
-
-        @Override
-        public boolean existsKey(BytesView keyView) {
-            return db.existsKey(keyView);
-        }
-
-        @Override
-        public List<byte[]> keys(byte[] globPattern, int maxMatches, long timeBudgetNanos) {
-            return db.keys(globPattern, maxMatches, timeBudgetNanos);
-        }
-
-        @Override
-        public ScanCursorV2 scan(ScanCursorV2 cursor, byte[] globPattern, int count, List<byte[]> out) {
-            return db.scan(cursor, globPattern, count, out);
-        }
-    }
-
-    private static final class TtlReads implements TtlReadOps {
-        private final YierdisDb db;
-
-        private TtlReads(YierdisDb db) {
-            this.db = Objects.requireNonNull(db, "db");
-        }
-
-        @Override
-        public long ttlSeconds(BytesView keyView) {
-            return db.ttlSeconds(keyView);
-        }
-
-        @Override
-        public long ttlMillis(BytesView keyView) {
-            return db.ttlMillis(keyView);
         }
     }
 

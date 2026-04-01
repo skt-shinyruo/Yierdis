@@ -29,7 +29,7 @@ public class OffHeapKeysToggleTest {
         YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
-            db.setString(b("k"), b("v"), SetMode.NORMAL, null);
+            db.writes().strings().setString(b("k"), b("v"), SetMode.NORMAL, null);
             Assert.assertFalse(db.memoryStats().keysStoredOffHeap());
         } finally {
             db.shutdown();
@@ -42,7 +42,7 @@ public class OffHeapKeysToggleTest {
         YierdisDb db = new YierdisDb(allocator, true, true, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
-            db.setString(b("k"), b("v"), SetMode.NORMAL, null);
+            db.writes().strings().setString(b("k"), b("v"), SetMode.NORMAL, null);
             Assert.assertTrue(db.memoryStats().keysStoredOffHeap());
         } finally {
             db.shutdown();

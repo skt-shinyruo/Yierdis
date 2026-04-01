@@ -16,12 +16,12 @@ public class KeysBudgetTest {
             for (int i = 0; i < 4096; i++) {
                 byte[] key = ("k" + i).getBytes(StandardCharsets.US_ASCII);
                 byte[] val = ("v" + i).getBytes(StandardCharsets.US_ASCII);
-                db.setString(key, val, SetMode.NORMAL, null);
+                db.writes().strings().setString(key, val, SetMode.NORMAL, null);
             }
 
             Assert.assertTrue(
                     "expected KEYS to return partial results under extreme time budget",
-                    db.keys("*".getBytes(StandardCharsets.US_ASCII), Integer.MAX_VALUE, 1L).size() < 4096
+                    db.reads().keyspace().keys("*".getBytes(StandardCharsets.US_ASCII), Integer.MAX_VALUE, 1L).size() < 4096
             );
         } finally {
             db.shutdown();
@@ -35,13 +35,13 @@ public class KeysBudgetTest {
         try {
             for (int i = 0; i < 4; i++) {
                 byte[] key = ("k" + i).getBytes(StandardCharsets.US_ASCII);
-            db.setString(key, "v".getBytes(StandardCharsets.US_ASCII), SetMode.NORMAL, null);
+                db.writes().strings().setString(key, "v".getBytes(StandardCharsets.US_ASCII), SetMode.NORMAL, null);
             }
 
             Assert.assertEquals(
                     "expected KEYS to return at most the configured maxMatches",
                     1,
-                    db.keys("*".getBytes(StandardCharsets.US_ASCII), 1, 0L).size()
+                    db.reads().keyspace().keys("*".getBytes(StandardCharsets.US_ASCII), 1, 0L).size()
             );
         } finally {
             db.shutdown();
