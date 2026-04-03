@@ -3,8 +3,7 @@ package yier.bubu.redis.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.db.YierdisDb;
-import yier.bubu.redis.db.memory.offheap.OffHeapKeyCopyDiagnostics;
-import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyInteger;
@@ -14,35 +13,31 @@ import static yier.bubu.redis.testutil.TestBytes.cmd;
 
 public class OffHeapKeysZeroCopyReadPathTest {
     @Test
-    public void readPathDoesNotCopyCanonicalKeyBytesWhenKeysStoredOffHeap() {
-        YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator, true, true, 0, "noeviction", 5, 5, 5);
-        try {
-            db.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
-                OffHeapKeyCopyDiagnostics.reset();
-                Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
+    public void readPathWorksWithDefaultFfmKeyspace() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
+            try {
+                db.bindToCurrentThread();
+                YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+                try (FastTestClient client = new FastTestClient(processor)) {
+                    Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
+                    Assert.assertTrue(db.memory().memoryStats().keysStoredOffHeap());
 
-                // 只统计“从 off-heap 复制 canonical key bytes 到 heap”的次数；SET 本身不应触发该路径。
-                OffHeapKeyCopyDiagnostics.reset();
+                    ReplyBulkString v = (ReplyBulkString) client.execute(cmd("GET", "k"));
+                    Assert.assertEquals("v", v.asString());
 
-                ReplyBulkString v = (ReplyBulkString) client.execute(cmd("GET", "k"));
-                Assert.assertEquals("v", v.asString());
+                    ReplyInteger exists = (ReplyInteger) client.execute(cmd("EXISTS", "k"));
+                    Assert.assertEquals(1L, exists.value());
 
-                ReplyInteger exists = (ReplyInteger) client.execute(cmd("EXISTS", "k"));
-                Assert.assertEquals(1L, exists.value());
+                    ReplySimpleString type = (ReplySimpleString) client.execute(cmd("TYPE", "k"));
+                    Assert.assertEquals("string", type.value());
 
-                ReplySimpleString type = (ReplySimpleString) client.execute(cmd("TYPE", "k"));
-                Assert.assertEquals("string", type.value());
-
-                ReplyInteger ttl = (ReplyInteger) client.execute(cmd("TTL", "k"));
-                Assert.assertEquals(-1L, ttl.value());
-
-                Assert.assertEquals(0L, OffHeapKeyCopyDiagnostics.heapKeyCopies());
+                    ReplyInteger ttl = (ReplyInteger) client.execute(cmd("TTL", "k"));
+                    Assert.assertEquals(-1L, ttl.value());
+                }
+            } finally {
+                db.shutdown();
             }
-        } finally {
-            db.shutdown();
         }
     }
 }

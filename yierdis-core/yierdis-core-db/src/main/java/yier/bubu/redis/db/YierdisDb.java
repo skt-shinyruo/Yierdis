@@ -2,6 +2,9 @@ package yier.bubu.redis.db;
 
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmBlobStore;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmExpireIndex;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmKeyspace;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.db.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
@@ -66,6 +69,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     private final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
     private final boolean ownsOffHeapAllocator;
+    private final boolean ownsMemoryRuntime;
     private final boolean keysStoredOffHeap;
 
     /**
@@ -108,11 +112,22 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     private final DbLifecycleOps lifecycleOps;
 
     public YierdisDb() {
-        this((OffHeapAllocator) null, false, 0, "noeviction", 5, 5, 5);
+        this(new YierdisFfmMemoryRuntime("db"), true, 0, "noeviction", 5, 5, 5);
     }
 
     public YierdisDb(OffHeapAllocator offHeapAllocator) {
         this(offHeapAllocator, false, false, 0, "noeviction", 5, 5, 5);
+    }
+
+    private YierdisDb(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            long maxmemoryBytes,
+            String maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis
+    ) {
+        this(memoryRuntime, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
     }
 
     public static YierdisDb createWithSharedFfmRuntime(
@@ -123,17 +138,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        return new YierdisDb(
-                memoryRuntime,
-                new YierdisForeignOffHeapAllocator(memoryRuntime, 0),
-                false,
-                false,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis
-        );
+        return new YierdisDb(memoryRuntime, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
     }
 
     public YierdisDb(
@@ -144,7 +149,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        this(null, offHeapAllocator, false, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+        this(null, offHeapAllocator, false, false, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
     }
 
     public YierdisDb(
@@ -156,7 +161,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        this(null, offHeapAllocator, true, offHeapKeysEnabled, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+        this(null, offHeapAllocator, true, offHeapKeysEnabled, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
     }
 
     public YierdisDb(
@@ -169,7 +174,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        this(null, offHeapAllocator, ownsOffHeapAllocator, offHeapKeysEnabled, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+        this(null, offHeapAllocator, ownsOffHeapAllocator, offHeapKeysEnabled, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
     }
 
     private YierdisDb(
@@ -177,6 +182,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             OffHeapAllocator offHeapAllocator,
             boolean ownsOffHeapAllocator,
             boolean offHeapKeysEnabled,
+            boolean ownsMemoryRuntime,
             long maxmemoryBytes,
             String maxmemoryPolicy,
             int maxmemorySamples,
@@ -186,10 +192,15 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         this.memoryRuntime = memoryRuntime;
         this.offHeapAllocator = offHeapAllocator;
         this.ownsOffHeapAllocator = ownsOffHeapAllocator;
-        if (offHeapKeysEnabled && !(offHeapAllocator instanceof OffHeapAddressAllocator)) {
+        this.ownsMemoryRuntime = ownsMemoryRuntime;
+        if (memoryRuntime != null) {
+            YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(memoryRuntime, "ffm-key");
+            this.store = new YierdisFfmKeyspace<>(blobStore);
+            this.expires = new YierdisFfmExpireIndex(blobStore);
+            this.keysStoredOffHeap = true;
+        } else if (offHeapKeysEnabled && !(offHeapAllocator instanceof OffHeapAddressAllocator)) {
             throw new IllegalArgumentException("offHeapKeysEnabled requires an address allocator (unsafe off-heap backend)");
-        }
-        if (offHeapKeysEnabled && offHeapAllocator instanceof OffHeapAddressAllocator addressAllocator) {
+        } else if (offHeapKeysEnabled && offHeapAllocator instanceof OffHeapAddressAllocator addressAllocator) {
             this.store = new YierdisUnsafeOffHeapKeyspace<>(addressAllocator);
             this.expires = new YierdisUnsafeOffHeapExpireIndex(addressAllocator);
             this.keysStoredOffHeap = true;
@@ -236,6 +247,29 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         this.memoryOps = new YierdisDbMemoryOps(this);
         this.lifecycleOps = new YierdisDbLifecycleOps(this);
         // Scheduling (if any) is done by the Netty event loop in YierdisServer, not by a dedicated thread.
+    }
+
+    private YierdisDb(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            boolean ownsMemoryRuntime,
+            long maxmemoryBytes,
+            String maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis
+    ) {
+        this(
+                memoryRuntime,
+                new YierdisForeignOffHeapAllocator(memoryRuntime, 0),
+                false,
+                false,
+                ownsMemoryRuntime,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis
+        );
     }
 
     @Override
@@ -430,8 +464,9 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                 offHeapUsedBytes = 0;
             }
         }
+        long directRuntimeBytes = maxmemoryCoordinator == null ? directRuntimeUsedBytes() : 0L;
         long ttlBytes = estimateTtlBytesForMaxmemory();
-        long total = usedBytes + offHeapUsedBytes;
+        long total = usedBytes + offHeapUsedBytes + directRuntimeBytes;
         if (ttlBytes <= 0) {
             return total;
         }
@@ -559,6 +594,9 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         if (ownsOffHeapAllocator && offHeapAllocator != null) {
             offHeapAllocator.close();
         }
+        if (ownsMemoryRuntime && memoryRuntime != null) {
+            memoryRuntime.close();
+        }
     }
 
     public void flushDb() {
@@ -590,16 +628,29 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     public YierdisMemoryStats memoryStats() {
         checkThread();
+        long directRuntimeBytes = directRuntimeUsedBytes();
         return DbMemoryAccounting.snapshot(
                 maxmemoryBytes,
                 usedBytes,
                 reservedBytes,
                 offHeapAllocator,
+                directRuntimeBytes,
                 store,
                 expires,
                 keysStoredOffHeap,
-                ownsOffHeapAllocator
+                maxmemoryCoordinator == null
         );
+    }
+
+    private long directRuntimeUsedBytes() {
+        long bytes = 0L;
+        if (store instanceof YierdisFfmKeyspace<?> ffmStore) {
+            bytes += Math.max(0L, ffmStore.nativeBytes());
+        }
+        if (expires instanceof YierdisFfmExpireIndex ffmExpires) {
+            bytes += Math.max(0L, ffmExpires.nativeBytes());
+        }
+        return bytes;
     }
 
     private long estimateEntryBytes(byte[] keyBytes, YierdisObject e) {
@@ -845,9 +896,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             removeExpire(handle);
             return;
         }
-        if (!keysStoredOffHeap) {
-            expires.removeExpire(keyBytes);
-        }
+        expires.removeExpire(keyBytes);
     }
 
     void removeExpire(KeyHandle keyHandle) {

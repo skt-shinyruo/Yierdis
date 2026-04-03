@@ -3,6 +3,7 @@ package yier.bubu.redis.db.key;
 // KeyHandle：key identity SSOT（heap/off-heap/bytesview），用于 keyspace/expires/scan 等内部路径的零拷贝交互。
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmBytesRef;
 import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 
 import java.util.Objects;
@@ -57,8 +58,21 @@ public interface KeyHandle extends BytesView {
         return new HeapKeyHandle(keyBytes, dictHash);
     }
 
+    static KeyHandle forFfm(YierdisFfmBytesRef ref, int dictHash) {
+        Objects.requireNonNull(ref, "ref");
+        return new FfmKeyHandle(ref, dictHash);
+    }
+
     static KeyHandle forOffHeap(OffHeapAddressAllocator allocator, long address, int len, int dictHash) {
         Objects.requireNonNull(allocator, "allocator");
         return new OffHeapKeyHandle(allocator, address, len, dictHash);
+    }
+
+    static int hashBytesView(BytesView view, int len) {
+        int h = 1;
+        for (int i = 0; i < len; i++) {
+            h = 31 * h + view.getByte(i);
+        }
+        return h;
     }
 }

@@ -22,9 +22,19 @@ public final class YierdisFfmAccess {
         return span.segment().get(ValueLayout.JAVA_LONG_UNALIGNED, offset);
     }
 
+    public static int getInt(YierdisFfmSpan span, int offset) {
+        checkRange(span, offset, Integer.BYTES);
+        return span.segment().get(ValueLayout.JAVA_INT_UNALIGNED, offset);
+    }
+
     public static void setLong(YierdisFfmSpan span, int offset, long value) {
         checkRange(span, offset, Long.BYTES);
         span.segment().set(ValueLayout.JAVA_LONG_UNALIGNED, offset, value);
+    }
+
+    public static void setInt(YierdisFfmSpan span, int offset, int value) {
+        checkRange(span, offset, Integer.BYTES);
+        span.segment().set(ValueLayout.JAVA_INT_UNALIGNED, offset, value);
     }
 
     public static void getBytes(YierdisFfmSpan span, int offset, byte[] dst, int dstOff, int len) {

@@ -1,5 +1,7 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.db.memory.ffm.YierdisFfmExpireIndex;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmKeyspace;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.ops.DbMemoryConstants;
 import yier.bubu.redis.ops.YierdisMemoryStats;
@@ -20,12 +22,15 @@ final class DbMemoryAccounting {
             long heapDataBytesEstimate,
             long reservedBytes,
             OffHeapAllocator offHeapAllocator,
+            long directNativeBytes,
             YierdisKeyspace<?> store,
             YierdisExpireIndex expires,
             boolean keysStoredOffHeap,
             boolean includeOffHeapInMaxmemory
     ) {
-        long offHeapUsedBytes = safeOffHeapUsedBytes(offHeapAllocator);
+        long allocatorOffHeapUsedBytes = safeOffHeapUsedBytes(offHeapAllocator);
+        long directNativeUsedBytes = Math.max(0L, directNativeBytes);
+        long offHeapUsedBytes = allocatorOffHeapUsedBytes + directNativeUsedBytes;
 
         int keyCount = store == null ? 0 : store.size();
         int expireCount = expires == null ? 0 : expires.size();
@@ -35,6 +40,11 @@ final class DbMemoryAccounting {
         int keyspaceCap1 = 0;
         long keyspaceOverhead = 0;
         if (store instanceof ByteArrayKeyspace<?> ks) {
+            keyspaceRehashing = ks.isRehashing();
+            keyspaceCap0 = ks.table0Capacity();
+            keyspaceCap1 = ks.table1Capacity();
+            keyspaceOverhead = ks.estimatedTableOverheadBytes();
+        } else if (store instanceof YierdisFfmKeyspace<?> ks) {
             keyspaceRehashing = ks.isRehashing();
             keyspaceCap0 = ks.table0Capacity();
             keyspaceCap1 = ks.table1Capacity();
@@ -53,6 +63,11 @@ final class DbMemoryAccounting {
             expireCap1 = raw.table1Capacity();
             expireOverhead = raw.estimatedTableOverheadBytes();
             expireValueObjects = estimateLongObjectBytes(expireCount);
+        } else if (expires instanceof YierdisFfmExpireIndex ffm) {
+            expireRehashing = ffm.isRehashing();
+            expireCap0 = ffm.table0Capacity();
+            expireCap1 = ffm.table1Capacity();
+            expireOverhead = ffm.estimatedTableOverheadBytes();
         }
 
         long usedBytesForMaxmemory = heapDataBytesEstimate + (includeOffHeapInMaxmemory ? offHeapUsedBytes : 0);
@@ -65,12 +80,13 @@ final class DbMemoryAccounting {
             }
         }
         long effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + Math.max(0L, reservedBytes);
-        long totalEstimatedBytes =
-                heapDataBytesEstimate
-                        + offHeapUsedBytes
-                        + keyspaceOverhead
-                        + expireOverhead
-                        + expireValueObjects;
+        long totalEstimatedBytes = heapDataBytesEstimate + allocatorOffHeapUsedBytes + directNativeUsedBytes;
+        if (store instanceof ByteArrayKeyspace<?>) {
+            totalEstimatedBytes += keyspaceOverhead;
+        }
+        if (expires instanceof YierdisHeapExpireIndex) {
+            totalEstimatedBytes += expireOverhead + expireValueObjects;
+        }
 
         return new YierdisMemoryStats(
                 maxmemoryBytes,

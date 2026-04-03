@@ -2,6 +2,7 @@ package yier.bubu.redis.db.key;
 
 // KeyHandleAccess：KeyHandle 的内部访问桥接（用于将 handle 落地到 keyspace/expire index 等实现细节）。
 
+import yier.bubu.redis.db.memory.ffm.YierdisFfmBytesRef;
 import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 
 /**
@@ -23,9 +24,27 @@ public final class KeyHandleAccess {
         return handle instanceof OffHeapKeyHandle;
     }
 
+    public static boolean isFfm(KeyHandle handle) {
+        return handle instanceof FfmKeyHandle;
+    }
+
     public static byte[] heapBytesOrNull(KeyHandle handle) {
         if (handle instanceof HeapKeyHandle h) {
             return h.bytesUnsafe();
+        }
+        return null;
+    }
+
+    public static YierdisFfmBytesRef ffmBytesRef(KeyHandle handle) {
+        if (!(handle instanceof FfmKeyHandle h)) {
+            throw new IllegalArgumentException("not an FFM KeyHandle: " + (handle == null ? "null" : handle.getClass().getName()));
+        }
+        return h.refUnsafe();
+    }
+
+    public static YierdisFfmBytesRef ffmBytesRefOrNull(KeyHandle handle) {
+        if (handle instanceof FfmKeyHandle h) {
+            return h.refUnsafe();
         }
         return null;
     }
