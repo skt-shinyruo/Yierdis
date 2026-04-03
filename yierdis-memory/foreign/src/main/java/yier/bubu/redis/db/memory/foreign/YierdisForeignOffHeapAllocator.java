@@ -1,23 +1,20 @@
 package yier.bubu.redis.db.memory.foreign;
 
 import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.bytes.BytesSource;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBuf;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapOutOfMemoryException;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapSlice;
-import yier.bubu.redis.bytes.BytesSource;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
 
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 
 public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
     private final long maxBytes;
+    private final YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("foreign-allocator");
 
     private boolean closed;
-    private long usedBytes;
 
     public YierdisForeignOffHeapAllocator(long maxBytes) {
         if (maxBytes < 0) {
@@ -35,20 +32,18 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
             throw new IllegalStateException("allocator is closed");
         }
 
-        long next = usedBytes + capacity;
+        long next = runtime.usedBytes() + capacity;
         if (maxBytes > 0 && next > maxBytes) {
             throw new YierdisOffHeapOutOfMemoryException("off-heap memory limit exceeded");
         }
 
-        Arena arena = Arena.ofConfined();
-        MemorySegment segment = arena.allocate(capacity);
-        usedBytes = next;
-        return new YierdisForeignOffHeapBuf(this, arena, segment, capacity);
+        YierdisFfmRegion region = runtime.allocateRegion("buf", capacity);
+        return new YierdisForeignOffHeapBuf(region, capacity);
     }
 
     @Override
     public long usedBytes() {
-        return usedBytes;
+        return runtime.usedBytes();
     }
 
     @Override
@@ -63,17 +58,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
     @Override
     public void close() {
         closed = true;
-        if (usedBytes != 0) {
-            throw new IllegalStateException("off-heap leak: " + usedBytes + " bytes still allocated");
-        }
-    }
-
-    void onFree(int capacity) {
-        long next = usedBytes - capacity;
-        if (next < 0) {
-            throw new IllegalStateException("allocator accounting underflow");
-        }
-        usedBytes = next;
+        runtime.close();
     }
 
     private static final class YierdisForeignOffHeapBuf implements YierdisOffHeapBuf {
@@ -81,22 +66,15 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
         private static final ThreadLocal<byte[]> TL_COPY_BUF =
                 ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
 
-        private final YierdisForeignOffHeapAllocator owner;
-        private final Arena arena;
-        private final MemorySegment segment;
+        private final YierdisFfmRegion region;
+        private final YierdisFfmSpan span;
         private final int capacity;
 
         private boolean closed;
 
-        private YierdisForeignOffHeapBuf(
-                YierdisForeignOffHeapAllocator owner,
-                Arena arena,
-                MemorySegment segment,
-                int capacity
-        ) {
-            this.owner = owner;
-            this.arena = arena;
-            this.segment = segment;
+        private YierdisForeignOffHeapBuf(YierdisFfmRegion region, int capacity) {
+            this.region = region;
+            this.span = region.span(0, capacity);
             this.capacity = capacity;
         }
 
@@ -109,14 +87,14 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
         public byte getByte(int index) {
             ensureOpen();
             checkIndex(index, 1);
-            return segment.get(ValueLayout.JAVA_BYTE, index);
+            return YierdisFfmAccess.getByte(span, index);
         }
 
         @Override
         public void setByte(int index, byte value) {
             ensureOpen();
             checkIndex(index, 1);
-            segment.set(ValueLayout.JAVA_BYTE, index, value);
+            YierdisFfmAccess.setByte(span, index, value);
         }
 
         @Override
@@ -129,12 +107,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
                 throw new IllegalArgumentException("len must be >= 0");
             }
             checkIndex(index, len);
-            if (dstOff < 0 || dstOff + len > dst.length) {
-                throw new IndexOutOfBoundsException();
-            }
-            for (int i = 0; i < len; i++) {
-                dst[dstOff + i] = segment.get(ValueLayout.JAVA_BYTE, index + i);
-            }
+            YierdisFfmAccess.getBytes(span, index, dst, dstOff, len);
         }
 
         @Override
@@ -147,12 +120,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
                 throw new IllegalArgumentException("len must be >= 0");
             }
             checkIndex(index, len);
-            if (srcOff < 0 || srcOff + len > src.length) {
-                throw new IndexOutOfBoundsException();
-            }
-            for (int i = 0; i < len; i++) {
-                segment.set(ValueLayout.JAVA_BYTE, index + i, src[srcOff + i]);
-            }
+            YierdisFfmAccess.setBytes(span, index, src, srcOff, len);
         }
 
         @Override
@@ -172,7 +140,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
                 return;
             }
 
-            ByteBuffer dst = segment.asSlice(index, len).asByteBuffer();
+            ByteBuffer dst = YierdisFfmAccess.asByteBuffer(span, index, len);
             byte[] scratch = TL_COPY_BUF.get();
             int remaining = len;
             int srcOff = srcIndex;
@@ -192,7 +160,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
                 throw new IllegalArgumentException("len must be >= 0");
             }
             checkIndex(index, len);
-            return new YierdisForeignOffHeapSlice(this, index, len);
+            return new YierdisForeignOffHeapSlice(this, span.slice(index, len));
         }
 
         @Override
@@ -201,27 +169,20 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
                 return;
             }
             closed = true;
-            arena.close();
-            owner.onFree(capacity);
+            region.close();
         }
 
         private void ensureOpen() {
             if (closed) {
                 throw new IllegalStateException("buffer is closed");
             }
-            if (!arena.scope().isAlive()) {
-                throw new IllegalStateException("arena is not alive");
-            }
+            region.ensureOpen();
         }
 
         private void checkIndex(int index, int len) {
             if (index < 0 || index + len > capacity) {
                 throw new IndexOutOfBoundsException();
             }
-        }
-
-        MemorySegment segment() {
-            return segment;
         }
 
         void ensureOwnerOpen() {
@@ -235,27 +196,22 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
                 ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
 
         private final YierdisForeignOffHeapBuf owner;
-        private final int offset;
-        private final int len;
+        private final YierdisFfmSpan span;
 
-        private YierdisForeignOffHeapSlice(YierdisForeignOffHeapBuf owner, int offset, int len) {
+        private YierdisForeignOffHeapSlice(YierdisForeignOffHeapBuf owner, YierdisFfmSpan span) {
             this.owner = owner;
-            this.offset = offset;
-            this.len = len;
+            this.span = span;
         }
 
         @Override
         public int length() {
-            return len;
+            return span.size();
         }
 
         @Override
         public byte getByte(int index) {
             owner.ensureOwnerOpen();
-            if (index < 0 || index >= len) {
-                throw new IndexOutOfBoundsException();
-            }
-            return owner.segment().get(ValueLayout.JAVA_BYTE, offset + index);
+            return YierdisFfmAccess.getByte(span, index);
         }
 
         @Override
@@ -267,15 +223,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
             if (readLen < 0) {
                 throw new IllegalArgumentException("len must be >= 0");
             }
-            if (index < 0 || index + readLen > len) {
-                throw new IndexOutOfBoundsException();
-            }
-            if (dstOff < 0 || dstOff + readLen > dst.length) {
-                throw new IndexOutOfBoundsException();
-            }
-            for (int i = 0; i < readLen; i++) {
-                dst[dstOff + i] = owner.segment().get(ValueLayout.JAVA_BYTE, offset + index + i);
-            }
+            YierdisFfmAccess.getBytes(span, index, dst, dstOff, readLen);
         }
 
         @Override
@@ -284,15 +232,14 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
             if (out == null) {
                 throw new IllegalArgumentException("out must not be null");
             }
-            if (len == 0) {
+            if (span.size() == 0) {
                 return;
             }
 
-            MemorySegment s = owner.segment().asSlice(offset, len);
-            ByteBuffer bb = s.asByteBuffer();
+            ByteBuffer bb = YierdisFfmAccess.asByteBuffer(span);
 
             byte[] scratch = TL_COPY_BUF.get();
-            int remaining = len;
+            int remaining = span.size();
             while (remaining > 0) {
                 int chunk = Math.min(remaining, scratch.length);
                 bb.get(scratch, 0, chunk);

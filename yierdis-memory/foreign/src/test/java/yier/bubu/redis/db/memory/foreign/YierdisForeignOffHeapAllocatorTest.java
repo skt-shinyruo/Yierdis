@@ -6,6 +6,7 @@ import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocatorContractTest;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocators;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocatorProvider;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBackend;
+import yier.bubu.redis.db.memory.api.YierdisOffHeapBuf;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
 
 import java.util.ServiceLoader;
@@ -28,6 +29,17 @@ public class YierdisForeignOffHeapAllocatorTest extends YierdisOffHeapAllocatorC
     public void allocatorInstantiatesWithoutIncubatorModuleFlags() {
         try (OffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(0)) {
             Assert.assertNotNull(allocator);
+            Assert.assertEquals(0L, allocator.usedBytes());
+        }
+    }
+
+    @Test
+    public void foreignAllocatorUsesFfmRuntimeForBufOwnership() {
+        try (YierdisForeignOffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(0)) {
+            YierdisOffHeapBuf buf = allocator.allocate(16);
+            buf.setByte(0, (byte) 'x');
+            Assert.assertEquals('x', buf.getByte(0));
+            buf.close();
             Assert.assertEquals(0L, allocator.usedBytes());
         }
     }
