@@ -81,13 +81,11 @@ public class MaxmemoryScopeTest {
     }
 
     @Test
-    public void globalMemoryStatsDoesNotDoubleCountOffHeap() throws Exception {
+    public void globalMemoryStatsIncludesDefaultFfmNativeMemoryOnce() throws Exception {
         try (TestServer server = TestServer.startWithArgs(
                 "--databases", "2",
                 "--maxmemoryScope", "global",
-                "--maxmemoryBytes", "0",
-                "--offheapBackend", "netty",
-                "--offheapMaxBytes", "10485760"
+                "--maxmemoryBytes", "0"
         )) {
             try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
                 ok(client, b("SELECT"), b("0"));
@@ -99,7 +97,7 @@ public class MaxmemoryScopeTest {
                 long offHeap = stats.getOrDefault("offheap_used_bytes", -1L);
                 long offHeapIncluded = stats.getOrDefault("offheap_included_in_maxmemory", -1L);
 
-                Assert.assertTrue("offheap_used_bytes should be > 0 when offheapBackend=netty", offHeap > 0);
+                Assert.assertTrue("offheap_used_bytes should be > 0 under the default FFM memory model", offHeap > 0);
                 Assert.assertEquals("offheap_included_in_maxmemory should be 1 in global mode", 1L, offHeapIncluded);
                 Assert.assertEquals("used_bytes_for_maxmemory should equal ledger_used_bytes + offheap_used_bytes when included",
                         ledgerUsed + offHeap, used);

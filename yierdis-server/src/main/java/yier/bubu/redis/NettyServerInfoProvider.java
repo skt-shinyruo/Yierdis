@@ -361,7 +361,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             sb.append("yierdis_maxmemory_effective_used_bytes:").append(maxmemoryEffectiveUsedBytes).append("\r\n");
             sb.append("yierdis_offheap_included_in_maxmemory:").append(offHeapIncludedInMaxmemory ? 1 : 0).append("\r\n");
             sb.append("yierdis_offheap_used_bytes:").append(m.offHeapUsedBytes).append("\r\n");
-            sb.append("yierdis_offheap_max_bytes:").append(config.offheapMaxBytes()).append("\r\n");
+            sb.append("yierdis_offheap_max_bytes:0\r\n");
             sb.append("\r\n");
         }
 

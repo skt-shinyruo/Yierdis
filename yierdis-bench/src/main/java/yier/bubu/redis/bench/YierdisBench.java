@@ -37,7 +37,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 纯 Java 压测工具：用于对比 Yierdis 的 off-heap 后端（none/netty/unsafe）的吞吐与延迟。
+ * 纯 Java 压测工具：用于测量 Yierdis 在默认 FFM native memory 模式下的吞吐与延迟。
  * <p>
  * 设计原则：
  * - 不依赖 redis-benchmark 等系统工具
@@ -47,7 +47,7 @@ import java.util.concurrent.TimeUnit;
 public final class YierdisBench {
     private static final String DEFAULT_HOST = "127.0.0.1";
     private static final int DEFAULT_PORT_BASE = 16378;
-    private static final List<String> DEFAULT_BACKENDS = List.of("none", "netty", "unsafe");
+    private static final List<String> DEFAULT_BACKENDS = List.of("foreign");
 
     // 共享容器 + memory limit=16G + server 固定 -Xms4g -Xmx4g 的保守默认预算
     private static final String DEFAULT_XMS = "4g";
@@ -137,10 +137,6 @@ public final class YierdisBench {
             if (!config.noStartServer) {
                 YierdisServerArgs serverArgsForRun = config.baseServerArgs.copy();
                 serverArgsForRun.port = port;
-                serverArgsForRun.offheapBackend = backend;
-                if ("none".equalsIgnoreCase(backend)) {
-                    serverArgsForRun.offheapMaxBytes = 0;
-                }
                 serverArgsForRun.normalizeAndValidate();
 
                 server = new ServerProcess(
@@ -274,8 +270,8 @@ public final class YierdisBench {
                 + " -XX:MaxDirectMemorySize=" + config.serverMaxDirectMemory);
         println("  maxmemory  : --maxmemoryBytes " + config.baseServerArgs.maxmemoryBytes
                 + " --maxmemoryPolicy " + config.baseServerArgs.maxmemoryPolicy);
-        println("  off-heap   : --offheapMaxBytes " + config.baseServerArgs.offheapMaxBytes + "（bench 会按 backend 覆盖 --offheapBackend）");
-        println("  提醒：容器 OOMKill 优先下调 offheapMaxBytes / maxDirectMemory，而不是只看 maxmemory。");
+        println("  native mem : JDK 25 FFM（固定启用）；容器内请配合 -XX:MaxDirectMemorySize 做预算。");
+        println("  提醒：容器 OOMKill 优先下调 maxDirectMemory / maxmemory，而不是只看 maxmemory。");
     }
 
     private static Path findServerJar() {
@@ -656,11 +652,7 @@ public final class YierdisBench {
                 throw new IllegalArgumentException("serverJar 不存在: " + args.serverJar.toAbsolutePath());
             }
 
-            List<String> backends = splitCsv(args.backends);
-            if (args.noStartServer) {
-                backends = List.of("external");
-            }
-            validateBackends(backends);
+            List<String> backends = args.noStartServer ? List.of("external") : DEFAULT_BACKENDS;
 
             return new BenchConfig(
                     args.noStartServer,
@@ -684,37 +676,6 @@ public final class YierdisBench {
                     args.skipLatency,
                     args.strictReplies
             );
-        }
-
-        private static void validateBackends(List<String> backends) {
-            if (backends == null || backends.isEmpty()) {
-                throw new IllegalArgumentException("backends 不能为空");
-            }
-            for (String b : backends) {
-                String normalized = b == null ? "" : b.trim().toLowerCase(Locale.ROOT);
-                if (normalized.isEmpty()) {
-                    continue;
-                }
-                if (!normalized.equals("none") && !normalized.equals("netty") && !normalized.equals("unsafe") && !normalized.equals("foreign")
-                        && !normalized.equals("external")) {
-                    throw new IllegalArgumentException("不支持的 backend: " + b);
-                }
-            }
-        }
-
-        private static List<String> splitCsv(String csv) {
-            if (csv == null || csv.isBlank()) {
-                return List.of();
-            }
-            String[] parts = csv.split(",");
-            List<String> out = new ArrayList<>(parts.length);
-            for (String p : parts) {
-                String s = p.trim();
-                if (!s.isEmpty()) {
-                    out.add(s);
-                }
-            }
-            return out;
         }
     }
 

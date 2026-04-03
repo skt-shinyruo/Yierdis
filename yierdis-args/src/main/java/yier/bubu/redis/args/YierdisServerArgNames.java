@@ -23,9 +23,6 @@ public final class YierdisServerArgNames {
     public static final String PROTOCOL_MAX_ARGS = "--protocolMaxArgs";
     public static final String PROTOCOL_MAX_LINE_BYTES = "--protocolMaxLineBytes";
 
-    public static final String OFFHEAP_BACKEND = "--offheapBackend";
-    public static final String OFFHEAP_MAX_BYTES = "--offheapMaxBytes";
-    public static final String OFFHEAP_KEYS_ENABLED = "--offheapKeysEnabled";
     public static final String MAXMEMORY_BYTES = "--maxmemoryBytes";
     public static final String MAXMEMORY_SCOPE = "--maxmemoryScope";
     public static final String MAXMEMORY_POLICY = "--maxmemoryPolicy";

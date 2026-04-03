@@ -24,16 +24,9 @@ public final class YierdisBenchArgs {
     @Option(
             names = "--portBase",
             defaultValue = "16378",
-            description = "Base port for auto-started servers (backend index is added). In connect-only mode, this is the target port."
+            description = "Port for the auto-started server. In connect-only mode, this is the target port."
     )
     public int portBase = 16378;
-
-    @Option(
-            names = "--backends",
-            defaultValue = "none,netty,unsafe",
-            description = "Comma-separated backend list to run when starting servers: none|netty|unsafe|foreign."
-    )
-    public String backends = "none,netty,unsafe";
 
     @Option(names = "--noStartServer", description = "Do not start server process; benchmark an already running server.")
     public boolean noStartServer;

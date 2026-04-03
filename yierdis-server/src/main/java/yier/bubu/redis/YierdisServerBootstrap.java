@@ -20,10 +20,12 @@ import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapBackend;
+import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocators;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBackendUnavailableException;
+import yier.bubu.redis.db.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.ops.DbEngine;
+import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
@@ -31,7 +33,6 @@ import yier.bubu.redis.runtime.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.YierdisInstanceRuntimeAccess;
 
 import java.net.InetSocketAddress;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -105,26 +106,17 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     }
 
     private void startInternal() throws Exception {
-        final YierdisOffHeapBackend backend = YierdisOffHeapBackend.fromString(runtimeConfig.offheapBackend().argvValue());
-        log.info("off-heap backend: {} (maxBytes={}, keysOffHeapEnabled={})",
-                backend.name().toLowerCase(Locale.ROOT),
-                runtimeConfig.offheapMaxBytes(),
-                runtimeConfig.offheapKeysEnabled());
+        ForeignMemoryAutoModules.ensureFfmAvailable();
+        log.info("native memory backend: foreign (JDK 25 FFM)");
         log.info("off-heap providers: {}", YierdisOffHeapAllocators.availableProvidersSummary());
 
         try {
-            offHeapAllocator = YierdisOffHeapAllocators.create(backend, runtimeConfig.offheapMaxBytes());
-            if (backend != YierdisOffHeapBackend.NONE && runtimeConfig.offheapMaxBytes() == 0) {
-                log.warn("off-heap backend '{}' is enabled but offheapMaxBytes=0 (no hard cap). "
-                                + "If you rely on maxmemoryBytes, consider setting --offheapMaxBytes to avoid surprises.",
-                        backend.name().toLowerCase(Locale.ROOT));
-            }
+            offHeapAllocator = YierdisOffHeapAllocators.create("foreign", 0);
         } catch (YierdisOffHeapBackendUnavailableException e) {
-            // 可预期配置错误：避免输出长堆栈，由 CLI 统一以稳定退出码退出。
-            log.error("Failed to initialize off-heap backend '{}': {}", backend, e.getMessage());
+            log.error("Failed to initialize native memory backend 'foreign': {}", e.getMessage());
             throw YierdisCliException.userError(e.getMessage(), e);
         } catch (RuntimeException e) {
-            log.error("Failed to initialize off-heap backend '{}': {}", backend, e.getMessage());
+            log.error("Failed to initialize native memory backend 'foreign': {}", e.getMessage());
             throw e;
         }
 
@@ -132,18 +124,41 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         int databases = Math.max(1, runtimeConfig.databases());
         YierdisInstanceConfig.MaxmemoryScope scope =
                 perDbScope ? YierdisInstanceConfig.MaxmemoryScope.PER_DB : YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
-        instance = YierdisInstance.create(YierdisInstanceConfig.builder()
+        YierdisInstanceConfig.Builder instanceConfig = YierdisInstanceConfig.builder()
                 .databases(databases)
-                .offHeapAllocator(offHeapAllocator)
-                .ownsOffHeapAllocator(false)
-                .offHeapKeysEnabled(runtimeConfig.offheapKeysEnabled())
                 .maxmemoryBytes(runtimeConfig.maxmemoryBytes())
                 .maxmemoryScope(scope)
                 .maxmemoryPolicy(runtimeConfig.maxmemoryPolicy().argvValue())
                 .maxmemorySamples(runtimeConfig.maxmemorySamples())
                 .evictionTimeLimitMillis(runtimeConfig.evictionTimeLimitMillis())
-                .expireCleanupTimeLimitMillis(runtimeConfig.expireCleanupTimeLimitMillis())
-                .build());
+                .expireCleanupTimeLimitMillis(runtimeConfig.expireCleanupTimeLimitMillis());
+        if (perDbScope) {
+            DbEngineFactory engineFactory = (dbIndex,
+                                            ignoredAllocator,
+                                            ignoredOwnsAllocator,
+                                            ignoredOffHeapKeysEnabled,
+                                            dbMaxmemoryBytes,
+                                            maxmemoryPolicy,
+                                            maxmemorySamples,
+                                            evictionTimeLimitMillis,
+                                            expireCleanupTimeLimitMillis) -> new YierdisDb(
+                    new YierdisForeignOffHeapAllocator(0),
+                    true,
+                    false,
+                    dbMaxmemoryBytes,
+                    maxmemoryPolicy,
+                    maxmemorySamples,
+                    evictionTimeLimitMillis,
+                    expireCleanupTimeLimitMillis
+            );
+            instanceConfig.engineFactory(engineFactory);
+            offHeapAllocator = null;
+        } else {
+            instanceConfig
+                    .offHeapAllocator(offHeapAllocator)
+                    .ownsOffHeapAllocator(false);
+        }
+        instance = YierdisInstance.create(instanceConfig.build());
         YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
         engines = instance.engines();
 

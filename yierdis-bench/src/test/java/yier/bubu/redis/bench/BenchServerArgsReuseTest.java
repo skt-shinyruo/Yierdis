@@ -17,13 +17,24 @@ import java.util.List;
 
 public class BenchServerArgsReuseTest {
     @Test
+    public void benchConfigDefaultsToSingleForeignRun() {
+        YierdisServerArgs baseServerArgs = parseServerArgs(
+                "--port", "6381",
+                "--maxmemoryScope", "Per_Db"
+        );
+        baseServerArgs.normalizeAndValidate();
+
+        YierdisBench.BenchConfig config = YierdisBench.BenchConfig.from(new YierdisBenchArgs(), baseServerArgs);
+
+        Assert.assertEquals(List.of("foreign"), config.backends);
+    }
+
+    @Test
     public void serverProcessUsesNormalizedArgvFromLaunchCopy() throws Exception {
         YierdisServerArgs baseServerArgs = parseServerArgs(
                 "--port", "6381",
                 "--noCleanup",
                 "--executorSchedulingPolicy", "GLOBAL",
-                "--offheapBackend", "UNSAFE",
-                "--offheapMaxBytes", "2048",
                 "--maxmemoryScope", "Per_Db",
                 "--maxmemoryPolicy", "ALLKEYS-LRU",
                 "--keysTimeBudgetMillis", "0",
@@ -32,15 +43,13 @@ public class BenchServerArgsReuseTest {
         baseServerArgs.normalizeAndValidate();
 
         YierdisBenchArgs benchArgs = new YierdisBenchArgs();
-        benchArgs.backends = "unsafe";
         benchArgs.portBase = 17380;
 
         YierdisBench.BenchConfig config = YierdisBench.BenchConfig.from(benchArgs, baseServerArgs);
-        String backend = config.backends.get(0);
+        Assert.assertEquals(List.of("foreign"), config.backends);
 
         YierdisServerArgs serverArgsForRun = config.baseServerArgs.copy();
         serverArgsForRun.port = config.portBase;
-        serverArgsForRun.offheapBackend = backend;
         serverArgsForRun.normalizeAndValidate();
 
         Path tempDir = Files.createTempDirectory("bench-server-args-");
@@ -80,10 +89,11 @@ public class BenchServerArgsReuseTest {
             List<String> actual = waitForLines(logFile, expected.size());
             Assert.assertEquals(expected, actual);
             assertArgValue(actual, "--executorSchedulingPolicy", "global");
-            assertArgValue(actual, "--offheapBackend", "unsafe");
             assertArgValue(actual, "--maxmemoryScope", "per-db");
             assertArgValue(actual, "--maxmemoryPolicy", "allkeys-lru");
             Assert.assertTrue(actual.contains("--noCleanup"));
+            Assert.assertFalse(actual.contains("--offheapBackend"));
+            Assert.assertFalse(actual.contains("--offheapMaxBytes"));
         } finally {
             process.stop();
         }

@@ -377,10 +377,14 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     @Override
     public long usedBytesForMaxmemory() {
         checkThread();
-        // maxmemory 是 best-effort 预算：当 off-heap allocator 由当前 DB 所拥有时，将堆外 used bytes 也计入预算。
-        // 对于 server 的多 DB 场景（allocator 共享且 ownsOffHeapAllocator=false），避免将同一 allocator.usedBytes() 重复计入每个 DB。
+        // maxmemory 是 best-effort 预算：
+        // 1) 单 DB / DB 自有 allocator 时，直接计入堆外 used bytes。
+        // 2) 多 DB + GLOBAL maxmemory 时，由 instance/global governor 通过 shared usage 单独计一次，DB 本身不重复计。
+        // 3) 多 DB + PER_DB maxmemory 时，没有 global coordinator，需要把 shared allocator used bytes 计入当前 DB，
+        //    否则默认 FFM/native memory 路径会被严重低估，导致 per-db 淘汰失效。
         long offHeapUsedBytes = 0;
-        if (ownsOffHeapAllocator && offHeapAllocator != null) {
+        boolean includeSharedOffHeapForPerDb = offHeapAllocator != null && maxmemoryCoordinator == null;
+        if (offHeapAllocator != null && (ownsOffHeapAllocator || includeSharedOffHeapForPerDb)) {
             try {
                 offHeapUsedBytes = Math.max(0L, offHeapAllocator.usedBytes());
             } catch (Throwable ignored) {

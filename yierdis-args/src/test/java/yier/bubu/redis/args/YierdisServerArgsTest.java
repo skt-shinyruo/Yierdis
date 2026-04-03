@@ -5,6 +5,10 @@ import org.junit.Test;
 import picocli.CommandLine;
 import yier.bubu.redis.protocol.ProtocolLimits;
 
+import java.lang.reflect.RecordComponent;
+import java.util.HashMap;
+import java.util.Map;
+
 public class YierdisServerArgsTest {
     @Test
     public void helpParses() {
@@ -14,15 +18,15 @@ public class YierdisServerArgsTest {
     }
 
     @Test
-    public void normalizeLowercasesBackendAndPolicy() {
-        YierdisServerArgs args = parse("--offheapBackend", "UNSAFE", "--maxmemoryPolicy", "ALLKEYS-LRU");
+    public void normalizeLowercasesSchedulingAndPolicy() {
+        YierdisServerArgs args = parse("--executorSchedulingPolicy", "GLOBAL", "--maxmemoryPolicy", "ALLKEYS-LRU");
         args.normalizeAndValidate();
-        Assert.assertEquals("unsafe", args.offheapBackend);
+        Assert.assertEquals("global", args.executorSchedulingPolicy);
         Assert.assertEquals("allkeys-lru", args.maxmemoryPolicy);
     }
 
     @Test
-    public void normalizedArgsConvertToStableRuntimeConfig() {
+    public void normalizedArgsConvertToRuntimeConfigWithoutLegacyOffheapFields() {
         YierdisServerArgs args = parse(
                 "--port", "6380",
                 "--databases", "32",
@@ -42,9 +46,6 @@ public class YierdisServerArgsTest {
                 "--protocolMaxBulkBytes", "32768",
                 "--protocolMaxArgs", "128",
                 "--protocolMaxLineBytes", "4096",
-                "--offheapBackend", "UNSAFE",
-                "--offheapMaxBytes", "65536",
-                "--offheapKeysEnabled",
                 "--maxmemoryBytes", "1048576",
                 "--maxmemoryScope", "Per_Db",
                 "--maxmemoryPolicy", "ALLKEYS-RANDOM",
@@ -58,45 +59,40 @@ public class YierdisServerArgsTest {
         args.normalizeAndValidate();
 
         Assert.assertEquals("global", args.executorSchedulingPolicy);
-        Assert.assertEquals("unsafe", args.offheapBackend);
         Assert.assertEquals("per-db", args.maxmemoryScope);
         Assert.assertEquals("allkeys-random", args.maxmemoryPolicy);
         Assert.assertEquals(0, args.cleanupIntervalMillis);
 
-        Assert.assertEquals(
-                new YierdisServerRuntimeConfig(
-                        6380,
-                        32,
-                        0,
-                        4,
-                        2048,
-                        4096,
-                        YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.GLOBAL,
-                        512,
-                        64,
-                        8192,
-                        2048,
-                        256,
-                        7,
-                        128,
-                        16384,
-                        32768,
-                        128,
-                        4096,
-                        YierdisServerRuntimeConfig.OffheapBackend.UNSAFE,
-                        65536,
-                        true,
-                        1048576,
-                        YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB,
-                        YierdisServerRuntimeConfig.MaxmemoryPolicy.ALLKEYS_RANDOM,
-                        9,
-                        11,
-                        13,
-                        17,
-                        23
-                ),
-                args.toRuntimeConfig()
-        );
+        Map<String, Object> runtimeConfig = recordValues(args.toRuntimeConfig());
+        Assert.assertEquals(6380, runtimeConfig.get("port"));
+        Assert.assertEquals(32, runtimeConfig.get("databases"));
+        Assert.assertEquals(0L, runtimeConfig.get("cleanupIntervalMillis"));
+        Assert.assertEquals(4, runtimeConfig.get("ioThreads"));
+        Assert.assertEquals(2048, runtimeConfig.get("executorQueueCapacity"));
+        Assert.assertEquals(4096L, runtimeConfig.get("executorQueueMaxBytes"));
+        Assert.assertEquals(YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.GLOBAL, runtimeConfig.get("executorSchedulingPolicy"));
+        Assert.assertEquals(512, runtimeConfig.get("backpressureHighWatermark"));
+        Assert.assertEquals(64, runtimeConfig.get("backpressureLowWatermark"));
+        Assert.assertEquals(8192L, runtimeConfig.get("backpressureBytesHighWatermark"));
+        Assert.assertEquals(2048L, runtimeConfig.get("backpressureBytesLowWatermark"));
+        Assert.assertEquals(256, runtimeConfig.get("executorMaxDrainCommands"));
+        Assert.assertEquals(7L, runtimeConfig.get("executorDrainTimeLimitMillis"));
+        Assert.assertEquals(128, runtimeConfig.get("transactionQueueMaxCommands"));
+        Assert.assertEquals(16384L, runtimeConfig.get("transactionQueueMaxBytes"));
+        Assert.assertEquals(32768, runtimeConfig.get("protocolMaxBulkBytes"));
+        Assert.assertEquals(128, runtimeConfig.get("protocolMaxArgs"));
+        Assert.assertEquals(4096, runtimeConfig.get("protocolMaxLineBytes"));
+        Assert.assertEquals(1048576L, runtimeConfig.get("maxmemoryBytes"));
+        Assert.assertEquals(YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB, runtimeConfig.get("maxmemoryScope"));
+        Assert.assertEquals(YierdisServerRuntimeConfig.MaxmemoryPolicy.ALLKEYS_RANDOM, runtimeConfig.get("maxmemoryPolicy"));
+        Assert.assertEquals(9, runtimeConfig.get("maxmemorySamples"));
+        Assert.assertEquals(11L, runtimeConfig.get("evictionTimeLimitMillis"));
+        Assert.assertEquals(13L, runtimeConfig.get("expireCleanupTimeLimitMillis"));
+        Assert.assertEquals(17L, runtimeConfig.get("keysTimeBudgetMillis"));
+        Assert.assertEquals(23, runtimeConfig.get("keysMaxResults"));
+        Assert.assertFalse(runtimeConfig.containsKey("offheapBackend"));
+        Assert.assertFalse(runtimeConfig.containsKey("offheapMaxBytes"));
+        Assert.assertFalse(runtimeConfig.containsKey("offheapKeysEnabled"));
     }
 
     @Test
@@ -105,8 +101,6 @@ public class YierdisServerArgsTest {
                 "--port", "6381",
                 "--noCleanup",
                 "--executorSchedulingPolicy", "FAIR",
-                "--offheapBackend", "NETTY",
-                "--offheapMaxBytes", "2048",
                 "--maxmemoryScope", "perdb",
                 "--maxmemoryPolicy", "ALLKEYS-LRU",
                 "--keysTimeBudgetMillis", "0",
@@ -116,6 +110,9 @@ public class YierdisServerArgsTest {
         args.normalizeAndValidate();
 
         YierdisServerArgs copied = args.copy();
+        Assert.assertFalse(copied.toArgv().contains("--offheapBackend"));
+        Assert.assertFalse(copied.toArgv().contains("--offheapMaxBytes"));
+        Assert.assertFalse(copied.toArgv().contains("--offheapKeysEnabled"));
         Assert.assertEquals(args.toArgv(), copied.toArgv());
 
         YierdisServerArgs reparsed = parse(copied.toArgv().toArray(new String[0]));
@@ -150,15 +147,11 @@ public class YierdisServerArgsTest {
     }
 
     @Test
-    public void invalidOffheapBackendIsRejected() {
-        YierdisServerArgs args = parse("--offheapBackend", "???");
-        assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
-    }
-
-    @Test
-    public void offheapBackendNoneWithNonzeroMaxBytesIsRejected() {
-        YierdisServerArgs args = parse("--offheapBackend", "none", "--offheapMaxBytes", "1");
-        assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
+    public void deletedOffheapFlagsAreRejectedAtParseTime() {
+        YierdisServerArgs args = new YierdisServerArgs();
+        assertThrows(CommandLine.ParameterException.class, () -> new CommandLine(args).parseArgs("--offheapBackend", "foreign"));
+        assertThrows(CommandLine.ParameterException.class, () -> new CommandLine(args).parseArgs("--offheapMaxBytes", "1"));
+        assertThrows(CommandLine.ParameterException.class, () -> new CommandLine(args).parseArgs("--offheapKeysEnabled"));
     }
 
     @Test
@@ -179,6 +172,19 @@ public class YierdisServerArgsTest {
         YierdisServerArgs args = new YierdisServerArgs();
         new CommandLine(args).parseArgs(argv);
         return args;
+    }
+
+    private static Map<String, Object> recordValues(Object record) {
+        Assert.assertTrue(record.getClass().isRecord());
+        Map<String, Object> values = new HashMap<>();
+        for (RecordComponent component : record.getClass().getRecordComponents()) {
+            try {
+                values.put(component.getName(), component.getAccessor().invoke(record));
+            } catch (ReflectiveOperationException e) {
+                throw new AssertionError("failed to read record component: " + component.getName(), e);
+            }
+        }
+        return values;
     }
 
     private static void assertThrows(Class<? extends Throwable> expected, Runnable r) {

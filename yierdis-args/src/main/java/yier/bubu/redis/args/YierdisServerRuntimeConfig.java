@@ -22,9 +22,6 @@ public record YierdisServerRuntimeConfig(
         int protocolMaxBulkBytes,
         int protocolMaxArgs,
         int protocolMaxLineBytes,
-        OffheapBackend offheapBackend,
-        long offheapMaxBytes,
-        boolean offheapKeysEnabled,
         long maxmemoryBytes,
         MaxmemoryScope maxmemoryScope,
         MaxmemoryPolicy maxmemoryPolicy,
@@ -36,7 +33,6 @@ public record YierdisServerRuntimeConfig(
 ) {
     public YierdisServerRuntimeConfig {
         Objects.requireNonNull(executorSchedulingPolicy, "executorSchedulingPolicy");
-        Objects.requireNonNull(offheapBackend, "offheapBackend");
         Objects.requireNonNull(maxmemoryScope, "maxmemoryScope");
         Objects.requireNonNull(maxmemoryPolicy, "maxmemoryPolicy");
     }
@@ -72,47 +68,6 @@ public record YierdisServerRuntimeConfig(
                 case "global" -> GLOBAL;
                 case "fair" -> FAIR;
                 default -> throw new IllegalStateException("executorSchedulingPolicy is not normalized: " + argvValue);
-            };
-        }
-    }
-
-    public enum OffheapBackend {
-        NONE("none"),
-        NETTY("netty"),
-        UNSAFE("unsafe"),
-        FOREIGN("foreign");
-
-        private final String argvValue;
-
-        OffheapBackend(String argvValue) {
-            this.argvValue = argvValue;
-        }
-
-        public String argvValue() {
-            return argvValue;
-        }
-
-        public static OffheapBackend parseCliValue(String rawValue) {
-            if (rawValue == null || rawValue.isBlank()) {
-                throw new IllegalArgumentException("offheapBackend must not be blank");
-            }
-            String normalized = rawValue.trim().toLowerCase(Locale.ROOT);
-            return switch (normalized) {
-                case "none" -> NONE;
-                case "netty" -> NETTY;
-                case "unsafe" -> UNSAFE;
-                case "foreign" -> FOREIGN;
-                default -> throw new IllegalArgumentException("unsupported offheapBackend: " + rawValue);
-            };
-        }
-
-        public static OffheapBackend fromArgvValue(String argvValue) {
-            return switch (argvValue) {
-                case "none" -> NONE;
-                case "netty" -> NETTY;
-                case "unsafe" -> UNSAFE;
-                case "foreign" -> FOREIGN;
-                default -> throw new IllegalStateException("offheapBackend is not normalized: " + argvValue);
             };
         }
     }

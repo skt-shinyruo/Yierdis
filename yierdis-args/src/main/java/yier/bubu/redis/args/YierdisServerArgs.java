@@ -132,23 +132,6 @@ public final class YierdisServerArgs {
     )
     public int protocolMaxLineBytes = DEFAULT_PROTOCOL_MAX_LINE_BYTES;
 
-    @Option(
-            names = YierdisServerArgNames.OFFHEAP_BACKEND,
-            defaultValue = "none",
-            description = "Off-heap backend: none|netty|unsafe|foreign."
-    )
-    public String offheapBackend = "none";
-
-    @Option(
-            names = YierdisServerArgNames.OFFHEAP_MAX_BYTES,
-            defaultValue = "0",
-            description = "Off-heap max bytes (only valid when offheap backend is not 'none')."
-    )
-    public long offheapMaxBytes = 0;
-
-    @Option(names = YierdisServerArgNames.OFFHEAP_KEYS_ENABLED, description = "Enable storing keys/expires in off-heap (unsafe backend only).")
-    public boolean offheapKeysEnabled;
-
     @Option(names = YierdisServerArgNames.MAXMEMORY_BYTES, defaultValue = "0", description = "Maxmemory in bytes (0 disables eviction).")
     public long maxmemoryBytes = 0;
 
@@ -254,18 +237,6 @@ public final class YierdisServerArgs {
         if (protocolMaxLineBytes <= 0) {
             throw new IllegalArgumentException("protocolMaxLineBytes must be > 0");
         }
-        String backend = normalizeOffheapBackend(offheapBackend);
-        offheapBackend = backend;
-
-        if (offheapMaxBytes < 0) {
-            throw new IllegalArgumentException("offheapMaxBytes must be >= 0");
-        }
-        if (backend.equals("none") && offheapMaxBytes != 0) {
-            throw new IllegalArgumentException("offheapMaxBytes must be 0 when offheapBackend is 'none'");
-        }
-        if (offheapKeysEnabled && !backend.equals("unsafe")) {
-            throw new IllegalArgumentException("offheapKeysEnabled requires offheapBackend='unsafe'");
-        }
         if (maxmemoryBytes < 0) {
             throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
         }
@@ -310,9 +281,6 @@ public final class YierdisServerArgs {
         out.protocolMaxBulkBytes = protocolMaxBulkBytes;
         out.protocolMaxArgs = protocolMaxArgs;
         out.protocolMaxLineBytes = protocolMaxLineBytes;
-        out.offheapBackend = offheapBackend;
-        out.offheapMaxBytes = offheapMaxBytes;
-        out.offheapKeysEnabled = offheapKeysEnabled;
         out.maxmemoryBytes = maxmemoryBytes;
         out.maxmemoryScope = maxmemoryScope;
         out.maxmemoryPolicy = maxmemoryPolicy;
@@ -349,9 +317,6 @@ public final class YierdisServerArgs {
                 protocolMaxBulkBytes,
                 protocolMaxArgs,
                 protocolMaxLineBytes,
-                YierdisServerRuntimeConfig.OffheapBackend.fromArgvValue(offheapBackend),
-                offheapMaxBytes,
-                offheapKeysEnabled,
                 maxmemoryBytes,
                 YierdisServerRuntimeConfig.MaxmemoryScope.fromArgvValue(maxmemoryScope),
                 YierdisServerRuntimeConfig.MaxmemoryPolicy.fromArgvValue(maxmemoryPolicy),
@@ -422,14 +387,6 @@ public final class YierdisServerArgs {
         out.add(YierdisServerArgNames.PROTOCOL_MAX_LINE_BYTES);
         out.add(Integer.toString(protocolMaxLineBytes));
 
-        out.add(YierdisServerArgNames.OFFHEAP_BACKEND);
-        out.add(offheapBackend);
-        out.add(YierdisServerArgNames.OFFHEAP_MAX_BYTES);
-        out.add(Long.toString(offheapMaxBytes));
-        if (offheapKeysEnabled) {
-            out.add(YierdisServerArgNames.OFFHEAP_KEYS_ENABLED);
-        }
-
         out.add(YierdisServerArgNames.MAXMEMORY_BYTES);
         out.add(Long.toString(maxmemoryBytes));
         out.add(YierdisServerArgNames.MAXMEMORY_SCOPE);
@@ -454,10 +411,6 @@ public final class YierdisServerArgs {
 
     private static String normalizeExecutorSchedulingPolicy(String rawValue) {
         return YierdisServerRuntimeConfig.ExecutorSchedulingPolicy.parseCliValue(rawValue).argvValue();
-    }
-
-    private static String normalizeOffheapBackend(String rawValue) {
-        return YierdisServerRuntimeConfig.OffheapBackend.parseCliValue(rawValue).argvValue();
     }
 
     private static String normalizeMaxmemoryScope(String rawValue) {
