@@ -5,11 +5,8 @@ package yier.bubu.redis.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
-import yier.bubu.redis.offheap.api.OffHeapAllocator;
-import yier.bubu.redis.offheap.api.OffHeapBuf;
 import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.DbLifecycleOps;
 import yier.bubu.redis.ops.DbReads;
@@ -30,12 +27,9 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 
 public class YierdisInstanceTest {
     @Test
-    public void globalMaxmemoryCountsSharedOffheapOnceAcrossDbs() {
-        OffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
+    public void globalMaxmemoryCountsSharedFfmRuntimeOnceAcrossDbs() {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
-                .offHeapAllocator(allocator)
-                .ownsOffHeapAllocator(true)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
                 .maxmemoryBytes(9000)
                 .maxmemoryPolicy("noeviction")
@@ -57,7 +51,6 @@ public class YierdisInstanceTest {
                 Assert.assertFalse("expected not OOM (no double-count off-heap)", reply instanceof ReplyError);
                 Assert.assertEquals("OK", ((ReplySimpleString) reply).value());
             }
-            Assert.assertTrue("expected off-heap allocations", allocator.usedBytes() > 0);
         }
     }
 
@@ -96,21 +89,15 @@ public class YierdisInstanceTest {
     public void closePropagatesDbAndAllocatorFailuresAfterBestEffortCleanup() {
         List<String> closeOrder = new ArrayList<>();
         DbEngineFactory factory = (dbIndex,
-                                   offHeapAllocator,
-                                   ownsOffHeapAllocator,
-                                   offHeapKeysEnabled,
                                    maxmemoryBytes,
                                    maxmemoryPolicy,
                                    maxmemorySamples,
                                    evictionTimeLimitMillis,
                                    expireCleanupTimeLimitMillis) -> new FailingRuntimeDbEngine("db-" + dbIndex, closeOrder);
-        ThrowingAllocator allocator = new ThrowingAllocator(closeOrder);
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
                 .databases(2)
                 .engineFactory(factory)
-                .offHeapAllocator(allocator)
-                .ownsOffHeapAllocator(true)
                 .build());
 
         try {
@@ -118,10 +105,9 @@ public class YierdisInstanceTest {
             Assert.fail("expected close failure");
         } catch (IllegalStateException e) {
             Assert.assertEquals("db-0", e.getMessage());
-            Assert.assertEquals(Arrays.asList("db-0", "db-1", "allocator"), closeOrder);
-            Assert.assertEquals(2, e.getSuppressed().length);
+            Assert.assertEquals(Arrays.asList("db-0", "db-1"), closeOrder);
+            Assert.assertEquals(1, e.getSuppressed().length);
             Assert.assertEquals("db-1", e.getSuppressed()[0].getMessage());
-            Assert.assertEquals("allocator", e.getSuppressed()[1].getMessage());
         }
     }
 
@@ -131,9 +117,6 @@ public class YierdisInstanceTest {
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
                 .databases(1)
                 .engineFactory((dbIndex,
-                                offHeapAllocator,
-                                ownsOffHeapAllocator,
-                                offHeapKeysEnabled,
                                 maxmemoryBytes,
                                 maxmemoryPolicy,
                                 maxmemorySamples,
@@ -167,9 +150,6 @@ public class YierdisInstanceTest {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(1)
                 .engineFactory((dbIndex,
-                                offHeapAllocator,
-                                ownsOffHeapAllocator,
-                                offHeapKeysEnabled,
                                 maxmemoryBytes,
                                 maxmemoryPolicy,
                                 maxmemorySamples,
@@ -310,35 +290,6 @@ public class YierdisInstanceTest {
         @Override
         public DbLifecycleOps lifecycle() {
             throw new UnsupportedOperationException();
-        }
-    }
-
-    private static final class ThrowingAllocator implements OffHeapAllocator {
-        private final List<String> closeOrder;
-
-        private ThrowingAllocator(List<String> closeOrder) {
-            this.closeOrder = closeOrder;
-        }
-
-        @Override
-        public OffHeapBuf allocate(int capacity) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public long usedBytes() {
-            return 0;
-        }
-
-        @Override
-        public long maxBytes() {
-            return 0;
-        }
-
-        @Override
-        public void close() {
-            closeOrder.add("allocator");
-            throw new IllegalStateException("allocator");
         }
     }
 

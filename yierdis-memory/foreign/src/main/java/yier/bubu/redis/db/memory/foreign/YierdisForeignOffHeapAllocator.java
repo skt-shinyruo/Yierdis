@@ -12,15 +12,27 @@ import java.nio.ByteBuffer;
 
 public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
     private final long maxBytes;
-    private final YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("foreign-allocator");
+    private final YierdisFfmMemoryRuntime runtime;
+    private final boolean ownsRuntime;
 
     private boolean closed;
+    private long usedBytes;
 
     public YierdisForeignOffHeapAllocator(long maxBytes) {
+        this(new YierdisFfmMemoryRuntime("foreign-allocator"), maxBytes, true);
+    }
+
+    public YierdisForeignOffHeapAllocator(YierdisFfmMemoryRuntime runtime, long maxBytes) {
+        this(runtime, maxBytes, false);
+    }
+
+    private YierdisForeignOffHeapAllocator(YierdisFfmMemoryRuntime runtime, long maxBytes, boolean ownsRuntime) {
         if (maxBytes < 0) {
             throw new IllegalArgumentException("maxBytes must be >= 0");
         }
+        this.runtime = runtime;
         this.maxBytes = maxBytes;
+        this.ownsRuntime = ownsRuntime;
     }
 
     @Override
@@ -32,18 +44,19 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
             throw new IllegalStateException("allocator is closed");
         }
 
-        long next = runtime.usedBytes() + capacity;
+        long next = usedBytes + capacity;
         if (maxBytes > 0 && next > maxBytes) {
             throw new YierdisOffHeapOutOfMemoryException("off-heap memory limit exceeded");
         }
 
         YierdisFfmRegion region = runtime.allocateRegion("buf", capacity);
-        return new YierdisForeignOffHeapBuf(region, capacity);
+        usedBytes = next;
+        return new YierdisForeignOffHeapBuf(this, region, capacity);
     }
 
     @Override
     public long usedBytes() {
-        return runtime.usedBytes();
+        return usedBytes;
     }
 
     @Override
@@ -58,7 +71,20 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
     @Override
     public void close() {
         closed = true;
-        runtime.close();
+        if (usedBytes != 0) {
+            throw new IllegalStateException("off-heap leak: " + usedBytes + " bytes still allocated");
+        }
+        if (ownsRuntime) {
+            runtime.close();
+        }
+    }
+
+    void onFree(int capacity) {
+        long next = usedBytes - capacity;
+        if (next < 0) {
+            throw new IllegalStateException("allocator accounting underflow");
+        }
+        usedBytes = next;
     }
 
     private static final class YierdisForeignOffHeapBuf implements YierdisOffHeapBuf {
@@ -66,13 +92,19 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
         private static final ThreadLocal<byte[]> TL_COPY_BUF =
                 ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
 
+        private final YierdisForeignOffHeapAllocator owner;
         private final YierdisFfmRegion region;
         private final YierdisFfmSpan span;
         private final int capacity;
 
         private boolean closed;
 
-        private YierdisForeignOffHeapBuf(YierdisFfmRegion region, int capacity) {
+        private YierdisForeignOffHeapBuf(
+                YierdisForeignOffHeapAllocator owner,
+                YierdisFfmRegion region,
+                int capacity
+        ) {
+            this.owner = owner;
             this.region = region;
             this.span = region.span(0, capacity);
             this.capacity = capacity;
@@ -170,6 +202,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
             }
             closed = true;
             region.close();
+            owner.onFree(capacity);
         }
 
         private void ensureOpen() {

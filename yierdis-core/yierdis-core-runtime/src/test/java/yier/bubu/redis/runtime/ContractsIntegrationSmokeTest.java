@@ -3,10 +3,8 @@ package yier.bubu.redis.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
-import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
 import yier.bubu.redis.testutil.ReplyBulkString;
@@ -20,19 +18,14 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 
 public class ContractsIntegrationSmokeTest {
     @Test
-    public void smokeAcrossBackendsAndMaxmemoryScopes() {
-        runCase(false, YierdisInstanceConfig.MaxmemoryScope.GLOBAL);
-        runCase(false, YierdisInstanceConfig.MaxmemoryScope.PER_DB);
-        runCase(true, YierdisInstanceConfig.MaxmemoryScope.GLOBAL);
-        runCase(true, YierdisInstanceConfig.MaxmemoryScope.PER_DB);
+    public void smokeAcrossFfmRuntimeAndMaxmemoryScopes() {
+        runCase(YierdisInstanceConfig.MaxmemoryScope.GLOBAL);
+        runCase(YierdisInstanceConfig.MaxmemoryScope.PER_DB);
     }
 
-    private static void runCase(boolean offHeapValues, YierdisInstanceConfig.MaxmemoryScope scope) {
-        OffHeapAllocator allocator = offHeapValues ? new YierdisUnsafeOffHeapAllocator(5_000) : null;
+    private static void runCase(YierdisInstanceConfig.MaxmemoryScope scope) {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
-                .offHeapAllocator(allocator)
-                .ownsOffHeapAllocator(allocator != null)
                 .maxmemoryScope(scope)
                 .maxmemoryBytes(2_000)
                 .maxmemoryPolicy("noeviction")

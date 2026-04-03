@@ -2,7 +2,6 @@ package yier.bubu.redis.runtime;
 
 // YierdisInstanceConfig：定义可嵌入 instance 的装配参数（Netty-free），作为 core runtime 的稳定输入口径。
 
-import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.ops.DbEngineFactory;
 
 import java.util.Locale;
@@ -14,9 +13,6 @@ public final class YierdisInstanceConfig {
     }
 
     private final int databases;
-    private final OffHeapAllocator offHeapAllocator;
-    private final boolean ownsOffHeapAllocator;
-    private final boolean offHeapKeysEnabled;
     private final DbEngineFactory engineFactory;
 
     private final long maxmemoryBytes;
@@ -28,9 +24,6 @@ public final class YierdisInstanceConfig {
 
     private YierdisInstanceConfig(Builder b) {
         this.databases = b.databases;
-        this.offHeapAllocator = b.offHeapAllocator;
-        this.ownsOffHeapAllocator = b.ownsOffHeapAllocator;
-        this.offHeapKeysEnabled = b.offHeapKeysEnabled;
         this.engineFactory = b.engineFactory;
         this.maxmemoryBytes = b.maxmemoryBytes;
         this.maxmemoryScope = b.maxmemoryScope;
@@ -46,18 +39,6 @@ public final class YierdisInstanceConfig {
 
     public int databases() {
         return databases;
-    }
-
-    public OffHeapAllocator offHeapAllocator() {
-        return offHeapAllocator;
-    }
-
-    public boolean ownsOffHeapAllocator() {
-        return ownsOffHeapAllocator;
-    }
-
-    public boolean offHeapKeysEnabled() {
-        return offHeapKeysEnabled;
     }
 
     public DbEngineFactory engineFactory() {
@@ -90,9 +71,6 @@ public final class YierdisInstanceConfig {
 
     public static final class Builder {
         private int databases = 1;
-        private OffHeapAllocator offHeapAllocator;
-        private boolean ownsOffHeapAllocator;
-        private boolean offHeapKeysEnabled;
         private DbEngineFactory engineFactory;
 
         private long maxmemoryBytes;
@@ -110,18 +88,18 @@ public final class YierdisInstanceConfig {
             return this;
         }
 
-        public Builder offHeapAllocator(OffHeapAllocator allocator) {
-            this.offHeapAllocator = allocator;
+        @Deprecated
+        public Builder offHeapAllocator(Object ignored) {
             return this;
         }
 
-        public Builder ownsOffHeapAllocator(boolean ownsOffHeapAllocator) {
-            this.ownsOffHeapAllocator = ownsOffHeapAllocator;
+        @Deprecated
+        public Builder ownsOffHeapAllocator(boolean ignored) {
             return this;
         }
 
-        public Builder offHeapKeysEnabled(boolean offHeapKeysEnabled) {
-            this.offHeapKeysEnabled = offHeapKeysEnabled;
+        @Deprecated
+        public Builder offHeapKeysEnabled(boolean ignored) {
             return this;
         }
 

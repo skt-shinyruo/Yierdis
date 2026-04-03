@@ -3,7 +3,7 @@ package yier.bubu.redis.runtime;
 // YierdisInstance：提供可嵌入（embedded）的 instance API（Netty-free），负责装配多 DB、路由与资源生命周期。
 
 import yier.bubu.redis.db.YierdisDbEngineFactory;
-import yier.bubu.redis.offheap.api.OffHeapAllocator;
+import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.MaxmemoryCoordinatorAware;
@@ -23,8 +23,8 @@ import java.util.concurrent.TimeUnit;
 public final class YierdisInstance implements AutoCloseable {
     private final YierdisInstanceConfig config;
     private final RuntimeDbEngine[] dbs;
-    private final OffHeapAllocator offHeapAllocator;
-    private final boolean closeAllocator;
+    private final YierdisFfmMemoryRuntime memoryRuntime;
+    private final boolean closeMemoryRuntime;
     private final YierdisInstanceRuntimeAccess runtimeAccess;
 
     private boolean closed;
@@ -32,13 +32,13 @@ public final class YierdisInstance implements AutoCloseable {
     private YierdisInstance(
             YierdisInstanceConfig config,
             RuntimeDbEngine[] dbs,
-            OffHeapAllocator offHeapAllocator,
-            boolean closeAllocator
+            YierdisFfmMemoryRuntime memoryRuntime,
+            boolean closeMemoryRuntime
     ) {
         this.config = Objects.requireNonNull(config, "config");
         this.dbs = Objects.requireNonNull(dbs, "dbs");
-        this.offHeapAllocator = offHeapAllocator;
-        this.closeAllocator = closeAllocator;
+        this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
+        this.closeMemoryRuntime = closeMemoryRuntime;
         this.runtimeAccess = new YierdisInstanceRuntimeAccess(this);
     }
 
@@ -46,15 +46,11 @@ public final class YierdisInstance implements AutoCloseable {
         Objects.requireNonNull(config, "config");
         int databases = Math.max(1, config.databases());
 
-        OffHeapAllocator allocator = config.offHeapAllocator();
+        YierdisFfmMemoryRuntime memoryRuntime = new YierdisFfmMemoryRuntime("instance");
         DbEngineFactory engineFactory = config.engineFactory();
         if (engineFactory == null) {
-            engineFactory = new YierdisDbEngineFactory();
+            engineFactory = new YierdisDbEngineFactory(memoryRuntime);
         }
-
-        // 约定：多 DB 场景默认共享 allocator，并由 instance 统一负责 close（避免 double-close 与 usedBytes 双计数）。
-        boolean dbOwnsAllocator = config.ownsOffHeapAllocator() && databases == 1;
-        boolean instanceClosesAllocator = config.ownsOffHeapAllocator() && !dbOwnsAllocator;
 
         long perDbMaxmemory = 0;
         long remainder = 0;
@@ -79,9 +75,6 @@ public final class YierdisInstance implements AutoCloseable {
             }
             dbs[i] = engineFactory.create(
                     i,
-                    allocator,
-                    dbOwnsAllocator,
-                    config.offHeapKeysEnabled(),
                     dbMax,
                     config.maxmemoryPolicy(),
                     config.maxmemorySamples(),
@@ -103,18 +96,15 @@ public final class YierdisInstance implements AutoCloseable {
                 participants[i] = participant;
             }
 
-            MaxmemoryUsageSource[] sharedUsage = new MaxmemoryUsageSource[0];
-            if (!dbOwnsAllocator && allocator != null) {
-                sharedUsage = new MaxmemoryUsageSource[]{
-                        () -> {
-                            try {
-                                return Math.max(0L, allocator.usedBytes());
-                            } catch (Throwable ignored) {
-                                return 0L;
-                            }
+            MaxmemoryUsageSource[] sharedUsage = new MaxmemoryUsageSource[]{
+                    () -> {
+                        try {
+                            return Math.max(0L, memoryRuntime.usedBytes());
+                        } catch (Throwable ignored) {
+                            return 0L;
                         }
-                };
-            }
+                    }
+            };
 
             YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
                     participants,
@@ -136,7 +126,7 @@ public final class YierdisInstance implements AutoCloseable {
             }
         }
 
-        return new YierdisInstance(config, dbs, allocator, instanceClosesAllocator);
+        return new YierdisInstance(config, dbs, memoryRuntime, true);
     }
 
     public YierdisInstanceConfig config() {
@@ -205,12 +195,12 @@ public final class YierdisInstance implements AutoCloseable {
         return dbInternal(dbIndex);
     }
 
-    OffHeapAllocator runtimeOffHeapAllocator() {
-        return offHeapAllocator;
+    YierdisFfmMemoryRuntime runtimeMemoryRuntime() {
+        return memoryRuntime;
     }
 
-    boolean runtimeClosesAllocator() {
-        return closeAllocator;
+    boolean runtimeClosesMemoryRuntime() {
+        return closeMemoryRuntime;
     }
 
     void requireOpenRuntimeAccess() {

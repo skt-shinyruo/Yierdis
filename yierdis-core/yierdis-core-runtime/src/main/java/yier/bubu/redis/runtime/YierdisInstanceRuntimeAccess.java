@@ -1,6 +1,6 @@
 package yier.bubu.redis.runtime;
 
-import yier.bubu.redis.offheap.api.OffHeapAllocator;
+import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.ops.RuntimeDbEngine;
 
 import java.util.Objects;
@@ -90,10 +90,10 @@ public final class YierdisInstanceRuntimeAccess implements AutoCloseable {
             }
         }
 
-        OffHeapAllocator allocator = instance.runtimeOffHeapAllocator();
-        if (instance.runtimeClosesAllocator() && allocator != null) {
+        YierdisFfmMemoryRuntime memoryRuntime = instance.runtimeMemoryRuntime();
+        if (instance.runtimeClosesMemoryRuntime() && memoryRuntime != null) {
             try {
-                allocator.close();
+                memoryRuntime.close();
             } catch (Throwable t) {
                 failure = recordFailure(failure, t);
             }

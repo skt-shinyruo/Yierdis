@@ -1,7 +1,5 @@
 package yier.bubu.redis.ops;
 
-import yier.bubu.redis.offheap.api.OffHeapAllocator;
-
 /**
  * SPI for creating DB engines for an instance.
  * <p>
@@ -10,9 +8,6 @@ import yier.bubu.redis.offheap.api.OffHeapAllocator;
 public interface DbEngineFactory {
     RuntimeDbEngine create(
             int dbIndex,
-            OffHeapAllocator offHeapAllocator,
-            boolean ownsOffHeapAllocator,
-            boolean offHeapKeysEnabled,
             long maxmemoryBytes,
             String maxmemoryPolicy,
             int maxmemorySamples,

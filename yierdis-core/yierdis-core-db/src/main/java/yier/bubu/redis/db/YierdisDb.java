@@ -2,6 +2,8 @@ package yier.bubu.redis.db;
 
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.db.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.offheap.api.OffHeapBuf;
@@ -61,6 +63,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     final YierdisKeyspace<YierdisObject> store;
     final YierdisExpireIndex expires;
+    private final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
     private final boolean ownsOffHeapAllocator;
     private final boolean keysStoredOffHeap;
@@ -105,11 +108,32 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     private final DbLifecycleOps lifecycleOps;
 
     public YierdisDb() {
-        this(null, false, 0, "noeviction", 5, 5, 5);
+        this((OffHeapAllocator) null, false, 0, "noeviction", 5, 5, 5);
     }
 
     public YierdisDb(OffHeapAllocator offHeapAllocator) {
         this(offHeapAllocator, false, false, 0, "noeviction", 5, 5, 5);
+    }
+
+    public static YierdisDb createWithSharedFfmRuntime(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            long maxmemoryBytes,
+            String maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis
+    ) {
+        return new YierdisDb(
+                memoryRuntime,
+                new YierdisForeignOffHeapAllocator(memoryRuntime, 0),
+                false,
+                false,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis
+        );
     }
 
     public YierdisDb(
@@ -120,7 +144,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        this(offHeapAllocator, false, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+        this(null, offHeapAllocator, false, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
     }
 
     public YierdisDb(
@@ -132,7 +156,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        this(offHeapAllocator, true, offHeapKeysEnabled, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+        this(null, offHeapAllocator, true, offHeapKeysEnabled, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
     }
 
     public YierdisDb(
@@ -145,6 +169,21 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
+        this(null, offHeapAllocator, ownsOffHeapAllocator, offHeapKeysEnabled, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+    }
+
+    private YierdisDb(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            OffHeapAllocator offHeapAllocator,
+            boolean ownsOffHeapAllocator,
+            boolean offHeapKeysEnabled,
+            long maxmemoryBytes,
+            String maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis
+    ) {
+        this.memoryRuntime = memoryRuntime;
         this.offHeapAllocator = offHeapAllocator;
         this.ownsOffHeapAllocator = ownsOffHeapAllocator;
         if (offHeapKeysEnabled && !(offHeapAllocator instanceof OffHeapAddressAllocator)) {
@@ -1094,6 +1133,11 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         @Override
         public OffHeapAllocator offHeapAllocator() {
             return offHeapAllocator;
+        }
+
+        @Override
+        public YierdisFfmMemoryRuntime memoryRuntime() {
+            return memoryRuntime;
         }
 
         @Override

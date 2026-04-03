@@ -14,19 +14,13 @@ import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import yier.bubu.redis.args.YierdisCliException;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocators;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapBackendUnavailableException;
-import yier.bubu.redis.db.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.ops.DbEngine;
-import yier.bubu.redis.ops.DbEngineFactory;
-import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
 import yier.bubu.redis.runtime.YierdisInstanceConfig;
@@ -53,7 +47,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     // Core resources (closed in reverse order).
     private YierdisInstance instance;
     private DbEngine[] engines;
-    private OffHeapAllocator offHeapAllocator;
     private NettyCommandExecutor executor;
     private EventExecutorGroup commandGroup;
     private EventLoopGroup bossGroup;
@@ -109,21 +102,11 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         ForeignMemoryAutoModules.ensureFfmAvailable();
         log.info("native memory backend: foreign (JDK 25 FFM)");
         log.info("off-heap providers: {}", YierdisOffHeapAllocators.availableProvidersSummary());
-
-        try {
-            offHeapAllocator = YierdisOffHeapAllocators.create("foreign", 0);
-        } catch (YierdisOffHeapBackendUnavailableException e) {
-            log.error("Failed to initialize native memory backend 'foreign': {}", e.getMessage());
-            throw YierdisCliException.userError(e.getMessage(), e);
-        } catch (RuntimeException e) {
-            log.error("Failed to initialize native memory backend 'foreign': {}", e.getMessage());
-            throw e;
-        }
-
-        boolean perDbScope = runtimeConfig.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB;
         int databases = Math.max(1, runtimeConfig.databases());
         YierdisInstanceConfig.MaxmemoryScope scope =
-                perDbScope ? YierdisInstanceConfig.MaxmemoryScope.PER_DB : YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
+                runtimeConfig.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB
+                        ? YierdisInstanceConfig.MaxmemoryScope.PER_DB
+                        : YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
         YierdisInstanceConfig.Builder instanceConfig = YierdisInstanceConfig.builder()
                 .databases(databases)
                 .maxmemoryBytes(runtimeConfig.maxmemoryBytes())
@@ -132,32 +115,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .maxmemorySamples(runtimeConfig.maxmemorySamples())
                 .evictionTimeLimitMillis(runtimeConfig.evictionTimeLimitMillis())
                 .expireCleanupTimeLimitMillis(runtimeConfig.expireCleanupTimeLimitMillis());
-        if (perDbScope) {
-            DbEngineFactory engineFactory = (dbIndex,
-                                            ignoredAllocator,
-                                            ignoredOwnsAllocator,
-                                            ignoredOffHeapKeysEnabled,
-                                            dbMaxmemoryBytes,
-                                            maxmemoryPolicy,
-                                            maxmemorySamples,
-                                            evictionTimeLimitMillis,
-                                            expireCleanupTimeLimitMillis) -> new YierdisDb(
-                    new YierdisForeignOffHeapAllocator(0),
-                    true,
-                    false,
-                    dbMaxmemoryBytes,
-                    maxmemoryPolicy,
-                    maxmemorySamples,
-                    evictionTimeLimitMillis,
-                    expireCleanupTimeLimitMillis
-            );
-            instanceConfig.engineFactory(engineFactory);
-            offHeapAllocator = null;
-        } else {
-            instanceConfig
-                    .offHeapAllocator(offHeapAllocator)
-                    .ownsOffHeapAllocator(false);
-        }
         instance = YierdisInstance.create(instanceConfig.build());
         YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
         engines = instance.engines();
@@ -307,16 +264,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             }
         }
         workerGroup = null;
-
-        OffHeapAllocator allocator = offHeapAllocator;
-        if (allocator != null) {
-            try {
-                allocator.close();
-            } catch (Throwable t) {
-                failure = recordCloseFailure(failure, t);
-            }
-        }
-        offHeapAllocator = null;
 
         rethrowIfNeeded(failure);
     }
