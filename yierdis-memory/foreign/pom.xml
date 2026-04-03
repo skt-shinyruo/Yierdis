@@ -14,7 +14,7 @@
     <packaging>jar</packaging>
 
     <name>yierdis-memory-foreign</name>
-    <description>Foreign Memory API backend for Yierdis (Java 17 incubator).</description>
+    <description>Foreign Memory API backend for Yierdis (JDK 25 FFM).</description>
 
     <dependencies>
         <dependency>
@@ -44,18 +44,6 @@
                 <configuration>
                     <release>${maven.compiler.release}</release>
                     <encoding>${project.build.sourceEncoding}</encoding>
-                    <compilerArgs>
-                        <arg>--add-modules</arg>
-                        <arg>jdk.incubator.foreign</arg>
-                    </compilerArgs>
-                </configuration>
-            </plugin>
-
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <configuration>
-                    <argLine>${argLine} --add-modules jdk.incubator.foreign</argLine>
                 </configuration>
             </plugin>
         </plugins>

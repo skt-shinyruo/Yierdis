@@ -1,4 +1,4 @@
-# yierdis (Java 17 + Netty)
+# yierdis (Java 25 + Netty)
 
 一个教学/演示导向的内存 KV 服务端，适合用来学习/演示 Netty 网络编程与单线程命令执行、背压与淘汰等思路。
 
@@ -15,7 +15,7 @@ Yierdis 的目标是 **教学/演示**：可以用项目内置 CLI 做交互学�
 
 ## 环境
 
-- JDK 17
+- JDK 25
 - Maven 3.x
 
 ## 开发者：模块边界（契约 / 组装）
@@ -246,7 +246,7 @@ busy 可诊断性（排障）：
 
 - `netty`：基于 Netty direct `ByteBuf`（适配层在 `yierdis-memory-netty`；`yierdis-memory-api` 不依赖 Netty）
 - `unsafe`：基于 `sun.misc.Unsafe`（通过 Netty `PlatformDependent`）管理 native memory（无需 incubator modules）
-- `foreign`：基于 Java 17 incubator 的 Foreign Memory API（默认构建已包含；运行时需要启用模块，server 可自动补齐）
+- `foreign`：基于 JDK 25 正式 `java.lang.foreign` FFM API（默认构建已包含；运行时无需额外模块参数）
 
 目前该层主要用于逐步迁移（先抽象，再替换实现）。默认 `--offheapBackend none` 不影响现有逻辑；当显式启用
 off-heap 后端后，当前已用于字符串值的存储与回复（例如 `GET` 会优先走 off-heap slice 的写出路径，避免为已存储值再分配新的 heap `byte[]`）。
@@ -261,21 +261,20 @@ mvn test
 mvn -DskipTests package
 ```
 
-如果你的构建/运行环境不包含 `jdk.incubator.foreign`（例如不是 JDK 17），可以显式禁用该 profile：
+如果你只想构建不包含 `foreign` 后端的产物，可以显式禁用该 profile：
 
 ```bash
 mvn -P!foreign-memory test
 mvn -P!foreign-memory -DskipTests package
 ```
 
-运行时若选择 `foreign` 后端，Java 17 需要启用 incubator 模块。推荐显式添加（避免一次自动重启）：
+运行时若选择 `foreign` 后端，直接使用 JDK 25 启动即可：
 
 ```bash
-java --add-modules jdk.incubator.foreign -jar yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --offheapBackend foreign
+java -jar yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --offheapBackend foreign
 ```
 
-为降低部署复杂度，如果你直接运行 `java -jar ... --offheapBackend foreign`，server 会检测到模块未启用并自动重启补齐
-`--add-modules jdk.incubator.foreign`（并保留原 JVM 参数，例如 `-Xmx` / `-XX:MaxDirectMemorySize` 等）。
+如果当前 JVM 不支持 `java.lang.foreign`，server 会在启动阶段直接报错，并提示改用 JDK 25 或其他 off-heap 后端。
 
 ### Server 参数（预留）
 

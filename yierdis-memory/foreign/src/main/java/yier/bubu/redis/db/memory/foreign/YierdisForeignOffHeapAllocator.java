@@ -1,8 +1,5 @@
 package yier.bubu.redis.db.memory.foreign;
 
-import jdk.incubator.foreign.MemoryAccess;
-import jdk.incubator.foreign.MemorySegment;
-import jdk.incubator.foreign.ResourceScope;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBackend;
 import yier.bubu.redis.db.memory.api.YierdisOffHeapBuf;
@@ -11,6 +8,9 @@ import yier.bubu.redis.db.memory.api.YierdisOffHeapSlice;
 import yier.bubu.redis.bytes.BytesSource;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 
 public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
@@ -40,10 +40,10 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
             throw new YierdisOffHeapOutOfMemoryException("off-heap memory limit exceeded");
         }
 
-        ResourceScope scope = ResourceScope.newConfinedScope();
-        MemorySegment segment = MemorySegment.allocateNative(capacity, scope);
+        Arena arena = Arena.ofConfined();
+        MemorySegment segment = arena.allocate(capacity);
         usedBytes = next;
-        return new YierdisForeignOffHeapBuf(this, scope, segment, capacity);
+        return new YierdisForeignOffHeapBuf(this, arena, segment, capacity);
     }
 
     @Override
@@ -82,7 +82,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
                 ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
 
         private final YierdisForeignOffHeapAllocator owner;
-        private final ResourceScope scope;
+        private final Arena arena;
         private final MemorySegment segment;
         private final int capacity;
 
@@ -90,12 +90,12 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
 
         private YierdisForeignOffHeapBuf(
                 YierdisForeignOffHeapAllocator owner,
-                ResourceScope scope,
+                Arena arena,
                 MemorySegment segment,
                 int capacity
         ) {
             this.owner = owner;
-            this.scope = scope;
+            this.arena = arena;
             this.segment = segment;
             this.capacity = capacity;
         }
@@ -109,14 +109,14 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
         public byte getByte(int index) {
             ensureOpen();
             checkIndex(index, 1);
-            return MemoryAccess.getByteAtOffset(segment, index);
+            return segment.get(ValueLayout.JAVA_BYTE, index);
         }
 
         @Override
         public void setByte(int index, byte value) {
             ensureOpen();
             checkIndex(index, 1);
-            MemoryAccess.setByteAtOffset(segment, index, value);
+            segment.set(ValueLayout.JAVA_BYTE, index, value);
         }
 
         @Override
@@ -133,7 +133,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
                 throw new IndexOutOfBoundsException();
             }
             for (int i = 0; i < len; i++) {
-                dst[dstOff + i] = MemoryAccess.getByteAtOffset(segment, index + i);
+                dst[dstOff + i] = segment.get(ValueLayout.JAVA_BYTE, index + i);
             }
         }
 
@@ -151,7 +151,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
                 throw new IndexOutOfBoundsException();
             }
             for (int i = 0; i < len; i++) {
-                MemoryAccess.setByteAtOffset(segment, index + i, src[srcOff + i]);
+                segment.set(ValueLayout.JAVA_BYTE, index + i, src[srcOff + i]);
             }
         }
 
@@ -201,7 +201,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
                 return;
             }
             closed = true;
-            scope.close();
+            arena.close();
             owner.onFree(capacity);
         }
 
@@ -209,8 +209,8 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
             if (closed) {
                 throw new IllegalStateException("buffer is closed");
             }
-            if (!scope.isAlive()) {
-                throw new IllegalStateException("scope is not alive");
+            if (!arena.scope().isAlive()) {
+                throw new IllegalStateException("arena is not alive");
             }
         }
 
@@ -255,7 +255,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
             if (index < 0 || index >= len) {
                 throw new IndexOutOfBoundsException();
             }
-            return MemoryAccess.getByteAtOffset(owner.segment(), offset + index);
+            return owner.segment().get(ValueLayout.JAVA_BYTE, offset + index);
         }
 
         @Override
@@ -274,7 +274,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
                 throw new IndexOutOfBoundsException();
             }
             for (int i = 0; i < readLen; i++) {
-                dst[dstOff + i] = MemoryAccess.getByteAtOffset(owner.segment(), offset + index + i);
+                dst[dstOff + i] = owner.segment().get(ValueLayout.JAVA_BYTE, offset + index + i);
             }
         }
 

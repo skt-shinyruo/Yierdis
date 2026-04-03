@@ -36,7 +36,7 @@ public class YierdisOffHeapAllocatorsTest {
     public void createForeignDependsOnServiceLoaderProviders() {
         boolean foreignPresent = hasProvider(YierdisOffHeapBackend.FOREIGN);
         if (foreignPresent) {
-            // Provider is present; runtime availability depends on JVM flags (incubator module).
+            // Provider is present; runtime availability still depends on the current JVM.
             // We only assert that resolution is attempted (no hard-coded class/reflection fallback here).
             try (OffHeapAllocator allocator = YierdisOffHeapAllocators.create("foreign", 0)) {
                 Assert.assertNotNull(allocator);

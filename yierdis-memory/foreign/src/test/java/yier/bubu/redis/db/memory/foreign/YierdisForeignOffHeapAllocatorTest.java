@@ -25,6 +25,14 @@ public class YierdisForeignOffHeapAllocatorTest extends YierdisOffHeapAllocatorC
     }
 
     @Test
+    public void allocatorInstantiatesWithoutIncubatorModuleFlags() {
+        try (OffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(0)) {
+            Assert.assertNotNull(allocator);
+            Assert.assertEquals(0L, allocator.usedBytes());
+        }
+    }
+
+    @Test
     public void serviceLoaderProviderIsPresent() {
         boolean found = false;
         for (YierdisOffHeapAllocatorProvider p : ServiceLoader.load(YierdisOffHeapAllocatorProvider.class)) {
