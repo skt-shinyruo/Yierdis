@@ -26,6 +26,7 @@ public final class YierdisInstance implements AutoCloseable {
     private final YierdisFfmMemoryRuntime memoryRuntime;
     private final boolean closeMemoryRuntime;
     private final YierdisInstanceRuntimeAccess runtimeAccess;
+    private final YierdisInstanceObservability observability;
 
     private boolean closed;
 
@@ -40,6 +41,7 @@ public final class YierdisInstance implements AutoCloseable {
         this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
         this.closeMemoryRuntime = closeMemoryRuntime;
         this.runtimeAccess = new YierdisInstanceRuntimeAccess(this);
+        this.observability = new YierdisInstanceObservability(this);
     }
 
     public static YierdisInstance create(YierdisInstanceConfig config) {
@@ -142,6 +144,13 @@ public final class YierdisInstance implements AutoCloseable {
      */
     public YierdisInstanceRuntimeAccess runtimeAccess() {
         return runtimeAccess;
+    }
+
+    /**
+     * Runtime-owned observability seam for instance-wide summaries.
+     */
+    public YierdisInstanceObservability observability() {
+        return observability;
     }
 
     /**

@@ -19,4 +19,25 @@ public class YierdisInstanceBoundaryTest {
                 hasFactoryMethod
         );
     }
+
+    @Test
+    public void instanceShouldExposeObservabilitySeam() throws Exception {
+        Class<?> observabilityType;
+        try {
+            observabilityType = Class.forName("yier.bubu.redis.runtime.YierdisInstanceObservability");
+        } catch (ClassNotFoundException e) {
+            Assert.fail("YierdisInstanceObservability should exist");
+            return;
+        }
+
+        Method observabilityMethod;
+        try {
+            observabilityMethod = YierdisInstance.class.getDeclaredMethod("observability");
+        } catch (NoSuchMethodException e) {
+            Assert.fail("YierdisInstance should expose observability()");
+            return;
+        }
+
+        Assert.assertEquals(observabilityType, observabilityMethod.getReturnType());
+    }
 }

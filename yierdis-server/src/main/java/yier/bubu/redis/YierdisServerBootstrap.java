@@ -23,6 +23,8 @@ import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
 import yier.bubu.redis.runtime.YierdisInstanceConfig;
+import yier.bubu.redis.runtime.YierdisInstanceMaintenance;
+import yier.bubu.redis.runtime.YierdisInstanceObservability;
 import yier.bubu.redis.runtime.YierdisInstanceRuntimeAccess;
 
 import java.net.InetSocketAddress;
@@ -115,9 +117,12 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .expireCleanupTimeLimitMillis(runtimeConfig.expireCleanupTimeLimitMillis());
         instance = YierdisInstance.create(instanceConfig.build());
         YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
+        YierdisInstanceMaintenance maintenance = new YierdisInstanceMaintenance(instance);
+        YierdisInstanceObservability observability = instance.observability();
         engines = instance.engines();
 
         NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(runtimeConfig);
+        infoProvider.bindObservability(observability);
         infoProvider.bindEngines(engines);
         SlowCommandGovernor slowGovernor = new SlowCommandGovernor() {
             private final long timeBudgetNanos = runtimeConfig.keysTimeBudgetMillis() <= 0
@@ -171,7 +176,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 }
                 exForTask.executeMaintenance(() -> {
                     try {
-                        runtimeAccess.maintenanceTick();
+                        maintenance.maintenanceTick();
                     } catch (Exception e) {
                         log.debug("Expiration cleanup error", e);
                     } finally {

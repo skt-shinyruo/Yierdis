@@ -11,6 +11,7 @@ import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.Session;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
+import yier.bubu.redis.runtime.YierdisInstanceObservability;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
@@ -73,6 +74,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private final YierdisServerRuntimeConfig config;
     private final long startedMillis;
     private volatile NettyCommandExecutor executor;
+    private volatile YierdisInstanceObservability observability;
     private volatile DbEngine[] engines;
 
     NettyServerInfoProvider(YierdisServerRuntimeConfig config) {
@@ -82,6 +84,10 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
     void bindExecutor(NettyCommandExecutor executor) {
         this.executor = Objects.requireNonNull(executor, "executor");
+    }
+
+    void bindObservability(YierdisInstanceObservability observability) {
+        this.observability = Objects.requireNonNull(observability, "observability");
     }
 
     void bindEngines(DbEngine[] engines) {
@@ -161,98 +167,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         if (config.maxmemoryScope() != YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL) {
             return null;
         }
-
-        DbEngine[] local = engines;
-        if (local == null || local.length == 0) {
-            return new YierdisMemoryStats(
-                    config.maxmemoryBytes(),
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    true,
-                    false,
-                    0,
-                    0,
-                    false,
-                    0,
-                    0,
-                    0,
-                    false,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0
-            );
-        }
-
-        long heap = 0;
-        long keyspaceOverhead = 0;
-        long expireOverhead = 0;
-        long expireValueObjects = 0;
-        long offHeap = 0;
-        long reserved = 0;
-        int keyCount = 0;
-        int expireCount = 0;
-        boolean keysStoredOffHeap = false;
-        boolean keyspaceRehashing = false;
-        boolean expireRehashing = false;
-        int keyspaceCap0 = 0;
-        int keyspaceCap1 = 0;
-        int expireCap0 = 0;
-        int expireCap1 = 0;
-
-        for (int i = 0; i < local.length; i++) {
-            DbEngine db = local[i];
-            if (db == null) {
-                continue;
-            }
-            YierdisMemoryStats s = db.memory().memoryStats();
-            heap += s.heapDataBytesEstimate();
-            keyspaceOverhead += s.keyspaceTableOverheadBytesEstimate();
-            expireOverhead += s.expireTableOverheadBytesEstimate();
-            expireValueObjects += s.expireValueObjectsBytesEstimate();
-            keyCount += s.keyCount();
-            expireCount += s.expireCount();
-            reserved += s.reservedBytes();
-            keysStoredOffHeap |= s.keysStoredOffHeap();
-            keyspaceRehashing |= s.keyspaceRehashing();
-            expireRehashing |= s.expireRehashing();
-            keyspaceCap0 += s.keyspaceTable0Capacity();
-            keyspaceCap1 += s.keyspaceTable1Capacity();
-            expireCap0 += s.expireTable0Capacity();
-            expireCap1 += s.expireTable1Capacity();
-            offHeap = Math.max(offHeap, s.offHeapUsedBytes());
-        }
-
-        long usedBytesForMaxmemory = heap + offHeap;
-        long effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + Math.max(0L, reserved);
-        long totalEstimatedBytes = heap + offHeap + keyspaceOverhead + expireOverhead + expireValueObjects;
-
-        return new YierdisMemoryStats(
-                config.maxmemoryBytes(),
-                usedBytesForMaxmemory,
-                heap,
-                offHeap,
-                reserved,
-                effectiveUsedBytesForMaxmemory,
-                true,
-                keysStoredOffHeap,
-                keyCount,
-                expireCount,
-                keyspaceRehashing,
-                keyspaceCap0,
-                keyspaceCap1,
-                keyspaceOverhead,
-                expireRehashing,
-                expireCap0,
-                expireCap1,
-                expireOverhead,
-                expireValueObjects,
-                totalEstimatedBytes
-        );
+        return aggregatedMemoryStats();
     }
 
     private void writeYierdisStructuredInfo(ReplyWriter out, NettyCommandExecutor ex) {
@@ -313,38 +228,15 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         if (memory) {
-            MemorySummary m = memorySummary();
-            long ledgerReservedBytes = 0;
-            long maxmemoryUsedBytes = 0;
-            long maxmemoryEffectiveUsedBytes = 0;
-            boolean offHeapIncludedInMaxmemory = config.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL;
-            if (config.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL) {
-                YierdisMemoryStats memStats = memoryStats(null);
-                if (memStats != null) {
-                    ledgerReservedBytes = memStats.reservedBytes();
-                    maxmemoryUsedBytes = memStats.usedBytesForMaxmemory();
-                    maxmemoryEffectiveUsedBytes = memStats.effectiveUsedBytesForMaxmemory();
-                    offHeapIncludedInMaxmemory = memStats.offHeapIncludedInMaxmemory();
-                }
-            } else {
-                DbEngine[] local = engines;
-                if (local != null) {
-                    for (int i = 0; i < local.length; i++) {
-                        DbEngine db = local[i];
-                        if (db == null) {
-                            continue;
-                        }
-                        YierdisMemoryStats dbStats = db.memory().memoryStats();
-                        ledgerReservedBytes += dbStats.reservedBytes();
-                        maxmemoryUsedBytes += dbStats.usedBytesForMaxmemory();
-                        maxmemoryEffectiveUsedBytes += dbStats.effectiveUsedBytesForMaxmemory();
-                    }
-                }
-            }
+            YierdisMemoryStats memStats = aggregatedMemoryStats();
+            long usedMemoryBytes = memStats.heapDataBytesEstimate() + memStats.offHeapUsedBytes();
+            long overheadBytesEstimate = memStats.keyspaceTableOverheadBytesEstimate()
+                    + memStats.expireTableOverheadBytesEstimate()
+                    + memStats.expireValueObjectsBytesEstimate();
             sb.append("# Memory\r\n");
-            sb.append("used_memory:").append(m.usedMemoryBytes).append("\r\n");
-            sb.append("used_memory_dataset:").append(m.heapDataBytesEstimate).append("\r\n");
-            sb.append("used_memory_overhead:").append(m.overheadBytesEstimate).append("\r\n");
+            sb.append("used_memory:").append(usedMemoryBytes).append("\r\n");
+            sb.append("used_memory_dataset:").append(memStats.heapDataBytesEstimate()).append("\r\n");
+            sb.append("used_memory_overhead:").append(overheadBytesEstimate).append("\r\n");
             sb.append("maxmemory:").append(config.maxmemoryBytes()).append("\r\n");
             sb.append("maxmemory_policy:").append(config.maxmemoryPolicy().argvValue()).append("\r\n");
             sb.append("yierdis_maxmemory_scope:")
@@ -354,13 +246,13 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
                 long perDb = config.maxmemoryBytes() / Math.max(1L, (long) config.databases());
                 sb.append("yierdis_maxmemory_per_db_bytes:").append(perDb).append("\r\n");
             }
-            sb.append("yierdis_ledger_used_bytes:").append(m.heapDataBytesEstimate).append("\r\n");
-            sb.append("yierdis_ledger_reserved_bytes:").append(ledgerReservedBytes).append("\r\n");
-            sb.append("yierdis_ledger_effective_used_bytes:").append(m.heapDataBytesEstimate + ledgerReservedBytes).append("\r\n");
-            sb.append("yierdis_maxmemory_used_bytes:").append(maxmemoryUsedBytes).append("\r\n");
-            sb.append("yierdis_maxmemory_effective_used_bytes:").append(maxmemoryEffectiveUsedBytes).append("\r\n");
-            sb.append("yierdis_offheap_included_in_maxmemory:").append(offHeapIncludedInMaxmemory ? 1 : 0).append("\r\n");
-            sb.append("yierdis_offheap_used_bytes:").append(m.offHeapUsedBytes).append("\r\n");
+            sb.append("yierdis_ledger_used_bytes:").append(memStats.heapDataBytesEstimate()).append("\r\n");
+            sb.append("yierdis_ledger_reserved_bytes:").append(memStats.reservedBytes()).append("\r\n");
+            sb.append("yierdis_ledger_effective_used_bytes:").append(memStats.heapDataBytesEstimate() + memStats.reservedBytes()).append("\r\n");
+            sb.append("yierdis_maxmemory_used_bytes:").append(memStats.usedBytesForMaxmemory()).append("\r\n");
+            sb.append("yierdis_maxmemory_effective_used_bytes:").append(memStats.effectiveUsedBytesForMaxmemory()).append("\r\n");
+            sb.append("yierdis_offheap_included_in_maxmemory:").append(memStats.offHeapIncludedInMaxmemory() ? 1 : 0).append("\r\n");
+            sb.append("yierdis_offheap_used_bytes:").append(memStats.offHeapUsedBytes()).append("\r\n");
             sb.append("yierdis_offheap_max_bytes:0\r\n");
             sb.append("\r\n");
         }
@@ -408,49 +300,33 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
     }
 
-    private MemorySummary memorySummary() {
-        DbEngine[] local = engines;
-        if (local == null || local.length == 0) {
-            return new MemorySummary(0, 0, 0, 0);
+    private YierdisMemoryStats aggregatedMemoryStats() {
+        YierdisInstanceObservability runtimeObservability = observability;
+        if (runtimeObservability != null) {
+            return runtimeObservability.memoryStats();
         }
-        long heap = 0;
-        long keyspaceOverhead = 0;
-        long expireOverhead = 0;
-        long expireValueObjects = 0;
-        long offHeap = 0;
-
-        for (int i = 0; i < local.length; i++) {
-            DbEngine db = local[i];
-            if (db == null) {
-                continue;
-            }
-            YierdisMemoryStats s = db.memory().memoryStats();
-            heap += s.heapDataBytesEstimate();
-            keyspaceOverhead += s.keyspaceTableOverheadBytesEstimate();
-            expireOverhead += s.expireTableOverheadBytesEstimate();
-            expireValueObjects += s.expireValueObjectsBytesEstimate();
-            if (i == 0) {
-                offHeap = s.offHeapUsedBytes();
-            }
-        }
-
-        long overhead = keyspaceOverhead + expireOverhead + expireValueObjects;
-        long used = heap + offHeap;
-        return new MemorySummary(used, heap, offHeap, overhead);
-    }
-
-    private static final class MemorySummary {
-        final long usedMemoryBytes;
-        final long heapDataBytesEstimate;
-        final long offHeapUsedBytes;
-        final long overheadBytesEstimate;
-
-        private MemorySummary(long usedMemoryBytes, long heapDataBytesEstimate, long offHeapUsedBytes, long overheadBytesEstimate) {
-            this.usedMemoryBytes = usedMemoryBytes;
-            this.heapDataBytesEstimate = heapDataBytesEstimate;
-            this.offHeapUsedBytes = offHeapUsedBytes;
-            this.overheadBytesEstimate = overheadBytesEstimate;
-        }
+        return new YierdisMemoryStats(
+                config.maxmemoryBytes(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                config.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL,
+                false,
+                0,
+                0,
+                false,
+                0,
+                0,
+                0,
+                false,
+                0,
+                0,
+                0,
+                0,
+                0
+        );
     }
 
     private static ServerRuntimeState runtimeState(CommandContext ctx) {

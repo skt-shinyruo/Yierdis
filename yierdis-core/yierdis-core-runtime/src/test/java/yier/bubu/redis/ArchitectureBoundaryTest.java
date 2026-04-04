@@ -288,12 +288,39 @@ public class ArchitectureBoundaryTest {
                 bootstrapFile,
                 offenders,
                 "inst.bindToCurrentThread()",
-                "inst.close()"
+                "inst.close()",
+                "runtimeAccess.maintenanceTick()"
         );
 
         if (!offenders.isEmpty()) {
             Assert.fail(
                     "检测到 bootstrap 重新内联 owner-thread 生命周期逻辑，而不是通过 runtime seam 协作：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void serverInfoProviderMustNotOwnGlobalMemoryAggregationAgain() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path infoProviderFile = repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis/NettyServerInfoProvider.java").normalize();
+        Assert.assertTrue("缺少 NettyServerInfoProvider.java", Files.isRegularFile(infoProviderFile));
+
+        List<String> offenders = new ArrayList<>();
+        scanFileForForbiddenText(
+                repoRoot,
+                infoProviderFile,
+                offenders,
+                "private MemorySummary memorySummary()",
+                "long totalEstimatedBytes = heap + offHeap + keyspaceOverhead + expireOverhead + expireValueObjects;",
+                "offHeap = Math.max(offHeap, s.offHeapUsedBytes());"
+        );
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 NettyServerInfoProvider 重新承担 instance/global memory 聚合职责，而不是通过 runtime observability seam 协作：\n"
                             + String.join("\n", offenders)
             );
         }
