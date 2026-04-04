@@ -29,7 +29,7 @@ Yierdis 的目标是 **教学/演示**：可以用项目内置 CLI 做交互学�
 - **instance 暴露面**：`YierdisInstance` 仅负责 DB 生命周期、资源 ownership 与 `DbEngine` 能力视图（`engine(int)` / `engines()` 防御性拷贝），避免上层依赖 `YierdisDb` 具体实现，也不再承担 command processor 组装。
 - **runtime owner-thread seam**：server 不应再通过公开 `DbEngine` 视图做 `RuntimeDbEngine` 向下转型，也不应在 bootstrap 中内联 `bindToCurrentThread()/close()` 细节；owner-thread 维护、maintenance、关闭应通过 `yierdis-core-runtime` 提供的 runtime-local seam 协作。
 - **DB 内部协作者**：`YierdisDb` 仍然是状态 owner，但过期清理、maxmemory/淘汰这类高密度内部策略应优先收敛到 package-local collaborator，而不是继续在单个超大类中内联扩张。
-- **off-heap 组装**：`YierdisOffHeapAllocators` 仅通过 `ServiceLoader` 发现 provider；server 侧通过引入对应 backend 模块（如 `yierdis-memory-netty/unsafe/foreign`）完成组装。
+- **native memory 组装**：server 直接依赖 `yierdis-memory-foreign`，统一使用 JDK 25 `java.lang.foreign` FFM API；不再存在多 backend 发现/切换。
 
 ## 启动
 
@@ -240,52 +240,28 @@ busy 可诊断性（排障）：
   - `offer_failed`：入队失败（通常是竞态/关闭路径）
 - `STATS` 会输出对应计数器，便于定位 busy 的主因（例如 `submit_rejected_queue_full_total` 等）。
 
-## Off-heap（实验）
+## Native Memory
 
-项目内置一层“堆外内存操作”抽象 API，并提供多个后端实现：
+Yierdis 现在要求使用 JDK 25，并且始终使用 `java.lang.foreign` FFM API 管理 native memory。
 
-- `netty`：基于 Netty direct `ByteBuf`（适配层在 `yierdis-memory-netty`；`yierdis-memory-api` 不依赖 Netty）
-- `unsafe`：基于 `sun.misc.Unsafe`（通过 Netty `PlatformDependent`）管理 native memory（无需 incubator modules）
-- `foreign`：基于 JDK 25 正式 `java.lang.foreign` FFM API（默认构建已包含；运行时无需额外模块参数）
+- 没有 `--offheapBackend`
+- 没有 `--offheapMaxBytes`
+- keyspace、expires、string/hash/list/set/zset 内部结构默认都走 FFM
+- `maxmemory` 是唯一的 native-memory 预算入口
 
-目前该层主要用于逐步迁移（先抽象，再替换实现）。默认 `--offheapBackend none` 不影响现有逻辑；当显式启用
-off-heap 后端后，当前已用于字符串值的存储与回复（例如 `GET` 会优先走 off-heap slice 的写出路径，避免为已存储值再分配新的 heap `byte[]`）。
-此外，当选择 `unsafe` 后端时，keyspace 的 key bytes 以及过期索引（expires）也会使用同一个 allocator 的 off-heap 内存（因此 `--offheapMaxBytes` 需要包含索引/keys 的固定开销）。
-
-### 运行/测试 Foreign Memory 后端
-
-从 2026-02-08 起，`foreign-memory` profile 默认启用，因此默认构建会编译并打包 foreign 后端：
+构建和运行方式保持简单：
 
 ```bash
 mvn test
 mvn -DskipTests package
+java -jar yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378
 ```
 
-如果你只想构建不包含 `foreign` 后端的产物，可以显式禁用该 profile：
-
-```bash
-mvn -P!foreign-memory test
-mvn -P!foreign-memory -DskipTests package
-```
-
-运行时若选择 `foreign` 后端，直接使用 JDK 25 启动即可：
-
-```bash
-java -jar yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --offheapBackend foreign
-```
-
-如果当前 JVM 不支持 `java.lang.foreign`，server 会在启动阶段直接报错，并提示改用 JDK 25 或其他 off-heap 后端。
-
-### Server 参数（预留）
-
-- `--offheapBackend none|netty|unsafe|foreign`（默认 `none`）
-- `--offheapMaxBytes <bytes>`（默认 `0` 表示不限制；>0 时作为硬限制，超限命令返回 OOM 错误）
-
-⚠️ 重要提示：如果启用了 off-heap 后端但未配置 `--offheapMaxBytes`（保持 0），off-heap 会表现为“无限上限”；此时即使配置了 `--maxmemoryBytes`，也可能出现“以为有硬限制但 off-heap 仍持续增长”的误解。建议在容器/受限环境中总是显式配置 `--offheapMaxBytes`。
+如果当前 JVM 不支持 `java.lang.foreign`，server 会在启动阶段直接报错并要求改用 JDK 25。
 
 ## 压力测试（可重复）
 
-本项目没有内置 JMH，但提供一个“可重复压测脚本”用于对比 `none/netty/unsafe` 三种后端的吞吐与延迟分位数（纯 Java 实现，不依赖
+本项目没有内置 JMH，但提供一个“可重复压测脚本”用于观测 FFM-only 路径下的吞吐与延迟分位数（纯 Java 实现，不依赖
 `redis-benchmark` 等系统工具）。
 
 一键运行：

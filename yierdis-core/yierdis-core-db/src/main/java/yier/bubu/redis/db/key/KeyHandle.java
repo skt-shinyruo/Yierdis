@@ -4,7 +4,6 @@ package yier.bubu.redis.db.key;
 
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.db.memory.ffm.YierdisFfmBytesRef;
-import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 
 import java.util.Objects;
 
@@ -61,11 +60,6 @@ public interface KeyHandle extends BytesView {
     static KeyHandle forFfm(YierdisFfmBytesRef ref, int dictHash) {
         Objects.requireNonNull(ref, "ref");
         return new FfmKeyHandle(ref, dictHash);
-    }
-
-    static KeyHandle forOffHeap(OffHeapAddressAllocator allocator, long address, int len, int dictHash) {
-        Objects.requireNonNull(allocator, "allocator");
-        return new OffHeapKeyHandle(allocator, address, len, dictHash);
     }
 
     static int hashBytesView(BytesView view, int len) {

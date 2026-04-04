@@ -1,8 +1,9 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.ops.ValueType;
-import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapZSet;
-import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmBlobStore;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmZSet;
+import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.ops.result.BulkStringSink;
 
@@ -14,8 +15,8 @@ import java.nio.charset.StandardCharsets;
 final class ZSetValue implements YierdisValue {
     private static final int REF_BYTES = 8;
 
-    private final OffHeapAddressAllocator offHeapAllocator;
-    private final YierdisUnsafeOffHeapZSet offHeap;
+    private final YierdisFfmMemoryRuntime memoryRuntime;
+    private final YierdisFfmZSet ffm;
 
     // Redis uses listpack for small ZSETs and upgrades to dict+skiplist as needed.
     // We approximate that behavior with an in-Java "listpack-like" sorted array and upgrade to
@@ -27,14 +28,14 @@ final class ZSetValue implements YierdisValue {
     private long skiplistLevels;
 
     ZSetValue() {
-        this.offHeapAllocator = null;
-        this.offHeap = null;
+        this.memoryRuntime = null;
+        this.ffm = null;
         this.listpack = new PackedZSet();
     }
 
-    ZSetValue(OffHeapAddressAllocator allocator) {
-        this.offHeapAllocator = allocator;
-        this.offHeap = new YierdisUnsafeOffHeapZSet(allocator);
+    ZSetValue(YierdisFfmMemoryRuntime memoryRuntime) {
+        this.memoryRuntime = memoryRuntime;
+        this.ffm = new YierdisFfmZSet(new YierdisFfmBlobStore(memoryRuntime, "zset"));
         this.listpack = null;
     }
 
@@ -45,15 +46,15 @@ final class ZSetValue implements YierdisValue {
 
     @Override
     public ValueEncoding encoding() {
-        if (offHeapAllocator != null) {
-            return ValueEncoding.ZSET_SKIPLIST;
+        if (memoryRuntime != null) {
+            return ffm.encoding();
         }
         return listpack != null ? ValueEncoding.ZSET_PACKED : ValueEncoding.ZSET_SKIPLIST;
     }
 
     int size() {
-        if (offHeapAllocator != null) {
-            return offHeap.size();
+        if (memoryRuntime != null) {
+            return ffm.size();
         }
         if (listpack != null) {
             return listpack.size();
@@ -62,7 +63,7 @@ final class ZSetValue implements YierdisValue {
     }
 
     long estimatedBytes() {
-        if (offHeapAllocator != null) {
+        if (memoryRuntime != null) {
             return 0;
         }
         if (listpack != null) {
@@ -79,8 +80,8 @@ final class ZSetValue implements YierdisValue {
     }
 
     int zaddMany(List<byte[]> scoreMemberPairs, boolean[] changedRef) {
-        if (offHeapAllocator != null) {
-            return offHeap.zaddMany(scoreMemberPairs, changedRef);
+        if (memoryRuntime != null) {
+            return ffm.zaddMany(scoreMemberPairs, changedRef);
         }
         int added = 0;
         boolean changedAny = false;
@@ -116,8 +117,8 @@ final class ZSetValue implements YierdisValue {
     }
 
     int zrem(List<byte[]> members) {
-        if (offHeapAllocator != null) {
-            return offHeap.zrem(members);
+        if (memoryRuntime != null) {
+            return ffm.zrem(members);
         }
         if (listpack != null) {
             int removed = 0;
@@ -142,8 +143,8 @@ final class ZSetValue implements YierdisValue {
     }
 
     List<byte[]> zrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        if (offHeapAllocator != null) {
-            return offHeap.zrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        if (memoryRuntime != null) {
+            return ffm.zrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
         }
         if (count <= 0) {
             return new ArrayList<>();
@@ -156,8 +157,8 @@ final class ZSetValue implements YierdisValue {
     }
 
     List<byte[]> zrevrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        if (offHeapAllocator != null) {
-            return offHeap.zrevrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        if (memoryRuntime != null) {
+            return ffm.zrevrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
         }
         if (count <= 0) {
             return new ArrayList<>();
@@ -170,8 +171,8 @@ final class ZSetValue implements YierdisValue {
     }
 
     int zremrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive) {
-        if (offHeapAllocator != null) {
-            return offHeap.zremrangeByScore(min, minExclusive, max, maxExclusive);
+        if (memoryRuntime != null) {
+            return ffm.zremrangeByScore(min, minExclusive, max, maxExclusive);
         }
         if (listpack != null) {
             int removed = 0;
@@ -200,8 +201,8 @@ final class ZSetValue implements YierdisValue {
     }
 
     int zremrangeByRank(long start, long stop) {
-        if (offHeapAllocator != null) {
-            return offHeap.zremrangeByRank(start, stop);
+        if (memoryRuntime != null) {
+            return ffm.zremrangeByRank(start, stop);
         }
         int size = size();
         if (size == 0) {
@@ -252,52 +253,52 @@ final class ZSetValue implements YierdisValue {
     }
 
     List<byte[]> zrange(long start, long stop, boolean withScores) {
-        if (offHeapAllocator != null) {
-            return offHeap.zrange(start, stop, withScores);
+        if (memoryRuntime != null) {
+            return ffm.zrange(start, stop, withScores);
         }
         return rangeByIndex(start, stop, withScores, false);
     }
 
     List<byte[]> zrevrange(long start, long stop, boolean withScores) {
-        if (offHeapAllocator != null) {
-            return offHeap.zrevrange(start, stop, withScores);
+        if (memoryRuntime != null) {
+            return ffm.zrevrange(start, stop, withScores);
         }
         return rangeByIndex(start, stop, withScores, true);
     }
 
     int zrangeCount(long start, long stop, boolean withScores) {
-        if (offHeapAllocator != null) {
-            return offHeap.zrangeCount(start, stop, withScores);
+        if (memoryRuntime != null) {
+            return ffm.zrangeCount(start, stop, withScores);
         }
         return rangeByIndexCount(start, stop, withScores, false);
     }
 
     void zrangeWriteTo(long start, long stop, boolean withScores, BulkStringSink out) {
-        if (offHeapAllocator != null) {
-            offHeap.zrangeWriteTo(start, stop, withScores, out);
+        if (memoryRuntime != null) {
+            ffm.zrangeWriteTo(start, stop, withScores, out);
             return;
         }
         rangeByIndexWriteTo(start, stop, withScores, false, out);
     }
 
     int zrevrangeCount(long start, long stop, boolean withScores) {
-        if (offHeapAllocator != null) {
-            return offHeap.zrevrangeCount(start, stop, withScores);
+        if (memoryRuntime != null) {
+            return ffm.zrevrangeCount(start, stop, withScores);
         }
         return rangeByIndexCount(start, stop, withScores, true);
     }
 
     void zrevrangeWriteTo(long start, long stop, boolean withScores, BulkStringSink out) {
-        if (offHeapAllocator != null) {
-            offHeap.zrevrangeWriteTo(start, stop, withScores, out);
+        if (memoryRuntime != null) {
+            ffm.zrevrangeWriteTo(start, stop, withScores, out);
             return;
         }
         rangeByIndexWriteTo(start, stop, withScores, true, out);
     }
 
     int zrangeByScoreCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        if (offHeapAllocator != null) {
-            return offHeap.zrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        if (memoryRuntime != null) {
+            return ffm.zrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
         }
         if (count <= 0) {
             return 0;
@@ -309,8 +310,8 @@ final class ZSetValue implements YierdisValue {
     }
 
     void zrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, BulkStringSink out) {
-        if (offHeapAllocator != null) {
-            offHeap.zrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+        if (memoryRuntime != null) {
+            ffm.zrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
             return;
         }
         if (out == null) {
@@ -327,8 +328,8 @@ final class ZSetValue implements YierdisValue {
     }
 
     int zrevrangeByScoreCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        if (offHeapAllocator != null) {
-            return offHeap.zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+        if (memoryRuntime != null) {
+            return ffm.zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
         }
         if (count <= 0) {
             return 0;
@@ -340,8 +341,8 @@ final class ZSetValue implements YierdisValue {
     }
 
     void zrevrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, BulkStringSink out) {
-        if (offHeapAllocator != null) {
-            offHeap.zrevrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+        if (memoryRuntime != null) {
+            ffm.zrevrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
             return;
         }
         if (out == null) {
@@ -1231,8 +1232,8 @@ final class ZSetValue implements YierdisValue {
 
     @Override
     public void close() {
-        if (offHeapAllocator != null) {
-            offHeap.close();
+        if (memoryRuntime != null) {
+            ffm.close();
         }
     }
 

@@ -1,6 +1,5 @@
 package yier.bubu.redis.db;
 
-import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 import yier.bubu.redis.ops.ListReadOps;
 import yier.bubu.redis.ops.ListWriteOps;
 import yier.bubu.redis.ops.ValueType;
@@ -66,8 +65,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
-                OffHeapAddressAllocator addressAllocator =
-                        internals.offHeapAllocator() instanceof OffHeapAddressAllocator a ? a : null;
+                var memoryRuntime = internals.memoryRuntime();
                 final int[] len = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
                 internals.store().computeWithHandle(keyBytes, (k, old) -> {
@@ -80,7 +78,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                         oldEstimate = 0;
                     }
                     if (old == null) {
-                        ListValue lv = addressAllocator != null ? new ListValue(addressAllocator) : new ListValue();
+                        ListValue lv = new ListValue(memoryRuntime);
                         if (left) {
                             lv.lpushAll(values);
                         } else {

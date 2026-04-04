@@ -95,7 +95,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
 
         long nowMillis = System.currentTimeMillis();
         List<byte[]> out = new ArrayList<>();
-        List<KeyHandle> expiredKeys = new ArrayList<>();
+        List<byte[]> expiredKeys = new ArrayList<>();
         List<YierdisObject> expiredValues = new ArrayList<>();
         final boolean[] timedOut = new boolean[]{false};
 
@@ -111,7 +111,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
                     return true;
                 }
                 if (internals.isKeyExpired(k, nowMillis)) {
-                    expiredKeys.add(k);
+                    expiredKeys.add(YierdisDb.toByteArray(k));
                     expiredValues.add(e);
                     return true;
                 }
@@ -140,7 +140,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
         }
 
         for (int i = 0; i < expiredKeys.size(); i++) {
-            KeyHandle key = expiredKeys.get(i);
+            byte[] key = expiredKeys.get(i);
             internals.removeExpire(key);
             if (internals.store().remove(key, expiredValues.get(i))) {
                 expiredValues.get(i).releasePayloadIfAny();
@@ -159,7 +159,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
         }
 
         long now = System.currentTimeMillis();
-        List<KeyHandle> expiredKeys = new ArrayList<>();
+        List<byte[]> expiredKeys = new ArrayList<>();
         List<YierdisObject> expiredValues = new ArrayList<>();
         int maxSteps = Math.max(64, count * 10);
         final int[] remaining = new int[]{count};
@@ -169,7 +169,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
                 return true;
             }
             if (internals.isKeyExpired(k, now)) {
-                expiredKeys.add(k);
+                expiredKeys.add(YierdisDb.toByteArray(k));
                 expiredValues.add(e);
                 return true;
             }
@@ -184,7 +184,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
         });
 
         for (int i = 0; i < expiredKeys.size(); i++) {
-            KeyHandle key = expiredKeys.get(i);
+            byte[] key = expiredKeys.get(i);
             internals.removeExpire(key);
             if (internals.store().remove(key, expiredValues.get(i))) {
                 expiredValues.get(i).releasePayloadIfAny();

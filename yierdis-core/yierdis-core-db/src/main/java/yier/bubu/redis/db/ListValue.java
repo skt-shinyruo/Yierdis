@@ -1,8 +1,9 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.ops.ValueType;
-import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapListpack;
-import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmBlobStore;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmListpack;
+import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.ops.result.BulkStringSink;
 
 import java.util.ArrayDeque;
@@ -15,25 +16,28 @@ final class ListValue implements YierdisValue {
     // to a quicklist-like deque of nodes once size/element thresholds are crossed.
     private static final int QUICKLIST_NODE_MAX_BYTES = YierdisEncodingThresholds.LIST_MAX_LISTPACK_BYTES;
 
-    private final OffHeapAddressAllocator offHeapAllocator;
+    private final YierdisFfmMemoryRuntime memoryRuntime;
+    private final YierdisFfmBlobStore ffmBlobStore;
 
     private YierdisListpack listpack;
     private ArrayDeque<ListNode> quicklist;
 
-    private YierdisUnsafeOffHeapListpack listpackOffHeap;
-    private ArrayDeque<OffHeapListNode> quicklistOffHeap;
+    private YierdisFfmListpack listpackFfm;
+    private ArrayDeque<FfmListNode> quicklistFfm;
 
     private int totalSize = 0;
     private long allocatedBytes = 0;
 
     ListValue() {
-        this.offHeapAllocator = null;
+        this.memoryRuntime = null;
+        this.ffmBlobStore = null;
         this.listpack = new YierdisListpack();
     }
 
-    ListValue(OffHeapAddressAllocator allocator) {
-        this.offHeapAllocator = allocator;
-        this.listpackOffHeap = new YierdisUnsafeOffHeapListpack(allocator);
+    ListValue(YierdisFfmMemoryRuntime memoryRuntime) {
+        this.memoryRuntime = memoryRuntime;
+        this.ffmBlobStore = new YierdisFfmBlobStore(memoryRuntime, "list");
+        this.listpackFfm = new YierdisFfmListpack(ffmBlobStore);
     }
 
     @Override
@@ -43,8 +47,8 @@ final class ListValue implements YierdisValue {
 
     @Override
     public ValueEncoding encoding() {
-        if (offHeapAllocator != null) {
-            return quicklistOffHeap != null ? ValueEncoding.LIST_QUICKLIST : ValueEncoding.LIST_PACKED;
+        if (memoryRuntime != null) {
+            return quicklistFfm != null ? ValueEncoding.LIST_QUICKLIST : ValueEncoding.LIST_PACKED;
         }
         return quicklist != null ? ValueEncoding.LIST_QUICKLIST : ValueEncoding.LIST_PACKED;
     }
@@ -54,33 +58,33 @@ final class ListValue implements YierdisValue {
     }
 
     long estimatedBytes() {
-        if (offHeapAllocator != null) {
+        if (memoryRuntime != null) {
             return 0;
         }
         return allocatedBytes;
     }
 
     void lpushAll(List<byte[]> values) {
-        if (offHeapAllocator != null) {
-            if (quicklistOffHeap != null) {
+        if (memoryRuntime != null) {
+            if (quicklistFfm != null) {
                 for (byte[] v : values) {
-                    qlAddFirstOffHeap(v);
+                    qlAddFirstFfm(v);
                 }
                 return;
             }
 
-            if (wouldExceedPackedBytesOffHeap(values)) {
-                convertToQuickListOffHeap();
+            if (wouldExceedPackedBytesFfm(values)) {
+                convertToQuickListFfm();
                 lpushAll(values);
                 return;
             }
 
             for (byte[] v : values) {
-                listpackOffHeap.addFirst(v);
+                listpackFfm.addFirst(v);
                 totalSize++;
             }
-            if (quicklistOffHeap == null && listpackOffHeap.encodedBytes() > QUICKLIST_NODE_MAX_BYTES) {
-                convertToQuickListOffHeap();
+            if (quicklistFfm == null && listpackFfm.encodedBytes() > QUICKLIST_NODE_MAX_BYTES) {
+                convertToQuickListFfm();
             }
             return;
         }
@@ -113,26 +117,26 @@ final class ListValue implements YierdisValue {
     }
 
     void rpushAll(List<byte[]> values) {
-        if (offHeapAllocator != null) {
-            if (quicklistOffHeap != null) {
+        if (memoryRuntime != null) {
+            if (quicklistFfm != null) {
                 for (byte[] v : values) {
-                    qlAddLastOffHeap(v);
+                    qlAddLastFfm(v);
                 }
                 return;
             }
 
-            if (wouldExceedPackedBytesOffHeap(values)) {
-                convertToQuickListOffHeap();
+            if (wouldExceedPackedBytesFfm(values)) {
+                convertToQuickListFfm();
                 rpushAll(values);
                 return;
             }
 
             for (byte[] v : values) {
-                listpackOffHeap.addLast(v);
+                listpackFfm.addLast(v);
             }
             totalSize += values.size();
-            if (quicklistOffHeap == null && listpackOffHeap.encodedBytes() > QUICKLIST_NODE_MAX_BYTES) {
-                convertToQuickListOffHeap();
+            if (quicklistFfm == null && listpackFfm.encodedBytes() > QUICKLIST_NODE_MAX_BYTES) {
+                convertToQuickListFfm();
             }
             return;
         }
@@ -171,21 +175,21 @@ final class ListValue implements YierdisValue {
         int expected = Math.min(count, totalSize);
         List<byte[]> out = new ArrayList<>(expected);
         for (int i = 0; i < count; i++) {
-            if (offHeapAllocator != null) {
-                if (quicklistOffHeap != null) {
-                    if (quicklistOffHeap.isEmpty()) {
+            if (memoryRuntime != null) {
+                if (quicklistFfm != null) {
+                    if (quicklistFfm.isEmpty()) {
                         break;
                     }
-                    byte[] v = qlPollFirstOffHeap();
+                    byte[] v = qlPollFirstFfm();
                     totalSize--;
                     out.add(v);
                     continue;
                 }
 
-                if (listpackOffHeap.isEmpty()) {
+                if (listpackFfm.isEmpty()) {
                     break;
                 }
-                byte[] v = listpackOffHeap.removeFirst();
+                byte[] v = listpackFfm.removeFirst();
                 totalSize--;
                 out.add(v);
                 continue;
@@ -218,21 +222,21 @@ final class ListValue implements YierdisValue {
         int expected = Math.min(count, totalSize);
         List<byte[]> out = new ArrayList<>(expected);
         for (int i = 0; i < count; i++) {
-            if (offHeapAllocator != null) {
-                if (quicklistOffHeap != null) {
-                    if (quicklistOffHeap.isEmpty()) {
+            if (memoryRuntime != null) {
+                if (quicklistFfm != null) {
+                    if (quicklistFfm.isEmpty()) {
                         break;
                     }
-                    byte[] v = qlPollLastOffHeap();
+                    byte[] v = qlPollLastFfm();
                     totalSize--;
                     out.add(v);
                     continue;
                 }
 
-                if (listpackOffHeap.isEmpty()) {
+                if (listpackFfm.isEmpty()) {
                     break;
                 }
-                byte[] v = listpackOffHeap.removeLast();
+                byte[] v = listpackFfm.removeLast();
                 totalSize--;
                 out.add(v);
                 continue;
@@ -282,11 +286,11 @@ final class ListValue implements YierdisValue {
 
         List<byte[]> out = new ArrayList<>(normalizedStop - normalizedStart + 1);
         int idx = 0;
-        if (offHeapAllocator != null) {
-            if (quicklistOffHeap != null) {
+        if (memoryRuntime != null) {
+            if (quicklistFfm != null) {
                 outer:
-                for (OffHeapListNode n : quicklistOffHeap) {
-                    YierdisUnsafeOffHeapListpack.Cursor c = n.cursor();
+                for (FfmListNode n : quicklistFfm) {
+                    YierdisFfmListpack.Cursor c = n.cursor();
                     while (c.next()) {
                         if (idx > normalizedStop) {
                             break outer;
@@ -300,7 +304,7 @@ final class ListValue implements YierdisValue {
                 return out;
             }
 
-            YierdisUnsafeOffHeapListpack.Cursor c = listpackOffHeap.cursor();
+            YierdisFfmListpack.Cursor c = listpackFfm.cursor();
             while (c.next()) {
                 if (idx > normalizedStop) {
                     break;
@@ -393,11 +397,11 @@ final class ListValue implements YierdisValue {
         }
 
         int idx = 0;
-        if (offHeapAllocator != null) {
-            if (quicklistOffHeap != null) {
+        if (memoryRuntime != null) {
+            if (quicklistFfm != null) {
                 outer:
-                for (OffHeapListNode n : quicklistOffHeap) {
-                    YierdisUnsafeOffHeapListpack.Cursor c = n.cursor();
+                for (FfmListNode n : quicklistFfm) {
+                    YierdisFfmListpack.Cursor c = n.cursor();
                     while (c.next()) {
                         if (idx > normalizedStop) {
                             break outer;
@@ -411,7 +415,7 @@ final class ListValue implements YierdisValue {
                 return;
             }
 
-            YierdisUnsafeOffHeapListpack.Cursor c = listpackOffHeap.cursor();
+            YierdisFfmListpack.Cursor c = listpackFfm.cursor();
             while (c.next()) {
                 if (idx > normalizedStop) {
                     break;
@@ -474,11 +478,11 @@ final class ListValue implements YierdisValue {
         return predicted > QUICKLIST_NODE_MAX_BYTES;
     }
 
-    private boolean wouldExceedPackedBytesOffHeap(List<byte[]> incoming) {
+    private boolean wouldExceedPackedBytesFfm(List<byte[]> incoming) {
         if (incoming == null || incoming.isEmpty()) {
             return false;
         }
-        int predicted = listpackOffHeap.encodedBytes();
+        int predicted = listpackFfm.encodedBytes();
         for (byte[] v : incoming) {
             predicted += entryEncodedBytes(v);
             if (predicted > QUICKLIST_NODE_MAX_BYTES) {
@@ -515,19 +519,19 @@ final class ListValue implements YierdisValue {
         this.listpack = null;
     }
 
-    private void convertToQuickListOffHeap() {
-        if (quicklistOffHeap != null) {
+    private void convertToQuickListFfm() {
+        if (quicklistFfm != null) {
             return;
         }
 
-        ArrayDeque<OffHeapListNode> out = new ArrayDeque<>();
-        OffHeapListNode node = new OffHeapListNode(offHeapAllocator);
-        YierdisUnsafeOffHeapListpack.Cursor c = listpackOffHeap.cursor();
+        ArrayDeque<FfmListNode> out = new ArrayDeque<>();
+        FfmListNode node = new FfmListNode(ffmBlobStore);
+        YierdisFfmListpack.Cursor c = listpackFfm.cursor();
         while (c.next()) {
             int entryBytes = entryEncodedBytes(c.isNull() ? -1 : c.length());
             if (!node.canAddEntry(entryBytes)) {
                 out.addLast(node);
-                node = new OffHeapListNode(offHeapAllocator);
+                node = new FfmListNode(ffmBlobStore);
             }
             node.addLast(c.toByteArray());
         }
@@ -535,9 +539,9 @@ final class ListValue implements YierdisValue {
             out.addLast(node);
         }
 
-        listpackOffHeap.close();
-        listpackOffHeap = null;
-        this.quicklistOffHeap = out;
+        listpackFfm.close();
+        listpackFfm = null;
+        quicklistFfm = out;
     }
 
     private void qlAddFirst(byte[] v) {
@@ -648,64 +652,64 @@ final class ListValue implements YierdisValue {
         quicklist.addLast(last);
     }
 
-    private void qlAddFirstOffHeap(byte[] v) {
-        if (quicklistOffHeap.isEmpty() || !quicklistOffHeap.peekFirst().canAdd(v)) {
-            quicklistOffHeap.addFirst(new OffHeapListNode(offHeapAllocator));
+    private void qlAddFirstFfm(byte[] v) {
+        if (quicklistFfm.isEmpty() || !quicklistFfm.peekFirst().canAdd(v)) {
+            quicklistFfm.addFirst(new FfmListNode(ffmBlobStore));
         }
-        OffHeapListNode n = quicklistOffHeap.peekFirst();
+        FfmListNode n = quicklistFfm.peekFirst();
         n.addFirst(v);
         totalSize++;
     }
 
-    private void qlAddLastOffHeap(byte[] v) {
-        if (quicklistOffHeap.isEmpty() || !quicklistOffHeap.peekLast().canAdd(v)) {
-            quicklistOffHeap.addLast(new OffHeapListNode(offHeapAllocator));
+    private void qlAddLastFfm(byte[] v) {
+        if (quicklistFfm.isEmpty() || !quicklistFfm.peekLast().canAdd(v)) {
+            quicklistFfm.addLast(new FfmListNode(ffmBlobStore));
         }
-        OffHeapListNode n = quicklistOffHeap.peekLast();
+        FfmListNode n = quicklistFfm.peekLast();
         n.addLast(v);
         totalSize++;
     }
 
-    private byte[] qlPollFirstOffHeap() {
-        if (quicklistOffHeap.isEmpty()) {
+    private byte[] qlPollFirstFfm() {
+        if (quicklistFfm.isEmpty()) {
             return null;
         }
-        OffHeapListNode n = quicklistOffHeap.peekFirst();
+        FfmListNode n = quicklistFfm.peekFirst();
         byte[] v = n.removeFirst();
         if (n.isEmpty()) {
-            quicklistOffHeap.removeFirst();
+            quicklistFfm.removeFirst();
             n.close();
         }
-        maybeMergeFirstTwoOffHeap();
+        maybeMergeFirstTwoFfm();
         return v;
     }
 
-    private byte[] qlPollLastOffHeap() {
-        if (quicklistOffHeap.isEmpty()) {
+    private byte[] qlPollLastFfm() {
+        if (quicklistFfm.isEmpty()) {
             return null;
         }
-        OffHeapListNode n = quicklistOffHeap.peekLast();
+        FfmListNode n = quicklistFfm.peekLast();
         byte[] v = n.removeLast();
         if (n.isEmpty()) {
-            quicklistOffHeap.removeLast();
+            quicklistFfm.removeLast();
             n.close();
         }
-        maybeMergeLastTwoOffHeap();
+        maybeMergeLastTwoFfm();
         return v;
     }
 
-    private void maybeMergeFirstTwoOffHeap() {
-        if (quicklistOffHeap.size() < 2) {
+    private void maybeMergeFirstTwoFfm() {
+        if (quicklistFfm.size() < 2) {
             return;
         }
-        OffHeapListNode first = quicklistOffHeap.pollFirst();
-        OffHeapListNode second = quicklistOffHeap.pollFirst();
+        FfmListNode first = quicklistFfm.pollFirst();
+        FfmListNode second = quicklistFfm.pollFirst();
         if (first == null || second == null) {
             if (second != null) {
-                quicklistOffHeap.addFirst(second);
+                quicklistFfm.addFirst(second);
             }
             if (first != null) {
-                quicklistOffHeap.addFirst(first);
+                quicklistFfm.addFirst(first);
             }
             return;
         }
@@ -713,26 +717,26 @@ final class ListValue implements YierdisValue {
         if (first.canAppendAll(second)) {
             first.appendAll(second);
             second.close();
-            quicklistOffHeap.addFirst(first);
+            quicklistFfm.addFirst(first);
             return;
         }
 
-        quicklistOffHeap.addFirst(second);
-        quicklistOffHeap.addFirst(first);
+        quicklistFfm.addFirst(second);
+        quicklistFfm.addFirst(first);
     }
 
-    private void maybeMergeLastTwoOffHeap() {
-        if (quicklistOffHeap.size() < 2) {
+    private void maybeMergeLastTwoFfm() {
+        if (quicklistFfm.size() < 2) {
             return;
         }
-        OffHeapListNode last = quicklistOffHeap.pollLast();
-        OffHeapListNode prev = quicklistOffHeap.pollLast();
+        FfmListNode last = quicklistFfm.pollLast();
+        FfmListNode prev = quicklistFfm.pollLast();
         if (last == null || prev == null) {
             if (prev != null) {
-                quicklistOffHeap.addLast(prev);
+                quicklistFfm.addLast(prev);
             }
             if (last != null) {
-                quicklistOffHeap.addLast(last);
+                quicklistFfm.addLast(last);
             }
             return;
         }
@@ -740,12 +744,12 @@ final class ListValue implements YierdisValue {
         if (prev.canAppendAll(last)) {
             prev.appendAll(last);
             last.close();
-            quicklistOffHeap.addLast(prev);
+            quicklistFfm.addLast(prev);
             return;
         }
 
-        quicklistOffHeap.addLast(prev);
-        quicklistOffHeap.addLast(last);
+        quicklistFfm.addLast(prev);
+        quicklistFfm.addLast(last);
     }
 
     private static final class ListNode {
@@ -819,18 +823,18 @@ final class ListValue implements YierdisValue {
         }
     }
 
-    private static final class OffHeapListNode implements AutoCloseable {
-        private final YierdisUnsafeOffHeapListpack listpack;
+    private static final class FfmListNode implements AutoCloseable {
+        private final YierdisFfmListpack listpack;
 
-        private OffHeapListNode(OffHeapAddressAllocator allocator) {
-            this.listpack = new YierdisUnsafeOffHeapListpack(allocator);
+        private FfmListNode(YierdisFfmBlobStore blobStore) {
+            this.listpack = new YierdisFfmListpack(blobStore);
         }
 
         boolean isEmpty() {
             return listpack.isEmpty();
         }
 
-        YierdisUnsafeOffHeapListpack.Cursor cursor() {
+        YierdisFfmListpack.Cursor cursor() {
             return listpack.cursor();
         }
 
@@ -864,18 +868,18 @@ final class ListValue implements YierdisValue {
             return listpack.removeLast();
         }
 
-        boolean canAppendAll(OffHeapListNode other) {
+        boolean canAppendAll(FfmListNode other) {
             if (other == null || other.isEmpty()) {
                 return true;
             }
             return this.listpack.encodedBytes() + other.listpack.encodedBytes() <= QUICKLIST_NODE_MAX_BYTES;
         }
 
-        void appendAll(OffHeapListNode other) {
+        void appendAll(FfmListNode other) {
             if (other == null || other.isEmpty()) {
                 return;
             }
-            YierdisUnsafeOffHeapListpack.Cursor c = other.listpack.cursor();
+            YierdisFfmListpack.Cursor c = other.listpack.cursor();
             while (c.next()) {
                 listpack.addLast(c.toByteArray());
             }
@@ -909,19 +913,18 @@ final class ListValue implements YierdisValue {
 
     @Override
     public void close() {
-        if (offHeapAllocator == null) {
-            return;
-        }
-        if (listpackOffHeap != null) {
-            listpackOffHeap.close();
-            listpackOffHeap = null;
-        }
-        if (quicklistOffHeap != null) {
-            for (OffHeapListNode n : quicklistOffHeap) {
-                n.close();
+        if (memoryRuntime != null) {
+            if (listpackFfm != null) {
+                listpackFfm.close();
+                listpackFfm = null;
             }
-            quicklistOffHeap.clear();
-            quicklistOffHeap = null;
+            if (quicklistFfm != null) {
+                for (FfmListNode n : quicklistFfm) {
+                    n.close();
+                }
+                quicklistFfm.clear();
+                quicklistFfm = null;
+            }
         }
     }
 

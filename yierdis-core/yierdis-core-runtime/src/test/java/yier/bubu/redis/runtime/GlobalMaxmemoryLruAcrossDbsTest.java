@@ -3,7 +3,9 @@ package yier.bubu.redis.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.ops.DbMemoryConstants;
+import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyNull;
@@ -19,8 +21,8 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
         byte[] value = new byte[100];
         Arrays.fill(value, (byte) 'a');
 
-        long entryBytes = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 1L + value.length;
-        long maxmemoryBytes = entryBytes * 3L + 1L;
+        long writeUpperBound = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 1L + value.length;
+        long maxmemoryBytes = maxmemoryBudgetThatFitsThreeKeysButNotFour(value, writeUpperBound);
 
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
@@ -59,6 +61,39 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
                 Assert.assertArrayEquals(value, ((ReplyBulkString) client.execute(Arrays.asList(b("GET"), b("c")))).data());
                 Assert.assertArrayEquals(value, ((ReplyBulkString) client.execute(Arrays.asList(b("GET"), b("d")))).data());
             }
+        }
+    }
+
+    private static long maxmemoryBudgetThatFitsThreeKeysButNotFour(byte[] value, long writeUpperBound) {
+        long usedAfterTwoKeys = probeGlobalUsedBytes(value, false);
+        long usedAfterThreeKeys = probeGlobalUsedBytes(value, true);
+        long lowerBound = usedAfterTwoKeys + writeUpperBound;
+        long upperExclusive = usedAfterThreeKeys + writeUpperBound;
+        Assert.assertTrue("probe budget must leave room between 3rd and 4th write", upperExclusive > lowerBound);
+        long span = upperExclusive - lowerBound;
+        return lowerBound + Math.max(0L, (span - 1L) / 2L);
+    }
+
+    private static long probeGlobalUsedBytes(byte[] value, boolean includeThirdKey) {
+        YierdisInstanceConfig probeConfig = YierdisInstanceConfig.builder()
+                .databases(2)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
+                .maxmemoryBytes(1_000_000)
+                .maxmemoryPolicy("allkeys-lru")
+                .maxmemorySamples(10)
+                .evictionTimeLimitMillis(1000)
+                .build();
+
+        try (YierdisInstance instance = YierdisInstance.create(probeConfig)) {
+            instance.bindToCurrentThread();
+            YierdisDb db0 = (YierdisDb) instance.engine(0);
+            YierdisDb db1 = (YierdisDb) instance.engine(1);
+            db0.writes().strings().setString(b("a"), value, SetMode.NORMAL, null);
+            db0.writes().strings().setString(b("b"), value, SetMode.NORMAL, null);
+            if (includeThirdKey) {
+                db1.writes().strings().setString(b("c"), value, SetMode.NORMAL, null);
+            }
+            return db0.usedBytesForMaxmemory() + db1.usedBytesForMaxmemory() + instance.runtimeMemoryRuntime().usedBytes();
         }
     }
 }

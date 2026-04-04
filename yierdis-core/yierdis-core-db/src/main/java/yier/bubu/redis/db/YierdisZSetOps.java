@@ -1,6 +1,5 @@
 package yier.bubu.redis.db;
 
-import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.WrongTypeException;
 import yier.bubu.redis.ops.YierdisCommandException;
@@ -37,8 +36,7 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
-                OffHeapAddressAllocator addressAllocator =
-                        internals.offHeapAllocator() instanceof OffHeapAddressAllocator a ? a : null;
+                var memoryRuntime = internals.memoryRuntime();
                 final int[] added = new int[]{0};
                 final boolean[] changedAny = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
@@ -52,7 +50,7 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                         oldEstimate = 0;
                     }
                     if (old == null) {
-                        ZSetValue zv = addressAllocator != null ? new ZSetValue(addressAllocator) : new ZSetValue();
+                        ZSetValue zv = new ZSetValue(memoryRuntime);
                         try {
                             added[0] = zv.zaddMany(scoreMemberPairs, changedAny);
                         } catch (RuntimeException e) {

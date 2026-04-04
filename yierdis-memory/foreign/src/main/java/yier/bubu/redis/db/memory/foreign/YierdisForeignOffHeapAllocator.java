@@ -2,11 +2,10 @@ package yier.bubu.redis.db.memory.foreign;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSource;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapBackend;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapBuf;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapOutOfMemoryException;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapSlice;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
+import yier.bubu.redis.offheap.api.OffHeapBuf;
+import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
+import yier.bubu.redis.offheap.api.OffHeapSlice;
 
 import java.nio.ByteBuffer;
 
@@ -36,7 +35,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
     }
 
     @Override
-    public YierdisOffHeapBuf allocate(int capacity) {
+    public OffHeapBuf allocate(int capacity) {
         if (capacity <= 0) {
             throw new IllegalArgumentException("capacity must be > 0");
         }
@@ -46,7 +45,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
 
         long next = usedBytes + capacity;
         if (maxBytes > 0 && next > maxBytes) {
-            throw new YierdisOffHeapOutOfMemoryException("off-heap memory limit exceeded");
+            throw new OffHeapOutOfMemoryException("off-heap memory limit exceeded");
         }
 
         YierdisFfmRegion region = runtime.allocateRegion("buf", capacity);
@@ -64,8 +63,8 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
         return maxBytes;
     }
 
-    public YierdisOffHeapBackend backend() {
-        return YierdisOffHeapBackend.FOREIGN;
+    public YierdisFfmMemoryRuntime memoryRuntime() {
+        return runtime;
     }
 
     @Override
@@ -87,7 +86,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
         usedBytes = next;
     }
 
-    private static final class YierdisForeignOffHeapBuf implements YierdisOffHeapBuf {
+    private static final class YierdisForeignOffHeapBuf implements OffHeapBuf {
         private static final int COPY_CHUNK_BYTES = 8 * 1024;
         private static final ThreadLocal<byte[]> TL_COPY_BUF =
                 ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);
@@ -186,7 +185,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
         }
 
         @Override
-        public YierdisOffHeapSlice slice(int index, int len) {
+        public OffHeapSlice slice(int index, int len) {
             ensureOpen();
             if (len < 0) {
                 throw new IllegalArgumentException("len must be >= 0");
@@ -223,7 +222,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
         }
     }
 
-    private static final class YierdisForeignOffHeapSlice implements YierdisOffHeapSlice {
+    private static final class YierdisForeignOffHeapSlice implements OffHeapSlice {
         private static final int COPY_CHUNK_BYTES = 8 * 1024;
         private static final ThreadLocal<byte[]> TL_COPY_BUF =
                 ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);

@@ -20,7 +20,7 @@ import java.util.List;
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestBytes.cmd;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
-import static yier.bubu.redis.testutil.TestDbs.runUnsafeOffHeap;
+import static yier.bubu.redis.testutil.TestDbs.runDefaultFfm;
 
 public class HashCommandTest {
     @Test
@@ -142,8 +142,8 @@ public class HashCommandTest {
     }
 
     @Test
-    public void offHeapHashStartsAsListpackAndUpgradesToHashtableAfterThreshold() {
-        runUnsafeOffHeap(db -> {
+    public void ffmHashStartsAsListpackAndUpgradesToHashtableAfterThreshold() {
+        runDefaultFfm(db -> {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 // 512 is YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES (kept package-private).

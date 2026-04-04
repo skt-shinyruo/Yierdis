@@ -4,7 +4,8 @@ import yier.bubu.redis.ops.ValueType;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.db.memory.netty.YierdisNettyOffHeapAllocator;
+import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.db.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.offheap.api.OffHeapSlice;
 import yier.bubu.redis.ops.ExpireOption;
 import yier.bubu.redis.ops.SetMode;
@@ -19,51 +20,56 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 
 public class OffHeapStringStorageTest {
     @Test
-    public void setGetUsesOffHeapSliceAndDelFrees() {
-        YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
-        try {
-            db.bindToCurrentThread();
-            byte[] key = b("k");
-            byte[] value = b("hello");
+    public void setGetUsesFfmSliceAndDelFrees() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
+            try {
+                db.bindToCurrentThread();
+                byte[] key = b("k");
+                byte[] value = b("hello");
 
-            Assert.assertTrue(db.writes().strings().setString(key, value, SetMode.NORMAL, null));
-            Assert.assertTrue(allocator.usedBytes() > 0);
+                Assert.assertTrue(db.writes().strings().setString(key, value, SetMode.NORMAL, null));
+                Assert.assertTrue(runtime.usedBytes() > 0);
 
-            RecordingBulkOutput out = new RecordingBulkOutput();
-            db.reads().strings().getStringValue(new TestBytesView(key)).writeTo(out);
-            Assert.assertTrue(out.usedOffHeapSlice);
-            Assert.assertArrayEquals(value, out.bytes);
+                RecordingBulkOutput out = new RecordingBulkOutput();
+                db.reads().strings().getStringValue(new TestBytesView(key)).writeTo(out);
+                Assert.assertTrue(out.usedOffHeapSlice);
+                Assert.assertArrayEquals(value, out.bytes);
 
-            Assert.assertEquals(1L, db.writes().keyspace().del(Collections.singletonList(key)));
-            Assert.assertEquals(0L, allocator.usedBytes());
-        } finally {
-            db.shutdown();
+                Assert.assertEquals(1L, db.writes().keyspace().del(Collections.singletonList(key)));
+                Assert.assertNull(db.store.randomKey());
+                Assert.assertEquals(0L, runtime.usedBytes());
+            } finally {
+                db.shutdown();
+            }
         }
     }
 
     @Test
-    public void cleanupExpiredFreesOffHeapStrings() {
-        YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
-        try {
-            db.bindToCurrentThread();
-            byte[] key = b("k");
-            db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
-            Assert.assertTrue(allocator.usedBytes() > 0);
+    public void cleanupExpiredFreesFfmStrings() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
+            try {
+                db.bindToCurrentThread();
+                byte[] key = b("k");
+                db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0));
+                Assert.assertTrue(runtime.usedBytes() > 0);
 
-            db.cleanupExpired();
-            Assert.assertEquals(0, db.size());
-            Assert.assertEquals(0L, allocator.usedBytes());
-        } finally {
-            db.shutdown();
+                db.cleanupExpired();
+                Assert.assertEquals(0, db.size());
+                Assert.assertNull(db.store.randomKey());
+                Assert.assertNull(db.expires.randomKey());
+                Assert.assertEquals(0L, runtime.usedBytes());
+            } finally {
+                db.shutdown();
+            }
         }
     }
 
     @Test
     public void expiredKeyStringPayloadIsReleasedWhenOverwrittenByOtherCommand() {
-        YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
+        YierdisForeignOffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(0);
+        YierdisDb db = new YierdisDb(allocator, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
@@ -80,9 +86,9 @@ public class OffHeapStringStorageTest {
     }
 
     @Test
-    public void overwriteReusesOffHeapBufferUnderHardCap() {
-        YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(5);
-        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
+    public void overwriteReusesFfmBufferUnderHardCap() {
+        YierdisForeignOffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(5);
+        YierdisDb db = new YierdisDb(allocator, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
@@ -105,9 +111,9 @@ public class OffHeapStringStorageTest {
     }
 
     @Test
-    public void offHeapMaxBytesRejectsOversizedSet() {
-        YierdisNettyOffHeapAllocator allocator = new YierdisNettyOffHeapAllocator(4);
-        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
+    public void ffmMaxBytesRejectsOversizedSet() {
+        YierdisForeignOffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(4);
+        YierdisDb db = new YierdisDb(allocator, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
             try {

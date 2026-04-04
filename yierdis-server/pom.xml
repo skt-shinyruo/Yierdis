@@ -54,17 +54,7 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-memory-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-memory-netty</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-memory-unsafe</artifactId>
+            <artifactId>yierdis-memory-foreign</artifactId>
         </dependency>
 
         <dependency>
@@ -120,18 +110,4 @@
         </plugins>
     </build>
 
-    <profiles>
-        <profile>
-            <id>foreign-memory</id>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-            </activation>
-            <dependencies>
-                <dependency>
-                    <groupId>yier.bubu.redis</groupId>
-                    <artifactId>yierdis-memory-foreign</artifactId>
-                </dependency>
-            </dependencies>
-        </profile>
-    </profiles>
 </project>

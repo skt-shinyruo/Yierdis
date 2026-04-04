@@ -3,6 +3,7 @@ package yier.bubu.redis.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.db.YierdisDb;
+import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyInteger;
@@ -73,44 +74,52 @@ public class HllCommandTest {
     }
 
     @Test
-    public void denseHllSupportsInPlacePfaddAfterPfmerge() {
-        forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
-                client.execute(cmd("PFADD", "src", "a", "b"));
+    public void denseHllSupportsInPlacePfaddAfterPfmergeUnderFfmStorage() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
+            try {
+                db.bindToCurrentThread();
+                YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+                try (FastTestClient client = new FastTestClient(processor)) {
+                    client.execute(cmd("PFADD", "src", "a", "b"));
 
-                // PFMERGE 总是写 dense，这样后续 PFADD 会走 dense 原地更新分支。
-                client.execute(cmd("PFMERGE", "dense", "src"));
+                    // PFMERGE 总是写 dense，这样后续 PFADD 会走 dense 原地更新分支。
+                    client.execute(cmd("PFMERGE", "dense", "src"));
 
-                ReplyInteger add = (ReplyInteger) client.execute(cmd("PFADD", "dense", "c"));
-                Assert.assertEquals(1, add.value());
+                    ReplyInteger add = (ReplyInteger) client.execute(cmd("PFADD", "dense", "c"));
+                    Assert.assertEquals(1, add.value());
 
-                ReplyInteger count = (ReplyInteger) client.execute(cmd("PFCOUNT", "dense"));
-                Assert.assertEquals(3, count.value());
+                    ReplyInteger count = (ReplyInteger) client.execute(cmd("PFCOUNT", "dense"));
+                    Assert.assertEquals(3, count.value());
+                }
+            } finally {
+                db.shutdown();
             }
-        });
+        }
     }
 
     @Test
     public void densePfaddNearMaxmemoryDoesNotFalseOom() {
-        YierdisDb db = new YierdisDb(null, 13000, "noeviction", 5, 5, 5);
-        db.bindToCurrentThread();
-        try {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
-            try (FastTestClient client = new FastTestClient(processor)) {
-                client.execute(cmd("PFADD", "src", "a", "b"));
-                client.execute(cmd("PFMERGE", "dense", "src"));
-                client.execute(cmd("DEL", "src"));
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 13000, "noeviction", 5, 5, 5);
+            db.bindToCurrentThread();
+            try {
+                YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+                try (FastTestClient client = new FastTestClient(processor)) {
+                    client.execute(cmd("PFADD", "src", "a", "b"));
+                    client.execute(cmd("PFMERGE", "dense", "src"));
+                    client.execute(cmd("DEL", "src"));
 
-                ReplyObject add = client.execute(cmd("PFADD", "dense", "c"));
-                Assert.assertTrue(add instanceof ReplyInteger);
-                Assert.assertEquals(1, ((ReplyInteger) add).value());
+                    ReplyObject add = client.execute(cmd("PFADD", "dense", "c"));
+                    Assert.assertTrue(add instanceof ReplyInteger);
+                    Assert.assertEquals(1, ((ReplyInteger) add).value());
 
-                ReplyInteger count = (ReplyInteger) client.execute(cmd("PFCOUNT", "dense"));
-                Assert.assertEquals(3, count.value());
+                    ReplyInteger count = (ReplyInteger) client.execute(cmd("PFCOUNT", "dense"));
+                    Assert.assertEquals(3, count.value());
+                }
+            } finally {
+                db.shutdown();
             }
-        } finally {
-            db.shutdown();
         }
     }
 

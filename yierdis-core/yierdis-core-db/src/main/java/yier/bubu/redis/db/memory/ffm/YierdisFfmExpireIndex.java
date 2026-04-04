@@ -11,6 +11,7 @@ import yier.bubu.redis.db.memory.foreign.YierdisFfmRegion;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmSpan;
 
 import java.util.Objects;
+import java.util.ArrayDeque;
 import java.util.concurrent.ThreadLocalRandom;
 
 public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
@@ -22,6 +23,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
     private final YierdisFfmBlobStore blobStore;
     private final YierdisFfmMemoryRuntime memoryRuntime;
+    private final ArrayDeque<Table> retiredTables = new ArrayDeque<>();
 
     private Table table0;
     private Table table1;
@@ -65,11 +67,11 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     @Override
     public Long get(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
+        rehashStep();
         Table t0 = table0;
         if (t0 == null) {
             return null;
         }
-        rehashStep();
         int h = hash(keyBytes);
         int idx = findIndex(t0, keyBytes, h);
         if (idx >= 0) {
@@ -88,11 +90,11 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     @Override
     public Long get(BytesView keyView) {
         Objects.requireNonNull(keyView, "keyView");
+        rehashStep();
         Table t0 = table0;
         if (t0 == null) {
             return null;
         }
-        rehashStep();
         int h = hash(keyView);
         int idx = findIndex(t0, keyView, h);
         if (idx >= 0) {
@@ -111,11 +113,11 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     @Override
     public Long get(KeyHandle keyHandle) {
         Objects.requireNonNull(keyHandle, "keyHandle");
+        rehashStep();
         Table t0 = table0;
         if (t0 == null) {
             return null;
         }
-        rehashStep();
         int h = hash(keyHandle);
         int idx = findIndex(t0, keyHandle, h);
         if (idx >= 0) {
@@ -169,6 +171,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
     @Override
     public void clear() {
+        closeRetiredTables();
         clearTable(table0);
         clearTable(table1);
         table0 = null;
@@ -341,7 +344,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         }
         int cap = t0.capacity;
         if (t0.size == 0) {
-            t0.close();
+            retireTable(t0);
             table0 = null;
             return;
         }
@@ -374,6 +377,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     }
 
     private void rehashStep() {
+        closeRetiredTables();
         if (table1 == null) {
             return;
         }
@@ -407,10 +411,22 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     private void finishRehash() {
         Table old0 = table0;
         Table new0 = table1;
-        old0.close();
+        retireTable(old0);
         table0 = new0;
         table1 = null;
         rehashIndex = -1;
+    }
+
+    private void retireTable(Table table) {
+        if (table != null) {
+            retiredTables.addLast(table);
+        }
+    }
+
+    private void closeRetiredTables() {
+        while (!retiredTables.isEmpty()) {
+            retiredTables.removeFirst().close();
+        }
     }
 
     private void insertExistingIntoTable1(YierdisFfmBytesRef ref, int hash, long expireAtMillis) {

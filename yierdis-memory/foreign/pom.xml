@@ -19,14 +19,7 @@
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-memory-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-memory-api</artifactId>
-            <classifier>tests</classifier>
-            <scope>test</scope>
+            <artifactId>yierdis-core-api</artifactId>
         </dependency>
 
         <dependency>

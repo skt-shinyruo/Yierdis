@@ -17,20 +17,6 @@
     <description>Aggregator and parent for Yierdis memory modules.</description>
 
     <modules>
-        <module>api</module>
-        <module>netty</module>
-        <module>unsafe</module>
+        <module>foreign</module>
     </modules>
-
-    <profiles>
-        <profile>
-            <id>foreign-memory</id>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-            </activation>
-            <modules>
-                <module>foreign</module>
-            </modules>
-        </profile>
-    </profiles>
 </project>

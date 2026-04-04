@@ -1,9 +1,11 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.ops.ValueType;
-import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapDictLong;
-import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapRawSlice;
-import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmBlobStore;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmByteMap;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmBytesRefSlice;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmIntSet;
+import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.ops.result.BulkStringSink;
 
 import java.nio.charset.StandardCharsets;
@@ -15,7 +17,10 @@ final class SetValue implements YierdisValue {
     private static final byte[] LONG_MIN_VALUE_BYTES = "-9223372036854775808".getBytes(StandardCharsets.US_ASCII);
     private static final int LONG_BYTES = Long.BYTES;
 
-    private final OffHeapAddressAllocator offHeapAllocator;
+    private static final Object PRESENT = new Object();
+
+    private final YierdisFfmMemoryRuntime memoryRuntime;
+    private final YierdisFfmBlobStore ffmBlobStore;
 
     private short[] intset16 = new short[0];
     private int[] intset32;
@@ -26,19 +31,18 @@ final class SetValue implements YierdisValue {
     private ByteArrayHashSet hashset;
     private long rawBytes;
 
-    // Unsafe off-heap mode:
-    // - intset stores sorted longs in a single off-heap long[]
-    // - hashtable stores members as dict keys (values are dummy 1L)
-    private long intsetAddr;
-    private int intsetCapOffHeap;
-    private YierdisUnsafeOffHeapDictLong hashsetOffHeap;
+    private YierdisFfmIntSet intsetFfm;
+    private YierdisFfmByteMap<Object> hashsetFfm;
 
     SetValue() {
-        this.offHeapAllocator = null;
+        this.memoryRuntime = null;
+        this.ffmBlobStore = null;
     }
 
-    SetValue(OffHeapAddressAllocator allocator) {
-        this.offHeapAllocator = allocator;
+    SetValue(YierdisFfmMemoryRuntime memoryRuntime) {
+        this.memoryRuntime = memoryRuntime;
+        this.ffmBlobStore = new YierdisFfmBlobStore(memoryRuntime, "set");
+        this.intsetFfm = new YierdisFfmIntSet(memoryRuntime);
     }
 
     @Override
@@ -48,8 +52,8 @@ final class SetValue implements YierdisValue {
 
     @Override
     public ValueEncoding encoding() {
-        if (offHeapAllocator != null) {
-            return hashsetOffHeap != null ? ValueEncoding.SET_HT : ValueEncoding.SET_INTSET;
+        if (memoryRuntime != null) {
+            return hashsetFfm != null ? ValueEncoding.SET_HT : ValueEncoding.SET_INTSET;
         }
         if (hashset != null) {
             return ValueEncoding.SET_HT;
@@ -58,8 +62,8 @@ final class SetValue implements YierdisValue {
     }
 
     int size() {
-        if (offHeapAllocator != null) {
-            return hashsetOffHeap != null ? hashsetOffHeap.size() : intsetSize;
+        if (memoryRuntime != null) {
+            return hashsetFfm != null ? hashsetFfm.size() : intsetFfm.size();
         }
         if (hashset != null) {
             return hashset.size();
@@ -68,7 +72,7 @@ final class SetValue implements YierdisValue {
     }
 
     long estimatedBytes() {
-        if (offHeapAllocator != null) {
+        if (memoryRuntime != null) {
             return 0;
         }
         if (hashset != null) {
@@ -108,19 +112,15 @@ final class SetValue implements YierdisValue {
     }
 
     boolean contains(byte[] member) {
-        if (offHeapAllocator != null) {
-            if (hashsetOffHeap != null) {
-                return hashsetOffHeap.get(member) != 0L;
+        if (memoryRuntime != null) {
+            if (hashsetFfm != null) {
+                return hashsetFfm.get(member) != null;
             }
 
             long parsed = parseCanonicalLongOrSentinel(member);
             boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
-            if (!isInt) {
-                return false;
-            }
-            return intsetContainsOffHeap(parsed);
+            return isInt && intsetFfm.contains(parsed);
         }
-
         if (hashset != null) {
             return hashset.contains(member);
         }
@@ -134,28 +134,19 @@ final class SetValue implements YierdisValue {
     }
 
     List<byte[]> members() {
-        if (offHeapAllocator != null) {
-            if (hashsetOffHeap != null) {
-                List<byte[]> out = new ArrayList<>(hashsetOffHeap.size());
-                hashsetOffHeap.forEach((keyPtr, keyLen, value) -> {
-                    if (keyLen == 0) {
-                        out.add(new byte[0]);
-                        return;
-                    }
-                    byte[] k = new byte[keyLen];
-                    offHeapAllocator.copyMemory(keyPtr, k, 0, keyLen);
-                    out.add(k);
-                });
+        if (memoryRuntime != null) {
+            if (hashsetFfm != null) {
+                List<byte[]> out = new ArrayList<>(hashsetFfm.size());
+                hashsetFfm.forEach((keyRef, ignored) -> out.add(ffmBlobStore.toByteArray(keyRef)));
                 return out;
             }
 
-            List<byte[]> out = new ArrayList<>(intsetSize);
-            for (int i = 0; i < intsetSize; i++) {
-                out.add(Long.toString(intsetLongAtOffHeap(i)).getBytes(StandardCharsets.US_ASCII));
+            List<byte[]> out = new ArrayList<>(intsetFfm.size());
+            for (int i = 0; i < intsetFfm.size(); i++) {
+                out.add(Long.toString(intsetFfm.get(i)).getBytes(StandardCharsets.US_ASCII));
             }
             return out;
         }
-
         if (hashset != null) {
             List<byte[]> out = new ArrayList<>(hashset.size());
             hashset.forEach(out::add);
@@ -174,14 +165,13 @@ final class SetValue implements YierdisValue {
             throw new IllegalArgumentException("out must not be null");
         }
 
-        if (offHeapAllocator != null) {
-            if (hashsetOffHeap != null) {
-                hashsetOffHeap.forEach((keyPtr, keyLen, value) ->
-                        out.bulkString(new YierdisUnsafeOffHeapRawSlice(offHeapAllocator, keyPtr, keyLen)));
+        if (memoryRuntime != null) {
+            if (hashsetFfm != null) {
+                hashsetFfm.forEach((keyRef, ignored) -> out.bulkString(new YierdisFfmBytesRefSlice(keyRef)));
                 return;
             }
-            for (int i = 0; i < intsetSize; i++) {
-                out.bulkStringLongAscii(intsetLongAtOffHeap(i));
+            for (int i = 0; i < intsetFfm.size(); i++) {
+                out.bulkStringLongAscii(intsetFfm.get(i));
             }
             return;
         }
@@ -201,21 +191,29 @@ final class SetValue implements YierdisValue {
             throw new IllegalArgumentException("member must not be null");
         }
 
-        if (offHeapAllocator != null) {
-            if (hashsetOffHeap != null) {
-                return hashsetOffHeap.put(member, 1L) == 0L;
+        if (memoryRuntime != null) {
+            if (hashsetFfm != null) {
+                boolean added = hashsetFfm.put(member, PRESENT) == null;
+                if (added) {
+                    rawBytes += member.length;
+                }
+                return added;
             }
 
             long parsed = parseCanonicalLongOrSentinel(member);
             boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
             if (!isInt) {
-                convertToHashSetOffHeap();
-                return hashsetOffHeap.put(member, 1L) == 0L;
+                convertToHashSetFfm();
+                boolean added = hashsetFfm.put(member, PRESENT) == null;
+                if (added) {
+                    rawBytes += member.length;
+                }
+                return added;
             }
 
-            boolean added = intsetAddOffHeap(parsed);
-            if (added && intsetSize > YierdisEncodingThresholds.SET_MAX_INTSET_ENTRIES) {
-                convertToHashSetOffHeap();
+            boolean added = intsetFfm.add(parsed);
+            if (added && intsetFfm.size() > YierdisEncodingThresholds.SET_MAX_INTSET_ENTRIES) {
+                convertToHashSetFfm();
             }
             return added;
         }
@@ -247,17 +245,18 @@ final class SetValue implements YierdisValue {
             return false;
         }
 
-        if (offHeapAllocator != null) {
-            if (hashsetOffHeap != null) {
-                return hashsetOffHeap.remove(member) != 0L;
+        if (memoryRuntime != null) {
+            if (hashsetFfm != null) {
+                boolean removed = hashsetFfm.remove(member) != null;
+                if (removed) {
+                    rawBytes -= member.length;
+                }
+                return removed;
             }
 
             long parsed = parseCanonicalLongOrSentinel(member);
             boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
-            if (!isInt) {
-                return false;
-            }
-            return intsetRemoveOffHeap(parsed);
+            return isInt && intsetFfm.remove(parsed);
         }
 
         if (hashset != null) {
@@ -297,36 +296,25 @@ final class SetValue implements YierdisValue {
         this.intsetSize = 0;
     }
 
-    private void convertToHashSetOffHeap() {
-        if (hashsetOffHeap != null) {
+    private void convertToHashSetFfm() {
+        if (hashsetFfm != null) {
             return;
         }
-        if (offHeapAllocator == null) {
-            throw new IllegalStateException("offHeapAllocator must not be null");
+        YierdisFfmByteMap<Object> out = new YierdisFfmByteMap<>(ffmBlobStore);
+        long bytes = 0L;
+        for (int i = 0; i < intsetFfm.size(); i++) {
+            byte[] member = Long.toString(intsetFfm.get(i)).getBytes(StandardCharsets.US_ASCII);
+            out.put(member, PRESENT);
+            bytes += member.length;
         }
-
-        YierdisUnsafeOffHeapDictLong out = new YierdisUnsafeOffHeapDictLong(offHeapAllocator);
-        for (int i = 0; i < intsetSize; i++) {
-            byte[] member = Long.toString(intsetLongAtOffHeap(i)).getBytes(StandardCharsets.US_ASCII);
-            out.put(member, 1L);
-        }
-
-        if (intsetAddr != 0 && intsetCapOffHeap > 0) {
-            offHeapAllocator.freeAddress(intsetAddr, Math.max(8, intsetCapOffHeap * LONG_BYTES));
-        }
-        intsetAddr = 0;
-        intsetCapOffHeap = 0;
-        intsetSize = 0;
-
-        this.hashsetOffHeap = out;
+        intsetFfm.close();
+        intsetFfm = null;
+        hashsetFfm = out;
+        rawBytes = bytes;
     }
 
     private boolean intsetContains(long v) {
         return intsetIndexOf(v) >= 0;
-    }
-
-    private boolean intsetContainsOffHeap(long v) {
-        return intsetIndexOfOffHeap(v) >= 0;
     }
 
     private boolean intsetAdd(long v) {
@@ -372,23 +360,6 @@ final class SetValue implements YierdisValue {
         return true;
     }
 
-    private boolean intsetAddOffHeap(long v) {
-        ensureIntsetCapacityOffHeap(intsetSize + 1);
-
-        int idx = intsetIndexOfOffHeap(v);
-        if (idx >= 0) {
-            return false;
-        }
-
-        int insertAt = -(idx + 1);
-        for (int i = intsetSize; i > insertAt; i--) {
-            putLong(intsetAddr, i, getLong(intsetAddr, i - 1));
-        }
-        putLong(intsetAddr, insertAt, v);
-        intsetSize++;
-        return true;
-    }
-
     private boolean intsetRemove(long v) {
         int idx = intsetIndexOf(v);
         if (idx < 0) {
@@ -413,41 +384,12 @@ final class SetValue implements YierdisValue {
         return true;
     }
 
-    private boolean intsetRemoveOffHeap(long v) {
-        int idx = intsetIndexOfOffHeap(v);
-        if (idx < 0) {
-            return false;
-        }
-        for (int i = idx; i + 1 < intsetSize; i++) {
-            putLong(intsetAddr, i, getLong(intsetAddr, i + 1));
-        }
-        intsetSize--;
-        return true;
-    }
-
     private int intsetIndexOf(long v) {
         int low = 0;
         int high = intsetSize - 1;
         while (low <= high) {
             int mid = (low + high) >>> 1;
             long mv = intsetLongAt(mid);
-            if (mv < v) {
-                low = mid + 1;
-            } else if (mv > v) {
-                high = mid - 1;
-            } else {
-                return mid;
-            }
-        }
-        return -(low + 1);
-    }
-
-    private int intsetIndexOfOffHeap(long v) {
-        int low = 0;
-        int high = intsetSize - 1;
-        while (low <= high) {
-            int mid = (low + high) >>> 1;
-            long mv = intsetLongAtOffHeap(mid);
             if (mv < v) {
                 low = mid + 1;
             } else if (mv > v) {
@@ -468,16 +410,6 @@ final class SetValue implements YierdisValue {
             default:
                 return intset64[index];
         }
-    }
-
-    private long intsetLongAtOffHeap(int index) {
-        if (intsetAddr == 0) {
-            throw new IllegalStateException("off-heap intset not allocated");
-        }
-        if (index < 0 || index >= intsetSize) {
-            throw new IndexOutOfBoundsException();
-        }
-        return getLong(intsetAddr, index);
     }
 
     private void ensureIntsetEncoding(long v) {
@@ -563,77 +495,17 @@ final class SetValue implements YierdisValue {
         }
     }
 
-    private void ensureIntsetCapacityOffHeap(int desired) {
-        if (desired <= 0) {
-            throw new IllegalArgumentException("desired must be > 0");
-        }
-        if (intsetCapOffHeap >= desired && intsetAddr != 0) {
-            return;
-        }
-
-        int next = Math.max(4, intsetCapOffHeap);
-        while (next < desired) {
-            next <<= 1;
-        }
-
-        long nextAddr = offHeapAllocator.allocateAddress(Math.max(8, next * LONG_BYTES));
-        if (intsetAddr != 0 && intsetSize > 0) {
-            offHeapAllocator.copyMemory(intsetAddr, nextAddr, (long) intsetSize * LONG_BYTES);
-        }
-        if (intsetAddr != 0 && intsetCapOffHeap > 0) {
-            offHeapAllocator.freeAddress(intsetAddr, Math.max(8, intsetCapOffHeap * LONG_BYTES));
-        }
-
-        intsetAddr = nextAddr;
-        intsetCapOffHeap = next;
-    }
-
-    private long getLong(long base, int index) {
-        long addr = base + (long) index * LONG_BYTES;
-        long b0 = offHeapAllocator.getByte(addr) & 0xffL;
-        long b1 = offHeapAllocator.getByte(addr + 1) & 0xffL;
-        long b2 = offHeapAllocator.getByte(addr + 2) & 0xffL;
-        long b3 = offHeapAllocator.getByte(addr + 3) & 0xffL;
-        long b4 = offHeapAllocator.getByte(addr + 4) & 0xffL;
-        long b5 = offHeapAllocator.getByte(addr + 5) & 0xffL;
-        long b6 = offHeapAllocator.getByte(addr + 6) & 0xffL;
-        long b7 = offHeapAllocator.getByte(addr + 7) & 0xffL;
-        return b0
-                | (b1 << 8)
-                | (b2 << 16)
-                | (b3 << 24)
-                | (b4 << 32)
-                | (b5 << 40)
-                | (b6 << 48)
-                | (b7 << 56);
-    }
-
-    private void putLong(long base, int index, long value) {
-        long addr = base + (long) index * LONG_BYTES;
-        offHeapAllocator.putByte(addr, (byte) value);
-        offHeapAllocator.putByte(addr + 1, (byte) (value >>> 8));
-        offHeapAllocator.putByte(addr + 2, (byte) (value >>> 16));
-        offHeapAllocator.putByte(addr + 3, (byte) (value >>> 24));
-        offHeapAllocator.putByte(addr + 4, (byte) (value >>> 32));
-        offHeapAllocator.putByte(addr + 5, (byte) (value >>> 40));
-        offHeapAllocator.putByte(addr + 6, (byte) (value >>> 48));
-        offHeapAllocator.putByte(addr + 7, (byte) (value >>> 56));
-    }
-
     @Override
     public void close() {
-        if (offHeapAllocator == null) {
-            return;
-        }
-        if (hashsetOffHeap != null) {
-            hashsetOffHeap.close();
-            hashsetOffHeap = null;
-        }
-        if (intsetAddr != 0 && intsetCapOffHeap > 0) {
-            offHeapAllocator.freeAddress(intsetAddr, Math.max(8, intsetCapOffHeap * LONG_BYTES));
-            intsetAddr = 0;
-            intsetCapOffHeap = 0;
-            intsetSize = 0;
+        if (memoryRuntime != null) {
+            if (hashsetFfm != null) {
+                hashsetFfm.close();
+                hashsetFfm = null;
+            }
+            if (intsetFfm != null) {
+                intsetFfm.close();
+                intsetFfm = null;
+            }
         }
     }
 

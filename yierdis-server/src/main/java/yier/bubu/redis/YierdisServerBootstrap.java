@@ -19,7 +19,6 @@ import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.db.memory.api.YierdisOffHeapAllocators;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
@@ -101,7 +100,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     private void startInternal() throws Exception {
         ForeignMemoryAutoModules.ensureFfmAvailable();
         log.info("native memory backend: foreign (JDK 25 FFM)");
-        log.info("off-heap providers: {}", YierdisOffHeapAllocators.availableProvidersSummary());
         int databases = Math.max(1, runtimeConfig.databases());
         YierdisInstanceConfig.MaxmemoryScope scope =
                 runtimeConfig.maxmemoryScope() == YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB

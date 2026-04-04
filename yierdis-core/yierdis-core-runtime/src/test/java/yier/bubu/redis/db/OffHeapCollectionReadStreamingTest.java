@@ -3,7 +3,7 @@ package yier.bubu.redis.db;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.db.memory.unsafe.YierdisUnsafeOffHeapAllocator;
+import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.offheap.api.OffHeapSlice;
 import yier.bubu.redis.ops.result.BulkStringMapPairs;
 import yier.bubu.redis.ops.result.BulkStringSequence;
@@ -78,13 +78,14 @@ public class OffHeapCollectionReadStreamingTest {
     }
 
     private static void withDb(DbConsumer consumer) {
-        YierdisUnsafeOffHeapAllocator allocator = new YierdisUnsafeOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator, true, false, 0, "noeviction", 5, 5, 5);
-        try {
-            db.bindToCurrentThread();
-            consumer.accept(db);
-        } finally {
-            db.shutdown();
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
+            try {
+                db.bindToCurrentThread();
+                consumer.accept(db);
+            } finally {
+                db.shutdown();
+            }
         }
     }
 

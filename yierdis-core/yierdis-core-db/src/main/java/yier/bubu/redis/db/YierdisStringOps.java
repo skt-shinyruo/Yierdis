@@ -467,13 +467,6 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
             }
             return count;
         }
-        if (object.payload instanceof yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapString s) {
-            int to = Math.min(end, object.rawLen - 1);
-            for (int i = start; i <= to; i++) {
-                count += Integer.bitCount(s.getByte(i) & 0xFF);
-            }
-            return count;
-        }
         return 0L;
     }
 

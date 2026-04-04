@@ -3,6 +3,8 @@ package yier.bubu.redis.db;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.db.key.KeyHandle;
+import yier.bubu.redis.db.key.KeyHandleAccess;
 import yier.bubu.redis.ops.SetMode;
 
 import java.lang.reflect.Field;
@@ -11,7 +13,7 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 
 public class ExpireKeySharingTest {
     @Test
-    public void expireStoresTtlUnderStoreCanonicalKey() throws Exception {
+    public void expireStoresTtlUnderSharedFfmKeyRef() throws Exception {
         YierdisDb db = new YierdisDb();
         try {
             db.bindToCurrentThread();
@@ -22,21 +24,21 @@ public class ExpireKeySharingTest {
             db.writes().strings().setString(key1, b("v"), SetMode.NORMAL, null);
             Assert.assertTrue(db.writes().ttl().expire(view(key2), 60));
 
-            ByteArrayKeyspace<?> store = storeKeyspace(db);
-            ByteArrayKeyspace<?> expires = expiresKeyspace(db);
+            YierdisKeyspace<?> store = storeKeyspace(db);
+            YierdisExpireIndex expires = expiresIndex(db);
 
-            byte[] storeKey = store.canonicalKey(key2);
-            Assert.assertSame(key1, storeKey);
-
-            byte[] expiresKey = expires.canonicalKey(key2);
-            Assert.assertSame(storeKey, expiresKey);
+            KeyHandle storeHandle = store.keyHandle(key2);
+            KeyHandle expireHandle = expires.randomKeyHandle();
+            Assert.assertNotNull(storeHandle);
+            Assert.assertNotNull(expireHandle);
+            Assert.assertSame(KeyHandleAccess.ffmBytesRef(storeHandle), KeyHandleAccess.ffmBytesRef(expireHandle));
         } finally {
             db.shutdown();
         }
     }
 
     @Test
-    public void expireMigratesPreexistingNonCanonicalExpiresKey() throws Exception {
+    public void repeatedExpireKeepsSingleSharedFfmKeyRef() throws Exception {
         YierdisDb db = new YierdisDb();
         try {
             db.bindToCurrentThread();
@@ -45,29 +47,27 @@ public class ExpireKeySharingTest {
             Assert.assertNotSame(key1, key2);
 
             db.writes().strings().setString(key1, b("v"), SetMode.NORMAL, null);
-
-            ByteArrayKeyspace<?> store = storeKeyspace(db);
-            ByteArrayKeyspace<Long> expires = expiresKeyspace(db);
-
-            // Simulate an old expires entry inserted under a different byte[] instance.
-            expires.compute(key2, (k, old) -> System.currentTimeMillis() + 1234L);
-            Assert.assertSame(key2, expires.canonicalKey(key1));
-
-            // Now update TTL through the DB API; it should migrate to the store-canonical key reference.
             Assert.assertTrue(db.writes().ttl().expire(view(key2), 60));
+            Assert.assertTrue(db.writes().ttl().expire(view(key1), 120));
 
-            byte[] canonical = store.canonicalKey(key1);
-            Assert.assertSame(key1, canonical);
-            Assert.assertSame(canonical, expires.canonicalKey(key1));
+            YierdisKeyspace<?> store = storeKeyspace(db);
+            YierdisExpireIndex expires = expiresIndex(db);
+            Assert.assertEquals(1, expires.size());
+
+            KeyHandle storeHandle = store.keyHandle(key1);
+            KeyHandle expireHandle = expires.randomKeyHandle();
+            Assert.assertNotNull(storeHandle);
+            Assert.assertNotNull(expireHandle);
+            Assert.assertSame(KeyHandleAccess.ffmBytesRef(storeHandle), KeyHandleAccess.ffmBytesRef(expireHandle));
         } finally {
             db.shutdown();
         }
     }
 
-    private static ByteArrayKeyspace<?> storeKeyspace(YierdisDb db) throws Exception {
+    private static YierdisKeyspace<?> storeKeyspace(YierdisDb db) throws Exception {
         Field f = YierdisDb.class.getDeclaredField("store");
         f.setAccessible(true);
-        return (ByteArrayKeyspace<?>) f.get(db);
+        return (YierdisKeyspace<?>) f.get(db);
     }
 
     private static BytesView view(byte[] bytes) {
@@ -84,14 +84,9 @@ public class ExpireKeySharingTest {
         };
     }
 
-    @SuppressWarnings("unchecked")
-    private static ByteArrayKeyspace<Long> expiresKeyspace(YierdisDb db) throws Exception {
+    private static YierdisExpireIndex expiresIndex(YierdisDb db) throws Exception {
         Field f = YierdisDb.class.getDeclaredField("expires");
         f.setAccessible(true);
-        Object idx = f.get(db);
-        if (idx instanceof YierdisHeapExpireIndex heap) {
-            return heap.rawKeyspace();
-        }
-        throw new AssertionError("unexpected expires index type: " + idx.getClass().getName());
+        return (YierdisExpireIndex) f.get(db);
     }
 }

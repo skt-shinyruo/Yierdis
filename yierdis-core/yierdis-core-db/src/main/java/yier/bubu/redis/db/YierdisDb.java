@@ -7,16 +7,12 @@ import yier.bubu.redis.db.memory.ffm.YierdisFfmExpireIndex;
 import yier.bubu.redis.db.memory.ffm.YierdisFfmKeyspace;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.db.memory.foreign.YierdisForeignOffHeapAllocator;
-import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.offheap.api.OffHeapBuf;
 import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
 import yier.bubu.redis.offheap.api.OffHeapSlice;
 import yier.bubu.redis.ops.ScanCursorV2;
 import yier.bubu.redis.ops.ValueType;
-import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapExpireIndex;
-import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapKeyspace;
-import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapString;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.db.memory.MemoryLedger;
 import yier.bubu.redis.db.memory.MemoryLedgerOutOfMemoryException;
@@ -116,7 +112,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     }
 
     public YierdisDb(OffHeapAllocator offHeapAllocator) {
-        this(offHeapAllocator, false, false, 0, "noeviction", 5, 5, 5);
+        this(offHeapAllocator, 0, "noeviction", 5, 5, 5);
     }
 
     private YierdisDb(
@@ -149,39 +145,13 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        this(null, offHeapAllocator, false, false, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
-    }
-
-    public YierdisDb(
-            OffHeapAllocator offHeapAllocator,
-            boolean offHeapKeysEnabled,
-            long maxmemoryBytes,
-            String maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
-    ) {
-        this(null, offHeapAllocator, true, offHeapKeysEnabled, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
-    }
-
-    public YierdisDb(
-            OffHeapAllocator offHeapAllocator,
-            boolean ownsOffHeapAllocator,
-            boolean offHeapKeysEnabled,
-            long maxmemoryBytes,
-            String maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
-    ) {
-        this(null, offHeapAllocator, ownsOffHeapAllocator, offHeapKeysEnabled, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+        this(null, offHeapAllocator, false, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
     }
 
     private YierdisDb(
             YierdisFfmMemoryRuntime memoryRuntime,
             OffHeapAllocator offHeapAllocator,
             boolean ownsOffHeapAllocator,
-            boolean offHeapKeysEnabled,
             boolean ownsMemoryRuntime,
             long maxmemoryBytes,
             String maxmemoryPolicy,
@@ -189,26 +159,36 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        this.memoryRuntime = memoryRuntime;
-        this.offHeapAllocator = offHeapAllocator;
-        this.ownsOffHeapAllocator = ownsOffHeapAllocator;
-        this.ownsMemoryRuntime = ownsMemoryRuntime;
-        if (memoryRuntime != null) {
-            YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(memoryRuntime, "ffm-key");
-            this.store = new YierdisFfmKeyspace<>(blobStore);
-            this.expires = new YierdisFfmExpireIndex(blobStore);
-            this.keysStoredOffHeap = true;
-        } else if (offHeapKeysEnabled && !(offHeapAllocator instanceof OffHeapAddressAllocator)) {
-            throw new IllegalArgumentException("offHeapKeysEnabled requires an address allocator (unsafe off-heap backend)");
-        } else if (offHeapKeysEnabled && offHeapAllocator instanceof OffHeapAddressAllocator addressAllocator) {
-            this.store = new YierdisUnsafeOffHeapKeyspace<>(addressAllocator);
-            this.expires = new YierdisUnsafeOffHeapExpireIndex(addressAllocator);
-            this.keysStoredOffHeap = true;
-        } else {
-            this.store = new ByteArrayKeyspace<>();
-            this.expires = new YierdisHeapExpireIndex();
-            this.keysStoredOffHeap = false;
+        YierdisFfmMemoryRuntime resolvedRuntime = memoryRuntime;
+        OffHeapAllocator resolvedAllocator = offHeapAllocator;
+        boolean resolvedOwnsAllocator = ownsOffHeapAllocator;
+        boolean resolvedOwnsRuntime = ownsMemoryRuntime;
+
+        if (resolvedRuntime == null && resolvedAllocator == null) {
+            resolvedRuntime = new YierdisFfmMemoryRuntime("db");
+            resolvedAllocator = new YierdisForeignOffHeapAllocator(resolvedRuntime, 0);
+            resolvedOwnsAllocator = true;
+            resolvedOwnsRuntime = true;
+        } else if (resolvedRuntime == null) {
+            if (!(resolvedAllocator instanceof YierdisForeignOffHeapAllocator foreignAllocator)) {
+                throw new IllegalArgumentException("Only the foreign off-heap allocator is supported");
+            }
+            resolvedRuntime = foreignAllocator.memoryRuntime();
+        } else if (resolvedAllocator == null) {
+            resolvedAllocator = new YierdisForeignOffHeapAllocator(resolvedRuntime, 0);
+            resolvedOwnsAllocator = true;
+        } else if (!(resolvedAllocator instanceof YierdisForeignOffHeapAllocator)) {
+            throw new IllegalArgumentException("Only the foreign off-heap allocator is supported");
         }
+
+        this.memoryRuntime = resolvedRuntime;
+        this.offHeapAllocator = resolvedAllocator;
+        this.ownsOffHeapAllocator = resolvedOwnsAllocator;
+        this.ownsMemoryRuntime = resolvedOwnsRuntime;
+        YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(this.memoryRuntime, "ffm-key");
+        this.store = new YierdisFfmKeyspace<>(blobStore);
+        this.expires = new YierdisFfmExpireIndex(blobStore);
+        this.keysStoredOffHeap = true;
         if (maxmemoryBytes < 0) {
             throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
         }
@@ -260,8 +240,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     ) {
         this(
                 memoryRuntime,
-                new YierdisForeignOffHeapAllocator(memoryRuntime, 0),
-                false,
+                null,
                 false,
                 ownsMemoryRuntime,
                 maxmemoryBytes,
@@ -419,8 +398,6 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         if (e.type == ValueType.STRING) {
             if (e.payload instanceof OffHeapBuf buf) {
                 extra += buf.capacity();
-            } else if (e.payload instanceof YierdisUnsafeOffHeapString s) {
-                extra += s.capacity();
             }
         }
         return extra;
@@ -450,23 +427,9 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     @Override
     public long usedBytesForMaxmemory() {
         checkThread();
-        // maxmemory 是 best-effort 预算：
-        // 1) 单 DB / DB 自有 allocator 时，直接计入堆外 used bytes。
-        // 2) 多 DB + GLOBAL maxmemory 时，由 instance/global governor 通过 shared usage 单独计一次，DB 本身不重复计。
-        // 3) 多 DB + PER_DB maxmemory 时，没有 global coordinator，需要把 shared allocator used bytes 计入当前 DB，
-        //    否则默认 FFM/native memory 路径会被严重低估，导致 per-db 淘汰失效。
-        long offHeapUsedBytes = 0;
-        boolean includeSharedOffHeapForPerDb = offHeapAllocator != null && maxmemoryCoordinator == null;
-        if (offHeapAllocator != null && (ownsOffHeapAllocator || includeSharedOffHeapForPerDb)) {
-            try {
-                offHeapUsedBytes = Math.max(0L, offHeapAllocator.usedBytes());
-            } catch (Throwable ignored) {
-                offHeapUsedBytes = 0;
-            }
-        }
-        long directRuntimeBytes = maxmemoryCoordinator == null ? directRuntimeUsedBytes() : 0L;
+        long nativeBytes = maxmemoryCoordinator == null ? runtimeUsedBytes() : 0L;
         long ttlBytes = estimateTtlBytesForMaxmemory();
-        long total = usedBytes + offHeapUsedBytes + directRuntimeBytes;
+        long total = usedBytes + nativeBytes;
         if (ttlBytes <= 0) {
             return total;
         }
@@ -628,18 +591,29 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     public YierdisMemoryStats memoryStats() {
         checkThread();
-        long directRuntimeBytes = directRuntimeUsedBytes();
+        long runtimeUsedBytes = runtimeUsedBytes();
         return DbMemoryAccounting.snapshot(
                 maxmemoryBytes,
                 usedBytes,
                 reservedBytes,
-                offHeapAllocator,
-                directRuntimeBytes,
+                null,
+                runtimeUsedBytes,
                 store,
                 expires,
                 keysStoredOffHeap,
                 maxmemoryCoordinator == null
         );
+    }
+
+    private long runtimeUsedBytes() {
+        if (memoryRuntime == null) {
+            return 0L;
+        }
+        try {
+            return Math.max(0L, memoryRuntime.usedBytes());
+        } catch (Throwable ignored) {
+            return 0L;
+        }
     }
 
     private long directRuntimeUsedBytes() {
@@ -679,7 +653,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
                 return Long.BYTES;
             }
             // 字符串 payload 若存放在 off-heap，则其容量由 allocator.usedBytes() 统计；这里避免重复计入。
-            if (offHeapAllocator != null && (e.payload instanceof OffHeapBuf || e.payload instanceof YierdisUnsafeOffHeapString)) {
+            if (offHeapAllocator != null && e.payload instanceof OffHeapBuf) {
                 return 0;
             }
             return e.rawLen;

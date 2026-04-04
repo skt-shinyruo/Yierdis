@@ -1,12 +1,12 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.ops.ValueType;
-import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapDictLong;
-import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapListpack;
-import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapRawSlice;
-import yier.bubu.redis.db.memory.offheap.YierdisUnsafeOffHeapSds;
-import yier.bubu.redis.offheap.api.OffHeapAddressAllocator;
-import yier.bubu.redis.offheap.api.OffHeapSlice;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmBlobStore;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmByteMap;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmBytesRef;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmBytesRefSlice;
+import yier.bubu.redis.db.memory.ffm.YierdisFfmListpack;
+import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.ops.result.BulkStringSink;
 
 import java.util.ArrayList;
@@ -16,25 +16,28 @@ final class HashValue implements YierdisValue {
     // Redis stores small hashes in a compact encoding (listpack) and upgrades to hashtable as needed.
     // We approximate that behavior by starting with small parallel arrays (packed) and upgrading to a hash map.
 
-    private final OffHeapAddressAllocator offHeapAllocator;
+    private final YierdisFfmMemoryRuntime memoryRuntime;
+    private final YierdisFfmBlobStore ffmBlobStore;
 
     // Packed form uses a listpack-like contiguous buffer containing [field][value] pairs.
     // This preserves binary-safe semantics while avoiding per-entry byte[] objects.
     private YierdisListpack packed;
-    private YierdisUnsafeOffHeapListpack packedOffHeap;
+    private YierdisFfmListpack packedFfm;
 
     private ByteArrayHashMap<byte[]> map;
-    private YierdisUnsafeOffHeapDictLong dict;
+    private YierdisFfmByteMap<YierdisFfmBytesRef> mapFfm;
     private long rawBytes;
 
     HashValue() {
-        this.offHeapAllocator = null;
+        this.memoryRuntime = null;
+        this.ffmBlobStore = null;
         this.packed = new YierdisListpack();
     }
 
-    HashValue(OffHeapAddressAllocator allocator) {
-        this.offHeapAllocator = allocator;
-        this.packedOffHeap = new YierdisUnsafeOffHeapListpack(allocator);
+    HashValue(YierdisFfmMemoryRuntime memoryRuntime) {
+        this.memoryRuntime = memoryRuntime;
+        this.ffmBlobStore = new YierdisFfmBlobStore(memoryRuntime, "hash");
+        this.packedFfm = new YierdisFfmListpack(ffmBlobStore);
     }
 
     @Override
@@ -44,18 +47,18 @@ final class HashValue implements YierdisValue {
 
     @Override
     public ValueEncoding encoding() {
-        if (offHeapAllocator != null) {
-            return dict != null ? ValueEncoding.HASH_HT : ValueEncoding.HASH_PACKED;
+        if (memoryRuntime != null) {
+            return mapFfm != null ? ValueEncoding.HASH_HT : ValueEncoding.HASH_PACKED;
         }
         return map != null ? ValueEncoding.HASH_HT : ValueEncoding.HASH_PACKED;
     }
 
     int size() {
-        if (offHeapAllocator != null) {
-            if (dict != null) {
-                return dict.size();
+        if (memoryRuntime != null) {
+            if (mapFfm != null) {
+                return mapFfm.size();
             }
-            return packedOffHeap.size() / 2;
+            return packedFfm.size() / 2;
         }
         if (map != null) {
             return map.size();
@@ -64,52 +67,49 @@ final class HashValue implements YierdisValue {
     }
 
     int hset(byte[] field, byte[] value) {
-        if (offHeapAllocator != null) {
-            if (dict != null) {
-                long nextValue = value == null ? 0L : YierdisUnsafeOffHeapSds.allocate(offHeapAllocator, value, 0, value.length);
+        if (memoryRuntime != null) {
+            if (mapFfm != null) {
+                YierdisFfmBytesRef nextValue = value == null ? null : ffmBlobStore.store(value);
                 boolean ok = false;
-                long old;
                 try {
-                    old = dict.put(field, nextValue);
+                    YierdisFfmBytesRef old = mapFfm.put(field, nextValue);
                     ok = true;
+                    if (old == null) {
+                        rawBytes += (long) field.length + (value == null ? 0 : value.length);
+                        return 1;
+                    }
+                    rawBytes += (value == null ? 0 : value.length) - old.length();
+                    ffmBlobStore.release(old);
+                    return 0;
                 } finally {
-                    if (!ok) {
-                        YierdisUnsafeOffHeapSds.free(offHeapAllocator, nextValue);
+                    if (!ok && nextValue != null) {
+                        ffmBlobStore.release(nextValue);
                     }
                 }
-                if (old == 0L) {
-                    rawBytes += (long) field.length + (value == null ? 0 : value.length);
-                    return 1;
-                }
-                int oldLen = YierdisUnsafeOffHeapSds.len(offHeapAllocator, old);
-                rawBytes += (value == null ? 0 : value.length) - oldLen;
-                YierdisUnsafeOffHeapSds.free(offHeapAllocator, old);
-                return 0;
             }
 
-            int pairIndex = indexOfFieldPairOffHeap(field);
+            int pairIndex = indexOfFieldPairFfm(field);
             if (pairIndex >= 0) {
                 if (isOversize(value)) {
-                    convertToDict();
+                    convertToFfmMap();
                     return hset(field, value);
                 }
-                packedOffHeap.set(pairIndex + 1, value);
+                packedFfm.set(pairIndex + 1, value);
                 return 0;
             }
 
-            // New field: only entry-count based upgrades should consider the insertion.
-            if (packedOffHeap.size() / 2 >= YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES
+            if (packedFfm.size() / 2 >= YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES
                     || isOversize(field)
                     || isOversize(value)) {
-                convertToDict();
+                convertToFfmMap();
                 return hset(field, value);
             }
 
-            packedOffHeap.addLast(field);
-            packedOffHeap.addLast(value);
+            packedFfm.addLast(field);
+            packedFfm.addLast(value);
 
-            if (packedOffHeap.size() / 2 > YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES) {
-                convertToDict();
+            if (packedFfm.size() / 2 > YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES) {
+                convertToFfmMap();
             }
             return 1;
         }
@@ -163,23 +163,16 @@ final class HashValue implements YierdisValue {
     }
 
     byte[] hget(byte[] field) {
-        if (offHeapAllocator != null) {
-            if (dict != null) {
-                long addr = dict.get(field);
-                if (addr == 0L) {
-                    return null;
-                }
-                int len = YierdisUnsafeOffHeapSds.len(offHeapAllocator, addr);
-                byte[] out = new byte[len];
-                YierdisUnsafeOffHeapSds.getBytes(offHeapAllocator, addr, out, 0, len);
-                return out;
+        if (memoryRuntime != null) {
+            if (mapFfm != null) {
+                YierdisFfmBytesRef ref = mapFfm.get(field);
+                return ref == null ? null : ffmBlobStore.toByteArray(ref);
             }
-
-            int pairIndex = indexOfFieldPairOffHeap(field);
+            int pairIndex = indexOfFieldPairFfm(field);
             if (pairIndex < 0) {
                 return null;
             }
-            return packedOffHeap.get(pairIndex + 1);
+            return packedFfm.get(pairIndex + 1);
         }
         if (map != null) {
             return map.get(field);
@@ -193,27 +186,27 @@ final class HashValue implements YierdisValue {
 
     int hdel(List<byte[]> fields) {
         int removed = 0;
-        if (offHeapAllocator != null) {
-            if (dict != null) {
-                for (byte[] f : fields) {
-                    long old = dict.remove(f);
-                    if (old != 0L) {
-                        int oldLen = YierdisUnsafeOffHeapSds.len(offHeapAllocator, old);
-                        rawBytes -= (long) f.length + oldLen;
-                        YierdisUnsafeOffHeapSds.free(offHeapAllocator, old);
-                        removed++;
+        if (memoryRuntime != null) {
+            if (mapFfm != null) {
+                for (byte[] field : fields) {
+                    YierdisFfmBytesRef old = mapFfm.remove(field);
+                    if (old == null) {
+                        continue;
                     }
+                    rawBytes -= (long) field.length + old.length();
+                    ffmBlobStore.release(old);
+                    removed++;
                 }
                 return removed;
             }
 
-            for (byte[] f : fields) {
-                int pairIndex = indexOfFieldPairOffHeap(f);
+            for (byte[] field : fields) {
+                int pairIndex = indexOfFieldPairFfm(field);
                 if (pairIndex < 0) {
                     continue;
                 }
-                packedOffHeap.removeAt(pairIndex + 1);
-                packedOffHeap.removeAt(pairIndex);
+                packedFfm.removeAt(pairIndex + 1);
+                packedFfm.removeAt(pairIndex);
                 removed++;
             }
             return removed;
@@ -244,34 +237,23 @@ final class HashValue implements YierdisValue {
     }
 
     List<byte[]> hgetallPairs() {
-        if (offHeapAllocator != null) {
-            if (dict != null) {
-                List<byte[]> out = new ArrayList<>(dict.size() * 2);
-                dict.forEach((keyPtr, keyLen, valueAddr) -> {
-                    byte[] k = new byte[keyLen];
-                    offHeapAllocator.copyMemory(keyPtr, k, 0, keyLen);
-                    out.add(k);
-
-                    if (valueAddr == 0L) {
-                        out.add(null);
-                    } else {
-                        int len = YierdisUnsafeOffHeapSds.len(offHeapAllocator, valueAddr);
-                        byte[] v = new byte[len];
-                        YierdisUnsafeOffHeapSds.getBytes(offHeapAllocator, valueAddr, v, 0, len);
-                        out.add(v);
-                    }
+        if (memoryRuntime != null) {
+            if (mapFfm != null) {
+                List<byte[]> out = new ArrayList<>(mapFfm.size() * 2);
+                mapFfm.forEach((fieldRef, valueRef) -> {
+                    out.add(ffmBlobStore.toByteArray(fieldRef));
+                    out.add(valueRef == null ? null : ffmBlobStore.toByteArray(valueRef));
                 });
                 return out;
             }
 
-            int pairs = packedOffHeap.size() / 2;
+            int pairs = packedFfm.size() / 2;
             List<byte[]> out = new ArrayList<>(pairs * 2);
-            for (int i = 0; i < packedOffHeap.size(); i++) {
-                out.add(packedOffHeap.get(i));
+            for (int i = 0; i < packedFfm.size(); i++) {
+                out.add(packedFfm.get(i));
             }
             return out;
         }
-
         if (map != null) {
             List<byte[]> out = new ArrayList<>(map.size() * 2);
             map.forEach((k, v) -> {
@@ -298,21 +280,20 @@ final class HashValue implements YierdisValue {
             throw new IllegalArgumentException("out must not be null");
         }
 
-        if (offHeapAllocator != null) {
-            if (dict != null) {
-                dict.forEach((keyPtr, keyLen, valueAddr) -> {
-                    out.bulkString(new YierdisUnsafeOffHeapRawSlice(offHeapAllocator, keyPtr, keyLen));
-                    if (valueAddr == 0L) {
+        if (memoryRuntime != null) {
+            if (mapFfm != null) {
+                mapFfm.forEach((fieldRef, valueRef) -> {
+                    out.bulkString(new YierdisFfmBytesRefSlice(fieldRef));
+                    if (valueRef == null) {
                         out.bulkStringNull();
                     } else {
-                        OffHeapSlice slice = YierdisUnsafeOffHeapSds.slice(offHeapAllocator, valueAddr);
-                        out.bulkString(slice);
+                        out.bulkString(new YierdisFfmBytesRefSlice(valueRef));
                     }
                 });
                 return;
             }
 
-            YierdisUnsafeOffHeapListpack.Cursor c = packedOffHeap.cursor();
+            YierdisFfmListpack.Cursor c = packedFfm.cursor();
             while (c.next()) {
                 c.writeTo(out);
             }
@@ -354,6 +335,18 @@ final class HashValue implements YierdisValue {
         return -1;
     }
 
+    private int indexOfFieldPairFfm(byte[] field) {
+        int idx = 0;
+        YierdisFfmListpack.Cursor c = packedFfm.cursor();
+        while (c.next()) {
+            if ((idx & 1) == 0 && c.equalsBytes(field)) {
+                return idx;
+            }
+            idx++;
+        }
+        return -1;
+    }
+
     private void convertToHashMap() {
         if (map != null) {
             return;
@@ -369,7 +362,7 @@ final class HashValue implements YierdisValue {
     }
 
     long estimatedBytes() {
-        if (offHeapAllocator != null) {
+        if (memoryRuntime != null) {
             return 0;
         }
         if (map != null) {
@@ -380,72 +373,62 @@ final class HashValue implements YierdisValue {
 
     @Override
     public void close() {
-        if (offHeapAllocator == null) {
-            return;
-        }
-        if (dict != null) {
-            dict.forEach((keyPtr, keyLen, valueAddr) -> YierdisUnsafeOffHeapSds.free(offHeapAllocator, valueAddr));
-            dict.close();
-            dict = null;
-        }
-        if (packedOffHeap != null) {
-            packedOffHeap.close();
-            packedOffHeap = null;
-        }
-    }
-
-    private int indexOfFieldPairOffHeap(byte[] field) {
-        int idx = 0;
-        YierdisUnsafeOffHeapListpack.Cursor c = packedOffHeap.cursor();
-        while (c.next()) {
-            if ((idx & 1) == 0 && c.equalsBytes(field)) {
-                return idx;
+        if (memoryRuntime != null) {
+            if (mapFfm != null) {
+                mapFfm.forEach((fieldRef, valueRef) -> {
+                    if (valueRef != null) {
+                        ffmBlobStore.release(valueRef);
+                    }
+                });
+                mapFfm.close();
+                mapFfm = null;
             }
-            idx++;
-        }
-        return -1;
-    }
-
-    private void convertToDict() {
-        if (dict != null) {
+            if (packedFfm != null) {
+                packedFfm.close();
+                packedFfm = null;
+            }
             return;
         }
-        YierdisUnsafeOffHeapDictLong out = new YierdisUnsafeOffHeapDictLong(offHeapAllocator);
-        long nextRawBytes = 0;
+    }
+
+    private void convertToFfmMap() {
+        if (mapFfm != null) {
+            return;
+        }
+        YierdisFfmByteMap<YierdisFfmBytesRef> out = new YierdisFfmByteMap<>(ffmBlobStore);
+        long nextRawBytes = 0L;
         boolean ok = false;
         try {
-            for (int i = 0; i + 1 < packedOffHeap.size(); i += 2) {
-                byte[] field = packedOffHeap.get(i);
-                byte[] value = packedOffHeap.get(i + 1);
-                long valueAddr = value == null ? 0L : YierdisUnsafeOffHeapSds.allocate(offHeapAllocator, value, 0, value.length);
-                long old;
+            for (int i = 0; i + 1 < packedFfm.size(); i += 2) {
+                byte[] field = packedFfm.get(i);
+                byte[] value = packedFfm.get(i + 1);
+                YierdisFfmBytesRef nextValue = value == null ? null : ffmBlobStore.store(value);
+                boolean inserted = false;
                 try {
-                    old = out.put(field, valueAddr);
-                } catch (RuntimeException e) {
-                    YierdisUnsafeOffHeapSds.free(offHeapAllocator, valueAddr);
-                    throw e;
-                }
-                if (old != 0L) {
-                    // Should not happen because packed stores unique field/value pairs, but keep it leak-safe.
-                    YierdisUnsafeOffHeapSds.free(offHeapAllocator, old);
+                    out.put(field, nextValue);
+                    inserted = true;
+                } finally {
+                    if (!inserted && nextValue != null) {
+                        ffmBlobStore.release(nextValue);
+                    }
                 }
                 nextRawBytes += (long) field.length + (value == null ? 0 : value.length);
             }
             ok = true;
         } finally {
             if (!ok) {
-                out.forEach((keyPtr, keyLen, valueAddr) -> {
-                    if (valueAddr != 0L) {
-                        YierdisUnsafeOffHeapSds.free(offHeapAllocator, valueAddr);
+                out.forEach((fieldRef, valueRef) -> {
+                    if (valueRef != null) {
+                        ffmBlobStore.release(valueRef);
                     }
                 });
                 out.close();
             }
         }
 
-        packedOffHeap.close();
-        packedOffHeap = null;
+        packedFfm.close();
+        packedFfm = null;
         rawBytes = nextRawBytes;
-        dict = out;
+        mapFfm = out;
     }
 }

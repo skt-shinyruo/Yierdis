@@ -1,7 +1,5 @@
 package yier.bubu.redis.db;
 
-import yier.bubu.redis.db.key.KeyHandle;
-
 import java.util.Objects;
 
 final class YierdisDbExpirationSupport {
@@ -59,25 +57,25 @@ final class YierdisDbExpirationSupport {
     private int cleanupOffHeapSamples(int samples, long nowMillis) {
         int expired = 0;
         for (int i = 0; i < samples; i++) {
-            KeyHandle keyHandle = db.expires.randomKeyHandle();
-            if (keyHandle == null) {
+            byte[] keyBytes = db.expires.randomKey();
+            if (keyBytes == null) {
                 break;
             }
 
-            Long expireAtMillis = db.expires.get(keyHandle);
+            Long expireAtMillis = db.expires.get(keyBytes);
             if (expireAtMillis == null) {
-                db.removeExpire(keyHandle);
+                db.removeExpire(keyBytes);
                 continue;
             }
 
-            YierdisObject e = db.store.get(keyHandle);
+            YierdisObject e = db.store.get(keyBytes);
             if (e == null) {
-                db.removeExpire(keyHandle);
+                db.removeExpire(keyBytes);
                 continue;
             }
 
             if (expireAtMillis <= nowMillis) {
-                removeExpiredValue(keyHandle, e);
+                removeExpiredValue(keyBytes, e);
                 expired++;
             }
         }
@@ -110,14 +108,6 @@ final class YierdisDbExpirationSupport {
             }
         }
         return expired;
-    }
-
-    private void removeExpiredValue(KeyHandle keyHandle, YierdisObject e) {
-        db.removeExpire(keyHandle);
-        if (db.store.remove(keyHandle, e)) {
-            e.releasePayloadIfAny();
-            db.adjustUsedBytes(-e.estimatedBytes);
-        }
     }
 
     private void removeExpiredValue(byte[] keyBytes, YierdisObject e) {
