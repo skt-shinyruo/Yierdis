@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.ops.ExpireOption;
+import yier.bubu.redis.ops.ScanCursorV2;
 import yier.bubu.redis.ops.SetMode;
 
 import java.lang.reflect.Method;
@@ -40,6 +41,13 @@ public class YierdisDbArchitectureGuardTest {
         Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "expires"));
         Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "offHeapAllocator"));
         Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "memoryRuntime"));
+    }
+
+    @Test
+    public void yierdisDbMustNotOwnMemoryReportingOrSnapshotMethods() {
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "memoryStats"));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "memoryUsage", BytesView.class));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "snapshot", ScanCursorV2.class, int.class, java.util.List.class));
     }
 
     private static Method findDeclaredMethod(Class<?> type, String name, Class<?>... parameterTypes) {

@@ -10,8 +10,6 @@ import yier.bubu.redis.db.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.offheap.api.OffHeapBuf;
 import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
-import yier.bubu.redis.offheap.api.OffHeapSlice;
-import yier.bubu.redis.ops.ScanCursorV2;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.db.memory.MemoryLedger;
@@ -34,7 +32,6 @@ import yier.bubu.redis.ops.RuntimeDbEngine;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.StringWriteOps;
 import yier.bubu.redis.ops.WrongTypeException;
-import yier.bubu.redis.ops.YierdisMemoryStats;
 import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.ops.result.BulkStringSink;
 import yier.bubu.redis.ops.result.BulkStringValue;
@@ -47,7 +44,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
-public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, MaxmemoryCoordinatorAware, MaxmemoryParticipant {
+public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAware, MaxmemoryParticipant {
     public enum MaxmemoryPolicy {
         NOEVICTION,
         ALLKEYS_RANDOM,
@@ -101,6 +98,8 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     private final YierdisHllOps hllOps;
     private final YierdisTtlOps ttlOps;
     private final YierdisKeyspaceOps keyspaceOps;
+    private final YierdisDbMemoryReporter memoryReporter;
+    private final YierdisDbIntrospection introspection;
 
     private final DbReads reads;
     private final DbWrites writes;
@@ -230,10 +229,22 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         this.hllOps = new YierdisHllOps(internals);
         this.ttlOps = new YierdisTtlOps(internals);
         this.keyspaceOps = new YierdisKeyspaceOps(internals);
+        this.memoryReporter = new YierdisDbMemoryReporter(
+                this::checkThread,
+                this.keyLifecycle,
+                this.store,
+                this.expires,
+                this.maxmemoryBytes,
+                this.keysStoredOffHeap,
+                () -> usedBytes,
+                () -> reservedBytes,
+                () -> maxmemoryCoordinator == null
+        );
+        this.introspection = new YierdisDbIntrospection(this::checkThread, this.keyLifecycle);
         this.reads = new YierdisDbReads(stringOps, hashOps, listOps, setOps, zsetOps, hllOps, keyspaceOps, ttlOps);
         this.writes = new YierdisDbWrites(stringOps, hashOps, listOps, setOps, zsetOps, hllOps, keyspaceOps, ttlOps);
         this.expirationManager = new YierdisDbExpirationManager(expirationSupport);
-        this.memoryOps = new YierdisDbMemoryOps(this);
+        this.memoryOps = new YierdisDbMemoryOps(memoryReporter, introspection);
         this.lifecycleOps = new YierdisDbLifecycleOps(this);
         // Scheduling (if any) is done by the Netty event loop in YierdisServer, not by a dedicated thread.
     }
@@ -367,113 +378,14 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         return keyLifecycle.getLiveObject(keyView);
     }
 
-    public long memoryUsage(BytesView keyView) {
-        checkThread();
-        YierdisObject e = getObjectIfNotExpired(keyView);
-        if (e == null) {
-            return -1;
-        }
-        long keyLen = 0;
-        if (keyView != null) {
-            keyLen = Math.max(0L, (long) keyView.len());
-        }
-        return e.estimatedBytes + estimateOffHeapBytesForMemoryUsage(keyLen, e);
-    }
-
-    public long memoryUsage(byte[] keyBytes) {
-        checkThread();
-        if (keyBytes == null) {
-            return -1;
-        }
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return -1;
-        }
-        return e.estimatedBytes + estimateOffHeapBytesForMemoryUsage(keyBytes.length, e);
-    }
-
-    private long estimateOffHeapBytesForMemoryUsage(long keyLen, YierdisObject e) {
-        if (offHeapAllocator == null || e == null) {
-            return 0;
-        }
-        long extra = 0;
-        if (keysStoredOffHeap && keyLen > 0) {
-            extra += keyLen;
-        }
-        if (e.type == ValueType.STRING) {
-            if (e.payload instanceof OffHeapBuf buf) {
-                extra += buf.capacity();
-            }
-        }
-        return extra;
-    }
-
-    public String objectEncoding(BytesView keyView) {
-        checkThread();
-        YierdisObject e = getObjectIfNotExpired(keyView);
-        if (e == null) {
-            return null;
-        }
-        return encodingName(e.encoding);
-    }
-
-    public String objectEncoding(byte[] keyBytes) {
-        checkThread();
-        if (keyBytes == null) {
-            return null;
-        }
-        YierdisObject e = getObjectIfNotExpired(keyBytes);
-        if (e == null) {
-            return null;
-        }
-        return encodingName(e.encoding);
-    }
-
     @Override
     public long usedBytesForMaxmemory() {
-        checkThread();
-        long nativeBytes = maxmemoryCoordinator == null ? runtimeUsedBytes() : 0L;
-        long ttlBytes = estimateTtlBytesForMaxmemory();
-        long total = usedBytes + nativeBytes;
-        if (ttlBytes <= 0) {
-            return total;
-        }
-        if (Long.MAX_VALUE - total < ttlBytes) {
-            return Long.MAX_VALUE;
-        }
-        return total + ttlBytes;
-    }
-
-    private long estimateTtlBytesForMaxmemory() {
-        if (TTL_ENTRY_BYTES_ESTIMATE <= 0) {
-            return 0;
-        }
-        int ttlCount;
-        try {
-            ttlCount = expires.size();
-        } catch (Throwable ignored) {
-            ttlCount = 0;
-        }
-        if (ttlCount <= 0) {
-            return 0;
-        }
-        try {
-            return Math.multiplyExact((long) ttlCount, TTL_ENTRY_BYTES_ESTIMATE);
-        } catch (ArithmeticException e) {
-            return Long.MAX_VALUE;
-        }
+        return memoryReporter.usedBytesForMaxmemory();
     }
 
     @Override
     public int keyCountEstimate() {
-        checkThread();
-        int size;
-        try {
-            size = store.size();
-        } catch (Throwable ignored) {
-            size = 0;
-        }
-        return Math.max(0, size);
+        return memoryReporter.keyCountEstimate();
     }
 
     @Override
@@ -510,35 +422,6 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
             return;
         }
         e.lruClock = ++lruClock;
-    }
-
-    private static String encodingName(ValueEncoding encoding) {
-        if (encoding == null) {
-            return "unknown";
-        }
-        switch (encoding) {
-            case STRING_INT:
-                return "int";
-            case STRING_EMBSTR:
-                return "embstr";
-            case STRING_RAW:
-                return "raw";
-            case HASH_PACKED:
-            case LIST_PACKED:
-            case ZSET_PACKED:
-                return "listpack";
-            case HASH_HT:
-            case SET_HT:
-                return "hashtable";
-            case SET_INTSET:
-                return "intset";
-            case LIST_QUICKLIST:
-                return "quicklist";
-            case ZSET_SKIPLIST:
-                return "skiplist";
-            default:
-                return encoding.name().toLowerCase(java.util.Locale.ROOT);
-        }
     }
 
     public void bindToCurrentThread() {
@@ -590,46 +473,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     }
 
     public long estimatedUsedBytes() {
-        checkThread();
-        return usedBytesForMaxmemory();
-    }
-
-    public YierdisMemoryStats memoryStats() {
-        checkThread();
-        long runtimeUsedBytes = runtimeUsedBytes();
-        return DbMemoryAccounting.snapshot(
-                maxmemoryBytes,
-                usedBytes,
-                reservedBytes,
-                null,
-                runtimeUsedBytes,
-                store,
-                expires,
-                keysStoredOffHeap,
-                maxmemoryCoordinator == null
-        );
-    }
-
-    private long runtimeUsedBytes() {
-        if (memoryRuntime == null) {
-            return 0L;
-        }
-        try {
-            return Math.max(0L, memoryRuntime.usedBytes());
-        } catch (Throwable ignored) {
-            return 0L;
-        }
-    }
-
-    private long directRuntimeUsedBytes() {
-        long bytes = 0L;
-        if (store instanceof YierdisFfmKeyspace<?> ffmStore) {
-            bytes += Math.max(0L, ffmStore.nativeBytes());
-        }
-        if (expires instanceof YierdisFfmExpireIndex ffmExpires) {
-            bytes += Math.max(0L, ffmExpires.nativeBytes());
-        }
-        return bytes;
+        return memoryReporter.estimatedUsedBytes();
     }
 
     private long estimateEntryBytes(byte[] keyBytes, YierdisObject e) {
@@ -760,40 +604,8 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         );
     }
 
-    @Override
-    public ScanCursorV2 snapshot(ScanCursorV2 cursor, int count, List<YierdisSnapshotEntry> out) {
-        checkThread();
-        Objects.requireNonNull(out, "out");
-        if (count <= 0) {
-            throw new IllegalArgumentException("count must be > 0");
-        }
-
-        long now = System.currentTimeMillis();
-        int maxSteps = Math.max(64, count * 10);
-        final int[] remaining = new int[]{count};
-
-        // 约束：快照读取不应产生副作用；过期 key 仅跳过，不在此处执行删除（删除由读/写/维护路径推进）。
-        return store.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, e) -> {
-            if (k == null || e == null) {
-                return true;
-            }
-            if (isKeyExpired(k, now)) {
-                return true;
-            }
-
-            byte[] keyBytes = toByteArray(k);
-            ValueType type = e.type;
-            byte[] stringValue = null;
-            if (type == ValueType.STRING) {
-                byte[] view = e.stringBytesView();
-                stringValue = view == null ? null : java.util.Arrays.copyOf(view, view.length);
-            }
-            Long expireAtMillis = expires.get(k);
-            out.add(new YierdisSnapshotEntry(keyBytes, type, stringValue, expireAtMillis));
-
-            remaining[0]--;
-            return remaining[0] > 0;
-        });
+    YierdisDbIntrospection introspection() {
+        return introspection;
     }
 
     public void cleanupExpired() {

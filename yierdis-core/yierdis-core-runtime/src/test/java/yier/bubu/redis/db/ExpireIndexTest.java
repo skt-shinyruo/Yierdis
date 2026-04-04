@@ -118,7 +118,7 @@ public class ExpireIndexTest {
 
         Assert.assertTrue(db.writes().ttl().persist(keyView));
         long usedAfterPersist = db.usedBytesForMaxmemory();
-        Assert.assertEquals(0, db.memoryStats().expireCount());
+        Assert.assertEquals(0, db.memory().memoryStats().expireCount());
         Assert.assertTrue(usedAfterPersist >= usedBeforeTtl);
         Assert.assertTrue(usedAfterPersist <= usedAfterTtl - DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
 

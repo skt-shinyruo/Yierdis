@@ -31,10 +31,11 @@ public class YierdisSnapshotTest {
             }
 
             List<YierdisSnapshotEntry> entries = new ArrayList<>();
+            YierdisSnapshot snapshot = db.introspection();
             ScanCursorV2 cursor = ScanCursorV2.start();
             int guard = 0;
             do {
-                cursor = db.snapshot(cursor, 10, entries);
+                cursor = snapshot.snapshot(cursor, 10, entries);
                 guard++;
                 Assert.assertTrue("snapshot loop guard triggered", guard < 1000);
             } while (cursor.value() != 0);

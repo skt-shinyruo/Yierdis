@@ -14,7 +14,7 @@ public class OffHeapKeysToggleTest {
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(b("k"), b("v"), SetMode.NORMAL, null);
-            Assert.assertTrue(db.memoryStats().keysStoredOffHeap());
+            Assert.assertTrue(db.memory().memoryStats().keysStoredOffHeap());
         } finally {
             db.shutdown();
         }
@@ -38,7 +38,7 @@ public class OffHeapKeysToggleTest {
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(b("k"), b("v"), SetMode.NORMAL, null);
-            Assert.assertTrue(db.memoryStats().keysStoredOffHeap());
+            Assert.assertTrue(db.memory().memoryStats().keysStoredOffHeap());
         } finally {
             db.shutdown();
         }

@@ -7,24 +7,26 @@ import yier.bubu.redis.ops.YierdisMemoryStats;
 import java.util.Objects;
 
 final class YierdisDbMemoryOps implements MemoryOps {
-    private final YierdisDb db;
+    private final YierdisDbMemoryReporter memoryReporter;
+    private final YierdisDbIntrospection introspection;
 
-    YierdisDbMemoryOps(YierdisDb db) {
-        this.db = Objects.requireNonNull(db, "db");
+    YierdisDbMemoryOps(YierdisDbMemoryReporter memoryReporter, YierdisDbIntrospection introspection) {
+        this.memoryReporter = Objects.requireNonNull(memoryReporter, "memoryReporter");
+        this.introspection = Objects.requireNonNull(introspection, "introspection");
     }
 
     @Override
     public long memoryUsage(BytesView keyView) {
-        return db.memoryUsage(keyView);
+        return memoryReporter.memoryUsage(keyView);
     }
 
     @Override
     public YierdisMemoryStats memoryStats() {
-        return db.memoryStats();
+        return memoryReporter.memoryStats();
     }
 
     @Override
     public String objectEncoding(BytesView keyView) {
-        return db.objectEncoding(keyView);
+        return introspection.objectEncoding(keyView);
     }
 }
