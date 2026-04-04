@@ -168,6 +168,8 @@ For replies, the server write path should use `ReplyWriter` as the single semant
 
 `CustomProtocolV1NdjsonEncoder` remains useful for client, bench, parser, and `ReplyValue` support, but it should not coexist with the main server write path as an alternate semantic authority.
 
+`CustomProtocolV1Request` plus `ProtocolCommandAdapter` already provide most of the protocol/request decoupling needed right now. Do not reopen protocol-layer rewrites while command-spec SSOT and `YierdisDb` shrink work are still in flight.
+
 ### Expected outcomes
 
 - protocol modules no longer depend on command execution contracts

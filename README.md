@@ -24,6 +24,7 @@ Yierdis 的目标是 **教学/演示**：可以用项目内置 CLI 做交互学�
 
 - **执行契约（Command/ReplyWriter/Session...）**：统一放在 `yierdis-core-contract`（包名 `yier.bubu.redis.contract.*`），不再放在 `yierdis-protocol-model`。
 - **协议模型（limits/build-info/reply tooling/client/parser model）**：继续位于 `yierdis-protocol-model`（包名 `yier.bubu.redis.protocol.*`）；其中 `ReplyValue` 仅用于协议侧客户端/工具/解析器与编码辅助，server 命令写回语义仍以 `ReplyWriter` 为单一事实来源。
+- **协议请求适配**：`CustomProtocolV1Request` 已经通过 `yierdis-server` 中的 `ProtocolCommandAdapter` 与执行契约解耦；在 command-spec SSOT 和 `YierdisDb` 收敛工作完成前，不应重启一轮 protocol-layer rewrite。
 - **core-command 默认装配**：`yierdis-core-command` 仅保留传输无关的默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server`，而 `PING/ECHO/COMMAND/SELECT/QUIT/FLUSHDB` 这类传输无关或 DB 生命周期命令继续留在 core。
 - **CLI 输入解析**：`InlineCommandParser` 位于 `yierdis-client`（`yier.bubu.redis.client.InlineCommandParser`）。
 - **instance 暴露面**：`YierdisInstance` 仅负责 DB 生命周期、资源 ownership 与 `DbEngine` 能力视图（`engine(int)` / `engines()` 防御性拷贝），避免上层依赖 `YierdisDb` 具体实现，也不再承担 command processor 组装。

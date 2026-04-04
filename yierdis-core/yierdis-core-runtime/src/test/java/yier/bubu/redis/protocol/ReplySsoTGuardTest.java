@@ -78,6 +78,7 @@ public class ReplySsoTGuardTest {
         String source = Files.readString(replyValueFile, StandardCharsets.UTF_8);
         Assert.assertFalse("ReplyValue 不应再被描述为 reply IR", source.contains("Reply IR"));
         Assert.assertFalse("ReplyValue 不应再被描述为命令层回包语义模型", source.contains("命令层回包语义"));
+        Assert.assertFalse("ReplyValue 不应再被描述为 command-layer reply model", source.contains("command-layer reply model"));
     }
 
     @Test
@@ -129,6 +130,7 @@ public class ReplySsoTGuardTest {
 
         String source = Files.readString(encoderFile, StandardCharsets.UTF_8);
         Assert.assertFalse("NDJSON encoder 不应再被描述为 server reply SSOT", source.contains("编码器（SSOT）"));
+        Assert.assertFalse("NDJSON encoder 不应再被描述为 server reply authority", source.contains("server reply authority"));
     }
 
     private static int scanCoreModulesForForbiddenText(Path workspaceRoot, List<String> offenders, String forbiddenText)
