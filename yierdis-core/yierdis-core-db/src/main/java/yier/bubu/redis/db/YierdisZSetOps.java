@@ -15,9 +15,11 @@ import java.util.function.IntSupplier;
 
 final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     private final YierdisDbInternals internals;
+    private final YierdisDbKeyLifecycle keyLifecycle;
 
     YierdisZSetOps(YierdisDbInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
+        this.keyLifecycle = internals.keyLifecycle();
     }
 
     @Override
@@ -36,15 +38,15 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
-                var memoryRuntime = internals.memoryRuntime();
+                var memoryRuntime = keyLifecycle.memoryRuntime();
                 final int[] added = new int[]{0};
                 final boolean[] changedAny = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && internals.isKeyExpired(k, now)) {
+                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         old = null;
                         oldEstimate = 0;
@@ -58,7 +60,7 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                             throw e;
                         }
                         YierdisObject next = YierdisObject.newZSet(zv);
-                        internals.touch(next);
+                        keyLifecycle.touch(next);
                         internals.refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
@@ -68,7 +70,7 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                     }
                     added[0] = ((ZSetValue) old.payload).zaddMany(scoreMemberPairs, changedAny);
                     old.refreshCompositeEncodingFromPayload();
-                    internals.touch(old);
+                    keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
@@ -150,11 +152,11 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeIfPresentWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old.estimatedBytes;
-                    if (internals.isKeyExpired(k, now)) {
+                    if (keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
@@ -165,12 +167,12 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                     removed[0] = zv.zrem(members);
                     if (zv.size() == 0) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
                     old.refreshCompositeEncodingFromPayload();
-                    internals.touch(old);
+                    keyLifecycle.touch(old);
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
@@ -197,11 +199,11 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeIfPresentWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old.estimatedBytes;
-                    if (internals.isKeyExpired(k, now)) {
+                    if (keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
@@ -212,12 +214,12 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                     removed[0] = zv.zremrangeByRank(start, stop);
                     if (zv.size() == 0) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
                     old.refreshCompositeEncodingFromPayload();
-                    internals.touch(old);
+                    keyLifecycle.touch(old);
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
@@ -244,11 +246,11 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeIfPresentWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old.estimatedBytes;
-                    if (internals.isKeyExpired(k, now)) {
+                    if (keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
@@ -259,12 +261,12 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                     removed[0] = zv.zremrangeByScore(min, minExclusive, max, maxExclusive);
                     if (zv.size() == 0) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
                     old.refreshCompositeEncodingFromPayload();
-                    internals.touch(old);
+                    keyLifecycle.touch(old);
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
@@ -342,7 +344,7 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     }
 
     private YierdisObject readZSet(byte[] keyBytes) {
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return null;
         }
@@ -353,7 +355,7 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     }
 
     private long estimateZSetWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
-        YierdisObject existing = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
         if (existing == null) {
             return YierdisDb.estimateZSetWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, scoreMemberPairs);
         }

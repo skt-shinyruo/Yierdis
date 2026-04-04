@@ -15,9 +15,11 @@ import java.util.function.IntSupplier;
 
 final class YierdisListOps implements ListReadOps, ListWriteOps {
     private final YierdisDbInternals internals;
+    private final YierdisDbKeyLifecycle keyLifecycle;
 
     YierdisListOps(YierdisDbInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
+        this.keyLifecycle = internals.keyLifecycle();
     }
 
     @Override
@@ -65,14 +67,14 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
-                var memoryRuntime = internals.memoryRuntime();
+                var memoryRuntime = keyLifecycle.memoryRuntime();
                 final int[] len = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && internals.isKeyExpired(k, now)) {
+                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         old = null;
                         oldEstimate = 0;
@@ -86,7 +88,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                         }
                         len[0] = lv.size();
                         YierdisObject next = YierdisObject.newList(lv);
-                        internals.touch(next);
+                        keyLifecycle.touch(next);
                         internals.refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
@@ -103,7 +105,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                     }
                     len[0] = lv.size();
                     old.refreshCompositeEncodingFromPayload();
-                    internals.touch(old);
+                    keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
@@ -116,7 +118,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
     }
 
     private int lrangeCount(byte[] keyBytes, int start, int stop) {
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return 0;
         }
@@ -127,7 +129,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
     }
 
     private void lrangeWriteTo(byte[] keyBytes, int start, int stop, BulkStringSink out) {
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return;
         }
@@ -155,11 +157,11 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
             public YierdisDbMutationExecutor.MutationResult<List<byte[]>> apply() {
                 final List<byte[]>[] popped = new List[]{null};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeIfPresentWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old.estimatedBytes;
-                    if (internals.isKeyExpired(k, now)) {
+                    if (keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
@@ -170,12 +172,12 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                     popped[0] = left ? lv.lpop(count) : lv.rpop(count);
                     if (lv.size() == 0) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
                     old.refreshCompositeEncodingFromPayload();
-                    internals.touch(old);
+                    keyLifecycle.touch(old);
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
@@ -189,7 +191,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
     }
 
     private long estimateListWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> values) {
-        YierdisObject existing = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
         if (existing == null) {
             return YierdisDb.estimateListWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, values);
         }

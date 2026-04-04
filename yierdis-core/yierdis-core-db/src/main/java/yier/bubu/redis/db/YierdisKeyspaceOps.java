@@ -16,9 +16,11 @@ import java.util.Objects;
 
 final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
     private final YierdisDbInternals internals;
+    private final YierdisDbKeyLifecycle keyLifecycle;
 
     YierdisKeyspaceOps(YierdisDbInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
+        this.keyLifecycle = internals.keyLifecycle();
     }
 
     @Override
@@ -36,15 +38,19 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
                 long removed = 0;
                 long deltaBytes = 0;
                 for (byte[] keyBytes : keys) {
-                    YierdisObject e = internals.store().get(keyBytes);
+                    KeyHandle handle = keyLifecycle.keyHandle(keyBytes);
+                    if (handle == null) {
+                        continue;
+                    }
+                    YierdisObject e = keyLifecycle.getStoredObject(handle);
                     if (e == null) {
                         continue;
                     }
-                    if (internals.removeIfExpired(keyBytes, e, now)) {
+                    if (keyLifecycle.removeIfExpired(handle, e, now)) {
                         continue;
                     }
-                    internals.removeExpire(keyBytes);
-                    if (internals.store().remove(keyBytes, e)) {
+                    keyLifecycle.removeExpire(handle);
+                    if (keyLifecycle.remove(handle, e)) {
                         e.releasePayloadIfAny();
                         deltaBytes -= e.estimatedBytes;
                         removed++;
@@ -61,14 +67,14 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
     @Override
     public ValueType typeOf(BytesView keyView) {
         internals.checkThread();
-        YierdisObject e = internals.getObjectIfNotExpired(keyView);
+        YierdisObject e = keyLifecycle.getLiveObject(keyView);
         return e == null ? null : e.type;
     }
 
     @Override
     public boolean existsKey(BytesView keyView) {
         internals.checkThread();
-        return internals.getObjectIfNotExpired(keyView) != null;
+        return keyLifecycle.getLiveObject(keyView) != null;
     }
 
     @Override
@@ -106,11 +112,11 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
                 timedOut[0] = true;
                 break;
             }
-            ScanCursorV2 next = internals.store().scan(cursor, 1024, (k, e) -> {
+            ScanCursorV2 next = keyLifecycle.scan(cursor, 1024, (k, e) -> {
                 if (k == null || e == null) {
                     return true;
                 }
-                if (internals.isKeyExpired(k, nowMillis)) {
+                if (keyLifecycle.isKeyExpired(k, nowMillis)) {
                     expiredKeys.add(YierdisDb.toByteArray(k));
                     expiredValues.add(e);
                     return true;
@@ -141,8 +147,8 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
 
         for (int i = 0; i < expiredKeys.size(); i++) {
             byte[] key = expiredKeys.get(i);
-            internals.removeExpire(key);
-            if (internals.store().remove(key, expiredValues.get(i))) {
+            keyLifecycle.removeExpire(key);
+            if (keyLifecycle.remove(key, expiredValues.get(i))) {
                 expiredValues.get(i).releasePayloadIfAny();
                 internals.adjustUsedBytes(-expiredValues.get(i).estimatedBytes);
             }
@@ -164,11 +170,11 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
         int maxSteps = Math.max(64, count * 10);
         final int[] remaining = new int[]{count};
 
-        ScanCursorV2 next = internals.store().scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, e) -> {
+        ScanCursorV2 next = keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, e) -> {
             if (k == null || e == null) {
                 return true;
             }
-            if (internals.isKeyExpired(k, now)) {
+            if (keyLifecycle.isKeyExpired(k, now)) {
                 expiredKeys.add(YierdisDb.toByteArray(k));
                 expiredValues.add(e);
                 return true;
@@ -185,8 +191,8 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
 
         for (int i = 0; i < expiredKeys.size(); i++) {
             byte[] key = expiredKeys.get(i);
-            internals.removeExpire(key);
-            if (internals.store().remove(key, expiredValues.get(i))) {
+            keyLifecycle.removeExpire(key);
+            if (keyLifecycle.remove(key, expiredValues.get(i))) {
                 expiredValues.get(i).releasePayloadIfAny();
                 internals.adjustUsedBytes(-expiredValues.get(i).estimatedBytes);
             }

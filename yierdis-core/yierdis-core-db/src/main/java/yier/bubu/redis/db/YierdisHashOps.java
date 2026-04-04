@@ -15,9 +15,11 @@ import java.util.function.IntSupplier;
 
 final class YierdisHashOps implements HashReadOps, HashWriteOps {
     private final YierdisDbInternals internals;
+    private final YierdisDbKeyLifecycle keyLifecycle;
 
     YierdisHashOps(YierdisDbInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
+        this.keyLifecycle = internals.keyLifecycle();
     }
 
     @Override
@@ -36,14 +38,14 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
-                var memoryRuntime = internals.memoryRuntime();
+                var memoryRuntime = keyLifecycle.memoryRuntime();
                 final int[] added = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && internals.isKeyExpired(k, now)) {
+                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         old = null;
                         oldEstimate = 0;
@@ -52,7 +54,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                         HashValue hv = new HashValue(memoryRuntime);
                         added[0] = hv.hsetMany(fieldValuePairs);
                         YierdisObject next = YierdisObject.newHash(hv);
-                        internals.touch(next);
+                        keyLifecycle.touch(next);
                         internals.refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
@@ -62,7 +64,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     }
                     added[0] = ((HashValue) old.payload).hsetMany(fieldValuePairs);
                     old.refreshCompositeEncodingFromPayload();
-                    internals.touch(old);
+                    keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
@@ -77,7 +79,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
     @Override
     public byte[] hget(byte[] keyBytes, byte[] fieldBytes) {
         internals.checkThread();
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return null;
         }
@@ -99,7 +101,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
     @Override
     public long hlen(byte[] keyBytes) {
         internals.checkThread();
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return 0;
         }
@@ -123,11 +125,11 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeIfPresentWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old.estimatedBytes;
-                    if (internals.isKeyExpired(k, now)) {
+                    if (keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
@@ -138,12 +140,12 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     removed[0] = hv.hdel(fields);
                     if (hv.size() == 0) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
                     old.refreshCompositeEncodingFromPayload();
-                    internals.touch(old);
+                    keyLifecycle.touch(old);
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
@@ -157,7 +159,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
     }
 
     private int hgetallCount(byte[] keyBytes) {
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return 0;
         }
@@ -168,7 +170,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
     }
 
     private void hgetallWriteTo(byte[] keyBytes, BulkStringSink out) {
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return;
         }
@@ -179,7 +181,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
     }
 
     private long estimateHashWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> fieldValuePairs) {
-        YierdisObject existing = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
         if (existing == null) {
             return YierdisDb.estimateHashWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, fieldValuePairs);
         }

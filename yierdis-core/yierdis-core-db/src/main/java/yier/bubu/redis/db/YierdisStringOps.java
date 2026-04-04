@@ -23,9 +23,11 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private static final long TTL_ENTRY_BYTES_ESTIMATE = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
 
     private final YierdisDbInternals internals;
+    private final YierdisDbKeyLifecycle keyLifecycle;
 
     YierdisStringOps(YierdisDbInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
+        this.keyLifecycle = internals.keyLifecycle();
     }
 
     @Override
@@ -54,19 +56,19 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 final long[] deltaBytes = new long[]{0};
                 final byte[][] oldValue = new byte[1][];
 
-                internals.store().computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
                     handleRef[0] = k;
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && internals.isKeyExpired(k, now)) {
+                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         old = null;
                         oldEstimate = 0;
                     }
                     existed[0] = old != null;
                     if (mode == SetMode.NX && old != null) {
-                        internals.touch(old);
+                        keyLifecycle.touch(old);
                         return old;
                     }
                     if (mode == SetMode.XX && old == null) {
@@ -81,14 +83,14 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     }
                     if (old == null) {
                         didSet[0] = true;
-                        YierdisObject next = YierdisObject.newString(internals.offHeapAllocator(), value);
-                        internals.touch(next);
+                        YierdisObject next = YierdisObject.newString(keyLifecycle.offHeapAllocator(), value);
+                        keyLifecycle.touch(next);
                         internals.refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
                     }
-                    old.overwriteWithString(internals.offHeapAllocator(), value);
-                    internals.touch(old);
+                    old.overwriteWithString(keyLifecycle.offHeapAllocator(), value);
+                    keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
@@ -105,15 +107,15 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                         );
                     }
                     if (expireAtMillis != null) {
-                        internals.setExpireAtMillis(handleRef[0], expireAtMillis);
+                        keyLifecycle.setExpireAtMillis(handleRef[0], expireAtMillis);
                         YierdisChangeTracking.markTtlChanged();
                         return YierdisDbMutationExecutor.MutationResult.of(
                                 SetStringResult.of(true, oldValue[0]),
                                 deltaBytes[0]
                         );
                     }
-                    Long beforeTtl = internals.expires().get(handleRef[0]);
-                    internals.removeExpire(handleRef[0]);
+                    Long beforeTtl = keyLifecycle.expireAtMillis(handleRef[0]);
+                    keyLifecycle.removeExpire(handleRef[0]);
                     if (beforeTtl != null) {
                         YierdisChangeTracking.markTtlChanged();
                     }
@@ -152,20 +154,20 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 final int[] newLen = new int[]{0};
                 final boolean[] changed = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && internals.isKeyExpired(k, now)) {
+                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         old = null;
                         oldEstimate = 0;
                     }
                     if (old == null) {
-                        YierdisObject created = YierdisObject.newString(internals.offHeapAllocator(), value);
+                        YierdisObject created = YierdisObject.newString(keyLifecycle.offHeapAllocator(), value);
                         newLen[0] = created.stringByteLength();
                         changed[0] = true;
-                        internals.touch(created);
+                        keyLifecycle.touch(created);
                         internals.refreshEstimatedBytes(k, created);
                         deltaBytes[0] += created.estimatedBytes;
                         return created;
@@ -174,9 +176,9 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     if (old.type != ValueType.STRING) {
                         throw new WrongTypeException();
                     }
-                    internals.touch(old);
+                    keyLifecycle.touch(old);
                     int beforeLen = old.stringByteLength();
-                    newLen[0] = old.stringAppend(internals.offHeapAllocator(), value);
+                    newLen[0] = old.stringAppend(keyLifecycle.offHeapAllocator(), value);
                     if (newLen[0] != beforeLen) {
                         changed[0] = true;
                     }
@@ -212,29 +214,29 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 final int[] oldBit = new int[]{0};
                 final boolean[] changed = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && internals.isKeyExpired(k, now)) {
+                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         old = null;
                         oldEstimate = 0;
                     }
 
                     if (old == null) {
-                        old = YierdisObject.newString(internals.offHeapAllocator(), (byte[]) null);
-                        internals.touch(old);
+                        old = YierdisObject.newString(keyLifecycle.offHeapAllocator(), (byte[]) null);
+                        keyLifecycle.touch(old);
                     } else {
                         if (old.type != ValueType.STRING) {
                             throw new WrongTypeException();
                         }
-                        internals.touch(old);
+                        keyLifecycle.touch(old);
                     }
 
                     int beforeLen = old.stringByteLength();
                     boolean existed = oldEstimate > 0;
-                    oldBit[0] = old.stringSetBit(internals.offHeapAllocator(), offset, value);
+                    oldBit[0] = old.stringSetBit(keyLifecycle.offHeapAllocator(), offset, value);
                     int afterLen = old.stringByteLength();
                     if (!existed || oldBit[0] != value || afterLen != beforeLen) {
                         changed[0] = true;
@@ -268,11 +270,11 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 final long[] result = new long[]{0L};
                 final long[] deltaBytes = new long[]{0L};
                 final boolean[] changed = new boolean[]{false};
-                internals.store().computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && internals.isKeyExpired(k, now)) {
+                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         old = null;
                         oldEstimate = 0;
@@ -280,7 +282,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     if (old == null) {
                         result[0] = delta;
                         YierdisObject created = YierdisObject.newStringInt(delta);
-                        internals.touch(created);
+                        keyLifecycle.touch(created);
                         internals.refreshEstimatedBytes(k, created);
                         deltaBytes[0] += created.estimatedBytes;
                         changed[0] = true;
@@ -290,8 +292,8 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     if (old.type != ValueType.STRING) {
                         throw new WrongTypeException();
                     }
-                    result[0] = old.stringIncrBy(internals.offHeapAllocator(), delta);
-                    internals.touch(old);
+                    result[0] = old.stringIncrBy(keyLifecycle.offHeapAllocator(), delta);
+                    keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
@@ -309,7 +311,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
     @Override
     public byte[] getStringBytes(byte[] keyBytes) {
         internals.checkThread();
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return null;
         }
@@ -322,7 +324,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
     @Override
     public BulkStringValue getStringValue(BytesView keyView) {
         internals.checkThread();
-        YierdisObject object = internals.getObjectIfNotExpired(keyView);
+        YierdisObject object = keyLifecycle.getLiveObject(keyView);
         if (object == null) {
             return BulkStringValue.nullValue();
         }
@@ -347,7 +349,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
     @Override
     public int getBit(BytesView keyView, long offset) {
         internals.checkThread();
-        YierdisObject object = internals.getObjectIfNotExpired(keyView);
+        YierdisObject object = keyLifecycle.getLiveObject(keyView);
         if (object == null) {
             return 0;
         }
@@ -360,7 +362,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
     @Override
     public long bitcount(BytesView keyView) {
         internals.checkThread();
-        YierdisObject object = internals.getObjectIfNotExpired(keyView);
+        YierdisObject object = keyLifecycle.getLiveObject(keyView);
         if (object == null) {
             return 0L;
         }
@@ -377,7 +379,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
     @Override
     public long bitcount(BytesView keyView, long start, long end) {
         internals.checkThread();
-        YierdisObject object = internals.getObjectIfNotExpired(keyView);
+        YierdisObject object = keyLifecycle.getLiveObject(keyView);
         if (object == null) {
             return 0L;
         }
@@ -417,7 +419,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     private int stringLength(byte[] keyBytes) {
         internals.checkThread();
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return 0;
         }
@@ -429,7 +431,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     private int stringLength(BytesView keyView) {
         internals.checkThread();
-        YierdisObject object = internals.getObjectIfNotExpired(keyView);
+        YierdisObject object = keyLifecycle.getLiveObject(keyView);
         if (object == null) {
             return 0;
         }

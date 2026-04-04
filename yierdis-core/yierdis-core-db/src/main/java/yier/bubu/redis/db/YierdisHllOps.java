@@ -11,9 +11,11 @@ import java.util.Objects;
 
 final class YierdisHllOps implements HllReadOps, HllWriteOps {
     private final YierdisDbInternals internals;
+    private final YierdisDbKeyLifecycle keyLifecycle;
 
     YierdisHllOps(YierdisDbInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
+        this.keyLifecycle = internals.keyLifecycle();
     }
 
     @Override
@@ -31,27 +33,27 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
                 final boolean[] changed = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && internals.isKeyExpired(k, now)) {
+                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         old = null;
                         oldEstimate = 0;
                     }
 
                     if (old == null) {
-                        old = YierdisObject.newString(internals.offHeapAllocator(), YierdisHyperLogLog.newSparse());
-                        internals.touch(old);
+                        old = YierdisObject.newString(keyLifecycle.offHeapAllocator(), YierdisHyperLogLog.newSparse());
+                        keyLifecycle.touch(old);
                     } else {
                         if (old.type != ValueType.STRING) {
                             throw new WrongTypeException();
                         }
-                        internals.touch(old);
+                        keyLifecycle.touch(old);
                     }
 
-                    changed[0] = YierdisHyperLogLog.pfAdd(old, internals.offHeapAllocator(), elements);
+                    changed[0] = YierdisHyperLogLog.pfAdd(old, keyLifecycle.offHeapAllocator(), elements);
 
                     deltaBytes[0] -= oldEstimate;
                     internals.refreshEstimatedBytes(k, old);
@@ -75,7 +77,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
         int[] registers = new int[YierdisHyperLogLog.REGISTERS];
         for (byte[] keyBytes : keys) {
-            YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+            YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
             if (object == null) {
                 continue;
             }
@@ -99,7 +101,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
         int[] registers = new int[YierdisHyperLogLog.REGISTERS];
         for (byte[] keyBytes : sourceKeys) {
-            YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+            YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
             if (object == null) {
                 continue;
             }
@@ -124,32 +126,32 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
             @Override
             public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeWithHandle(destKeyBytes, (k, old) -> {
+                keyLifecycle.computeWithHandle(destKeyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && internals.isKeyExpired(k, now)) {
+                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         old = null;
                         oldEstimate = 0;
                     }
 
                     if (old == null) {
-                        YierdisObject next = YierdisObject.newString(internals.offHeapAllocator(), mergedDense);
-                        internals.touch(next);
+                        YierdisObject next = YierdisObject.newString(keyLifecycle.offHeapAllocator(), mergedDense);
+                        keyLifecycle.touch(next);
                         internals.refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
                     }
 
-                    old.overwriteWithString(internals.offHeapAllocator(), mergedDense);
-                    internals.touch(old);
+                    old.overwriteWithString(keyLifecycle.offHeapAllocator(), mergedDense);
+                    keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
-                internals.removeExpire(destKeyBytes);
+                keyLifecycle.removeExpire(destKeyBytes);
                 YierdisChangeTracking.markValueChanged();
                 return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes[0]);
             }
@@ -157,7 +159,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
     }
 
     private long estimatePfaddUpperBound(byte[] keyBytes, List<byte[]> elements) {
-        YierdisObject existing = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
         if (existing == null) {
             int upperValueLength = YierdisHyperLogLog.sparseLengthUpperBoundForElements(elements);
             return YierdisDb.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, upperValueLength);
@@ -177,7 +179,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
     }
 
     private long estimatePfmergeUpperBound(byte[] keyBytes, int mergedDenseLength) {
-        YierdisObject existing = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
         if (existing == null) {
             return YierdisDb.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, mergedDenseLength);
         }

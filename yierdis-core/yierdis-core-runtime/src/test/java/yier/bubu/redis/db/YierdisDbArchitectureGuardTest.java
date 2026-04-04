@@ -34,6 +34,14 @@ public class YierdisDbArchitectureGuardTest {
         Assert.assertNull(findDeclaredMethod(YierdisDb.class, "pfcount", java.util.List.class));
     }
 
+    @Test
+    public void yierdisDbInternalsMustNotExposeRawContainersOrMemoryRuntime() {
+        Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "store"));
+        Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "expires"));
+        Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "offHeapAllocator"));
+        Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "memoryRuntime"));
+    }
+
     private static Method findDeclaredMethod(Class<?> type, String name, Class<?>... parameterTypes) {
         try {
             return type.getDeclaredMethod(name, parameterTypes);

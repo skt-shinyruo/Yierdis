@@ -91,6 +91,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     private final YierdisDbMutationExecutor mutationExecutor;
     private final YierdisDbExpirationSupport expirationSupport;
     private final YierdisDbMaxmemorySupport maxmemorySupport;
+    private final YierdisDbKeyLifecycle keyLifecycle;
     private final YierdisDbInternals internals;
     private final YierdisStringOps stringOps;
     private final YierdisHashOps hashOps;
@@ -212,6 +213,14 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         this.mutationExecutor = new YierdisDbMutationExecutor(this);
         this.expirationSupport = new YierdisDbExpirationSupport(this, this.keysStoredOffHeap, this.expireCleanupTimeLimitNanos);
         this.maxmemorySupport = new YierdisDbMaxmemorySupport(this, this.maxmemoryPolicy, this.maxmemorySamples, this.evictionTimeLimitNanos);
+        this.keyLifecycle = new YierdisDbKeyLifecycle(
+                this.store,
+                this.expires,
+                this.offHeapAllocator,
+                this.memoryRuntime,
+                this::touch,
+                this::adjustUsedBytes
+        );
         this.internals = new DbInternals();
         this.stringOps = new YierdisStringOps(internals);
         this.hashOps = new YierdisHashOps(internals);
@@ -355,11 +364,7 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     }
 
     YierdisObject getObjectIfNotExpired(BytesView keyView) {
-        KeyHandle handle = store.keyHandle(keyView);
-        if (handle == null) {
-            return null;
-        }
-        return getObjectIfNotExpired(handle);
+        return keyLifecycle.getLiveObject(keyView);
     }
 
     public long memoryUsage(BytesView keyView) {
@@ -797,49 +802,23 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     }
 
     YierdisObject getObjectIfNotExpired(byte[] keyBytes) {
-        KeyHandle handle = store.keyHandle(keyBytes);
-        if (handle == null) {
-            return null;
-        }
-        return getObjectIfNotExpired(handle);
+        return keyLifecycle.getLiveObject(keyBytes);
     }
 
     boolean removeIfExpired(byte[] keyBytes, YierdisObject e, long nowMillis) {
-        KeyHandle handle = store.keyHandle(keyBytes);
-        if (handle == null) {
-            return false;
-        }
-        return removeIfExpired(handle, e, nowMillis);
+        return keyLifecycle.removeIfExpired(keyBytes, e, nowMillis);
     }
 
     YierdisObject getObjectIfNotExpired(KeyHandle keyHandle) {
-        YierdisObject e = store.get(keyHandle);
-        if (e == null) {
-            return null;
-        }
-        if (removeIfExpired(keyHandle, e, System.currentTimeMillis())) {
-            return null;
-        }
-        touch(e);
-        return e;
+        return keyLifecycle.getLiveObject(keyHandle);
     }
 
     boolean removeIfExpired(KeyHandle keyHandle, YierdisObject e, long nowMillis) {
-        Long expireAtMillis = expires.get(keyHandle);
-        if (expireAtMillis == null || expireAtMillis > nowMillis) {
-            return false;
-        }
-        removeExpire(keyHandle);
-        if (store.remove(keyHandle, e)) {
-            e.releasePayloadIfAny();
-            adjustUsedBytes(-e.estimatedBytes);
-            return true;
-        }
-        return false;
+        return keyLifecycle.removeIfExpired(keyHandle, e, nowMillis);
     }
 
     boolean isKeyExpired(byte[] keyBytes, long nowMillis) {
-        KeyHandle handle = store.keyHandle(keyBytes);
+        KeyHandle handle = keyLifecycle.keyHandle(keyBytes);
         if (handle == null) {
             return false;
         }
@@ -847,34 +826,23 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
     }
 
     boolean isKeyExpired(KeyHandle keyHandle, long nowMillis) {
-        Long expireAtMillis = expires.get(keyHandle);
-        return expireAtMillis != null && expireAtMillis <= nowMillis;
+        return keyLifecycle.isKeyExpired(keyHandle, nowMillis);
     }
 
     void setExpireAtMillis(byte[] keyBytes, long expireAtMillis) {
-        KeyHandle handle = store.keyHandle(keyBytes);
-        if (handle != null) {
-            expires.setExpireAtMillis(handle, expireAtMillis);
-            return;
-        }
-        expires.setExpireAtMillis(keyBytes, expireAtMillis, store);
+        keyLifecycle.setExpireAtMillis(keyBytes, expireAtMillis);
     }
 
     void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
-        expires.setExpireAtMillis(keyHandle, expireAtMillis);
+        keyLifecycle.setExpireAtMillis(keyHandle, expireAtMillis);
     }
 
     void removeExpire(byte[] keyBytes) {
-        KeyHandle handle = store.keyHandle(keyBytes);
-        if (handle != null) {
-            removeExpire(handle);
-            return;
-        }
-        expires.removeExpire(keyBytes);
+        keyLifecycle.removeExpire(keyBytes);
     }
 
     void removeExpire(KeyHandle keyHandle) {
-        expires.removeExpire(keyHandle);
+        keyLifecycle.removeExpire(keyHandle);
     }
 
     static boolean globMatches(byte[] pattern, byte[] text) {
@@ -1144,38 +1112,13 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
 
     private final class DbInternals implements YierdisDbInternals {
         @Override
-        public YierdisKeyspace<YierdisObject> store() {
-            return store;
-        }
-
-        @Override
-        public YierdisExpireIndex expires() {
-            return expires;
-        }
-
-        @Override
-        public OffHeapAllocator offHeapAllocator() {
-            return offHeapAllocator;
-        }
-
-        @Override
-        public YierdisFfmMemoryRuntime memoryRuntime() {
-            return memoryRuntime;
-        }
-
-        @Override
         public <T> T executeMutation(YierdisDbMutationExecutor.MutationPlan<T> plan) {
             return mutationExecutor.execute(plan);
         }
 
         @Override
-        public void checkThread() {
-            YierdisDb.this.checkThread();
-        }
-
-        @Override
-        public void touch(YierdisObject object) {
-            YierdisDb.this.touch(object);
+        public YierdisDbKeyLifecycle keyLifecycle() {
+            return keyLifecycle;
         }
 
         @Override
@@ -1184,58 +1127,13 @@ public final class YierdisDb implements YierdisSnapshot, RuntimeDbEngine, Maxmem
         }
 
         @Override
-        public boolean removeIfExpired(byte[] keyBytes, YierdisObject object, long nowMillis) {
-            return YierdisDb.this.removeIfExpired(keyBytes, object, nowMillis);
-        }
-
-        @Override
-        public boolean removeIfExpired(KeyHandle keyHandle, YierdisObject object, long nowMillis) {
-            return YierdisDb.this.removeIfExpired(keyHandle, object, nowMillis);
-        }
-
-        @Override
-        public boolean isKeyExpired(KeyHandle keyHandle, long nowMillis) {
-            return YierdisDb.this.isKeyExpired(keyHandle, nowMillis);
-        }
-
-        @Override
-        public void setExpireAtMillis(byte[] keyBytes, long expireAtMillis) {
-            YierdisDb.this.setExpireAtMillis(keyBytes, expireAtMillis);
-        }
-
-        @Override
-        public void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
-            YierdisDb.this.setExpireAtMillis(keyHandle, expireAtMillis);
-        }
-
-        @Override
-        public void removeExpire(byte[] keyBytes) {
-            YierdisDb.this.removeExpire(keyBytes);
-        }
-
-        @Override
-        public void removeExpire(KeyHandle keyHandle) {
-            YierdisDb.this.removeExpire(keyHandle);
-        }
-
-        @Override
         public void adjustUsedBytes(long deltaBytes) {
             YierdisDb.this.adjustUsedBytes(deltaBytes);
         }
 
         @Override
-        public YierdisObject getObjectIfNotExpired(byte[] keyBytes) {
-            return YierdisDb.this.getObjectIfNotExpired(keyBytes);
-        }
-
-        @Override
-        public YierdisObject getObjectIfNotExpired(BytesView keyView) {
-            return YierdisDb.this.getObjectIfNotExpired(keyView);
-        }
-
-        @Override
-        public YierdisObject getObjectIfNotExpired(KeyHandle keyHandle) {
-            return YierdisDb.this.getObjectIfNotExpired(keyHandle);
+        public void checkThread() {
+            YierdisDb.this.checkThread();
         }
     }
 

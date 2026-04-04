@@ -14,9 +14,11 @@ import java.util.function.IntSupplier;
 
 final class YierdisSetOps implements SetReadOps, SetWriteOps {
     private final YierdisDbInternals internals;
+    private final YierdisDbKeyLifecycle keyLifecycle;
 
     YierdisSetOps(YierdisDbInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
+        this.keyLifecycle = internals.keyLifecycle();
     }
 
     @Override
@@ -32,14 +34,14 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
-                var memoryRuntime = internals.memoryRuntime();
+                var memoryRuntime = keyLifecycle.memoryRuntime();
                 final int[] added = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && internals.isKeyExpired(k, now)) {
+                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         old = null;
                         oldEstimate = 0;
@@ -48,7 +50,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                         SetValue sv = new SetValue(memoryRuntime);
                         added[0] = sv.addAll(members);
                         YierdisObject next = YierdisObject.newSet(sv);
-                        internals.touch(next);
+                        keyLifecycle.touch(next);
                         internals.refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
@@ -58,7 +60,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     }
                     added[0] = ((SetValue) old.payload).addAll(members);
                     old.refreshCompositeEncodingFromPayload();
-                    internals.touch(old);
+                    keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
@@ -86,11 +88,11 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
             public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                internals.store().computeIfPresentWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old.estimatedBytes;
-                    if (internals.isKeyExpired(k, now)) {
+                    if (keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
@@ -101,12 +103,12 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     removed[0] = sv.removeAll(members);
                     if (sv.size() == 0) {
                         old.releasePayloadIfAny();
-                        internals.removeExpire(k);
+                        keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
                     old.refreshCompositeEncodingFromPayload();
-                    internals.touch(old);
+                    keyLifecycle.touch(old);
                     internals.refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
@@ -131,7 +133,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
     @Override
     public boolean sismember(byte[] keyBytes, byte[] member) {
         internals.checkThread();
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return false;
         }
@@ -144,7 +146,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
     @Override
     public long scard(byte[] keyBytes) {
         internals.checkThread();
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return 0;
         }
@@ -155,7 +157,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
     }
 
     private int smembersCount(byte[] keyBytes) {
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return 0;
         }
@@ -166,7 +168,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
     }
 
     private void smembersWriteTo(byte[] keyBytes, BulkStringSink out) {
-        YierdisObject object = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return;
         }
@@ -177,7 +179,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
     }
 
     private long estimateSetWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> members) {
-        YierdisObject existing = internals.getObjectIfNotExpired(keyBytes);
+        YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
         if (existing == null) {
             return YierdisDb.estimateSetWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, members);
         }
