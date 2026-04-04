@@ -15,6 +15,23 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class CommandMetadataRegressionTest {
     @Test
+    public void registrationInterfaceExposesUnifiedCommandSpecRegistration() throws Exception {
+        Class<?> specType;
+        try {
+            specType = Class.forName("yier.bubu.redis.command.CommandSpec");
+        } catch (ClassNotFoundException e) {
+            Assert.fail("CommandSpec should exist as the unified registration contract");
+            return;
+        }
+
+        try {
+            Assert.assertNotNull(CommandModule.Registration.class.getMethod("register", String.class, specType));
+        } catch (NoSuchMethodException e) {
+            Assert.fail("CommandModule.Registration should expose register(String, CommandSpec)");
+        }
+    }
+
+    @Test
     public void commandInfoKeepsMetadataForBuiltInAndExtraCommands() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(

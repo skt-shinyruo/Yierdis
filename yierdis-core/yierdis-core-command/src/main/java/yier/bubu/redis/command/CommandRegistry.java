@@ -26,22 +26,16 @@ final class CommandRegistry implements CommandModule.Registration {
     private static final class Entry {
         private final byte[] nameUpperAscii;
         private final long hash;
-        private final CommandModule.Handler handler;
-        private final CommandDescriptor descriptor;
-        private final String disallowedInMultiError;
+        private final CommandSpec spec;
 
         private Entry(
                 byte[] nameUpperAscii,
                 long hash,
-                CommandModule.Handler handler,
-                CommandDescriptor descriptor,
-                String disallowedInMultiError
+                CommandSpec spec
         ) {
             this.nameUpperAscii = Objects.requireNonNull(nameUpperAscii, "nameUpperAscii");
             this.hash = hash;
-            this.handler = Objects.requireNonNull(handler, "handler");
-            this.descriptor = Objects.requireNonNull(descriptor, "descriptor");
-            this.disallowedInMultiError = disallowedInMultiError;
+            this.spec = Objects.requireNonNull(spec, "spec");
         }
     }
 
@@ -52,47 +46,20 @@ final class CommandRegistry implements CommandModule.Registration {
     private int size = 0;
 
     @Override
-    public void register(String name, CommandModule.Handler handler) {
-        registerInternal(name, handler, null, null);
+    public void register(String name, CommandSpec spec) {
+        registerInternal(name, spec);
     }
 
-    @Override
-    public void register(String name, CommandModule.Handler handler, CommandDescriptor descriptor) {
-        registerInternal(name, handler, descriptor, null);
-    }
-
-    @Override
-    public void registerDisallowedInMulti(String name, CommandModule.Handler handler, String errorMessage) {
-        if (errorMessage == null || errorMessage.isBlank()) {
-            throw new IllegalArgumentException("errorMessage must not be blank");
-        }
-        registerInternal(name, handler, null, errorMessage);
-    }
-
-    @Override
-    public void registerDisallowedInMulti(
-            String name,
-            CommandModule.Handler handler,
-            CommandDescriptor descriptor,
-            String errorMessage
-    ) {
-        if (errorMessage == null || errorMessage.isBlank()) {
-            throw new IllegalArgumentException("errorMessage must not be blank");
-        }
-        registerInternal(name, handler, descriptor, errorMessage);
-    }
-
-    private void registerInternal(
-            String name,
-            CommandModule.Handler handler,
-            CommandDescriptor descriptor,
-            String disallowedInMultiError
-    ) {
+    private void registerInternal(String name, CommandSpec spec) {
         Objects.requireNonNull(name, "name");
-        Objects.requireNonNull(handler, "handler");
+        Objects.requireNonNull(spec, "spec");
         String nameUpper = name.trim().toUpperCase(Locale.ROOT);
         if (nameUpper.isEmpty()) {
             throw new IllegalArgumentException("command name must not be empty");
+        }
+        String disallowedInMultiError = spec.disallowedInMultiError();
+        if (disallowedInMultiError != null && disallowedInMultiError.isBlank()) {
+            throw new IllegalArgumentException("disallowedInMultiError must not be blank");
         }
         if (!namesUpper.add(nameUpper)) {
             throw new IllegalArgumentException("duplicate command registration: " + nameUpper);
@@ -104,28 +71,37 @@ final class CommandRegistry implements CommandModule.Registration {
 
         byte[] ascii = asciiUpperBytes(nameUpper);
         long hash = hashUpperAscii(ascii, 0, ascii.length);
-        CommandDescriptor effectiveDescriptor = descriptor == null
-                ? CommandDescriptor.defaultForNameUpper(nameUpper)
-                : descriptor;
-        insert(new Entry(ascii, hash, handler, effectiveDescriptor, disallowedInMultiError));
+        CommandDescriptor effectiveDescriptor = spec.descriptor() == null
+                ? defaultDescriptorForNameUpper(nameUpper)
+                : spec.descriptor();
+        insert(new Entry(
+                ascii,
+                hash,
+                new CommandSpec(spec.handler(), effectiveDescriptor, disallowedInMultiError)
+        ));
     }
 
     CommandModule.Handler find(Command cmd) {
-        Entry entry = findEntry(cmd);
-        return entry == null ? null : entry.handler;
+        CommandSpec spec = spec(cmd);
+        return spec == null ? null : spec.handler();
     }
 
     String disallowedInMultiError(Command cmd) {
-        Entry entry = findEntry(cmd);
-        return entry == null ? null : entry.disallowedInMultiError;
+        CommandSpec spec = spec(cmd);
+        return spec == null ? null : spec.disallowedInMultiError();
     }
 
     CommandDescriptor descriptor(Command cmd) {
-        Entry entry = findEntry(cmd);
-        return entry == null ? null : entry.descriptor;
+        CommandSpec spec = spec(cmd);
+        return spec == null ? null : spec.descriptor();
     }
 
-    CommandDescriptor descriptorByUpperName(String nameUpper) {
+    CommandSpec spec(Command cmd) {
+        Entry entry = findEntry(cmd);
+        return entry == null ? null : entry.spec;
+    }
+
+    CommandSpec specByUpperName(String nameUpper) {
         if (nameUpper == null || nameUpper.isBlank()) {
             return null;
         }
@@ -140,7 +116,7 @@ final class CommandRegistry implements CommandModule.Registration {
             return null;
         }
         Entry entry = findEntry(ascii);
-        return entry == null ? null : entry.descriptor;
+        return entry == null ? null : entry.spec;
     }
 
     private Entry findEntry(Command cmd) {
@@ -249,6 +225,64 @@ final class CommandRegistry implements CommandModule.Registration {
         int v = Math.max(MIN_TABLE_SIZE, x);
         int highest = Integer.highestOneBit(v);
         return v == highest ? v : highest << 1;
+    }
+
+    private static CommandDescriptor defaultDescriptorForNameUpper(String nameUpper) {
+        return CommandDescriptor.of(
+                defaultArity(nameUpper),
+                defaultFirstKeyIndex(nameUpper),
+                defaultLastKeyIndex(nameUpper),
+                defaultKeyStep(nameUpper)
+        );
+    }
+
+    private static int defaultArity(String nameUpper) {
+        if (nameUpper == null) {
+            return -1;
+        }
+        return switch (nameUpper) {
+            case "PING", "COMMAND" -> -1;
+            case "ECHO", "SELECT" -> 2;
+            case "QUIT", "FLUSHDB" -> 1;
+            case "TYPE", "KEYS", "TTL", "GET", "STRLEN", "INCR", "DECR", "SMEMBERS", "SCARD", "HGETALL", "HLEN" -> 2;
+            case "EXPIRE", "APPEND", "HGET", "SISMEMBER", "GETBIT" -> 3;
+            case "SETBIT", "LRANGE", "ZREMRANGEBYRANK", "ZREMRANGEBYSCORE" -> 4;
+            case "DEL", "EXISTS", "MEMORY", "OBJECT", "BITCOUNT", "LPOP", "RPOP", "PFCOUNT" -> -2;
+            case "SET", "LPUSH", "RPUSH", "SADD", "SREM", "HDEL", "ZREM", "PFADD", "PFMERGE" -> -3;
+            case "HSET", "ZADD", "ZRANGE", "ZREVRANGE", "ZRANGEBYSCORE", "ZREVRANGEBYSCORE" -> -4;
+            default -> -1;
+        };
+    }
+
+    private static int defaultFirstKeyIndex(String nameUpper) {
+        if (nameUpper == null) {
+            return 0;
+        }
+        return switch (nameUpper) {
+            case "PING", "ECHO", "COMMAND", "QUIT", "FLUSHDB", "SELECT", "KEYS", "MEMORY", "OBJECT" -> 0;
+            default -> 1;
+        };
+    }
+
+    private static int defaultLastKeyIndex(String nameUpper) {
+        if (nameUpper == null) {
+            return 0;
+        }
+        return switch (nameUpper) {
+            case "DEL", "EXISTS", "PFCOUNT", "PFMERGE" -> -1;
+            case "PING", "ECHO", "COMMAND", "SELECT", "QUIT", "FLUSHDB", "KEYS", "MEMORY", "OBJECT" -> 0;
+            default -> 1;
+        };
+    }
+
+    private static int defaultKeyStep(String nameUpper) {
+        if (nameUpper == null) {
+            return 0;
+        }
+        return switch (nameUpper) {
+            case "PING", "ECHO", "COMMAND", "QUIT", "FLUSHDB", "SELECT", "KEYS", "MEMORY", "OBJECT" -> 0;
+            default -> 1;
+        };
     }
 
     private static byte[] asciiUpperBytes(String nameUpper) {

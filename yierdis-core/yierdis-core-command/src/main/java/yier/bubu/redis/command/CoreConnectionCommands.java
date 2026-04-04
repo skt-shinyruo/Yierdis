@@ -124,7 +124,12 @@ final class CoreConnectionCommands {
             String[] names = registry.upperNamesSorted();
             out.arrayHeader(names.length);
             for (String upper : names) {
-                writeCommandInfo(out, upper, registry.descriptorByUpperName(upper));
+                CommandSpec spec = registry.specByUpperName(upper);
+                if (spec == null) {
+                    out.nullArray();
+                    continue;
+                }
+                writeCommandInfo(out, upper, spec.descriptor());
             }
             return;
         }
@@ -152,12 +157,12 @@ final class CoreConnectionCommands {
                     continue;
                 }
                 upper = upper.trim().toUpperCase(Locale.ROOT);
-                CommandDescriptor descriptor = registry.descriptorByUpperName(upper);
-                if (descriptor == null) {
+                CommandSpec spec = registry.specByUpperName(upper);
+                if (spec == null) {
                     out.nullArray();
                     continue;
                 }
-                writeCommandInfo(out, upper, descriptor);
+                writeCommandInfo(out, upper, spec.descriptor());
             }
             return;
         }
@@ -166,15 +171,14 @@ final class CoreConnectionCommands {
     }
 
     private static void writeCommandInfo(ReplyWriter out, String nameUpper, CommandDescriptor descriptor) {
-        CommandDescriptor effective = descriptor == null
-                ? CommandDescriptor.defaultForNameUpper(nameUpper)
-                : descriptor;
+        Objects.requireNonNull(nameUpper, "nameUpper");
+        Objects.requireNonNull(descriptor, "descriptor");
         out.arrayHeader(6);
         out.bulkString(nameUpper.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII));
-        out.integer(effective.arity());
+        out.integer(descriptor.arity());
         out.arrayHeader(0);
-        out.integer(effective.firstKeyIndex());
-        out.integer(effective.lastKeyIndex());
-        out.integer(effective.keyStep());
+        out.integer(descriptor.firstKeyIndex());
+        out.integer(descriptor.lastKeyIndex());
+        out.integer(descriptor.keyStep());
     }
 }

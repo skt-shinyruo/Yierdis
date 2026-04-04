@@ -14,14 +14,18 @@ public interface CommandModule {
     void register(Registration registration);
 
     interface Registration {
-        void register(String name, Handler handler);
+        void register(String name, CommandSpec spec);
+
+        default void register(String name, Handler handler) {
+            register(name, new CommandSpec(handler, null, null));
+        }
 
         default void register(String name, Handler handler, CommandDescriptor descriptor) {
-            register(name, handler);
+            register(name, new CommandSpec(handler, descriptor, null));
         }
 
         default void registerDisallowedInMulti(String name, Handler handler, String errorMessage) {
-            register(name, handler);
+            register(name, new CommandSpec(handler, null, errorMessage));
         }
 
         default void registerDisallowedInMulti(
@@ -30,7 +34,7 @@ public interface CommandModule {
                 CommandDescriptor descriptor,
                 String errorMessage
         ) {
-            registerDisallowedInMulti(name, handler, errorMessage);
+            register(name, new CommandSpec(handler, descriptor, errorMessage));
         }
 
         int commandCount();

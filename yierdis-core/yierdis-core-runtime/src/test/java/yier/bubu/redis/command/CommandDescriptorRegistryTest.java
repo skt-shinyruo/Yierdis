@@ -8,12 +8,54 @@ import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyObject;
 
+import java.lang.reflect.Method;
 import java.util.Arrays;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class CommandDescriptorRegistryTest {
+    @Test
+    public void registryExposesDescriptorAndMultiPolicyThroughUnifiedSpec() throws Exception {
+        CommandRegistry registry = new CommandRegistry();
+        registry.registerDisallowedInMulti(
+                "HELLO",
+                (cmd, ctx) -> ctx.out().simpleString("OK"),
+                CommandDescriptor.of(-1, 0, 0, 0),
+                "ERR HELLO is not allowed in MULTI"
+        );
+
+        Method specByUpperName;
+        try {
+            specByUpperName = CommandRegistry.class.getDeclaredMethod("specByUpperName", String.class);
+        } catch (NoSuchMethodException e) {
+            Assert.fail("CommandRegistry should expose specByUpperName(String)");
+            return;
+        }
+        specByUpperName.setAccessible(true);
+
+        Object spec = specByUpperName.invoke(registry, "HELLO");
+        Assert.assertNotNull(spec);
+
+        Method descriptorMethod;
+        Method disallowedInMultiMethod;
+        try {
+            descriptorMethod = spec.getClass().getDeclaredMethod("descriptor");
+            disallowedInMultiMethod = spec.getClass().getDeclaredMethod("disallowedInMultiError");
+        } catch (NoSuchMethodException e) {
+            Assert.fail("Command spec should expose descriptor() and disallowedInMultiError()");
+            return;
+        }
+
+        CommandDescriptor descriptor = (CommandDescriptor) descriptorMethod.invoke(spec);
+        Assert.assertNotNull(descriptor);
+        Assert.assertEquals(-1, descriptor.arity());
+        Assert.assertEquals(0, descriptor.firstKeyIndex());
+        Assert.assertEquals(0, descriptor.lastKeyIndex());
+        Assert.assertEquals(0, descriptor.keyStep());
+        Assert.assertEquals("ERR HELLO is not allowed in MULTI", disallowedInMultiMethod.invoke(spec));
+    }
+
     @Test
     public void commandInfoUsesDescriptorFromRegistryRegistration() {
         forEachDb(db -> {

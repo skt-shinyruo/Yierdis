@@ -129,7 +129,8 @@ public final class YierdisFastCommandProcessor {
             boolean isExec = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "EXEC");
             boolean isDiscard = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "DISCARD");
             if (!isMulti && !isExec && !isDiscard) {
-                String disallowedInMultiError = registry.disallowedInMultiError(cmd);
+                CommandSpec spec = registry.spec(cmd);
+                String disallowedInMultiError = spec == null ? null : spec.disallowedInMultiError();
                 if (disallowedInMultiError != null) {
                     tx.markAborted();
                     out.error(disallowedInMultiError);
@@ -146,11 +147,12 @@ public final class YierdisFastCommandProcessor {
         }
 
         try {
-            CommandModule.Handler handler = registry.find(cmd);
-            if (handler == null) {
+            CommandSpec spec = registry.spec(cmd);
+            if (spec == null) {
                 out.error(unknownCommandMessage(cmd));
                 return;
             }
+            CommandModule.Handler handler = spec.handler();
             boolean sinkEnabled = changeSink != YierdisChangeSink.NOOP;
             boolean changed = false;
             if (sinkEnabled) {
@@ -253,28 +255,8 @@ public final class YierdisFastCommandProcessor {
         }
         CommandModule.Registration registrar = new CommandModule.Registration() {
             @Override
-            public void register(String name, CommandModule.Handler handler) {
-                registry.register(name, handler);
-            }
-
-            @Override
-            public void register(String name, CommandModule.Handler handler, CommandDescriptor descriptor) {
-                registry.register(name, handler, descriptor);
-            }
-
-            @Override
-            public void registerDisallowedInMulti(String name, CommandModule.Handler handler, String errorMessage) {
-                registry.registerDisallowedInMulti(name, handler, errorMessage);
-            }
-
-            @Override
-            public void registerDisallowedInMulti(
-                    String name,
-                    CommandModule.Handler handler,
-                    CommandDescriptor descriptor,
-                    String errorMessage
-            ) {
-                registry.registerDisallowedInMulti(name, handler, descriptor, errorMessage);
+            public void register(String name, CommandSpec spec) {
+                registry.register(name, spec);
             }
 
             @Override

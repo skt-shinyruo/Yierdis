@@ -49,6 +49,19 @@ public class CoreCommandBoundaryGuardTest {
         }
     }
 
+    @Test
+    public void commandDescriptorMustNotRetainFallbackMetadataTables() throws IOException {
+        Path moduleRoot = resolveModuleRoot();
+        Assert.assertNotNull("无法定位 yierdis-core-command 模块根目录（未找到 src/main/java）", moduleRoot);
+
+        Path descriptorFile = moduleRoot.resolve("src/main/java/yier/bubu/redis/command/CommandDescriptor.java");
+        Assert.assertTrue("缺少 CommandDescriptor.java", Files.isRegularFile(descriptorFile));
+
+        String source = Files.readString(descriptorFile, StandardCharsets.UTF_8);
+        Assert.assertFalse("CommandDescriptor 不应继续承担 fallback metadata table", source.contains("defaultForNameUpper("));
+        Assert.assertFalse("CommandDescriptor 不应继续内联 switch metadata table", source.contains("switch (nameUpper)"));
+    }
+
     private static int scanForForbiddenImports(Path srcRoot, List<String> offenders) throws IOException {
         if (srcRoot == null || !Files.isDirectory(srcRoot)) {
             return 0;
