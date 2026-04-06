@@ -1,7 +1,7 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ExecutionRequest;
 
 /**
  * Extension point for registering additional commands into a processor.
@@ -50,6 +50,6 @@ public interface CommandModule {
 
     @FunctionalInterface
     interface Handler {
-        void execute(Command cmd, CommandContext ctx);
+        void execute(ExecutionRequest request, CommandContext ctx);
     }
 }

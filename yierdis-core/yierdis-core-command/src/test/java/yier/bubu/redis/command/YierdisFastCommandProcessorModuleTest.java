@@ -38,7 +38,14 @@ public class YierdisFastCommandProcessorModuleTest {
                 new NoopDbEngine(),
                 null,
                 SlowCommandGovernor.DEFAULT,
-                registrar -> registrar.register("LOCAL", (cmd, ctx) -> ctx.out().simpleString("LOCAL_OK"), CommandDescriptor.of(1, 0, 0, 0))
+                registrar -> registrar.register(
+                        "LOCAL",
+                        (request, ctx) -> {
+                            Assert.assertFalse(request instanceof Command);
+                            ctx.out().simpleString(CommandSupport.utf8(request, 0));
+                        },
+                        CommandDescriptor.of(1, 0, 0, 0)
+                )
         );
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of());
         Assert.assertFalse(request instanceof Command);
@@ -46,7 +53,7 @@ public class YierdisFastCommandProcessorModuleTest {
         CapturingReplyWriter out = new CapturingReplyWriter();
         processor.execute(request, new CommandContext(null, out));
 
-        Assert.assertEquals("LOCAL_OK", out.simpleStringValue);
+        Assert.assertEquals("LOCAL", out.simpleStringValue);
         Assert.assertNull(out.errorValue);
     }
 

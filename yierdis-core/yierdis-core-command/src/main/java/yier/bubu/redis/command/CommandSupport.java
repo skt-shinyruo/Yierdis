@@ -9,8 +9,8 @@ import yier.bubu.redis.ops.DbReads;
 import yier.bubu.redis.ops.DbWrites;
 import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.DbIndexProvider;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 
 import java.nio.charset.StandardCharsets;
@@ -76,19 +76,19 @@ final class CommandSupport {
         return slowGovernor;
     }
 
-    BytesView argView(Command cmd, int argIndex) {
-        return argView.reset(cmd, argIndex);
+    BytesView argView(ExecutionRequest request, int argIndex) {
+        return argView.reset(request, argIndex);
     }
 
-    BytesSlice argSlice(Command cmd, int argIndex) {
-        return argSlice.reset(cmd, argIndex);
+    BytesSlice argSlice(ExecutionRequest request, int argIndex) {
+        return argSlice.reset(request, argIndex);
     }
 
     java.util.List<byte[]> slice() {
         return slice;
     }
 
-    void sliceResetFromCommand(Command cmd, int argStart, int len) {
+    void sliceResetFromRequest(ExecutionRequest request, int argStart, int len) {
         if (len < 0) {
             throw new IllegalArgumentException("len must be non-negative");
         }
@@ -98,7 +98,7 @@ final class CommandSupport {
         }
         ensureScratchCapacity(len);
         for (int i = 0; i < len; i++) {
-            argvScratch[i] = cmd.toByteArray(argStart + i);
+            argvScratch[i] = request.toByteArray(argStart + i);
         }
         slice.reset(argvScratch, 0, len);
     }
@@ -142,27 +142,27 @@ final class CommandSupport {
         out.error("ERR wrong number of arguments for '" + cmdLower + "' command");
     }
 
-    static String utf8(Command cmd, int argIndex) {
-        return utf8(cmd.toByteArray(argIndex));
+    static String utf8(ExecutionRequest request, int argIndex) {
+        return utf8(request.toByteArray(argIndex));
     }
 
     static String utf8(byte[] s) {
         return s == null ? null : new String(s, StandardCharsets.UTF_8);
     }
 
-    static boolean asciiEqualsIgnoreCase(Command cmd, int argIndex, String literal) {
+    static boolean asciiEqualsIgnoreCase(ExecutionRequest request, int argIndex, String literal) {
         if (literal == null) {
             return false;
         }
-        if (cmd.isNull(argIndex)) {
+        if (request.isNull(argIndex)) {
             return false;
         }
-        int len = cmd.len(argIndex);
+        int len = request.len(argIndex);
         if (len != literal.length()) {
             return false;
         }
         for (int i = 0; i < len; i++) {
-            int b = cmd.byteAt(argIndex, i) & 0xFF;
+            int b = request.byteAt(argIndex, i) & 0xFF;
             int c = literal.charAt(i);
             if (b >= 'A' && b <= 'Z') {
                 b |= 0x20;
@@ -227,20 +227,20 @@ final class CommandSupport {
         return true;
     }
 
-    static long parseLong(Command cmd, int argIndex, String label) {
-        return parseLong(cmd.toByteArray(argIndex), label);
+    static long parseLong(ExecutionRequest request, int argIndex, String label) {
+        return parseLong(request.toByteArray(argIndex), label);
     }
 
-    static long parseNonNegativeLong(Command cmd, int argIndex, String label) {
-        long v = parseLong(cmd, argIndex, label);
+    static long parseNonNegativeLong(ExecutionRequest request, int argIndex, String label) {
+        long v = parseLong(request, argIndex, label);
         if (v < 0) {
             throw new IllegalArgumentException("value is not an integer or out of range");
         }
         return v;
     }
 
-    static int parseIntClamped(Command cmd, int argIndex, String label) {
-        long v = parseLong(cmd, argIndex, label);
+    static int parseIntClamped(ExecutionRequest request, int argIndex, String label) {
+        long v = parseLong(request, argIndex, label);
         if (v > Integer.MAX_VALUE) {
             return Integer.MAX_VALUE;
         }
@@ -385,23 +385,23 @@ final class CommandSupport {
     }
 
     private static final class CommandArgBytesView implements BytesView {
-        private Command cmd;
+        private ExecutionRequest request;
         private int argIndex;
 
-        CommandArgBytesView reset(Command cmd, int argIndex) {
-            this.cmd = cmd;
+        CommandArgBytesView reset(ExecutionRequest request, int argIndex) {
+            this.request = request;
             this.argIndex = argIndex;
             return this;
         }
 
         @Override
         public int length() {
-            return cmd.len(argIndex);
+            return request.len(argIndex);
         }
 
         @Override
         public byte getByte(int index) {
-            return cmd.byteAt(argIndex, index);
+            return request.byteAt(argIndex, index);
         }
     }
 
@@ -410,25 +410,30 @@ final class CommandSupport {
         private static final ThreadLocal<byte[]> TL_WRITE_BUF =
                 ThreadLocal.withInitial(() -> new byte[WRITE_CHUNK_BYTES]);
 
-        private Command cmd;
+        private ExecutionRequest request;
         private int argIndex;
         private BytesSource frame;
         private int frameOffset;
 
-        CommandArgBytesSlice reset(Command cmd, int argIndex) {
-            this.cmd = cmd;
+        CommandArgBytesSlice reset(ExecutionRequest request, int argIndex) {
+            this.request = request;
             this.argIndex = argIndex;
-            this.frame = cmd == null ? null : cmd.frame();
-            this.frameOffset = frame == null ? -1 : cmd.argOffset(argIndex);
+            if (request instanceof yier.bubu.redis.contract.Command cmd) {
+                this.frame = cmd.frame();
+                this.frameOffset = frame == null ? -1 : cmd.argOffset(argIndex);
+            } else {
+                this.frame = null;
+                this.frameOffset = -1;
+            }
             return this;
         }
 
         @Override
         public int length() {
-            if (cmd == null) {
+            if (request == null) {
                 return 0;
             }
-            int len = cmd.len(argIndex);
+            int len = request.len(argIndex);
             return Math.max(0, len);
         }
 
@@ -441,7 +446,7 @@ final class CommandSupport {
             if (frame != null && frameOffset >= 0) {
                 return frame.getByte(frameOffset + index);
             }
-            return cmd.byteAt(argIndex, index);
+            return request.byteAt(argIndex, index);
         }
 
         @Override
@@ -468,13 +473,12 @@ final class CommandSupport {
                 return;
             }
 
-            // Heap-only fallback: use command APIs (copy whole arg when possible).
             if (index == 0 && len == l) {
-                cmd.copyToByteArray(argIndex, dst, dstOff);
+                request.copyToByteArray(argIndex, dst, dstOff);
                 return;
             }
             for (int i = 0; i < len; i++) {
-                dst[dstOff + i] = cmd.byteAt(argIndex, index + i);
+                dst[dstOff + i] = request.byteAt(argIndex, index + i);
             }
         }
 

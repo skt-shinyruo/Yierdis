@@ -3,8 +3,8 @@ package yier.bubu.redis;
 import yier.bubu.redis.command.CommandModule;
 import yier.bubu.redis.command.CommandDescriptor;
 import yier.bubu.redis.command.ServerInfoProvider;
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
 
@@ -41,22 +41,22 @@ final class ServerCommandModule implements CommandModule {
         registration.register("STATS", this::stats, CommandDescriptor.of(1, 0, 0, 0));
     }
 
-    private void info(Command cmd, CommandContext ctx) {
+    private void info(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 1 && cmd.argc() != 2) {
+        if (request.argc() != 1 && request.argc() != 2) {
             out.error("ERR wrong number of arguments for 'info' command");
             return;
         }
-        infoProvider.info(cmd, ctx);
+        infoProvider.info(request, ctx);
     }
 
-    private void stats(Command cmd, CommandContext ctx) {
-        infoProvider.stats(cmd, ctx);
+    private void stats(ExecutionRequest request, CommandContext ctx) {
+        infoProvider.stats(request, ctx);
     }
 
-    private void hello(Command cmd, CommandContext ctx) {
+    private void hello(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 1 && cmd.argc() != 2) {
+        if (request.argc() != 1 && request.argc() != 2) {
             out.error("ERR wrong number of arguments for 'hello' command");
             return;
         }

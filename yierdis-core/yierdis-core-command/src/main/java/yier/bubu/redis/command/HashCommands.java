@@ -1,8 +1,8 @@
 package yier.bubu.redis.command;
 
 import yier.bubu.redis.ops.result.BulkStringMapPairs;
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 
 import java.util.Objects;
@@ -24,39 +24,39 @@ final class HashCommands implements CommandModule {
         registration.register("HDEL", this::hdel, CommandDescriptor.of(-3, 1, 1, 1));
     }
 
-    private void hset(Command cmd, CommandContext ctx) {
+    private void hset(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() < 4) {
+        if (request.argc() < 4) {
             CommandSupport.wrongArity(out, "hset");
             return;
         }
-        int pairsLen = cmd.argc() - 2;
-        support.sliceResetFromCommand(cmd, 2, pairsLen);
+        int pairsLen = request.argc() - 2;
+        support.sliceResetFromRequest(request, 2, pairsLen);
         try {
-            long added = support.dbWrites(ctx).hashes().hset(cmd.toByteArray(1), support.slice());
+            long added = support.dbWrites(ctx).hashes().hset(request.toByteArray(1), support.slice());
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
         }
     }
 
-    private void hget(Command cmd, CommandContext ctx) {
+    private void hget(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 3) {
+        if (request.argc() != 3) {
             CommandSupport.wrongArity(out, "hget");
             return;
         }
-        out.bulkString(support.dbReads(ctx).hashes().hget(cmd.toByteArray(1), cmd.toByteArray(2)));
+        out.bulkString(support.dbReads(ctx).hashes().hget(request.toByteArray(1), request.toByteArray(2)));
     }
 
-    private void hgetall(Command cmd, CommandContext ctx) {
+    private void hgetall(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 2) {
+        if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "hgetall");
             return;
         }
 
-        byte[] key = cmd.toByteArray(1);
+        byte[] key = request.toByteArray(1);
         BulkStringMapPairs pairsResult = support.dbReads(ctx).hashes().hgetall(key);
         int pairs = pairsResult.pairCount();
         out.mapHeader(pairs);
@@ -66,25 +66,25 @@ final class HashCommands implements CommandModule {
         pairsResult.emitPairsTo(new BulkStringReplyAdapter(out));
     }
 
-    private void hlen(Command cmd, CommandContext ctx) {
+    private void hlen(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 2) {
+        if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "hlen");
             return;
         }
-        out.integer(support.dbReads(ctx).hashes().hlen(cmd.toByteArray(1)));
+        out.integer(support.dbReads(ctx).hashes().hlen(request.toByteArray(1)));
     }
 
-    private void hdel(Command cmd, CommandContext ctx) {
+    private void hdel(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() < 3) {
+        if (request.argc() < 3) {
             CommandSupport.wrongArity(out, "hdel");
             return;
         }
-        int fieldsLen = cmd.argc() - 2;
-        support.sliceResetFromCommand(cmd, 2, fieldsLen);
+        int fieldsLen = request.argc() - 2;
+        support.sliceResetFromRequest(request, 2, fieldsLen);
         try {
-            out.integer(support.dbWrites(ctx).hashes().hdel(cmd.toByteArray(1), support.slice()));
+            out.integer(support.dbWrites(ctx).hashes().hdel(request.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(fieldsLen);
         }

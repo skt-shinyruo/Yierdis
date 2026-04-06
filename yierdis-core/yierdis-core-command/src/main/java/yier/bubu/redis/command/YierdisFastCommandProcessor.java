@@ -98,28 +98,24 @@ public final class YierdisFastCommandProcessor {
 
     public void execute(ExecutionRequest request, CommandContext ctx) {
         Objects.requireNonNull(request, "request");
-        executeCommand(request instanceof Command command ? command : new ExecutionRequestCommandAdapter(request), ctx);
-    }
-
-    private void executeCommand(Command cmd, CommandContext ctx) {
         Objects.requireNonNull(ctx, "ctx");
         ReplyWriter out = ctx.out();
-        int argc = cmd.argc();
+        int argc = request.argc();
         if (argc <= 0) {
             out.error("ERR empty command");
             return;
         }
-        if (cmd.isNull(0) || cmd.len(0) == 0) {
+        if (request.isNull(0) || request.len(0) == 0) {
             out.error("ERR empty command");
             return;
         }
 
         // Reject null bulk strings early to avoid NPEs deeper in the DB and data structures.
         // We only allow a null bulk string for PING/ECHO's single message argument (argv[1]).
-        boolean allowNullMessage = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "PING")
-                || CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "ECHO");
+        boolean allowNullMessage = CommandSupport.asciiEqualsIgnoreCase(request, 0, "PING")
+                || CommandSupport.asciiEqualsIgnoreCase(request, 0, "ECHO");
         for (int i = 1; i < argc; i++) {
-            if (!cmd.isNull(i)) {
+            if (!request.isNull(i)) {
                 continue;
             }
             if (allowNullMessage && argc == 2 && i == 1) {
@@ -135,18 +131,18 @@ public final class YierdisFastCommandProcessor {
             tx = s.transaction();
         }
         if (tx != null && tx.active()) {
-            boolean isMulti = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "MULTI");
-            boolean isExec = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "EXEC");
-            boolean isDiscard = CommandSupport.asciiEqualsIgnoreCase(cmd, 0, "DISCARD");
+            boolean isMulti = CommandSupport.asciiEqualsIgnoreCase(request, 0, "MULTI");
+            boolean isExec = CommandSupport.asciiEqualsIgnoreCase(request, 0, "EXEC");
+            boolean isDiscard = CommandSupport.asciiEqualsIgnoreCase(request, 0, "DISCARD");
             if (!isMulti && !isExec && !isDiscard) {
-                CommandSpec spec = registry.spec(cmd);
+                CommandSpec spec = registry.spec(request);
                 String disallowedInMultiError = spec == null ? null : spec.disallowedInMultiError();
                 if (disallowedInMultiError != null) {
                     tx.markAborted();
                     out.error(disallowedInMultiError);
                     return;
                 }
-                String enqueueErr = tx.tryEnqueue(copyArgv(cmd));
+                String enqueueErr = tx.tryEnqueue(copyArgv(request));
                 if (enqueueErr != null) {
                     out.error(enqueueErr);
                     return;
@@ -157,9 +153,9 @@ public final class YierdisFastCommandProcessor {
         }
 
         try {
-            CommandSpec spec = registry.spec(cmd);
+            CommandSpec spec = registry.spec(request);
             if (spec == null) {
-                out.error(unknownCommandMessage(cmd));
+                out.error(unknownCommandMessage(request));
                 return;
             }
             CommandModule.Handler handler = spec.handler();
@@ -167,11 +163,11 @@ public final class YierdisFastCommandProcessor {
             boolean changed = false;
             if (sinkEnabled) {
                 try (YierdisChangeTracking.Scope ignored = YierdisChangeTracking.beginScope()) {
-                    handler.execute(cmd, ctx);
+                    handler.execute(request, ctx);
                     changed = YierdisChangeTracking.changedAny();
                 }
             } else {
-                handler.execute(cmd, ctx);
+                handler.execute(request, ctx);
             }
 
             // 变更事件：仅在命令执行成功后触发；仅当本次命令产生“真实变更”（Keyspace/Value/TTL 元数据）时 emit。
@@ -183,7 +179,7 @@ public final class YierdisFastCommandProcessor {
                     dbIndex = Math.max(0, provider.dbIndex());
                 }
                 try {
-                    changeSink.onChange(new YierdisChangeEvent(dbIndex, copyArgv(cmd)));
+                    changeSink.onChange(new YierdisChangeEvent(dbIndex, copyArgv(request)));
                 } catch (Throwable ignored) {
                     // best-effort: 事件消费失败不应影响主命令执行路径
                 }
@@ -199,63 +195,15 @@ public final class YierdisFastCommandProcessor {
         }
     }
 
-    private static final class ExecutionRequestCommandAdapter implements Command {
-        private final ExecutionRequest request;
-
-        private ExecutionRequestCommandAdapter(ExecutionRequest request) {
-            this.request = request;
-        }
-
-        @Override
-        public int argc() {
-            return request.argc();
-        }
-
-        @Override
-        public boolean isNull(int index) {
-            return request.isNull(index);
-        }
-
-        @Override
-        public int len(int index) {
-            return request.len(index);
-        }
-
-        @Override
-        public byte byteAt(int index, int offset) {
-            return request.byteAt(index, offset);
-        }
-
-        @Override
-        public void copyToByteArray(int index, byte[] dst, int dstOff) {
-            request.copyToByteArray(index, dst, dstOff);
-        }
-
-        @Override
-        public byte[] toByteArray(int index) {
-            return request.toByteArray(index);
-        }
-
-        @Override
-        public int retainedBytes() {
-            return request.retainedBytes();
-        }
-
-        @Override
-        public void close() {
-            request.close();
-        }
-    }
-
-    private static byte[][] copyArgv(Command cmd) {
-        int argc = cmd == null ? 0 : cmd.argc();
+    private static byte[][] copyArgv(ExecutionRequest request) {
+        int argc = request == null ? 0 : request.argc();
         byte[][] argv = new byte[argc][];
         for (int i = 0; i < argc; i++) {
-            if (cmd.isNull(i)) {
+            if (request.isNull(i)) {
                 argv[i] = null;
                 continue;
             }
-            int len = cmd.len(i);
+            int len = request.len(i);
             if (len < 0) {
                 // Defensive: treat negative length as a null bulk string.
                 argv[i] = null;
@@ -266,26 +214,26 @@ public final class YierdisFastCommandProcessor {
                 continue;
             }
             byte[] out = new byte[len];
-            cmd.copyToByteArray(i, out, 0);
+            request.copyToByteArray(i, out, 0);
             argv[i] = out;
         }
         return argv;
     }
 
-    private static String unknownCommandMessage(Command cmd) {
-        if (cmd == null || cmd.argc() <= 0 || cmd.isNull(0) || cmd.len(0) <= 0) {
+    private static String unknownCommandMessage(ExecutionRequest request) {
+        if (request == null || request.argc() <= 0 || request.isNull(0) || request.len(0) <= 0) {
             return "ERR unknown command";
         }
-        int len = cmd.len(0);
+        int len = request.len(0);
         int printable = 0;
         for (int i = 0; i < len; i++) {
-            int b = cmd.byteAt(0, i) & 0xFF;
+            int b = request.byteAt(0, i) & 0xFF;
             if (b >= 0x20 && b <= 0x7E && b != '\'' && b != '\\') {
                 printable++;
             }
         }
         if (printable == len && len <= 64) {
-            byte[] name = cmd.toByteArray(0);
+            byte[] name = request.toByteArray(0);
             String s = name == null ? "" : new String(name, java.nio.charset.StandardCharsets.US_ASCII);
             return "ERR unknown command '" + s + "'";
         }

@@ -85,6 +85,28 @@ public class CoreCommandBoundaryGuardTest {
         }
     }
 
+    @Test
+    public void coreCommandMustOnlyUseCommandImportInFastProcessorCompatibilityShim() throws IOException {
+        Path moduleRoot = resolveModuleRoot();
+        Assert.assertNotNull("无法定位 yierdis-core-command 模块根目录（未找到 src/main/java）", moduleRoot);
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                moduleRoot.resolve("src/main/java/yier/bubu/redis/command"),
+                offenders,
+                "import yier.bubu.redis.contract.Command;"
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
+
+        allowOnly(
+                offenders,
+                "src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java"
+        );
+        if (!offenders.isEmpty()) {
+            Assert.fail("core-command 只能在 YierdisFastCommandProcessor 保留 Command 兼容 import：\n" + String.join("\n", offenders));
+        }
+    }
+
     private static int scanForForbiddenImports(Path srcRoot, List<String> offenders) throws IOException {
         if (srcRoot == null || !Files.isDirectory(srcRoot)) {
             return 0;
@@ -155,6 +177,29 @@ public class CoreCommandBoundaryGuardTest {
                 }
             }
         }
+    }
+
+    private static void allowOnly(List<String> offenders, String... allowedSuffixes) {
+        if (offenders.isEmpty()) {
+            return;
+        }
+        offenders.removeIf(offender -> {
+            String path = offender;
+            int marker = offender.indexOf(" -> ");
+            if (marker >= 0) {
+                path = offender.substring(0, marker);
+            }
+            int lineSep = path.lastIndexOf(':');
+            if (lineSep > 1) {
+                path = path.substring(0, lineSep);
+            }
+            for (String suffix : allowedSuffixes) {
+                if (path.endsWith(suffix)) {
+                    return true;
+                }
+            }
+            return false;
+        });
     }
 
     private static Path resolveModuleRoot() {

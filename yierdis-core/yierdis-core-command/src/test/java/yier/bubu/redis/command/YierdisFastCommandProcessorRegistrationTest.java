@@ -6,6 +6,7 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.DbIndexProvider;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.runtime.api.YierdisChangeSink;
@@ -60,6 +61,43 @@ public class YierdisFastCommandProcessorRegistrationTest {
         Assert.assertEquals("TRACE-OK", executeSimpleString(processor, "TRACE"));
     }
 
+    @Test
+    public void handlerSignatureMustUseExecutionRequest() throws Exception {
+        Class<?> handlerType = loadRequiredType("yier.bubu.redis.command.CommandModule$Handler");
+        Method execute = handlerType.getMethod("execute", ExecutionRequest.class, CommandContext.class);
+
+        Assert.assertEquals(void.class, execute.getReturnType());
+    }
+
+    @Test
+    public void registryLookupAndHelpersMustAcceptExecutionRequest() throws Exception {
+        Method spec = CommandRegistry.class.getDeclaredMethod("spec", ExecutionRequest.class);
+        Assert.assertEquals(CommandSpec.class, spec.getReturnType());
+
+        Method find = CommandRegistry.class.getDeclaredMethod("find", ExecutionRequest.class);
+        Assert.assertEquals(CommandModule.Handler.class, find.getReturnType());
+
+        Method descriptor = CommandRegistry.class.getDeclaredMethod("descriptor", ExecutionRequest.class);
+        Assert.assertEquals(CommandDescriptor.class, descriptor.getReturnType());
+
+        Method disallowed = CommandRegistry.class.getDeclaredMethod("disallowedInMultiError", ExecutionRequest.class);
+        Assert.assertEquals(String.class, disallowed.getReturnType());
+
+        Method utf8 = CommandSupport.class.getDeclaredMethod("utf8", ExecutionRequest.class, int.class);
+        Assert.assertEquals(String.class, utf8.getReturnType());
+
+        Method asciiEqualsIgnoreCase = CommandSupport.class.getDeclaredMethod(
+                "asciiEqualsIgnoreCase",
+                ExecutionRequest.class,
+                int.class,
+                String.class
+        );
+        Assert.assertEquals(boolean.class, asciiEqualsIgnoreCase.getReturnType());
+
+        Method parseLong = CommandSupport.class.getDeclaredMethod("parseLong", ExecutionRequest.class, int.class, String.class);
+        Assert.assertEquals(long.class, parseLong.getReturnType());
+    }
+
     private static Class<?> loadRequiredType(String className) {
         try {
             return Class.forName(className);
@@ -104,13 +142,19 @@ public class YierdisFastCommandProcessorRegistrationTest {
                         Assert.assertEquals("execute", handlerMethod.getName());
                         Assert.assertNotNull(handlerArgs);
                         Assert.assertEquals(2, handlerArgs.length);
+                        Assert.assertTrue(handlerArgs[0] instanceof ExecutionRequest);
                         CommandContext ctx = (CommandContext) handlerArgs[1];
                         ctx.out().simpleString("TRACE-OK");
                         return null;
                     }
             );
-            Method register = registrationType.getMethod("register", String.class, handlerType);
-            register.invoke(registration, "TRACE", traceHandler);
+            Method register = registrationType.getMethod(
+                    "register",
+                    String.class,
+                    handlerType,
+                    CommandDescriptor.class
+            );
+            register.invoke(registration, "TRACE", traceHandler, CommandDescriptor.of(1, 0, 0, 0));
             return null;
         };
     }

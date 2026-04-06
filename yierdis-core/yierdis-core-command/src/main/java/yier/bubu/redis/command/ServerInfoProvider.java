@@ -1,8 +1,8 @@
 package yier.bubu.redis.command;
 
 import yier.bubu.redis.ops.YierdisMemoryStats;
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 
 /**
@@ -12,9 +12,9 @@ import yier.bubu.redis.contract.ReplyWriter;
  * 仍能获取 server/executor/connection 的统计摘要。
  */
 public interface ServerInfoProvider {
-    void info(Command cmd, CommandContext ctx);
+    void info(ExecutionRequest request, CommandContext ctx);
 
-    void stats(Command cmd, CommandContext ctx);
+    void stats(ExecutionRequest request, CommandContext ctx);
 
     /**
      * 供 MEMORY STATS 等命令复用的内存摘要（可选）。

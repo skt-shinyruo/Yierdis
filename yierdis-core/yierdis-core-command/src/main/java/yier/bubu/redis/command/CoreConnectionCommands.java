@@ -1,7 +1,7 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ServerSession;
 
@@ -32,37 +32,37 @@ final class CoreConnectionCommands {
         registry.register("FLUSHDB", this::flushdb, CommandDescriptor.of(-1, 0, 0, 0));
     }
 
-    private void ping(Command cmd, CommandContext ctx) {
+    private void ping(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() == 1) {
+        if (request.argc() == 1) {
             out.simpleString("PONG");
             return;
         }
-        if (cmd.argc() == 2) {
-            out.bulkString(cmd.toByteArray(1));
+        if (request.argc() == 2) {
+            out.bulkString(request.toByteArray(1));
             return;
         }
         CommandSupport.wrongArity(out, "ping");
     }
 
-    private void echo(Command cmd, CommandContext ctx) {
+    private void echo(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 2) {
+        if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "echo");
             return;
         }
-        out.bulkString(cmd.toByteArray(1));
+        out.bulkString(request.toByteArray(1));
     }
 
-    private void select(Command cmd, CommandContext ctx) {
+    private void select(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 2) {
+        if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "select");
             return;
         }
         long idx;
         try {
-            idx = CommandSupport.parseLong(cmd, 1, "index");
+            idx = CommandSupport.parseLong(request, 1, "index");
         } catch (IllegalArgumentException e) {
             out.error("ERR value is not an integer or out of range");
             return;
@@ -92,9 +92,9 @@ final class CoreConnectionCommands {
         out.simpleString("OK");
     }
 
-    private void quit(Command cmd, CommandContext ctx) {
+    private void quit(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 1) {
+        if (request.argc() != 1) {
             CommandSupport.wrongArity(out, "quit");
             return;
         }
@@ -102,15 +102,15 @@ final class CoreConnectionCommands {
         out.requestCloseAfterReply();
     }
 
-    private void flushdb(Command cmd, CommandContext ctx) {
+    private void flushdb(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 1 && cmd.argc() != 2) {
+        if (request.argc() != 1 && request.argc() != 2) {
             CommandSupport.wrongArity(out, "flushdb");
             return;
         }
-        if (cmd.argc() == 2) {
-            if (!CommandSupport.asciiEqualsIgnoreCase(cmd, 1, "SYNC")
-                    && !CommandSupport.asciiEqualsIgnoreCase(cmd, 1, "ASYNC")) {
+        if (request.argc() == 2) {
+            if (!CommandSupport.asciiEqualsIgnoreCase(request, 1, "SYNC")
+                    && !CommandSupport.asciiEqualsIgnoreCase(request, 1, "ASYNC")) {
                 out.error("ERR syntax error");
                 return;
             }
@@ -119,8 +119,8 @@ final class CoreConnectionCommands {
         out.simpleString("OK");
     }
 
-    private static void command(Command cmd, ReplyWriter out, CommandRegistry registry) {
-        if (cmd.argc() == 1) {
+    private static void command(ExecutionRequest request, ReplyWriter out, CommandRegistry registry) {
+        if (request.argc() == 1) {
             String[] names = registry.upperNamesSorted();
             out.arrayHeader(names.length);
             for (String upper : names) {
@@ -134,24 +134,24 @@ final class CoreConnectionCommands {
             return;
         }
 
-        if (cmd.argc() == 2 && CommandSupport.asciiEqualsIgnoreCase(cmd, 1, "COUNT")) {
+        if (request.argc() == 2 && CommandSupport.asciiEqualsIgnoreCase(request, 1, "COUNT")) {
             out.integer(registry.commandCount());
             return;
         }
 
-        if (cmd.argc() >= 2 && CommandSupport.asciiEqualsIgnoreCase(cmd, 1, "INFO")) {
-            if (cmd.argc() == 2) {
+        if (request.argc() >= 2 && CommandSupport.asciiEqualsIgnoreCase(request, 1, "INFO")) {
+            if (request.argc() == 2) {
                 CommandSupport.wrongArity(out, "command");
                 return;
             }
-            int n = cmd.argc() - 2;
+            int n = request.argc() - 2;
             out.arrayHeader(n);
-            for (int i = 2; i < cmd.argc(); i++) {
-                if (cmd.isNull(i) || cmd.len(i) <= 0) {
+            for (int i = 2; i < request.argc(); i++) {
+                if (request.isNull(i) || request.len(i) <= 0) {
                     out.nullArray();
                     continue;
                 }
-                String upper = CommandSupport.utf8(cmd, i);
+                String upper = CommandSupport.utf8(request, i);
                 if (upper == null || upper.isBlank()) {
                     out.nullArray();
                     continue;

@@ -4,8 +4,8 @@ package yier.bubu.redis;
 
 import yier.bubu.redis.command.ServerInfoProvider;
 import yier.bubu.redis.ops.YierdisMemoryStats;
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
@@ -89,7 +89,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     @Override
-    public void info(Command cmd, CommandContext ctx) {
+    public void info(ExecutionRequest request, CommandContext ctx) {
         Objects.requireNonNull(ctx, "ctx");
         ReplyWriter out = Objects.requireNonNull(ctx.out(), "out");
         NettyCommandExecutor ex = executor;
@@ -98,7 +98,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             return;
         }
 
-        String section = cmd != null && cmd.argc() == 2 ? asciiLower(cmd, 1) : null;
+        String section = request != null && request.argc() == 2 ? asciiLower(request, 1) : null;
         if ("yierdis".equals(section)) {
             writeYierdisStructuredInfo(out, ex);
             return;
@@ -108,7 +108,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     }
 
     @Override
-    public void stats(Command cmd, CommandContext ctx) {
+    public void stats(ExecutionRequest request, CommandContext ctx) {
         Objects.requireNonNull(ctx, "ctx");
         ReplyWriter out = Objects.requireNonNull(ctx.out(), "out");
         NettyCommandExecutor ex = executor;
@@ -346,11 +346,11 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         out.integer(value);
     }
 
-    private static String asciiLower(Command cmd, int argIndex) {
-        if (cmd == null || argIndex < 0 || argIndex >= cmd.argc() || cmd.isNull(argIndex) || cmd.len(argIndex) <= 0) {
+    private static String asciiLower(ExecutionRequest request, int argIndex) {
+        if (request == null || argIndex < 0 || argIndex >= request.argc() || request.isNull(argIndex) || request.len(argIndex) <= 0) {
             return null;
         }
-        byte[] raw = cmd.toByteArray(argIndex);
+        byte[] raw = request.toByteArray(argIndex);
         if (raw == null || raw.length == 0) {
             return null;
         }

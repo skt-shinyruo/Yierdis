@@ -1,7 +1,7 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
@@ -33,9 +33,9 @@ final class TransactionCommands implements CommandModule {
         registration.register("EXEC", this::exec, CommandDescriptor.of(1, 0, 0, 0));
     }
 
-    private void multi(Command cmd, CommandContext ctx) {
+    private void multi(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 1) {
+        if (request.argc() != 1) {
             CommandSupport.wrongArity(out, "multi");
             return;
         }
@@ -52,9 +52,9 @@ final class TransactionCommands implements CommandModule {
         out.simpleString("OK");
     }
 
-    private void discard(Command cmd, CommandContext ctx) {
+    private void discard(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 1) {
+        if (request.argc() != 1) {
             CommandSupport.wrongArity(out, "discard");
             return;
         }
@@ -67,9 +67,9 @@ final class TransactionCommands implements CommandModule {
         out.simpleString("OK");
     }
 
-    private void exec(Command cmd, CommandContext ctx) {
+    private void exec(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 1) {
+        if (request.argc() != 1) {
             CommandSupport.wrongArity(out, "exec");
             return;
         }
@@ -88,7 +88,7 @@ final class TransactionCommands implements CommandModule {
         out.arrayHeader(queued.size());
         for (int i = 0; i < queued.size(); i++) {
             byte[][] argv = queued.get(i);
-            try (Command q = new QueuedCommand(argv)) {
+            try (ExecutionRequest q = new QueuedExecutionRequest(argv)) {
                 processor.execute(q, ctx);
             }
         }
@@ -105,11 +105,11 @@ final class TransactionCommands implements CommandModule {
     /**
      * Transaction-queued command: wraps argv bytes with stable lifetime and command API.
      */
-    private static final class QueuedCommand implements Command {
+    private static final class QueuedExecutionRequest implements ExecutionRequest {
         private final byte[][] argv;
         private final int retainedBytes;
 
-        private QueuedCommand(byte[][] argv) {
+        private QueuedExecutionRequest(byte[][] argv) {
             this.argv = Objects.requireNonNull(argv, "argv");
             int total = 0;
             for (int i = 0; i < argv.length; i++) {

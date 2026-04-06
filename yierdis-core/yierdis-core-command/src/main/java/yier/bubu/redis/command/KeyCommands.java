@@ -3,8 +3,8 @@ package yier.bubu.redis.command;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.YierdisMemoryStats;
 import yier.bubu.redis.ops.ScanCursorV2;
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 
 import java.nio.charset.StandardCharsets;
@@ -60,13 +60,13 @@ final class KeyCommands implements CommandModule {
         registration.register("PTTL", this::pttl, CommandDescriptor.of(2, 1, 1, 1));
     }
 
-    private void type(Command cmd, CommandContext ctx) {
+    private void type(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 2) {
+        if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "type");
             return;
         }
-        ValueType t = support.dbReads(ctx).keyspace().typeOf(support.argView(cmd, 1));
+        ValueType t = support.dbReads(ctx).keyspace().typeOf(support.argView(request, 1));
         if (t == null) {
             out.simpleString("none");
             return;
@@ -74,19 +74,19 @@ final class KeyCommands implements CommandModule {
         out.simpleString(t.name().toLowerCase(Locale.ROOT));
     }
 
-    private void memory(Command cmd, CommandContext ctx) {
+    private void memory(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() < 2) {
+        if (request.argc() < 2) {
             CommandSupport.wrongArity(out, "memory");
             return;
         }
 
-        if (CommandSupport.asciiEqualsIgnoreCase(cmd, 1, "USAGE")) {
-            if (cmd.argc() != 3) {
+        if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "USAGE")) {
+            if (request.argc() != 3) {
                 CommandSupport.wrongArity(out, "memory");
                 return;
             }
-            long bytes = support.db(ctx).memory().memoryUsage(support.argView(cmd, 2));
+            long bytes = support.db(ctx).memory().memoryUsage(support.argView(request, 2));
             if (bytes < 0) {
                 out.bulkString((byte[]) null);
                 return;
@@ -95,8 +95,8 @@ final class KeyCommands implements CommandModule {
             return;
         }
 
-        if (CommandSupport.asciiEqualsIgnoreCase(cmd, 1, "STATS")) {
-            if (cmd.argc() != 2) {
+        if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "STATS")) {
+            if (request.argc() != 2) {
                 CommandSupport.wrongArity(out, "memory");
                 return;
             }
@@ -177,17 +177,17 @@ final class KeyCommands implements CommandModule {
         out.error("ERR syntax error");
     }
 
-    private void object(Command cmd, CommandContext ctx) {
+    private void object(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 3) {
+        if (request.argc() != 3) {
             CommandSupport.wrongArity(out, "object");
             return;
         }
-        if (!CommandSupport.asciiEqualsIgnoreCase(cmd, 1, "ENCODING")) {
+        if (!CommandSupport.asciiEqualsIgnoreCase(request, 1, "ENCODING")) {
             out.error("ERR syntax error");
             return;
         }
-        String enc = support.db(ctx).memory().objectEncoding(support.argView(cmd, 2));
+        String enc = support.db(ctx).memory().objectEncoding(support.argView(request, 2));
         if (enc == null) {
             out.bulkString((byte[]) null);
             return;
@@ -195,45 +195,45 @@ final class KeyCommands implements CommandModule {
         out.bulkString(enc.getBytes(StandardCharsets.US_ASCII));
     }
 
-    private void keys(Command cmd, CommandContext ctx) {
+    private void keys(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 2) {
+        if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "keys");
             return;
         }
         SlowCommandGovernor governor = support.slowGovernor();
         out.bulkStringArray(support.dbReads(ctx).keyspace().keys(
-                cmd.toByteArray(1),
+                request.toByteArray(1),
                 governor.keysMaxResults(ctx),
                 governor.keysTimeBudgetNanos(ctx)
         ));
     }
 
-    private void scan(Command cmd, CommandContext ctx) {
+    private void scan(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() < 2) {
+        if (request.argc() < 2) {
             CommandSupport.wrongArity(out, "scan");
             return;
         }
-        long cursor = CommandSupport.parseNonNegativeLong(cmd, 1, "cursor");
+        long cursor = CommandSupport.parseNonNegativeLong(request, 1, "cursor");
 
         byte[] match = null;
         int count = 10;
-        for (int i = 2; i < cmd.argc(); i++) {
-            if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "MATCH")) {
-                if (i + 1 >= cmd.argc()) {
+        for (int i = 2; i < request.argc(); i++) {
+            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "MATCH")) {
+                if (i + 1 >= request.argc()) {
                     out.error("ERR syntax error");
                     return;
                 }
-                match = cmd.toByteArray(++i);
+                match = request.toByteArray(++i);
                 continue;
             }
-            if (CommandSupport.asciiEqualsIgnoreCase(cmd, i, "COUNT")) {
-                if (i + 1 >= cmd.argc()) {
+            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "COUNT")) {
+                if (i + 1 >= request.argc()) {
                     out.error("ERR syntax error");
                     return;
                 }
-                long v = CommandSupport.parseNonNegativeLong(cmd, ++i, "count");
+                long v = CommandSupport.parseNonNegativeLong(request, ++i, "count");
                 if (v <= 0 || v > Integer.MAX_VALUE) {
                     throw new IllegalArgumentException("value is not an integer or out of range");
                 }
@@ -253,14 +253,14 @@ final class KeyCommands implements CommandModule {
         out.bulkStringArray(keys);
     }
 
-    private void del(Command cmd, CommandContext ctx) {
+    private void del(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() < 2) {
+        if (request.argc() < 2) {
             CommandSupport.wrongArity(out, "del");
             return;
         }
-        int len = cmd.argc() - 1;
-        support.sliceResetFromCommand(cmd, 1, len);
+        int len = request.argc() - 1;
+        support.sliceResetFromRequest(request, 1, len);
         try {
             out.integer(support.dbWrites(ctx).keyspace().del(support.slice()));
         } finally {
@@ -268,86 +268,86 @@ final class KeyCommands implements CommandModule {
         }
     }
 
-    private void exists(Command cmd, CommandContext ctx) {
+    private void exists(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() < 2) {
+        if (request.argc() < 2) {
             CommandSupport.wrongArity(out, "exists");
             return;
         }
 
         long count = 0;
-        for (int i = 1; i < cmd.argc(); i++) {
-            if (support.dbReads(ctx).keyspace().existsKey(support.argView(cmd, i))) {
+        for (int i = 1; i < request.argc(); i++) {
+            if (support.dbReads(ctx).keyspace().existsKey(support.argView(request, i))) {
                 count++;
             }
         }
         out.integer(count);
     }
 
-    private void expire(Command cmd, CommandContext ctx) {
+    private void expire(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 3) {
+        if (request.argc() != 3) {
             CommandSupport.wrongArity(out, "expire");
             return;
         }
-        long seconds = CommandSupport.parseLong(cmd, 2, "seconds");
-        out.integer(support.dbWrites(ctx).ttl().expire(support.argView(cmd, 1), seconds) ? 1 : 0);
+        long seconds = CommandSupport.parseLong(request, 2, "seconds");
+        out.integer(support.dbWrites(ctx).ttl().expire(support.argView(request, 1), seconds) ? 1 : 0);
     }
 
-    private void pexpire(Command cmd, CommandContext ctx) {
+    private void pexpire(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 3) {
+        if (request.argc() != 3) {
             CommandSupport.wrongArity(out, "pexpire");
             return;
         }
-        long millis = CommandSupport.parseLong(cmd, 2, "milliseconds");
-        out.integer(support.dbWrites(ctx).ttl().pexpire(support.argView(cmd, 1), millis) ? 1 : 0);
+        long millis = CommandSupport.parseLong(request, 2, "milliseconds");
+        out.integer(support.dbWrites(ctx).ttl().pexpire(support.argView(request, 1), millis) ? 1 : 0);
     }
 
-    private void expireat(Command cmd, CommandContext ctx) {
+    private void expireat(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 3) {
+        if (request.argc() != 3) {
             CommandSupport.wrongArity(out, "expireat");
             return;
         }
-        long seconds = CommandSupport.parseLong(cmd, 2, "seconds");
-        out.integer(support.dbWrites(ctx).ttl().expireAtSeconds(support.argView(cmd, 1), seconds) ? 1 : 0);
+        long seconds = CommandSupport.parseLong(request, 2, "seconds");
+        out.integer(support.dbWrites(ctx).ttl().expireAtSeconds(support.argView(request, 1), seconds) ? 1 : 0);
     }
 
-    private void pexpireat(Command cmd, CommandContext ctx) {
+    private void pexpireat(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 3) {
+        if (request.argc() != 3) {
             CommandSupport.wrongArity(out, "pexpireat");
             return;
         }
-        long millis = CommandSupport.parseLong(cmd, 2, "milliseconds");
-        out.integer(support.dbWrites(ctx).ttl().expireAtMillis(support.argView(cmd, 1), millis) ? 1 : 0);
+        long millis = CommandSupport.parseLong(request, 2, "milliseconds");
+        out.integer(support.dbWrites(ctx).ttl().expireAtMillis(support.argView(request, 1), millis) ? 1 : 0);
     }
 
-    private void persist(Command cmd, CommandContext ctx) {
+    private void persist(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 2) {
+        if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "persist");
             return;
         }
-        out.integer(support.dbWrites(ctx).ttl().persist(support.argView(cmd, 1)) ? 1 : 0);
+        out.integer(support.dbWrites(ctx).ttl().persist(support.argView(request, 1)) ? 1 : 0);
     }
 
-    private void ttl(Command cmd, CommandContext ctx) {
+    private void ttl(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 2) {
+        if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "ttl");
             return;
         }
-        out.integer(support.dbReads(ctx).ttl().ttlSeconds(support.argView(cmd, 1)));
+        out.integer(support.dbReads(ctx).ttl().ttlSeconds(support.argView(request, 1)));
     }
 
-    private void pttl(Command cmd, CommandContext ctx) {
+    private void pttl(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() != 2) {
+        if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "pttl");
             return;
         }
-        out.integer(support.dbReads(ctx).ttl().ttlMillis(support.argView(cmd, 1)));
+        out.integer(support.dbReads(ctx).ttl().ttlMillis(support.argView(request, 1)));
     }
 }

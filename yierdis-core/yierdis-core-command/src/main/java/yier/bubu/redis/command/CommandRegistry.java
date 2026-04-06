@@ -1,6 +1,6 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ExecutionRequest;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -13,7 +13,7 @@ import java.util.Set;
  * Command name to handler registry (SSOT) for the server command processor.
  * <p>
  * Runtime lookup is allocation-free: the registry builds an open-addressed hash table at registration time,
- * then matches commands directly against the request {@link Command} bytes (ASCII case-insensitive).
+ * then matches commands directly against the request {@link ExecutionRequest} bytes (ASCII case-insensitive).
  */
 final class CommandRegistry implements CommandModule.Registration {
     private static final int MIN_TABLE_SIZE = 16;
@@ -79,23 +79,23 @@ final class CommandRegistry implements CommandModule.Registration {
         ));
     }
 
-    CommandModule.Handler find(Command cmd) {
-        CommandSpec spec = spec(cmd);
+    CommandModule.Handler find(ExecutionRequest request) {
+        CommandSpec spec = spec(request);
         return spec == null ? null : spec.handler();
     }
 
-    String disallowedInMultiError(Command cmd) {
-        CommandSpec spec = spec(cmd);
+    String disallowedInMultiError(ExecutionRequest request) {
+        CommandSpec spec = spec(request);
         return spec == null ? null : spec.disallowedInMultiError();
     }
 
-    CommandDescriptor descriptor(Command cmd) {
-        CommandSpec spec = spec(cmd);
+    CommandDescriptor descriptor(ExecutionRequest request) {
+        CommandSpec spec = spec(request);
         return spec == null ? null : spec.descriptor();
     }
 
-    CommandSpec spec(Command cmd) {
-        Entry entry = findEntry(cmd);
+    CommandSpec spec(ExecutionRequest request) {
+        Entry entry = findEntry(request);
         return entry == null ? null : entry.spec;
     }
 
@@ -117,26 +117,26 @@ final class CommandRegistry implements CommandModule.Registration {
         return entry == null ? null : entry.spec;
     }
 
-    private Entry findEntry(Command cmd) {
-        if (cmd == null || cmd.argc() <= 0) {
+    private Entry findEntry(ExecutionRequest request) {
+        if (request == null || request.argc() <= 0) {
             return null;
         }
-        if (cmd.isNull(0)) {
+        if (request.isNull(0)) {
             return null;
         }
-        int len = cmd.len(0);
+        int len = request.len(0);
         if (len <= 0) {
             return null;
         }
 
-        long hash = hashUpperAscii(cmd, 0, len);
+        long hash = hashUpperAscii(request, 0, len);
         int idx = index(hash);
         for (; ; ) {
             Entry e = table[idx];
             if (e == null) {
                 return null;
             }
-            if (e.hash == hash && e.nameUpperAscii.length == len && asciiEqualsIgnoreCase(cmd, 0, e.nameUpperAscii)) {
+            if (e.hash == hash && e.nameUpperAscii.length == len && asciiEqualsIgnoreCase(request, 0, e.nameUpperAscii)) {
                 return e;
             }
             idx = (idx + 1) & mask;
@@ -235,12 +235,12 @@ final class CommandRegistry implements CommandModule.Registration {
         return bytes;
     }
 
-    private static boolean asciiEqualsIgnoreCase(Command cmd, int argIndex, byte[] upperAscii) {
-        if (cmd.len(argIndex) != upperAscii.length) {
+    private static boolean asciiEqualsIgnoreCase(ExecutionRequest request, int argIndex, byte[] upperAscii) {
+        if (request.len(argIndex) != upperAscii.length) {
             return false;
         }
         for (int i = 0; i < upperAscii.length; i++) {
-            int b = cmd.byteAt(argIndex, i) & 0xFF;
+            int b = request.byteAt(argIndex, i) & 0xFF;
             if (b >= 'a' && b <= 'z') {
                 b -= 32;
             }
@@ -251,10 +251,10 @@ final class CommandRegistry implements CommandModule.Registration {
         return true;
     }
 
-    private static long hashUpperAscii(Command cmd, int argIndex, int len) {
+    private static long hashUpperAscii(ExecutionRequest request, int argIndex, int len) {
         long h = FNV64_OFFSET_BASIS;
         for (int i = 0; i < len; i++) {
-            int b = cmd.byteAt(argIndex, i) & 0xFF;
+            int b = request.byteAt(argIndex, i) & 0xFF;
             if (b >= 'a' && b <= 'z') {
                 b -= 32;
             }

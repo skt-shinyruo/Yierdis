@@ -1,7 +1,7 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 
 import java.util.Objects;
@@ -21,29 +21,29 @@ final class HllCommands implements CommandModule {
         registration.register("PFMERGE", this::pfmerge, CommandDescriptor.of(-3, 1, -1, 1));
     }
 
-    private void pfadd(Command cmd, CommandContext ctx) {
+    private void pfadd(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() < 3) {
+        if (request.argc() < 3) {
             CommandSupport.wrongArity(out, "pfadd");
             return;
         }
-        int elementsLen = cmd.argc() - 2;
-        support.sliceResetFromCommand(cmd, 2, elementsLen);
+        int elementsLen = request.argc() - 2;
+        support.sliceResetFromRequest(request, 2, elementsLen);
         try {
-            out.integer(support.dbWrites(ctx).hll().pfadd(cmd.toByteArray(1), support.slice()));
+            out.integer(support.dbWrites(ctx).hll().pfadd(request.toByteArray(1), support.slice()));
         } finally {
             support.clearScratch(elementsLen);
         }
     }
 
-    private void pfcount(Command cmd, CommandContext ctx) {
+    private void pfcount(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() < 2) {
+        if (request.argc() < 2) {
             CommandSupport.wrongArity(out, "pfcount");
             return;
         }
-        int len = cmd.argc() - 1;
-        support.sliceResetFromCommand(cmd, 1, len);
+        int len = request.argc() - 1;
+        support.sliceResetFromRequest(request, 1, len);
         try {
             out.integer(support.dbReads(ctx).hll().pfcount(support.slice()));
         } finally {
@@ -51,16 +51,16 @@ final class HllCommands implements CommandModule {
         }
     }
 
-    private void pfmerge(Command cmd, CommandContext ctx) {
+    private void pfmerge(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (cmd.argc() < 3) {
+        if (request.argc() < 3) {
             CommandSupport.wrongArity(out, "pfmerge");
             return;
         }
-        int sourcesLen = cmd.argc() - 2;
-        support.sliceResetFromCommand(cmd, 2, sourcesLen);
+        int sourcesLen = request.argc() - 2;
+        support.sliceResetFromRequest(request, 2, sourcesLen);
         try {
-            support.dbWrites(ctx).hll().pfmerge(cmd.toByteArray(1), support.slice());
+            support.dbWrites(ctx).hll().pfmerge(request.toByteArray(1), support.slice());
         } finally {
             support.clearScratch(sourcesLen);
         }
