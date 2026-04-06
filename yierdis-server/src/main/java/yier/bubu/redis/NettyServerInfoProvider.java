@@ -4,11 +4,10 @@ package yier.bubu.redis;
 
 import yier.bubu.redis.command.ServerInfoProvider;
 import yier.bubu.redis.ops.YierdisMemoryStats;
-import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ReplyWriter;
-import yier.bubu.redis.contract.Session;
+import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
 import yier.bubu.redis.runtime.YierdisInstanceObservability;
@@ -75,7 +74,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private final long startedMillis;
     private volatile NettyCommandExecutor executor;
     private volatile YierdisInstanceObservability observability;
-    private volatile DbEngine[] engines;
 
     NettyServerInfoProvider(YierdisServerRuntimeConfig config) {
         this.config = Objects.requireNonNull(config, "config");
@@ -88,10 +86,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
     void bindObservability(YierdisInstanceObservability observability) {
         this.observability = Objects.requireNonNull(observability, "observability");
-    }
-
-    void bindEngines(DbEngine[] engines) {
-        this.engines = engines;
     }
 
     @Override
@@ -124,9 +118,9 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         NettyCommandExecutor.StatsSnapshot s = ex.statsSnapshot();
-        ServerRuntimeState rt = runtimeState(ctx);
+        ServerConnectionContext.ConnectionStatsSnapshot stats = connectionStats(ctx);
 
-        int pairs = 15 + (rt == null ? 0 : 11);
+        int pairs = 15 + (stats == null ? 0 : 11);
         writeHeader(out, pairs);
 
         writePair(out, KEY_QUEUED_TASKS, s.queuedTasks);
@@ -145,21 +139,21 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL, s.drainLimitedByMaxCommands);
         writePair(out, KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL, s.drainLimitedByTimeBudget);
 
-        if (rt == null) {
+        if (stats == null) {
             return;
         }
 
-        writePair(out, KEY_CONN_PENDING, rt.pendingCounter().get());
-        writePair(out, KEY_CONN_PENDING_BYTES, rt.pendingBytesCounter().get());
-        writePair(out, KEY_CONN_AUTOREAD_DISABLED, rt.autoReadDisabledByExecutor() ? 1 : 0);
-        writePair(out, KEY_CONN_CLOSING, rt.isClosing() ? 1 : 0);
-        writePair(out, KEY_CONN_COMMANDS_ENQUEUED, rt.commandsEnqueuedCounter().get());
-        writePair(out, KEY_CONN_COMMANDS_EXECUTED, rt.commandsExecutedCounter().get());
-        writePair(out, KEY_CONN_COMMANDS_REJECTED, rt.commandsRejectedCounter().get());
-        writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, rt.commandsSkippedClosingCounter().get());
-        writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, rt.closeAfterReplyCounter().get());
-        writePair(out, KEY_CONN_BACKPRESSURE_ENTER, rt.backpressureEnterCounter().get());
-        writePair(out, KEY_CONN_BACKPRESSURE_EXIT, rt.backpressureExitCounter().get());
+        writePair(out, KEY_CONN_PENDING, stats.pending());
+        writePair(out, KEY_CONN_PENDING_BYTES, stats.pendingBytes());
+        writePair(out, KEY_CONN_AUTOREAD_DISABLED, stats.autoReadDisabledByExecutor() ? 1 : 0);
+        writePair(out, KEY_CONN_CLOSING, stats.closing() ? 1 : 0);
+        writePair(out, KEY_CONN_COMMANDS_ENQUEUED, stats.commandsEnqueued());
+        writePair(out, KEY_CONN_COMMANDS_EXECUTED, stats.commandsExecuted());
+        writePair(out, KEY_CONN_COMMANDS_REJECTED, stats.commandsRejected());
+        writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, stats.commandsSkippedClosing());
+        writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, stats.closeAfterReply());
+        writePair(out, KEY_CONN_BACKPRESSURE_ENTER, stats.backpressureEnter());
+        writePair(out, KEY_CONN_BACKPRESSURE_EXIT, stats.backpressureExit());
     }
 
     @Override
@@ -270,32 +264,25 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
         if (keyspace) {
             sb.append("# Keyspace\r\n");
-            appendKeyspace(sb);
+            appendRuntimeKeyspaceSummary(sb);
             sb.append("\r\n");
         }
 
         return sb.toString();
     }
 
-    private void appendKeyspace(StringBuilder sb) {
-        DbEngine[] local = engines;
-        if (local == null || local.length == 0) {
+    private void appendRuntimeKeyspaceSummary(StringBuilder sb) {
+        YierdisInstanceObservability runtimeObservability = observability;
+        if (runtimeObservability == null) {
             return;
         }
-        for (int i = 0; i < local.length; i++) {
-            DbEngine db = local[i];
-            if (db == null) {
+        for (YierdisInstanceObservability.YierdisDbSummary summary : runtimeObservability.dbSummaries()) {
+            if (summary.keyCount() <= 0 && summary.expireCount() <= 0) {
                 continue;
             }
-            YierdisMemoryStats s = db.memory().memoryStats();
-            int keys = s.keyCount();
-            int expires = s.expireCount();
-            if (keys <= 0 && expires <= 0) {
-                continue;
-            }
-            sb.append("db").append(i)
-                    .append(":keys=").append(keys)
-                    .append(",expires=").append(expires)
+            sb.append("db").append(summary.dbIndex())
+                    .append(":keys=").append(summary.keyCount())
+                    .append(",expires=").append(summary.expireCount())
                     .append("\r\n");
         }
     }
@@ -329,13 +316,13 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         );
     }
 
-    private static ServerRuntimeState runtimeState(CommandContext ctx) {
+    private static ServerConnectionContext.ConnectionStatsSnapshot connectionStats(CommandContext ctx) {
         if (ctx == null) {
             return null;
         }
-        Session session = ctx.session();
-        if (session instanceof ServerSessionState s) {
-            return s.runtime();
+        ServerSession serverSession = ctx.serverSessionOrNull();
+        if (serverSession instanceof ServerSessionState s) {
+            return s.connectionStatsSnapshot();
         }
         return null;
     }

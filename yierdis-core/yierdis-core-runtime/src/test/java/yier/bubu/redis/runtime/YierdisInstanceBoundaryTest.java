@@ -5,6 +5,7 @@ import org.junit.Test;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.List;
 
 public class YierdisInstanceBoundaryTest {
     @Test
@@ -39,5 +40,12 @@ public class YierdisInstanceBoundaryTest {
         }
 
         Assert.assertEquals(observabilityType, observabilityMethod.getReturnType());
+    }
+
+    @Test
+    public void observabilityShouldExposeDbSummariesApi() throws Exception {
+        Class<?> observabilityType = Class.forName("yier.bubu.redis.runtime.YierdisInstanceObservability");
+        Method summariesMethod = observabilityType.getDeclaredMethod("dbSummaries");
+        Assert.assertEquals(List.class, summariesMethod.getReturnType());
     }
 }

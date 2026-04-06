@@ -1,5 +1,6 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.ops.SetReadOps;
 import yier.bubu.redis.ops.SetWriteOps;
 import yier.bubu.redis.ops.ValueType;
@@ -11,14 +12,17 @@ import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.IntSupplier;
+import java.util.function.ToLongBiFunction;
 
 final class YierdisSetOps implements SetReadOps, SetWriteOps {
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
-    YierdisSetOps(YierdisDbInternals internals) {
+    YierdisSetOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
+        this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
     @Override
@@ -51,7 +55,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                         added[0] = sv.addAll(members);
                         YierdisObject next = YierdisObject.newSet(sv);
                         keyLifecycle.touch(next);
-                        internals.refreshEstimatedBytes(k, next);
+                        refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
                     }
@@ -62,7 +66,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     old.refreshCompositeEncodingFromPayload();
                     keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
-                    internals.refreshEstimatedBytes(k, old);
+                    refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
@@ -109,7 +113,7 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     }
                     old.refreshCompositeEncodingFromPayload();
                     keyLifecycle.touch(old);
-                    internals.refreshEstimatedBytes(k, old);
+                    refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
                 });
@@ -187,6 +191,13 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
             return 0L;
         }
         return YierdisDb.sumByteLengths(members);
+    }
+
+    private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
+        if (object == null) {
+            return;
+        }
+        object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
     }
 
     private static BulkStringSequence sequenceOf(IntSupplier countSupplier, BulkEmitter emitter) {

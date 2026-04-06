@@ -14,7 +14,6 @@ import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.db.memory.MemoryLedger;
 import yier.bubu.redis.db.memory.MemoryLedgerOutOfMemoryException;
-import yier.bubu.redis.db.memory.MemoryReservation;
 import yier.bubu.redis.ops.DbLifecycleOps;
 import yier.bubu.redis.ops.DbReads;
 import yier.bubu.redis.ops.DbEngine;
@@ -24,9 +23,7 @@ import yier.bubu.redis.ops.ExpireOption;
 import yier.bubu.redis.ops.ExpirationManager;
 import yier.bubu.redis.ops.MaxmemoryCandidate;
 import yier.bubu.redis.ops.MaxmemoryCoordinator;
-import yier.bubu.redis.ops.MaxmemoryCoordinatorAware;
 import yier.bubu.redis.ops.MaxmemoryErrors;
-import yier.bubu.redis.ops.MaxmemoryParticipant;
 import yier.bubu.redis.ops.MemoryOps;
 import yier.bubu.redis.ops.RuntimeDbEngine;
 import yier.bubu.redis.ops.SetMode;
@@ -41,10 +38,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
-public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAware, MaxmemoryParticipant {
+public final class YierdisDb implements RuntimeDbEngine {
     public enum MaxmemoryPolicy {
         NOEVICTION,
         ALLKEYS_RANDOM,
@@ -52,8 +48,6 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
     }
 
     private static final long TTL_ENTRY_BYTES_ESTIMATE = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-    private static final long LIST_ELEMENT_OVERHEAD_BYTES_ESTIMATE = 32L;
-    private static final long HASH_PAIR_OVERHEAD_BYTES_ESTIMATE = 64L;
     private static final long SET_MEMBER_OVERHEAD_BYTES_ESTIMATE = 32L;
     private static final long ZSET_MEMBER_OVERHEAD_BYTES_ESTIMATE = 96L;
 
@@ -61,8 +55,7 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
     final YierdisExpireIndex expires;
     private final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
-    private final boolean ownsOffHeapAllocator;
-    private final boolean ownsMemoryRuntime;
+    private final YierdisDbOwnedResources resources;
     private final boolean keysStoredOffHeap;
 
     /**
@@ -78,13 +71,11 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
     private final long evictionTimeLimitNanos;
     private final long expireCleanupTimeLimitNanos;
 
-    long usedBytes;
-    long reservedBytes;
     private long lruClock;
 
     private final DbThreadGuard threadGuard = new DbThreadGuard();
     private volatile MaxmemoryCoordinator maxmemoryCoordinator;
-    private final MemoryLedger ledger;
+    private final YierdisDbMemoryLedger ledger;
     private final YierdisDbMutationExecutor mutationExecutor;
     private final YierdisDbExpirationSupport expirationSupport;
     private final YierdisDbMaxmemorySupport maxmemorySupport;
@@ -183,8 +174,12 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
 
         this.memoryRuntime = resolvedRuntime;
         this.offHeapAllocator = resolvedAllocator;
-        this.ownsOffHeapAllocator = resolvedOwnsAllocator;
-        this.ownsMemoryRuntime = resolvedOwnsRuntime;
+        this.resources = new YierdisDbOwnedResources(
+                this.memoryRuntime,
+                this.offHeapAllocator,
+                resolvedOwnsRuntime,
+                resolvedOwnsAllocator
+        );
         YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(this.memoryRuntime, "ffm-key");
         this.store = new YierdisFfmKeyspace<>(blobStore);
         this.expires = new YierdisFfmExpireIndex(blobStore);
@@ -208,8 +203,15 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
         this.lruEnabled = maxmemoryBytes > 0 && this.maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_LRU;
         this.evictionTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(evictionTimeLimitMillis);
         this.expireCleanupTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(expireCleanupTimeLimitMillis);
-        this.ledger = new DbMemoryLedger();
-        this.mutationExecutor = new YierdisDbMutationExecutor(this);
+        this.ledger = new YierdisDbMemoryLedger(
+                this.maxmemoryBytes,
+                this.maxmemoryPolicy,
+                this::cleanupExpired,
+                this::evictUntilUnder,
+                this::usedBytesForMaxmemory,
+                () -> maxmemoryCoordinator
+        );
+        this.mutationExecutor = new YierdisDbMutationExecutor(this::checkThread, this.ledger);
         this.expirationSupport = new YierdisDbExpirationSupport(this, this.keysStoredOffHeap, this.expireCleanupTimeLimitNanos);
         this.maxmemorySupport = new YierdisDbMaxmemorySupport(this, this.maxmemoryPolicy, this.maxmemorySamples, this.evictionTimeLimitNanos);
         this.keyLifecycle = new YierdisDbKeyLifecycle(
@@ -221,12 +223,12 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
                 this::adjustUsedBytes
         );
         this.internals = new DbInternals();
-        this.stringOps = new YierdisStringOps(internals);
-        this.hashOps = new YierdisHashOps(internals);
-        this.listOps = new YierdisListOps(internals);
-        this.setOps = new YierdisSetOps(internals);
-        this.zsetOps = new YierdisZSetOps(internals);
-        this.hllOps = new YierdisHllOps(internals);
+        this.stringOps = new YierdisStringOps(internals, this::estimateEntryBytes);
+        this.hashOps = new YierdisHashOps(internals, this::estimateEntryBytes);
+        this.listOps = new YierdisListOps(internals, this::estimateEntryBytes);
+        this.setOps = new YierdisSetOps(internals, this::estimateEntryBytes);
+        this.zsetOps = new YierdisZSetOps(internals, this::estimateEntryBytes);
+        this.hllOps = new YierdisHllOps(internals, this::estimateEntryBytes);
         this.ttlOps = new YierdisTtlOps(internals);
         this.keyspaceOps = new YierdisKeyspaceOps(internals);
         this.memoryReporter = new YierdisDbMemoryReporter(
@@ -236,8 +238,7 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
                 this.expires,
                 this.maxmemoryBytes,
                 this.keysStoredOffHeap,
-                () -> usedBytes,
-                () -> reservedBytes,
+                this.ledger,
                 () -> maxmemoryCoordinator == null
         );
         this.introspection = new YierdisDbIntrospection(this::checkThread, this.keyLifecycle);
@@ -320,19 +321,6 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
 
     void adjustUsedBytes(long deltaBytes) {
         ledger.commit(null, deltaBytes);
-    }
-
-    MemoryReservation reserveMutation(long estimatedUpperBoundBytes) {
-        checkThread();
-        return ledger.reserve(Math.max(0L, estimatedUpperBoundBytes));
-    }
-
-    void commitMutation(MemoryReservation reservation, long actualDeltaBytes) {
-        ledger.commit(reservation, actualDeltaBytes);
-    }
-
-    void rollbackMutation(MemoryReservation reservation) {
-        ledger.rollback(reservation);
     }
 
     public void enforceMaxmemory() {
@@ -432,33 +420,25 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
         threadGuard.checkThread();
     }
 
+    YierdisDbMemoryLedger memoryLedger() {
+        return ledger;
+    }
+
     public void shutdown() {
         threadGuard.checkThreadForShutdown();
         if (!threadGuard.tryMarkClosed()) {
             return;
         }
-        store.forEach((k, e) -> e.releasePayloadIfAny());
-        store.clear();
-        expires.clear();
-        usedBytes = 0;
-        reservedBytes = 0;
-        if (ownsOffHeapAllocator && offHeapAllocator != null) {
-            offHeapAllocator.close();
-        }
-        if (ownsMemoryRuntime && memoryRuntime != null) {
-            memoryRuntime.close();
-        }
+        ledger.resetUsage();
+        resources.releaseAll(store, expires);
     }
 
     public void flushDb() {
         checkThread();
         boolean hadKeys = store.size() != 0;
         boolean hadTtl = expires.size() != 0;
-        store.forEach((k, e) -> e.releasePayloadIfAny());
-        store.clear();
-        expires.clear();
-        usedBytes = 0;
-        reservedBytes = 0;
+        resources.clearData(store, expires);
+        ledger.resetUsage();
         if (hadKeys) {
             YierdisChangeTracking.markValueChanged();
         }
@@ -474,14 +454,6 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
 
     public long estimatedUsedBytes() {
         return memoryReporter.estimatedUsedBytes();
-    }
-
-    private long estimateEntryBytes(byte[] keyBytes, YierdisObject e) {
-        if (keyBytes == null || e == null) {
-            return 0;
-        }
-        int keyBytesCost = keysStoredOffHeap ? 0 : keyBytes.length;
-        return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + keyBytesCost + estimateValueBytes(e);
     }
 
     private long estimateEntryBytes(KeyHandle keyHandle, YierdisObject e) {
@@ -524,20 +496,6 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
         return 0;
     }
 
-    void refreshEstimatedBytes(byte[] keyBytes, YierdisObject e) {
-        if (e == null) {
-            return;
-        }
-        e.estimatedBytes = estimateEntryBytes(keyBytes, e);
-    }
-
-    void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject e) {
-        if (e == null) {
-            return;
-        }
-        e.estimatedBytes = estimateEntryBytes(keyHandle, e);
-    }
-
     static long estimateStringWriteUpperBound(int keyLength, int valueLength) {
         return (long) Math.max(0, keyLength) + Math.max(0, valueLength) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
     }
@@ -557,24 +515,6 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
 
     private static long estimateCollectionWriteUpperBound(int keyLength, long payloadBytes, long structuralBytes) {
         return estimateStringWriteUpperBound(keyLength, 0) + Math.max(0L, payloadBytes) + Math.max(0L, structuralBytes);
-    }
-
-    static long estimateListWriteUpperBound(int keyLength, List<byte[]> values) {
-        int itemCount = values == null ? 0 : values.size();
-        return estimateCollectionWriteUpperBound(
-                keyLength,
-                sumByteLengths(values),
-                Math.multiplyExact((long) itemCount, LIST_ELEMENT_OVERHEAD_BYTES_ESTIMATE)
-        );
-    }
-
-    static long estimateHashWriteUpperBound(int keyLength, List<byte[]> fieldValuePairs) {
-        int pairCount = fieldValuePairs == null ? 0 : fieldValuePairs.size() / 2;
-        return estimateCollectionWriteUpperBound(
-                keyLength,
-                sumByteLengths(fieldValuePairs),
-                Math.multiplyExact((long) pairCount, HASH_PAIR_OVERHEAD_BYTES_ESTIMATE)
-        );
     }
 
     static long estimateSetWriteUpperBound(int keyLength, List<byte[]> members) {
@@ -934,176 +874,13 @@ public final class YierdisDb implements RuntimeDbEngine, MaxmemoryCoordinatorAwa
         }
 
         @Override
-        public void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
-            YierdisDb.this.refreshEstimatedBytes(keyHandle, object);
-        }
-
-        @Override
-        public void adjustUsedBytes(long deltaBytes) {
-            YierdisDb.this.adjustUsedBytes(deltaBytes);
+        public MemoryLedger ledger() {
+            return ledger;
         }
 
         @Override
         public void checkThread() {
             YierdisDb.this.checkThread();
-        }
-    }
-
-    private final class DbMemoryLedger implements MemoryLedger {
-        @Override
-        public long limitBytes() {
-            return Math.max(0L, maxmemoryBytes);
-        }
-
-        @Override
-        public long usedBytes() {
-            return usedBytes;
-        }
-
-        @Override
-        public long reservedBytes() {
-            return reservedBytes;
-        }
-
-        @Override
-        public MemoryReservation reserve(long estimatedExtraBytes) {
-            if (estimatedExtraBytes < 0) {
-                throw new IllegalArgumentException("estimatedExtraBytes must be >= 0");
-            }
-
-            MaxmemoryCoordinator coordinator = maxmemoryCoordinator;
-            if (coordinator != null) {
-                try {
-                    coordinator.prepareWrite(estimatedExtraBytes);
-                } catch (YierdisCommandException e) {
-                    throw new MemoryLedgerOutOfMemoryException();
-                }
-                if (estimatedExtraBytes == 0) {
-                    return NoopReservation.INSTANCE;
-                }
-                reservedBytes += estimatedExtraBytes;
-                return new ReservationToken(this, estimatedExtraBytes);
-            }
-
-            if (maxmemoryBytes > 0) {
-                // Best-effort: reclaim expired keys first (align with Redis behavior under pressure).
-                cleanupExpired();
-
-                if (estimatedExtraBytes > 0 && estimatedExtraBytes > maxmemoryBytes) {
-                    // The write cannot fit even if we evict everything; fail-fast for stable OOM semantics.
-                    throw new MemoryLedgerOutOfMemoryException();
-                }
-
-                long limit = maxmemoryBytes - estimatedExtraBytes;
-                if (limit < 0) {
-                    limit = 0;
-                }
-                if (usedBytesForMaxmemory() > limit) {
-                    if (maxmemoryPolicy == MaxmemoryPolicy.NOEVICTION) {
-                        if (estimatedExtraBytes > 0) {
-                            throw new MemoryLedgerOutOfMemoryException();
-                        }
-                        // estimatedExtraBytes == 0: allow "no growth" operations even when already above maxmemory.
-                        // (Redis-style behavior: reject only when the write is expected to increase memory.)
-                        return NoopReservation.INSTANCE;
-                    }
-                    evictUntilUnder(limit);
-                    if (usedBytesForMaxmemory() > limit) {
-                        if (estimatedExtraBytes > 0) {
-                            throw new MemoryLedgerOutOfMemoryException();
-                        }
-                        // Best-effort enforcement: if we cannot evict enough, still allow "no growth" reservations.
-                        return NoopReservation.INSTANCE;
-                    }
-                }
-            }
-
-            if (estimatedExtraBytes == 0) {
-                return NoopReservation.INSTANCE;
-            }
-            reservedBytes += estimatedExtraBytes;
-            return new ReservationToken(this, estimatedExtraBytes);
-        }
-
-        @Override
-        public void commit(MemoryReservation reservation, long actualDeltaBytes) {
-            ReservationToken token = ReservationToken.validate(reservation, this);
-            if (token != null) {
-                token.finish();
-                reservedBytes -= token.reservedBytes;
-                if (reservedBytes < 0) {
-                    throw new IllegalStateException("reservedBytes underflow");
-                }
-            }
-
-            if (actualDeltaBytes == 0) {
-                return;
-            }
-            usedBytes += actualDeltaBytes;
-            if (usedBytes < 0) {
-                throw new IllegalStateException("usedBytes underflow");
-            }
-        }
-
-        @Override
-        public void rollback(MemoryReservation reservation) {
-            ReservationToken token = ReservationToken.validate(reservation, this);
-            if (token == null) {
-                return;
-            }
-            token.finish();
-            reservedBytes -= token.reservedBytes;
-            if (reservedBytes < 0) {
-                throw new IllegalStateException("reservedBytes underflow");
-            }
-        }
-
-        private enum NoopReservation implements MemoryReservation {
-            INSTANCE;
-
-            @Override
-            public long reservedBytes() {
-                return 0;
-            }
-        }
-
-        private static final class ReservationToken implements MemoryReservation {
-            private final DbMemoryLedger owner;
-            private final long reservedBytes;
-            private boolean finished;
-
-            private ReservationToken(DbMemoryLedger owner, long reservedBytes) {
-                this.owner = Objects.requireNonNull(owner, "owner");
-                this.reservedBytes = reservedBytes;
-            }
-
-            @Override
-            public long reservedBytes() {
-                return reservedBytes;
-            }
-
-            private void finish() {
-                if (finished) {
-                    throw new IllegalStateException("reservation already finished");
-                }
-                finished = true;
-            }
-
-            private static ReservationToken validate(MemoryReservation reservation, DbMemoryLedger expectedOwner) {
-                if (reservation == null) {
-                    return null;
-                }
-                if (reservation instanceof NoopReservation) {
-                    return null;
-                }
-                if (!(reservation instanceof ReservationToken token)) {
-                    throw new IllegalArgumentException("unknown reservation type: " + reservation.getClass().getName());
-                }
-                if (token.owner != expectedOwner) {
-                    throw new IllegalArgumentException("reservation does not belong to this ledger");
-                }
-                return token;
-            }
         }
     }
 

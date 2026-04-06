@@ -1,5 +1,8 @@
 # Architecture Refactor Roadmap Implementation Plan
 
+This roadmap is superseded by `docs/superpowers/plans/2026-04-06-architecture-remediation-replan.md`.
+Final protocol/reply boundary policy remains: server command execution write-back still uses ReplyWriter.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Reduce the remaining Yierdis design debt in command registration, runtime/server seams, and `core-db` ownership without changing protocol behavior or command semantics.

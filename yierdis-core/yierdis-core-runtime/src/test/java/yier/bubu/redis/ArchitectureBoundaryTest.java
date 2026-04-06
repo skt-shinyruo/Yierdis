@@ -223,6 +223,50 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void protocolRequestAndServerReplyBoundariesMustStayDocumented() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path requestFile = repoRoot.getParent().resolve(
+                "yierdis-protocol/yierdis-protocol-model/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1Request.java"
+        );
+        Assert.assertTrue("缺少 CustomProtocolV1Request.java", Files.isRegularFile(requestFile));
+        String requestSource = Files.readString(requestFile, StandardCharsets.UTF_8);
+        Assert.assertTrue("request model 必须声明 protocol DTO 边界", requestSource.contains("This is a protocol-layer DTO only"));
+
+        Path readmeFile = repoRoot.getParent().resolve("README.md");
+        Assert.assertTrue("缺少 README.md", Files.isRegularFile(readmeFile));
+        String readmeSource = Files.readString(readmeFile, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "README 必须声明 ReplyWriter 仍是 server write-back 语义 authority",
+                readmeSource.contains("server command execution write-back still uses ReplyWriter")
+        );
+    }
+
+    @Test
+    public void serverSourceMustNotConstructProtocolReplyModelsDirectly() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                repoRoot.getParent().resolve("yierdis-server/src/main/java"),
+                offenders,
+                "ReplyValue.",
+                "ReplyArray(",
+                "ReplyMap("
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 server 生产代码直接构造 protocol reply model（应保持 ReplyWriter 为唯一语义 authority）：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
     public void yierdisDbMustNotRetainLegacyReservationHelpers() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
@@ -290,6 +334,44 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void runtimeAssemblyMustNotUseRttiOrFirstEngineGlobalMaintenance() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path instanceFile = repoRoot.resolve(
+                "yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java"
+        );
+        Assert.assertTrue("缺少 YierdisInstance.java", Files.isRegularFile(instanceFile));
+
+        Path runtimeAccessFile = repoRoot.resolve(
+                "yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java"
+        );
+        Assert.assertTrue("缺少 YierdisInstanceRuntimeAccess.java", Files.isRegularFile(runtimeAccessFile));
+
+        List<String> offenders = new ArrayList<>();
+        scanFileForForbiddenText(
+                repoRoot,
+                instanceFile,
+                offenders,
+                "instanceof MaxmemoryParticipant",
+                "instanceof MaxmemoryCoordinatorAware"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                runtimeAccessFile,
+                offenders,
+                "RuntimeDbEngine firstEngine",
+                "firstEngine.enforceMaxmemoryMaintenance()"
+        );
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 runtime 仍使用 RTTI 或 first-engine 全局维护约定：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
     public void serverBootstrapMustNotInlineOwnerThreadLifecycleAgain() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
@@ -309,7 +391,9 @@ public class ArchitectureBoundaryTest {
                 offenders,
                 "inst.bindToCurrentThread()",
                 "inst.close()",
-                "runtimeAccess.maintenanceTick()"
+                "runtimeAccess.maintenanceTick()",
+                "engines = instance.engines()",
+                "bindEngines("
         );
 
         if (!offenders.isEmpty()) {
@@ -335,7 +419,9 @@ public class ArchitectureBoundaryTest {
                 offenders,
                 "private MemorySummary memorySummary()",
                 "long totalEstimatedBytes = heap + offHeap + keyspaceOverhead + expireOverhead + expireValueObjects;",
-                "offHeap = Math.max(offHeap, s.offHeapUsedBytes());"
+                "offHeap = Math.max(offHeap, s.offHeapUsedBytes());",
+                "db.memory().memoryStats()",
+                "appendKeyspace("
         );
 
         if (!offenders.isEmpty()) {
@@ -390,6 +476,33 @@ public class ArchitectureBoundaryTest {
         }
     }
 
+    @Test
+    public void serverMustNotReachThroughConnectionSlicesOutsideContext() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path serverRoot = repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis").normalize();
+        Assert.assertTrue("缺少 yierdis-server/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                serverRoot,
+                offenders,
+                ".runtime()",
+                ".session()",
+                ".scheduling()"
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server Java 文件", scanned > 0);
+        retainOnly(offenders, "yierdis-server/src/main/java/yier/bubu/redis/ServerConnectionContext.java");
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 server 代码绕过 ServerConnectionContext 直接访问连接切片：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
     private static int scanForForbiddenText(Path repoRoot, Path root, List<String> offenders, String... forbiddenSnippets) throws IOException {
         if (root == null || !Files.exists(root)) {
             return 0;
@@ -421,6 +534,13 @@ public class ArchitectureBoundaryTest {
                 }
             }
         }
+    }
+
+    private static void retainOnly(List<String> offenders, String allowedRelativeFile) {
+        if (offenders == null || offenders.isEmpty()) {
+            return;
+        }
+        offenders.removeIf(line -> line != null && line.startsWith(allowedRelativeFile + ":"));
     }
 
     private static String relativePath(Path repoRoot, Path file) {

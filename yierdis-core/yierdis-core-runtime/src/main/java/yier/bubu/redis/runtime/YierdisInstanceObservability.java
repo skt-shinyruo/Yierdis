@@ -1,8 +1,9 @@
 package yier.bubu.redis.runtime;
 
-import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.YierdisMemoryStats;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -11,14 +12,17 @@ import java.util.Objects;
 public final class YierdisInstanceObservability {
     private final YierdisInstance instance;
 
+    public record YierdisDbSummary(int dbIndex, int keyCount, int expireCount) {
+    }
+
     YierdisInstanceObservability(YierdisInstance instance) {
         this.instance = Objects.requireNonNull(instance, "instance");
     }
 
     public YierdisMemoryStats memoryStats() {
-        DbEngine[] local = instance.engines();
         boolean globalScope = instance.config().maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
-        if (local.length == 0) {
+        int databases = Math.max(0, instance.databases());
+        if (databases == 0) {
             return emptyStats(instance.config().maxmemoryBytes(), globalScope);
         }
 
@@ -40,11 +44,8 @@ public final class YierdisInstanceObservability {
         int expireCap0 = 0;
         int expireCap1 = 0;
 
-        for (DbEngine db : local) {
-            if (db == null) {
-                continue;
-            }
-            YierdisMemoryStats s = db.memory().memoryStats();
+        for (int dbIndex = 0; dbIndex < databases; dbIndex++) {
+            YierdisMemoryStats s = instance.runtimeEngine(dbIndex).memory().memoryStats();
             heap += s.heapDataBytesEstimate();
             keyspaceOverhead += s.keyspaceTableOverheadBytesEstimate();
             expireOverhead += s.expireTableOverheadBytesEstimate();
@@ -95,6 +96,19 @@ public final class YierdisInstanceObservability {
                 expireValueObjects,
                 totalEstimatedBytes
         );
+    }
+
+    public List<YierdisDbSummary> dbSummaries() {
+        int databases = Math.max(0, instance.databases());
+        if (databases == 0) {
+            return List.of();
+        }
+        List<YierdisDbSummary> summaries = new ArrayList<>(databases);
+        for (int dbIndex = 0; dbIndex < databases; dbIndex++) {
+            YierdisMemoryStats s = instance.runtimeEngine(dbIndex).memory().memoryStats();
+            summaries.add(new YierdisDbSummary(dbIndex, s.keyCount(), s.expireCount()));
+        }
+        return summaries;
     }
 
     private static YierdisMemoryStats emptyStats(long maxmemoryBytes, boolean offHeapIncludedInMaxmemory) {

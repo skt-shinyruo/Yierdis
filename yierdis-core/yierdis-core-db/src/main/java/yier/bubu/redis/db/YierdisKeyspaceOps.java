@@ -150,7 +150,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
             keyLifecycle.removeExpire(key);
             if (keyLifecycle.remove(key, expiredValues.get(i))) {
                 expiredValues.get(i).releasePayloadIfAny();
-                internals.adjustUsedBytes(-expiredValues.get(i).estimatedBytes);
+                internals.ledger().commit(null, -expiredValues.get(i).estimatedBytes);
             }
         }
         return out;
@@ -194,7 +194,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
             keyLifecycle.removeExpire(key);
             if (keyLifecycle.remove(key, expiredValues.get(i))) {
                 expiredValues.get(i).releasePayloadIfAny();
-                internals.adjustUsedBytes(-expiredValues.get(i).estimatedBytes);
+                internals.ledger().commit(null, -expiredValues.get(i).estimatedBytes);
             }
         }
         return next;

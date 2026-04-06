@@ -50,6 +50,13 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
         return globalLruClock.incrementAndGet();
     }
 
+    /**
+     * Best-effort maintenance tick for global maxmemory without assuming write growth.
+     */
+    public void enforceMaintenance() {
+        prepareWrite(0);
+    }
+
     @Override
     public void prepareWrite(long estimatedExtraBytes) {
         if (estimatedExtraBytes < 0) {

@@ -1,5 +1,6 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.ops.HllReadOps;
 import yier.bubu.redis.ops.HllWriteOps;
 import yier.bubu.redis.ops.ValueType;
@@ -8,14 +9,17 @@ import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.ToLongBiFunction;
 
 final class YierdisHllOps implements HllReadOps, HllWriteOps {
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
-    YierdisHllOps(YierdisDbInternals internals) {
+    YierdisHllOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
+        this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
     @Override
@@ -56,7 +60,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     changed[0] = YierdisHyperLogLog.pfAdd(old, keyLifecycle.offHeapAllocator(), elements);
 
                     deltaBytes[0] -= oldEstimate;
-                    internals.refreshEstimatedBytes(k, old);
+                    refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
@@ -139,7 +143,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     if (old == null) {
                         YierdisObject next = YierdisObject.newString(keyLifecycle.offHeapAllocator(), mergedDense);
                         keyLifecycle.touch(next);
-                        internals.refreshEstimatedBytes(k, next);
+                        refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
                     }
@@ -147,7 +151,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     old.overwriteWithString(keyLifecycle.offHeapAllocator(), mergedDense);
                     keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
-                    internals.refreshEstimatedBytes(k, old);
+                    refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
@@ -187,5 +191,12 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
             return 0L;
         }
         return Math.max(0L, (long) mergedDenseLength - existing.rawLen);
+    }
+
+    private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
+        if (object == null) {
+            return;
+        }
+        object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
     }
 }

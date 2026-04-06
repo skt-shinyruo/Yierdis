@@ -1,6 +1,6 @@
 package yier.bubu.redis.db;
 
-import yier.bubu.redis.db.key.KeyHandle;
+import yier.bubu.redis.db.memory.MemoryLedger;
 
 interface YierdisDbInternals {
     void checkThread();
@@ -9,7 +9,5 @@ interface YierdisDbInternals {
 
     YierdisDbKeyLifecycle keyLifecycle();
 
-    void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object);
-
-    void adjustUsedBytes(long deltaBytes);
+    MemoryLedger ledger();
 }

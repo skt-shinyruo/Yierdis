@@ -185,7 +185,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
         this.taskQueue = new ExecutorTaskQueue<>(
                 this.schedulingPolicy,
                 this.queue,
-                channel -> ServerConnectionContext.getOrCreate(channel).scheduling()
+                channel -> ServerConnectionContext.getOrCreate(channel).queueState()
         );
         this.backlogBudget = new ExecutorBacklogBudget(queueCapacity, queueMaxBytes);
         this.backpressureHighWatermark = backpressureHighWatermark;
@@ -252,32 +252,32 @@ public final class NettyCommandExecutor implements AutoCloseable {
         ExecutorBackpressureRuntime<Channel> runtime = new ExecutorBackpressureRuntime<>() {
             @Override
             public int pending(Channel key) {
-                return ServerConnectionContext.getOrCreate(key).runtime().pendingCounter().get();
+                return ServerConnectionContext.getOrCreate(key).pending();
             }
 
             @Override
             public long pendingBytes(Channel key) {
-                return ServerConnectionContext.getOrCreate(key).runtime().pendingBytesCounter().get();
+                return ServerConnectionContext.getOrCreate(key).pendingBytes();
             }
 
             @Override
             public boolean isClosing(Channel key) {
-                return ServerConnectionContext.getOrCreate(key).runtime().isClosing();
+                return ServerConnectionContext.getOrCreate(key).isClosing();
             }
 
             @Override
             public boolean markAutoReadDisabledByExecutor(Channel key) {
-                return ServerConnectionContext.getOrCreate(key).runtime().markAutoReadDisabledByExecutor();
+                return ServerConnectionContext.getOrCreate(key).markAutoReadDisabledByExecutor();
             }
 
             @Override
             public boolean autoReadDisabledByExecutor(Channel key) {
-                return ServerConnectionContext.getOrCreate(key).runtime().autoReadDisabledByExecutor();
+                return ServerConnectionContext.getOrCreate(key).autoReadDisabledByExecutor();
             }
 
             @Override
             public boolean clearAutoReadDisabledByExecutor(Channel key) {
-                return ServerConnectionContext.getOrCreate(key).runtime().clearAutoReadDisabledByExecutor();
+                return ServerConnectionContext.getOrCreate(key).clearAutoReadDisabledByExecutor();
             }
         };
 
@@ -288,7 +288,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
                     return;
                 }
                 try {
-                    ServerConnectionContext.getOrCreate(key).runtime().backpressureEnterCounter().incrementAndGet();
+                    ServerConnectionContext.getOrCreate(key).recordBackpressureEnter();
                 } catch (Throwable ignored) {
                     // ignore
                 }
@@ -301,7 +301,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
                     return;
                 }
                 try {
-                    ServerConnectionContext.getOrCreate(key).runtime().backpressureExitCounter().incrementAndGet();
+                    ServerConnectionContext.getOrCreate(key).recordBackpressureExit();
                 } catch (Throwable ignored) {
                     // ignore
                 }
@@ -416,9 +416,9 @@ public final class NettyCommandExecutor implements AutoCloseable {
             return;
         }
 
-        ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
-        int pending = conn.pendingCounter().get();
-        long pendingBytes = conn.pendingBytesCounter().get();
+        ServerConnectionContext connection = ServerConnectionContext.getOrCreate(ch);
+        int pending = connection.pending();
+        long pendingBytes = connection.pendingBytes();
 
         boolean pendingOk = pending <= backpressureLowWatermark;
         boolean bytesOk = backpressureBytesHighWatermark <= 0 || pendingBytes <= backpressureBytesLowWatermark;

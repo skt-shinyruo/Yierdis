@@ -72,6 +72,28 @@ public class YierdisServerBootstrapCommandWiringTest {
                 JsonObject select = roundTrip(out, in, "{\"cmd\":\"SELECT\",\"args\":[\"1\"]}");
                 Assert.assertTrue(booleanField(select, "ok"));
                 Assert.assertEquals("OK", stringField(select, "result"));
+
+                JsonObject setDb1 = roundTrip(out, in, "{\"cmd\":\"SET\",\"args\":[\"k1\",\"v1\"]}");
+                Assert.assertTrue(booleanField(setDb1, "ok"));
+                Assert.assertEquals("OK", stringField(setDb1, "result"));
+
+                JsonObject selectDb0 = roundTrip(out, in, "{\"cmd\":\"SELECT\",\"args\":[\"0\"]}");
+                Assert.assertTrue(booleanField(selectDb0, "ok"));
+                Assert.assertEquals("OK", stringField(selectDb0, "result"));
+
+                JsonObject setDb0 = roundTrip(out, in, "{\"cmd\":\"SET\",\"args\":[\"k0\",\"v0\"]}");
+                Assert.assertTrue(booleanField(setDb0, "ok"));
+                Assert.assertEquals("OK", stringField(setDb0, "result"));
+
+                JsonObject expireDb0 = roundTrip(out, in, "{\"cmd\":\"EXPIRE\",\"args\":[\"k0\",\"60\"]}");
+                Assert.assertTrue(booleanField(expireDb0, "ok"));
+                Assert.assertEquals(1L, longField(expireDb0, "result"));
+
+                JsonObject keyspace = roundTrip(out, in, "{\"cmd\":\"INFO\",\"args\":[\"keyspace\"]}");
+                Assert.assertTrue(booleanField(keyspace, "ok"));
+                String keyspaceSection = stringField(keyspace, "result");
+                Assert.assertTrue(keyspaceSection.contains("db0:keys=1,expires=1\r\n"));
+                Assert.assertTrue(keyspaceSection.contains("db1:keys=1,expires=0\r\n"));
             }
         }
     }

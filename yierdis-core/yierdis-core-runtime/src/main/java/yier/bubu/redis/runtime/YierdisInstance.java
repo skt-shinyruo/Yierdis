@@ -4,13 +4,12 @@ package yier.bubu.redis.runtime;
 
 import yier.bubu.redis.db.YierdisDbEngineFactory;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.DbEngine;
-import yier.bubu.redis.ops.MaxmemoryCoordinatorAware;
-import yier.bubu.redis.ops.MaxmemoryParticipant;
+import yier.bubu.redis.ops.DbEngineFactory;
 import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.ops.MaxmemoryUsageSource;
 import yier.bubu.redis.ops.RuntimeDbEngine;
+
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -22,9 +21,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class YierdisInstance implements AutoCloseable {
     private final YierdisInstanceConfig config;
-    private final RuntimeDbEngine[] dbs;
-    private final YierdisFfmMemoryRuntime memoryRuntime;
-    private final boolean closeMemoryRuntime;
+    private final YierdisInstanceResources resources;
     private final YierdisInstanceRuntimeAccess runtimeAccess;
     private final YierdisInstanceObservability observability;
 
@@ -32,14 +29,10 @@ public final class YierdisInstance implements AutoCloseable {
 
     private YierdisInstance(
             YierdisInstanceConfig config,
-            RuntimeDbEngine[] dbs,
-            YierdisFfmMemoryRuntime memoryRuntime,
-            boolean closeMemoryRuntime
+            YierdisInstanceResources resources
     ) {
         this.config = Objects.requireNonNull(config, "config");
-        this.dbs = Objects.requireNonNull(dbs, "dbs");
-        this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
-        this.closeMemoryRuntime = closeMemoryRuntime;
+        this.resources = Objects.requireNonNull(resources, "resources");
         this.runtimeAccess = new YierdisInstanceRuntimeAccess(this);
         this.observability = new YierdisInstanceObservability(this);
     }
@@ -86,17 +79,11 @@ public final class YierdisInstance implements AutoCloseable {
                 );
             }
 
+            YierdisGlobalMaxmemoryGovernor governor = null;
             if (!perDbScope && config.maxmemoryBytes() > 0) {
-                MaxmemoryParticipant[] participants = new MaxmemoryParticipant[dbs.length];
+                RuntimeDbEngine[] participants = new RuntimeDbEngine[dbs.length];
                 for (int i = 0; i < dbs.length; i++) {
-                    RuntimeDbEngine engine = dbs[i];
-                    if (engine == null) {
-                        continue;
-                    }
-                    if (!(engine instanceof MaxmemoryParticipant participant)) {
-                        throw new IllegalStateException("GLOBAL maxmemory requires MaxmemoryParticipant: dbIndex=" + i);
-                    }
-                    participants[i] = participant;
+                    participants[i] = dbs[i];
                 }
 
                 MaxmemoryUsageSource[] sharedUsage = new MaxmemoryUsageSource[]{
@@ -109,7 +96,7 @@ public final class YierdisInstance implements AutoCloseable {
                         }
                 };
 
-                YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
+                governor = new YierdisGlobalMaxmemoryGovernor(
                         participants,
                         sharedUsage,
                         config.maxmemoryBytes(),
@@ -122,16 +109,13 @@ public final class YierdisInstance implements AutoCloseable {
                     if (engine == null) {
                         continue;
                     }
-                    if (!(engine instanceof MaxmemoryCoordinatorAware aware)) {
-                        throw new IllegalStateException("GLOBAL maxmemory requires MaxmemoryCoordinatorAware");
-                    }
-                    aware.attachMaxmemoryCoordinator(governor);
+                    engine.attachMaxmemoryCoordinator(governor);
                 }
             }
 
-            return new YierdisInstance(config, dbs, memoryRuntime, true);
+            return new YierdisInstance(config, new YierdisInstanceResources(dbs, memoryRuntime, true, governor));
         } catch (Throwable t) {
-            throw startupFailure(t, dbs, memoryRuntime);
+            throw YierdisInstanceResources.startupFailure(t, dbs, memoryRuntime, true);
         }
     }
 
@@ -140,7 +124,7 @@ public final class YierdisInstance implements AutoCloseable {
     }
 
     public int databases() {
-        return dbs.length;
+        return resources.databases();
     }
 
     /**
@@ -161,7 +145,7 @@ public final class YierdisInstance implements AutoCloseable {
      * 获取 DB 的能力视图（依赖倒置到 {@link DbEngine}），避免上层（例如 server/bootstrap）直接依赖具体实现类。
      */
     public DbEngine engine(int dbIndex) {
-        return dbInternal(dbIndex);
+        return resources.engine(dbIndex);
     }
 
     /**
@@ -170,19 +154,7 @@ public final class YierdisInstance implements AutoCloseable {
      * 返回的是一个防御性拷贝，避免暴露底层实现数组并规避协变数组写入风险。
      */
     public DbEngine[] engines() {
-        DbEngine[] out = new DbEngine[dbs.length];
-        for (int i = 0; i < dbs.length; i++) {
-            out[i] = dbs[i];
-        }
-        return out;
-    }
-
-    private RuntimeDbEngine dbInternal(int dbIndex) {
-        int idx = Math.max(0, dbIndex);
-        if (idx >= dbs.length) {
-            throw new IllegalArgumentException("dbIndex out of range: " + dbIndex);
-        }
-        return dbs[idx];
+        return resources.engineViews();
     }
 
     /**
@@ -205,15 +177,19 @@ public final class YierdisInstance implements AutoCloseable {
     }
 
     RuntimeDbEngine runtimeEngine(int dbIndex) {
-        return dbInternal(dbIndex);
+        return resources.engine(dbIndex);
     }
 
     YierdisFfmMemoryRuntime runtimeMemoryRuntime() {
-        return memoryRuntime;
+        return resources.memoryRuntime();
     }
 
     boolean runtimeClosesMemoryRuntime() {
-        return closeMemoryRuntime;
+        return resources.closesMemoryRuntime();
+    }
+
+    YierdisInstanceResources resources() {
+        return resources;
     }
 
     void requireOpenRuntimeAccess() {
@@ -230,48 +206,4 @@ public final class YierdisInstance implements AutoCloseable {
         return true;
     }
 
-    private static RuntimeException startupFailure(
-            Throwable failure,
-            RuntimeDbEngine[] dbs,
-            YierdisFfmMemoryRuntime memoryRuntime
-    ) {
-        Throwable cleanupFailure = null;
-        if (dbs != null) {
-            for (RuntimeDbEngine engine : dbs) {
-                if (engine == null) {
-                    continue;
-                }
-                try {
-                    engine.shutdown();
-                } catch (Throwable t) {
-                    cleanupFailure = recordSuppressedFailure(cleanupFailure, t);
-                }
-            }
-        }
-        if (memoryRuntime != null) {
-            try {
-                memoryRuntime.close();
-            } catch (Throwable t) {
-                cleanupFailure = recordSuppressedFailure(cleanupFailure, t);
-            }
-        }
-        if (cleanupFailure != null) {
-            failure.addSuppressed(cleanupFailure);
-        }
-        if (failure instanceof RuntimeException runtimeException) {
-            return runtimeException;
-        }
-        if (failure instanceof Error error) {
-            throw error;
-        }
-        return new IllegalStateException(failure);
-    }
-
-    private static Throwable recordSuppressedFailure(Throwable failure, Throwable next) {
-        if (failure == null) {
-            return next;
-        }
-        failure.addSuppressed(next);
-        return failure;
-    }
 }

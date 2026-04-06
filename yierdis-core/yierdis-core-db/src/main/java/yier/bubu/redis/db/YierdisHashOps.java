@@ -1,5 +1,7 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.db.key.KeyHandle;
+import yier.bubu.redis.ops.DbMemoryConstants;
 import yier.bubu.redis.ops.HashReadOps;
 import yier.bubu.redis.ops.HashWriteOps;
 import yier.bubu.redis.ops.ValueType;
@@ -12,14 +14,19 @@ import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.IntSupplier;
+import java.util.function.ToLongBiFunction;
 
 final class YierdisHashOps implements HashReadOps, HashWriteOps {
+    private static final long HASH_PAIR_OVERHEAD_BYTES_ESTIMATE = 64L;
+
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
-    YierdisHashOps(YierdisDbInternals internals) {
+    YierdisHashOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
+        this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
     @Override
@@ -55,7 +62,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                         added[0] = hv.hsetMany(fieldValuePairs);
                         YierdisObject next = YierdisObject.newHash(hv);
                         keyLifecycle.touch(next);
-                        internals.refreshEstimatedBytes(k, next);
+                        refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
                     }
@@ -66,7 +73,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     old.refreshCompositeEncodingFromPayload();
                     keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
-                    internals.refreshEstimatedBytes(k, old);
+                    refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
@@ -146,7 +153,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     }
                     old.refreshCompositeEncodingFromPayload();
                     keyLifecycle.touch(old);
-                    internals.refreshEstimatedBytes(k, old);
+                    refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
                 });
@@ -183,12 +190,49 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
     private long estimateHashWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> fieldValuePairs) {
         YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
         if (existing == null) {
-            return YierdisDb.estimateHashWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, fieldValuePairs);
+            return estimateHashWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, fieldValuePairs);
         }
         if (existing.type != ValueType.HASH) {
             return 0L;
         }
-        return YierdisDb.sumByteLengths(fieldValuePairs);
+        return sumByteLengths(fieldValuePairs);
+    }
+
+    private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
+        if (object == null) {
+            return;
+        }
+        object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
+    }
+
+    private static long estimateHashWriteUpperBound(int keyLength, List<byte[]> fieldValuePairs) {
+        int pairCount = fieldValuePairs == null ? 0 : fieldValuePairs.size() / 2;
+        return estimateCollectionWriteUpperBound(
+                keyLength,
+                sumByteLengths(fieldValuePairs),
+                Math.multiplyExact((long) pairCount, HASH_PAIR_OVERHEAD_BYTES_ESTIMATE)
+        );
+    }
+
+    private static long estimateCollectionWriteUpperBound(int keyLength, long payloadBytes, long structuralBytes) {
+        return estimateStringWriteUpperBound(keyLength, 0) + Math.max(0L, payloadBytes) + Math.max(0L, structuralBytes);
+    }
+
+    private static long estimateStringWriteUpperBound(int keyLength, int valueLength) {
+        return (long) Math.max(0, keyLength) + Math.max(0, valueLength) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+    }
+
+    private static long sumByteLengths(List<byte[]> values) {
+        if (values == null || values.isEmpty()) {
+            return 0L;
+        }
+        long total = 0L;
+        for (byte[] value : values) {
+            if (value != null) {
+                total += value.length;
+            }
+        }
+        return total;
     }
 
     private static BulkStringMapPairs pairsOf(IntSupplier countSupplier, BulkEmitter emitter) {

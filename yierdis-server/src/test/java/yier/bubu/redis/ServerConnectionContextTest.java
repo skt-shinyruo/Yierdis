@@ -16,9 +16,8 @@ public class ServerConnectionContextTest {
             ServerConnectionContext c2 = ServerConnectionContext.getOrCreate(ch);
 
             Assert.assertSame(c1, c2);
-            Assert.assertSame(c1.session(), c2.session());
-            Assert.assertSame(c1.runtime(), c2.runtime());
-            Assert.assertSame(c1.scheduling(), c2.scheduling());
+            Assert.assertSame(c1.commandSession(), c2.commandSession());
+            Assert.assertSame(c1.queueState(), c2.queueState());
         } finally {
             ch.finishAndReleaseAll();
         }
@@ -29,7 +28,7 @@ public class ServerConnectionContextTest {
         EmbeddedChannel ch = new EmbeddedChannel();
         try {
             ServerConnectionContext ctx = ServerConnectionContext.getOrCreate(ch, 1, 0);
-            TransactionState tx = ctx.session().transaction();
+            TransactionState tx = ctx.commandSession().transaction();
             tx.begin();
 
             Assert.assertNull(tx.tryEnqueue(argv("SET", "k", "v")));
@@ -46,7 +45,7 @@ public class ServerConnectionContextTest {
             ServerConnectionContext.getOrCreate(ch, 1, 0);
             ServerConnectionContext.getOrCreate(ch, 4, 0);
 
-            TransactionState tx = ServerConnectionContext.getOrCreate(ch).session().transaction();
+            TransactionState tx = ServerConnectionContext.getOrCreate(ch).commandSession().transaction();
             tx.begin();
             Assert.assertNull(tx.tryEnqueue(argv("SET", "k", "v")));
             Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(argv("PING")));
@@ -56,20 +55,37 @@ public class ServerConnectionContextTest {
     }
 
     @Test
-    public void runtimeAndSchedulingAccessDoNotPreventLaterSessionLimitConfiguration() {
+    public void queueStateAccessDoesNotPreventLaterSessionLimitConfiguration() {
         EmbeddedChannel ch = new EmbeddedChannel();
         try {
             ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
 
-            Assert.assertNotNull(context.runtime());
-            Assert.assertNotNull(context.scheduling());
+            Assert.assertNotNull(context.queueState());
 
             ServerConnectionContext.getOrCreate(ch, 1, 0);
 
-            TransactionState tx = context.session().transaction();
+            TransactionState tx = context.commandSession().transaction();
             tx.begin();
             Assert.assertNull(tx.tryEnqueue(argv("SET", "k", "v")));
             Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(argv("PING")));
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void markClosingIsIdempotentAndDiscardsTransaction() {
+        EmbeddedChannel ch = new EmbeddedChannel();
+        try {
+            ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch, 16, 1024);
+            TransactionState tx = context.commandSession().transaction();
+            tx.begin();
+            Assert.assertNull(tx.tryEnqueue(argv("SET", "k", "v")));
+            Assert.assertTrue(tx.active());
+
+            Assert.assertTrue(context.markClosing());
+            Assert.assertFalse(context.markClosing());
+            Assert.assertFalse(context.commandSession().transaction().active());
         } finally {
             ch.finishAndReleaseAll();
         }

@@ -66,6 +66,43 @@ public class ReplySsoTGuardTest {
     }
 
     @Test
+    public void serverProductionCodeMustNotConstructProtocolReplyValuesDirectly() throws IOException {
+        Path workspaceRoot = resolveWorkspaceRoot();
+        Assert.assertNotNull("无法定位仓库根目录", workspaceRoot);
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenTexts(
+                workspaceRoot,
+                workspaceRoot.resolve("yierdis-server/src/main/java"),
+                offenders,
+                "ReplyValue.",
+                "ReplyArray(",
+                "ReplyMap("
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 server 生产代码重新直接构造 protocol reply model，可能绕开 ReplyWriter 语义 authority：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void protocolRequestDocumentationMustStayDtoOnly() throws IOException {
+        Path workspaceRoot = resolveWorkspaceRoot();
+        Assert.assertNotNull("无法定位仓库根目录", workspaceRoot);
+
+        Path requestFile = workspaceRoot.resolve(
+                "yierdis-protocol/yierdis-protocol-model/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1Request.java"
+        );
+        Assert.assertTrue("缺少 CustomProtocolV1Request.java", Files.isRegularFile(requestFile));
+
+        String requestSource = Files.readString(requestFile, StandardCharsets.UTF_8);
+        Assert.assertTrue("request model 必须声明 protocol DTO 边界", requestSource.contains("This is a protocol-layer DTO only"));
+    }
+
+    @Test
     public void replyValueDocumentationMustNotDescribeCommandLayerReplyIr() throws IOException {
         Path workspaceRoot = resolveWorkspaceRoot();
         Assert.assertNotNull("无法定位仓库根目录", workspaceRoot);

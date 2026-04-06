@@ -47,7 +47,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
     // Core resources (closed in reverse order).
     private YierdisInstance instance;
-    private DbEngine[] engines;
     private NettyCommandExecutor executor;
     private EventExecutorGroup commandGroup;
     private EventLoopGroup bossGroup;
@@ -119,11 +118,9 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
         YierdisInstanceMaintenance maintenance = new YierdisInstanceMaintenance(instance);
         YierdisInstanceObservability observability = instance.observability();
-        engines = instance.engines();
 
         NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(runtimeConfig);
         infoProvider.bindObservability(observability);
-        infoProvider.bindEngines(engines);
         SlowCommandGovernor slowGovernor = new SlowCommandGovernor() {
             private final long timeBudgetNanos = runtimeConfig.keysTimeBudgetMillis() <= 0
                     ? 0
@@ -235,7 +232,6 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             }
         }
         instance = null;
-        engines = null;
         executor = null;
 
         EventExecutorGroup cg = commandGroup;
@@ -291,23 +287,23 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
     private static YierdisDbRouter dbRouter(YierdisInstance instance) {
         Objects.requireNonNull(instance, "instance");
-        DbEngine[] engines = instance.engines();
+        DbEngine[] dbViews = instance.engines();
         return new YierdisDbRouter() {
             @Override
             public DbEngine dbFor(yier.bubu.redis.contract.DbIndexProvider dbIndexProvider) {
-                if (engines.length == 0) {
+                if (dbViews.length == 0) {
                     throw new IllegalStateException("no dbs");
                 }
                 int idx = dbIndexProvider == null ? 0 : dbIndexProvider.dbIndex();
-                if (idx < 0 || idx >= engines.length) {
+                if (idx < 0 || idx >= dbViews.length) {
                     idx = 0;
                 }
-                return engines[idx];
+                return dbViews[idx];
             }
 
             @Override
             public int databases() {
-                return Math.max(1, engines.length);
+                return Math.max(1, dbViews.length);
             }
         };
     }

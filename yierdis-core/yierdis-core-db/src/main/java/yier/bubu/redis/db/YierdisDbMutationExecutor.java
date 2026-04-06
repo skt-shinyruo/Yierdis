@@ -1,6 +1,7 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.memory.MemoryLedgerOutOfMemoryException;
+import yier.bubu.redis.db.memory.MemoryLedger;
 import yier.bubu.redis.db.memory.MemoryReservation;
 import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
 import yier.bubu.redis.ops.MaxmemoryErrors;
@@ -9,30 +10,39 @@ import yier.bubu.redis.ops.YierdisCommandException;
 import java.util.Objects;
 
 final class YierdisDbMutationExecutor {
-    private final YierdisDb db;
+    private final Runnable threadChecker;
+    private final MemoryLedger ledger;
 
     YierdisDbMutationExecutor(YierdisDb db) {
-        this.db = Objects.requireNonNull(db, "db");
+        this(
+                Objects.requireNonNull(db, "db")::checkThread,
+                db.memoryLedger()
+        );
+    }
+
+    YierdisDbMutationExecutor(Runnable threadChecker, MemoryLedger ledger) {
+        this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
+        this.ledger = Objects.requireNonNull(ledger, "ledger");
     }
 
     <T> T execute(MutationPlan<T> plan) {
         Objects.requireNonNull(plan, "plan");
-        db.checkThread();
+        threadChecker.run();
 
         MemoryReservation reservation = null;
         try {
-            reservation = db.reserveMutation(plan.upperBoundBytes());
+            reservation = ledger.reserve(Math.max(0L, plan.upperBoundBytes()));
             MutationResult<T> result = Objects.requireNonNull(plan.apply(), "mutation result");
-            db.commitMutation(reservation, result.actualDeltaBytes());
+            ledger.commit(reservation, result.actualDeltaBytes());
             return result.value();
         } catch (MemoryLedgerOutOfMemoryException e) {
-            db.rollbackMutation(reservation);
+            ledger.rollback(reservation);
             throw new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
         } catch (OffHeapOutOfMemoryException e) {
-            db.rollbackMutation(reservation);
+            ledger.rollback(reservation);
             throw new YierdisCommandException("OOM off-heap memory limit exceeded");
         } catch (RuntimeException | Error e) {
-            db.rollbackMutation(reservation);
+            ledger.rollback(reservation);
             throw e;
         }
     }

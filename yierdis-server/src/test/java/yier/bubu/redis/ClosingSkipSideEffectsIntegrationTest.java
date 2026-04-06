@@ -18,7 +18,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 public class ClosingSkipSideEffectsIntegrationTest {
     @Test
@@ -62,8 +61,8 @@ public class ClosingSkipSideEffectsIntegrationTest {
             ch.writeInbound(request("PING"));
             Assert.assertNull("expected no reply while executor is blocked", readOutbound(ch));
 
-            ServerRuntimeState rt = ServerConnectionContext.getOrCreate(ch).runtime();
-            Assert.assertEquals(2L, rt.commandsEnqueuedCounter().get());
+            ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
+            Assert.assertEquals(2L, context.statsSnapshot().commandsEnqueued());
 
             // Trigger an internal error: handler should mark closing and close the channel after replying.
             ch.pipeline().fireExceptionCaught(new RuntimeException("boom"));
@@ -71,13 +70,13 @@ public class ClosingSkipSideEffectsIntegrationTest {
                     ascii("{\"ok\":false,\"error\":{\"kind\":\"internal\",\"message\":\"ERR internal error\"}}\n"),
                     awaitOutbound(ch, 1000)
             );
-            Assert.assertTrue("expected runtime closing flag to be set", rt.isClosing());
+            Assert.assertTrue("expected runtime closing flag to be set", context.statsSnapshot().closing());
 
             // Allow the executor to drain: already-queued commands must be skipped to avoid side effects.
             unblock.countDown();
 
-            awaitEquals(rt.commandsSkippedClosingCounter(), 2L, 1000);
-            Assert.assertEquals(0L, rt.commandsExecutedCounter().get());
+            awaitCounter(context, c -> c.statsSnapshot().commandsSkippedClosing(), 2L, 1000);
+            Assert.assertEquals(0L, context.statsSnapshot().commandsExecuted());
             Assert.assertNull("no command reply should be produced after closing is requested", readOutbound(ch));
         } finally {
             unblock.countDown();
@@ -129,8 +128,8 @@ public class ClosingSkipSideEffectsIntegrationTest {
             ch.writeInbound(request("PING"));
             Assert.assertNull("expected no reply while executor is blocked", readOutbound(ch));
 
-            ServerRuntimeState rt = ServerConnectionContext.getOrCreate(ch).runtime();
-            Assert.assertEquals(2L, rt.commandsEnqueuedCounter().get());
+            ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
+            Assert.assertEquals(2L, context.statsSnapshot().commandsEnqueued());
 
             // Allow the executor to drain: the first task triggers an internal error on the executor thread.
             // This should mark closing and close the connection, so already-queued commands are skipped.
@@ -140,10 +139,10 @@ public class ClosingSkipSideEffectsIntegrationTest {
                     ascii("{\"ok\":false,\"error\":{\"kind\":\"internal\",\"message\":\"ERR internal error\"}}\n"),
                     awaitOutbound(ch, 1000)
             );
-            Assert.assertTrue("expected runtime closing flag to be set", rt.isClosing());
+            Assert.assertTrue("expected runtime closing flag to be set", context.statsSnapshot().closing());
 
-            awaitEquals(rt.commandsSkippedClosingCounter(), 1L, 1000);
-            Assert.assertEquals(1L, rt.commandsExecutedCounter().get());
+            awaitCounter(context, c -> c.statsSnapshot().commandsSkippedClosing(), 1L, 1000);
+            Assert.assertEquals(1L, context.statsSnapshot().commandsExecuted());
             Assert.assertNull("no command reply should be produced after internal error closing is requested", readOutbound(ch));
         } finally {
             unblock.countDown();
@@ -196,14 +195,20 @@ public class ClosingSkipSideEffectsIntegrationTest {
         }
     }
 
-    private static void awaitEquals(AtomicLong counter, long expected, long timeoutMillis) throws InterruptedException {
+    private static void awaitCounter(
+            ServerConnectionContext context,
+            java.util.function.ToLongFunction<ServerConnectionContext> counter,
+            long expected,
+            long timeoutMillis
+    ) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         for (; ; ) {
-            if (counter.get() == expected) {
+            long value = counter.applyAsLong(context);
+            if (value == expected) {
                 return;
             }
             if (System.nanoTime() >= deadline) {
-                Assert.fail("timeout waiting for counter: expected=" + expected + ", actual=" + counter.get());
+                Assert.fail("timeout waiting for counter: expected=" + expected + ", actual=" + value);
             }
             Thread.sleep(5);
         }

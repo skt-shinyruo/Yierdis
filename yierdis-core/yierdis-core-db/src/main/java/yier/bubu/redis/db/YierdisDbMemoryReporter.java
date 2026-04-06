@@ -1,12 +1,12 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.db.memory.MemoryLedger;
 import yier.bubu.redis.offheap.api.OffHeapBuf;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.YierdisMemoryStats;
 
 import java.util.function.BooleanSupplier;
-import java.util.function.LongSupplier;
 
 final class YierdisDbMemoryReporter {
     private final Runnable threadChecker;
@@ -15,8 +15,7 @@ final class YierdisDbMemoryReporter {
     private final YierdisExpireIndex expires;
     private final long maxmemoryBytes;
     private final boolean keysStoredOffHeap;
-    private final LongSupplier usedBytesSupplier;
-    private final LongSupplier reservedBytesSupplier;
+    private final MemoryLedger ledger;
     private final BooleanSupplier offHeapIncludedInMaxmemorySupplier;
 
     YierdisDbMemoryReporter(
@@ -26,8 +25,7 @@ final class YierdisDbMemoryReporter {
             YierdisExpireIndex expires,
             long maxmemoryBytes,
             boolean keysStoredOffHeap,
-            LongSupplier usedBytesSupplier,
-            LongSupplier reservedBytesSupplier,
+            MemoryLedger ledger,
             BooleanSupplier offHeapIncludedInMaxmemorySupplier
     ) {
         this.threadChecker = java.util.Objects.requireNonNull(threadChecker, "threadChecker");
@@ -36,8 +34,7 @@ final class YierdisDbMemoryReporter {
         this.expires = java.util.Objects.requireNonNull(expires, "expires");
         this.maxmemoryBytes = maxmemoryBytes;
         this.keysStoredOffHeap = keysStoredOffHeap;
-        this.usedBytesSupplier = java.util.Objects.requireNonNull(usedBytesSupplier, "usedBytesSupplier");
-        this.reservedBytesSupplier = java.util.Objects.requireNonNull(reservedBytesSupplier, "reservedBytesSupplier");
+        this.ledger = java.util.Objects.requireNonNull(ledger, "ledger");
         this.offHeapIncludedInMaxmemorySupplier = java.util.Objects.requireNonNull(
                 offHeapIncludedInMaxmemorySupplier,
                 "offHeapIncludedInMaxmemorySupplier"
@@ -70,8 +67,8 @@ final class YierdisDbMemoryReporter {
         threadChecker.run();
         return DbMemoryAccounting.snapshot(
                 maxmemoryBytes,
-                usedBytesSupplier.getAsLong(),
-                reservedBytesSupplier.getAsLong(),
+                ledger.usedBytes(),
+                ledger.reservedBytes(),
                 null,
                 runtimeUsedBytes(),
                 store,
@@ -85,7 +82,7 @@ final class YierdisDbMemoryReporter {
         threadChecker.run();
         long nativeBytes = offHeapIncludedInMaxmemorySupplier.getAsBoolean() ? runtimeUsedBytes() : 0L;
         long ttlBytes = estimateTtlBytesForMaxmemory();
-        long total = usedBytesSupplier.getAsLong() + nativeBytes;
+        long total = ledger.usedBytes() + nativeBytes;
         if (ttlBytes <= 0) {
             return total;
         }

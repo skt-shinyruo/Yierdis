@@ -1,5 +1,7 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.db.key.KeyHandle;
+import yier.bubu.redis.ops.DbMemoryConstants;
 import yier.bubu.redis.ops.ListReadOps;
 import yier.bubu.redis.ops.ListWriteOps;
 import yier.bubu.redis.ops.ValueType;
@@ -12,14 +14,19 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.IntSupplier;
+import java.util.function.ToLongBiFunction;
 
 final class YierdisListOps implements ListReadOps, ListWriteOps {
+    private static final long LIST_ELEMENT_OVERHEAD_BYTES_ESTIMATE = 32L;
+
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
-    YierdisListOps(YierdisDbInternals internals) {
+    YierdisListOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
+        this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
     @Override
@@ -89,7 +96,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                         len[0] = lv.size();
                         YierdisObject next = YierdisObject.newList(lv);
                         keyLifecycle.touch(next);
-                        internals.refreshEstimatedBytes(k, next);
+                        refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
                     }
@@ -107,7 +114,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                     old.refreshCompositeEncodingFromPayload();
                     keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
-                    internals.refreshEstimatedBytes(k, old);
+                    refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
@@ -178,7 +185,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                     }
                     old.refreshCompositeEncodingFromPayload();
                     keyLifecycle.touch(old);
-                    internals.refreshEstimatedBytes(k, old);
+                    refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
                 });
@@ -193,12 +200,49 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
     private long estimateListWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> values) {
         YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
         if (existing == null) {
-            return YierdisDb.estimateListWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, values);
+            return estimateListWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, values);
         }
         if (existing.type != ValueType.LIST) {
             return 0L;
         }
-        return YierdisDb.sumByteLengths(values);
+        return sumByteLengths(values);
+    }
+
+    private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
+        if (object == null) {
+            return;
+        }
+        object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
+    }
+
+    private static long estimateListWriteUpperBound(int keyLength, List<byte[]> values) {
+        int itemCount = values == null ? 0 : values.size();
+        return estimateCollectionWriteUpperBound(
+                keyLength,
+                sumByteLengths(values),
+                Math.multiplyExact((long) itemCount, LIST_ELEMENT_OVERHEAD_BYTES_ESTIMATE)
+        );
+    }
+
+    private static long estimateCollectionWriteUpperBound(int keyLength, long payloadBytes, long structuralBytes) {
+        return estimateStringWriteUpperBound(keyLength, 0) + Math.max(0L, payloadBytes) + Math.max(0L, structuralBytes);
+    }
+
+    private static long estimateStringWriteUpperBound(int keyLength, int valueLength) {
+        return (long) Math.max(0, keyLength) + Math.max(0, valueLength) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+    }
+
+    private static long sumByteLengths(List<byte[]> values) {
+        if (values == null || values.isEmpty()) {
+            return 0L;
+        }
+        long total = 0L;
+        for (byte[] value : values) {
+            if (value != null) {
+                total += value.length;
+            }
+        }
+        return total;
     }
 
     private static BulkStringSequence sequenceOf(IntSupplier countSupplier, BulkEmitter emitter) {

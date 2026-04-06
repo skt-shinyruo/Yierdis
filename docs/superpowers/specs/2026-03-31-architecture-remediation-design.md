@@ -6,6 +6,8 @@
 
 Execute the full architecture remediation of Yierdis without changing the external protocol, command semantics, CLI behavior, or user-visible replies.
 
+The active execution plan is now `docs/superpowers/plans/2026-04-06-architecture-remediation-replan.md`, and server command execution write-back still uses ReplyWriter.
+
 ## Confirmed Constraints
 
 - Custom Protocol v1 wire format must remain compatible.

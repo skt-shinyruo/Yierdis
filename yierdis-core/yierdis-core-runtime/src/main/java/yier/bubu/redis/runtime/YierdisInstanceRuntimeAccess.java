@@ -1,6 +1,5 @@
 package yier.bubu.redis.runtime;
 
-import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.ops.RuntimeDbEngine;
 
 import java.util.Objects;
@@ -23,13 +22,7 @@ public final class YierdisInstanceRuntimeAccess implements AutoCloseable {
      */
     public void bindToCurrentThread() {
         instance.requireOpenRuntimeAccess();
-        for (int i = 0; i < instance.databases(); i++) {
-            RuntimeDbEngine engine = engine(i);
-            if (engine == null) {
-                continue;
-            }
-            engine.bindToCurrentThread();
-        }
+        instance.resources().bindToCurrentThread();
     }
 
     /**
@@ -47,24 +40,19 @@ public final class YierdisInstanceRuntimeAccess implements AutoCloseable {
         boolean perDb = maxmemoryEnabled && config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
         boolean global = maxmemoryEnabled && config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
 
-        RuntimeDbEngine firstEngine = null;
         for (int i = 0; i < databases; i++) {
             RuntimeDbEngine engine = engine(i);
             if (engine == null) {
                 continue;
             }
-            if (firstEngine == null) {
-                firstEngine = engine;
-            }
-
             engine.expiration().cleanupExpired();
             if (perDb) {
                 engine.enforceMaxmemoryMaintenance();
             }
         }
 
-        if (global && firstEngine != null) {
-            firstEngine.enforceMaxmemoryMaintenance();
+        if (global) {
+            instance.resources().enforceGlobalMaxmemoryMaintenance();
         }
     }
 
@@ -77,56 +65,10 @@ public final class YierdisInstanceRuntimeAccess implements AutoCloseable {
             return;
         }
 
-        Throwable failure = null;
-        for (int i = 0; i < instance.databases(); i++) {
-            RuntimeDbEngine engine = engine(i);
-            if (engine == null) {
-                continue;
-            }
-            try {
-                engine.shutdown();
-            } catch (Throwable t) {
-                failure = recordFailure(failure, t);
-            }
-        }
-
-        YierdisFfmMemoryRuntime memoryRuntime = instance.runtimeMemoryRuntime();
-        if (instance.runtimeClosesMemoryRuntime() && memoryRuntime != null) {
-            try {
-                memoryRuntime.close();
-            } catch (Throwable t) {
-                failure = recordFailure(failure, t);
-            }
-        }
-
-        rethrowIfNeeded(failure);
+        instance.resources().shutdownAll();
     }
 
     RuntimeDbEngine engine(int dbIndex) {
         return instance.runtimeEngine(dbIndex);
-    }
-
-    private static Throwable recordFailure(Throwable current, Throwable next) {
-        if (next == null) {
-            return current;
-        }
-        if (current == null) {
-            return next;
-        }
-        current.addSuppressed(next);
-        return current;
-    }
-
-    private static void rethrowIfNeeded(Throwable failure) {
-        if (failure == null) {
-            return;
-        }
-        if (failure instanceof RuntimeException runtimeException) {
-            throw runtimeException;
-        }
-        if (failure instanceof Error error) {
-            throw error;
-        }
-        throw new IllegalStateException("close failed", failure);
     }
 }

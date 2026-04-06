@@ -33,6 +33,22 @@ final class ServerSessionState implements ServerSession {
         return runtime;
     }
 
+    ServerConnectionContext.ConnectionStatsSnapshot connectionStatsSnapshot() {
+        return new ServerConnectionContext.ConnectionStatsSnapshot(
+                runtime.pendingCounter().get(),
+                runtime.pendingBytesCounter().get(),
+                runtime.autoReadDisabledByExecutor(),
+                runtime.isClosing(),
+                runtime.commandsEnqueuedCounter().get(),
+                runtime.commandsExecutedCounter().get(),
+                runtime.commandsRejectedCounter().get(),
+                runtime.commandsSkippedClosingCounter().get(),
+                runtime.closeAfterReplyCounter().get(),
+                runtime.backpressureEnterCounter().get(),
+                runtime.backpressureExitCounter().get()
+        );
+    }
+
     void discardTransaction() {
         transaction.discard();
     }

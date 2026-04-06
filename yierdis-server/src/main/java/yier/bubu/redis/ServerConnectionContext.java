@@ -46,7 +46,7 @@ final class ServerConnectionContext {
         this.scheduling = new NettyExecutorChannelState();
     }
 
-    ServerSessionState session() {
+    ServerSessionState commandSession() {
         ServerSessionState existing = session;
         if (existing != null) {
             return existing;
@@ -59,12 +59,116 @@ final class ServerConnectionContext {
         }
     }
 
+    NettyExecutorChannelState queueState() {
+        return scheduling;
+    }
+
+    boolean isClosing() {
+        return runtime.isClosing();
+    }
+
+    boolean markClosing() {
+        boolean changed = !runtime.isClosing();
+        runtime.markClosing(commandSession());
+        return changed;
+    }
+
+    void recordCommandEnqueued(int retainedBytes) {
+        runtime.pendingCounter().incrementAndGet();
+        runtime.pendingBytesCounter().addAndGet(Math.max(0, retainedBytes));
+        runtime.commandsEnqueuedCounter().incrementAndGet();
+    }
+
+    void recordCommandRejected() {
+        runtime.commandsRejectedCounter().incrementAndGet();
+    }
+
+    void recordCommandFinished(int retainedBytes, boolean executed) {
+        if (executed) {
+            runtime.commandsExecutedCounter().incrementAndGet();
+        }
+        runtime.pendingCounter().decrementAndGet();
+        runtime.pendingBytesCounter().addAndGet(-Math.max(0, retainedBytes));
+    }
+
+    void recordSkippedClosing() {
+        runtime.commandsSkippedClosingCounter().incrementAndGet();
+    }
+
+    void recordCloseAfterReply() {
+        runtime.closeAfterReplyCounter().incrementAndGet();
+    }
+
+    void recordBackpressureEnter() {
+        runtime.backpressureEnterCounter().incrementAndGet();
+    }
+
+    void recordBackpressureExit() {
+        runtime.backpressureExitCounter().incrementAndGet();
+    }
+
+    int pending() {
+        return runtime.pendingCounter().get();
+    }
+
+    long pendingBytes() {
+        return runtime.pendingBytesCounter().get();
+    }
+
+    boolean markAutoReadDisabledByExecutor() {
+        return runtime.markAutoReadDisabledByExecutor();
+    }
+
+    boolean autoReadDisabledByExecutor() {
+        return runtime.autoReadDisabledByExecutor();
+    }
+
+    boolean clearAutoReadDisabledByExecutor() {
+        return runtime.clearAutoReadDisabledByExecutor();
+    }
+
+    ConnectionStatsSnapshot statsSnapshot() {
+        return new ConnectionStatsSnapshot(
+                runtime.pendingCounter().get(),
+                runtime.pendingBytesCounter().get(),
+                runtime.autoReadDisabledByExecutor(),
+                runtime.isClosing(),
+                runtime.commandsEnqueuedCounter().get(),
+                runtime.commandsExecutedCounter().get(),
+                runtime.commandsRejectedCounter().get(),
+                runtime.commandsSkippedClosingCounter().get(),
+                runtime.closeAfterReplyCounter().get(),
+                runtime.backpressureEnterCounter().get(),
+                runtime.backpressureExitCounter().get()
+        );
+    }
+
+    record ConnectionStatsSnapshot(
+            int pending,
+            long pendingBytes,
+            boolean autoReadDisabledByExecutor,
+            boolean closing,
+            long commandsEnqueued,
+            long commandsExecuted,
+            long commandsRejected,
+            long commandsSkippedClosing,
+            long closeAfterReply,
+            long backpressureEnter,
+            long backpressureExit
+    ) {
+    }
+
+    // Compatibility accessors kept for non-Task3 call sites/tests; behavior should use APIs above.
+    ServerSessionState session() {
+        return commandSession();
+    }
+
     ServerRuntimeState runtime() {
         return runtime;
     }
 
     NettyExecutorChannelState scheduling() {
-        return scheduling;
+        return queueState();
     }
 
     private synchronized void configureSessionLimits(int transactionQueueMaxCommands, long transactionQueueMaxBytes) {

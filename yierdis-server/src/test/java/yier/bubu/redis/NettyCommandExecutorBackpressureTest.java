@@ -41,7 +41,7 @@ public class NettyCommandExecutorBackpressureTest {
                 // 第一次入队成功（执行器未 start，因此不会产生响应）。
                 ch.writeInbound(request("PING"));
                 Assert.assertNull(ch.readOutbound());
-                Assert.assertEquals(1L, ServerConnectionContext.getOrCreate(ch).runtime().commandsEnqueuedCounter().get());
+                Assert.assertEquals(1L, ServerConnectionContext.getOrCreate(ch).statsSnapshot().commandsEnqueued());
 
                 // 第二次入队失败，立刻返回 busy 错误。
                 ch.writeInbound(request("PING"));
@@ -86,7 +86,7 @@ public class NettyCommandExecutorBackpressureTest {
                 // ch2 is rejected: should return busy and enter backpressure (autoRead disabled).
                 ch2.writeInbound(request("PING"));
                 Assert.assertArrayEquals(ascii("{\"ok\":false,\"error\":{\"kind\":\"command\",\"message\":\"ERR busy queue_full\"}}\n"), readOutbound(ch2));
-                Assert.assertEquals(1L, ServerConnectionContext.getOrCreate(ch2).runtime().commandsRejectedCounter().get());
+                Assert.assertEquals(1L, ServerConnectionContext.getOrCreate(ch2).statsSnapshot().commandsRejected());
                 ch1.runPendingTasks();
                 ch2.runPendingTasks();
                 Assert.assertFalse(ch2.config().isAutoRead());
@@ -131,7 +131,7 @@ public class NettyCommandExecutorBackpressureTest {
                 // executor 未 start 时不会 drain，pending 会累积并触发 backpressure。
                 ch.writeInbound(request("PING"));
                 ch.writeInbound(request("PING"));
-                Assert.assertEquals(2, ServerConnectionContext.getOrCreate(ch).runtime().pendingCounter().get());
+                Assert.assertEquals(2, ServerConnectionContext.getOrCreate(ch).statsSnapshot().pending());
                 ch.runPendingTasks();
                 Assert.assertFalse("autoRead should be disabled when pending >= high watermark", ch.config().isAutoRead());
 

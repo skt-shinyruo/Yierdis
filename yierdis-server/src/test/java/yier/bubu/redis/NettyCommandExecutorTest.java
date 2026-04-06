@@ -59,16 +59,16 @@ public class NettyCommandExecutorTest {
         EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
         try {
             ch.writeInbound(request("PING"));
-            ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
-            Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
-            Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
-            Assert.assertEquals(0L, conn.commandsRejectedCounter().get());
+            ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
+            Assert.assertEquals(1L, context.statsSnapshot().commandsEnqueued());
+            Assert.assertEquals(0L, context.statsSnapshot().commandsExecuted());
+            Assert.assertEquals(0L, context.statsSnapshot().commandsRejected());
             Assert.assertNull("first command should be queued (no reply yet)", ch.readOutbound());
 
             ch.writeInbound(request("PING"));
-            Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
-            Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
-            Assert.assertEquals(1L, conn.commandsRejectedCounter().get());
+            Assert.assertEquals(1L, context.statsSnapshot().commandsEnqueued());
+            Assert.assertEquals(0L, context.statsSnapshot().commandsExecuted());
+            Assert.assertEquals(1L, context.statsSnapshot().commandsRejected());
             Assert.assertArrayEquals(ascii("{\"ok\":false,\"error\":{\"kind\":\"command\",\"message\":\"ERR busy queue_full\"}}\n"), readOutbound(ch));
         } finally {
             unblock.countDown();
@@ -126,9 +126,9 @@ public class NettyCommandExecutorTest {
             // Enqueue 2 commands while executor is blocked.
             ch.writeInbound(request("PING"));
             ch.writeInbound(request("PING"));
-            ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
-            Assert.assertEquals(2L, conn.commandsEnqueuedCounter().get());
-            Assert.assertEquals(0L, conn.commandsExecutedCounter().get());
+            ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
+            Assert.assertEquals(2L, context.statsSnapshot().commandsEnqueued());
+            Assert.assertEquals(0L, context.statsSnapshot().commandsExecuted());
 
             // Queue a second blocker behind the first drain tick, so we can observe intermediate state.
             eventExecutor.submit(() -> {
@@ -144,14 +144,14 @@ public class NettyCommandExecutorTest {
             // Only the first command should have been processed in the first drain tick.
             byte[] r1 = awaitOutbound(ch, 1000);
             Assert.assertArrayEquals(ascii("{\"ok\":true,\"result\":\"PONG\"}\n"), r1);
-            Assert.assertEquals(1L, conn.commandsExecutedCounter().get());
+            Assert.assertEquals(1L, context.statsSnapshot().commandsExecuted());
             Assert.assertNull("second reply must wait for next drain tick", readOutbound(ch));
 
             // Allow the second drain tick to run and produce the second reply.
             unblock2.countDown();
             byte[] r2 = awaitOutbound(ch, 1000);
             Assert.assertArrayEquals(ascii("{\"ok\":true,\"result\":\"PONG\"}\n"), r2);
-            Assert.assertEquals(2L, conn.commandsExecutedCounter().get());
+            Assert.assertEquals(2L, context.statsSnapshot().commandsExecuted());
         } finally {
             unblock2.countDown();
             executor.shutdownGracefully().syncUninterruptibly();
@@ -199,13 +199,13 @@ public class NettyCommandExecutorTest {
             Assert.assertTrue(ch.config().isAutoRead());
 
             ch.writeInbound(request("PING"));
-            ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
-            Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
+            ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
+            Assert.assertEquals(1L, context.statsSnapshot().commandsEnqueued());
 
             ch.runPendingTasks();
             Assert.assertFalse("autoRead should be disabled after reaching high watermark", ch.config().isAutoRead());
-            Assert.assertEquals(1L, conn.backpressureEnterCounter().get());
-            Assert.assertEquals(0L, conn.backpressureExitCounter().get());
+            Assert.assertEquals(1L, context.statsSnapshot().backpressureEnter());
+            Assert.assertEquals(0L, context.statsSnapshot().backpressureExit());
 
             unblock.countDown();
 
@@ -215,9 +215,9 @@ public class NettyCommandExecutorTest {
 
             ch.runPendingTasks();
             Assert.assertTrue("autoRead should be re-enabled after backlog drains", ch.config().isAutoRead());
-            Assert.assertEquals(1L, conn.backpressureEnterCounter().get());
-            Assert.assertEquals(1L, conn.backpressureExitCounter().get());
-            Assert.assertEquals(1L, conn.commandsExecutedCounter().get());
+            Assert.assertEquals(1L, context.statsSnapshot().backpressureEnter());
+            Assert.assertEquals(1L, context.statsSnapshot().backpressureExit());
+            Assert.assertEquals(1L, context.statsSnapshot().commandsExecuted());
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().syncUninterruptibly();
@@ -332,16 +332,16 @@ public class NettyCommandExecutorTest {
 
             ch.writeInbound(request("PING"));
 
-            ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
-            Assert.assertEquals(1L, conn.commandsEnqueuedCounter().get());
-            Assert.assertEquals(1, conn.pendingCounter().get());
-            Assert.assertTrue("sanity: pending should be below high watermark, so bytes must be the trigger", conn.pendingCounter().get() < 256);
-            Assert.assertTrue("sanity: pending bytes should be > 0", conn.pendingBytesCounter().get() > 0);
+            ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
+            Assert.assertEquals(1L, context.statsSnapshot().commandsEnqueued());
+            Assert.assertEquals(1, context.statsSnapshot().pending());
+            Assert.assertTrue("sanity: pending should be below high watermark, so bytes must be the trigger", context.statsSnapshot().pending() < 256);
+            Assert.assertTrue("sanity: pending bytes should be > 0", context.statsSnapshot().pendingBytes() > 0);
 
             ch.runPendingTasks();
             Assert.assertFalse("autoRead should be disabled after reaching bytes high watermark", ch.config().isAutoRead());
-            Assert.assertEquals(1L, conn.backpressureEnterCounter().get());
-            Assert.assertEquals(0L, conn.backpressureExitCounter().get());
+            Assert.assertEquals(1L, context.statsSnapshot().backpressureEnter());
+            Assert.assertEquals(0L, context.statsSnapshot().backpressureExit());
 
             unblock.countDown();
 
@@ -349,11 +349,11 @@ public class NettyCommandExecutorTest {
 
             ch.runPendingTasks();
             Assert.assertTrue("autoRead should be re-enabled after bytes backlog drains", ch.config().isAutoRead());
-            Assert.assertEquals(1L, conn.backpressureEnterCounter().get());
-            Assert.assertEquals(1L, conn.backpressureExitCounter().get());
-            Assert.assertEquals(1L, conn.commandsExecutedCounter().get());
-            Assert.assertEquals(0, conn.pendingCounter().get());
-            Assert.assertEquals(0L, conn.pendingBytesCounter().get());
+            Assert.assertEquals(1L, context.statsSnapshot().backpressureEnter());
+            Assert.assertEquals(1L, context.statsSnapshot().backpressureExit());
+            Assert.assertEquals(1L, context.statsSnapshot().commandsExecuted());
+            Assert.assertEquals(0, context.statsSnapshot().pending());
+            Assert.assertEquals(0L, context.statsSnapshot().pendingBytes());
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().syncUninterruptibly();
@@ -402,9 +402,9 @@ public class NettyCommandExecutorTest {
             ch.writeInbound(request("QUIT"));
             ch.writeInbound(request("PING"));
 
-            ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
-            Assert.assertEquals(2L, conn.commandsEnqueuedCounter().get());
-            Assert.assertEquals(0L, conn.closeAfterReplyCounter().get());
+            ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
+            Assert.assertEquals(2L, context.statsSnapshot().commandsEnqueued());
+            Assert.assertEquals(0L, context.statsSnapshot().closeAfterReply());
 
             unblock.countDown();
 
@@ -418,9 +418,9 @@ public class NettyCommandExecutorTest {
             ch.runPendingTasks();
             ch.runScheduledPendingTasks();
 
-            Assert.assertEquals(1L, conn.closeAfterReplyCounter().get());
-            Assert.assertEquals(1L, conn.commandsExecutedCounter().get());
-            Assert.assertEquals(1L, conn.commandsSkippedClosingCounter().get());
+            Assert.assertEquals(1L, context.statsSnapshot().closeAfterReply());
+            Assert.assertEquals(1L, context.statsSnapshot().commandsExecuted());
+            Assert.assertEquals(1L, context.statsSnapshot().commandsSkippedClosing());
         } finally {
             unblock.countDown();
             executor.shutdownGracefully().syncUninterruptibly();

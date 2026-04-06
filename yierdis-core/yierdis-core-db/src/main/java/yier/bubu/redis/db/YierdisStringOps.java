@@ -18,16 +18,19 @@ import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.function.ToLongBiFunction;
 
 final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private static final long TTL_ENTRY_BYTES_ESTIMATE = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
 
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
-    YierdisStringOps(YierdisDbInternals internals) {
+    YierdisStringOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
+        this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
     @Override
@@ -85,14 +88,14 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                         didSet[0] = true;
                         YierdisObject next = YierdisObject.newString(keyLifecycle.offHeapAllocator(), value);
                         keyLifecycle.touch(next);
-                        internals.refreshEstimatedBytes(k, next);
+                        refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
                     }
                     old.overwriteWithString(keyLifecycle.offHeapAllocator(), value);
                     keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
-                    internals.refreshEstimatedBytes(k, old);
+                    refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
                     didSet[0] = true;
                     return old;
@@ -168,7 +171,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                         newLen[0] = created.stringByteLength();
                         changed[0] = true;
                         keyLifecycle.touch(created);
-                        internals.refreshEstimatedBytes(k, created);
+                        refreshEstimatedBytes(k, created);
                         deltaBytes[0] += created.estimatedBytes;
                         return created;
                     }
@@ -183,7 +186,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                         changed[0] = true;
                     }
                     deltaBytes[0] -= oldEstimate;
-                    internals.refreshEstimatedBytes(k, old);
+                    refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
@@ -242,7 +245,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                         changed[0] = true;
                     }
                     deltaBytes[0] -= oldEstimate;
-                    internals.refreshEstimatedBytes(k, old);
+                    refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
@@ -283,7 +286,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                         result[0] = delta;
                         YierdisObject created = YierdisObject.newStringInt(delta);
                         keyLifecycle.touch(created);
-                        internals.refreshEstimatedBytes(k, created);
+                        refreshEstimatedBytes(k, created);
                         deltaBytes[0] += created.estimatedBytes;
                         changed[0] = true;
                         return created;
@@ -295,7 +298,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     result[0] = old.stringIncrBy(keyLifecycle.offHeapAllocator(), delta);
                     keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
-                    internals.refreshEstimatedBytes(k, old);
+                    refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
                     changed[0] = true;
                     return old;
@@ -470,6 +473,13 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
             return count;
         }
         return 0L;
+    }
+
+    private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
+        if (object == null) {
+            return;
+        }
+        object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
     }
 
     private static long estimateStringWriteUpperBound(int keyLength, int valueLength) {

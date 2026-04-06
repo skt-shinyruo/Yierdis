@@ -9,8 +9,6 @@ import yier.bubu.redis.executor.ExecutorBackpressureController;
 import yier.bubu.redis.executor.ExecutorTaskQueue;
 
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
 
@@ -63,22 +61,22 @@ final class NettyCommandSubmitter {
         Objects.requireNonNull(ctx, "ctx");
         Objects.requireNonNull(cmd, "cmd");
         Channel ch = ctx.channel();
-        ServerRuntimeState conn = ServerConnectionContext.getOrCreate(ch).runtime();
+        ServerConnectionContext connection = ServerConnectionContext.getOrCreate(ch);
         if (!running.getAsBoolean()) {
             submitRejectedNotRunning.increment();
-            conn.commandsRejectedCounter().incrementAndGet();
+            connection.recordCommandRejected();
             return NettyCommandExecutor.SubmitRejectReason.NOT_RUNNING;
         }
 
-        AtomicInteger pending = conn.pendingCounter();
-        AtomicLong pendingBytes = conn.pendingBytesCounter();
+        int pending = connection.pending();
+        long pendingBytes = connection.pendingBytes();
         if (backlogBudget.isGlobalBackpressureHigh()) {
             backpressureController.disableAutoRead(ch);
         }
-        if (pending.get() >= backpressureHighWatermark) {
+        if (pending >= backpressureHighWatermark) {
             backpressureController.disableAutoRead(ch);
         }
-        if (backpressureBytesHighWatermark > 0 && pendingBytes.get() >= backpressureBytesHighWatermark) {
+        if (backpressureBytesHighWatermark > 0 && pendingBytes >= backpressureBytesHighWatermark) {
             backpressureController.disableAutoRead(ch);
         }
 
@@ -87,7 +85,7 @@ final class NettyCommandSubmitter {
             // Global queue full: apply backpressure to avoid busy storms.
             backpressureController.disableAutoRead(ch);
             submitRejectedQueueFull.increment();
-            conn.commandsRejectedCounter().incrementAndGet();
+            connection.recordCommandRejected();
             return NettyCommandExecutor.SubmitRejectReason.QUEUE_FULL;
         }
         reservedSlot = true;
@@ -102,7 +100,7 @@ final class NettyCommandSubmitter {
                 }
                 backpressureController.disableAutoRead(ch);
                 submitRejectedBytesBudget.increment();
-                conn.commandsRejectedCounter().incrementAndGet();
+                connection.recordCommandRejected();
                 return NettyCommandExecutor.SubmitRejectReason.BYTES_BUDGET;
             }
             reservedBytes = true;
@@ -115,18 +113,18 @@ final class NettyCommandSubmitter {
                 }
                 backpressureController.disableAutoRead(ch);
                 submitRejectedOfferFailed.increment();
-                conn.commandsRejectedCounter().incrementAndGet();
+                connection.recordCommandRejected();
                 return NettyCommandExecutor.SubmitRejectReason.OFFER_FAILED;
             }
 
             submitAccepted.increment();
-            conn.commandsEnqueuedCounter().incrementAndGet();
-            int now = pending.incrementAndGet();
+            connection.recordCommandEnqueued(retainedBytes);
+            int now = connection.pending();
             if (now >= backpressureHighWatermark) {
                 backpressureController.disableAutoRead(ch);
             }
 
-            long bytesNow = pendingBytes.addAndGet(retainedBytes);
+            long bytesNow = connection.pendingBytes();
             if (backpressureBytesHighWatermark > 0 && bytesNow >= backpressureBytesHighWatermark) {
                 backpressureController.disableAutoRead(ch);
             }
@@ -144,7 +142,7 @@ final class NettyCommandSubmitter {
                 backlogBudget.releaseSlot();
             }
             submitRejectedOfferFailed.increment();
-            conn.commandsRejectedCounter().incrementAndGet();
+            connection.recordCommandRejected();
             log.debug("Failed to submit command", t);
             return NettyCommandExecutor.SubmitRejectReason.OFFER_FAILED;
         }

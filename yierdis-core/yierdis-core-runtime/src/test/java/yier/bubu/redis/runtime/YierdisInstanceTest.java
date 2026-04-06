@@ -16,6 +16,7 @@ import yier.bubu.redis.ops.MemoryOps;
 import yier.bubu.redis.ops.RuntimeDbEngine;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyError;
+import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.util.ArrayList;
@@ -202,6 +203,63 @@ public class YierdisInstanceTest {
         Assert.assertEquals(1, engine.maxmemoryMaintenanceCalls);
     }
 
+    @Test
+    public void globalMaintenanceUsesGovernorInsteadOfFirstEngineRuntimeHook() {
+        TrackingRuntimeDbEngine engine0 = new TrackingRuntimeDbEngine();
+        TrackingRuntimeDbEngine engine1 = new TrackingRuntimeDbEngine();
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(2)
+                .engineFactory((dbIndex,
+                                maxmemoryBytes,
+                                maxmemoryPolicy,
+                                maxmemorySamples,
+                                evictionTimeLimitMillis,
+                                expireCleanupTimeLimitMillis) -> dbIndex == 0 ? engine0 : engine1)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
+                .maxmemoryBytes(128)
+                .build();
+
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
+            instance.bindToCurrentThread();
+            new YierdisInstanceMaintenance(instance).maintenanceTick();
+        }
+
+        Assert.assertEquals(1, engine0.expirationCleanupCalls);
+        Assert.assertEquals(1, engine1.expirationCleanupCalls);
+        Assert.assertEquals(0, engine0.maxmemoryMaintenanceCalls);
+        Assert.assertEquals(0, engine1.maxmemoryMaintenanceCalls);
+        Assert.assertEquals(1, engine0.participantCleanupCalls);
+        Assert.assertEquals(1, engine1.participantCleanupCalls);
+    }
+
+    @Test
+    public void observabilityDbSummariesExposePerDbKeysAndExpires() {
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(2)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
+                .build();
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
+            instance.bindToCurrentThread();
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+            TestSession session = new TestSession();
+            try (FastTestClient client = new FastTestClient(processor, session)) {
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("k0"), b("v0")))).value());
+                Assert.assertEquals(1L, ((ReplyInteger) client.execute(Arrays.asList(b("EXPIRE"), b("k0"), b("60")))).value());
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SELECT"), b("1")))).value());
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("k1"), b("v1")))).value());
+            }
+
+            List<YierdisInstanceObservability.YierdisDbSummary> summaries = instance.observability().dbSummaries();
+            Assert.assertEquals(2, summaries.size());
+            Assert.assertEquals(0, summaries.get(0).dbIndex());
+            Assert.assertEquals(1, summaries.get(0).keyCount());
+            Assert.assertEquals(1, summaries.get(0).expireCount());
+            Assert.assertEquals(1, summaries.get(1).dbIndex());
+            Assert.assertEquals(1, summaries.get(1).keyCount());
+            Assert.assertEquals(0, summaries.get(1).expireCount());
+        }
+    }
+
     private static final class TestSession implements ServerSession {
         private int dbIndex;
         private String clientName;
@@ -380,6 +438,7 @@ public class YierdisInstanceTest {
         private int expirationCleanupCalls;
         private int maxmemoryMaintenanceCalls;
         private int shutdownCalls;
+        private int participantCleanupCalls;
 
         @Override
         public void bindToCurrentThread() {
@@ -394,6 +453,11 @@ public class YierdisInstanceTest {
         @Override
         public void shutdown() {
             shutdownCalls++;
+        }
+
+        @Override
+        public void cleanupExpired(long nowMillis) {
+            participantCleanupCalls++;
         }
 
         @Override

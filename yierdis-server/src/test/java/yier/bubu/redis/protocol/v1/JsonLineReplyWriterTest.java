@@ -6,6 +6,9 @@ import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.charset.StandardCharsets;
 
 public class JsonLineReplyWriterTest {
@@ -143,6 +146,29 @@ public class JsonLineReplyWriterTest {
         Assert.assertEquals("{\"ok\":false,\"error\":{\"kind\":\"command\",\"message\":\"" + sanitized + "\"}}\n", sink.utf8());
     }
 
+    @Test
+    public void architectureDocsMustKeepReplyWriterAsServerWriteAuthority() throws Exception {
+        Path workspaceRoot = resolveWorkspaceRoot();
+        Assert.assertNotNull("missing workspace root", workspaceRoot);
+
+        String readme = Files.readString(workspaceRoot.resolve("README.md"), StandardCharsets.UTF_8);
+        Assert.assertTrue(readme.contains("server command execution write-back still uses ReplyWriter"));
+
+        String design = Files.readString(
+                workspaceRoot.resolve("docs/superpowers/specs/2026-03-31-architecture-remediation-design.md"),
+                StandardCharsets.UTF_8
+        );
+        Assert.assertTrue(design.contains("server command execution write-back still uses ReplyWriter"));
+
+        String legacyRoadmap = Files.readString(
+                workspaceRoot.resolve("docs/superpowers/plans/2026-04-04-architecture-refactor-roadmap.md"),
+                StandardCharsets.UTF_8
+        );
+        Assert.assertTrue(
+                legacyRoadmap.contains("This roadmap is superseded by `docs/superpowers/plans/2026-04-06-architecture-remediation-replan.md`.")
+        );
+    }
+
     private static String writeBulkString(byte[] bytes) {
         ByteArraySink sink = new ByteArraySink();
         JsonLineReplyWriter w = new JsonLineReplyWriter(sink);
@@ -206,5 +232,19 @@ public class JsonLineReplyWriterTest {
         String utf8() {
             return baos.toString(StandardCharsets.UTF_8);
         }
+    }
+
+    private static Path resolveWorkspaceRoot() {
+        Path cwd = Paths.get("").toAbsolutePath().normalize();
+        Path cursor = cwd;
+        while (cursor != null) {
+            if (Files.isRegularFile(cursor.resolve("README.md"))
+                    && Files.isDirectory(cursor.resolve("yierdis-server/src/main/java"))
+                    && Files.isDirectory(cursor.resolve("docs/superpowers"))) {
+                return cursor;
+            }
+            cursor = cursor.getParent();
+        }
+        return null;
     }
 }
