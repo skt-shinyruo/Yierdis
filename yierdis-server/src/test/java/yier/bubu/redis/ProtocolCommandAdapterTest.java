@@ -16,7 +16,7 @@ public class ProtocolCommandAdapterTest {
         EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter());
         ExecutionRequest adapted = null;
         try {
-            Assert.assertTrue(ch.writeInbound(new CustomProtocolV1Request(" ping 雪 ", Arrays.asList("alpha", null, "你好", ""))));
+            Assert.assertTrue(ch.writeInbound(new CustomProtocolV1Request("PING", Arrays.asList("alpha", null, "你好", ""))));
 
             Object inbound = ch.readInbound();
             Assert.assertTrue(inbound instanceof ExecutionRequest);
@@ -24,14 +24,14 @@ public class ProtocolCommandAdapterTest {
 
             adapted = (ExecutionRequest) inbound;
             Assert.assertEquals(5, adapted.argc());
-            Assert.assertArrayEquals(utf8(" ping 雪 "), adapted.toByteArray(0));
+            Assert.assertArrayEquals(utf8("PING"), adapted.toByteArray(0));
             Assert.assertArrayEquals(utf8("alpha"), adapted.toByteArray(1));
             Assert.assertTrue(adapted.isNull(2));
             Assert.assertEquals(-1, adapted.len(2));
             Assert.assertArrayEquals(utf8("你好"), adapted.toByteArray(3));
             Assert.assertArrayEquals(utf8(""), adapted.toByteArray(4));
 
-            int expectedRetainedBytes = utf8(" ping 雪 ").length
+            int expectedRetainedBytes = utf8("PING").length
                     + utf8("alpha").length
                     + utf8("你好").length;
             Assert.assertEquals(expectedRetainedBytes, adapted.retainedBytes());

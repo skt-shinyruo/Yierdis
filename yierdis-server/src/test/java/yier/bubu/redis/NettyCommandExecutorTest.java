@@ -4,10 +4,10 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutor;
+import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
@@ -17,9 +17,9 @@ import yier.bubu.redis.runtime.YierdisInstanceConfig;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class NettyCommandExecutorTest {
     @Test
@@ -87,7 +87,7 @@ public class NettyCommandExecutorTest {
     }
 
     @Test
-    public void handlerExecutesDirectExecutionRequestMessages() throws Exception {
+    public void handlerClosesRejectedDirectExecutionRequests() throws Exception {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
@@ -98,7 +98,7 @@ public class NettyCommandExecutorTest {
                 processor,
                 eventExecutor,
                 new JsonLineReplyWriterFactory(),
-                16,
+                1,
                 0,
                 256,
                 128,
@@ -110,16 +110,146 @@ public class NettyCommandExecutorTest {
         );
         executor.start();
 
+        CountDownLatch blockerStarted = new CountDownLatch(1);
+        CountDownLatch unblock = new CountDownLatch(1);
+        eventExecutor.submit(() -> {
+            blockerStarted.countDown();
+            unblock.await();
+            return null;
+        });
+        Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
+
         EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
         try {
-            ch.writeInbound(ByteArrayExecutionRequest.fromUtf8("PING", List.of()));
-            Assert.assertArrayEquals(ascii("{\"ok\":true,\"result\":\"PONG\"}\n"), awaitOutbound(ch, 1000));
-            Assert.assertEquals(1L, ServerConnectionContext.getOrCreate(ch).statsSnapshot().commandsExecuted());
+            ch.writeInbound(TrackingExecutionRequest.ofUtf8("PING"));
+            TrackingExecutionRequest rejected = TrackingExecutionRequest.ofUtf8("PING");
+            ch.writeInbound(rejected);
+
+            Assert.assertEquals(1, rejected.closeCalls());
+            Assert.assertEquals(1L, ServerConnectionContext.getOrCreate(ch).statsSnapshot().commandsRejected());
         } finally {
+            unblock.countDown();
             executor.shutdownGracefully().syncUninterruptibly();
             executor.executor().submit(instance::close).syncUninterruptibly();
             group.shutdownGracefully().syncUninterruptibly();
             ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void handlerExecutesDirectExecutionRequestMessages() throws Exception {
+        try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+            NettyCommandExecutor executor = new NettyCommandExecutor(
+                    instance::bindToCurrentThread,
+                    processor,
+                    ImmediateEventExecutor.INSTANCE,
+                    new JsonLineReplyWriterFactory(),
+                    16,
+                    0,
+                    256,
+                    128,
+                    0,
+                    0,
+                    128,
+                    10,
+                    SchedulingPolicy.FAIR
+            );
+            executor.start();
+
+            EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+            try {
+                TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("PING");
+                ch.writeInbound(request);
+                Assert.assertArrayEquals(ascii("{\"ok\":true,\"result\":\"PONG\"}\n"), awaitOutbound(ch, 1000));
+                Assert.assertEquals(1, request.closeCalls());
+                Assert.assertEquals(1L, ServerConnectionContext.getOrCreate(ch).statsSnapshot().commandsExecuted());
+            } finally {
+                executor.close();
+                ch.finishAndReleaseAll();
+            }
+        }
+    }
+
+    @Test
+    public void closingChannelsRecycleQueuedExecutionRequestsWithoutExecuting() {
+        try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+            NettyCommandExecutor executor = new NettyCommandExecutor(
+                    instance::bindToCurrentThread,
+                    processor,
+                    ImmediateEventExecutor.INSTANCE,
+                    new JsonLineReplyWriterFactory(),
+                    16,
+                    0,
+                    256,
+                    128,
+                    0,
+                    0,
+                    128,
+                    10,
+                    SchedulingPolicy.FAIR
+            );
+            executor.start();
+
+            EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+            try {
+                ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
+                Assert.assertTrue(context.markClosing());
+
+                TrackingExecutionRequest request = TrackingExecutionRequest.ofUtf8("PING");
+                ch.writeInbound(request);
+
+                Assert.assertNull(readOutbound(ch));
+                Assert.assertEquals(1, request.closeCalls());
+                Assert.assertEquals(1L, context.statsSnapshot().commandsEnqueued());
+                Assert.assertEquals(0L, context.statsSnapshot().commandsExecuted());
+                Assert.assertEquals(1L, context.statsSnapshot().commandsSkippedClosing());
+            } finally {
+                executor.close();
+                ch.finishAndReleaseAll();
+            }
+        }
+    }
+
+    @Test
+    public void executionFailureClosesAcceptedExecutionRequests() throws Exception {
+        try (YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build())) {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+            NettyCommandExecutor executor = new NettyCommandExecutor(
+                    instance::bindToCurrentThread,
+                    processor,
+                    ImmediateEventExecutor.INSTANCE,
+                    new JsonLineReplyWriterFactory(),
+                    16,
+                    0,
+                    256,
+                    128,
+                    0,
+                    0,
+                    128,
+                    10,
+                    SchedulingPolicy.FAIR
+            );
+            executor.start();
+
+            EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+            try {
+                TrackingExecutionRequest request = TrackingExecutionRequest.failingOnCommandRead("PING");
+                ch.writeInbound(request);
+
+                Assert.assertArrayEquals(
+                        ascii("{\"ok\":false,\"error\":{\"kind\":\"internal\",\"message\":\"ERR internal error\"}}\n"),
+                        awaitOutbound(ch, 1000)
+                );
+                Assert.assertEquals(1, request.closeCalls());
+                ch.runPendingTasks();
+                ch.runScheduledPendingTasks();
+                Assert.assertFalse(ch.isActive());
+            } finally {
+                executor.close();
+                ch.finishAndReleaseAll();
+            }
         }
     }
 
@@ -547,6 +677,104 @@ public class NettyCommandExecutorTest {
         @Override
         public void close() {
             // no-op
+        }
+    }
+
+    private static final class TrackingExecutionRequest implements ExecutionRequest {
+        private final byte[][] argv;
+        private final int retainedBytes;
+        private final boolean failOnCommandRead;
+        private final AtomicInteger closeCalls = new AtomicInteger();
+
+        private TrackingExecutionRequest(byte[][] argv, int retainedBytes, boolean failOnCommandRead) {
+            this.argv = argv;
+            this.retainedBytes = retainedBytes;
+            this.failOnCommandRead = failOnCommandRead;
+        }
+
+        static TrackingExecutionRequest ofUtf8(String cmd, String... args) {
+            return fromUtf8(false, cmd, args);
+        }
+
+        static TrackingExecutionRequest failingOnCommandRead(String cmd, String... args) {
+            return fromUtf8(true, cmd, args);
+        }
+
+        private static TrackingExecutionRequest fromUtf8(boolean failOnCommandRead, String cmd, String... args) {
+            byte[][] argv = new byte[args.length + 1][];
+            int retainedBytes = 0;
+
+            argv[0] = utf8(cmd);
+            retainedBytes += argv[0].length;
+
+            for (int i = 0; i < args.length; i++) {
+                if (args[i] == null) {
+                    continue;
+                }
+                argv[i + 1] = utf8(args[i]);
+                retainedBytes += argv[i + 1].length;
+            }
+            return new TrackingExecutionRequest(argv, retainedBytes, failOnCommandRead);
+        }
+
+        int closeCalls() {
+            return closeCalls.get();
+        }
+
+        @Override
+        public int retainedBytes() {
+            return retainedBytes;
+        }
+
+        @Override
+        public int argc() {
+            return argv.length;
+        }
+
+        @Override
+        public boolean isNull(int index) {
+            return argv[index] == null;
+        }
+
+        @Override
+        public int len(int index) {
+            byte[] arg = argv[index];
+            return arg == null ? -1 : arg.length;
+        }
+
+        @Override
+        public byte byteAt(int index, int offset) {
+            if (failOnCommandRead && index == 0) {
+                throw new RuntimeException("boom");
+            }
+            return argv[index][offset];
+        }
+
+        @Override
+        public void copyToByteArray(int index, byte[] dst, int dstOff) {
+            byte[] arg = argv[index];
+            if (arg == null) {
+                throw new IllegalStateException("arg is null");
+            }
+            System.arraycopy(arg, 0, dst, dstOff, arg.length);
+        }
+
+        @Override
+        public byte[] toByteArray(int index) {
+            byte[] arg = argv[index];
+            if (arg == null) {
+                return null;
+            }
+            return arg.clone();
+        }
+
+        @Override
+        public void close() {
+            closeCalls.incrementAndGet();
+        }
+
+        private static byte[] utf8(String value) {
+            return value.getBytes(StandardCharsets.UTF_8);
         }
     }
 }
