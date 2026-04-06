@@ -11,19 +11,7 @@ import yier.bubu.redis.bytes.BytesSource;
  * This interface is intentionally minimal and byte-oriented to support low-allocation execution and to keep the
  * command layer independent from any specific wire protocol.
  */
-public interface Command extends AutoCloseable {
-    int argc();
-
-    boolean isNull(int index);
-
-    int len(int index);
-
-    byte byteAt(int index, int offset);
-
-    void copyToByteArray(int index, byte[] dst, int dstOff);
-
-    byte[] toByteArray(int index);
-
+public interface Command extends ExecutionRequest {
     /**
      * Optional backing bytes for this command.
      * <p>
@@ -41,17 +29,4 @@ public interface Command extends AutoCloseable {
     default int argOffset(int index) {
         return -1;
     }
-
-    /**
-     * Estimated bytes retained by keeping this command alive while queued.
-     * <p>
-     * The returned value MUST be stable for the lifetime of the command.
-     */
-    default int retainedBytes() {
-        return 0;
-    }
-
-    @Override
-    void close();
 }
-

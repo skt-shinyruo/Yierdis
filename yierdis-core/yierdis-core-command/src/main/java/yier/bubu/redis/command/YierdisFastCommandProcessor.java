@@ -6,6 +6,7 @@ import yier.bubu.redis.ops.WrongTypeException;
 import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.DbIndexProvider;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ServerSession;
@@ -92,6 +93,15 @@ public final class YierdisFastCommandProcessor {
     }
 
     public void execute(Command cmd, CommandContext ctx) {
+        execute((ExecutionRequest) cmd, ctx);
+    }
+
+    public void execute(ExecutionRequest request, CommandContext ctx) {
+        Objects.requireNonNull(request, "request");
+        executeCommand(request instanceof Command command ? command : new ExecutionRequestCommandAdapter(request), ctx);
+    }
+
+    private void executeCommand(Command cmd, CommandContext ctx) {
         Objects.requireNonNull(ctx, "ctx");
         ReplyWriter out = ctx.out();
         int argc = cmd.argc();
@@ -186,6 +196,54 @@ public final class YierdisFastCommandProcessor {
             out.error("OOM off-heap memory limit exceeded");
         } catch (IllegalArgumentException e) {
             out.error("ERR " + e.getMessage());
+        }
+    }
+
+    private static final class ExecutionRequestCommandAdapter implements Command {
+        private final ExecutionRequest request;
+
+        private ExecutionRequestCommandAdapter(ExecutionRequest request) {
+            this.request = request;
+        }
+
+        @Override
+        public int argc() {
+            return request.argc();
+        }
+
+        @Override
+        public boolean isNull(int index) {
+            return request.isNull(index);
+        }
+
+        @Override
+        public int len(int index) {
+            return request.len(index);
+        }
+
+        @Override
+        public byte byteAt(int index, int offset) {
+            return request.byteAt(index, offset);
+        }
+
+        @Override
+        public void copyToByteArray(int index, byte[] dst, int dstOff) {
+            request.copyToByteArray(index, dst, dstOff);
+        }
+
+        @Override
+        public byte[] toByteArray(int index) {
+            return request.toByteArray(index);
+        }
+
+        @Override
+        public int retainedBytes() {
+            return request.retainedBytes();
+        }
+
+        @Override
+        public void close() {
+            request.close();
         }
     }
 

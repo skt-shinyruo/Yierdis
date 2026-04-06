@@ -2,8 +2,9 @@ package yier.bubu.redis.testutil;
 
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
@@ -35,73 +36,23 @@ public final class FastTestClient implements AutoCloseable {
 
     public ReplyObject execute(List<byte[]> args) {
         Objects.requireNonNull(args, "args");
-        HeapCommand cmd = new HeapCommand(args);
+        return execute(ByteArrayExecutionRequest.copyOf(args));
+    }
+
+    public ReplyObject execute(ExecutionRequest request) {
+        Objects.requireNonNull(request, "request");
         CapturingReplyWriter writer = new CapturingReplyWriter();
-        processor.execute(cmd, new CommandContext(session, writer));
-        cmd.close();
-        return writer.root();
+        try {
+            processor.execute(request, new CommandContext(session, writer));
+            return writer.root();
+        } finally {
+            request.close();
+        }
     }
 
     @Override
     public void close() {
         // no-op
-    }
-
-    private static final class HeapCommand implements Command {
-        private final byte[][] argv;
-
-        private HeapCommand(List<byte[]> args) {
-            int argc = args == null ? 0 : args.size();
-            byte[][] out = new byte[argc][];
-            for (int i = 0; i < argc; i++) {
-                out[i] = args.get(i);
-            }
-            this.argv = out;
-        }
-
-        @Override
-        public int argc() {
-            return argv.length;
-        }
-
-        @Override
-        public boolean isNull(int index) {
-            return argv[index] == null;
-        }
-
-        @Override
-        public int len(int index) {
-            byte[] a = argv[index];
-            return a == null ? -1 : a.length;
-        }
-
-        @Override
-        public byte byteAt(int index, int offset) {
-            byte[] a = argv[index];
-            if (a == null) {
-                throw new IllegalStateException("arg is null");
-            }
-            return a[offset];
-        }
-
-        @Override
-        public void copyToByteArray(int index, byte[] dst, int dstOff) {
-            byte[] a = argv[index];
-            if (a == null) {
-                throw new IllegalStateException("arg is null");
-            }
-            System.arraycopy(a, 0, dst, dstOff, a.length);
-        }
-
-        @Override
-        public byte[] toByteArray(int index) {
-            return argv[index];
-        }
-
-        @Override
-        public void close() {
-            // no-op
-        }
     }
 
     private static final class CapturingReplyWriter implements ReplyWriter {

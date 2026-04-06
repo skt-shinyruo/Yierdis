@@ -3,8 +3,10 @@ package yier.bubu.redis.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.DbLifecycleOps;
@@ -38,9 +40,11 @@ public class YierdisFastCommandProcessorModuleTest {
                 SlowCommandGovernor.DEFAULT,
                 registrar -> registrar.register("LOCAL", (cmd, ctx) -> ctx.out().simpleString("LOCAL_OK"), CommandDescriptor.of(1, 0, 0, 0))
         );
+        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of());
+        Assert.assertFalse(request instanceof Command);
 
         CapturingReplyWriter out = new CapturingReplyWriter();
-        processor.execute(new StaticCommand("LOCAL"), new CommandContext(null, out));
+        processor.execute(request, new CommandContext(null, out));
 
         Assert.assertEquals("LOCAL_OK", out.simpleStringValue);
         Assert.assertNull(out.errorValue);
