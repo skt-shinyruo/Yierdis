@@ -281,4 +281,5 @@ public final class YierdisFastCommandProcessor {
             extraModule.register(registrar);
         }
     }
+
 }

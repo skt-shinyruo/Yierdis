@@ -12,5 +12,6 @@ public record CommandSpec(
 ) {
     public CommandSpec {
         Objects.requireNonNull(handler, "handler");
+        Objects.requireNonNull(descriptor, "descriptor");
     }
 }

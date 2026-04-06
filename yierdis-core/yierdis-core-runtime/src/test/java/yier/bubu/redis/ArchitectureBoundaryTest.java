@@ -101,7 +101,13 @@ public class ArchitectureBoundaryTest {
                 offenders,
                 "new ServerCommands(",
                 "ERR HELLO is not allowed in MULTI",
-                "asciiEqualsIgnoreCase(cmd, 0, \"HELLO\")"
+                "asciiEqualsIgnoreCase(cmd, 0, \"HELLO\")",
+                "descriptorAwareRegistration(",
+                "coreDescriptor(",
+                "coreDefaultArity(",
+                "coreDefaultFirstKeyIndex(",
+                "coreDefaultLastKeyIndex(",
+                "coreDefaultKeyStep("
         );
         scanForForbiddenText(
                 repoRoot,
@@ -134,6 +140,20 @@ public class ArchitectureBoundaryTest {
                 "case \"HELLO\":",
                 "case \"INFO\":",
                 "case \"STATS\":"
+        );
+        Path registryFile = repoRoot.resolve(
+                "yierdis-core-command/src/main/java/yier/bubu/redis/command/CommandRegistry.java"
+        );
+        Assert.assertTrue("缺少 CommandRegistry.java，无法执行 COMMAND metadata fallback 护栏", Files.isRegularFile(registryFile));
+        scanFileForForbiddenText(
+                repoRoot,
+                registryFile,
+                offenders,
+                "defaultDescriptorForNameUpper(",
+                "defaultArity(",
+                "defaultFirstKeyIndex(",
+                "defaultLastKeyIndex(",
+                "defaultKeyStep("
         );
 
         if (!offenders.isEmpty()) {

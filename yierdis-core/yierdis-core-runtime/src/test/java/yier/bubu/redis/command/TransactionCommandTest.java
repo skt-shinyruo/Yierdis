@@ -109,6 +109,7 @@ public class TransactionCommandTest {
                     registration -> registration.registerDisallowedInMulti(
                             "HELLO",
                             (cmd, ctx) -> ctx.out().simpleString("HELLO"),
+                            CommandDescriptor.of(-1, 0, 0, 0),
                             "ERR HELLO is not allowed in MULTI"
                     )
             );

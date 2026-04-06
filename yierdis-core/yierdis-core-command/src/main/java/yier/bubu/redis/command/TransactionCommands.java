@@ -28,9 +28,9 @@ final class TransactionCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("MULTI", this::multi);
-        registration.register("DISCARD", this::discard);
-        registration.register("EXEC", this::exec);
+        registration.register("MULTI", this::multi, CommandDescriptor.of(1, 0, 0, 0));
+        registration.register("DISCARD", this::discard, CommandDescriptor.of(1, 0, 0, 0));
+        registration.register("EXEC", this::exec, CommandDescriptor.of(1, 0, 0, 0));
     }
 
     private void multi(Command cmd, CommandContext ctx) {

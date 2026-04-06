@@ -44,20 +44,20 @@ final class KeyCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("TYPE", this::type);
-        registration.register("MEMORY", this::memory);
-        registration.register("OBJECT", this::object);
-        registration.register("KEYS", this::keys);
-        registration.register("SCAN", this::scan);
-        registration.register("DEL", this::del);
-        registration.register("EXISTS", this::exists);
-        registration.register("EXPIRE", this::expire);
-        registration.register("PEXPIRE", this::pexpire);
-        registration.register("EXPIREAT", this::expireat);
-        registration.register("PEXPIREAT", this::pexpireat);
-        registration.register("PERSIST", this::persist);
-        registration.register("TTL", this::ttl);
-        registration.register("PTTL", this::pttl);
+        registration.register("TYPE", this::type, CommandDescriptor.of(2, 1, 1, 1));
+        registration.register("MEMORY", this::memory, CommandDescriptor.of(-2, 0, 0, 0));
+        registration.register("OBJECT", this::object, CommandDescriptor.of(-2, 0, 0, 0));
+        registration.register("KEYS", this::keys, CommandDescriptor.of(2, 0, 0, 0));
+        registration.register("SCAN", this::scan, CommandDescriptor.of(-2, 0, 0, 0));
+        registration.register("DEL", this::del, CommandDescriptor.of(-2, 1, -1, 1));
+        registration.register("EXISTS", this::exists, CommandDescriptor.of(-2, 1, -1, 1));
+        registration.register("EXPIRE", this::expire, CommandDescriptor.of(3, 1, 1, 1));
+        registration.register("PEXPIRE", this::pexpire, CommandDescriptor.of(3, 1, 1, 1));
+        registration.register("EXPIREAT", this::expireat, CommandDescriptor.of(3, 1, 1, 1));
+        registration.register("PEXPIREAT", this::pexpireat, CommandDescriptor.of(3, 1, 1, 1));
+        registration.register("PERSIST", this::persist, CommandDescriptor.of(2, 1, 1, 1));
+        registration.register("TTL", this::ttl, CommandDescriptor.of(2, 1, 1, 1));
+        registration.register("PTTL", this::pttl, CommandDescriptor.of(2, 1, 1, 1));
     }
 
     private void type(Command cmd, CommandContext ctx) {

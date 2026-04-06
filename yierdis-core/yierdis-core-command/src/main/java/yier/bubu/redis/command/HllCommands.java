@@ -16,9 +16,9 @@ final class HllCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("PFADD", this::pfadd);
-        registration.register("PFCOUNT", this::pfcount);
-        registration.register("PFMERGE", this::pfmerge);
+        registration.register("PFADD", this::pfadd, CommandDescriptor.of(-3, 1, 1, 1));
+        registration.register("PFCOUNT", this::pfcount, CommandDescriptor.of(-2, 1, -1, 1));
+        registration.register("PFMERGE", this::pfmerge, CommandDescriptor.of(-3, 1, -1, 1));
     }
 
     private void pfadd(Command cmd, CommandContext ctx) {

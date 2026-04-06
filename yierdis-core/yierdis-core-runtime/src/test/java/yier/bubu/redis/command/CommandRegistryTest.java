@@ -8,11 +8,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 public class CommandRegistryTest {
+    private static final CommandDescriptor PING = CommandDescriptor.of(1, 0, 0, 0);
+
     @Test
     public void findIsCaseInsensitive() {
         CommandRegistry registry = new CommandRegistry();
         registry.register("PING", (cmd, out) -> {
-        });
+        }, PING);
 
         try (TestCommand c1 = new TestCommand("PING")) {
             Assert.assertNotNull(registry.find(c1));
@@ -29,7 +31,7 @@ public class CommandRegistryTest {
     public void unknownCommandReturnsNull() {
         CommandRegistry registry = new CommandRegistry();
         registry.register("PING", (cmd, out) -> {
-        });
+        }, PING);
 
         try (TestCommand cmd = new TestCommand("NOPE")) {
             Assert.assertNull(registry.find(cmd));
@@ -40,10 +42,10 @@ public class CommandRegistryTest {
     public void duplicateRegistrationIsRejected() {
         CommandRegistry registry = new CommandRegistry();
         registry.register("PING", (cmd, out) -> {
-        });
+        }, PING);
         try {
             registry.register("ping", (cmd, out) -> {
-            });
+            }, PING);
             Assert.fail("expected duplicate registration to throw");
         } catch (IllegalArgumentException expected) {
             // ok
@@ -82,7 +84,7 @@ public class CommandRegistryTest {
 
         for (String name : names) {
             registry.register(name, (cmd, out) -> {
-            });
+            }, CommandDescriptor.of(1, 0, 0, 0));
         }
 
         for (String name : names) {

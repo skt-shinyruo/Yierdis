@@ -62,6 +62,29 @@ public class CoreCommandBoundaryGuardTest {
         Assert.assertFalse("CommandDescriptor 不应继续内联 switch metadata table", source.contains("switch (nameUpper)"));
     }
 
+    @Test
+    public void commandRegistryMustNotRetainFallbackMetadataTables() throws IOException {
+        Path moduleRoot = resolveModuleRoot();
+        Assert.assertNotNull("无法定位 yierdis-core-command 模块根目录（未找到 src/main/java）", moduleRoot);
+
+        Path registryFile = moduleRoot.resolve("src/main/java/yier/bubu/redis/command/CommandRegistry.java");
+        Assert.assertTrue("缺少 CommandRegistry.java", Files.isRegularFile(registryFile));
+
+        List<String> offenders = new ArrayList<>();
+        scanFileForForbiddenText(
+                registryFile,
+                offenders,
+                "defaultDescriptorForNameUpper(",
+                "defaultArity(",
+                "defaultFirstKeyIndex(",
+                "defaultLastKeyIndex(",
+                "defaultKeyStep("
+        );
+        if (!offenders.isEmpty()) {
+            Assert.fail("CommandRegistry 不应继续保留 fallback metadata table：\n" + String.join("\n", offenders));
+        }
+    }
+
     private static int scanForForbiddenImports(Path srcRoot, List<String> offenders) throws IOException {
         if (srcRoot == null || !Files.isDirectory(srcRoot)) {
             return 0;
@@ -120,6 +143,18 @@ public class CoreCommandBoundaryGuardTest {
                     });
         }
         return scanned[0];
+    }
+
+    private static void scanFileForForbiddenText(Path file, List<String> offenders, String... forbiddenSnippets) throws IOException {
+        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            for (String snippet : forbiddenSnippets) {
+                if (line.contains(snippet)) {
+                    offenders.add(file.toString() + ":" + (i + 1) + " -> " + snippet);
+                }
+            }
+        }
     }
 
     private static Path resolveModuleRoot() {

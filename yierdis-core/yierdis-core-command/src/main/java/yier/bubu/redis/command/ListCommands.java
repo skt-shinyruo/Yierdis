@@ -18,11 +18,11 @@ final class ListCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("LPUSH", this::lpush);
-        registration.register("RPUSH", this::rpush);
-        registration.register("LRANGE", this::lrange);
-        registration.register("LPOP", this::lpop);
-        registration.register("RPOP", this::rpop);
+        registration.register("LPUSH", this::lpush, CommandDescriptor.of(-3, 1, 1, 1));
+        registration.register("RPUSH", this::rpush, CommandDescriptor.of(-3, 1, 1, 1));
+        registration.register("LRANGE", this::lrange, CommandDescriptor.of(4, 1, 1, 1));
+        registration.register("LPOP", this::lpop, CommandDescriptor.of(-2, 1, 1, 1));
+        registration.register("RPOP", this::rpop, CommandDescriptor.of(-2, 1, 1, 1));
     }
 
     private void lpush(Command cmd, CommandContext ctx) {

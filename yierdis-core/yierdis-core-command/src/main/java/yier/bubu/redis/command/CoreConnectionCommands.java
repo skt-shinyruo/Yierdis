@@ -24,12 +24,12 @@ final class CoreConnectionCommands {
 
     void register(CommandRegistry registry) {
         Objects.requireNonNull(registry, "registry");
-        registry.register("PING", this::ping);
-        registry.register("ECHO", this::echo);
-        registry.register("COMMAND", (cmd, ctx) -> command(cmd, ctx.out(), registry));
-        registry.register("SELECT", this::select);
-        registry.register("QUIT", this::quit);
-        registry.register("FLUSHDB", this::flushdb);
+        registry.register("PING", this::ping, CommandDescriptor.of(-1, 0, 0, 0));
+        registry.register("ECHO", this::echo, CommandDescriptor.of(2, 0, 0, 0));
+        registry.register("COMMAND", (cmd, ctx) -> command(cmd, ctx.out(), registry), CommandDescriptor.of(-1, 0, 0, 0));
+        registry.register("SELECT", this::select, CommandDescriptor.of(2, 0, 0, 0));
+        registry.register("QUIT", this::quit, CommandDescriptor.of(1, 0, 0, 0));
+        registry.register("FLUSHDB", this::flushdb, CommandDescriptor.of(-1, 0, 0, 0));
     }
 
     private void ping(Command cmd, CommandContext ctx) {

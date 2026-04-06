@@ -20,15 +20,15 @@ final class StringCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("SET", this::set);
-        registration.register("GET", this::get);
-        registration.register("STRLEN", this::strlen);
-        registration.register("APPEND", this::append);
-        registration.register("SETBIT", this::setbit);
-        registration.register("GETBIT", this::getbit);
-        registration.register("BITCOUNT", this::bitcount);
-        registration.register("INCR", this::incr);
-        registration.register("DECR", this::decr);
+        registration.register("SET", this::set, CommandDescriptor.of(-3, 1, 1, 1));
+        registration.register("GET", this::get, CommandDescriptor.of(2, 1, 1, 1));
+        registration.register("STRLEN", this::strlen, CommandDescriptor.of(2, 1, 1, 1));
+        registration.register("APPEND", this::append, CommandDescriptor.of(3, 1, 1, 1));
+        registration.register("SETBIT", this::setbit, CommandDescriptor.of(4, 1, 1, 1));
+        registration.register("GETBIT", this::getbit, CommandDescriptor.of(3, 1, 1, 1));
+        registration.register("BITCOUNT", this::bitcount, CommandDescriptor.of(-2, 1, 1, 1));
+        registration.register("INCR", this::incr, CommandDescriptor.of(2, 1, 1, 1));
+        registration.register("DECR", this::decr, CommandDescriptor.of(2, 1, 1, 1));
     }
 
     private void set(Command cmd, CommandContext ctx) {

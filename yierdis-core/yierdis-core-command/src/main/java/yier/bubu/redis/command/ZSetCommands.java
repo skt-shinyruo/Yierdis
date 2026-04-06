@@ -17,14 +17,14 @@ final class ZSetCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("ZADD", this::zadd);
-        registration.register("ZRANGE", this::zrange);
-        registration.register("ZREVRANGE", this::zrevrange);
-        registration.register("ZRANGEBYSCORE", this::zrangebyscore);
-        registration.register("ZREVRANGEBYSCORE", this::zrevrangebyscore);
-        registration.register("ZREMRANGEBYSCORE", this::zremrangebyscore);
-        registration.register("ZREMRANGEBYRANK", this::zremrangebyrank);
-        registration.register("ZREM", this::zrem);
+        registration.register("ZADD", this::zadd, CommandDescriptor.of(-4, 1, 1, 1));
+        registration.register("ZRANGE", this::zrange, CommandDescriptor.of(-4, 1, 1, 1));
+        registration.register("ZREVRANGE", this::zrevrange, CommandDescriptor.of(-4, 1, 1, 1));
+        registration.register("ZRANGEBYSCORE", this::zrangebyscore, CommandDescriptor.of(-4, 1, 1, 1));
+        registration.register("ZREVRANGEBYSCORE", this::zrevrangebyscore, CommandDescriptor.of(-4, 1, 1, 1));
+        registration.register("ZREMRANGEBYSCORE", this::zremrangebyscore, CommandDescriptor.of(4, 1, 1, 1));
+        registration.register("ZREMRANGEBYRANK", this::zremrangebyrank, CommandDescriptor.of(4, 1, 1, 1));
+        registration.register("ZREM", this::zrem, CommandDescriptor.of(-3, 1, 1, 1));
     }
 
     private void zadd(Command cmd, CommandContext ctx) {

@@ -36,7 +36,7 @@ public class YierdisFastCommandProcessorModuleTest {
                 new NoopDbEngine(),
                 null,
                 SlowCommandGovernor.DEFAULT,
-                registrar -> registrar.register("LOCAL", (cmd, ctx) -> ctx.out().simpleString("LOCAL_OK"))
+                registrar -> registrar.register("LOCAL", (cmd, ctx) -> ctx.out().simpleString("LOCAL_OK"), CommandDescriptor.of(1, 0, 0, 0))
         );
 
         CapturingReplyWriter out = new CapturingReplyWriter();
@@ -44,6 +44,21 @@ public class YierdisFastCommandProcessorModuleTest {
 
         Assert.assertEquals("LOCAL_OK", out.simpleStringValue);
         Assert.assertNull(out.errorValue);
+    }
+
+    @Test
+    public void extraModulesMustProvideDescriptorMetadata() {
+        try {
+            new YierdisFastCommandProcessor(
+                    new NoopDbEngine(),
+                    null,
+                    SlowCommandGovernor.DEFAULT,
+                    registrar -> registrar.register("LOCAL", (cmd, ctx) -> ctx.out().simpleString("LOCAL_OK"))
+            );
+            Assert.fail("expected descriptor-less extra module registration to fail");
+        } catch (UnsupportedOperationException expected) {
+            Assert.assertTrue(expected.getMessage().contains("descriptor is required"));
+        }
     }
 
     private static void assertUnknownCommand(YierdisFastCommandProcessor processor, String commandName) {

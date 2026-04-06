@@ -17,11 +17,11 @@ final class HashCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("HSET", this::hset);
-        registration.register("HGET", this::hget);
-        registration.register("HGETALL", this::hgetall);
-        registration.register("HLEN", this::hlen);
-        registration.register("HDEL", this::hdel);
+        registration.register("HSET", this::hset, CommandDescriptor.of(-4, 1, 1, 1));
+        registration.register("HGET", this::hget, CommandDescriptor.of(3, 1, 1, 1));
+        registration.register("HGETALL", this::hgetall, CommandDescriptor.of(2, 1, 1, 1));
+        registration.register("HLEN", this::hlen, CommandDescriptor.of(2, 1, 1, 1));
+        registration.register("HDEL", this::hdel, CommandDescriptor.of(-3, 1, 1, 1));
     }
 
     private void hset(Command cmd, CommandContext ctx) {

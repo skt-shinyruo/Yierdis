@@ -17,7 +17,9 @@ public interface CommandModule {
         void register(String name, CommandSpec spec);
 
         default void register(String name, Handler handler) {
-            register(name, new CommandSpec(handler, null, null));
+            throw new UnsupportedOperationException(
+                    "descriptor is required; use register(String, Handler, CommandDescriptor)"
+            );
         }
 
         default void register(String name, Handler handler, CommandDescriptor descriptor) {
@@ -25,7 +27,9 @@ public interface CommandModule {
         }
 
         default void registerDisallowedInMulti(String name, Handler handler, String errorMessage) {
-            register(name, new CommandSpec(handler, null, errorMessage));
+            throw new UnsupportedOperationException(
+                    "descriptor is required; use registerDisallowedInMulti(String, Handler, CommandDescriptor, String)"
+            );
         }
 
         default void registerDisallowedInMulti(

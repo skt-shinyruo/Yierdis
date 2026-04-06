@@ -8,6 +8,7 @@ import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplyObject;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 
@@ -84,6 +85,30 @@ public class CommandDescriptorRegistryTest {
         });
     }
 
+    @Test
+    public void registrySpecsRemainAuthoritativeForBuiltInAndExtraMetadata() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+                    db,
+                    null,
+                    SlowCommandGovernor.DEFAULT,
+                    registration -> {
+                        registration.register("INFO", (cmd, ctx) -> ctx.out().simpleString("OK"), CommandDescriptor.of(-1, 0, 0, 0));
+                        registration.registerDisallowedInMulti(
+                                "HELLO",
+                                (cmd, ctx) -> ctx.out().simpleString("OK"),
+                                CommandDescriptor.of(-1, 0, 0, 0),
+                                "ERR HELLO is not allowed in MULTI"
+                        );
+                    }
+            );
+            CommandRegistry registry = registryOf(processor);
+            Assert.assertEquals(-1, registry.specByUpperName("INFO").descriptor().arity());
+            Assert.assertEquals("ERR HELLO is not allowed in MULTI", registry.specByUpperName("HELLO").disallowedInMultiError());
+            Assert.assertNotNull(registry.specByUpperName("SET").descriptor());
+        });
+    }
+
     private static void assertCommandInfo(
             ReplyObject reply,
             String expectedName,
@@ -106,5 +131,15 @@ public class CommandDescriptorRegistryTest {
         Assert.assertEquals(expectedFirstKey, ((ReplyInteger) info.values().get(3)).value());
         Assert.assertEquals(expectedLastKey, ((ReplyInteger) info.values().get(4)).value());
         Assert.assertEquals(expectedStep, ((ReplyInteger) info.values().get(5)).value());
+    }
+
+    private static CommandRegistry registryOf(YierdisFastCommandProcessor processor) {
+        try {
+            Field field = YierdisFastCommandProcessor.class.getDeclaredField("registry");
+            field.setAccessible(true);
+            return (CommandRegistry) field.get(processor);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("unable to access processor registry", e);
+        }
     }
 }
