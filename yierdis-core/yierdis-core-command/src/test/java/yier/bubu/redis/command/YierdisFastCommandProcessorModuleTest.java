@@ -51,6 +51,23 @@ public class YierdisFastCommandProcessorModuleTest {
     }
 
     @Test
+    public void builtInCommandsCanExecuteFromPlainExecutionRequest() {
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+                new NoopDbEngine(),
+                null,
+                SlowCommandGovernor.DEFAULT
+        );
+        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("PING", List.of());
+        Assert.assertFalse(request instanceof Command);
+
+        CapturingReplyWriter out = new CapturingReplyWriter();
+        processor.execute(request, new CommandContext(null, out));
+
+        Assert.assertEquals("PONG", out.simpleStringValue);
+        Assert.assertNull(out.errorValue);
+    }
+
+    @Test
     public void extraModulesMustProvideDescriptorMetadata() {
         try {
             new YierdisFastCommandProcessor(
