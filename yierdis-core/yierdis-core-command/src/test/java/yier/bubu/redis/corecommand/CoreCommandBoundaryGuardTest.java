@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 public class CoreCommandBoundaryGuardTest {
@@ -86,25 +87,34 @@ public class CoreCommandBoundaryGuardTest {
     }
 
     @Test
-    public void coreCommandMustOnlyUseCommandImportInFastProcessorCompatibilityShim() throws IOException {
+    public void coreCommandMustOnlyUseCommandCompatibilitySurfacesTemporarily() throws IOException {
         Path moduleRoot = resolveModuleRoot();
         Assert.assertNotNull("无法定位 yierdis-core-command 模块根目录（未找到 src/main/java）", moduleRoot);
 
         List<String> offenders = new ArrayList<>();
-        int scanned = scanForForbiddenText(
+        int scanned = scanForForbiddenPattern(
                 moduleRoot.resolve("src/main/java/yier/bubu/redis/command"),
                 offenders,
-                "import yier.bubu.redis.contract.Command;"
+                Pattern.compile("\\byier\\.bubu\\.redis\\.contract\\.Command\\b")
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
 
         allowOnly(
                 offenders,
-                "src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java"
+                "src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java",
+                "src/main/java/yier/bubu/redis/command/CommandSupport.java"
         );
         if (!offenders.isEmpty()) {
-            Assert.fail("core-command 只能在 YierdisFastCommandProcessor 保留 Command 兼容 import：\n" + String.join("\n", offenders));
+            Assert.fail("core-command 只能在 Task 2 允许的兼容面保留 Command 引用：\n" + String.join("\n", offenders));
         }
+
+        Path supportFile = moduleRoot.resolve("src/main/java/yier/bubu/redis/command/CommandSupport.java");
+        Assert.assertTrue("缺少 CommandSupport.java", Files.isRegularFile(supportFile));
+        String source = Files.readString(supportFile, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "CommandSupport 必须显式说明当前 zero-copy Command fallback 是临时兼容 seam",
+                source.contains("temporary compatibility seam for zero-copy/frame-backed Command producers")
+        );
     }
 
     private static int scanForForbiddenImports(Path srcRoot, List<String> offenders) throws IOException {
@@ -157,6 +167,31 @@ public class CoreCommandBoundaryGuardTest {
                                     if (line.contains(snippet)) {
                                         offenders.add(p.toString() + ":" + (i + 1) + " -> " + snippet);
                                     }
+                                }
+                            }
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+        }
+        return scanned[0];
+    }
+
+    private static int scanForForbiddenPattern(Path srcRoot, List<String> offenders, Pattern forbiddenPattern) throws IOException {
+        if (srcRoot == null || !Files.isDirectory(srcRoot)) {
+            return 0;
+        }
+        int[] scanned = new int[]{0};
+        try (Stream<Path> paths = Files.walk(srcRoot)) {
+            paths.filter(p -> p != null && p.toString().endsWith(".java"))
+                    .forEach(p -> {
+                        try {
+                            scanned[0]++;
+                            List<String> lines = Files.readAllLines(p, StandardCharsets.UTF_8);
+                            for (int i = 0; i < lines.size(); i++) {
+                                String line = lines.get(i);
+                                if (forbiddenPattern.matcher(line).find()) {
+                                    offenders.add(p.toString() + ":" + (i + 1) + " -> " + forbiddenPattern.pattern());
                                 }
                             }
                         } catch (IOException e) {
