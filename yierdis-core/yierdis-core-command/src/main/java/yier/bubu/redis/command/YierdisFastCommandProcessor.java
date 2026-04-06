@@ -4,9 +4,11 @@ import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.WrongTypeException;
 import yier.bubu.redis.ops.YierdisCommandException;
+import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.ExecutionRequest;
+import yier.bubu.redis.contract.ExecutionRecord;
 import yier.bubu.redis.contract.DbIndexProvider;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ServerSession;
@@ -142,7 +144,7 @@ public final class YierdisFastCommandProcessor {
                     out.error(disallowedInMultiError);
                     return;
                 }
-                String enqueueErr = tx.tryEnqueue(copyArgv(request));
+                String enqueueErr = tx.tryEnqueue(ByteArrayExecutionRequest.copyOf(request));
                 if (enqueueErr != null) {
                     out.error(enqueueErr);
                     return;
@@ -179,7 +181,7 @@ public final class YierdisFastCommandProcessor {
                     dbIndex = Math.max(0, provider.dbIndex());
                 }
                 try {
-                    changeSink.onChange(new YierdisChangeEvent(dbIndex, copyArgv(request)));
+                    changeSink.onChange(new YierdisChangeEvent(new ExecutionRecord(dbIndex, request)));
                 } catch (Throwable ignored) {
                     // best-effort: 事件消费失败不应影响主命令执行路径
                 }
@@ -193,31 +195,6 @@ public final class YierdisFastCommandProcessor {
         } catch (IllegalArgumentException e) {
             out.error("ERR " + e.getMessage());
         }
-    }
-
-    private static byte[][] copyArgv(ExecutionRequest request) {
-        int argc = request == null ? 0 : request.argc();
-        byte[][] argv = new byte[argc][];
-        for (int i = 0; i < argc; i++) {
-            if (request.isNull(i)) {
-                argv[i] = null;
-                continue;
-            }
-            int len = request.len(i);
-            if (len < 0) {
-                // Defensive: treat negative length as a null bulk string.
-                argv[i] = null;
-                continue;
-            }
-            if (len == 0) {
-                argv[i] = new byte[0];
-                continue;
-            }
-            byte[] out = new byte[len];
-            request.copyToByteArray(i, out, 0);
-            argv[i] = out;
-        }
-        return argv;
     }
 
     private static String unknownCommandMessage(ExecutionRequest request) {

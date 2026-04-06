@@ -2,10 +2,13 @@ package yier.bubu.redis;
 
 // Server 会话状态（server 私有）：实现协议层 ServerSession，承载 SELECT/AUTH/MULTI 等 Redis-like 连接态。
 
+import yier.bubu.redis.contract.ByteArrayExecutionRequest;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
@@ -106,7 +109,7 @@ final class ServerSessionState implements ServerSession {
         private boolean active;
         private boolean aborted;
         private long queuedBytes;
-        private final ArrayList<byte[][]> queue = new ArrayList<>();
+        private final ArrayList<ExecutionRequest> queue = new ArrayList<>();
 
         private ConnectionTransactionState(int maxQueuedCommands, long maxQueuedBytes) {
             this.maxQueuedCommands = Math.max(0, maxQueuedCommands);
@@ -145,13 +148,13 @@ final class ServerSessionState implements ServerSession {
         }
 
         @Override
-        public synchronized void enqueue(byte[][] argv) {
-            tryEnqueue(argv);
+        public synchronized void enqueue(ExecutionRequest request) {
+            tryEnqueue(request);
         }
 
         @Override
-        public synchronized String tryEnqueue(byte[][] argv) {
-            if (argv == null) {
+        public synchronized String tryEnqueue(ExecutionRequest request) {
+            if (request == null) {
                 return null;
             }
             if (maxQueuedCommands > 0 && queue.size() >= maxQueuedCommands) {
@@ -159,15 +162,24 @@ final class ServerSessionState implements ServerSession {
                 return "ERR Transaction queue is full";
             }
 
-            long argvBytes = estimateArgvBytes(argv);
-            if (maxQueuedBytes > 0 && queuedBytes + argvBytes > maxQueuedBytes) {
+            ExecutionRequest snapshot = ByteArrayExecutionRequest.copyOf(request);
+            long requestBytes = Math.max(0L, snapshot.retainedBytes());
+            if (maxQueuedBytes > 0 && queuedBytes + requestBytes > maxQueuedBytes) {
                 aborted = true;
                 return "ERR Transaction queue is full";
             }
 
-            queue.add(argv);
-            queuedBytes += argvBytes;
+            queue.add(snapshot);
+            queuedBytes += requestBytes;
             return null;
+        }
+
+        @Override
+        public synchronized String tryEnqueue(byte[][] argv) {
+            if (argv == null) {
+                return null;
+            }
+            return tryEnqueue(ByteArrayExecutionRequest.copyOf(Arrays.asList(argv)));
         }
 
         @Override
@@ -176,27 +188,13 @@ final class ServerSessionState implements ServerSession {
         }
 
         @Override
-        public synchronized List<byte[][]> drain() {
-            ArrayList<byte[][]> out = new ArrayList<>(queue);
+        public synchronized List<ExecutionRequest> drain() {
+            ArrayList<ExecutionRequest> out = new ArrayList<>(queue);
             queue.clear();
             active = false;
             aborted = false;
             queuedBytes = 0;
             return out;
-        }
-
-        private static long estimateArgvBytes(byte[][] argv) {
-            if (argv == null) {
-                return 0;
-            }
-            long total = 0;
-            for (int i = 0; i < argv.length; i++) {
-                byte[] arg = argv[i];
-                if (arg != null) {
-                    total += arg.length;
-                }
-            }
-            return total;
         }
     }
 }

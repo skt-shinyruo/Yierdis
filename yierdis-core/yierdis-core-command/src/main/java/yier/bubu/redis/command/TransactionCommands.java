@@ -84,12 +84,11 @@ final class TransactionCommands implements CommandModule {
             return;
         }
 
-        List<byte[][]> queued = tx.drain();
+        List<ExecutionRequest> queued = tx.drainRequests();
         out.arrayHeader(queued.size());
-        for (int i = 0; i < queued.size(); i++) {
-            byte[][] argv = queued.get(i);
-            try (ExecutionRequest q = new QueuedExecutionRequest(argv)) {
-                processor.execute(q, ctx);
+        for (ExecutionRequest queuedRequest : queued) {
+            try (ExecutionRequest replay = queuedRequest) {
+                processor.execute(replay, ctx);
             }
         }
     }
@@ -100,89 +99,5 @@ final class TransactionCommands implements CommandModule {
             return s.transaction();
         }
         return null;
-    }
-
-    /**
-     * Transaction-queued command: wraps argv bytes with stable lifetime and command API.
-     */
-    private static final class QueuedExecutionRequest implements ExecutionRequest {
-        private final byte[][] argv;
-        private final int retainedBytes;
-
-        private QueuedExecutionRequest(byte[][] argv) {
-            this.argv = Objects.requireNonNull(argv, "argv");
-            int total = 0;
-            for (int i = 0; i < argv.length; i++) {
-                byte[] a = argv[i];
-                if (a != null) {
-                    total += a.length;
-                }
-            }
-            this.retainedBytes = total;
-        }
-
-        @Override
-        public int argc() {
-            return argv.length;
-        }
-
-        @Override
-        public boolean isNull(int index) {
-            if (index < 0 || index >= argv.length) {
-                throw new IndexOutOfBoundsException();
-            }
-            return argv[index] == null;
-        }
-
-        @Override
-        public int len(int index) {
-            if (index < 0 || index >= argv.length) {
-                throw new IndexOutOfBoundsException();
-            }
-            byte[] a = argv[index];
-            return a == null ? -1 : a.length;
-        }
-
-        @Override
-        public byte byteAt(int index, int offset) {
-            byte[] a = argv[index];
-            if (a == null) {
-                throw new IllegalStateException("arg is null");
-            }
-            return a[offset];
-        }
-
-        @Override
-        public void copyToByteArray(int index, byte[] dst, int dstOff) {
-            byte[] a = argv[index];
-            if (a == null) {
-                throw new IllegalStateException("arg is null");
-            }
-            System.arraycopy(a, 0, dst, dstOff, a.length);
-        }
-
-        @Override
-        public byte[] toByteArray(int index) {
-            byte[] a = argv[index];
-            if (a == null) {
-                return null;
-            }
-            if (a.length == 0) {
-                return new byte[0];
-            }
-            byte[] out = new byte[a.length];
-            System.arraycopy(a, 0, out, 0, a.length);
-            return out;
-        }
-
-        @Override
-        public int retainedBytes() {
-            return retainedBytes;
-        }
-
-        @Override
-        public void close() {
-            // no-op: argv is owned by the transaction queue and will be released on discard/drain
-        }
     }
 }

@@ -3,6 +3,9 @@ package yier.bubu.redis.runtime.api;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.contract.ByteArrayExecutionRequest;
+import yier.bubu.redis.contract.ExecutionRecord;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -14,12 +17,26 @@ import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static yier.bubu.redis.testutil.TestBytes.cmd;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class YierdisChangeSinkTest {
+    @Test
+    public void changeEventExposesExecutionRecordFacts() {
+        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", Arrays.asList("key", "value"));
+
+        YierdisChangeEvent event = new YierdisChangeEvent(new ExecutionRecord(-4, request));
+
+        Assert.assertEquals(0, event.dbIndex());
+        Assert.assertNotNull(event.record());
+        Assert.assertArrayEquals("SET".getBytes(StandardCharsets.US_ASCII), event.request().toByteArray(0));
+        Assert.assertArrayEquals("key".getBytes(StandardCharsets.US_ASCII), event.request().toByteArray(1));
+        Assert.assertArrayEquals("value".getBytes(StandardCharsets.US_ASCII), event.request().toByteArray(2));
+    }
+
     @Test
     public void emitsEventsForRealChangesOnly() {
         forEachDb(db -> {
@@ -37,9 +54,10 @@ public class YierdisChangeSinkTest {
 
                 YierdisChangeEvent e = events.get(0);
                 Assert.assertEquals(0, e.dbIndex());
-                Assert.assertEquals("SET", new String(e.argv()[0], StandardCharsets.US_ASCII));
-                Assert.assertEquals("k", new String(e.argv()[1], StandardCharsets.US_ASCII));
-                Assert.assertEquals("v", new String(e.argv()[2], StandardCharsets.US_ASCII));
+                Assert.assertNotNull(e.record());
+                Assert.assertEquals("SET", arg(e, 0));
+                Assert.assertEquals("k", arg(e, 1));
+                Assert.assertEquals("v", arg(e, 2));
 
                 // No-op writes: should not emit.
                 events.clear();
@@ -105,7 +123,7 @@ public class YierdisChangeSinkTest {
                 Assert.assertEquals(2, exec.values().size());
 
                 Assert.assertEquals(1, events.size());
-                Assert.assertEquals("SET", new String(events.get(0).argv()[0], StandardCharsets.US_ASCII));
+                Assert.assertEquals("SET", arg(events.get(0), 0));
             }
         });
     }
@@ -147,16 +165,20 @@ public class YierdisChangeSinkTest {
                 ReplyObject merged = client.execute(cmd("PFMERGE", "h", "h1"));
                 Assert.assertTrue(merged instanceof ReplySimpleString);
                 Assert.assertEquals(1, events.size());
-                Assert.assertEquals("PFMERGE", new String(events.get(0).argv()[0], StandardCharsets.US_ASCII));
+                Assert.assertEquals("PFMERGE", arg(events.get(0), 0));
             }
         });
+    }
+
+    private static String arg(YierdisChangeEvent event, int index) {
+        return new String(event.request().toByteArray(index), StandardCharsets.US_ASCII);
     }
 
     private static final class TestSession implements ServerSession {
         private int dbIndex;
         private String clientName;
         private boolean authenticated;
-        private final TransactionState tx = new TestTransactionState();
+        private final TestTransactionState tx = new TestTransactionState();
 
         @Override
         public int dbIndex() {
@@ -201,7 +223,7 @@ public class YierdisChangeSinkTest {
 
     private static final class TestTransactionState implements TransactionState {
         private boolean active;
-        private final ArrayList<byte[][]> queue = new ArrayList<>();
+        private final ArrayList<ExecutionRequest> queue = new ArrayList<>();
 
         @Override
         public boolean active() {
@@ -221,8 +243,11 @@ public class YierdisChangeSinkTest {
         }
 
         @Override
-        public void enqueue(byte[][] argv) {
-            queue.add(argv);
+        public void enqueue(ExecutionRequest request) {
+            if (request == null) {
+                return;
+            }
+            queue.add(ByteArrayExecutionRequest.copyOf(request));
         }
 
         @Override
@@ -231,8 +256,8 @@ public class YierdisChangeSinkTest {
         }
 
         @Override
-        public List<byte[][]> drain() {
-            ArrayList<byte[][]> out = new ArrayList<>(queue);
+        public List<ExecutionRequest> drain() {
+            ArrayList<ExecutionRequest> out = new ArrayList<>(queue);
             queue.clear();
             active = false;
             return out;

@@ -2,6 +2,8 @@ package yier.bubu.redis.command;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.contract.ByteArrayExecutionRequest;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -86,8 +88,14 @@ public class TransactionCommandTest {
                 byte[] value = b("v1");
                 Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), key, value))).value());
 
+                ExecutionRequest queued = session.transactionState().queued(0);
+                Assert.assertArrayEquals(b("SET"), queued.toByteArray(0));
+                Assert.assertArrayEquals(b("k"), queued.toByteArray(1));
+                Assert.assertArrayEquals(b("v1"), queued.toByteArray(2));
+
                 // Mutate the original value buffer after it was enqueued.
                 value[1] = (byte) '2';
+                Assert.assertArrayEquals(b("v1"), queued.toByteArray(2));
 
                 ReplyArray exec = (ReplyArray) client.execute(Arrays.asList(b("EXEC")));
                 Assert.assertNotNull(exec.values());
@@ -132,7 +140,7 @@ public class TransactionCommandTest {
         private int dbIndex;
         private String clientName;
         private boolean authenticated;
-        private final TransactionState tx = new TestTransactionState();
+        private final TestTransactionState tx = new TestTransactionState();
 
         @Override
         public int dbIndex() {
@@ -173,12 +181,16 @@ public class TransactionCommandTest {
         public TransactionState transaction() {
             return tx;
         }
+
+        private TestTransactionState transactionState() {
+            return tx;
+        }
     }
 
     private static final class TestTransactionState implements TransactionState {
         private boolean active;
         private boolean aborted;
-        private final ArrayList<byte[][]> queue = new ArrayList<>();
+        private final ArrayList<ExecutionRequest> queue = new ArrayList<>();
 
         @Override
         public boolean active() {
@@ -200,8 +212,11 @@ public class TransactionCommandTest {
         }
 
         @Override
-        public void enqueue(byte[][] argv) {
-            queue.add(argv);
+        public void enqueue(ExecutionRequest request) {
+            if (request == null) {
+                return;
+            }
+            queue.add(ByteArrayExecutionRequest.copyOf(request));
         }
 
         @Override
@@ -220,12 +235,16 @@ public class TransactionCommandTest {
         }
 
         @Override
-        public List<byte[][]> drain() {
-            ArrayList<byte[][]> out = new ArrayList<>(queue);
+        public List<ExecutionRequest> drain() {
+            ArrayList<ExecutionRequest> out = new ArrayList<>(queue);
             queue.clear();
             active = false;
             aborted = false;
             return out;
+        }
+
+        private ExecutionRequest queued(int index) {
+            return queue.get(index);
         }
     }
 }

@@ -191,6 +191,41 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void replaySurfacesMustUseExecutionContracts() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        List<String> offenders = new ArrayList<>();
+        scanFileForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeEvent.java"),
+                offenders,
+                "byte[][] argv"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis/ServerSessionState.java").normalize(),
+                offenders,
+                "ArrayList<byte[][]>",
+                "List<byte[][]>"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/TransactionCommands.java"),
+                offenders,
+                "new QueuedCommand(",
+                "new QueuedExecutionRequest("
+        );
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到事务回放/变更事件仍在使用原始 argv 或专用回放包装，而不是 ExecutionRequest/ExecutionRecord：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
     public void protocolCodecMustNotDependOnCoreContract() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
