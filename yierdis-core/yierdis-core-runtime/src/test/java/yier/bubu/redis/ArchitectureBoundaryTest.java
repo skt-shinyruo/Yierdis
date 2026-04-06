@@ -233,10 +233,22 @@ public class ArchitectureBoundaryTest {
                 offenders,
                 "tx.tryEnqueue(ByteArrayExecutionRequest.copyOf(request))"
         );
+        scanFileForForbiddenText(
+                repoRoot,
+                repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java").normalize(),
+                offenders,
+                "new AdaptedCommand("
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java").normalize(),
+                offenders,
+                "SimpleChannelInboundHandler<Command>"
+        );
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到事务回放/变更事件仍在使用原始 argv、专用回放包装，或错误的快照 ownership，而不是 ExecutionRequest/ExecutionRecord：\n"
+                    "检测到旧的 Command 生产路径、事务回放/变更事件 argv 容器，或错误的快照 ownership 重新出现；这些边界必须继续统一到 ExecutionRequest/ExecutionRecord：\n"
                             + String.join("\n", offenders)
             );
         }

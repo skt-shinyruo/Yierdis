@@ -2,6 +2,9 @@ package yier.bubu.redis.corecommand;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.CommandContext;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -84,6 +87,16 @@ public class CoreCommandBoundaryGuardTest {
         if (!offenders.isEmpty()) {
             Assert.fail("CommandRegistry 不应继续保留 fallback metadata table：\n" + String.join("\n", offenders));
         }
+    }
+
+    @Test
+    public void executeCommandCompatibilityOverloadMustBeExplicitlyDeprecated() throws NoSuchMethodException {
+        Assert.assertTrue(
+                "execute(Command, CommandContext) 必须显式标记为兼容层 @Deprecated overload",
+                YierdisFastCommandProcessor.class
+                        .getDeclaredMethod("execute", Command.class, CommandContext.class)
+                        .isAnnotationPresent(Deprecated.class)
+        );
     }
 
     @Test

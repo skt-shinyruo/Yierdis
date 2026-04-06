@@ -93,6 +93,11 @@ public final class YierdisFastCommandProcessor {
         this.registry = registry;
     }
 
+    /**
+     * Transitional compatibility overload for existing embedders/tests; production code should call
+     * {@link #execute(ExecutionRequest, CommandContext)}.
+     */
+    @Deprecated(forRemoval = false)
     public void execute(Command cmd, CommandContext ctx) {
         execute((ExecutionRequest) cmd, ctx);
     }
