@@ -23,11 +23,16 @@ import yier.bubu.redis.protocol.json.JsonParser;
 import yier.bubu.redis.protocol.json.JsonString;
 import yier.bubu.redis.protocol.json.JsonValue;
 
+import java.io.IOException;
+import java.net.ConnectException;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -165,6 +170,20 @@ public class YierdisClientTest {
                 }
             }
         }
+    }
+
+    @Test
+    public void failedConnectDoesNotLeakEventLoopThreads() throws Exception {
+        Set<String> before = threadNames();
+
+        try {
+            YierdisClient.connect("127.0.0.1", unusedPort());
+            Assert.fail("Expected connection failure");
+        } catch (Exception expected) {
+            assertConnectException(expected);
+        }
+
+        waitForNoExtraEventLoopThreads(before, 3000);
     }
 
     @Test
@@ -328,6 +347,58 @@ public class YierdisClientTest {
 
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static Set<String> threadNames() {
+        Set<String> names = new LinkedHashSet<>();
+        for (Thread thread : Thread.getAllStackTraces().keySet()) {
+            if (thread != null) {
+                names.add(thread.getName());
+            }
+        }
+        return names;
+    }
+
+    private static int unusedPort() throws IOException {
+        try (ServerSocket socket = new ServerSocket(0)) {
+            socket.setReuseAddress(true);
+            return socket.getLocalPort();
+        }
+    }
+
+    private static void waitForNoExtraEventLoopThreads(Set<String> before, long timeoutMillis) throws Exception {
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        while (true) {
+            Set<String> leaked = extraEventLoopThreads(before);
+            if (leaked.isEmpty()) {
+                return;
+            }
+            if (System.nanoTime() >= deadlineNanos) {
+                Assert.fail("Expected no leaked nioEventLoopGroup threads, but found " + leaked);
+            }
+            Thread.sleep(25);
+        }
+    }
+
+    private static Set<String> extraEventLoopThreads(Set<String> before) {
+        Set<String> leaked = new LinkedHashSet<>();
+        for (String name : threadNames()) {
+            if (!before.contains(name) && name.contains("nioEventLoopGroup")) {
+                leaked.add(name);
+            }
+        }
+        return leaked;
+    }
+
+    private static void assertConnectException(Exception expected) {
+        Throwable cursor = expected;
+        while (cursor != null) {
+            if (cursor instanceof ConnectException) {
+                return;
+            }
+            cursor = cursor.getCause();
+        }
+        throw new AssertionError("Expected ConnectException but got " + expected, expected);
     }
 
     private static final class TestServer implements AutoCloseable {

@@ -66,69 +66,73 @@ public final class YierdisInstance implements AutoCloseable {
         }
 
         RuntimeDbEngine[] dbs = new RuntimeDbEngine[databases];
-        for (int i = 0; i < databases; i++) {
-            long dbMax = config.maxmemoryBytes();
-            if (perDbScope) {
-                dbMax = perDbMaxmemory;
-                if (remainder > 0) {
-                    dbMax++;
-                    remainder--;
-                }
-            }
-            dbs[i] = engineFactory.create(
-                    i,
-                    dbMax,
-                    config.maxmemoryPolicy(),
-                    config.maxmemorySamples(),
-                    config.evictionTimeLimitMillis(),
-                    config.expireCleanupTimeLimitMillis()
-            );
-        }
-
-        if (!perDbScope && config.maxmemoryBytes() > 0) {
-            MaxmemoryParticipant[] participants = new MaxmemoryParticipant[dbs.length];
-            for (int i = 0; i < dbs.length; i++) {
-                RuntimeDbEngine engine = dbs[i];
-                if (engine == null) {
-                    continue;
-                }
-                if (!(engine instanceof MaxmemoryParticipant participant)) {
-                    throw new IllegalStateException("GLOBAL maxmemory requires MaxmemoryParticipant: dbIndex=" + i);
-                }
-                participants[i] = participant;
-            }
-
-            MaxmemoryUsageSource[] sharedUsage = new MaxmemoryUsageSource[]{
-                    () -> {
-                        try {
-                            return Math.max(0L, memoryRuntime.usedBytes());
-                        } catch (Throwable ignored) {
-                            return 0L;
-                        }
+        try {
+            for (int i = 0; i < databases; i++) {
+                long dbMax = config.maxmemoryBytes();
+                if (perDbScope) {
+                    dbMax = perDbMaxmemory;
+                    if (remainder > 0) {
+                        dbMax++;
+                        remainder--;
                     }
-            };
-
-            YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                    participants,
-                    sharedUsage,
-                    config.maxmemoryBytes(),
-                    MaxmemoryPolicy.parse(config.maxmemoryPolicy()),
-                    config.maxmemorySamples(),
-                    TimeUnit.MILLISECONDS.toNanos(config.evictionTimeLimitMillis())
-            );
-
-            for (RuntimeDbEngine engine : dbs) {
-                if (engine == null) {
-                    continue;
                 }
-                if (!(engine instanceof MaxmemoryCoordinatorAware aware)) {
-                    throw new IllegalStateException("GLOBAL maxmemory requires MaxmemoryCoordinatorAware");
-                }
-                aware.attachMaxmemoryCoordinator(governor);
+                dbs[i] = engineFactory.create(
+                        i,
+                        dbMax,
+                        config.maxmemoryPolicy(),
+                        config.maxmemorySamples(),
+                        config.evictionTimeLimitMillis(),
+                        config.expireCleanupTimeLimitMillis()
+                );
             }
-        }
 
-        return new YierdisInstance(config, dbs, memoryRuntime, true);
+            if (!perDbScope && config.maxmemoryBytes() > 0) {
+                MaxmemoryParticipant[] participants = new MaxmemoryParticipant[dbs.length];
+                for (int i = 0; i < dbs.length; i++) {
+                    RuntimeDbEngine engine = dbs[i];
+                    if (engine == null) {
+                        continue;
+                    }
+                    if (!(engine instanceof MaxmemoryParticipant participant)) {
+                        throw new IllegalStateException("GLOBAL maxmemory requires MaxmemoryParticipant: dbIndex=" + i);
+                    }
+                    participants[i] = participant;
+                }
+
+                MaxmemoryUsageSource[] sharedUsage = new MaxmemoryUsageSource[]{
+                        () -> {
+                            try {
+                                return Math.max(0L, memoryRuntime.usedBytes());
+                            } catch (Throwable ignored) {
+                                return 0L;
+                            }
+                        }
+                };
+
+                YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
+                        participants,
+                        sharedUsage,
+                        config.maxmemoryBytes(),
+                        MaxmemoryPolicy.parse(config.maxmemoryPolicy()),
+                        config.maxmemorySamples(),
+                        TimeUnit.MILLISECONDS.toNanos(config.evictionTimeLimitMillis())
+                );
+
+                for (RuntimeDbEngine engine : dbs) {
+                    if (engine == null) {
+                        continue;
+                    }
+                    if (!(engine instanceof MaxmemoryCoordinatorAware aware)) {
+                        throw new IllegalStateException("GLOBAL maxmemory requires MaxmemoryCoordinatorAware");
+                    }
+                    aware.attachMaxmemoryCoordinator(governor);
+                }
+            }
+
+            return new YierdisInstance(config, dbs, memoryRuntime, true);
+        } catch (Throwable t) {
+            throw startupFailure(t, dbs, memoryRuntime);
+        }
     }
 
     public YierdisInstanceConfig config() {
@@ -224,5 +228,50 @@ public final class YierdisInstance implements AutoCloseable {
         }
         closed = true;
         return true;
+    }
+
+    private static RuntimeException startupFailure(
+            Throwable failure,
+            RuntimeDbEngine[] dbs,
+            YierdisFfmMemoryRuntime memoryRuntime
+    ) {
+        Throwable cleanupFailure = null;
+        if (dbs != null) {
+            for (RuntimeDbEngine engine : dbs) {
+                if (engine == null) {
+                    continue;
+                }
+                try {
+                    engine.shutdown();
+                } catch (Throwable t) {
+                    cleanupFailure = recordSuppressedFailure(cleanupFailure, t);
+                }
+            }
+        }
+        if (memoryRuntime != null) {
+            try {
+                memoryRuntime.close();
+            } catch (Throwable t) {
+                cleanupFailure = recordSuppressedFailure(cleanupFailure, t);
+            }
+        }
+        if (cleanupFailure != null) {
+            failure.addSuppressed(cleanupFailure);
+        }
+        if (failure instanceof RuntimeException runtimeException) {
+            return runtimeException;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        return new IllegalStateException(failure);
+    }
+
+    private static Throwable recordSuppressedFailure(Throwable failure, Throwable next) {
+        if (failure == null) {
+            return next;
+        }
+        failure.addSuppressed(next);
+        return failure;
     }
 }

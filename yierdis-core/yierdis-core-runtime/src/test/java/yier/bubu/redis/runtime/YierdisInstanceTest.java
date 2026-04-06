@@ -112,6 +112,40 @@ public class YierdisInstanceTest {
     }
 
     @Test
+    public void createCleansUpAlreadyCreatedEnginesWhenFactoryFailsMidStartup() {
+        List<String> closeOrder = new ArrayList<>();
+        DbEngineFactory factory = new DbEngineFactory() {
+            private int calls;
+
+            @Override
+            public RuntimeDbEngine create(
+                    int dbIndex,
+                    long maxmemoryBytes,
+                    String maxmemoryPolicy,
+                    int maxmemorySamples,
+                    long evictionTimeLimitMillis,
+                    long expireCleanupTimeLimitMillis
+            ) {
+                if (calls++ == 0) {
+                    return new CloseTrackingRuntimeDbEngine("db-" + dbIndex, closeOrder);
+                }
+                throw new IllegalStateException("boom-create-" + dbIndex);
+            }
+        };
+
+        try {
+            YierdisInstance.create(YierdisInstanceConfig.builder()
+                    .databases(2)
+                    .engineFactory(factory)
+                    .build());
+            Assert.fail("expected startup failure");
+        } catch (IllegalStateException e) {
+            Assert.assertEquals("boom-create-1", e.getMessage());
+            Assert.assertEquals(Arrays.asList("db-0"), closeOrder);
+        }
+    }
+
+    @Test
     public void runtimeAccessExposesOwnerThreadLifecycleHooks() {
         TrackingRuntimeDbEngine engine = new TrackingRuntimeDbEngine();
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder()
@@ -241,6 +275,54 @@ public class YierdisInstanceTest {
         @Override
         public java.util.List<byte[][]> drain() {
             return java.util.Collections.emptyList();
+        }
+    }
+
+    private static final class CloseTrackingRuntimeDbEngine implements RuntimeDbEngine {
+        private final String name;
+        private final List<String> closeOrder;
+
+        private CloseTrackingRuntimeDbEngine(String name, List<String> closeOrder) {
+            this.name = name;
+            this.closeOrder = closeOrder;
+        }
+
+        @Override
+        public void bindToCurrentThread() {
+        }
+
+        @Override
+        public void enforceMaxmemoryMaintenance() {
+        }
+
+        @Override
+        public void shutdown() {
+            closeOrder.add(name);
+        }
+
+        @Override
+        public DbReads reads() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbWrites writes() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ExpirationManager expiration() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public MemoryOps memory() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbLifecycleOps lifecycle() {
+            throw new UnsupportedOperationException();
         }
     }
 

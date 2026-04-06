@@ -79,8 +79,17 @@ public final class YierdisClient implements AutoCloseable {
                     }
                 });
 
-        Channel channel = bootstrap.connect(host, port).sync().channel();
-        return new YierdisClient(group, channel, responses, terminalError);
+        try {
+            Channel channel = bootstrap.connect(host, port).sync().channel();
+            return new YierdisClient(group, channel, responses, terminalError);
+        } catch (Throwable t) {
+            try {
+                group.shutdownGracefully().syncUninterruptibly();
+            } catch (Throwable closeFailure) {
+                t.addSuppressed(closeFailure);
+            }
+            throw t;
+        }
     }
 
     public JsonReply execute(List<byte[]> args, long timeoutMillis) throws InterruptedException {
