@@ -4,7 +4,6 @@ import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.WrongTypeException;
 import yier.bubu.redis.ops.YierdisCommandException;
-import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.ExecutionRequest;
@@ -144,7 +143,7 @@ public final class YierdisFastCommandProcessor {
                     out.error(disallowedInMultiError);
                     return;
                 }
-                String enqueueErr = tx.tryEnqueue(ByteArrayExecutionRequest.copyOf(request));
+                String enqueueErr = tx.tryEnqueue(request);
                 if (enqueueErr != null) {
                     out.error(enqueueErr);
                     return;

@@ -227,10 +227,16 @@ public class ArchitectureBoundaryTest {
                 "new QueuedCommand(",
                 "new QueuedExecutionRequest("
         );
+        scanFileForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java"),
+                offenders,
+                "tx.tryEnqueue(ByteArrayExecutionRequest.copyOf(request))"
+        );
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到事务回放/变更事件仍在使用原始 argv 或专用回放包装，而不是 ExecutionRequest/ExecutionRecord：\n"
+                    "检测到事务回放/变更事件仍在使用原始 argv、专用回放包装，或错误的快照 ownership，而不是 ExecutionRequest/ExecutionRecord：\n"
                             + String.join("\n", offenders)
             );
         }
