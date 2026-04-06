@@ -6,6 +6,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.TransactionState;
 import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
@@ -29,6 +30,7 @@ import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -141,8 +143,8 @@ public class YierdisServerBootstrapCommandWiringTest {
 
                 TransactionState tx = ServerConnectionContext.getOrCreate(commandLimitedChannel).session().transaction();
                 tx.begin();
-                Assert.assertNull(tx.tryEnqueue(argv("SET", "k", "v")));
-                Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(argv("GET", "k")));
+                Assert.assertNull(tx.tryEnqueue(request("SET", "k", "v")));
+                Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(request("GET", "k")));
             } finally {
                 commandLimitedChannel.unsafe().closeForcibly();
             }
@@ -154,8 +156,8 @@ public class YierdisServerBootstrapCommandWiringTest {
 
                 TransactionState tx = ServerConnectionContext.getOrCreate(byteLimitedChannel).session().transaction();
                 tx.begin();
-                Assert.assertNull(tx.tryEnqueue(argv("GET", "k")));
-                Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(argv("SET", "x", "y")));
+                Assert.assertNull(tx.tryEnqueue(request("GET", "k")));
+                Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(request("SET", "x", "y")));
 
                 CustomRequestDecoder decoder = byteLimitedChannel.pipeline().get(CustomRequestDecoder.class);
                 Assert.assertNotNull(decoder);
@@ -342,12 +344,8 @@ public class YierdisServerBootstrapCommandWiringTest {
         );
     }
 
-    private static byte[][] argv(String... values) {
-        byte[][] argv = new byte[values.length][];
-        for (int i = 0; i < values.length; i++) {
-            argv[i] = values[i].getBytes(StandardCharsets.UTF_8);
-        }
-        return argv;
+    private static ByteArrayExecutionRequest request(String... values) {
+        return ByteArrayExecutionRequest.fromUtf8(values[0], Arrays.asList(Arrays.copyOfRange(values, 1, values.length)));
     }
 
     private static int intField(Object target, String fieldName) throws Exception {

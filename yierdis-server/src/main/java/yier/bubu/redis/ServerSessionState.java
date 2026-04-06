@@ -8,7 +8,6 @@ import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
@@ -172,14 +171,6 @@ final class ServerSessionState implements ServerSession {
             queue.add(snapshot);
             queuedBytes += requestBytes;
             return null;
-        }
-
-        @Override
-        public synchronized String tryEnqueue(byte[][] argv) {
-            if (argv == null) {
-                return null;
-            }
-            return tryEnqueue(ByteArrayExecutionRequest.copyOf(Arrays.asList(argv)));
         }
 
         @Override

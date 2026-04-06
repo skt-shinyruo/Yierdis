@@ -3,9 +3,11 @@ package yier.bubu.redis;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.contract.ByteArrayExecutionRequest;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.TransactionState;
 
-import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 public class ServerConnectionContextTest {
     @Test
@@ -31,8 +33,8 @@ public class ServerConnectionContextTest {
             TransactionState tx = ctx.commandSession().transaction();
             tx.begin();
 
-            Assert.assertNull(tx.tryEnqueue(argv("SET", "k", "v")));
-            Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(argv("GET", "k")));
+            Assert.assertNull(tx.tryEnqueue(request("SET", "k", "v")));
+            Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(request("GET", "k")));
         } finally {
             ch.finishAndReleaseAll();
         }
@@ -47,8 +49,8 @@ public class ServerConnectionContextTest {
 
             TransactionState tx = ServerConnectionContext.getOrCreate(ch).commandSession().transaction();
             tx.begin();
-            Assert.assertNull(tx.tryEnqueue(argv("SET", "k", "v")));
-            Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(argv("PING")));
+            Assert.assertNull(tx.tryEnqueue(request("SET", "k", "v")));
+            Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(request("PING")));
         } finally {
             ch.finishAndReleaseAll();
         }
@@ -66,8 +68,8 @@ public class ServerConnectionContextTest {
 
             TransactionState tx = context.commandSession().transaction();
             tx.begin();
-            Assert.assertNull(tx.tryEnqueue(argv("SET", "k", "v")));
-            Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(argv("PING")));
+            Assert.assertNull(tx.tryEnqueue(request("SET", "k", "v")));
+            Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(request("PING")));
         } finally {
             ch.finishAndReleaseAll();
         }
@@ -80,7 +82,7 @@ public class ServerConnectionContextTest {
             ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch, 16, 1024);
             TransactionState tx = context.commandSession().transaction();
             tx.begin();
-            Assert.assertNull(tx.tryEnqueue(argv("SET", "k", "v")));
+            Assert.assertNull(tx.tryEnqueue(request("SET", "k", "v")));
             Assert.assertTrue(tx.active());
 
             Assert.assertTrue(context.markClosing());
@@ -91,11 +93,7 @@ public class ServerConnectionContextTest {
         }
     }
 
-    private static byte[][] argv(String... args) {
-        byte[][] out = new byte[args.length][];
-        for (int i = 0; i < args.length; i++) {
-            out[i] = args[i].getBytes(StandardCharsets.US_ASCII);
-        }
-        return out;
+    private static ExecutionRequest request(String... args) {
+        return ByteArrayExecutionRequest.fromUtf8(args[0], Arrays.asList(Arrays.copyOfRange(args, 1, args.length)));
     }
 }

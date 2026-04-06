@@ -84,7 +84,7 @@ final class TransactionCommands implements CommandModule {
             return;
         }
 
-        List<ExecutionRequest> queued = tx.drainRequests();
+        List<ExecutionRequest> queued = tx.drain();
         out.arrayHeader(queued.size());
         for (ExecutionRequest queuedRequest : queued) {
             try (ExecutionRequest replay = queuedRequest) {

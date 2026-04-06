@@ -3,6 +3,7 @@ package yier.bubu.redis.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -149,7 +150,7 @@ public class ContractsIntegrationSmokeTest {
         }
 
         @Override
-        public void enqueue(byte[][] argv) {
+        public void enqueue(ExecutionRequest request) {
         }
 
         @Override
@@ -158,7 +159,7 @@ public class ContractsIntegrationSmokeTest {
         }
 
         @Override
-        public java.util.List<byte[][]> drain() {
+        public java.util.List<ExecutionRequest> drain() {
             return java.util.Collections.emptyList();
         }
     }

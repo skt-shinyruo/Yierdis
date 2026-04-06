@@ -204,15 +204,26 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
+                repoRoot.resolve("yierdis-core-contract/src/main/java/yier/bubu/redis/contract/TransactionState.java"),
+                offenders,
+                "enqueue(byte[][]",
+                "tryEnqueue(byte[][]",
+                "List<?> drain()",
+                "drainRequests()"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
                 repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis/ServerSessionState.java").normalize(),
                 offenders,
                 "ArrayList<byte[][]>",
-                "List<byte[][]>"
+                "List<byte[][]>",
+                "tryEnqueue(byte[][]"
         );
         scanFileForForbiddenText(
                 repoRoot,
                 repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/TransactionCommands.java"),
                 offenders,
+                "drainRequests(",
                 "new QueuedCommand(",
                 "new QueuedExecutionRequest("
         );

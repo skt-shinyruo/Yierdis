@@ -370,7 +370,7 @@ public final class FastTestClient implements AutoCloseable {
     private static final class DefaultTransactionState implements TransactionState {
         private boolean active;
         private boolean aborted;
-        private final ArrayList<byte[][]> queue = new ArrayList<>();
+        private final ArrayList<ExecutionRequest> queue = new ArrayList<>();
 
         @Override
         public synchronized boolean active() {
@@ -392,8 +392,11 @@ public final class FastTestClient implements AutoCloseable {
         }
 
         @Override
-        public synchronized void enqueue(byte[][] argv) {
-            queue.add(argv);
+        public synchronized void enqueue(ExecutionRequest request) {
+            if (request == null) {
+                return;
+            }
+            queue.add(ByteArrayExecutionRequest.copyOf(request));
         }
 
         @Override
@@ -412,8 +415,8 @@ public final class FastTestClient implements AutoCloseable {
         }
 
         @Override
-        public synchronized List<byte[][]> drain() {
-            ArrayList<byte[][]> out = new ArrayList<>(queue);
+        public synchronized List<ExecutionRequest> drain() {
+            ArrayList<ExecutionRequest> out = new ArrayList<>(queue);
             queue.clear();
             active = false;
             aborted = false;

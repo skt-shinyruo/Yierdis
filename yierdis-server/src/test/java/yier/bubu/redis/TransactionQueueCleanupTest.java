@@ -5,9 +5,10 @@ package yier.bubu.redis;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.TransactionState;
 
-import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 public class TransactionQueueCleanupTest {
     @Test
@@ -24,11 +25,11 @@ public class TransactionQueueCleanupTest {
             Assert.assertFalse(tx.aborted());
             Assert.assertEquals(0, tx.size());
 
-            Assert.assertNull(tx.tryEnqueue(new byte[][]{b("SET"), b("k"), b("v")}));
+            Assert.assertNull(tx.tryEnqueue(request("SET", "k", "v")));
             Assert.assertEquals(1, tx.size());
 
             // 触发一次入队失败，确保 aborted 标记也能被清理。
-            Assert.assertNotNull(tx.tryEnqueue(new byte[][]{b("GET"), b("k")}));
+            Assert.assertNotNull(tx.tryEnqueue(request("GET", "k")));
             Assert.assertTrue(tx.aborted());
 
             runtime.markClosing(session);
@@ -40,7 +41,7 @@ public class TransactionQueueCleanupTest {
         }
     }
 
-    private static byte[] b(String s) {
-        return s.getBytes(StandardCharsets.UTF_8);
+    private static ByteArrayExecutionRequest request(String... args) {
+        return ByteArrayExecutionRequest.fromUtf8(args[0], Arrays.asList(Arrays.copyOfRange(args, 1, args.length)));
     }
 }
