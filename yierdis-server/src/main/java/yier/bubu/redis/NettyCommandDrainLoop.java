@@ -5,7 +5,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.util.concurrent.EventExecutor;
-import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.executor.ExecutorTaskQueue;
 
@@ -120,8 +120,8 @@ final class NettyCommandDrainLoop {
 
     private void executeOne(NettyExecutorTask task, NettyReplyFlushBatch flushBatch) {
         ChannelHandlerContext ctx = task.ctx;
-        Command cmd = task.cmd;
-        if (ctx == null || cmd == null) {
+        ExecutionRequest request = task.request;
+        if (ctx == null || request == null) {
             return;
         }
         Channel ch = ctx.channel();
@@ -137,7 +137,7 @@ final class NettyCommandDrainLoop {
             boolean ok = false;
             try {
                 ReplyWriter writer = executionSupport.newReplyWriter(out, ch);
-                executionSupport.executeCommand(cmd, ch, writer);
+                executionSupport.executeCommand(request, ch, writer);
                 if (writer.closeAfterReplyRequested()) {
                     // close-after-reply：flush 后关闭连接，并标记该 channel 后续任务需要跳过。
                     executionSupport.markCloseAfterReply(ch);
@@ -158,7 +158,7 @@ final class NettyCommandDrainLoop {
             executionSupport.handleExecutionFailure(ctx, ch, t);
         } finally {
             try {
-                cmd.close();
+                request.close();
             } catch (Throwable ignored) {
                 // ignore
             }

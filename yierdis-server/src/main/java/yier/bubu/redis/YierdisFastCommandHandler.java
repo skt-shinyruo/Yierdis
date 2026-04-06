@@ -7,12 +7,12 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.DecoderException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 
 import java.util.Objects;
 
-public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler<Command> {
+public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler<ExecutionRequest> {
     private static final Logger log = LoggerFactory.getLogger(YierdisFastCommandHandler.class);
 
     private final NettyCommandExecutor nettyExecutor;
@@ -22,14 +22,14 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
     }
 
     @Override
-    protected void channelRead0(ChannelHandlerContext ctx, Command msg) {
+    protected void channelRead0(ChannelHandlerContext ctx, ExecutionRequest msg) {
         NettyCommandExecutor.SubmitRejectReason reject = nettyExecutor.trySubmitWithReason(ctx, msg);
         if (reject == null) {
-            // 执行器接管 msg 的生命周期，负责 recycle。
+            // 执行器接管 msg 的生命周期，负责 close/release。
             return;
         }
 
-        // 队列满或服务关闭：返回 busy 错误并回收命令帧，避免积压导致 OOM。
+        // 队列满或服务关闭：返回 busy 错误并关闭请求对象，避免积压导致 OOM。
         ByteBuf out = ctx.alloc().buffer();
         try {
             String err = "ERR busy";

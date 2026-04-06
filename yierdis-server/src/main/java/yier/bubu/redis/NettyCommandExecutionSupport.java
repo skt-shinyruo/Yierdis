@@ -7,8 +7,8 @@ import io.netty.channel.ChannelHandlerContext;
 import org.slf4j.Logger;
 import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ReplyWriterFactory;
 import yier.bubu.redis.executor.ExecutorBacklogBudget;
@@ -67,12 +67,12 @@ final class NettyCommandExecutionSupport {
         return replyWriterFactory.newWriter(new NettyByteBufSink(out));
     }
 
-    void executeCommand(Command cmd, Channel ch, ReplyWriter writer) {
-        Objects.requireNonNull(cmd, "cmd");
+    void executeCommand(ExecutionRequest request, Channel ch, ReplyWriter writer) {
+        Objects.requireNonNull(request, "request");
         Objects.requireNonNull(ch, "ch");
         Objects.requireNonNull(writer, "writer");
         ServerSessionState session = ServerConnectionContext.getOrCreate(ch).commandSession();
-        commandProcessor.execute(cmd, context(session, writer));
+        commandProcessor.execute(request, context(session, writer));
     }
 
     void recordSkippedClosing(Channel ch) {
@@ -150,11 +150,11 @@ final class NettyCommandExecutionSupport {
     }
 
     void recycleAndRelease(NettyExecutorTask task) {
-        if (task == null || task.cmd == null) {
+        if (task == null || task.request == null) {
             return;
         }
         try {
-            task.cmd.close();
+            task.request.close();
         } catch (Throwable ignored) {
             // ignore
         }
@@ -173,12 +173,12 @@ final class NettyCommandExecutionSupport {
         return ServerConnectionContext.getOrCreate(ch).isClosing();
     }
 
-    static int safeRetainedBytes(Command cmd) {
-        if (cmd == null) {
+    static int safeRetainedBytes(ExecutionRequest request) {
+        if (request == null) {
             return 0;
         }
         try {
-            return Math.max(0, cmd.retainedBytes());
+            return Math.max(0, request.retainedBytes());
         } catch (Throwable ignored) {
             return 0;
         }

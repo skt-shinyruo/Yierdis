@@ -1,7 +1,7 @@
 package yier.bubu.redis;
 
 import io.netty.channel.ChannelHandlerContext;
-import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ExecutionRequest;
 
 /**
  * 执行器内部任务载体：持有命令执行所需的上下文以及 bytes 预算口径。
@@ -10,16 +10,16 @@ import yier.bubu.redis.contract.Command;
  */
 final class NettyExecutorTask {
     final ChannelHandlerContext ctx;
-    final Command cmd;
+    final ExecutionRequest request;
     final int retainedBytes;
 
-    private NettyExecutorTask(ChannelHandlerContext ctx, Command cmd, int retainedBytes) {
+    private NettyExecutorTask(ChannelHandlerContext ctx, ExecutionRequest request, int retainedBytes) {
         this.ctx = ctx;
-        this.cmd = cmd;
+        this.request = request;
         this.retainedBytes = retainedBytes;
     }
 
-    static NettyExecutorTask command(ChannelHandlerContext ctx, Command cmd, int retainedBytes) {
-        return new NettyExecutorTask(ctx, cmd, retainedBytes);
+    static NettyExecutorTask command(ChannelHandlerContext ctx, ExecutionRequest request, int retainedBytes) {
+        return new NettyExecutorTask(ctx, request, retainedBytes);
     }
 }

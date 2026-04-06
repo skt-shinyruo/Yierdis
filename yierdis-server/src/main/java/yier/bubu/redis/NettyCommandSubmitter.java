@@ -3,7 +3,7 @@ package yier.bubu.redis;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import org.slf4j.Logger;
-import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.executor.ExecutorBacklogBudget;
 import yier.bubu.redis.executor.ExecutorBackpressureController;
 import yier.bubu.redis.executor.ExecutorTaskQueue;
@@ -57,9 +57,9 @@ final class NettyCommandSubmitter {
         this.submitRejectedOfferFailed = Objects.requireNonNull(submitRejectedOfferFailed, "submitRejectedOfferFailed");
     }
 
-    NettyCommandExecutor.SubmitRejectReason trySubmitWithReason(ChannelHandlerContext ctx, Command cmd) {
+    NettyCommandExecutor.SubmitRejectReason trySubmitWithReason(ChannelHandlerContext ctx, ExecutionRequest request) {
         Objects.requireNonNull(ctx, "ctx");
-        Objects.requireNonNull(cmd, "cmd");
+        Objects.requireNonNull(request, "request");
         Channel ch = ctx.channel();
         ServerConnectionContext connection = ServerConnectionContext.getOrCreate(ch);
         if (!running.getAsBoolean()) {
@@ -93,7 +93,7 @@ final class NettyCommandSubmitter {
         int retainedBytes = 0;
         boolean reservedBytes = false;
         try {
-            retainedBytes = NettyCommandExecutionSupport.safeRetainedBytes(cmd);
+            retainedBytes = NettyCommandExecutionSupport.safeRetainedBytes(request);
             if (!backlogBudget.tryReserveQueuedBytes(retainedBytes)) {
                 if (reservedSlot) {
                     backlogBudget.releaseSlot();
@@ -105,7 +105,7 @@ final class NettyCommandSubmitter {
             }
             reservedBytes = true;
 
-            boolean accepted = taskQueue.offer(ch, NettyExecutorTask.command(ctx, cmd, retainedBytes));
+            boolean accepted = taskQueue.offer(ch, NettyExecutorTask.command(ctx, request, retainedBytes));
             if (!accepted) {
                 backlogBudget.releaseQueuedBytes(retainedBytes);
                 if (reservedSlot) {

@@ -9,7 +9,7 @@ import io.netty.util.concurrent.EventExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ReplyWriterFactory;
 import yier.bubu.redis.executor.ExecutorBacklogBudget;
@@ -35,9 +35,9 @@ import java.util.concurrent.atomic.LongAdder;
  * Key behaviors (contract):
  * <ul>
  *     <li><b>Bounded queue</b>: {@code queueCapacity} is a hard cap for the global backlog.
- *     When the queue is full (or executor is closing), {@link #trySubmit(ChannelHandlerContext, Command)}
+ *     When the queue is full (or executor is closing), {@link #trySubmit(ChannelHandlerContext, ExecutionRequest)}
  *     returns {@code false} and the caller is expected to fail-fast (server returns {@code -ERR busy}).</li>
- *     <li><b>Ownership</b>: on success, the executor takes ownership of {@link Command} and will recycle it.
+ *     <li><b>Ownership</b>: on success, the executor takes ownership of {@link ExecutionRequest} and will recycle it.
  *     On failure, the caller must recycle.</li>
  *     <li><b>Connection-level backpressure</b>: backpressure is tracked per-channel by a pending counter.
  *     When {@code pending >= backpressureHighWatermark}, the executor disables Netty {@code autoRead} for that
@@ -444,11 +444,11 @@ public final class NettyCommandExecutor implements AutoCloseable {
     /**
      * Attempts to submit a client command for execution.
      * <p>
-     * Success: the executor takes ownership of {@link Command} and is responsible for close().
-     * Failure: the caller retains ownership and MUST recycle().
+     * Success: the executor takes ownership of {@link ExecutionRequest} and is responsible for close().
+     * Failure: the caller retains ownership and MUST close() it.
      */
-    public boolean trySubmit(ChannelHandlerContext ctx, Command cmd) {
-        return trySubmitWithReason(ctx, cmd) == null;
+    public boolean trySubmit(ChannelHandlerContext ctx, ExecutionRequest request) {
+        return trySubmitWithReason(ctx, request) == null;
     }
 
     enum SubmitRejectReason {
@@ -468,8 +468,8 @@ public final class NettyCommandExecutor implements AutoCloseable {
         }
     }
 
-    SubmitRejectReason trySubmitWithReason(ChannelHandlerContext ctx, Command cmd) {
-        return submitter.trySubmitWithReason(ctx, cmd);
+    SubmitRejectReason trySubmitWithReason(ChannelHandlerContext ctx, ExecutionRequest request) {
+        return submitter.trySubmitWithReason(ctx, request);
     }
 
     public void executeMaintenance(Runnable task) {
@@ -628,7 +628,7 @@ public final class NettyCommandExecutor implements AutoCloseable {
         );
     }
 
-    static int safeRetainedBytes(Command cmd) {
-        return NettyCommandExecutionSupport.safeRetainedBytes(cmd);
+    static int safeRetainedBytes(ExecutionRequest request) {
+        return NettyCommandExecutionSupport.safeRetainedBytes(request);
     }
 }

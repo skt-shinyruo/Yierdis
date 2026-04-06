@@ -7,7 +7,8 @@ import io.netty.util.concurrent.EventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ByteArrayExecutionRequest;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
@@ -16,6 +17,7 @@ import yier.bubu.redis.runtime.YierdisInstanceConfig;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -80,8 +82,45 @@ public class NettyCommandExecutorTest {
     }
 
     @Test
-    public void safeRetainedBytesFallsBackToZeroWhenCommandThrows() {
-        Assert.assertEquals(0, NettyCommandExecutor.safeRetainedBytes(new ThrowingRetainedBytesCommand()));
+    public void safeRetainedBytesFallsBackToZeroWhenRequestThrows() {
+        Assert.assertEquals(0, NettyCommandExecutor.safeRetainedBytes(new ThrowingRetainedBytesRequest()));
+    }
+
+    @Test
+    public void handlerExecutesDirectExecutionRequestMessages() throws Exception {
+        DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
+        EventExecutor eventExecutor = group.next();
+
+        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+        NettyCommandExecutor executor = new NettyCommandExecutor(
+                instance::bindToCurrentThread,
+                processor,
+                eventExecutor,
+                new JsonLineReplyWriterFactory(),
+                16,
+                0,
+                256,
+                128,
+                0,
+                0,
+                128,
+                10,
+                SchedulingPolicy.FAIR
+        );
+        executor.start();
+
+        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor));
+        try {
+            ch.writeInbound(ByteArrayExecutionRequest.fromUtf8("PING", List.of()));
+            Assert.assertArrayEquals(ascii("{\"ok\":true,\"result\":\"PONG\"}\n"), awaitOutbound(ch, 1000));
+            Assert.assertEquals(1L, ServerConnectionContext.getOrCreate(ch).statsSnapshot().commandsExecuted());
+        } finally {
+            executor.shutdownGracefully().syncUninterruptibly();
+            executor.executor().submit(instance::close).syncUninterruptibly();
+            group.shutdownGracefully().syncUninterruptibly();
+            ch.finishAndReleaseAll();
+        }
     }
 
     @Test
@@ -469,7 +508,7 @@ public class NettyCommandExecutorTest {
         return new CustomProtocolV1Request(cmd, Arrays.asList(args));
     }
 
-    private static final class ThrowingRetainedBytesCommand implements Command {
+    private static final class ThrowingRetainedBytesRequest implements ExecutionRequest {
         @Override
         public int retainedBytes() {
             throw new RuntimeException("boom");
