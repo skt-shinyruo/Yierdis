@@ -33,7 +33,7 @@ final class HashCommands implements CommandModule {
         int pairsLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, pairsLen);
         try {
-            long added = support.dbWrites(ctx).hashes().hset(request.toByteArray(1), support.slice());
+            long added = support.dbWrites(ctx).hashes().hset(request.readOnlyByteArray(1), support.slice());
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
@@ -46,7 +46,7 @@ final class HashCommands implements CommandModule {
             CommandSupport.wrongArity(out, "hget");
             return;
         }
-        out.bulkString(support.dbReads(ctx).hashes().hget(request.toByteArray(1), request.toByteArray(2)));
+        out.bulkString(support.dbReads(ctx).hashes().hget(request.readOnlyByteArray(1), request.readOnlyByteArray(2)));
     }
 
     private void hgetall(ExecutionRequest request, CommandContext ctx) {
@@ -56,7 +56,7 @@ final class HashCommands implements CommandModule {
             return;
         }
 
-        byte[] key = request.toByteArray(1);
+        byte[] key = request.readOnlyByteArray(1);
         BulkStringMapPairs pairsResult = support.dbReads(ctx).hashes().hgetall(key);
         int pairs = pairsResult.pairCount();
         out.mapHeader(pairs);
@@ -72,7 +72,7 @@ final class HashCommands implements CommandModule {
             CommandSupport.wrongArity(out, "hlen");
             return;
         }
-        out.integer(support.dbReads(ctx).hashes().hlen(request.toByteArray(1)));
+        out.integer(support.dbReads(ctx).hashes().hlen(request.readOnlyByteArray(1)));
     }
 
     private void hdel(ExecutionRequest request, CommandContext ctx) {
@@ -84,7 +84,7 @@ final class HashCommands implements CommandModule {
         int fieldsLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, fieldsLen);
         try {
-            out.integer(support.dbWrites(ctx).hashes().hdel(request.toByteArray(1), support.slice()));
+            out.integer(support.dbWrites(ctx).hashes().hdel(request.readOnlyByteArray(1), support.slice()));
         } finally {
             support.clearScratch(fieldsLen);
         }

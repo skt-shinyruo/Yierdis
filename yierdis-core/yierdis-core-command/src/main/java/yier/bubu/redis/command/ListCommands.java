@@ -51,8 +51,8 @@ final class ListCommands implements CommandModule {
         support.sliceResetFromRequest(request, 2, valuesLen);
         try {
             long len = left
-                    ? support.dbWrites(ctx).lists().lpush(request.toByteArray(1), support.slice())
-                    : support.dbWrites(ctx).lists().rpush(request.toByteArray(1), support.slice());
+                    ? support.dbWrites(ctx).lists().lpush(request.readOnlyByteArray(1), support.slice())
+                    : support.dbWrites(ctx).lists().rpush(request.readOnlyByteArray(1), support.slice());
             out.integer(len);
         } finally {
             support.clearScratch(valuesLen);
@@ -68,7 +68,7 @@ final class ListCommands implements CommandModule {
         int start = CommandSupport.parseIntClamped(request, 2, "start");
         int stop = CommandSupport.parseIntClamped(request, 3, "stop");
 
-        byte[] key = request.toByteArray(1);
+        byte[] key = request.readOnlyByteArray(1);
         BulkStringSequence seq = support.dbReads(ctx).lists().lrange(key, start, stop);
         int count = seq.count();
         out.arrayHeader(count);
@@ -99,8 +99,8 @@ final class ListCommands implements CommandModule {
         }
 
         List<byte[]> popped = left
-                ? support.dbWrites(ctx).lists().lpop(request.toByteArray(1), count)
-                : support.dbWrites(ctx).lists().rpop(request.toByteArray(1), count);
+                ? support.dbWrites(ctx).lists().lpop(request.readOnlyByteArray(1), count)
+                : support.dbWrites(ctx).lists().rpop(request.readOnlyByteArray(1), count);
         popResponse(out, popped, hasCount);
     }
 

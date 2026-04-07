@@ -20,6 +20,16 @@ public interface ExecutionRequest extends AutoCloseable {
     byte[] toByteArray(int index);
 
     /**
+     * Read-only argv access for hot paths that can consume immutable heap-backed bytes without copying.
+     * <p>
+     * Callers MUST treat the returned array as immutable. Implementations may return either a shared backing array or
+     * a defensive copy when zero-copy access is unavailable.
+     */
+    default byte[] readOnlyByteArray(int index) {
+        return toByteArray(index);
+    }
+
+    /**
      * Estimated bytes retained by keeping this request alive while queued or replayed.
      * <p>
      * The returned value MUST be stable for the lifetime of the request.

@@ -214,7 +214,7 @@ public final class YierdisFastCommandProcessor {
             }
         }
         if (printable == len && len <= 64) {
-            byte[] name = request.toByteArray(0);
+            byte[] name = request.readOnlyByteArray(0);
             String s = name == null ? "" : new String(name, java.nio.charset.StandardCharsets.US_ASCII);
             return "ERR unknown command '" + s + "'";
         }

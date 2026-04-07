@@ -118,6 +118,11 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
     }
 
     @Override
+    public byte[] readOnlyByteArray(int index) {
+        return argv[index];
+    }
+
+    @Override
     public int retainedBytes() {
         return retainedBytes;
     }

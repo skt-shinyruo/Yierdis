@@ -3,6 +3,8 @@ package yier.bubu.redis.contract;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,8 +49,44 @@ public class ExecutionRequestContractTest {
         Assert.assertArrayEquals(ascii("value"), record.request().toByteArray(2));
     }
 
+    @Test
+    public void heapBackedRequestsExposeStableReadOnlyFastPath() {
+        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key"));
+
+        byte[] first = readOnlyByteArray(request, 0);
+        byte[] second = readOnlyByteArray(request, 0);
+
+        Assert.assertSame(first, second);
+        Assert.assertArrayEquals(ascii("SET"), first);
+        Assert.assertNotSame(first, request.toByteArray(0));
+    }
+
+    @Test
+    public void genericRequestsKeepReadOnlyFastPathDefensiveByDefault() {
+        MutableExecutionRequest request = new MutableExecutionRequest("SET", "key");
+
+        byte[] first = readOnlyByteArray(request, 0);
+        byte[] second = readOnlyByteArray(request, 0);
+        first[0] = (byte) 'N';
+
+        Assert.assertNotSame(first, second);
+        Assert.assertArrayEquals(ascii("SET"), readOnlyByteArray(request, 0));
+    }
+
     private static byte[] ascii(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] readOnlyByteArray(ExecutionRequest request, int index) {
+        try {
+            Method method = ExecutionRequest.class.getMethod("readOnlyByteArray", int.class);
+            return (byte[]) method.invoke(request, index);
+        } catch (NoSuchMethodException e) {
+            Assert.fail("missing ExecutionRequest.readOnlyByteArray(int) fast path");
+            return null;
+        } catch (IllegalAccessException | InvocationTargetException e) {
+            throw new AssertionError("failed to invoke ExecutionRequest.readOnlyByteArray(int)", e);
+        }
     }
 
     private static final class MutableExecutionRequest implements ExecutionRequest {

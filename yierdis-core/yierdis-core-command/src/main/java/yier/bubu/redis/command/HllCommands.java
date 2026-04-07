@@ -30,7 +30,7 @@ final class HllCommands implements CommandModule {
         int elementsLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, elementsLen);
         try {
-            out.integer(support.dbWrites(ctx).hll().pfadd(request.toByteArray(1), support.slice()));
+            out.integer(support.dbWrites(ctx).hll().pfadd(request.readOnlyByteArray(1), support.slice()));
         } finally {
             support.clearScratch(elementsLen);
         }
@@ -60,7 +60,7 @@ final class HllCommands implements CommandModule {
         int sourcesLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, sourcesLen);
         try {
-            support.dbWrites(ctx).hll().pfmerge(request.toByteArray(1), support.slice());
+            support.dbWrites(ctx).hll().pfmerge(request.readOnlyByteArray(1), support.slice());
         } finally {
             support.clearScratch(sourcesLen);
         }

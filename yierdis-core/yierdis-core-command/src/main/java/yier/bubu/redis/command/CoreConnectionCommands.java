@@ -39,7 +39,7 @@ final class CoreConnectionCommands {
             return;
         }
         if (request.argc() == 2) {
-            out.bulkString(request.toByteArray(1));
+            out.bulkString(request.readOnlyByteArray(1));
             return;
         }
         CommandSupport.wrongArity(out, "ping");
@@ -51,7 +51,7 @@ final class CoreConnectionCommands {
             CommandSupport.wrongArity(out, "echo");
             return;
         }
-        out.bulkString(request.toByteArray(1));
+        out.bulkString(request.readOnlyByteArray(1));
     }
 
     private void select(ExecutionRequest request, CommandContext ctx) {

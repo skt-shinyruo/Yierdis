@@ -98,7 +98,7 @@ final class CommandSupport {
         }
         ensureScratchCapacity(len);
         for (int i = 0; i < len; i++) {
-            argvScratch[i] = request.toByteArray(argStart + i);
+            argvScratch[i] = request.readOnlyByteArray(argStart + i);
         }
         slice.reset(argvScratch, 0, len);
     }
@@ -143,7 +143,7 @@ final class CommandSupport {
     }
 
     static String utf8(ExecutionRequest request, int argIndex) {
-        return utf8(request.toByteArray(argIndex));
+        return utf8(request.readOnlyByteArray(argIndex));
     }
 
     static String utf8(byte[] s) {
@@ -228,7 +228,7 @@ final class CommandSupport {
     }
 
     static long parseLong(ExecutionRequest request, int argIndex, String label) {
-        return parseLong(request.toByteArray(argIndex), label);
+        return parseLong(request.readOnlyByteArray(argIndex), label);
     }
 
     static long parseNonNegativeLong(ExecutionRequest request, int argIndex, String label) {

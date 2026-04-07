@@ -38,7 +38,7 @@ final class StringCommands implements CommandModule {
             return;
         }
 
-        byte[] key = request.toByteArray(1);
+        byte[] key = request.readOnlyByteArray(1);
         SetMode mode = SetMode.NORMAL;
         ExpireOption expire = null;
         boolean getOld = false;
@@ -190,7 +190,7 @@ final class StringCommands implements CommandModule {
             CommandSupport.wrongArity(out, "append");
             return;
         }
-        long len = support.dbWrites(ctx).strings().append(request.toByteArray(1), support.argSlice(request, 2));
+        long len = support.dbWrites(ctx).strings().append(request.readOnlyByteArray(1), support.argSlice(request, 2));
         out.integer(len);
     }
 
@@ -212,7 +212,7 @@ final class StringCommands implements CommandModule {
             out.error("ERR string exceeds maximum allowed size");
             return;
         }
-        int old = support.dbWrites(ctx).strings().setBit(request.toByteArray(1), offset, (int) v);
+        int old = support.dbWrites(ctx).strings().setBit(request.readOnlyByteArray(1), offset, (int) v);
         out.integer(old);
     }
 
@@ -255,7 +255,7 @@ final class StringCommands implements CommandModule {
             CommandSupport.wrongArity(out, delta > 0 ? "incr" : "decr");
             return;
         }
-        long value = support.dbWrites(ctx).strings().incrBy(request.toByteArray(1), delta);
+        long value = support.dbWrites(ctx).strings().incrBy(request.readOnlyByteArray(1), delta);
         out.integer(value);
     }
 }

@@ -203,7 +203,7 @@ final class KeyCommands implements CommandModule {
         }
         SlowCommandGovernor governor = support.slowGovernor();
         out.bulkStringArray(support.dbReads(ctx).keyspace().keys(
-                request.toByteArray(1),
+                request.readOnlyByteArray(1),
                 governor.keysMaxResults(ctx),
                 governor.keysTimeBudgetNanos(ctx)
         ));
@@ -225,7 +225,7 @@ final class KeyCommands implements CommandModule {
                     out.error("ERR syntax error");
                     return;
                 }
-                match = request.toByteArray(++i);
+                match = request.readOnlyByteArray(++i);
                 continue;
             }
             if (CommandSupport.asciiEqualsIgnoreCase(request, i, "COUNT")) {

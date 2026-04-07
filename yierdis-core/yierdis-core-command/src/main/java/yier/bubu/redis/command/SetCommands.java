@@ -33,7 +33,7 @@ final class SetCommands implements CommandModule {
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
-            long added = support.dbWrites(ctx).sets().sadd(request.toByteArray(1), support.slice());
+            long added = support.dbWrites(ctx).sets().sadd(request.readOnlyByteArray(1), support.slice());
             out.integer(added);
         } finally {
             support.clearScratch(membersLen);
@@ -49,7 +49,7 @@ final class SetCommands implements CommandModule {
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
-            out.integer(support.dbWrites(ctx).sets().srem(request.toByteArray(1), support.slice()));
+            out.integer(support.dbWrites(ctx).sets().srem(request.readOnlyByteArray(1), support.slice()));
         } finally {
             support.clearScratch(membersLen);
         }
@@ -62,7 +62,7 @@ final class SetCommands implements CommandModule {
             return;
         }
 
-        byte[] key = request.toByteArray(1);
+        byte[] key = request.readOnlyByteArray(1);
         BulkStringSequence seq = support.dbReads(ctx).sets().smembers(key);
         int count = seq.count();
         out.arrayHeader(count);
@@ -78,7 +78,7 @@ final class SetCommands implements CommandModule {
             CommandSupport.wrongArity(out, "sismember");
             return;
         }
-        out.integer(support.dbReads(ctx).sets().sismember(request.toByteArray(1), request.toByteArray(2)) ? 1 : 0);
+        out.integer(support.dbReads(ctx).sets().sismember(request.readOnlyByteArray(1), request.readOnlyByteArray(2)) ? 1 : 0);
     }
 
     private void scard(ExecutionRequest request, CommandContext ctx) {
@@ -87,6 +87,6 @@ final class SetCommands implements CommandModule {
             CommandSupport.wrongArity(out, "scard");
             return;
         }
-        out.integer(support.dbReads(ctx).sets().scard(request.toByteArray(1)));
+        out.integer(support.dbReads(ctx).sets().scard(request.readOnlyByteArray(1)));
     }
 }

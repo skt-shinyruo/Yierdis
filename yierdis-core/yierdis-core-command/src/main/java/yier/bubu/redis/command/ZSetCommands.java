@@ -36,7 +36,7 @@ final class ZSetCommands implements CommandModule {
         int pairsLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, pairsLen);
         try {
-            long added = support.dbWrites(ctx).zsets().zadd(request.toByteArray(1), support.slice());
+            long added = support.dbWrites(ctx).zsets().zadd(request.readOnlyByteArray(1), support.slice());
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
@@ -67,7 +67,7 @@ final class ZSetCommands implements CommandModule {
             return;
         }
 
-        byte[] key = request.toByteArray(1);
+        byte[] key = request.readOnlyByteArray(1);
         BulkStringSequence seq = rev
                 ? support.dbReads(ctx).zsets().zrevrange(key, start, stop, withScores)
                 : support.dbReads(ctx).zsets().zrange(key, start, stop, withScores);
@@ -97,7 +97,7 @@ final class ZSetCommands implements CommandModule {
             withScores = true;
         }
 
-        byte[] key = request.toByteArray(1);
+        byte[] key = request.readOnlyByteArray(1);
         BulkStringSequence seq = support.dbReads(ctx).zsets().zrevrange(key, start, stop, withScores);
         int count = seq.count();
         out.arrayHeader(count);
@@ -114,8 +114,8 @@ final class ZSetCommands implements CommandModule {
             return;
         }
 
-        CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(request.toByteArray(2));
-        CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(request.toByteArray(3));
+        CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(request.readOnlyByteArray(2));
+        CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(request.readOnlyByteArray(3));
 
         boolean withScores = false;
         long offset = 0;
@@ -142,7 +142,7 @@ final class ZSetCommands implements CommandModule {
             return;
         }
 
-        byte[] key = request.toByteArray(1);
+        byte[] key = request.readOnlyByteArray(1);
         BulkStringSequence seq = support.dbReads(ctx).zsets().zrangeByScore(
                 key,
                 min.value,
@@ -168,9 +168,9 @@ final class ZSetCommands implements CommandModule {
             return;
         }
 
-        CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(request.toByteArray(2));
-        CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(request.toByteArray(3));
-        out.integer(support.dbWrites(ctx).zsets().zremrangeByScore(request.toByteArray(1), min.value, min.exclusive, max.value, max.exclusive));
+        CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(request.readOnlyByteArray(2));
+        CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(request.readOnlyByteArray(3));
+        out.integer(support.dbWrites(ctx).zsets().zremrangeByScore(request.readOnlyByteArray(1), min.value, min.exclusive, max.value, max.exclusive));
     }
 
     private void zrevrangebyscore(ExecutionRequest request, CommandContext ctx) {
@@ -180,8 +180,8 @@ final class ZSetCommands implements CommandModule {
             return;
         }
 
-        CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(request.toByteArray(2));
-        CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(request.toByteArray(3));
+        CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(request.readOnlyByteArray(2));
+        CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(request.readOnlyByteArray(3));
 
         boolean withScores = false;
         long offset = 0;
@@ -208,7 +208,7 @@ final class ZSetCommands implements CommandModule {
             return;
         }
 
-        byte[] key = request.toByteArray(1);
+        byte[] key = request.readOnlyByteArray(1);
         BulkStringSequence seq = support.dbReads(ctx).zsets().zrevrangeByScore(
                 key,
                 min.value,
@@ -235,7 +235,7 @@ final class ZSetCommands implements CommandModule {
         }
         long start = CommandSupport.parseLong(request, 2, "start");
         long stop = CommandSupport.parseLong(request, 3, "stop");
-        out.integer(support.dbWrites(ctx).zsets().zremrangeByRank(request.toByteArray(1), start, stop));
+        out.integer(support.dbWrites(ctx).zsets().zremrangeByRank(request.readOnlyByteArray(1), start, stop));
     }
 
     private void zrem(ExecutionRequest request, CommandContext ctx) {
@@ -247,7 +247,7 @@ final class ZSetCommands implements CommandModule {
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
-            out.integer(support.dbWrites(ctx).zsets().zrem(request.toByteArray(1), support.slice()));
+            out.integer(support.dbWrites(ctx).zsets().zrem(request.readOnlyByteArray(1), support.slice()));
         } finally {
             support.clearScratch(membersLen);
         }
