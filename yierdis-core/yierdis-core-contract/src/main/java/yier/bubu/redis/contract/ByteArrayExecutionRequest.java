@@ -10,10 +10,12 @@ import java.util.Objects;
 public final class ByteArrayExecutionRequest implements ExecutionRequest {
     private final byte[][] argv;
     private final int retainedBytes;
+    private final boolean exposeReadOnlyBacking;
 
-    private ByteArrayExecutionRequest(byte[][] argv, int retainedBytes) {
+    private ByteArrayExecutionRequest(byte[][] argv, int retainedBytes, boolean exposeReadOnlyBacking) {
         this.argv = argv;
         this.retainedBytes = retainedBytes;
+        this.exposeReadOnlyBacking = exposeReadOnlyBacking;
     }
 
     public static ByteArrayExecutionRequest copyOf(List<byte[]> args) {
@@ -29,7 +31,7 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
             argv[i] = copy;
             retainedBytes += copy.length;
         }
-        return new ByteArrayExecutionRequest(argv, retainedBytes);
+        return new ByteArrayExecutionRequest(argv, retainedBytes, false);
     }
 
     public static ByteArrayExecutionRequest copyOf(ExecutionRequest request) {
@@ -52,7 +54,7 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
             argv[i] = copy;
             retainedBytes += copy.length;
         }
-        return new ByteArrayExecutionRequest(argv, retainedBytes);
+        return new ByteArrayExecutionRequest(argv, retainedBytes, false);
     }
 
     public static ByteArrayExecutionRequest fromUtf8(String commandName, List<String> args) {
@@ -74,7 +76,7 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
             argv[i + 1] = bytes;
             retainedBytes += bytes.length;
         }
-        return new ByteArrayExecutionRequest(argv, retainedBytes);
+        return new ByteArrayExecutionRequest(argv, retainedBytes, true);
     }
 
     @Override
@@ -119,7 +121,11 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
 
     @Override
     public byte[] readOnlyByteArray(int index) {
-        return argv[index];
+        byte[] arg = argv[index];
+        if (arg == null) {
+            return null;
+        }
+        return exposeReadOnlyBacking ? arg : arg.clone();
     }
 
     @Override

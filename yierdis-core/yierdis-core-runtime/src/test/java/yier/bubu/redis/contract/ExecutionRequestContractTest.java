@@ -50,6 +50,21 @@ public class ExecutionRequestContractTest {
     }
 
     @Test
+    public void executionRecordReadOnlyFastPathDoesNotExposeMutableSnapshotBacking() {
+        ExecutionRecord record = new ExecutionRecord(
+                0,
+                ByteArrayExecutionRequest.fromUtf8("SET", List.of("key"))
+        );
+
+        byte[] leaked = readOnlyByteArray(record.request(), 0);
+        leaked[0] = (byte) 'G';
+
+        Assert.assertArrayEquals(ascii("SET"), record.request().toByteArray(0));
+        Assert.assertArrayEquals(ascii("SET"), readOnlyByteArray(record.request(), 0));
+        Assert.assertNotSame(leaked, readOnlyByteArray(record.request(), 0));
+    }
+
+    @Test
     public void heapBackedRequestsExposeStableReadOnlyFastPath() {
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", List.of("key"));
 

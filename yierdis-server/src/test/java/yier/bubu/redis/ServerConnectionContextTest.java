@@ -76,6 +76,22 @@ public class ServerConnectionContextTest {
     }
 
     @Test
+    public void oversizedRequestIsRejectedBeforeSnapshotAllocation() {
+        EmbeddedChannel ch = new EmbeddedChannel();
+        try {
+            ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch, 16, 1);
+            TransactionState tx = context.commandSession().transaction();
+            tx.begin();
+
+            Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(new OversizedExecutionRequest()));
+            Assert.assertTrue(tx.aborted());
+            Assert.assertEquals(0, tx.size());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void markClosingIsIdempotentAndDiscardsTransaction() {
         EmbeddedChannel ch = new EmbeddedChannel();
         try {
@@ -95,5 +111,47 @@ public class ServerConnectionContextTest {
 
     private static ExecutionRequest request(String... args) {
         return ByteArrayExecutionRequest.fromUtf8(args[0], Arrays.asList(Arrays.copyOfRange(args, 1, args.length)));
+    }
+
+    private static final class OversizedExecutionRequest implements ExecutionRequest {
+        @Override
+        public int argc() {
+            return 1;
+        }
+
+        @Override
+        public boolean isNull(int index) {
+            return false;
+        }
+
+        @Override
+        public int len(int index) {
+            return 4;
+        }
+
+        @Override
+        public byte byteAt(int index, int offset) {
+            return "PING".getBytes()[offset];
+        }
+
+        @Override
+        public void copyToByteArray(int index, byte[] dst, int dstOff) {
+            throw new AssertionError("snapshot copy should not happen before queue byte guard");
+        }
+
+        @Override
+        public byte[] toByteArray(int index) {
+            throw new AssertionError("snapshot copy should not happen before queue byte guard");
+        }
+
+        @Override
+        public int retainedBytes() {
+            return 4;
+        }
+
+        @Override
+        public void close() {
+            // no-op
+        }
     }
 }

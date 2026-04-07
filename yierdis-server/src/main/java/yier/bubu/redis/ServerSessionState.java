@@ -160,6 +160,11 @@ final class ServerSessionState implements ServerSession {
                 aborted = true;
                 return "ERR Transaction queue is full";
             }
+            long estimatedBytes = Math.max(0L, request.retainedBytes());
+            if (maxQueuedBytes > 0 && estimatedBytes > 0 && queuedBytes + estimatedBytes > maxQueuedBytes) {
+                aborted = true;
+                return "ERR Transaction queue is full";
+            }
 
             ExecutionRequest snapshot = ByteArrayExecutionRequest.copyOf(request);
             long requestBytes = Math.max(0L, snapshot.retainedBytes());
