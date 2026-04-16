@@ -107,6 +107,11 @@ Restructure the repository into one kernel-first implementation path:
 
 This is a converging redesign, not a parallel rewrite.
 
+The implementation should be staged:
+
+- phase 1 converges the execution path and the highest-value FFM-native structures
+- phase 2 finishes the broader module/path cleanup and lower-priority structure migrations
+
 ## Alternatives Considered
 
 ### Option A: Keep the current architecture and only align semantics
@@ -129,6 +134,8 @@ This is a converging redesign, not a parallel rewrite.
 ## Target Architecture
 
 ### Primary Layers
+
+These layers describe the target end-state architecture, not a requirement that every directory rename happen immediately in phase 1.
 
 The repository should be legible as four layers:
 
@@ -153,6 +160,8 @@ This module becomes the only data-plane memory foundation. It should own:
 
 This module is not a generic pluggable off-heap abstraction layer. It is explicitly FFM-first.
 
+Phase 1 does not require a fully generalized malloc-style allocator. Structure-specific region/blob ownership is acceptable if it keeps the migration smaller and clearer.
+
 ### `yierdis-kernel`
 
 This module becomes the repository center. It should own:
@@ -168,6 +177,8 @@ This module becomes the repository center. It should own:
 - kernel command semantics
 
 This module should read like a Java Redis kernel, not like transport-neutral helper glue.
+
+In phase 1, this kernel boundary may still be implemented by reshaping existing modules before the final rename lands.
 
 ### `yierdis-protocol-*`
 
@@ -204,6 +215,8 @@ Reason:
 
 This break change removes abstraction noise that no longer matches product direction.
 
+Phase 1 should prefer targeted region/blob abstractions over inventing a broad allocator subsystem too early.
+
 ### Break Change 2: Reorganize `YierdisDb` into explicit kernel collaborators
 
 Reason:
@@ -228,13 +241,25 @@ Reason:
 - kernel execution order should be centralized and reusable
 - this is the clearest way to teach Redis command semantics
 
-### Break Change 5: Rename modules and paths to match the kernel-first model
+This is the most important phase 1 break change.
+
+### Break Change 5: Defer large-scale path/module renames until the kernel path is stable
 
 Reason:
 
-- names shape how contributors read the repository
-- if the names still center server/protocol boundaries, the redesign remains conceptual only
-- the new names should make the intended architecture obvious without reading design docs first
+- renaming first creates churn before the architecture has actually converged
+- the current codebase already contains enough moving parts without adding early large-scale path edits
+- once the kernel runner and first FFM-native structures are stable, renames become a cleanup step instead of a source of migration noise
+
+This is still a real break change, but it should land later than the kernel-path convergence work.
+
+### Break Change 6: Allow heap-resident control metadata in phase 1 while keeping payloads off-heap
+
+Reason:
+
+- Java does not need to copy Redis's C object layout mechanically in phase 1
+- the important early win is moving payload and core structures onto FFM
+- small heap-resident metadata objects can keep the first migration tractable without changing the architectural direction
 
 ## Kernel Execution Model
 
@@ -264,12 +289,36 @@ The kernel should adopt an explicit Redis-like object model:
 
 - `type`
 - `encoding`
-- LRU metadata in phase 1
+- LRU metadata
 - native payload handle
 
-Keyspace entries should point to a compact object header plus native payload, rather than storing large Java object graphs as the main data-plane representation.
+Keyspace entries should point to compact control metadata plus native payload, rather than storing large Java object graphs as the main data-plane representation.
+
+Phase 1 does not require a fully native Redis object header. It is acceptable for small control metadata records to stay on heap while payload bytes and primary structures move to FFM. A more aggressively native object layout is a phase 2 optimization.
+
+## Allocator Strategy
+
+Phase 1 should avoid overreaching into a fully general allocator project.
+
+The preferred order is:
+
+1. keep or refine the current structure-oriented FFM runtime and blob ownership model
+2. make keyspace/expire/container payloads FFM-native
+3. introduce lower-level reusable primitives only when multiple structures genuinely need them
+
+This keeps the project focused on "Java Redis kernel on FFM" rather than drifting into "build a new memory manager first".
 
 ## Data Structure Design
+
+Phase 1 priority is:
+
+1. keyspace
+2. expire dictionary
+3. string
+4. hash
+5. set
+
+`List` and `ZSet` remain part of the target design, but they are phase 2 priorities unless the earlier migrations finish cleanly.
 
 ### Keyspace
 
@@ -306,13 +355,17 @@ Phase 1 should support Redis-style encodings:
 
 ### List
 
-- small lists use native listpack
-- upgraded lists use native quicklist-style nodes
+- small lists should eventually use native listpack
+- upgraded lists should eventually use native quicklist-style nodes
+
+This is a phase 2 structure unless phase 1 finishes ahead of scope.
 
 ### ZSet
 
-- small sorted sets use native listpack
-- upgraded sorted sets use native dictionary plus native skiplist
+- small sorted sets should eventually use native listpack
+- upgraded sorted sets should eventually use native dictionary plus native skiplist
+
+This is a phase 2 structure unless phase 1 finishes ahead of scope.
 
 ### HLL
 
@@ -320,7 +373,7 @@ Phase 1 should support Redis-style encodings:
 
 ## Teaching-Core Command Scope
 
-The first phase teaching-core command set is:
+### Phase 1 kernel-first command scope
 
 ### Core / Keyspace / TTL
 
@@ -349,7 +402,13 @@ The first phase teaching-core command set is:
 - `SREM`
 - `SISMEMBER`
 
-### List
+Other commands may remain in the repository, but they are not allowed to dictate the phase 1 kernel design.
+
+### Phase 2 teaching-core expansion
+
+Once phase 1 is stable, expand the same kernel path to:
+
+#### List
 
 - `LPUSH`
 - `RPUSH`
@@ -357,53 +416,53 @@ The first phase teaching-core command set is:
 - `RPOP`
 - `LRANGE`
 
-### ZSet
+#### ZSet
 
 - `ZADD`
 - `ZREM`
 - `ZRANGE`
 
-Other commands may remain in the repository, but they are not allowed to dictate the phase 1 kernel design.
-
 ## Module Migration Plan
 
-### Step 1: Rename and shrink module boundaries
-
-- move current FFM/native memory concerns under a clearly named memory module
-- collapse current core API/contract/db/command layers into a kernel-first boundary
-- keep protocol and server as outer layers
-
-### Step 2: Introduce one kernel command runner
+### Step 1: Introduce one kernel command runner inside the current repository shape
 
 - centralize lookup, expire, type dispatch, reservation, commit, and bookkeeping
-- keep existing protocol and reply behavior stable where possible
+- keep the existing server/protocol entry points stable
+- avoid immediate large-scale path churn
 
-### Step 3: Make keyspace and expire dict first-class kernel objects
+### Step 2: Make keyspace and expire dict first-class kernel objects
 
 - move TTL and lookup semantics behind a unified kernel path
+- keep them runnable through the existing server mainline
 
-### Step 4: Migrate each core data structure to one FFM-native path
+### Step 3: Migrate the first FFM-native structure set
 
 Migration order:
 
 1. `String`
 2. `Hash`
 3. `Set`
-4. `List`
-5. `ZSet`
 
 After each migration:
 
 - remove the old heap fallback for that type
 - move tests to the kernel/encoding/native-structure split
 
-### Step 5: Reattach active expire and eviction to kernel maintenance
+### Step 4: Reattach active expire and eviction to kernel maintenance
 
 - active expire becomes a kernel-owned maintenance cycle
 - eviction becomes a kernel-owned memory-pressure response
 
-### Step 6: Delete obsolete paths
+### Step 5: Migrate `List` and `ZSet`
 
+- move `List` toward native listpack plus quicklist-style nodes
+- move `ZSet` toward native packed form plus dictionary and skiplist
+- remove the old heap fallback for each structure after migration
+
+### Step 6: Finalize module renames and delete obsolete paths
+
+- move current FFM/native memory concerns under a clearly named memory module
+- collapse current core API/contract/db/command layers into a kernel-first boundary
 - remove compatibility facades
 - remove stale module boundaries
 - remove tests that lock the old architecture in place
@@ -427,6 +486,9 @@ These lock Redis-style upgrade behavior:
 - string `int/embstr/raw`
 - hash `listpack -> ht`
 - set `intset -> ht`
+
+Once phase 2 structure work begins, extend the same suite to:
+
 - list `listpack -> quicklist`
 - zset `listpack -> dict+skiplist`
 
@@ -455,19 +517,23 @@ These remain necessary, but they move to the outermost layer:
 Phase 1 succeeds when the repository provides:
 
 - one runnable server using the existing custom protocol
-- one FFM-native data-plane implementation
+- one FFM-native mainline data-plane implementation
 - one kernel-first execution path
-- Redis-style basic data structures with encoding upgrades
-- teaching-core commands that exercise those structures through Redis-like semantics
+- FFM-native keyspace and expire dictionaries
+- FFM-native `String`, `Hash`, and `Set` implementations with Redis-style encoding upgrades
+- phase 1 teaching-core commands that exercise those structures through Redis-like semantics
 
 Phase 1 does not require:
 
+- `List` and `ZSet` migration completion
 - full Redis command coverage
 - persistence
 - replication
 - cluster
 - ACL/TLS
 - encoding downgrade
+- a fully native Redis object header
+- a generalized allocator subsystem
 - peak performance tuning beyond correctness and reasonable baseline behavior
 
 ## Explicit Non-Goals
@@ -486,5 +552,6 @@ After this redesign, the repository will be less backwards-compatible internally
 - FFM will become a visible architectural choice instead of a hidden implementation detail
 - data structures will better mirror Redis concepts
 - protocol and server concerns will stop dominating the core design
+- early phases will carry less rename churn than the original broader proposal
 
 That trade-off is intentional and correct for the stated project goal.
