@@ -308,6 +308,18 @@ The preferred order is:
 
 This keeps the project focused on "Java Redis kernel on FFM" rather than drifting into "build a new memory manager first".
 
+### Why Not Build A General Allocator First
+
+The allocator shape depends on the real object model and allocation patterns that survive the earlier kernel convergence work. Those details are not stable enough yet:
+
+- `String`, `Hash`, `Set`, `List`, and `ZSet` do not all have the same size classes or lifetime patterns
+- table resize blocks, packed encodings, and object payloads may or may not want the same allocation strategy
+- refcounting, handles, and ownership boundaries are still being simplified
+
+If a general allocator is designed before those needs settle, the repository risks solving the wrong problem first and then forcing every structure to conform to premature allocator decisions.
+
+The current region/blob approach is not the final desired memory layout, but it already provides the most important phase 1 property: explicit ownership with observable leak boundaries. That is enough to let the kernel path and first FFM-native structures stabilize before allocator generalization begins.
+
 ## Data Structure Design
 
 Phase 1 priority is:
@@ -319,6 +331,26 @@ Phase 1 priority is:
 5. set
 
 `List` and `ZSet` remain part of the target design, but they are phase 2 priorities unless the earlier migrations finish cleanly.
+
+### Why Not Native-ize Every Structure At Once
+
+Converging the execution path, ownership model, and structure layout all at the same time would make the migration too opaque to reason about.
+
+The structures are not equal in difficulty:
+
+- `String`, `Hash`, and `Set` are the best early vehicles for teaching encodings and FFM-backed payload ownership
+- `List` adds quicklist-style node management concerns
+- `ZSet` adds coupled dictionary and ordered-index consistency concerns
+
+If every structure is migrated in one wave, failures become hard to attribute:
+
+- is the bug in command semantics
+- in lazy expire or key deletion rules
+- in FFM ownership
+- in packed encoding layout
+- or in upgraded container topology
+
+That would slow the project down and undermine the "single implementation, teachable kernel path" goal. A phased structure migration keeps the code runnable and keeps the meaning of each refactor legible.
 
 ### Keyspace
 
