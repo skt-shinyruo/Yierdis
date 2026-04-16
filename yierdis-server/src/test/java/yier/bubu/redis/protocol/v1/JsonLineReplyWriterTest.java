@@ -147,25 +147,25 @@ public class JsonLineReplyWriterTest {
     }
 
     @Test
-    public void architectureDocsMustKeepReplyWriterAsServerWriteAuthority() throws Exception {
+    public void replyWriterAuthorityMustStayDocumentedInReadmeAndProtocolSources() throws Exception {
         Path workspaceRoot = resolveWorkspaceRoot();
         Assert.assertNotNull("missing workspace root", workspaceRoot);
 
         String readme = Files.readString(workspaceRoot.resolve("README.md"), StandardCharsets.UTF_8);
         Assert.assertTrue(readme.contains("server command execution write-back still uses ReplyWriter"));
 
-        String design = Files.readString(
-                workspaceRoot.resolve("docs/superpowers/specs/2026-03-31-architecture-remediation-design.md"),
+        String replyValueSource = Files.readString(
+                workspaceRoot.resolve("yierdis-protocol/yierdis-protocol-model/src/main/java/yier/bubu/redis/protocol/reply/ReplyValue.java"),
                 StandardCharsets.UTF_8
         );
-        Assert.assertTrue(design.contains("server command execution write-back still uses ReplyWriter"));
+        Assert.assertTrue(replyValueSource.contains("server 命令执行写回仍以 {@code ReplyWriter} 为准"));
 
-        String legacyRoadmap = Files.readString(
-                workspaceRoot.resolve("docs/superpowers/plans/2026-04-04-architecture-refactor-roadmap.md"),
+        String encoderSource = Files.readString(
+                workspaceRoot.resolve("yierdis-protocol/yierdis-protocol-codec/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1NdjsonEncoder.java"),
                 StandardCharsets.UTF_8
         );
         Assert.assertTrue(
-                legacyRoadmap.contains("This roadmap is superseded by `docs/superpowers/plans/2026-04-06-architecture-remediation-replan.md`.")
+                encoderSource.contains("server 主写回路径的语义 owner 仍是 {@code ReplyWriter}")
         );
     }
 
@@ -240,7 +240,8 @@ public class JsonLineReplyWriterTest {
         while (cursor != null) {
             if (Files.isRegularFile(cursor.resolve("README.md"))
                     && Files.isDirectory(cursor.resolve("yierdis-server/src/main/java"))
-                    && Files.isDirectory(cursor.resolve("docs/superpowers"))) {
+                    && Files.isDirectory(cursor.resolve("yierdis-protocol/yierdis-protocol-model/src/main/java"))
+                    && Files.isDirectory(cursor.resolve("yierdis-protocol/yierdis-protocol-codec/src/main/java"))) {
                 return cursor;
             }
             cursor = cursor.getParent();
