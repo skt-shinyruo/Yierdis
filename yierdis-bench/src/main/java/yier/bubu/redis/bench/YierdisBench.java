@@ -459,7 +459,8 @@ public final class YierdisBench {
         return new LatencyResult(workload, all.length, errors, seconds, qps, stats);
     }
 
-    private static void printSummary(List<BackendResult> results, boolean skipLatency) {
+    static String renderSummary(List<BackendResult> results, boolean skipLatency) {
+        StringBuilder sb = new StringBuilder();
         String header = skipLatency
                 ? String.format("%-8s | %12s | %8s | %12s | %8s", "backend", "SET_QPS", "SET_ERR", "GET_QPS", "GET_ERR")
                 : String.format(
@@ -467,16 +468,17 @@ public final class YierdisBench {
                 "backend", "SET_QPS", "SET_ERR", "GET_QPS", "GET_ERR",
                 "PING_p95(ms)", "PING_E", "SET_p95(ms)", "SET_E", "GET_p95(ms)", "GET_E"
         );
-        println(header);
-        println(repeat('-', header.length()));
+        sb.append(header).append('\n');
+        sb.append(repeat('-', header.length())).append('\n');
 
         for (BackendResult r : results) {
-            String setQps = r.setThroughput == null ? "-" : formatQps(r.setThroughput.qps);
-            String getQps = r.getThroughput == null ? "-" : formatQps(r.getThroughput.qps);
+            String setQps = r.setThroughput == null ? "-" : DF.format(r.setThroughput.qps);
+            String getQps = r.getThroughput == null ? "-" : DF.format(r.getThroughput.qps);
             String setErr = r.setThroughput == null ? "-" : Long.toString(r.setThroughput.errors);
             String getErr = r.getThroughput == null ? "-" : Long.toString(r.getThroughput.errors);
             if (skipLatency) {
-                println(String.format("%-8s | %12s | %8s | %12s | %8s", r.backend, setQps, setErr, getQps, getErr));
+                sb.append(String.format("%-8s | %12s | %8s | %12s | %8s", r.backend, setQps, setErr, getQps, getErr))
+                        .append('\n');
                 continue;
             }
             String pingP95 = r.pingLatency == null ? "-" : DF.format(r.pingLatency.stats.p95Millis());
@@ -485,25 +487,21 @@ public final class YierdisBench {
             String pingErr = r.pingLatency == null ? "-" : Long.toString(r.pingLatency.errors);
             String setLatErr = r.setLatency == null ? "-" : Long.toString(r.setLatency.errors);
             String getLatErr = r.getLatency == null ? "-" : Long.toString(r.getLatency.errors);
-            println(String.format(
+            sb.append(String.format(
                     "%-8s | %12s | %8s | %12s | %8s | %14s | %8s | %14s | %8s | %14s | %8s",
                     r.backend, setQps, setErr, getQps, getErr,
                     pingP95, pingErr, setP95, setLatErr, getP95, getLatErr
-            ));
+            )).append('\n');
         }
+        return sb.toString();
     }
 
-    private static String formatQps(double qps) {
-        if (Double.isNaN(qps) || Double.isInfinite(qps)) {
-            return "NaN";
+    private static void printSummary(List<BackendResult> results, boolean skipLatency) {
+        for (String line : renderSummary(results, skipLatency).split("\n", -1)) {
+            if (!line.isEmpty()) {
+                println(line);
+            }
         }
-        if (qps >= 1_000_000) {
-            return DF.format(qps / 1_000_000.0) + "M";
-        }
-        if (qps >= 1_000) {
-            return DF.format(qps / 1_000.0) + "K";
-        }
-        return DF.format(qps);
     }
 
     private static String repeat(char c, int n) {

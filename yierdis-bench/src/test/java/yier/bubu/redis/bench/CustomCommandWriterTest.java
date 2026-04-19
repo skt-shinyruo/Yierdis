@@ -34,6 +34,17 @@ public class CustomCommandWriterTest {
     }
 
     @Test
+    public void repeatedSummaryRenderingDoesNotTouchCommandWriterPath() throws Exception {
+        byte[] key = utf8("next-key");
+        byte[] value = utf8("line1\\line2\n中文");
+
+        Assert.assertArrayEquals(
+                CustomProtocolV1RequestEncoder.encodeRequestFrame(List.of(utf8("SET"), key, value)),
+                writeFrame(writer -> writer.writeSet(key, value))
+        );
+    }
+
+    @Test
     public void writeSetThenGetOnSameWriterDoesNotLeakPreviousArgs() throws Exception {
         byte[] setKey = utf8("bench\"key");
         byte[] getKey = utf8("next-key");
