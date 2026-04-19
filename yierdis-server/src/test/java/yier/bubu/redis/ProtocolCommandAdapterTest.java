@@ -7,36 +7,31 @@ import org.junit.Test;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
-import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1ArgvRequest;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 
 public class ProtocolCommandAdapterTest {
     @Test
-    public void adaptsCustomProtocolRequestToExecutionRequestPreservingUtf8NullsAndRetainedBytes() {
+    public void adaptsByteBackedRequestWithoutUtf8Reencoding() {
         EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter());
+        byte[] cmd = utf8("PING");
+        byte[] arg = utf8("alpha");
         ExecutionRequest adapted = null;
         try {
-            Assert.assertTrue(ch.writeInbound(new CustomProtocolV1Request("PING", Arrays.asList("alpha", null, "你好", ""))));
+            Assert.assertTrue(ch.writeInbound(
+                    CustomProtocolV1ArgvRequest.of(new byte[][]{cmd, arg, null}, cmd.length + arg.length)
+            ));
 
             Object inbound = ch.readInbound();
             Assert.assertTrue(inbound instanceof ExecutionRequest);
             Assert.assertFalse(inbound instanceof Command);
 
             adapted = (ExecutionRequest) inbound;
-            Assert.assertEquals(5, adapted.argc());
-            Assert.assertArrayEquals(utf8("PING"), adapted.toByteArray(0));
-            Assert.assertArrayEquals(utf8("alpha"), adapted.toByteArray(1));
+            Assert.assertSame(cmd, adapted.readOnlyByteArray(0));
+            Assert.assertSame(arg, adapted.readOnlyByteArray(1));
             Assert.assertTrue(adapted.isNull(2));
-            Assert.assertEquals(-1, adapted.len(2));
-            Assert.assertArrayEquals(utf8("你好"), adapted.toByteArray(3));
-            Assert.assertArrayEquals(utf8(""), adapted.toByteArray(4));
-
-            int expectedRetainedBytes = utf8("PING").length
-                    + utf8("alpha").length
-                    + utf8("你好").length;
-            Assert.assertEquals(expectedRetainedBytes, adapted.retainedBytes());
+            Assert.assertEquals(cmd.length + arg.length, adapted.retainedBytes());
         } finally {
             if (adapted != null) {
                 adapted.close();
@@ -57,8 +52,8 @@ public class ProtocolCommandAdapterTest {
             Assert.assertFalse(inbound instanceof Command);
 
             adapted = (ExecutionRequest) inbound;
-            Assert.assertArrayEquals(utf8("PING"), adapted.toByteArray(0));
-            Assert.assertArrayEquals(utf8("alpha"), adapted.toByteArray(1));
+            Assert.assertArrayEquals(utf8("PING"), adapted.readOnlyByteArray(0));
+            Assert.assertArrayEquals(utf8("alpha"), adapted.readOnlyByteArray(1));
         } finally {
             if (adapted != null) {
                 adapted.close();

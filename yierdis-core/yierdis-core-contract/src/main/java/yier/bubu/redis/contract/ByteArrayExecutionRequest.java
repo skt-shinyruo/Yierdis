@@ -57,6 +57,13 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
         return new ByteArrayExecutionRequest(argv, retainedBytes, false);
     }
 
+    public static ByteArrayExecutionRequest wrapReadOnly(byte[][] argv, int retainedBytes) {
+        Objects.requireNonNull(argv, "argv");
+        byte[][] owned = new byte[argv.length][];
+        System.arraycopy(argv, 0, owned, 0, argv.length);
+        return new ByteArrayExecutionRequest(owned, Math.max(0, retainedBytes), true);
+    }
+
     public static ByteArrayExecutionRequest fromUtf8(String commandName, List<String> args) {
         Objects.requireNonNull(commandName, "commandName");
         Objects.requireNonNull(args, "args");

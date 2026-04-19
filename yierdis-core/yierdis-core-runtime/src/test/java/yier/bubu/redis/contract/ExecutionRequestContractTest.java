@@ -88,6 +88,21 @@ public class ExecutionRequestContractTest {
         Assert.assertArrayEquals(ascii("SET"), readOnlyByteArray(request, 0));
     }
 
+    @Test
+    public void wrappedReadOnlyArgvRequestKeepsStableReadOnlyBacking() {
+        byte[] cmd = ascii("SET");
+        byte[] key = ascii("key");
+
+        ExecutionRequest request = ByteArrayExecutionRequest.wrapReadOnly(
+                new byte[][]{cmd, key, null},
+                cmd.length + key.length
+        );
+
+        Assert.assertSame(cmd, readOnlyByteArray(request, 0));
+        Assert.assertSame(key, readOnlyByteArray(request, 1));
+        Assert.assertTrue(request.isNull(2));
+    }
+
     private static byte[] ascii(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
     }

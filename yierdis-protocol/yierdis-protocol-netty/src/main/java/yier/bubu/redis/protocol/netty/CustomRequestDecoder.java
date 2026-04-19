@@ -3,20 +3,11 @@ package yier.bubu.redis.protocol.netty;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ByteToMessageDecoder;
-import yier.bubu.redis.protocol.json.JsonArray;
-import yier.bubu.redis.protocol.json.JsonLimits;
-import yier.bubu.redis.protocol.json.JsonNull;
-import yier.bubu.redis.protocol.json.JsonObject;
 import yier.bubu.redis.protocol.json.JsonParseException;
-import yier.bubu.redis.protocol.json.JsonParser;
-import yier.bubu.redis.protocol.json.JsonString;
-import yier.bubu.redis.protocol.json.JsonValue;
-import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1ArgvRequest;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1RequestPayloadParser;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Custom protocol v1 request decoder.
@@ -40,7 +31,6 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
     private final int maxArgs;
     private final int maxHeaderBytes;
     private final int maxDiscardBytes;
-    private final JsonLimits jsonLimits;
 
     private State state = State.READ_HEADER;
     private int expectedPayloadLen;
@@ -55,7 +45,6 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
         this.maxArgs = Math.max(0, maxArgs);
         this.maxHeaderBytes = Math.max(0, maxHeaderBytes);
         this.maxDiscardBytes = Math.max(0, maxDiscardBytes);
-        this.jsonLimits = buildJsonLimits(this.maxPayloadBytes, this.maxArgs);
     }
 
     @Override
@@ -108,7 +97,7 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
                 }
 
                 try {
-                    CustomProtocolV1Request request = parseCommandPayload(payload);
+                    CustomProtocolV1ArgvRequest request = parseCommandPayload(payload);
                     out.add(request);
                 } catch (JsonParseException e) {
                     enterDiscard(out, "Protocol error: invalid JSON");
@@ -219,59 +208,7 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
         out.add(new ProtocolError(message));
     }
 
-    private CustomProtocolV1Request parseCommandPayload(ByteBuf payload) {
-        JsonValue v = parsePayloadJson(payload);
-        if (!(v instanceof JsonObject obj)) {
-            throw new IllegalArgumentException("request must be a JSON object");
-        }
-
-        Map<String, JsonValue> map = obj.values();
-        JsonValue cmdVal = map.get("cmd");
-        if (!(cmdVal instanceof JsonString)) {
-            throw new IllegalArgumentException("cmd must be a string");
-        }
-        String cmd = ((JsonString) cmdVal).value();
-        String normalizedCmd = cmd.trim();
-        if (normalizedCmd.isEmpty()) {
-            throw new IllegalArgumentException("cmd must not be blank");
-        }
-
-        JsonValue argsVal = map.get("args");
-        ArrayList<String> args = new ArrayList<>();
-        if (argsVal == null || argsVal instanceof JsonNull) {
-            // no args
-        } else if (argsVal instanceof JsonArray arr) {
-            List<JsonValue> values = arr.values();
-            if (values != null && !values.isEmpty()) {
-                int argc = 1 + values.size();
-                if (maxArgs > 0 && argc > maxArgs) {
-                    throw new IllegalArgumentException("too many args");
-                }
-                args = new ArrayList<>(values.size());
-                for (JsonValue a : values) {
-                    if (a == null || a instanceof JsonNull) {
-                        args.add(null);
-                        continue;
-                    }
-                    if (a instanceof JsonString s) {
-                        args.add(s.value());
-                        continue;
-                    }
-                    throw new IllegalArgumentException("args elements must be string|null");
-                }
-            }
-        } else {
-            throw new IllegalArgumentException("args must be an array");
-        }
-
-        int argc = 1 + args.size();
-        if (maxArgs > 0 && argc > maxArgs) {
-            throw new IllegalArgumentException("too many args");
-        }
-        return new CustomProtocolV1Request(normalizedCmd, args);
-    }
-
-    private JsonValue parsePayloadJson(ByteBuf payload) {
+    private CustomProtocolV1ArgvRequest parseCommandPayload(ByteBuf payload) {
         if (payload == null) {
             throw new IllegalArgumentException("payload must not be null");
         }
@@ -284,33 +221,13 @@ public final class CustomRequestDecoder extends ByteToMessageDecoder {
         if (payload.hasArray()) {
             byte[] arr = payload.array();
             int base = payload.arrayOffset() + off;
-            return JsonParser.parseStrictUtf8(arr, base, len, jsonLimits);
-        }
-
-        if (payload.nioBufferCount() == 1) {
-            ByteBuffer buf = payload.nioBuffer(off, len);
-            return JsonParser.parseStrictUtf8(buf, jsonLimits);
+            return CustomProtocolV1RequestPayloadParser.parse(arr, base, len, maxArgs);
         }
 
         // Fallback: some composite buffers can't expose a single ByteBuffer view for the payload range.
         byte[] copy = new byte[len];
         payload.getBytes(off, copy);
-        return JsonParser.parseStrictUtf8(copy, 0, copy.length, jsonLimits);
-    }
-
-    private static JsonLimits buildJsonLimits(int maxPayloadBytes, int maxArgs) {
-        int maxNestingDepth = JsonLimits.DEFAULT.maxNestingDepth();
-        int maxArrayLen = JsonLimits.DEFAULT.maxArrayLen();
-        if (maxArgs > 0) {
-            // args array length is <= maxArgs-1, but allow maxArgs to keep a stable schema error for off-by-one.
-            maxArrayLen = maxArgs;
-        }
-        int maxObjectPairs = JsonLimits.DEFAULT.maxObjectPairs();
-        int maxStringChars = JsonLimits.DEFAULT.maxStringChars();
-        if (maxPayloadBytes > 0) {
-            maxStringChars = Math.min(maxStringChars, maxPayloadBytes);
-        }
-        return new JsonLimits(maxNestingDepth, maxArrayLen, maxObjectPairs, maxStringChars);
+        return CustomProtocolV1RequestPayloadParser.parse(copy, 0, copy.length, maxArgs);
     }
 
     private static boolean containsCrLf(ByteBuf payload) {

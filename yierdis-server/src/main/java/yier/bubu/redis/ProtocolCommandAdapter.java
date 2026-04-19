@@ -5,14 +5,18 @@ package yier.bubu.redis;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1ArgvRequest;
 
-final class ProtocolCommandAdapter extends SimpleChannelInboundHandler<CustomProtocolV1Request> {
+final class ProtocolCommandAdapter extends SimpleChannelInboundHandler<CustomProtocolV1ArgvRequest> {
     @Override
-    protected void channelRead0(ChannelHandlerContext ctx, CustomProtocolV1Request msg) {
+    protected void channelRead0(ChannelHandlerContext ctx, CustomProtocolV1ArgvRequest msg) {
         if (ctx == null || msg == null) {
             return;
         }
-        ctx.fireChannelRead(ByteArrayExecutionRequest.fromUtf8(msg.cmd(), msg.args()));
+        byte[][] argv = new byte[msg.argc()][];
+        for (int i = 0; i < argv.length; i++) {
+            argv[i] = msg.readOnlyArg(i);
+        }
+        ctx.fireChannelRead(ByteArrayExecutionRequest.wrapReadOnly(argv, msg.retainedBytes()));
     }
 }
