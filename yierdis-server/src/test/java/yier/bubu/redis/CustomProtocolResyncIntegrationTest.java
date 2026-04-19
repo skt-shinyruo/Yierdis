@@ -18,6 +18,12 @@ import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
 import yier.bubu.redis.runtime.YierdisInstance;
 import yier.bubu.redis.runtime.YierdisInstanceConfig;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
@@ -41,6 +47,29 @@ public class CustomProtocolResyncIntegrationTest {
             Assert.assertEquals("PONG", stringField(pong, "result"));
 
             Assert.assertTrue("protocol error should keep the connection open", ch.isActive());
+        }
+    }
+
+    @Test
+    public void malformedFrameStillResyncsAndExecutesNextValidCommandAfterByteBackedParserSwap() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0")) {
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+                socket.setSoTimeout(2000);
+
+                OutputStream out = socket.getOutputStream();
+                InputStream in = socket.getInputStream();
+
+                writeRawFrame(out, "{\"cmd\":}");
+                writeFrame(out, "{\"cmd\":\"PING\",\"args\":[]}");
+
+                JsonObject first = parseJsonObject(readReplyLine(in));
+                Assert.assertFalse(booleanField(first, "ok"));
+
+                JsonObject second = parseJsonObject(readReplyLine(in));
+                Assert.assertTrue(booleanField(second, "ok"));
+                Assert.assertEquals("PONG", stringField(second, "result"));
+            }
         }
     }
 
@@ -140,6 +169,32 @@ public class CustomProtocolResyncIntegrationTest {
         String head = Integer.toString(payload.length) + ":";
         byte[] h = head.getBytes(StandardCharsets.US_ASCII);
         return concat(h, payload, new byte[]{'\n'});
+    }
+
+    private static void writeRawFrame(OutputStream out, String json) throws IOException {
+        out.write(frame(json));
+        out.flush();
+    }
+
+    private static void writeFrame(OutputStream out, String json) throws IOException {
+        writeRawFrame(out, json);
+    }
+
+    private static byte[] readReplyLine(InputStream in) throws IOException {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        while (true) {
+            int b = in.read();
+            if (b < 0) {
+                if (buf.size() == 0) {
+                    return null;
+                }
+                throw new IOException("unexpected EOF before reply newline");
+            }
+            if (b == '\n') {
+                return buf.toByteArray();
+            }
+            buf.write(b);
+        }
     }
 
     private static byte[] concat(byte[]... parts) {

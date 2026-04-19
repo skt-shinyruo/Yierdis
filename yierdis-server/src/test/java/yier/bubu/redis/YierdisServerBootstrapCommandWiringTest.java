@@ -101,6 +101,35 @@ public class YierdisServerBootstrapCommandWiringTest {
     }
 
     @Test
+    public void bootstrapStillProcessesHelloInfoStatsAndDataCommandsAfterByteBackedDecodePath() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0", "--databases", "2")) {
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+                socket.setSoTimeout(2000);
+
+                OutputStream out = socket.getOutputStream();
+                InputStream in = socket.getInputStream();
+
+                JsonObject hello = roundTrip(out, in, "{\"cmd\":\"HELLO\",\"args\":[]}");
+                Assert.assertTrue(booleanField(hello, "ok"));
+
+                JsonObject info = roundTrip(out, in, "{\"cmd\":\"INFO\",\"args\":[\"yierdis\"]}");
+                Assert.assertTrue(booleanField(info, "ok"));
+
+                JsonObject stats = roundTrip(out, in, "{\"cmd\":\"STATS\",\"args\":[]}");
+                Assert.assertTrue(booleanField(stats, "ok"));
+
+                JsonObject set = roundTrip(out, in, "{\"cmd\":\"SET\",\"args\":[\"k\",\"v\"]}");
+                Assert.assertTrue(booleanField(set, "ok"));
+
+                JsonObject get = roundTrip(out, in, "{\"cmd\":\"GET\",\"args\":[\"k\"]}");
+                Assert.assertTrue(booleanField(get, "ok"));
+                Assert.assertEquals("v", stringField(get, "result"));
+            }
+        }
+    }
+
+    @Test
     public void observabilityUsesNormalizedRuntimeConfigValues() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
                 "--port", "0",

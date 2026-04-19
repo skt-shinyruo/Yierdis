@@ -272,6 +272,14 @@ java -jar yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378
 ./scripts/bench.sh
 ```
 
+### Request-Path Baseline Comparison
+
+对 request-path 优化，建议在改动前后都用同一组参数保留 `yierdis-bench` 的 summary 表格输出，便于直接对比吞吐和延迟：
+
+```bash
+REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
+```
+
 常用可调参数（环境变量）：
 
 - `PORT_BASE`：起始端口（默认 `16378`，每个后端 +1）
