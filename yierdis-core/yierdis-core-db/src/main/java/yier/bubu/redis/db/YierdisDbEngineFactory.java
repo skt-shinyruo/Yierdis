@@ -12,6 +12,10 @@ import java.util.Objects;
 public final class YierdisDbEngineFactory implements DbEngineFactory {
     private final YierdisFfmMemoryRuntime memoryRuntime;
 
+    public YierdisDbEngineFactory() {
+        this.memoryRuntime = null;
+    }
+
     public YierdisDbEngineFactory(YierdisFfmMemoryRuntime memoryRuntime) {
         this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
     }
@@ -25,6 +29,15 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
+        if (memoryRuntime == null) {
+            return YierdisDb.createWithOwnedFfmRuntime(
+                    maxmemoryBytes,
+                    maxmemoryPolicy,
+                    maxmemorySamples,
+                    evictionTimeLimitMillis,
+                    expireCleanupTimeLimitMillis
+            );
+        }
         return YierdisDb.createWithSharedFfmRuntime(
                 memoryRuntime,
                 maxmemoryBytes,

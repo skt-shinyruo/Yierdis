@@ -40,16 +40,18 @@ public final class YierdisInstance implements AutoCloseable {
     public static YierdisInstance create(YierdisInstanceConfig config) {
         Objects.requireNonNull(config, "config");
         int databases = Math.max(1, config.databases());
+        boolean perDbScope = config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
 
         YierdisFfmMemoryRuntime memoryRuntime = new YierdisFfmMemoryRuntime("instance");
         DbEngineFactory engineFactory = config.engineFactory();
         if (engineFactory == null) {
-            engineFactory = new YierdisDbEngineFactory(memoryRuntime);
+            engineFactory = perDbScope
+                    ? new YierdisDbEngineFactory()
+                    : new YierdisDbEngineFactory(memoryRuntime);
         }
 
         long perDbMaxmemory = 0;
         long remainder = 0;
-        boolean perDbScope = config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
         if (perDbScope && config.maxmemoryBytes() > 0) {
             perDbMaxmemory = config.maxmemoryBytes() / (long) databases;
             remainder = config.maxmemoryBytes() - perDbMaxmemory * (long) databases;

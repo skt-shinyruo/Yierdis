@@ -14,6 +14,7 @@ import yier.bubu.redis.ops.DbReads;
 import yier.bubu.redis.ops.DbWrites;
 import yier.bubu.redis.ops.ExpirationManager;
 import yier.bubu.redis.ops.MemoryOps;
+import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.RuntimeDbEngine;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyError;
@@ -53,6 +54,67 @@ public class YierdisInstanceTest {
                 Assert.assertFalse("expected not OOM (no double-count off-heap)", reply instanceof ReplyError);
                 Assert.assertEquals("OK", ((ReplySimpleString) reply).value());
             }
+        }
+    }
+
+    @Test
+    public void perDbScopeDoesNotCountAnotherDbsFfmBytesInLocalBudget() {
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(2)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
+                .maxmemoryBytes(20_000)
+                .maxmemoryPolicy("noeviction")
+                .build();
+
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
+            instance.bindToCurrentThread();
+            byte[] value = new byte[4_000];
+            Arrays.fill(value, (byte) 'a');
+
+            long db0Before = instance.engine(0).memory().memoryStats().usedBytesForMaxmemory();
+
+            Assert.assertTrue(instance.engine(1).writes().strings().setString(b("remote"), value, SetMode.NORMAL, null));
+            long db0AfterRemoteWrite = instance.engine(0).memory().memoryStats().usedBytesForMaxmemory();
+            Assert.assertEquals("DB1 writes must not consume DB0 maxmemory budget in per-db mode",
+                    db0Before,
+                    db0AfterRemoteWrite);
+
+            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("local"), value, SetMode.NORMAL, null));
+            long db0AfterLocalWrite = instance.engine(0).memory().memoryStats().usedBytesForMaxmemory();
+            Assert.assertTrue("DB0 local writes should increase its own maxmemory usage",
+                    db0AfterLocalWrite > db0AfterRemoteWrite);
+        }
+    }
+
+    @Test
+    public void instanceObservabilitySumsOffHeapInPerDbScopeAndMarksIncluded() {
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(2)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
+                .maxmemoryBytes(0)
+                .maxmemoryPolicy("noeviction")
+                .build();
+
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
+            instance.bindToCurrentThread();
+            byte[] value = new byte[4_000];
+            Arrays.fill(value, (byte) 'a');
+
+            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("a"), value, SetMode.NORMAL, null));
+            Assert.assertTrue(instance.engine(1).writes().strings().setString(b("b"), value, SetMode.NORMAL, null));
+
+            long off0 = instance.engine(0).memory().memoryStats().offHeapUsedBytes();
+            long off1 = instance.engine(1).memory().memoryStats().offHeapUsedBytes();
+            long expected;
+            if (Long.MAX_VALUE - off0 < off1) {
+                expected = Long.MAX_VALUE;
+            } else {
+                expected = off0 + off1;
+            }
+
+            var stats = instance.observability().memoryStats();
+            Assert.assertTrue("expected off-heap to be included in maxmemory accounting", stats.offHeapIncludedInMaxmemory());
+            Assert.assertEquals("expected instance off-heap to sum across DBs in per-db scope", expected, stats.offHeapUsedBytes());
         }
     }
 

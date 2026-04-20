@@ -128,6 +128,17 @@ public final class YierdisDb implements RuntimeDbEngine {
         return new YierdisDb(memoryRuntime, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
     }
 
+    public static YierdisDb createWithOwnedFfmRuntime(
+            long maxmemoryBytes,
+            String maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis
+    ) {
+        return new YierdisDb(new YierdisFfmMemoryRuntime("db"), true,
+                maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+    }
+
     public YierdisDb(
             OffHeapAllocator offHeapAllocator,
             long maxmemoryBytes,

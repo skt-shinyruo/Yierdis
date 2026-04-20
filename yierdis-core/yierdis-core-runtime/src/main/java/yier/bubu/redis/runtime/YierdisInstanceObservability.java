@@ -23,7 +23,8 @@ public final class YierdisInstanceObservability {
         boolean globalScope = instance.config().maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
         int databases = Math.max(0, instance.databases());
         if (databases == 0) {
-            return emptyStats(instance.config().maxmemoryBytes(), globalScope);
+            // With no DBs, off-heap is effectively 0; treat it as included to avoid surprising UI/metrics.
+            return emptyStats(instance.config().maxmemoryBytes(), true);
         }
 
         long heap = 0;
@@ -37,6 +38,7 @@ public final class YierdisInstanceObservability {
         int keyCount = 0;
         int expireCount = 0;
         boolean keysStoredOffHeap = false;
+        boolean offHeapIncludedInMaxmemory = true;
         boolean keyspaceRehashing = false;
         boolean expireRehashing = false;
         int keyspaceCap0 = 0;
@@ -50,7 +52,18 @@ public final class YierdisInstanceObservability {
             keyspaceOverhead += s.keyspaceTableOverheadBytesEstimate();
             expireOverhead += s.expireTableOverheadBytesEstimate();
             expireValueObjects += s.expireValueObjectsBytesEstimate();
-            offHeap = Math.max(offHeap, s.offHeapUsedBytes());
+            long dbOffHeap = Math.max(0L, s.offHeapUsedBytes());
+            if (globalScope) {
+                // GLOBAL: the default wiring uses a shared off-heap runtime, so count it once.
+                offHeap = Math.max(offHeap, dbOffHeap);
+            } else {
+                // PER_DB: each DB owns its runtime, so sum.
+                if (Long.MAX_VALUE - offHeap < dbOffHeap) {
+                    offHeap = Long.MAX_VALUE;
+                } else {
+                    offHeap += dbOffHeap;
+                }
+            }
             reserved += s.reservedBytes();
             keyCount += s.keyCount();
             expireCount += s.expireCount();
@@ -64,12 +77,14 @@ public final class YierdisInstanceObservability {
             if (!globalScope) {
                 usedBytesForMaxmemory += s.usedBytesForMaxmemory();
                 effectiveUsedBytesForMaxmemory += s.effectiveUsedBytesForMaxmemory();
+                offHeapIncludedInMaxmemory &= s.offHeapIncludedInMaxmemory();
             }
         }
 
         if (globalScope) {
             usedBytesForMaxmemory = heap + offHeap;
             effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + Math.max(0L, reserved);
+            offHeapIncludedInMaxmemory = true;
         }
 
         long totalEstimatedBytes = heap + offHeap + keyspaceOverhead + expireOverhead + expireValueObjects;
@@ -81,7 +96,7 @@ public final class YierdisInstanceObservability {
                 offHeap,
                 reserved,
                 effectiveUsedBytesForMaxmemory,
-                globalScope,
+                offHeapIncludedInMaxmemory,
                 keysStoredOffHeap,
                 keyCount,
                 expireCount,

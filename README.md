@@ -1,16 +1,16 @@
 # yierdis (Java 25 + Netty)
 
-一个教学/演示导向的内存 KV 服务端，适合用来学习/演示 Netty 网络编程与单线程命令执行、背压与淘汰等思路。
+一个使用 Java + Netty 实现的单机内存 KV 服务端，目标是参考 Redis 的设计与实现方式做一个类似的项目。
 
 对外协议使用自定义协议 **Custom Protocol v1**（不兼容 Redis 原生协议）。
 
 ## 定位与兼容性边界（重要）
 
-Yierdis 的目标是 **教学/演示**：可以用项目内置 CLI 做交互学习、用最小命令集理解数据结构/协议/背压/淘汰等思路。
+Yierdis 的目标是：用 Java 参考 Redis 的思路实现一个类似的项目。项目内置 CLI 主要用于本地调试/验证（最小命令集、协议、背压、淘汰等机制）。
 
 但它不是 Redis 的 drop-in replacement（README 明确将不少能力定义为 out-of-scope），并且即便是已实现命令，也有不少“刻意简化/最小子集”的语义差异（例如 TTL 清理、`KEYS` glob 覆盖范围、事务边界行为等）。
 
-- **包含（In scope）**：单机内存版数据结构、基础命令子集、TTL（惰性删除 + 轻量后台清理）、maxmemory（教学口径的估算 + 近似淘汰）、最小事务子集（`MULTI/EXEC/DISCARD`）、自定义协议（Custom Protocol v1：length-prefixed request + NDJSON reply；协议错误尽量可恢复）、`INFO/STATS/MEMORY STATS` 可观测性
+- **包含（In scope）**：单机内存版数据结构、基础命令子集、TTL（惰性删除 + 轻量后台清理）、maxmemory（简化的估算 + 近似淘汰）、最小事务子集（`MULTI/EXEC/DISCARD`）、自定义协议（Custom Protocol v1：length-prefixed request + NDJSON reply；协议错误尽量可恢复）、`INFO/STATS/MEMORY STATS` 可观测性
 - **不包含（Out of scope）**：AOF/RDB 持久化、复制/集群、Lua、ACL/TLS、PubSub/订阅模式、完整的模块化运维能力
 
 ## 环境
@@ -188,9 +188,9 @@ java -jar yierdis-client/target/yierdis-client-0.1.0-SNAPSHOT.jar
 - 协议层为 Custom Protocol v1（length-prefixed JSON request + NDJSON reply）；协议错误尽量可恢复（返回 error 并尝试读取下一帧；在安全上限触达时可能断连）。
 - TTL 采用“访问时惰性删除”，并带一个轻量级后台清理任务（可关）。
 
-## 内存管理（maxmemory / 淘汰，教学用）
+## 内存管理（maxmemory / 淘汰，简化实现）
 
-Yierdis 提供一个“Redis 风格、但刻意简化”的 maxmemory/淘汰机制，方便演示：
+Yierdis 提供一个“Redis 风格、但刻意简化”的 maxmemory/淘汰机制，便于本地调试与对齐思路：
 
 - `--maxmemoryBytes <bytes>`：启用最大内存预算（默认 `0` 表示不限制）。
 - `--maxmemoryScope global|per-db`：maxmemory 预算口径（默认 `global`，更贴近 Redis “全实例 maxmemory”；`per-db` 为兼容模式：将 `maxmemoryBytes` 按 DB 数量硬分摊）。
