@@ -8,8 +8,10 @@ import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
 import yier.bubu.redis.protocol.v1.CustomProtocolV1ArgvRequest;
+import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 public class ProtocolCommandAdapterTest {
     @Test
@@ -54,6 +56,27 @@ public class ProtocolCommandAdapterTest {
             adapted = (ExecutionRequest) inbound;
             Assert.assertArrayEquals(utf8("PING"), adapted.readOnlyByteArray(0));
             Assert.assertArrayEquals(utf8("alpha"), adapted.readOnlyByteArray(1));
+        } finally {
+            if (adapted != null) {
+                adapted.close();
+            }
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void legacyCustomProtocolRequestStillAdaptsForInternalCallers() {
+        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter());
+        ExecutionRequest adapted = null;
+        try {
+            Assert.assertTrue(ch.writeInbound(new CustomProtocolV1Request("PING", Arrays.asList("alpha", null))));
+
+            Object inbound = ch.readInbound();
+            Assert.assertTrue(inbound instanceof ExecutionRequest);
+            adapted = (ExecutionRequest) inbound;
+            Assert.assertArrayEquals(utf8("PING"), adapted.toByteArray(0));
+            Assert.assertArrayEquals(utf8("alpha"), adapted.toByteArray(1));
+            Assert.assertTrue(adapted.isNull(2));
         } finally {
             if (adapted != null) {
                 adapted.close();
