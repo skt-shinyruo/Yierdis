@@ -18,6 +18,19 @@ Yierdis 的目标是：用 Java 参考 Redis 的思路实现一个类似的项�
 - JDK 25
 - Maven 3.x
 
+构建和测试必须使用 JDK 25：
+
+```bash
+jdk25 mvn test
+jdk25 mvn -DskipTests package
+```
+
+如果当前 shell 里还没有 `jdk25`，等价的原始写法是：
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn test
+```
+
 ## 开发者：模块边界（契约 / 组装）
 
 本项目内部模块做过一次“边界收敛”，目的是让依赖方向更清晰（契约在 core，协议模型专注协议，组装在 server）：
