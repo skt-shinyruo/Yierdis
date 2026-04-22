@@ -31,6 +31,53 @@ jdk25 mvn -DskipTests package
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn test
 ```
 
+## 初学者导读
+
+如果你是第一次进入这个仓库，建议不要一上来就直接读所有源码。更好的顺序是先通过 `docs/` 里的导览文档建立整体心智模型，再回头看具体实现。
+
+推荐阅读顺序：
+
+1. `docs/codebase-guide.md`
+2. `docs/project-introduction.md`
+3. `docs/project-overview.md`
+4. `docs/request-execution-flow.md`
+5. `docs/main-path-walkthrough.md`
+6. `docs/protocol-reference.md`
+7. `docs/commands-and-data-model.md`
+8. `docs/db-internals.md`
+9. `docs/executor-and-backpressure.md`
+10. `docs/bytes-and-fast-paths.md`
+11. `docs/configuration-and-operations.md`
+12. `docs/client-and-bench-internals.md`
+13. `docs/testing-and-debugging.md`
+14. `docs/glossary.md`
+15. `docs/module-architecture.md`
+16. `docs/development-navigation.md`
+
+这组文档分别覆盖：
+
+- 项目详细介绍：这个项目为什么存在、适合用什么心态理解、相比普通 KV 服务有意思在哪里
+- 项目定位：这个项目想解决什么问题，不想解决什么问题
+- 请求执行链：一条请求从 Netty 收包到 DB 读写、回包写出是怎么流动的
+- 主链源码导读：把启动、协议适配、执行器、命令分发和 `SET` 写路径按类和方法串起来
+- 协议细节：`Custom Protocol v1` 的 frame、request schema、reply envelope、tagged value 和 resync 逻辑
+- 命令与数据模型：命令家族怎么注册、逻辑类型和内部编码怎么对应、HLL 为什么复用 string
+- DB 内核：`YierdisDb`、key lifecycle、mutation executor、memory ledger、TTL、maxmemory 在单 DB 内部如何协作
+- 执行器与背压：入队、预算、GLOBAL/FAIR 调度、drain loop、autoRead 控制和 global recovery 怎么配合
+- bytes 抽象与 fast-path：`BytesView/BytesSlice/BytesSink` 为什么存在，以及它们如何连接协议、写回和 off-heap
+- 配置与运维：启动参数怎么进入 runtime、背压和淘汰怎么工作、`INFO/STATS/MEMORY STATS` 看什么
+- client/bench 内部实现：CLI、Netty client、bench 和脚本如何沿真实协议路径验证和压测 server
+- 测试与调试：测试如何按层组织、脚本怎么用、遇到协议/背压/事务/内存问题先看哪里
+- 术语表：把 `ExecutionRequest`、`ReplyWriter`、owner thread、keyspace、`maxmemory` 等高频概念集中解释
+- 模块架构：各 Maven 模块负责什么、为什么这样拆、哪些依赖方向被明确禁止
+- 开发导航：如果你准备改 `SET`、新增命令、改协议、看事务或背压，该先从哪些文件开始
+
+如果你对 FFM / off-heap 本身还不熟，建议再配合阅读：
+
+- `docs/ffm-beginner-guide.md`
+- `docs/ffm-usage.md`
+- `docs/offheap-copy-behavior.md`
+
 ## 开发者：模块边界（契约 / 组装）
 
 本项目内部模块做过一次“边界收敛”，目的是让依赖方向更清晰（契约在 core，协议模型专注协议，组装在 server）：
