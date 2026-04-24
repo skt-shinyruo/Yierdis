@@ -9,6 +9,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.LongAdder;
 
 public final class CommandExecutor<C extends ExecutionConnection> implements AutoCloseable {
     private final Runnable bindToCurrentThread;
@@ -37,6 +38,8 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
     private final CommandExecutorDrainLoop<C> drainLoop;
     private final CommandExecutorExecutionSupport<C> executionSupport;
     private final SchedulingPolicy schedulingPolicy;
+    private final LongAdder backpressureEnter = new LongAdder();
+    private final LongAdder backpressureExit = new LongAdder();
     private volatile boolean running = true;
 
     public CommandExecutor(
@@ -119,11 +122,13 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                     @Override
                     public void onEnter(C key) {
                         key.context().recordBackpressureEnter();
+                        backpressureEnter.increment();
                     }
 
                     @Override
                     public void onExit(C key) {
                         key.context().recordBackpressureExit();
+                        backpressureExit.increment();
                     }
                 },
                 () -> running
@@ -172,7 +177,24 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
     }
 
     public StatsSnapshot statsSnapshot() {
-        return executionSupport.statsSnapshot(backlogBudget.queuedTasks(), backlogBudget.queuedBytes(), schedulingPolicy);
+        return new StatsSnapshot(
+                executionSupport.commandsExecuted(),
+                executionSupport.commandsSkippedClosing(),
+                backlogBudget.queuedTasks(),
+                backlogBudget.queuedBytes(),
+                schedulingPolicy,
+                backpressureController.keysAutoReadDisabledCount(),
+                submitter.submitAccepted(),
+                submitter.submitRejectedNotRunning(),
+                submitter.submitRejectedQueueFull(),
+                submitter.submitRejectedBytesBudget(),
+                submitter.submitRejectedOfferFailed(),
+                executionSupport.closeAfterReply(),
+                backpressureEnter.sum(),
+                backpressureExit.sum(),
+                drainLoop.drainLimitedByMaxCommands(),
+                drainLoop.drainLimitedByTimeBudget()
+        );
     }
 
     public void executeMaintenance(Runnable task) {
@@ -233,7 +255,18 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
             long commandsSkippedClosing,
             int queuedTasks,
             long queuedBytes,
-            SchedulingPolicy schedulingPolicy
+            SchedulingPolicy schedulingPolicy,
+            int channelsAutoReadDisabled,
+            long submitAccepted,
+            long submitRejectedNotRunning,
+            long submitRejectedQueueFull,
+            long submitRejectedBytesBudget,
+            long submitRejectedOfferFailed,
+            long closeAfterReply,
+            long backpressureEnter,
+            long backpressureExit,
+            long drainLimitedByMaxCommands,
+            long drainLimitedByTimeBudget
     ) {
     }
 
