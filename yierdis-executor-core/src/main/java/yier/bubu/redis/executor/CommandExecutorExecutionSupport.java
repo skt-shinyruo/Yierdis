@@ -80,6 +80,10 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
             touchedConnections.add(connection);
             commandsExecuted.increment();
             executed = true;
+        } catch (Throwable t) {
+            executed = true;
+            commandsExecuted.increment();
+            handleExecutionFailure(connection, context, touchedConnections);
         } finally {
             closeRequest(task.request);
             finishTask(connection, task.retainedBytes, executed);
@@ -155,6 +159,31 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         }
         if (globalOk) {
             backpressureController.scheduleGlobalRecovery();
+        }
+    }
+
+    private void handleExecutionFailure(
+            C connection,
+            ExecutionConnectionContext context,
+            Collection<C> touchedConnections
+    ) {
+        try {
+            if (context.markClosing()) {
+                backpressureController.disableAutoRead(connection);
+            }
+        } catch (Throwable ignored) {
+            // Ignore best-effort closing bookkeeping after executor-thread failures.
+        }
+
+        try {
+            ReplyWriter writer = replyWriterFactory.newWriter(ioAdapter.newReplySink(connection));
+            writer.internalError("ERR internal error");
+            writer.requestCloseAfterReply();
+            context.recordCloseAfterReply();
+            ioAdapter.writeBufferedReply(connection, true);
+            touchedConnections.add(connection);
+        } catch (Throwable ignored) {
+            // Ignore best-effort internal error reply failures; the connection is already closing.
         }
     }
 

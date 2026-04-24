@@ -8,6 +8,9 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.executor.CommandExecutor;
+import yier.bubu.redis.executor.CommandExecutorConfig;
+import yier.bubu.redis.executor.ExecutionConnectionContext;
 import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
@@ -27,20 +30,14 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
-        NettyCommandExecutor executor = new NettyCommandExecutor(
+        JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
+        CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 processor,
                 eventExecutor,
-                new JsonLineReplyWriterFactory(),
-                16,
-                0,
-                256,
-                128,
-                0,
-                0,
-                128,
-                10,
-                SchedulingPolicy.FAIR
+                replyWriterFactory,
+                new NettyExecutionIoAdapter(),
+                new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
         );
         executor.start();
 
@@ -54,14 +51,15 @@ public class ClosingSkipSideEffectsIntegrationTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor, replyWriterFactory));
         try {
+            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 16, 1024);
             // Enqueue commands while executor is blocked (no replies yet).
             ch.writeInbound(request("PING"));
             ch.writeInbound(request("PING"));
             Assert.assertNull("expected no reply while executor is blocked", readOutbound(ch));
 
-            ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
+            ExecutionConnectionContext context = connection.context();
             Assert.assertEquals(2L, context.statsSnapshot().commandsEnqueued());
 
             // Trigger an internal error: handler should mark closing and close the channel after replying.
@@ -80,8 +78,8 @@ public class ClosingSkipSideEffectsIntegrationTest {
             Assert.assertNull("no command reply should be produced after closing is requested", readOutbound(ch));
         } finally {
             unblock.countDown();
-            executor.shutdownGracefully().syncUninterruptibly();
-            executor.executor().submit(instance::close).syncUninterruptibly();
+            executor.shutdownGracefully().join();
+            executor.executeOwnerTask(instance::close).join();
             group.shutdownGracefully().syncUninterruptibly();
             ch.finishAndReleaseAll();
         }
@@ -94,20 +92,14 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
-        NettyCommandExecutor executor = new NettyCommandExecutor(
+        JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
+        CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 processor,
                 eventExecutor,
-                new JsonLineReplyWriterFactory(),
-                16,
-                0,
-                256,
-                128,
-                0,
-                0,
-                128,
-                10,
-                SchedulingPolicy.FAIR
+                replyWriterFactory,
+                new NettyExecutionIoAdapter(),
+                new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
         );
         executor.start();
 
@@ -121,14 +113,15 @@ public class ClosingSkipSideEffectsIntegrationTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor));
+        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor, replyWriterFactory));
         try {
+            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 16, 1024);
             // Enqueue commands while executor is blocked (no replies yet).
             ch.writeInbound(new ExplodingCommand());
             ch.writeInbound(request("PING"));
             Assert.assertNull("expected no reply while executor is blocked", readOutbound(ch));
 
-            ServerConnectionContext context = ServerConnectionContext.getOrCreate(ch);
+            ExecutionConnectionContext context = connection.context();
             Assert.assertEquals(2L, context.statsSnapshot().commandsEnqueued());
 
             // Allow the executor to drain: the first task triggers an internal error on the executor thread.
@@ -146,8 +139,8 @@ public class ClosingSkipSideEffectsIntegrationTest {
             Assert.assertNull("no command reply should be produced after internal error closing is requested", readOutbound(ch));
         } finally {
             unblock.countDown();
-            executor.shutdownGracefully().syncUninterruptibly();
-            executor.executor().submit(instance::close).syncUninterruptibly();
+            executor.shutdownGracefully().join();
+            executor.executeOwnerTask(instance::close).join();
             group.shutdownGracefully().syncUninterruptibly();
             ch.finishAndReleaseAll();
         }
@@ -196,8 +189,8 @@ public class ClosingSkipSideEffectsIntegrationTest {
     }
 
     private static void awaitCounter(
-            ServerConnectionContext context,
-            java.util.function.ToLongFunction<ServerConnectionContext> counter,
+            ExecutionConnectionContext context,
+            java.util.function.ToLongFunction<ExecutionConnectionContext> counter,
             long expected,
             long timeoutMillis
     ) throws InterruptedException {
