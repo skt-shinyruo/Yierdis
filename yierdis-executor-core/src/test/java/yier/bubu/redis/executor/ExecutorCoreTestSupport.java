@@ -4,7 +4,9 @@ import yier.bubu.redis.bytes.BytesSink;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 final class ExecutorCoreTestSupport {
     private ExecutorCoreTestSupport() {
@@ -32,90 +34,111 @@ final class TestConnection implements ExecutionConnection {
 }
 
 final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
-    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-    private final List<String> flushedConnectionIds = new ArrayList<>();
-    private Runnable closeCallback = () -> {};
-    private boolean active = true;
-    private boolean writable = true;
-    private boolean closeAfterReply;
-    private boolean inputDisabled;
-    private boolean inputEnabledAgain;
+    private final Map<String, ConnectionState> states = new HashMap<>();
+    private final List<String> lastFlushedConnectionIds = new ArrayList<>();
+    private int flushCalls;
 
     @Override
     public boolean isActive(TestConnection connection) {
-        return active;
+        return state(connection).active;
     }
 
     @Override
     public boolean isWritable(TestConnection connection) {
-        return writable;
+        return state(connection).writable;
     }
 
     @Override
     public void disableInput(TestConnection connection) {
-        inputDisabled = true;
+        state(connection).inputDisabled = true;
     }
 
     @Override
     public void enableInput(TestConnection connection) {
-        inputEnabledAgain = true;
+        state(connection).inputEnabledAgain = true;
     }
 
     @Override
     public void onClose(TestConnection connection, Runnable callback) {
-        this.closeCallback = callback;
+        state(connection).closeCallback = callback;
     }
 
     @Override
     public BytesSink newReplySink(TestConnection connection) {
-        return bytes::write;
+        return state(connection).bytes::write;
     }
 
     @Override
     public void writeBufferedReply(TestConnection connection, boolean closeAfterReply) {
-        this.closeAfterReply = closeAfterReply;
+        state(connection).closeAfterReply = closeAfterReply;
     }
 
     @Override
     public void flushPending(Iterable<TestConnection> touchedConnections) {
+        flushCalls++;
+        lastFlushedConnectionIds.clear();
         for (TestConnection connection : touchedConnections) {
-            flushedConnectionIds.add(connection.connectionId());
+            state(connection).flushCount++;
+            lastFlushedConnectionIds.add(connection.connectionId());
         }
     }
 
-    String bufferedReply() {
-        return bytes.toString();
+    String bufferedReply(TestConnection connection) {
+        return state(connection).bytes.toString();
     }
 
-    boolean closeAfterReply() {
-        return closeAfterReply;
+    boolean closeAfterReply(TestConnection connection) {
+        return state(connection).closeAfterReply;
     }
 
-    boolean inputDisabled() {
-        return inputDisabled;
+    boolean inputDisabled(TestConnection connection) {
+        return state(connection).inputDisabled;
     }
 
-    boolean inputEnabledAgain() {
-        return inputEnabledAgain;
+    boolean inputEnabledAgain(TestConnection connection) {
+        return state(connection).inputEnabledAgain;
     }
 
     int flushCalls() {
-        return flushedConnectionIds.size();
+        return flushCalls;
     }
 
     String lastFlushedConnectionId() {
-        return flushedConnectionIds.isEmpty() ? null : flushedConnectionIds.get(flushedConnectionIds.size() - 1);
+        return lastFlushedConnectionIds.isEmpty() ? null : lastFlushedConnectionIds.get(lastFlushedConnectionIds.size() - 1);
     }
 
-    void setActive(boolean active) {
-        this.active = active;
+    List<String> lastFlushedConnectionIds() {
+        return List.copyOf(lastFlushedConnectionIds);
     }
 
-    void setWritable(boolean writable) {
-        this.writable = writable;
+    int flushCount(TestConnection connection) {
+        return state(connection).flushCount;
     }
 
-    void fireClosed() {
-        closeCallback.run();
+    void setActive(TestConnection connection, boolean active) {
+        state(connection).active = active;
+    }
+
+    void setWritable(TestConnection connection, boolean writable) {
+        state(connection).writable = writable;
+    }
+
+    void fireClosed(TestConnection connection) {
+        state(connection).closeCallback.run();
+    }
+
+    private ConnectionState state(TestConnection connection) {
+        return states.computeIfAbsent(connection.connectionId(), ignored -> new ConnectionState());
+    }
+
+    private static final class ConnectionState {
+        private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        private Runnable closeCallback = () -> {};
+        private boolean active = true;
+        private boolean writable = true;
+        private boolean closeAfterReply;
+        private boolean inputDisabled;
+        private boolean inputEnabledAgain;
+        private int flushCount;
     }
 }
