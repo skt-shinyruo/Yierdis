@@ -3,10 +3,13 @@ package yier.bubu.redis;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.executor.CommandExecutor;
+import yier.bubu.redis.executor.CommandExecutorConfig;
 import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.json.JsonLimits;
 import yier.bubu.redis.protocol.json.JsonObject;
@@ -37,12 +40,12 @@ public class CustomProtocolResyncIntegrationTest {
             byte[] ping = frame("{\"cmd\":\"PING\",\"args\":[]}");
             ch.writeInbound(Unpooled.wrappedBuffer(concat(invalid, ping)));
 
-            JsonObject err = parseJsonObject(readOutbound(ch));
+            JsonObject err = parseJsonObject(awaitOutbound(ch, 1000));
             Assert.assertEquals(false, booleanField(err, "ok"));
             JsonObject errorObj = objectField(err, "error");
             Assert.assertEquals("protocol", stringField(errorObj, "kind"));
 
-            JsonObject pong = parseJsonObject(readOutbound(ch));
+            JsonObject pong = parseJsonObject(awaitOutbound(ch, 1000));
             Assert.assertEquals(true, booleanField(pong, "ok"));
             Assert.assertEquals("PONG", stringField(pong, "result"));
 
@@ -75,42 +78,40 @@ public class CustomProtocolResyncIntegrationTest {
 
     private static final class TestEnv implements AutoCloseable {
         private final YierdisInstance instance;
-        private final NettyCommandExecutor executor;
+        private final DefaultEventExecutorGroup group;
+        private final CommandExecutor<NettyExecutionConnection> executor;
         private final EmbeddedChannel ch;
 
         private TestEnv() {
             this.instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+            this.group = new DefaultEventExecutorGroup(1);
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
-            this.executor = new NettyCommandExecutor(
+            JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
+            this.executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
                     processor,
-                    ImmediateEventExecutor.INSTANCE,
-                    new JsonLineReplyWriterFactory(),
-                    1024,
-                    0,
-                    256,
-                    128,
-                    0,
-                    0,
-                    1024,
-                    10,
-                    SchedulingPolicy.FAIR
+                    group.next(),
+                    replyWriterFactory,
+                    new NettyExecutionIoAdapter(),
+                    new CommandExecutorConfig(1024, 0, 256, 128, 0, 0, 1024, 10, SchedulingPolicy.FAIR)
             );
             executor.start();
             this.ch = new EmbeddedChannel(
                     new CustomRequestDecoder(1024 * 1024, 1024, 256),
                     new ProtocolCommandAdapter(),
-                    new ProtocolErrorReplyHandler(executor),
-                    new YierdisFastCommandHandler(executor)
+                    new ProtocolErrorReplyHandler(replyWriterFactory),
+                    new YierdisFastCommandHandler(executor, replyWriterFactory)
             );
+            NettyExecutionConnection.getOrCreate(ch, 16, 1024);
         }
 
         @Override
         public void close() {
             try {
-                executor.close();
+                executor.shutdownGracefully().join();
+                executor.executeOwnerTask(instance::close).join();
+                group.shutdownGracefully().syncUninterruptibly();
             } finally {
-                instance.close();
                 ch.finishAndReleaseAll();
             }
         }
@@ -133,6 +134,33 @@ public class CustomProtocolResyncIntegrationTest {
             return bytes;
         } finally {
             buf.release();
+        }
+    }
+
+    private static byte[] awaitOutbound(EmbeddedChannel ch, long timeoutMillis) {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        for (; ; ) {
+            ch.runPendingTasks();
+            ch.runScheduledPendingTasks();
+            Object out = ch.readOutbound();
+            if (out instanceof ByteBuf buf) {
+                try {
+                    byte[] bytes = new byte[buf.readableBytes()];
+                    buf.readBytes(bytes);
+                    return bytes;
+                } finally {
+                    buf.release();
+                }
+            }
+            if (System.nanoTime() >= deadline) {
+                Assert.fail("timeout waiting for outbound");
+            }
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                Assert.fail("interrupted while waiting for outbound");
+            }
         }
     }
 

@@ -213,7 +213,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis/ServerSessionState.java").normalize(),
+                repoRoot.getParent().resolve("yierdis-executor-core/src/main/java/yier/bubu/redis/executor/DefaultExecutionSession.java").normalize(),
                 offenders,
                 "ArrayList<byte[][]>",
                 "List<byte[][]>",
@@ -497,15 +497,74 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void serverMustOwnChannelAttrOnlyInServerConnectionContext() throws IOException {
+    public void executorCoreMustNotDependOnNetty() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                repoRoot.getParent().resolve("yierdis-executor-core/src/main/java").normalize(),
+                offenders,
+                "import io.netty."
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-executor-core Java 文件", scanned > 0);
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 yierdis-executor-core 重新依赖 Netty（该模块必须保持 transport-neutral）：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void serverMustNotContainLegacyExecutorRuntimeFiles() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
         Path serverRoot = repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis").normalize();
         Assert.assertTrue("缺少 yierdis-server/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
 
-        Path allowedOwner = serverRoot.resolve("ServerConnectionContext.java");
-        Assert.assertTrue("缺少 ServerConnectionContext.java，无法执行 Channel.attr 归一化护栏", Files.isRegularFile(allowedOwner));
+        List<String> offenders = new ArrayList<>();
+        for (String name : List.of(
+                "NettyCommandExecutor.java",
+                "NettyCommandSubmitter.java",
+                "NettyCommandDrainLoop.java",
+                "NettyCommandExecutionSupport.java",
+                "NettyExecutorTask.java",
+                "NettyCommandExecutorConfig.java",
+                "ServerConnectionContext.java",
+                "ServerSessionState.java",
+                "ServerRuntimeState.java",
+                "NettyExecutorChannelState.java"
+        )) {
+            Path file = serverRoot.resolve(name);
+            if (Files.exists(file)) {
+                offenders.add(relativePath(repoRoot, file));
+            }
+        }
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到已经废弃的 server-owned executor/runtime 文件仍然存在：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void serverMustOwnChannelAttrOnlyInNettyExecutionAdapters() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path serverRoot = repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis").normalize();
+        Assert.assertTrue("缺少 yierdis-server/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
+
+        Path allowedConnectionOwner = serverRoot.resolve("NettyExecutionConnection.java");
+        Path allowedIoOwner = serverRoot.resolve("NettyExecutionIoAdapter.java");
+        Assert.assertTrue("缺少 NettyExecutionConnection.java，无法执行 Channel.attr 归一化护栏", Files.isRegularFile(allowedConnectionOwner));
+        Assert.assertTrue("缺少 NettyExecutionIoAdapter.java，无法执行 Channel.attr 归一化护栏", Files.isRegularFile(allowedIoOwner));
 
         List<String> offenders = new ArrayList<>();
         int[] scanned = new int[]{0};
@@ -513,7 +572,7 @@ public class ArchitectureBoundaryTest {
             paths.filter(p -> p != null && p.toString().endsWith(".java"))
                     .sorted()
                     .forEach(file -> {
-                        if (allowedOwner.equals(file)) {
+                        if (allowedConnectionOwner.equals(file) || allowedIoOwner.equals(file)) {
                             return;
                         }
                         scanned[0]++;
@@ -534,14 +593,14 @@ public class ArchitectureBoundaryTest {
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 yierdis-server 存在分散的 Channel.attr 所有权（仅允许 ServerConnectionContext.java 持有）：\n"
+                    "检测到 yierdis-server 存在分散的 Channel.attr 所有权（仅允许 NettyExecutionConnection/NettyExecutionIoAdapter 持有）：\n"
                             + String.join("\n", offenders)
             );
         }
     }
 
     @Test
-    public void serverMustNotReachThroughConnectionSlicesOutsideContext() throws IOException {
+    public void serverMustNotReachThroughLegacyConnectionSlices() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
@@ -558,10 +617,9 @@ public class ArchitectureBoundaryTest {
                 ".scheduling()"
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server Java 文件", scanned > 0);
-        retainOnly(offenders, "yierdis-server/src/main/java/yier/bubu/redis/ServerConnectionContext.java");
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 server 代码绕过 ServerConnectionContext 直接访问连接切片：\n"
+                    "检测到 server 代码仍访问已经废弃的 legacy 连接切片 API：\n"
                             + String.join("\n", offenders)
             );
         }

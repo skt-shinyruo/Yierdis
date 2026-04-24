@@ -1,6 +1,6 @@
 package yier.bubu.redis;
 
-// INFO/STATS 提供器：基于执行器统计与连接态（由 ServerConnectionContext 持有的 session/runtime）输出可观测性摘要，避免在热路径做额外分配。
+// INFO/STATS 提供器：基于 transport-neutral executor 统计与连接态输出可观测性摘要，避免在热路径做额外分配。
 
 import yier.bubu.redis.command.ServerInfoProvider;
 import yier.bubu.redis.ops.YierdisMemoryStats;
@@ -162,19 +162,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             writePair(out, KEY_CONN_BACKPRESSURE_ENTER, snapshot.backpressureEnter());
             writePair(out, KEY_CONN_BACKPRESSURE_EXIT, snapshot.backpressureExit());
             return;
-        }
-        if (stats instanceof ServerConnectionContext.ConnectionStatsSnapshot snapshot) {
-            writePair(out, KEY_CONN_PENDING, snapshot.pending());
-            writePair(out, KEY_CONN_PENDING_BYTES, snapshot.pendingBytes());
-            writePair(out, KEY_CONN_AUTOREAD_DISABLED, snapshot.autoReadDisabledByExecutor() ? 1 : 0);
-            writePair(out, KEY_CONN_CLOSING, snapshot.closing() ? 1 : 0);
-            writePair(out, KEY_CONN_COMMANDS_ENQUEUED, snapshot.commandsEnqueued());
-            writePair(out, KEY_CONN_COMMANDS_EXECUTED, snapshot.commandsExecuted());
-            writePair(out, KEY_CONN_COMMANDS_REJECTED, snapshot.commandsRejected());
-            writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, snapshot.commandsSkippedClosing());
-            writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, snapshot.closeAfterReply());
-            writePair(out, KEY_CONN_BACKPRESSURE_ENTER, snapshot.backpressureEnter());
-            writePair(out, KEY_CONN_BACKPRESSURE_EXIT, snapshot.backpressureExit());
         }
     }
 
@@ -345,9 +332,6 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         if (serverSession instanceof DefaultExecutionSession session) {
             ExecutionConnectionContext context = session.connectionContext();
             return context == null ? null : context.statsSnapshot();
-        }
-        if (serverSession instanceof ServerSessionState s) {
-            return s.connectionStatsSnapshot();
         }
         return null;
     }

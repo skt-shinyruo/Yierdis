@@ -191,6 +191,49 @@ public class CommandExecutorTest {
     }
 
     @Test
+    public void executorInternalErrorWritesInternalErrorReplyMarksClosingAndSurvivesShutdown() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+
+        try (ProcessorHandle handle = ExecutorCoreTestSupport.processorHandle()) {
+            CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                    () -> {},
+                    handle.processor(),
+                    ownerExecutor,
+                    ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                    io,
+                    new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+            );
+            ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+
+            TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
+            TrackingExecutionRequest exploding = TrackingExecutionRequest.failingOnCommandRead("PING");
+            TrackingExecutionRequest queued = TrackingExecutionRequest.ofUtf8("PING");
+
+            Assert.assertNull(executor.trySubmit(connection, exploding));
+            Assert.assertNull(executor.trySubmit(connection, queued));
+
+            ownerExecutor.runAll();
+
+            Assert.assertEquals("ERR internal error\n", io.bufferedReply(connection));
+            Assert.assertTrue(io.closeAfterReply(connection));
+            Assert.assertTrue(connection.context().statsSnapshot().closing());
+            Assert.assertEquals(1, exploding.closeCalls());
+            Assert.assertEquals(1, queued.closeCalls());
+            Assert.assertEquals(2L, connection.context().statsSnapshot().commandsEnqueued());
+            Assert.assertEquals(1L, connection.context().statsSnapshot().commandsExecuted());
+            Assert.assertEquals(1L, connection.context().statsSnapshot().commandsSkippedClosing());
+
+            CompletableFuture<Void> shutdown = executor.shutdownGracefully();
+            Assert.assertFalse(shutdown.isDone());
+            ownerExecutor.runAll();
+            Assert.assertTrue("executor should still accept shutdown after internal command failure", shutdown.isDone());
+
+            executor.close();
+        }
+    }
+
+    @Test
     public void startWaitsForOwnerThreadBindingBeforeReturning() throws Exception {
         ExecutorService ownerExecutor = Executors.newSingleThreadExecutor();
         CountDownLatch bindStarted = new CountDownLatch(1);

@@ -121,14 +121,24 @@ final class ProcessorHandle implements AutoCloseable {
 final class TrackingExecutionRequest implements ExecutionRequest {
     private final byte[][] argv;
     private final int retainedBytes;
+    private final boolean failOnCommandRead;
     private final AtomicInteger closeCalls = new AtomicInteger();
 
-    private TrackingExecutionRequest(byte[][] argv, int retainedBytes) {
+    private TrackingExecutionRequest(byte[][] argv, int retainedBytes, boolean failOnCommandRead) {
         this.argv = argv;
         this.retainedBytes = retainedBytes;
+        this.failOnCommandRead = failOnCommandRead;
     }
 
     static TrackingExecutionRequest ofUtf8(String cmd, String... args) {
+        return fromUtf8(false, cmd, args);
+    }
+
+    static TrackingExecutionRequest failingOnCommandRead(String cmd, String... args) {
+        return fromUtf8(true, cmd, args);
+    }
+
+    private static TrackingExecutionRequest fromUtf8(boolean failOnCommandRead, String cmd, String... args) {
         byte[][] argv = new byte[args.length + 1][];
         int retainedBytes = 0;
 
@@ -141,7 +151,7 @@ final class TrackingExecutionRequest implements ExecutionRequest {
             argv[i + 1] = utf8(args[i]);
             retainedBytes += argv[i + 1].length;
         }
-        return new TrackingExecutionRequest(argv, retainedBytes);
+        return new TrackingExecutionRequest(argv, retainedBytes, failOnCommandRead);
     }
 
     int closeCalls() {
@@ -166,6 +176,9 @@ final class TrackingExecutionRequest implements ExecutionRequest {
 
     @Override
     public byte byteAt(int index, int offset) {
+        if (failOnCommandRead && index == 0) {
+            throw new RuntimeException("boom");
+        }
         return argv[index][offset];
     }
 
@@ -222,6 +235,16 @@ final class SimpleReplyWriter implements ReplyWriter {
     @Override
     public void error(String message) {
         write("ERR " + message);
+    }
+
+    @Override
+    public void protocolError(String message) {
+        write(message == null ? "Protocol error" : message);
+    }
+
+    @Override
+    public void internalError(String message) {
+        write(message == null ? "ERR internal error" : message);
     }
 
     @Override
@@ -363,7 +386,10 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
 
     @Override
     public BytesSink newReplySink(TestConnection connection) {
-        return state(connection).bytes::write;
+        ConnectionState state = state(connection);
+        state.bytes.reset();
+        state.closeAfterReply = false;
+        return state.bytes::write;
     }
 
     @Override
