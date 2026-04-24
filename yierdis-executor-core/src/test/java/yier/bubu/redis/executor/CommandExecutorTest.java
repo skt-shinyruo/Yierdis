@@ -25,20 +25,28 @@ public class CommandExecutorTest {
     @Test
     public void configRejectsInvalidValues() {
         assertInvalidConfig(-1, 1024, 8, 4, 128, 64, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
+        assertInvalidConfig(0, 1024, 8, 4, 128, 64, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
         assertInvalidConfig(32, -1, 8, 4, 128, 64, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
         assertInvalidConfig(32, 1024, -1, 4, 128, 64, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
+        assertInvalidConfig(32, 1024, 0, 0, 128, 64, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
         assertInvalidConfig(32, 1024, 8, -1, 128, 64, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
+        assertInvalidConfig(32, 1024, 8, 8, 128, 64, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
         assertInvalidConfig(32, 1024, 8, 9, 128, 64, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
         assertInvalidConfig(32, 1024, 8, 4, -1, 64, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
         assertInvalidConfig(32, 1024, 8, 4, 128, -1, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
+        assertInvalidConfig(32, 1024, 8, 4, 0, 64, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
+        assertInvalidConfig(32, 1024, 8, 4, 128, 128, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
         assertInvalidConfig(32, 1024, 8, 4, 128, 129, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
         assertInvalidConfig(32, 1024, 8, 4, 128, 64, -1, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
+        assertInvalidConfig(32, 1024, 8, 4, 128, 64, 0, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
         assertInvalidConfig(32, 1024, 8, 4, 128, 64, 16, -1, SchedulingPolicy.FAIR, IllegalArgumentException.class);
+        assertInvalidConfig(32, 1024, 8, 4, 128, 64, 16, 0, SchedulingPolicy.FAIR, IllegalArgumentException.class);
         assertInvalidConfig(32, 1024, 8, 4, 128, 64, 16, 10, null, NullPointerException.class);
+        assertInvalidConfig(32, 1024, 8, 4, 0, 1, 16, 10, SchedulingPolicy.FAIR, IllegalArgumentException.class);
 
-        CommandExecutorConfig disabledByteBackpressure = new CommandExecutorConfig(32, 1024, 8, 4, 0, 64, 16, 10, SchedulingPolicy.FAIR);
+        CommandExecutorConfig disabledByteBackpressure = new CommandExecutorConfig(32, 1024, 8, 4, 0, 0, 16, 10, SchedulingPolicy.FAIR);
         Assert.assertEquals(0L, disabledByteBackpressure.backpressureBytesHighWatermark());
-        Assert.assertEquals(64L, disabledByteBackpressure.backpressureBytesLowWatermark());
+        Assert.assertEquals(0L, disabledByteBackpressure.backpressureBytesLowWatermark());
     }
 
     @Test
