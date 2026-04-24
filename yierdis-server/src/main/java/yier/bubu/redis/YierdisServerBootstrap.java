@@ -10,7 +10,6 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
-import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +18,8 @@ import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.executor.CommandExecutor;
+import yier.bubu.redis.executor.CommandExecutorConfig;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;
@@ -47,7 +48,8 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
     // Core resources (closed in reverse order).
     private YierdisInstance instance;
-    private NettyCommandExecutor executor;
+    private CommandExecutor<NettyExecutionConnection> executor;
+    private NettyServerInfoProvider infoProvider;
     private EventExecutorGroup commandGroup;
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
@@ -119,7 +121,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         YierdisInstanceMaintenance maintenance = new YierdisInstanceMaintenance(instance);
         YierdisInstanceObservability observability = instance.observability();
 
-        NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(runtimeConfig);
+        infoProvider = new NettyServerInfoProvider(runtimeConfig);
         infoProvider.bindObservability(observability);
         SlowCommandGovernor slowGovernor = new SlowCommandGovernor() {
             private final long timeBudgetNanos = runtimeConfig.keysTimeBudgetMillis() <= 0
@@ -143,12 +145,14 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 new ServerCommandModule(infoProvider)
         );
         commandGroup = new DefaultEventExecutorGroup(1);
-        NettyCommandExecutorConfig executorConfig = NettyCommandExecutorConfig.from(runtimeConfig);
-        executor = new NettyCommandExecutor(
+        JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
+        CommandExecutorConfig executorConfig = CommandExecutorConfigs.from(runtimeConfig);
+        executor = new CommandExecutor<>(
                 runtimeAccess::bindToCurrentThread,
                 processor,
                 commandGroup.next(),
-                new JsonLineReplyWriterFactory(),
+                replyWriterFactory,
+                new NettyExecutionIoAdapter(),
                 executorConfig
         );
         infoProvider.bindExecutor(executor);
@@ -165,7 +169,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             // 2) 通过 executeMaintenance 让 cleanup 在 DB 绑定线程中执行。
             // 3) 通过 coalesce 避免在高压下积累多个 cleanup 请求（fixed-rate catch-up storm）。
             long period = runtimeConfig.cleanupIntervalMillis();
-            NettyCommandExecutor exForTask = executor;
+            CommandExecutor<NettyExecutionConnection> exForTask = executor;
             java.util.concurrent.atomic.AtomicBoolean cleanupPending = new java.util.concurrent.atomic.AtomicBoolean(false);
             cleanupFuture = workerGroup.next().scheduleWithFixedDelay(() -> {
                 if (!cleanupPending.compareAndSet(false, true)) {
@@ -188,7 +192,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .channel(NioServerSocketChannel.class)
                 .childOption(ChannelOption.TCP_NODELAY, true)
                 .childOption(ChannelOption.SO_KEEPALIVE, true)
-                .childHandler(new YierdisServerChannelInitializer(runtimeConfig, executor));
+                .childHandler(new YierdisServerChannelInitializer(runtimeConfig, executor, replyWriterFactory));
 
         serverChannel = bootstrap.bind(runtimeConfig.port()).sync().channel();
     }
@@ -214,10 +218,10 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         }
         cleanupFuture = null;
 
-        NettyCommandExecutor ex = executor;
+        CommandExecutor<NettyExecutionConnection> ex = executor;
         if (ex != null) {
             try {
-                ex.shutdownGracefully().syncUninterruptibly();
+                ex.shutdownGracefully().join();
             } catch (Throwable t) {
                 failure = recordCloseFailure(failure, t);
             }
@@ -233,6 +237,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         }
         instance = null;
         executor = null;
+        infoProvider = null;
 
         EventExecutorGroup cg = commandGroup;
         if (cg != null) {
@@ -267,21 +272,24 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         rethrowIfNeeded(failure);
     }
 
-    private static void closeRuntimeAccess(NettyCommandExecutor executor, YierdisInstanceRuntimeAccess runtimeAccess) throws Throwable {
+    NettyServerInfoProvider infoProviderForTests() {
+        return infoProvider;
+    }
+
+    private static void closeRuntimeAccess(CommandExecutor<?> executor, YierdisInstanceRuntimeAccess runtimeAccess) throws Throwable {
         Objects.requireNonNull(runtimeAccess, "runtimeAccess");
         if (executor == null) {
             runtimeAccess.close();
             return;
         }
 
-        Future<?> closeFuture = executor.executor().submit(() -> {
-            runtimeAccess.close();
-            return null;
-        });
-        closeFuture.awaitUninterruptibly();
-        Throwable cause = closeFuture.cause();
-        if (cause != null) {
-            throw cause;
+        try {
+            executor.executeOwnerTask(runtimeAccess::close).join();
+        } catch (java.util.concurrent.CompletionException e) {
+            if (e.getCause() != null) {
+                throw e.getCause();
+            }
+            throw e;
         }
     }
 

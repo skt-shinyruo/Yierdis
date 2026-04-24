@@ -115,6 +115,10 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         );
     }
 
+    void recoverInputIfPossible(C connection) {
+        maybeRecoverInput(connection);
+    }
+
     private CommandContext context(Session session, ReplyWriter writer) {
         CommandContext existing = execCtx;
         if (existing == null) {
