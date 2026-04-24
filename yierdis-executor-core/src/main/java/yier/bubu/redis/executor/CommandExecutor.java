@@ -30,6 +30,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
 
     private final Executor ownerExecutor;
     private final ExecutorBacklogBudget backlogBudget;
+    private final ExecutorBackpressureController<C> backpressureController;
     private final ExecutorTaskQueue<C, CommandExecutorTask<C>> taskQueue;
     private final CommandExecutorSubmitter<C> submitter;
     private final CommandExecutorDrainLoop<C> drainLoop;
@@ -50,13 +51,106 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
         this.ownerExecutor = Objects.requireNonNull(ownerExecutor, "ownerExecutor");
         this.schedulingPolicy = config.schedulingPolicy();
         this.backlogBudget = new ExecutorBacklogBudget(config.queueCapacity(), config.queueMaxBytes());
+        this.backpressureController = new ExecutorBackpressureController<>(
+                this.ownerExecutor,
+                backlogBudget,
+                config.backpressureLowWatermark(),
+                config.backpressureBytesHighWatermark(),
+                config.backpressureBytesLowWatermark(),
+                new ExecutorBackpressureIo<>() {
+                    @Override
+                    public boolean isActive(C key) {
+                        return ioAdapter.isActive(key);
+                    }
+
+                    @Override
+                    public boolean isWritable(C key) {
+                        return ioAdapter.isWritable(key);
+                    }
+
+                    @Override
+                    public void disableAutoRead(C key) {
+                        ioAdapter.disableInput(key);
+                    }
+
+                    @Override
+                    public void enableAutoRead(C key) {
+                        ioAdapter.enableInput(key);
+                    }
+
+                    @Override
+                    public void onClose(C key, Runnable callback) {
+                        ioAdapter.onClose(key, callback);
+                    }
+                },
+                new ExecutorBackpressureRuntime<>() {
+                    @Override
+                    public int pending(C key) {
+                        return key.context().pending();
+                    }
+
+                    @Override
+                    public long pendingBytes(C key) {
+                        return key.context().pendingBytes();
+                    }
+
+                    @Override
+                    public boolean isClosing(C key) {
+                        return key.context().isClosing();
+                    }
+
+                    @Override
+                    public boolean markAutoReadDisabledByExecutor(C key) {
+                        return key.context().markInputDisabledByExecutor();
+                    }
+
+                    @Override
+                    public boolean autoReadDisabledByExecutor(C key) {
+                        return key.context().autoReadDisabledByExecutor();
+                    }
+
+                    @Override
+                    public boolean clearAutoReadDisabledByExecutor(C key) {
+                        return key.context().clearAutoReadDisabledByExecutor();
+                    }
+                },
+                new ExecutorBackpressureObserver<>() {
+                    @Override
+                    public void onEnter(C key) {
+                        key.context().recordBackpressureEnter();
+                    }
+
+                    @Override
+                    public void onExit(C key) {
+                        key.context().recordBackpressureExit();
+                    }
+                },
+                () -> running
+        );
 
         ArrayBlockingQueue<CommandExecutorTask<C>> globalQueue = this.schedulingPolicy == SchedulingPolicy.GLOBAL
                 ? new ArrayBlockingQueue<>(config.queueCapacity())
                 : null;
         this.taskQueue = new ExecutorTaskQueue<>(this.schedulingPolicy, globalQueue, CommandExecutor::queueStateFor);
-        this.executionSupport = new CommandExecutorExecutionSupport<>(commandProcessor, replyWriterFactory, ioAdapter, backlogBudget);
-        this.submitter = new CommandExecutorSubmitter<>(taskQueue, backlogBudget, () -> running);
+        this.executionSupport = new CommandExecutorExecutionSupport<>(
+                commandProcessor,
+                replyWriterFactory,
+                ioAdapter,
+                backlogBudget,
+                backpressureController,
+                config.backpressureLowWatermark(),
+                config.backpressureBytesHighWatermark(),
+                config.backpressureBytesLowWatermark(),
+                () -> running
+        );
+        this.submitter = new CommandExecutorSubmitter<>(
+                taskQueue,
+                backlogBudget,
+                backpressureController,
+                config.backpressureHighWatermark(),
+                config.backpressureBytesHighWatermark(),
+                () -> running
+        );
         this.drainLoop = new CommandExecutorDrainLoop<>(
                 this.ownerExecutor,
                 taskQueue,

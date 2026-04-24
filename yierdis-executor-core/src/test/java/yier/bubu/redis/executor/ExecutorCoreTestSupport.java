@@ -10,7 +10,7 @@ import yier.bubu.redis.db.YierdisDb;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -313,8 +313,9 @@ final class SimpleReplyWriter implements ReplyWriter {
 }
 
 final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
-    private final Map<String, ConnectionState> states = new HashMap<>();
+    private final Map<TestConnection, ConnectionState> states = new IdentityHashMap<>();
     private final List<String> lastFlushedConnectionIds = new ArrayList<>();
+    private final List<String> executionOrder = new ArrayList<>();
     private int flushCalls;
 
     @Override
@@ -350,6 +351,7 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
     @Override
     public void writeBufferedReply(TestConnection connection, boolean closeAfterReply) {
         state(connection).closeAfterReply = closeAfterReply;
+        executionOrder.add(connection.connectionId());
     }
 
     @Override
@@ -390,6 +392,10 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
         return List.copyOf(lastFlushedConnectionIds);
     }
 
+    List<String> executionOrder() {
+        return List.copyOf(executionOrder);
+    }
+
     int flushCount(TestConnection connection) {
         return state(connection).flushCount;
     }
@@ -407,7 +413,7 @@ final class RecordingIoAdapter implements ExecutionIoAdapter<TestConnection> {
     }
 
     private ConnectionState state(TestConnection connection) {
-        return states.computeIfAbsent(connection.connectionId(), ignored -> new ConnectionState());
+        return states.computeIfAbsent(connection, ignored -> new ConnectionState());
     }
 
     private static final class ConnectionState {
