@@ -9,12 +9,18 @@ import yier.bubu.redis.contract.Session;
 import java.util.Collection;
 import java.util.Objects;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.BooleanSupplier;
 
 final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     private final YierdisFastCommandProcessor commandProcessor;
     private final ReplyWriterFactory replyWriterFactory;
     private final ExecutionIoAdapter<C> ioAdapter;
     private final ExecutorBacklogBudget backlogBudget;
+    private final ExecutorBackpressureController<C> backpressureController;
+    private final int backpressureLowWatermark;
+    private final long backpressureBytesHighWatermark;
+    private final long backpressureBytesLowWatermark;
+    private final BooleanSupplier running;
     private final LongAdder commandsExecuted = new LongAdder();
     private final LongAdder commandsSkippedClosing = new LongAdder();
     private CommandContext execCtx;
@@ -23,12 +29,22 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
             YierdisFastCommandProcessor commandProcessor,
             ReplyWriterFactory replyWriterFactory,
             ExecutionIoAdapter<C> ioAdapter,
-            ExecutorBacklogBudget backlogBudget
+            ExecutorBacklogBudget backlogBudget,
+            ExecutorBackpressureController<C> backpressureController,
+            int backpressureLowWatermark,
+            long backpressureBytesHighWatermark,
+            long backpressureBytesLowWatermark,
+            BooleanSupplier running
     ) {
         this.commandProcessor = Objects.requireNonNull(commandProcessor, "commandProcessor");
         this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
         this.ioAdapter = Objects.requireNonNull(ioAdapter, "ioAdapter");
         this.backlogBudget = Objects.requireNonNull(backlogBudget, "backlogBudget");
+        this.backpressureController = Objects.requireNonNull(backpressureController, "backpressureController");
+        this.backpressureLowWatermark = backpressureLowWatermark;
+        this.backpressureBytesHighWatermark = backpressureBytesHighWatermark;
+        this.backpressureBytesLowWatermark = backpressureBytesLowWatermark;
+        this.running = Objects.requireNonNull(running, "running");
     }
 
     void execute(CommandExecutorTask<C> task, Collection<C> touchedConnections) {
@@ -114,11 +130,28 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         } finally {
             releaseReservedBudget(retainedBytes);
         }
+        maybeRecoverInput(connection);
     }
 
     private void releaseReservedBudget(int retainedBytes) {
         backlogBudget.releaseQueuedBytes(retainedBytes);
         backlogBudget.releaseSlot();
+    }
+
+    private void maybeRecoverInput(C connection) {
+        if (connection == null || !running.getAsBoolean()) {
+            return;
+        }
+        ExecutionConnectionContext context = connection.context();
+        boolean pendingOk = context.pending() <= backpressureLowWatermark;
+        boolean bytesOk = backpressureBytesHighWatermark <= 0 || context.pendingBytes() <= backpressureBytesLowWatermark;
+        boolean globalOk = backlogBudget.isGlobalBackpressureCleared();
+        if (!context.isClosing() && pendingOk && bytesOk && globalOk) {
+            backpressureController.enableAutoReadIfWeDisabled(connection);
+        }
+        if (globalOk) {
+            backpressureController.scheduleGlobalRecovery();
+        }
     }
 
     private static void closeRequest(yier.bubu.redis.contract.ExecutionRequest request) {
