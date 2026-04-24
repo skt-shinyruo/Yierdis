@@ -75,6 +75,10 @@ public class YierdisServerBootstrapCommandWiringTest {
                 JsonObject statsResult = objectField(stats, "result");
                 Assert.assertTrue(mapContainsKey(statsResult, "queued_tasks"));
                 Assert.assertTrue(mapContainsKey(statsResult, "commands_executed_total"));
+                Assert.assertTrue(
+                        "expected STATS to expose non-zero submit totals after accepted commands",
+                        longValue(mapValue(statsResult, "submit_accepted_total")) > 0L
+                );
 
                 JsonObject command = roundTrip(out, in, "{\"cmd\":\"COMMAND\",\"args\":[\"INFO\",\"HELLO\",\"INFO\",\"STATS\"]}");
                 Assert.assertTrue(booleanField(command, "ok"));

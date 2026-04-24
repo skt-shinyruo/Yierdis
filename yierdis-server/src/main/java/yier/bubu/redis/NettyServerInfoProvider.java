@@ -131,19 +131,19 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
         writePair(out, KEY_QUEUED_TASKS, s.queuedTasks());
         writePair(out, KEY_QUEUED_BYTES, s.queuedBytes());
-        writePair(out, KEY_CHANNELS_AUTOREAD_DISABLED, 0);
-        writePair(out, KEY_SUBMIT_ACCEPTED_TOTAL, 0);
-        writePair(out, KEY_SUBMIT_REJECTED_NOT_RUNNING_TOTAL, 0);
-        writePair(out, KEY_SUBMIT_REJECTED_QUEUE_FULL_TOTAL, 0);
-        writePair(out, KEY_SUBMIT_REJECTED_BYTES_BUDGET_TOTAL, 0);
-        writePair(out, KEY_SUBMIT_REJECTED_OFFER_FAILED_TOTAL, 0);
+        writePair(out, KEY_CHANNELS_AUTOREAD_DISABLED, s.channelsAutoReadDisabled());
+        writePair(out, KEY_SUBMIT_ACCEPTED_TOTAL, s.submitAccepted());
+        writePair(out, KEY_SUBMIT_REJECTED_NOT_RUNNING_TOTAL, s.submitRejectedNotRunning());
+        writePair(out, KEY_SUBMIT_REJECTED_QUEUE_FULL_TOTAL, s.submitRejectedQueueFull());
+        writePair(out, KEY_SUBMIT_REJECTED_BYTES_BUDGET_TOTAL, s.submitRejectedBytesBudget());
+        writePair(out, KEY_SUBMIT_REJECTED_OFFER_FAILED_TOTAL, s.submitRejectedOfferFailed());
         writePair(out, KEY_COMMANDS_EXECUTED_TOTAL, s.commandsExecuted());
         writePair(out, KEY_COMMANDS_SKIPPED_CLOSING_TOTAL, s.commandsSkippedClosing());
-        writePair(out, KEY_CLOSE_AFTER_REPLY_TOTAL, 0);
-        writePair(out, KEY_BACKPRESSURE_ENTER_TOTAL, 0);
-        writePair(out, KEY_BACKPRESSURE_EXIT_TOTAL, 0);
-        writePair(out, KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL, 0);
-        writePair(out, KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL, 0);
+        writePair(out, KEY_CLOSE_AFTER_REPLY_TOTAL, s.closeAfterReply());
+        writePair(out, KEY_BACKPRESSURE_ENTER_TOTAL, s.backpressureEnter());
+        writePair(out, KEY_BACKPRESSURE_EXIT_TOTAL, s.backpressureExit());
+        writePair(out, KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL, s.drainLimitedByMaxCommands());
+        writePair(out, KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL, s.drainLimitedByTimeBudget());
 
         if (stats == null) {
             return;

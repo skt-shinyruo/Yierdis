@@ -3,6 +3,7 @@ package yier.bubu.redis.executor;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
@@ -13,6 +14,8 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
     private final int maxDrainCommands;
     private final long drainTimeLimitNanos;
     private final BooleanSupplier running;
+    private final LongAdder drainLimitedByMaxCommands = new LongAdder();
+    private final LongAdder drainLimitedByTimeBudget = new LongAdder();
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean drainScheduled = new AtomicBoolean(false);
 
@@ -59,13 +62,17 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
 
         long deadline = System.nanoTime() + drainTimeLimitNanos;
         int processed = 0;
+        boolean hitMaxDrainCommands = false;
+        boolean hitDrainTimeBudget = false;
         LinkedHashSet<C> touchedConnections = new LinkedHashSet<>();
 
         for (; ; ) {
             if (processed >= maxDrainCommands) {
+                hitMaxDrainCommands = true;
                 break;
             }
             if (System.nanoTime() >= deadline) {
+                hitDrainTimeBudget = true;
                 break;
             }
 
@@ -81,6 +88,13 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
 
         boolean pendingAfterDrain = taskQueue.hasPendingTasks();
         if (pendingAfterDrain) {
+            if (hitMaxDrainCommands) {
+                drainLimitedByMaxCommands.increment();
+            } else if (hitDrainTimeBudget) {
+                drainLimitedByTimeBudget.increment();
+            }
+        }
+        if (pendingAfterDrain) {
             ownerExecutor.execute(this::drainLoop);
             return;
         }
@@ -89,5 +103,13 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
         if (taskQueue.hasPendingTasks() && drainScheduled.compareAndSet(false, true)) {
             ownerExecutor.execute(this::drainLoop);
         }
+    }
+
+    long drainLimitedByMaxCommands() {
+        return drainLimitedByMaxCommands.sum();
+    }
+
+    long drainLimitedByTimeBudget() {
+        return drainLimitedByTimeBudget.sum();
     }
 }

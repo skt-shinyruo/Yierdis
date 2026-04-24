@@ -3,6 +3,7 @@ package yier.bubu.redis.executor;
 import yier.bubu.redis.contract.ExecutionRequest;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
 
 final class CommandExecutorSubmitter<C extends ExecutionConnection> {
@@ -12,6 +13,11 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
     private final int backpressureHighWatermark;
     private final long backpressureBytesHighWatermark;
     private final BooleanSupplier running;
+    private final LongAdder submitAccepted = new LongAdder();
+    private final LongAdder submitRejectedNotRunning = new LongAdder();
+    private final LongAdder submitRejectedQueueFull = new LongAdder();
+    private final LongAdder submitRejectedBytesBudget = new LongAdder();
+    private final LongAdder submitRejectedOfferFailed = new LongAdder();
 
     CommandExecutorSubmitter(
             ExecutorTaskQueue<C, CommandExecutorTask<C>> taskQueue,
@@ -37,6 +43,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
         ExecutionConnectionContext context = connection.context();
         if (!running.getAsBoolean()) {
             context.recordCommandRejected();
+            submitRejectedNotRunning.increment();
             return CommandExecutor.SubmitRejectReason.NOT_RUNNING;
         }
 
@@ -53,6 +60,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
         if (!backlogBudget.tryReserveSlot()) {
             backpressureController.disableAutoRead(connection);
             context.recordCommandRejected();
+            submitRejectedQueueFull.increment();
             return CommandExecutor.SubmitRejectReason.QUEUE_FULL;
         }
 
@@ -63,6 +71,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
                 backlogBudget.releaseSlot();
                 backpressureController.disableAutoRead(connection);
                 context.recordCommandRejected();
+                submitRejectedBytesBudget.increment();
                 return CommandExecutor.SubmitRejectReason.BYTES_BUDGET;
             }
             reservedBytes = true;
@@ -73,10 +82,12 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
                 backlogBudget.releaseSlot();
                 backpressureController.disableAutoRead(connection);
                 context.recordCommandRejected();
+                submitRejectedOfferFailed.increment();
                 return CommandExecutor.SubmitRejectReason.OFFER_FAILED;
             }
 
             context.recordCommandEnqueued(retainedBytes);
+            submitAccepted.increment();
             if (context.pending() >= backpressureHighWatermark) {
                 backpressureController.disableAutoRead(connection);
             }
@@ -94,8 +105,29 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
             }
             backlogBudget.releaseSlot();
             context.recordCommandRejected();
+            submitRejectedOfferFailed.increment();
             return CommandExecutor.SubmitRejectReason.OFFER_FAILED;
         }
+    }
+
+    long submitAccepted() {
+        return submitAccepted.sum();
+    }
+
+    long submitRejectedNotRunning() {
+        return submitRejectedNotRunning.sum();
+    }
+
+    long submitRejectedQueueFull() {
+        return submitRejectedQueueFull.sum();
+    }
+
+    long submitRejectedBytesBudget() {
+        return submitRejectedBytesBudget.sum();
+    }
+
+    long submitRejectedOfferFailed() {
+        return submitRejectedOfferFailed.sum();
     }
 
     private static int safeRetainedBytes(ExecutionRequest request) {

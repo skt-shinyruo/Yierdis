@@ -175,6 +175,8 @@ public class CommandExecutorTest {
             Assert.assertEquals(0, stats.queuedTasks());
             Assert.assertEquals(0L, stats.queuedBytes());
             Assert.assertEquals(SchedulingPolicy.FAIR, stats.schedulingPolicy());
+            Assert.assertEquals(2L, stats.submitAccepted());
+            Assert.assertEquals(0L, stats.submitRejectedNotRunning());
 
             CompletableFuture<Void> shutdown = executor.shutdownGracefully();
             Assert.assertFalse(shutdown.isDone());
@@ -184,6 +186,7 @@ public class CommandExecutorTest {
             TrackingExecutionRequest rejected = TrackingExecutionRequest.ofUtf8("PING");
             Assert.assertEquals(CommandExecutor.SubmitRejectReason.NOT_RUNNING, executor.trySubmit(connection, rejected));
             Assert.assertEquals(0, rejected.closeCalls());
+            Assert.assertEquals(1L, executor.statsSnapshot().submitRejectedNotRunning());
 
             executor.close();
             rejected.close();
@@ -223,6 +226,8 @@ public class CommandExecutorTest {
             Assert.assertEquals(2L, connection.context().statsSnapshot().commandsEnqueued());
             Assert.assertEquals(1L, connection.context().statsSnapshot().commandsExecuted());
             Assert.assertEquals(1L, connection.context().statsSnapshot().commandsSkippedClosing());
+            Assert.assertEquals(2L, executor.statsSnapshot().submitAccepted());
+            Assert.assertEquals(1L, executor.statsSnapshot().closeAfterReply());
 
             CompletableFuture<Void> shutdown = executor.shutdownGracefully();
             Assert.assertFalse(shutdown.isDone());

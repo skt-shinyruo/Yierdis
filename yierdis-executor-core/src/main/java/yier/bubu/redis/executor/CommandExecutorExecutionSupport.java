@@ -23,6 +23,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     private final BooleanSupplier running;
     private final LongAdder commandsExecuted = new LongAdder();
     private final LongAdder commandsSkippedClosing = new LongAdder();
+    private final LongAdder closeAfterReply = new LongAdder();
     private CommandContext execCtx;
 
     CommandExecutorExecutionSupport(
@@ -74,6 +75,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
             commandProcessor.execute(task.request, context(context.session(), writer));
             if (writer.closeAfterReplyRequested()) {
                 context.recordCloseAfterReply();
+                closeAfterReply.increment();
                 context.markClosing();
             }
             ioAdapter.writeBufferedReply(connection, writer.closeAfterReplyRequested());
@@ -109,18 +111,20 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         releaseReservedBudget(task.retainedBytes);
     }
 
-    CommandExecutor.StatsSnapshot statsSnapshot(int queuedTasks, long queuedBytes, SchedulingPolicy schedulingPolicy) {
-        return new CommandExecutor.StatsSnapshot(
-                commandsExecuted.sum(),
-                commandsSkippedClosing.sum(),
-                queuedTasks,
-                queuedBytes,
-                schedulingPolicy
-        );
-    }
-
     void recoverInputIfPossible(C connection) {
         maybeRecoverInput(connection);
+    }
+
+    long commandsExecuted() {
+        return commandsExecuted.sum();
+    }
+
+    long commandsSkippedClosing() {
+        return commandsSkippedClosing.sum();
+    }
+
+    long closeAfterReply() {
+        return closeAfterReply.sum();
     }
 
     private CommandContext context(Session session, ReplyWriter writer) {
@@ -180,6 +184,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
             writer.internalError("ERR internal error");
             writer.requestCloseAfterReply();
             context.recordCloseAfterReply();
+            closeAfterReply.increment();
             ioAdapter.writeBufferedReply(connection, true);
             touchedConnections.add(connection);
         } catch (Throwable ignored) {
