@@ -20,8 +20,7 @@ public class CommandExecutorFairSchedulingTest {
                     io,
                     new CommandExecutorConfig(16, 0, 8, 4, 0, 0, 2, 1000, SchedulingPolicy.FAIR)
             );
-            executor.start();
-            ownerExecutor.runAll();
+            ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
 
             TestConnection c1 = ExecutorCoreTestSupport.newConnection("c1");
             TestConnection c2 = ExecutorCoreTestSupport.newConnection("c2");

@@ -18,8 +18,7 @@ public class CommandExecutorBackpressureTest {
                     io,
                     new CommandExecutorConfig(16, 0, 2, 1, 0, 0, 128, 10, SchedulingPolicy.FAIR)
             );
-            executor.start();
-            ownerExecutor.runAll();
+            ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
 
             TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
 

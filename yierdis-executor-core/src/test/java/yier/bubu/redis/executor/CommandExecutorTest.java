@@ -5,6 +5,10 @@ import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class CommandExecutorTest {
@@ -142,8 +146,7 @@ public class CommandExecutorTest {
                     io,
                     new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
             );
-            executor.start();
-            ownerExecutor.runAll();
+            ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
 
             TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
             TrackingExecutionRequest ping = TrackingExecutionRequest.ofUtf8("PING");
@@ -184,6 +187,48 @@ public class CommandExecutorTest {
 
             executor.close();
             rejected.close();
+        }
+    }
+
+    @Test
+    public void startWaitsForOwnerThreadBindingBeforeReturning() throws Exception {
+        ExecutorService ownerExecutor = Executors.newSingleThreadExecutor();
+        CountDownLatch bindStarted = new CountDownLatch(1);
+        CountDownLatch releaseBind = new CountDownLatch(1);
+
+        try (ProcessorHandle handle = ExecutorCoreTestSupport.processorHandle()) {
+            CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                    () -> {
+                        bindStarted.countDown();
+                        try {
+                            Assert.assertTrue(releaseBind.await(1, TimeUnit.SECONDS));
+                        } catch (InterruptedException e) {
+                            throw new RuntimeException(e);
+                        }
+                    },
+                    handle.processor(),
+                    ownerExecutor,
+                    ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                    new RecordingIoAdapter(),
+                    new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+            );
+
+            Thread startThread = new Thread(executor::start);
+            startThread.start();
+
+            Assert.assertTrue(bindStarted.await(1, TimeUnit.SECONDS));
+            startThread.join(100);
+            Assert.assertTrue("start should wait until owner-thread binding finishes", startThread.isAlive());
+
+            releaseBind.countDown();
+            startThread.join(1000);
+            Assert.assertFalse("start should return after binding completes", startThread.isAlive());
+
+            executor.close();
+        } finally {
+            releaseBind.countDown();
+            ownerExecutor.shutdownNow();
+            Assert.assertTrue("owner executor should terminate", ownerExecutor.awaitTermination(1, TimeUnit.SECONDS));
         }
     }
 

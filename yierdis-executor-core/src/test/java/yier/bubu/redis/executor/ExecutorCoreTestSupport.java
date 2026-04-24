@@ -1,5 +1,6 @@
 package yier.bubu.redis.executor;
 
+import org.junit.Assert;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.ExecutionRequest;
@@ -27,6 +28,23 @@ final class ExecutorCoreTestSupport {
 
     static ManualOwnerExecutor manualOwnerExecutor() {
         return new ManualOwnerExecutor();
+    }
+
+    static void startExecutor(CommandExecutor<?> executor, ManualOwnerExecutor ownerExecutor) {
+        Thread startThread = new Thread(executor::start);
+        startThread.start();
+        long deadlineNanos = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(1);
+        while (ownerExecutor.pendingTasks() == 0 && startThread.isAlive() && System.nanoTime() < deadlineNanos) {
+            Thread.onSpinWait();
+        }
+        Assert.assertTrue("owner executor should receive bind task during start", ownerExecutor.pendingTasks() > 0);
+        ownerExecutor.runAll();
+        try {
+            startThread.join(1000);
+        } catch (InterruptedException e) {
+            throw new AssertionError("Interrupted while waiting for executor start", e);
+        }
+        Assert.assertFalse("executor.start should complete after owner tasks run", startThread.isAlive());
     }
 
     static ReplyWriterFactory simpleReplyWriterFactory() {

@@ -11,6 +11,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
 public final class CommandExecutor<C extends ExecutionConnection> implements AutoCloseable {
+    private final Runnable bindToCurrentThread;
     public enum SubmitRejectReason {
         NOT_RUNNING("not_running"),
         QUEUE_FULL("queue_full"),
@@ -46,7 +47,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
             ExecutionIoAdapter<C> ioAdapter,
             CommandExecutorConfig config
     ) {
-        Objects.requireNonNull(bindToCurrentThread, "bindToCurrentThread");
+        this.bindToCurrentThread = Objects.requireNonNull(bindToCurrentThread, "bindToCurrentThread");
         Objects.requireNonNull(config, "config");
         this.ownerExecutor = Objects.requireNonNull(ownerExecutor, "ownerExecutor");
         this.schedulingPolicy = config.schedulingPolicy();
@@ -159,10 +160,10 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 TimeUnit.MILLISECONDS.toNanos(config.drainTimeLimitMillis()),
                 () -> running
         );
-        this.ownerExecutor.execute(bindToCurrentThread);
     }
 
     public void start() {
+        executeOwnerTask(bindToCurrentThread).join();
         drainLoop.markStarted();
     }
 
@@ -181,6 +182,34 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 task.run();
             }
         });
+    }
+
+    public CompletableFuture<Void> executeOwnerTask(Runnable task) {
+        Objects.requireNonNull(task, "task");
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        ownerExecutor.execute(() -> {
+            try {
+                task.run();
+                future.complete(null);
+            } catch (Throwable t) {
+                future.completeExceptionally(t);
+            }
+        });
+        return future;
+    }
+
+    public void onTransportUnwritable(C connection) {
+        if (connection == null || !running) {
+            return;
+        }
+        backpressureController.disableAutoRead(connection);
+    }
+
+    public void onTransportWritable(C connection) {
+        if (connection == null || !running) {
+            return;
+        }
+        ownerExecutor.execute(() -> executionSupport.recoverInputIfPossible(connection));
     }
 
     public CompletableFuture<Void> shutdownGracefully() {

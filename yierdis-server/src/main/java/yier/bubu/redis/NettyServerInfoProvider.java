@@ -9,16 +9,18 @@ import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
+import yier.bubu.redis.executor.CommandExecutor;
+import yier.bubu.redis.executor.DefaultExecutionSession;
+import yier.bubu.redis.executor.ExecutionConnectionContext;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
 import yier.bubu.redis.runtime.YierdisInstanceObservability;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 
 /**
- * Server-side INFO/STATS provider backed by {@link NettyCommandExecutor}.
+ * Server-side INFO/STATS provider backed by {@link CommandExecutor}.
  * <p>
  * This object is intentionally lightweight: it is called only when clients execute INFO/STATS, and uses
  * pre-aggregated counters updated on the hot path.
@@ -72,7 +74,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
     private final YierdisServerRuntimeConfig config;
     private final long startedMillis;
-    private volatile NettyCommandExecutor executor;
+    private volatile CommandExecutor<NettyExecutionConnection> executor;
     private volatile YierdisInstanceObservability observability;
 
     NettyServerInfoProvider(YierdisServerRuntimeConfig config) {
@@ -80,8 +82,12 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         this.startedMillis = System.currentTimeMillis();
     }
 
-    void bindExecutor(NettyCommandExecutor executor) {
+    void bindExecutor(CommandExecutor<NettyExecutionConnection> executor) {
         this.executor = Objects.requireNonNull(executor, "executor");
+    }
+
+    CommandExecutor<NettyExecutionConnection> boundExecutorForTests() {
+        return executor;
     }
 
     void bindObservability(YierdisInstanceObservability observability) {
@@ -92,7 +98,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     public void info(ExecutionRequest request, CommandContext ctx) {
         Objects.requireNonNull(ctx, "ctx");
         ReplyWriter out = Objects.requireNonNull(ctx.out(), "out");
-        NettyCommandExecutor ex = executor;
+        CommandExecutor<NettyExecutionConnection> ex = executor;
         if (ex == null) {
             out.error("ERR INFO not ready");
             return;
@@ -111,49 +117,65 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     public void stats(ExecutionRequest request, CommandContext ctx) {
         Objects.requireNonNull(ctx, "ctx");
         ReplyWriter out = Objects.requireNonNull(ctx.out(), "out");
-        NettyCommandExecutor ex = executor;
+        CommandExecutor<NettyExecutionConnection> ex = executor;
         if (ex == null) {
             out.error("ERR STATS not ready");
             return;
         }
 
-        NettyCommandExecutor.StatsSnapshot s = ex.statsSnapshot();
-        ServerConnectionContext.ConnectionStatsSnapshot stats = connectionStats(ctx);
+        CommandExecutor.StatsSnapshot s = ex.statsSnapshot();
+        Object stats = connectionStats(ctx);
 
         int pairs = 15 + (stats == null ? 0 : 11);
         writeHeader(out, pairs);
 
-        writePair(out, KEY_QUEUED_TASKS, s.queuedTasks);
-        writePair(out, KEY_QUEUED_BYTES, s.queuedBytes);
-        writePair(out, KEY_CHANNELS_AUTOREAD_DISABLED, s.channelsAutoReadDisabled);
-        writePair(out, KEY_SUBMIT_ACCEPTED_TOTAL, s.submitAccepted);
-        writePair(out, KEY_SUBMIT_REJECTED_NOT_RUNNING_TOTAL, s.submitRejectedNotRunning);
-        writePair(out, KEY_SUBMIT_REJECTED_QUEUE_FULL_TOTAL, s.submitRejectedQueueFull);
-        writePair(out, KEY_SUBMIT_REJECTED_BYTES_BUDGET_TOTAL, s.submitRejectedBytesBudget);
-        writePair(out, KEY_SUBMIT_REJECTED_OFFER_FAILED_TOTAL, s.submitRejectedOfferFailed);
-        writePair(out, KEY_COMMANDS_EXECUTED_TOTAL, s.commandsExecuted);
-        writePair(out, KEY_COMMANDS_SKIPPED_CLOSING_TOTAL, s.commandsSkippedClosing);
-        writePair(out, KEY_CLOSE_AFTER_REPLY_TOTAL, s.closeAfterReply);
-        writePair(out, KEY_BACKPRESSURE_ENTER_TOTAL, s.backpressureEnter);
-        writePair(out, KEY_BACKPRESSURE_EXIT_TOTAL, s.backpressureExit);
-        writePair(out, KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL, s.drainLimitedByMaxCommands);
-        writePair(out, KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL, s.drainLimitedByTimeBudget);
+        writePair(out, KEY_QUEUED_TASKS, s.queuedTasks());
+        writePair(out, KEY_QUEUED_BYTES, s.queuedBytes());
+        writePair(out, KEY_CHANNELS_AUTOREAD_DISABLED, 0);
+        writePair(out, KEY_SUBMIT_ACCEPTED_TOTAL, 0);
+        writePair(out, KEY_SUBMIT_REJECTED_NOT_RUNNING_TOTAL, 0);
+        writePair(out, KEY_SUBMIT_REJECTED_QUEUE_FULL_TOTAL, 0);
+        writePair(out, KEY_SUBMIT_REJECTED_BYTES_BUDGET_TOTAL, 0);
+        writePair(out, KEY_SUBMIT_REJECTED_OFFER_FAILED_TOTAL, 0);
+        writePair(out, KEY_COMMANDS_EXECUTED_TOTAL, s.commandsExecuted());
+        writePair(out, KEY_COMMANDS_SKIPPED_CLOSING_TOTAL, s.commandsSkippedClosing());
+        writePair(out, KEY_CLOSE_AFTER_REPLY_TOTAL, 0);
+        writePair(out, KEY_BACKPRESSURE_ENTER_TOTAL, 0);
+        writePair(out, KEY_BACKPRESSURE_EXIT_TOTAL, 0);
+        writePair(out, KEY_DRAIN_LIMITED_MAX_COMMANDS_TOTAL, 0);
+        writePair(out, KEY_DRAIN_LIMITED_TIME_BUDGET_TOTAL, 0);
 
         if (stats == null) {
             return;
         }
 
-        writePair(out, KEY_CONN_PENDING, stats.pending());
-        writePair(out, KEY_CONN_PENDING_BYTES, stats.pendingBytes());
-        writePair(out, KEY_CONN_AUTOREAD_DISABLED, stats.autoReadDisabledByExecutor() ? 1 : 0);
-        writePair(out, KEY_CONN_CLOSING, stats.closing() ? 1 : 0);
-        writePair(out, KEY_CONN_COMMANDS_ENQUEUED, stats.commandsEnqueued());
-        writePair(out, KEY_CONN_COMMANDS_EXECUTED, stats.commandsExecuted());
-        writePair(out, KEY_CONN_COMMANDS_REJECTED, stats.commandsRejected());
-        writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, stats.commandsSkippedClosing());
-        writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, stats.closeAfterReply());
-        writePair(out, KEY_CONN_BACKPRESSURE_ENTER, stats.backpressureEnter());
-        writePair(out, KEY_CONN_BACKPRESSURE_EXIT, stats.backpressureExit());
+        if (stats instanceof ExecutionConnectionContext.ConnectionStatsSnapshot snapshot) {
+            writePair(out, KEY_CONN_PENDING, snapshot.pending());
+            writePair(out, KEY_CONN_PENDING_BYTES, snapshot.pendingBytes());
+            writePair(out, KEY_CONN_AUTOREAD_DISABLED, snapshot.inputDisabledByExecutor() ? 1 : 0);
+            writePair(out, KEY_CONN_CLOSING, snapshot.closing() ? 1 : 0);
+            writePair(out, KEY_CONN_COMMANDS_ENQUEUED, snapshot.commandsEnqueued());
+            writePair(out, KEY_CONN_COMMANDS_EXECUTED, snapshot.commandsExecuted());
+            writePair(out, KEY_CONN_COMMANDS_REJECTED, snapshot.commandsRejected());
+            writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, snapshot.commandsSkippedClosing());
+            writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, snapshot.closeAfterReply());
+            writePair(out, KEY_CONN_BACKPRESSURE_ENTER, snapshot.backpressureEnter());
+            writePair(out, KEY_CONN_BACKPRESSURE_EXIT, snapshot.backpressureExit());
+            return;
+        }
+        if (stats instanceof ServerConnectionContext.ConnectionStatsSnapshot snapshot) {
+            writePair(out, KEY_CONN_PENDING, snapshot.pending());
+            writePair(out, KEY_CONN_PENDING_BYTES, snapshot.pendingBytes());
+            writePair(out, KEY_CONN_AUTOREAD_DISABLED, snapshot.autoReadDisabledByExecutor() ? 1 : 0);
+            writePair(out, KEY_CONN_CLOSING, snapshot.closing() ? 1 : 0);
+            writePair(out, KEY_CONN_COMMANDS_ENQUEUED, snapshot.commandsEnqueued());
+            writePair(out, KEY_CONN_COMMANDS_EXECUTED, snapshot.commandsExecuted());
+            writePair(out, KEY_CONN_COMMANDS_REJECTED, snapshot.commandsRejected());
+            writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, snapshot.commandsSkippedClosing());
+            writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, snapshot.closeAfterReply());
+            writePair(out, KEY_CONN_BACKPRESSURE_ENTER, snapshot.backpressureEnter());
+            writePair(out, KEY_CONN_BACKPRESSURE_EXIT, snapshot.backpressureExit());
+        }
     }
 
     @Override
@@ -164,11 +186,10 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         return aggregatedMemoryStats();
     }
 
-    private void writeYierdisStructuredInfo(ReplyWriter out, NettyCommandExecutor ex) {
-        NettyCommandExecutor.StatsSnapshot s = ex.statsSnapshot();
+    private void writeYierdisStructuredInfo(ReplyWriter out, CommandExecutor<NettyExecutionConnection> ex) {
+        CommandExecutor.StatsSnapshot s = ex.statsSnapshot();
         long nowMillis = System.currentTimeMillis();
         long uptimeMillis = Math.max(0, nowMillis - startedMillis);
-        long drainMillis = TimeUnit.NANOSECONDS.toMillis(s.drainTimeLimitNanos);
 
         int pairs = 15;
         writeHeader(out, pairs);
@@ -177,21 +198,21 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_VERSION, VALUE_VERSION);
         writePair(out, KEY_PORT, config.port());
         writePair(out, KEY_IO_THREADS, config.ioThreads());
-        writePair(out, KEY_EXECUTOR_POLICY, ascii(String.valueOf(s.schedulingPolicy)));
-        writePair(out, KEY_EXECUTOR_QUEUE_CAPACITY, s.queueCapacity);
-        writePair(out, KEY_EXECUTOR_QUEUE_MAX_BYTES, s.queueMaxBytes);
-        writePair(out, KEY_BACKPRESSURE_HIGH, s.backpressureHighWatermark);
-        writePair(out, KEY_BACKPRESSURE_LOW, s.backpressureLowWatermark);
-        writePair(out, KEY_BACKPRESSURE_BYTES_HIGH, s.backpressureBytesHighWatermark);
-        writePair(out, KEY_BACKPRESSURE_BYTES_LOW, s.backpressureBytesLowWatermark);
-        writePair(out, KEY_EXECUTOR_MAX_DRAIN, s.maxDrainCommands);
-        writePair(out, KEY_EXECUTOR_DRAIN_MILLIS, drainMillis);
+        writePair(out, KEY_EXECUTOR_POLICY, ascii(String.valueOf(s.schedulingPolicy())));
+        writePair(out, KEY_EXECUTOR_QUEUE_CAPACITY, config.executorQueueCapacity());
+        writePair(out, KEY_EXECUTOR_QUEUE_MAX_BYTES, config.executorQueueMaxBytes());
+        writePair(out, KEY_BACKPRESSURE_HIGH, config.backpressureHighWatermark());
+        writePair(out, KEY_BACKPRESSURE_LOW, config.backpressureLowWatermark());
+        writePair(out, KEY_BACKPRESSURE_BYTES_HIGH, config.backpressureBytesHighWatermark());
+        writePair(out, KEY_BACKPRESSURE_BYTES_LOW, config.backpressureBytesLowWatermark());
+        writePair(out, KEY_EXECUTOR_MAX_DRAIN, config.executorMaxDrainCommands());
+        writePair(out, KEY_EXECUTOR_DRAIN_MILLIS, config.executorDrainTimeLimitMillis());
         writePair(out, KEY_STARTED_MILLIS, startedMillis);
         writePair(out, KEY_UPTIME_MILLIS, uptimeMillis);
     }
 
-    private String buildRedisInfo(String section, NettyCommandExecutor ex) {
-        NettyCommandExecutor.StatsSnapshot s = ex.statsSnapshot();
+    private String buildRedisInfo(String section, CommandExecutor<NettyExecutionConnection> ex) {
+        CommandExecutor.StatsSnapshot s = ex.statsSnapshot();
         long nowMillis = System.currentTimeMillis();
         long uptimeMillis = Math.max(0, nowMillis - startedMillis);
         long uptimeSeconds = Math.max(0, uptimeMillis / 1000L);
@@ -253,12 +274,12 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
         if (stats) {
             sb.append("# Stats\r\n");
-            sb.append("total_commands_processed:").append(s.commandsExecuted).append("\r\n");
+            sb.append("total_commands_processed:").append(s.commandsExecuted()).append("\r\n");
             sb.append("rejected_connections:0\r\n");
             sb.append("total_connections_received:0\r\n");
             sb.append("instantaneous_ops_per_sec:0\r\n");
-            sb.append("yierdis_queued_tasks:").append(s.queuedTasks).append("\r\n");
-            sb.append("yierdis_queued_bytes:").append(s.queuedBytes).append("\r\n");
+            sb.append("yierdis_queued_tasks:").append(s.queuedTasks()).append("\r\n");
+            sb.append("yierdis_queued_bytes:").append(s.queuedBytes()).append("\r\n");
             sb.append("\r\n");
         }
 
@@ -316,11 +337,15 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         );
     }
 
-    private static ServerConnectionContext.ConnectionStatsSnapshot connectionStats(CommandContext ctx) {
+    private static Object connectionStats(CommandContext ctx) {
         if (ctx == null) {
             return null;
         }
         ServerSession serverSession = ctx.serverSessionOrNull();
+        if (serverSession instanceof DefaultExecutionSession session) {
+            ExecutionConnectionContext context = session.connectionContext();
+            return context == null ? null : context.statsSnapshot();
+        }
         if (serverSession instanceof ServerSessionState s) {
             return s.connectionStatsSnapshot();
         }

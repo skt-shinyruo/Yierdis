@@ -5,29 +5,30 @@ package yier.bubu.redis;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
+import yier.bubu.redis.contract.ReplyWriterFactory;
+import yier.bubu.redis.executor.CommandExecutor;
 import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
 
 import java.util.Objects;
 
 final class YierdisServerChannelInitializer extends ChannelInitializer<SocketChannel> {
     private final YierdisServerRuntimeConfig config;
-    private final NettyCommandExecutor executor;
+    private final CommandExecutor<NettyExecutionConnection> executor;
+    private final ReplyWriterFactory replyWriterFactory;
 
-    YierdisServerChannelInitializer(YierdisServerRuntimeConfig config, NettyCommandExecutor executor) {
+    YierdisServerChannelInitializer(
+            YierdisServerRuntimeConfig config,
+            CommandExecutor<NettyExecutionConnection> executor,
+            ReplyWriterFactory replyWriterFactory
+    ) {
         this.config = Objects.requireNonNull(config, "config");
         this.executor = Objects.requireNonNull(executor, "executor");
+        this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
     }
 
     @Override
     protected void initChannel(SocketChannel ch) {
         NettyExecutionConnection.getOrCreate(
-                ch,
-                config.transactionQueueMaxCommands(),
-                config.transactionQueueMaxBytes()
-        );
-
-        // 统一连接态入口：会话（SELECT/MULTI/...）、运行时（背压/统计/closing）与调度状态在同一 context 内初始化。
-        ServerConnectionContext.getOrCreate(
                 ch,
                 config.transactionQueueMaxCommands(),
                 config.transactionQueueMaxBytes()
@@ -41,8 +42,8 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                         config.protocolMaxLineBytes()
                 ))
                 .addLast("protocolCommandAdapter", new ProtocolCommandAdapter())
-                .addLast("protocolErrorReply", new ProtocolErrorReplyHandler(executor))
-                .addLast("commandHandler", new YierdisFastCommandHandler(executor));
+                .addLast("protocolErrorReply", new ProtocolErrorReplyHandler(replyWriterFactory))
+                .addLast("commandHandler", new YierdisFastCommandHandler(executor, replyWriterFactory));
     }
 
     /**
@@ -50,20 +51,20 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
      * executor to re-evaluate autoRead when it becomes writable again.
      */
     private static final class WriteBufferBackpressureHandler extends io.netty.channel.ChannelInboundHandlerAdapter {
-        private final NettyCommandExecutor executor;
+        private final CommandExecutor<NettyExecutionConnection> executor;
 
-        private WriteBufferBackpressureHandler(NettyCommandExecutor executor) {
+        private WriteBufferBackpressureHandler(CommandExecutor<NettyExecutionConnection> executor) {
             this.executor = Objects.requireNonNull(executor, "executor");
         }
 
         @Override
         public void channelWritabilityChanged(io.netty.channel.ChannelHandlerContext ctx) throws Exception {
             if (ctx != null) {
+                NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
                 if (!ctx.channel().isWritable()) {
-                    // Use the same autoRead flag as executor backpressure; enable is guarded by ch.isWritable().
-                    executor.disableAutoRead(ctx.channel());
-                } else {
-                    executor.onChannelWritable(ctx.channel());
+                    executor.onTransportUnwritable(connection);
+                } else if (connection != null) {
+                    executor.onTransportWritable(connection);
                 }
             }
             super.channelWritabilityChanged(ctx);
