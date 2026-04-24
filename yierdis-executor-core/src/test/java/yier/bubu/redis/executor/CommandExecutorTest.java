@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class CommandExecutorTest {
@@ -125,6 +126,65 @@ public class CommandExecutorTest {
 
         io.fireClosed(second);
         Assert.assertTrue(secondClosed.get());
+    }
+
+    @Test
+    public void executorRunsCommandsSkipsClosingQueuedWorkAndStopsAcceptingNewSubmissions() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+
+        try (ProcessorHandle handle = ExecutorCoreTestSupport.processorHandle()) {
+            CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                    () -> {},
+                    handle.processor(),
+                    ownerExecutor,
+                    ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                    io,
+                    new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+            );
+            executor.start();
+            ownerExecutor.runAll();
+
+            TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
+            TrackingExecutionRequest ping = TrackingExecutionRequest.ofUtf8("PING");
+
+            Assert.assertNull(executor.trySubmit(connection, ping));
+            Assert.assertEquals(1, ownerExecutor.pendingTasks());
+            ownerExecutor.runAll();
+
+            Assert.assertEquals("PONG\n", io.bufferedReply(connection));
+            Assert.assertEquals(1, ping.closeCalls());
+            Assert.assertEquals(1, io.flushCalls());
+
+            TrackingExecutionRequest queuedButClosing = TrackingExecutionRequest.ofUtf8("PING");
+            Assert.assertNull(executor.trySubmit(connection, queuedButClosing));
+            connection.context().markClosing();
+            ownerExecutor.runAll();
+
+            Assert.assertEquals(1, queuedButClosing.closeCalls());
+            Assert.assertEquals(2, connection.context().statsSnapshot().commandsEnqueued());
+            Assert.assertEquals(1, connection.context().statsSnapshot().commandsExecuted());
+            Assert.assertEquals(1, connection.context().statsSnapshot().commandsSkippedClosing());
+
+            CommandExecutor.StatsSnapshot stats = executor.statsSnapshot();
+            Assert.assertEquals(1L, stats.commandsExecuted());
+            Assert.assertEquals(1L, stats.commandsSkippedClosing());
+            Assert.assertEquals(0, stats.queuedTasks());
+            Assert.assertEquals(0L, stats.queuedBytes());
+            Assert.assertEquals(SchedulingPolicy.FAIR, stats.schedulingPolicy());
+
+            CompletableFuture<Void> shutdown = executor.shutdownGracefully();
+            Assert.assertFalse(shutdown.isDone());
+            ownerExecutor.runAll();
+            Assert.assertTrue(shutdown.isDone());
+
+            TrackingExecutionRequest rejected = TrackingExecutionRequest.ofUtf8("PING");
+            Assert.assertEquals(CommandExecutor.SubmitRejectReason.NOT_RUNNING, executor.trySubmit(connection, rejected));
+            Assert.assertEquals(0, rejected.closeCalls());
+
+            executor.close();
+            rejected.close();
+        }
     }
 
     private static void assertInvalidConfig(
