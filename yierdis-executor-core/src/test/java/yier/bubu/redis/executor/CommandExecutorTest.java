@@ -28,16 +28,30 @@ public class CommandExecutorTest {
         TestConnection connection = new TestConnection("c-1", new ExecutionConnectionContext(new DefaultExecutionSession(4, 128)));
         AtomicBoolean closed = new AtomicBoolean(false);
 
+        Assert.assertTrue(io.isActive(connection));
+        Assert.assertTrue(io.isWritable(connection));
+        io.setActive(false);
+        io.setWritable(false);
+        Assert.assertFalse(io.isActive(connection));
+        Assert.assertFalse(io.isWritable(connection));
+        io.setActive(true);
+        io.setWritable(true);
+
         io.onClose(connection, () -> closed.set(true));
         io.disableInput(connection);
+        Assert.assertTrue(io.inputDisabled());
         io.enableInput(connection);
+        Assert.assertTrue(io.inputEnabledAgain());
         BytesSink sink = io.newReplySink(connection);
         sink.writeBytes(new byte[]{'O', 'K'});
         io.writeBufferedReply(connection, true);
+        io.flushPending(java.util.List.of(connection));
         io.fireClosed();
 
         Assert.assertEquals("OK", io.bufferedReply());
         Assert.assertTrue(io.closeAfterReply());
+        Assert.assertEquals("c-1", io.lastFlushedConnectionId());
+        Assert.assertEquals(1, io.flushCalls());
         Assert.assertTrue(closed.get());
     }
 }
