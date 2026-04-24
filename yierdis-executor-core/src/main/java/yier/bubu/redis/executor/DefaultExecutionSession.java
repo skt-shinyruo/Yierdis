@@ -112,18 +112,18 @@ public final class DefaultExecutionSession implements ServerSession {
 
         @Override
         public synchronized void begin() {
+            closeOwnedRequests();
             active = true;
             aborted = false;
             queuedBytes = 0;
-            queue.clear();
         }
 
         @Override
         public synchronized void discard() {
+            closeOwnedRequests();
             active = false;
             aborted = false;
             queuedBytes = 0;
-            queue.clear();
         }
 
         @Override
@@ -173,6 +173,20 @@ public final class DefaultExecutionSession implements ServerSession {
             aborted = false;
             queuedBytes = 0;
             return out;
+        }
+
+        private void closeOwnedRequests() {
+            for (ExecutionRequest request : queue) {
+                if (request == null) {
+                    continue;
+                }
+                try {
+                    request.close();
+                } catch (Throwable ignored) {
+                    // Ignore cleanup failures while resetting transaction state.
+                }
+            }
+            queue.clear();
         }
     }
 }

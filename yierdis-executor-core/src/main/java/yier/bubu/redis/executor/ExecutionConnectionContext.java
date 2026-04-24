@@ -5,21 +5,23 @@ import yier.bubu.redis.contract.ServerSession;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 public final class ExecutionConnectionContext {
     private final DefaultExecutionSession session;
     private final QueueState queueState = new QueueState();
-    private int pending;
-    private long pendingBytes;
-    private boolean closing;
-    private boolean inputDisabledByExecutor;
-    private long commandsEnqueued;
-    private long commandsExecuted;
-    private long commandsRejected;
-    private long commandsSkippedClosing;
-    private long closeAfterReply;
-    private long backpressureEnter;
-    private long backpressureExit;
+    private final AtomicInteger pending = new AtomicInteger(0);
+    private final AtomicLong pendingBytes = new AtomicLong(0);
+    private final AtomicBoolean closing = new AtomicBoolean(false);
+    private final AtomicBoolean inputDisabledByExecutor = new AtomicBoolean(false);
+    private final AtomicLong commandsEnqueued = new AtomicLong(0);
+    private final AtomicLong commandsExecuted = new AtomicLong(0);
+    private final AtomicLong commandsRejected = new AtomicLong(0);
+    private final AtomicLong commandsSkippedClosing = new AtomicLong(0);
+    private final AtomicLong closeAfterReply = new AtomicLong(0);
+    private final AtomicLong backpressureEnter = new AtomicLong(0);
+    private final AtomicLong backpressureExit = new AtomicLong(0);
 
     public ExecutionConnectionContext(DefaultExecutionSession session) {
         this.session = session;
@@ -35,93 +37,84 @@ public final class ExecutionConnectionContext {
     }
 
     public int pending() {
-        return pending;
+        return pending.get();
     }
 
     public long pendingBytes() {
-        return pendingBytes;
+        return pendingBytes.get();
     }
 
     public boolean isClosing() {
-        return closing;
+        return closing.get();
     }
 
     public boolean markClosing() {
-        if (closing) {
+        if (!closing.compareAndSet(false, true)) {
             return false;
         }
-        closing = true;
         session.discardTransaction();
         return true;
     }
 
     public void recordCommandEnqueued(int retainedBytes) {
-        pending++;
-        pendingBytes += Math.max(0, retainedBytes);
-        commandsEnqueued++;
+        pending.incrementAndGet();
+        pendingBytes.addAndGet(Math.max(0, retainedBytes));
+        commandsEnqueued.incrementAndGet();
     }
 
     public void recordCommandFinished(int retainedBytes, boolean executed) {
-        pending--;
-        pendingBytes -= Math.max(0, retainedBytes);
+        pending.decrementAndGet();
+        pendingBytes.addAndGet(-Math.max(0, retainedBytes));
         if (executed) {
-            commandsExecuted++;
+            commandsExecuted.incrementAndGet();
         }
     }
 
     public void recordCommandRejected() {
-        commandsRejected++;
+        commandsRejected.incrementAndGet();
     }
 
     public void recordSkippedClosing() {
-        commandsSkippedClosing++;
+        commandsSkippedClosing.incrementAndGet();
     }
 
     public void recordCloseAfterReply() {
-        closeAfterReply++;
+        closeAfterReply.incrementAndGet();
     }
 
     public void recordBackpressureEnter() {
-        backpressureEnter++;
+        backpressureEnter.incrementAndGet();
     }
 
     public void recordBackpressureExit() {
-        backpressureExit++;
+        backpressureExit.incrementAndGet();
     }
 
     public boolean markInputDisabledByExecutor() {
-        if (inputDisabledByExecutor) {
-            return false;
-        }
-        inputDisabledByExecutor = true;
-        return true;
+        return inputDisabledByExecutor.compareAndSet(false, true);
     }
 
     public boolean autoReadDisabledByExecutor() {
-        return inputDisabledByExecutor;
+        return inputDisabledByExecutor.get();
     }
 
     public boolean clearAutoReadDisabledByExecutor() {
-        if (!inputDisabledByExecutor) {
-            return false;
-        }
-        inputDisabledByExecutor = false;
-        return true;
+        return inputDisabledByExecutor.compareAndSet(true, false);
     }
 
     public ConnectionStatsSnapshot statsSnapshot() {
         return new ConnectionStatsSnapshot(
-                pending,
-                pendingBytes,
-                inputDisabledByExecutor,
-                closing,
-                commandsEnqueued,
-                commandsExecuted,
-                commandsRejected,
-                commandsSkippedClosing,
-                closeAfterReply,
-                backpressureEnter,
-                backpressureExit
+                pending.get(),
+                pendingBytes.get(),
+                inputDisabledByExecutor.get(),
+                closing.get(),
+                commandsEnqueued.get(),
+                commandsExecuted.get(),
+                commandsRejected.get(),
+                commandsSkippedClosing.get(),
+                closeAfterReply.get(),
+                backpressureEnter.get(),
+                backpressureExit.get()
         );
     }
 
