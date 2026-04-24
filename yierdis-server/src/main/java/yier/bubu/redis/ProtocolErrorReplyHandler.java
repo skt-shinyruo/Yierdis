@@ -5,16 +5,25 @@ package yier.bubu.redis;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.contract.ReplyWriterFactory;
 import yier.bubu.redis.protocol.netty.ProtocolError;
 
 import java.util.Objects;
 
 final class ProtocolErrorReplyHandler extends ChannelInboundHandlerAdapter {
     private final NettyCommandExecutor executor;
+    private final ReplyWriterFactory replyWriterFactory;
 
     ProtocolErrorReplyHandler(NettyCommandExecutor executor) {
         this.executor = Objects.requireNonNull(executor, "executor");
+        this.replyWriterFactory = null;
+    }
+
+    ProtocolErrorReplyHandler(ReplyWriterFactory replyWriterFactory) {
+        this.executor = null;
+        this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
     }
 
     @Override
@@ -32,7 +41,7 @@ final class ProtocolErrorReplyHandler extends ChannelInboundHandlerAdapter {
         }
         ByteBuf out = ctx.alloc().buffer();
         try {
-            ReplyWriter writer = executor.newReplyWriter(out, ctx.channel());
+            ReplyWriter writer = newReplyWriter(out, ctx);
             writer.protocolError(message);
             ctx.writeAndFlush(out);
             out = null;
@@ -41,5 +50,12 @@ final class ProtocolErrorReplyHandler extends ChannelInboundHandlerAdapter {
                 out.release();
             }
         }
+    }
+
+    private ReplyWriter newReplyWriter(ByteBuf out, ChannelHandlerContext ctx) {
+        if (executor != null) {
+            return executor.newReplyWriter(out, ctx.channel());
+        }
+        return replyWriterFactory.newWriter(new NettyByteBufSink(out));
     }
 }

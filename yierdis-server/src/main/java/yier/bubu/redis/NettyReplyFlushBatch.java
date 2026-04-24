@@ -12,35 +12,37 @@ import java.util.IdentityHashMap;
  * end of the tick.
  */
 final class NettyReplyFlushBatch {
-    private final IdentityHashMap<Channel, ChannelHandlerContext> targets = new IdentityHashMap<>();
+    private final IdentityHashMap<Channel, Boolean> targets = new IdentityHashMap<>();
 
     void record(ChannelHandlerContext ctx) {
         if (ctx == null) {
             return;
         }
-        Channel ch = ctx.channel();
-        if (ch == null) {
+        record(ctx.channel());
+    }
+
+    void record(Channel channel) {
+        if (channel == null) {
             return;
         }
-        targets.put(ch, ctx);
+        targets.put(channel, Boolean.TRUE);
     }
 
     void flushAll() {
-        for (ChannelHandlerContext ctx : targets.values()) {
-            safeFlush(ctx);
+        for (Channel channel : targets.keySet()) {
+            safeFlush(channel);
         }
         targets.clear();
     }
 
-    private static void safeFlush(ChannelHandlerContext ctx) {
-        if (ctx == null) {
+    private static void safeFlush(Channel channel) {
+        if (channel == null) {
             return;
         }
         try {
-            ctx.flush();
+            channel.flush();
         } catch (Throwable ignored) {
             // ignore
         }
     }
 }
-
