@@ -20,6 +20,12 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
 
     @Override
     protected void initChannel(SocketChannel ch) {
+        NettyExecutionConnection.getOrCreate(
+                ch,
+                config.transactionQueueMaxCommands(),
+                config.transactionQueueMaxBytes()
+        );
+
         // 统一连接态入口：会话（SELECT/MULTI/...）、运行时（背压/统计/closing）与调度状态在同一 context 内初始化。
         ServerConnectionContext.getOrCreate(
                 ch,
