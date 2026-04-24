@@ -1,0 +1,134 @@
+package yier.bubu.redis.executor;
+
+import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.contract.ReplyWriterFactory;
+import yier.bubu.redis.contract.Session;
+
+import java.util.Collection;
+import java.util.Objects;
+import java.util.concurrent.atomic.LongAdder;
+
+final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
+    private final YierdisFastCommandProcessor commandProcessor;
+    private final ReplyWriterFactory replyWriterFactory;
+    private final ExecutionIoAdapter<C> ioAdapter;
+    private final ExecutorBacklogBudget backlogBudget;
+    private final LongAdder commandsExecuted = new LongAdder();
+    private final LongAdder commandsSkippedClosing = new LongAdder();
+    private CommandContext execCtx;
+
+    CommandExecutorExecutionSupport(
+            YierdisFastCommandProcessor commandProcessor,
+            ReplyWriterFactory replyWriterFactory,
+            ExecutionIoAdapter<C> ioAdapter,
+            ExecutorBacklogBudget backlogBudget
+    ) {
+        this.commandProcessor = Objects.requireNonNull(commandProcessor, "commandProcessor");
+        this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
+        this.ioAdapter = Objects.requireNonNull(ioAdapter, "ioAdapter");
+        this.backlogBudget = Objects.requireNonNull(backlogBudget, "backlogBudget");
+    }
+
+    void execute(CommandExecutorTask<C> task, Collection<C> touchedConnections) {
+        if (task == null) {
+            return;
+        }
+
+        C connection = task.connection;
+        if (connection == null) {
+            closeRequest(task.request);
+            releaseReservedBudget(task.retainedBytes);
+            return;
+        }
+
+        ExecutionConnectionContext context = connection.context();
+        if (context.isClosing()) {
+            context.recordSkippedClosing();
+            commandsSkippedClosing.increment();
+            closeRequest(task.request);
+            finishTask(connection, task.retainedBytes, false);
+            return;
+        }
+
+        boolean executed = false;
+        try {
+            ReplyWriter writer = replyWriterFactory.newWriter(ioAdapter.newReplySink(connection));
+            commandProcessor.execute(task.request, context(context.session(), writer));
+            if (writer.closeAfterReplyRequested()) {
+                context.recordCloseAfterReply();
+                context.markClosing();
+            }
+            ioAdapter.writeBufferedReply(connection, writer.closeAfterReplyRequested());
+            touchedConnections.add(connection);
+            commandsExecuted.increment();
+            executed = true;
+        } finally {
+            closeRequest(task.request);
+            finishTask(connection, task.retainedBytes, executed);
+        }
+    }
+
+    void flushPending(Collection<C> touchedConnections) {
+        if (touchedConnections == null || touchedConnections.isEmpty()) {
+            return;
+        }
+        ioAdapter.flushPending(touchedConnections);
+    }
+
+    void recycleAndRelease(CommandExecutorTask<C> task) {
+        if (task == null) {
+            return;
+        }
+        closeRequest(task.request);
+        if (task.connection != null) {
+            finishTask(task.connection, task.retainedBytes, false);
+            return;
+        }
+        releaseReservedBudget(task.retainedBytes);
+    }
+
+    CommandExecutor.StatsSnapshot statsSnapshot(int queuedTasks, long queuedBytes, SchedulingPolicy schedulingPolicy) {
+        return new CommandExecutor.StatsSnapshot(
+                commandsExecuted.sum(),
+                commandsSkippedClosing.sum(),
+                queuedTasks,
+                queuedBytes,
+                schedulingPolicy
+        );
+    }
+
+    private CommandContext context(Session session, ReplyWriter writer) {
+        CommandContext existing = execCtx;
+        if (existing == null) {
+            execCtx = new CommandContext(session, writer);
+            return execCtx;
+        }
+        return existing.reset(session, writer);
+    }
+
+    private void finishTask(C connection, int retainedBytes, boolean executed) {
+        try {
+            connection.context().recordCommandFinished(retainedBytes, executed);
+        } finally {
+            releaseReservedBudget(retainedBytes);
+        }
+    }
+
+    private void releaseReservedBudget(int retainedBytes) {
+        backlogBudget.releaseQueuedBytes(retainedBytes);
+        backlogBudget.releaseSlot();
+    }
+
+    private static void closeRequest(yier.bubu.redis.contract.ExecutionRequest request) {
+        if (request == null) {
+            return;
+        }
+        try {
+            request.close();
+        } catch (Throwable ignored) {
+            // Ignore cleanup failures on executor-owned requests.
+        }
+    }
+}
