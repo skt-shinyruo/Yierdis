@@ -18,8 +18,24 @@
 
     <dependencies>
         <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-core-contract</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-core-command</artifactId>
+        </dependency>
+
+        <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-core-db</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

@@ -1,6 +1,4 @@
-package yier.bubu.redis;
-
-// Server 会话状态（server 私有）：实现协议层 ServerSession，承载 SELECT/AUTH/MULTI 等 Redis-like 连接态。
+package yier.bubu.redis.executor;
 
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.ExecutionRequest;
@@ -9,46 +7,28 @@ import yier.bubu.redis.contract.TransactionState;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 
-final class ServerSessionState implements ServerSession {
+public final class DefaultExecutionSession implements ServerSession {
     private static final AtomicLong NEXT_CLIENT_ID = new AtomicLong(1);
-    static final int DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS = 1024;
-    static final long DEFAULT_TRANSACTION_QUEUE_MAX_BYTES = 64L * 1024 * 1024; // 64 MiB
 
-    // --- Redis-like connection state（通过 ServerSession 暴露给命令层） ---
     private final long clientId = NEXT_CLIENT_ID.getAndIncrement();
+    private final DefaultTransactionState transaction;
+    private ExecutionConnectionContext connectionContext;
     private int dbIndex;
     private String clientName;
     private boolean authenticated;
-    private final ConnectionTransactionState transaction;
 
-    private final ServerRuntimeState runtime;
-
-    ServerSessionState(ServerRuntimeState runtime, int transactionQueueMaxCommands, long transactionQueueMaxBytes) {
-        this.runtime = Objects.requireNonNull(runtime, "runtime");
-        this.transaction = new ConnectionTransactionState(transactionQueueMaxCommands, transactionQueueMaxBytes);
+    public DefaultExecutionSession(int maxQueuedCommands, long maxQueuedBytes) {
+        this.transaction = new DefaultTransactionState(maxQueuedCommands, maxQueuedBytes);
     }
 
-    ServerRuntimeState runtime() {
-        return runtime;
+    void attach(ExecutionConnectionContext connectionContext) {
+        this.connectionContext = connectionContext;
     }
 
-    ServerConnectionContext.ConnectionStatsSnapshot connectionStatsSnapshot() {
-        return new ServerConnectionContext.ConnectionStatsSnapshot(
-                runtime.pendingCounter().get(),
-                runtime.pendingBytesCounter().get(),
-                runtime.autoReadDisabledByExecutor(),
-                runtime.isClosing(),
-                runtime.commandsEnqueuedCounter().get(),
-                runtime.commandsExecutedCounter().get(),
-                runtime.commandsRejectedCounter().get(),
-                runtime.commandsSkippedClosingCounter().get(),
-                runtime.closeAfterReplyCounter().get(),
-                runtime.backpressureEnterCounter().get(),
-                runtime.backpressureExitCounter().get()
-        );
+    public ExecutionConnectionContext connectionContext() {
+        return connectionContext;
     }
 
     void discardTransaction() {
@@ -102,15 +82,15 @@ final class ServerSessionState implements ServerSession {
         return transaction;
     }
 
-    private static final class ConnectionTransactionState implements TransactionState {
+    private static final class DefaultTransactionState implements TransactionState {
         private final int maxQueuedCommands;
         private final long maxQueuedBytes;
+        private final ArrayList<ExecutionRequest> queue = new ArrayList<>();
         private boolean active;
         private boolean aborted;
         private long queuedBytes;
-        private final ArrayList<ExecutionRequest> queue = new ArrayList<>();
 
-        private ConnectionTransactionState(int maxQueuedCommands, long maxQueuedBytes) {
+        private DefaultTransactionState(int maxQueuedCommands, long maxQueuedBytes) {
             this.maxQueuedCommands = Math.max(0, maxQueuedCommands);
             this.maxQueuedBytes = Math.max(0, maxQueuedBytes);
         }
@@ -132,18 +112,18 @@ final class ServerSessionState implements ServerSession {
 
         @Override
         public synchronized void begin() {
+            closeOwnedRequests();
             active = true;
             aborted = false;
             queuedBytes = 0;
-            queue.clear();
         }
 
         @Override
         public synchronized void discard() {
+            closeOwnedRequests();
             active = false;
             aborted = false;
             queuedBytes = 0;
-            queue.clear();
         }
 
         @Override
@@ -160,6 +140,7 @@ final class ServerSessionState implements ServerSession {
                 aborted = true;
                 return "ERR Transaction queue is full";
             }
+
             long estimatedBytes = Math.max(0L, request.retainedBytes());
             if (maxQueuedBytes > 0 && estimatedBytes > 0 && queuedBytes + estimatedBytes > maxQueuedBytes) {
                 aborted = true;
@@ -170,6 +151,7 @@ final class ServerSessionState implements ServerSession {
             long requestBytes = Math.max(0L, snapshot.retainedBytes());
             if (maxQueuedBytes > 0 && queuedBytes + requestBytes > maxQueuedBytes) {
                 aborted = true;
+                snapshot.close();
                 return "ERR Transaction queue is full";
             }
 
@@ -191,6 +173,20 @@ final class ServerSessionState implements ServerSession {
             aborted = false;
             queuedBytes = 0;
             return out;
+        }
+
+        private void closeOwnedRequests() {
+            for (ExecutionRequest request : queue) {
+                if (request == null) {
+                    continue;
+                }
+                try {
+                    request.close();
+                } catch (Throwable ignored) {
+                    // Ignore cleanup failures while resetting transaction state.
+                }
+            }
+            queue.clear();
         }
     }
 }

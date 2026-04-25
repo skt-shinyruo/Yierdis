@@ -6,8 +6,11 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.contract.ReplyWriterFactory;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.TransactionState;
+import yier.bubu.redis.executor.CommandExecutor;
+import yier.bubu.redis.executor.CommandExecutorConfig;
 import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
 import yier.bubu.redis.protocol.json.JsonArray;
@@ -36,6 +39,16 @@ import java.util.Map;
 
 public class YierdisServerBootstrapCommandWiringTest {
     @Test
+    public void bootstrapBindsTransportNeutralExecutorIntoInfoProvider() throws Exception {
+        try (YierdisServerBootstrap bootstrap = YierdisServerBootstrap.start("--port", "0")) {
+            NettyServerInfoProvider infoProvider = bootstrap.infoProviderForTests();
+            Assert.assertNotNull(infoProvider);
+            Assert.assertNotNull(infoProvider.boundExecutorForTests());
+            Assert.assertEquals("FAIR", infoProvider.boundExecutorForTests().statsSnapshot().schedulingPolicy().name());
+        }
+    }
+
+    @Test
     public void bootstrapWiresServerAndCoreConnectionCommandsTogether() throws Exception {
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0", "--databases", "2")) {
             try (Socket socket = new Socket()) {
@@ -62,6 +75,10 @@ public class YierdisServerBootstrapCommandWiringTest {
                 JsonObject statsResult = objectField(stats, "result");
                 Assert.assertTrue(mapContainsKey(statsResult, "queued_tasks"));
                 Assert.assertTrue(mapContainsKey(statsResult, "commands_executed_total"));
+                Assert.assertTrue(
+                        "expected STATS to expose non-zero submit totals after accepted commands",
+                        longValue(mapValue(statsResult, "submit_accepted_total")) > 0L
+                );
 
                 JsonObject command = roundTrip(out, in, "{\"cmd\":\"COMMAND\",\"args\":[\"INFO\",\"HELLO\",\"INFO\",\"STATS\"]}");
                 Assert.assertTrue(booleanField(command, "ok"));
@@ -168,9 +185,11 @@ public class YierdisServerBootstrapCommandWiringTest {
             YierdisServerRuntimeConfig commandLimitedConfig = runtimeConfig(1, 0, 3, 2, 4);
             NioSocketChannel commandLimitedChannel = new NioSocketChannel();
             try {
-                new YierdisServerChannelInitializer(commandLimitedConfig, env.executor).initChannel(commandLimitedChannel);
+                new YierdisServerChannelInitializer(commandLimitedConfig, env.executor, env.replyWriterFactory).initChannel(commandLimitedChannel);
 
-                TransactionState tx = ServerConnectionContext.getOrCreate(commandLimitedChannel).session().transaction();
+                NettyExecutionConnection connection = NettyExecutionConnection.get(commandLimitedChannel);
+                Assert.assertNotNull(connection);
+                TransactionState tx = connection.context().session().transaction();
                 tx.begin();
                 Assert.assertNull(tx.tryEnqueue(request("SET", "k", "v")));
                 Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(request("GET", "k")));
@@ -181,9 +200,11 @@ public class YierdisServerBootstrapCommandWiringTest {
             YierdisServerRuntimeConfig byteLimitedConfig = runtimeConfig(0, 4, 3, 2, 4);
             NioSocketChannel byteLimitedChannel = new NioSocketChannel();
             try {
-                new YierdisServerChannelInitializer(byteLimitedConfig, env.executor).initChannel(byteLimitedChannel);
+                new YierdisServerChannelInitializer(byteLimitedConfig, env.executor, env.replyWriterFactory).initChannel(byteLimitedChannel);
 
-                TransactionState tx = ServerConnectionContext.getOrCreate(byteLimitedChannel).session().transaction();
+                NettyExecutionConnection connection = NettyExecutionConnection.get(byteLimitedChannel);
+                Assert.assertNotNull(connection);
+                TransactionState tx = connection.context().session().transaction();
                 tx.begin();
                 Assert.assertNull(tx.tryEnqueue(request("GET", "k")));
                 Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(request("SET", "x", "y")));
@@ -385,25 +406,20 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     private static final class InitializerTestEnv implements AutoCloseable {
         private final YierdisInstance instance;
-        private final NettyCommandExecutor executor;
+        private final ReplyWriterFactory replyWriterFactory;
+        private final CommandExecutor<NettyExecutionConnection> executor;
 
         private InitializerTestEnv() {
             this.instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
-            this.executor = new NettyCommandExecutor(
+            this.replyWriterFactory = new JsonLineReplyWriterFactory();
+            this.executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
                     processor,
                     ImmediateEventExecutor.INSTANCE,
-                    new JsonLineReplyWriterFactory(),
-                    1024,
-                    0,
-                    256,
-                    128,
-                    0,
-                    0,
-                    1024,
-                    10,
-                    SchedulingPolicy.FAIR
+                    replyWriterFactory,
+                    new NettyExecutionIoAdapter(),
+                    new CommandExecutorConfig(1024, 0, 256, 128, 0, 0, 1024, 10, SchedulingPolicy.FAIR)
             );
             executor.start();
         }
