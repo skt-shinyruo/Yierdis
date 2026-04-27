@@ -121,7 +121,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
                     expiredValues.add(e);
                     return true;
                 }
-                if (YierdisDb.globMatches(globPattern, k)) {
+                if (YierdisGlobMatcher.matches(globPattern, k)) {
                     out.add(YierdisDb.toByteArray(k));
                     if (out.size() >= limit) {
                         return false;
@@ -179,7 +179,7 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
                 expiredValues.add(e);
                 return true;
             }
-            if (globPattern == null || YierdisDb.globMatches(globPattern, k)) {
+            if (globPattern == null || YierdisGlobMatcher.matches(globPattern, k)) {
                 out.add(YierdisDb.toByteArray(k));
                 remaining[0]--;
                 if (remaining[0] <= 0) {
