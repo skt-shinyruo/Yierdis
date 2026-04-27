@@ -1,7 +1,6 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.key.KeyHandle;
-import yier.bubu.redis.ops.DbMemoryConstants;
 import yier.bubu.redis.ops.HashReadOps;
 import yier.bubu.redis.ops.HashWriteOps;
 import yier.bubu.redis.ops.ValueType;
@@ -195,7 +194,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
         if (existing.type != ValueType.HASH) {
             return 0L;
         }
-        return sumByteLengths(fieldValuePairs);
+        return YierdisDbMemoryEstimator.sumByteLengths(fieldValuePairs);
     }
 
     private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
@@ -207,32 +206,11 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
     private static long estimateHashWriteUpperBound(int keyLength, List<byte[]> fieldValuePairs) {
         int pairCount = fieldValuePairs == null ? 0 : fieldValuePairs.size() / 2;
-        return estimateCollectionWriteUpperBound(
+        return YierdisDbMemoryEstimator.estimateCollectionWriteUpperBound(
                 keyLength,
-                sumByteLengths(fieldValuePairs),
+                YierdisDbMemoryEstimator.sumByteLengths(fieldValuePairs),
                 Math.multiplyExact((long) pairCount, HASH_PAIR_OVERHEAD_BYTES_ESTIMATE)
         );
-    }
-
-    private static long estimateCollectionWriteUpperBound(int keyLength, long payloadBytes, long structuralBytes) {
-        return estimateStringWriteUpperBound(keyLength, 0) + Math.max(0L, payloadBytes) + Math.max(0L, structuralBytes);
-    }
-
-    private static long estimateStringWriteUpperBound(int keyLength, int valueLength) {
-        return (long) Math.max(0, keyLength) + Math.max(0, valueLength) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-    }
-
-    private static long sumByteLengths(List<byte[]> values) {
-        if (values == null || values.isEmpty()) {
-            return 0L;
-        }
-        long total = 0L;
-        for (byte[] value : values) {
-            if (value != null) {
-                total += value.length;
-            }
-        }
-        return total;
     }
 
     private static BulkStringMapPairs pairsOf(IntSupplier countSupplier, BulkEmitter emitter) {

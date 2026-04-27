@@ -39,7 +39,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
         long now = System.currentTimeMillis();
         boolean keepTtl = expireOption != null && expireOption.isKeepTtl();
         Long expireAtMillis = (expireOption == null || keepTtl) ? null : expireOption.toExpireAtMillis(now);
-        long upperBound = estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, value == null ? 0 : value.len());
+        long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, value == null ? 0 : value.len());
         if (expireAtMillis != null) {
             upperBound += TTL_ENTRY_BYTES_ESTIMATE;
         }
@@ -145,7 +145,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
     public long append(byte[] keyBytes, BytesSlice value) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        long upperBound = estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, value == null ? 0 : value.len());
+        long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, value == null ? 0 : value.len());
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
@@ -205,7 +205,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
         long currentLen = stringLength(keyBytes);
         long requiredBytes = (offset >>> 3) + 1;
         long growth = Math.max(0L, requiredBytes - currentLen);
-        long upperBound = estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, (int) growth);
+        long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, (int) growth);
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
@@ -261,7 +261,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
     public long incrBy(byte[] keyBytes, long delta) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        long upperBound = estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, 32);
+        long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, 32);
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
@@ -480,10 +480,6 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
             return;
         }
         object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
-    }
-
-    private static long estimateStringWriteUpperBound(int keyLength, int valueLength) {
-        return (long) Math.max(0, keyLength) + Math.max(0, valueLength) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
     }
 
     private static BytesSlice sliceOf(byte[] value) {

@@ -166,7 +166,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
         YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
         if (existing == null) {
             int upperValueLength = YierdisHyperLogLog.sparseLengthUpperBoundForElements(elements);
-            return YierdisDb.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, upperValueLength);
+            return YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, upperValueLength);
         }
         if (existing.type != ValueType.STRING || !YierdisHyperLogLog.isHllString(existing)) {
             return 0L;
@@ -185,7 +185,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
     private long estimatePfmergeUpperBound(byte[] keyBytes, int mergedDenseLength) {
         YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
         if (existing == null) {
-            return YierdisDb.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, mergedDenseLength);
+            return YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, mergedDenseLength);
         }
         if (existing.type != ValueType.STRING || !YierdisHyperLogLog.isHllString(existing)) {
             return 0L;

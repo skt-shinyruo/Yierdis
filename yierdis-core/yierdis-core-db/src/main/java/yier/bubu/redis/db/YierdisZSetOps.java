@@ -361,21 +361,12 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     private long estimateZSetWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
         YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
         if (existing == null) {
-            return YierdisDb.estimateZSetWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, scoreMemberPairs);
+            return YierdisDbMemoryEstimator.estimateZSetWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, scoreMemberPairs);
         }
         if (existing.type != ValueType.ZSET) {
             return 0L;
         }
-        long memberBytes = 0L;
-        if (scoreMemberPairs != null) {
-            for (int i = 1; i < scoreMemberPairs.size(); i += 2) {
-                byte[] member = scoreMemberPairs.get(i);
-                if (member != null) {
-                    memberBytes += member.length;
-                }
-            }
-        }
-        return memberBytes;
+        return YierdisDbMemoryEstimator.sumZSetMemberByteLengths(scoreMemberPairs);
     }
 
     private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
