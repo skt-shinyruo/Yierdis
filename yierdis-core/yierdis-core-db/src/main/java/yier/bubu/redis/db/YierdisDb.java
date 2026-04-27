@@ -70,7 +70,6 @@ public final class YierdisDb implements RuntimeDbEngine {
     private final YierdisDbMaxmemorySupport maxmemorySupport;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final YierdisDbInternals internals;
-    private final YierdisDbMemoryEstimator memoryEstimator;
     private final YierdisStringOps stringOps;
     private final YierdisHashOps hashOps;
     private final YierdisListOps listOps;
@@ -89,7 +88,7 @@ public final class YierdisDb implements RuntimeDbEngine {
     private final DbLifecycleOps lifecycleOps;
 
     public YierdisDb() {
-        this(new YierdisFfmMemoryRuntime("db"), true, 0, "noeviction", 5, 5, 5);
+        this(null, null, false, false, 0, "noeviction", 5, 5, 5);
     }
 
     public YierdisDb(OffHeapAllocator offHeapAllocator) {
@@ -125,7 +124,7 @@ public final class YierdisDb implements RuntimeDbEngine {
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        return new YierdisDb(new YierdisFfmMemoryRuntime("db"), true,
+        return new YierdisDb(null, null, false, false,
                 maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
     }
 
@@ -216,7 +215,6 @@ public final class YierdisDb implements RuntimeDbEngine {
         this.lruEnabled = components.config.lruEnabled;
         this.evictionTimeLimitNanos = components.config.evictionTimeLimitNanos;
         this.expireCleanupTimeLimitNanos = components.config.expireCleanupTimeLimitNanos;
-        this.memoryEstimator = components.memoryEstimator;
         this.ledger = components.ledger;
         this.mutationExecutor = components.mutationExecutor;
         this.expirationSupport = components.expirationSupport;
