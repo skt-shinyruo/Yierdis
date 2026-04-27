@@ -1,6 +1,5 @@
 package yier.bubu.redis.executor;
 
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ReplyWriterFactory;
@@ -12,7 +11,7 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
 
 final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
-    private final YierdisFastCommandProcessor commandProcessor;
+    private final CommandExecutionEngine commandProcessor;
     private final ReplyWriterFactory replyWriterFactory;
     private final ExecutionIoAdapter<C> ioAdapter;
     private final ExecutorBacklogBudget backlogBudget;
@@ -27,7 +26,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     private CommandContext execCtx;
 
     CommandExecutorExecutionSupport(
-            YierdisFastCommandProcessor commandProcessor,
+            CommandExecutionEngine commandProcessor,
             ReplyWriterFactory replyWriterFactory,
             ExecutionIoAdapter<C> ioAdapter,
             ExecutorBacklogBudget backlogBudget,

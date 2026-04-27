@@ -2,11 +2,9 @@ package yier.bubu.redis.executor;
 
 import org.junit.Assert;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ReplyWriterFactory;
-import yier.bubu.redis.db.YierdisDb;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -51,8 +49,37 @@ final class ExecutorCoreTestSupport {
         return SimpleReplyWriter::new;
     }
 
-    static ProcessorHandle processorHandle() {
-        return new ProcessorHandle(new YierdisDb());
+    static CommandExecutionEngine simpleCommandEngine() {
+        return (request, ctx) -> {
+            if (asciiEqualsIgnoreCase(request, 0, "PING")) {
+                ctx.out().simpleString("PONG");
+                return;
+            }
+            if (asciiEqualsIgnoreCase(request, 0, "QUIT")) {
+                ctx.out().simpleString("OK");
+                ctx.out().requestCloseAfterReply();
+                return;
+            }
+            ctx.out().error("ERR unsupported test command");
+        };
+    }
+
+    private static boolean asciiEqualsIgnoreCase(ExecutionRequest request, int index, String expectedUpperAscii) {
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(expectedUpperAscii, "expectedUpperAscii");
+        if (request.isNull(index) || request.len(index) != expectedUpperAscii.length()) {
+            return false;
+        }
+        for (int i = 0; i < expectedUpperAscii.length(); i++) {
+            int actual = request.byteAt(index, i) & 0xFF;
+            if (actual >= 'a' && actual <= 'z') {
+                actual -= 32;
+            }
+            if (actual != expectedUpperAscii.charAt(i)) {
+                return false;
+            }
+        }
+        return true;
     }
 }
 
@@ -96,25 +123,6 @@ final class ManualOwnerExecutor implements Executor {
                 task.run();
             }
         }
-    }
-}
-
-final class ProcessorHandle implements AutoCloseable {
-    private final YierdisDb db;
-    private final YierdisFastCommandProcessor processor;
-
-    ProcessorHandle(YierdisDb db) {
-        this.db = Objects.requireNonNull(db, "db");
-        this.processor = new YierdisFastCommandProcessor(db);
-    }
-
-    YierdisFastCommandProcessor processor() {
-        return processor;
-    }
-
-    @Override
-    public void close() {
-        db.shutdown();
     }
 }
 

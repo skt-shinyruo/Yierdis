@@ -149,7 +149,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         CommandExecutorConfig executorConfig = CommandExecutorConfigs.from(runtimeConfig);
         executor = new CommandExecutor<>(
                 runtimeAccess::bindToCurrentThread,
-                processor,
+                processor::execute,
                 commandGroup.next(),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),

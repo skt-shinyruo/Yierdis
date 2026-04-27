@@ -89,7 +89,7 @@ public class CustomProtocolResyncIntegrationTest {
             JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
             this.executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    processor,
+                    processor::execute,
                     group.next(),
                     replyWriterFactory,
                     new NettyExecutionIoAdapter(),

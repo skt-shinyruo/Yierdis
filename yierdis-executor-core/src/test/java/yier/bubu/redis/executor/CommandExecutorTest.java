@@ -137,60 +137,59 @@ public class CommandExecutorTest {
         RecordingIoAdapter io = new RecordingIoAdapter();
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
 
-        try (ProcessorHandle handle = ExecutorCoreTestSupport.processorHandle()) {
-            CommandExecutor<TestConnection> executor = new CommandExecutor<>(
-                    () -> {},
-                    handle.processor(),
-                    ownerExecutor,
-                    ExecutorCoreTestSupport.simpleReplyWriterFactory(),
-                    io,
-                    new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
-            );
-            ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+        CommandExecutionEngine engine = ExecutorCoreTestSupport.simpleCommandEngine();
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> {},
+                engine,
+                ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io,
+                new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
 
-            TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
-            TrackingExecutionRequest ping = TrackingExecutionRequest.ofUtf8("PING");
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
+        TrackingExecutionRequest ping = TrackingExecutionRequest.ofUtf8("PING");
 
-            Assert.assertNull(executor.trySubmit(connection, ping));
-            Assert.assertEquals(1, ownerExecutor.pendingTasks());
-            ownerExecutor.runAll();
+        Assert.assertNull(executor.trySubmit(connection, ping));
+        Assert.assertEquals(1, ownerExecutor.pendingTasks());
+        ownerExecutor.runAll();
 
-            Assert.assertEquals("PONG\n", io.bufferedReply(connection));
-            Assert.assertEquals(1, ping.closeCalls());
-            Assert.assertEquals(1, io.flushCalls());
+        Assert.assertEquals("PONG\n", io.bufferedReply(connection));
+        Assert.assertEquals(1, ping.closeCalls());
+        Assert.assertEquals(1, io.flushCalls());
 
-            TrackingExecutionRequest queuedButClosing = TrackingExecutionRequest.ofUtf8("PING");
-            Assert.assertNull(executor.trySubmit(connection, queuedButClosing));
-            connection.context().markClosing();
-            ownerExecutor.runAll();
+        TrackingExecutionRequest queuedButClosing = TrackingExecutionRequest.ofUtf8("PING");
+        Assert.assertNull(executor.trySubmit(connection, queuedButClosing));
+        connection.context().markClosing();
+        ownerExecutor.runAll();
 
-            Assert.assertEquals(1, queuedButClosing.closeCalls());
-            Assert.assertEquals(2, connection.context().statsSnapshot().commandsEnqueued());
-            Assert.assertEquals(1, connection.context().statsSnapshot().commandsExecuted());
-            Assert.assertEquals(1, connection.context().statsSnapshot().commandsSkippedClosing());
+        Assert.assertEquals(1, queuedButClosing.closeCalls());
+        Assert.assertEquals(2, connection.context().statsSnapshot().commandsEnqueued());
+        Assert.assertEquals(1, connection.context().statsSnapshot().commandsExecuted());
+        Assert.assertEquals(1, connection.context().statsSnapshot().commandsSkippedClosing());
 
-            CommandExecutor.StatsSnapshot stats = executor.statsSnapshot();
-            Assert.assertEquals(1L, stats.commandsExecuted());
-            Assert.assertEquals(1L, stats.commandsSkippedClosing());
-            Assert.assertEquals(0, stats.queuedTasks());
-            Assert.assertEquals(0L, stats.queuedBytes());
-            Assert.assertEquals(SchedulingPolicy.FAIR, stats.schedulingPolicy());
-            Assert.assertEquals(2L, stats.submitAccepted());
-            Assert.assertEquals(0L, stats.submitRejectedNotRunning());
+        CommandExecutor.StatsSnapshot stats = executor.statsSnapshot();
+        Assert.assertEquals(1L, stats.commandsExecuted());
+        Assert.assertEquals(1L, stats.commandsSkippedClosing());
+        Assert.assertEquals(0, stats.queuedTasks());
+        Assert.assertEquals(0L, stats.queuedBytes());
+        Assert.assertEquals(SchedulingPolicy.FAIR, stats.schedulingPolicy());
+        Assert.assertEquals(2L, stats.submitAccepted());
+        Assert.assertEquals(0L, stats.submitRejectedNotRunning());
 
-            CompletableFuture<Void> shutdown = executor.shutdownGracefully();
-            Assert.assertFalse(shutdown.isDone());
-            ownerExecutor.runAll();
-            Assert.assertTrue(shutdown.isDone());
+        CompletableFuture<Void> shutdown = executor.shutdownGracefully();
+        Assert.assertFalse(shutdown.isDone());
+        ownerExecutor.runAll();
+        Assert.assertTrue(shutdown.isDone());
 
-            TrackingExecutionRequest rejected = TrackingExecutionRequest.ofUtf8("PING");
-            Assert.assertEquals(CommandExecutor.SubmitRejectReason.NOT_RUNNING, executor.trySubmit(connection, rejected));
-            Assert.assertEquals(0, rejected.closeCalls());
-            Assert.assertEquals(1L, executor.statsSnapshot().submitRejectedNotRunning());
+        TrackingExecutionRequest rejected = TrackingExecutionRequest.ofUtf8("PING");
+        Assert.assertEquals(CommandExecutor.SubmitRejectReason.NOT_RUNNING, executor.trySubmit(connection, rejected));
+        Assert.assertEquals(0, rejected.closeCalls());
+        Assert.assertEquals(1L, executor.statsSnapshot().submitRejectedNotRunning());
 
-            executor.close();
-            rejected.close();
-        }
+        executor.close();
+        rejected.close();
     }
 
     @Test
@@ -198,44 +197,74 @@ public class CommandExecutorTest {
         RecordingIoAdapter io = new RecordingIoAdapter();
         ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
 
-        try (ProcessorHandle handle = ExecutorCoreTestSupport.processorHandle()) {
-            CommandExecutor<TestConnection> executor = new CommandExecutor<>(
-                    () -> {},
-                    handle.processor(),
-                    ownerExecutor,
-                    ExecutorCoreTestSupport.simpleReplyWriterFactory(),
-                    io,
-                    new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
-            );
-            ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+        CommandExecutionEngine engine = ExecutorCoreTestSupport.simpleCommandEngine();
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> {},
+                engine,
+                ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io,
+                new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
 
-            TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
-            TrackingExecutionRequest exploding = TrackingExecutionRequest.failingOnCommandRead("PING");
-            TrackingExecutionRequest queued = TrackingExecutionRequest.ofUtf8("PING");
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
+        TrackingExecutionRequest exploding = TrackingExecutionRequest.failingOnCommandRead("PING");
+        TrackingExecutionRequest queued = TrackingExecutionRequest.ofUtf8("PING");
 
-            Assert.assertNull(executor.trySubmit(connection, exploding));
-            Assert.assertNull(executor.trySubmit(connection, queued));
+        Assert.assertNull(executor.trySubmit(connection, exploding));
+        Assert.assertNull(executor.trySubmit(connection, queued));
 
-            ownerExecutor.runAll();
+        ownerExecutor.runAll();
 
-            Assert.assertEquals("ERR internal error\n", io.bufferedReply(connection));
-            Assert.assertTrue(io.closeAfterReply(connection));
-            Assert.assertTrue(connection.context().statsSnapshot().closing());
-            Assert.assertEquals(1, exploding.closeCalls());
-            Assert.assertEquals(1, queued.closeCalls());
-            Assert.assertEquals(2L, connection.context().statsSnapshot().commandsEnqueued());
-            Assert.assertEquals(1L, connection.context().statsSnapshot().commandsExecuted());
-            Assert.assertEquals(1L, connection.context().statsSnapshot().commandsSkippedClosing());
-            Assert.assertEquals(2L, executor.statsSnapshot().submitAccepted());
-            Assert.assertEquals(1L, executor.statsSnapshot().closeAfterReply());
+        Assert.assertEquals("ERR internal error\n", io.bufferedReply(connection));
+        Assert.assertTrue(io.closeAfterReply(connection));
+        Assert.assertTrue(connection.context().statsSnapshot().closing());
+        Assert.assertEquals(1, exploding.closeCalls());
+        Assert.assertEquals(1, queued.closeCalls());
+        Assert.assertEquals(2L, connection.context().statsSnapshot().commandsEnqueued());
+        Assert.assertEquals(1L, connection.context().statsSnapshot().commandsExecuted());
+        Assert.assertEquals(1L, connection.context().statsSnapshot().commandsSkippedClosing());
+        Assert.assertEquals(2L, executor.statsSnapshot().submitAccepted());
+        Assert.assertEquals(1L, executor.statsSnapshot().closeAfterReply());
 
-            CompletableFuture<Void> shutdown = executor.shutdownGracefully();
-            Assert.assertFalse(shutdown.isDone());
-            ownerExecutor.runAll();
-            Assert.assertTrue("executor should still accept shutdown after internal command failure", shutdown.isDone());
+        CompletableFuture<Void> shutdown = executor.shutdownGracefully();
+        Assert.assertFalse(shutdown.isDone());
+        ownerExecutor.runAll();
+        Assert.assertTrue("executor should still accept shutdown after internal command failure", shutdown.isDone());
 
-            executor.close();
-        }
+        executor.close();
+    }
+
+    @Test
+    public void executorHandlesSuccessfulCloseAfterReplyCommand() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+
+        CommandExecutionEngine engine = ExecutorCoreTestSupport.simpleCommandEngine();
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> {},
+                engine,
+                ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io,
+                new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
+        TrackingExecutionRequest quit = TrackingExecutionRequest.ofUtf8("QUIT");
+
+        Assert.assertNull(executor.trySubmit(connection, quit));
+        ownerExecutor.runAll();
+
+        Assert.assertEquals("OK\n", io.bufferedReply(connection));
+        Assert.assertTrue(io.closeAfterReply(connection));
+        Assert.assertTrue(connection.context().statsSnapshot().closing());
+        Assert.assertEquals(1, quit.closeCalls());
+        Assert.assertEquals(1L, executor.statsSnapshot().closeAfterReply());
+
+        executor.close();
     }
 
     @Test
@@ -244,23 +273,24 @@ public class CommandExecutorTest {
         CountDownLatch bindStarted = new CountDownLatch(1);
         CountDownLatch releaseBind = new CountDownLatch(1);
 
-        try (ProcessorHandle handle = ExecutorCoreTestSupport.processorHandle()) {
-            CommandExecutor<TestConnection> executor = new CommandExecutor<>(
-                    () -> {
-                        bindStarted.countDown();
-                        try {
-                            Assert.assertTrue(releaseBind.await(1, TimeUnit.SECONDS));
-                        } catch (InterruptedException e) {
-                            throw new RuntimeException(e);
-                        }
-                    },
-                    handle.processor(),
-                    ownerExecutor,
-                    ExecutorCoreTestSupport.simpleReplyWriterFactory(),
-                    new RecordingIoAdapter(),
-                    new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
-            );
+        CommandExecutionEngine engine = ExecutorCoreTestSupport.simpleCommandEngine();
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> {
+                    bindStarted.countDown();
+                    try {
+                        Assert.assertTrue(releaseBind.await(1, TimeUnit.SECONDS));
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                },
+                engine,
+                ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                new RecordingIoAdapter(),
+                new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
 
+        try {
             Thread startThread = new Thread(executor::start);
             startThread.start();
 
