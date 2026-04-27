@@ -3,15 +3,10 @@ package yier.bubu.redis.db;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.db.key.KeyHandle;
-import yier.bubu.redis.db.memory.ffm.YierdisFfmBlobStore;
-import yier.bubu.redis.db.memory.ffm.YierdisFfmExpireIndex;
-import yier.bubu.redis.db.memory.ffm.YierdisFfmKeyspace;
+import yier.bubu.redis.db.memory.MemoryLedgerOutOfMemoryException;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.db.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
-import yier.bubu.redis.db.memory.MemoryLedger;
-import yier.bubu.redis.db.memory.MemoryLedgerOutOfMemoryException;
 import yier.bubu.redis.ops.DbLifecycleOps;
 import yier.bubu.redis.ops.DbReads;
 import yier.bubu.redis.ops.DbEngine;
@@ -156,41 +151,52 @@ public final class YierdisDb implements RuntimeDbEngine {
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        YierdisFfmMemoryRuntime resolvedRuntime = memoryRuntime;
-        OffHeapAllocator resolvedAllocator = offHeapAllocator;
-        boolean resolvedOwnsAllocator = ownsOffHeapAllocator;
-        boolean resolvedOwnsRuntime = ownsMemoryRuntime;
+        YierdisDbComponents components = YierdisDbComponentFactory.create(
+                new YierdisDbComponentFactory.OwnerCallbacks() {
+                    @Override
+                    public YierdisDb db() {
+                        return YierdisDb.this;
+                    }
 
-        if (resolvedRuntime == null && resolvedAllocator == null) {
-            resolvedRuntime = new YierdisFfmMemoryRuntime("db");
-            resolvedAllocator = new YierdisForeignOffHeapAllocator(resolvedRuntime, 0);
-            resolvedOwnsAllocator = true;
-            resolvedOwnsRuntime = true;
-        } else if (resolvedRuntime == null) {
-            if (!(resolvedAllocator instanceof YierdisForeignOffHeapAllocator foreignAllocator)) {
-                throw new IllegalArgumentException("Only the foreign off-heap allocator is supported");
-            }
-            resolvedRuntime = foreignAllocator.memoryRuntime();
-        } else if (resolvedAllocator == null) {
-            resolvedAllocator = new YierdisForeignOffHeapAllocator(resolvedRuntime, 0);
-            resolvedOwnsAllocator = true;
-        } else if (!(resolvedAllocator instanceof YierdisForeignOffHeapAllocator)) {
-            throw new IllegalArgumentException("Only the foreign off-heap allocator is supported");
-        }
+                    @Override
+                    public void checkThread() {
+                        YierdisDb.this.checkThread();
+                    }
 
-        this.memoryRuntime = resolvedRuntime;
-        this.offHeapAllocator = resolvedAllocator;
-        this.resources = new YierdisDbOwnedResources(
-                this.memoryRuntime,
-                this.offHeapAllocator,
-                resolvedOwnsRuntime,
-                resolvedOwnsAllocator
-        );
-        YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(this.memoryRuntime, "ffm-key");
-        this.store = new YierdisFfmKeyspace<>(blobStore);
-        this.expires = new YierdisFfmExpireIndex(blobStore);
-        this.keysStoredOffHeap = true;
-        YierdisDbConfig config = YierdisDbConfig.create(
+                    @Override
+                    public void cleanupExpired() {
+                        YierdisDb.this.cleanupExpired();
+                    }
+
+                    @Override
+                    public void evictUntilUnder(long limitBytes) {
+                        YierdisDb.this.evictUntilUnder(limitBytes);
+                    }
+
+                    @Override
+                    public long usedBytesForMaxmemory() {
+                        return YierdisDb.this.usedBytesForMaxmemory();
+                    }
+
+                    @Override
+                    public MaxmemoryCoordinator maxmemoryCoordinator() {
+                        return YierdisDb.this.maxmemoryCoordinator;
+                    }
+
+                    @Override
+                    public void touch(YierdisObject object) {
+                        YierdisDb.this.touch(object);
+                    }
+
+                    @Override
+                    public void adjustUsedBytes(long deltaBytes) {
+                        YierdisDb.this.adjustUsedBytes(deltaBytes);
+                    }
+                },
+                memoryRuntime,
+                offHeapAllocator,
+                ownsOffHeapAllocator,
+                ownsMemoryRuntime,
                 maxmemoryBytes,
                 maxmemoryPolicy,
                 maxmemorySamples,
@@ -198,57 +204,40 @@ public final class YierdisDb implements RuntimeDbEngine {
                 expireCleanupTimeLimitMillis
         );
 
-        this.maxmemoryBytes = config.maxmemoryBytes;
-        this.maxmemoryPolicy = config.maxmemoryPolicy;
-        this.maxmemorySamples = config.maxmemorySamples;
-        this.lruEnabled = config.lruEnabled;
-        this.evictionTimeLimitNanos = config.evictionTimeLimitNanos;
-        this.expireCleanupTimeLimitNanos = config.expireCleanupTimeLimitNanos;
-        this.ledger = new YierdisDbMemoryLedger(
-                this.maxmemoryBytes,
-                this.maxmemoryPolicy,
-                this::cleanupExpired,
-                this::evictUntilUnder,
-                this::usedBytesForMaxmemory,
-                () -> maxmemoryCoordinator
-        );
-        this.mutationExecutor = new YierdisDbMutationExecutor(this::checkThread, this.ledger);
-        this.expirationSupport = new YierdisDbExpirationSupport(this, this.keysStoredOffHeap, this.expireCleanupTimeLimitNanos);
-        this.maxmemorySupport = new YierdisDbMaxmemorySupport(this, this.maxmemoryPolicy, this.maxmemorySamples, this.evictionTimeLimitNanos);
-        this.keyLifecycle = new YierdisDbKeyLifecycle(
-                this.store,
-                this.expires,
-                this.offHeapAllocator,
-                this.memoryRuntime,
-                this::touch,
-                this::adjustUsedBytes
-        );
-        this.internals = new DbInternals();
-        this.memoryEstimator = new YierdisDbMemoryEstimator(this.keysStoredOffHeap, this.offHeapAllocator);
-        this.stringOps = new YierdisStringOps(internals, this.memoryEstimator::estimateEntryBytes);
-        this.hashOps = new YierdisHashOps(internals, this.memoryEstimator::estimateEntryBytes);
-        this.listOps = new YierdisListOps(internals, this.memoryEstimator::estimateEntryBytes);
-        this.setOps = new YierdisSetOps(internals, this.memoryEstimator::estimateEntryBytes);
-        this.zsetOps = new YierdisZSetOps(internals, this.memoryEstimator::estimateEntryBytes);
-        this.hllOps = new YierdisHllOps(internals, this.memoryEstimator::estimateEntryBytes);
-        this.ttlOps = new YierdisTtlOps(internals);
-        this.keyspaceOps = new YierdisKeyspaceOps(internals);
-        this.memoryReporter = new YierdisDbMemoryReporter(
-                this::checkThread,
-                this.keyLifecycle,
-                this.store,
-                this.expires,
-                this.maxmemoryBytes,
-                this.keysStoredOffHeap,
-                this.ledger,
-                () -> maxmemoryCoordinator == null
-        );
-        this.introspection = new YierdisDbIntrospection(this::checkThread, this.keyLifecycle);
-        this.reads = new YierdisDbReads(stringOps, hashOps, listOps, setOps, zsetOps, hllOps, keyspaceOps, ttlOps);
-        this.writes = new YierdisDbWrites(stringOps, hashOps, listOps, setOps, zsetOps, hllOps, keyspaceOps, ttlOps);
-        this.expirationManager = new YierdisDbExpirationManager(expirationSupport);
-        this.memoryOps = new YierdisDbMemoryOps(memoryReporter, introspection);
-        this.lifecycleOps = new YierdisDbLifecycleOps(this);
+        this.memoryRuntime = components.storage.memoryRuntime;
+        this.offHeapAllocator = components.storage.offHeapAllocator;
+        this.resources = components.storage.resources;
+        this.store = components.storage.store;
+        this.expires = components.storage.expires;
+        this.keysStoredOffHeap = components.storage.keysStoredOffHeap;
+        this.maxmemoryBytes = components.config.maxmemoryBytes;
+        this.maxmemoryPolicy = components.config.maxmemoryPolicy;
+        this.maxmemorySamples = components.config.maxmemorySamples;
+        this.lruEnabled = components.config.lruEnabled;
+        this.evictionTimeLimitNanos = components.config.evictionTimeLimitNanos;
+        this.expireCleanupTimeLimitNanos = components.config.expireCleanupTimeLimitNanos;
+        this.memoryEstimator = components.memoryEstimator;
+        this.ledger = components.ledger;
+        this.mutationExecutor = components.mutationExecutor;
+        this.expirationSupport = components.expirationSupport;
+        this.maxmemorySupport = components.maxmemorySupport;
+        this.keyLifecycle = components.keyLifecycle;
+        this.internals = components.internals;
+        this.stringOps = components.stringOps;
+        this.hashOps = components.hashOps;
+        this.listOps = components.listOps;
+        this.setOps = components.setOps;
+        this.zsetOps = components.zsetOps;
+        this.hllOps = components.hllOps;
+        this.ttlOps = components.ttlOps;
+        this.keyspaceOps = components.keyspaceOps;
+        this.memoryReporter = components.memoryReporter;
+        this.introspection = components.introspection;
+        this.reads = components.reads;
+        this.writes = components.writes;
+        this.expirationManager = components.expirationManager;
+        this.memoryOps = components.memoryOps;
+        this.lifecycleOps = components.lifecycleOps;
         // Scheduling (if any) is done by the Netty event loop in YierdisServer, not by a dedicated thread.
     }
 
@@ -492,28 +481,6 @@ public final class YierdisDb implements RuntimeDbEngine {
 
     void removeExpire(KeyHandle keyHandle) {
         keyLifecycle.removeExpire(keyHandle);
-    }
-
-    private final class DbInternals implements YierdisDbInternals {
-        @Override
-        public <T> T executeMutation(YierdisDbMutationExecutor.MutationPlan<T> plan) {
-            return mutationExecutor.execute(plan);
-        }
-
-        @Override
-        public YierdisDbKeyLifecycle keyLifecycle() {
-            return keyLifecycle;
-        }
-
-        @Override
-        public MemoryLedger ledger() {
-            return ledger;
-        }
-
-        @Override
-        public void checkThread() {
-            YierdisDb.this.checkThread();
-        }
     }
 
 }
