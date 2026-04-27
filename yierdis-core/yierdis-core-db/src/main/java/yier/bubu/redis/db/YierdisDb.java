@@ -35,7 +35,6 @@ import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.concurrent.TimeUnit;
 
 public final class YierdisDb implements RuntimeDbEngine {
     public enum MaxmemoryPolicy {
@@ -191,25 +190,20 @@ public final class YierdisDb implements RuntimeDbEngine {
         this.store = new YierdisFfmKeyspace<>(blobStore);
         this.expires = new YierdisFfmExpireIndex(blobStore);
         this.keysStoredOffHeap = true;
-        if (maxmemoryBytes < 0) {
-            throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
-        }
-        if (maxmemorySamples <= 0) {
-            throw new IllegalArgumentException("maxmemorySamples must be > 0");
-        }
-        if (evictionTimeLimitMillis <= 0) {
-            throw new IllegalArgumentException("evictionTimeLimitMillis must be > 0");
-        }
-        if (expireCleanupTimeLimitMillis <= 0) {
-            throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be > 0");
-        }
+        YierdisDbConfig config = YierdisDbConfig.create(
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis
+        );
 
-        this.maxmemoryBytes = maxmemoryBytes;
-        this.maxmemoryPolicy = parseMaxmemoryPolicy(maxmemoryPolicy);
-        this.maxmemorySamples = maxmemorySamples;
-        this.lruEnabled = maxmemoryBytes > 0 && this.maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_LRU;
-        this.evictionTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(evictionTimeLimitMillis);
-        this.expireCleanupTimeLimitNanos = TimeUnit.MILLISECONDS.toNanos(expireCleanupTimeLimitMillis);
+        this.maxmemoryBytes = config.maxmemoryBytes;
+        this.maxmemoryPolicy = config.maxmemoryPolicy;
+        this.maxmemorySamples = config.maxmemorySamples;
+        this.lruEnabled = config.lruEnabled;
+        this.evictionTimeLimitNanos = config.evictionTimeLimitNanos;
+        this.expireCleanupTimeLimitNanos = config.expireCleanupTimeLimitNanos;
         this.ledger = new YierdisDbMemoryLedger(
                 this.maxmemoryBytes,
                 this.maxmemoryPolicy,
@@ -303,23 +297,6 @@ public final class YierdisDb implements RuntimeDbEngine {
     @Override
     public DbLifecycleOps lifecycle() {
         return lifecycleOps;
-    }
-
-    private static MaxmemoryPolicy parseMaxmemoryPolicy(String policy) {
-        if (policy == null || policy.isBlank()) {
-            return MaxmemoryPolicy.NOEVICTION;
-        }
-        String normalized = policy.trim().toLowerCase(java.util.Locale.ROOT).replace('_', '-');
-        switch (normalized) {
-            case "noeviction":
-                return MaxmemoryPolicy.NOEVICTION;
-            case "allkeys-random":
-                return MaxmemoryPolicy.ALLKEYS_RANDOM;
-            case "allkeys-lru":
-                return MaxmemoryPolicy.ALLKEYS_LRU;
-            default:
-                throw new IllegalArgumentException("unsupported maxmemoryPolicy: " + policy);
-        }
     }
 
     @Override
