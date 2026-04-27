@@ -1,6 +1,5 @@
 package yier.bubu.redis.executor;
 
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriterFactory;
 
@@ -44,7 +43,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
 
     public CommandExecutor(
             Runnable bindToCurrentThread,
-            YierdisFastCommandProcessor commandProcessor,
+            CommandExecutionEngine commandProcessor,
             Executor ownerExecutor,
             ReplyWriterFactory replyWriterFactory,
             ExecutionIoAdapter<C> ioAdapter,

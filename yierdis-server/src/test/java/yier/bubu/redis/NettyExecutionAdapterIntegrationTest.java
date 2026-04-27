@@ -33,7 +33,7 @@ public class NettyExecutionAdapterIntegrationTest {
             NettyExecutionIoAdapter ioAdapter = new NettyExecutionIoAdapter();
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    processor,
+                    processor::execute,
                     Runnable::run,
                     new JsonLineReplyWriterFactory(),
                     ioAdapter,
@@ -69,7 +69,7 @@ public class NettyExecutionAdapterIntegrationTest {
         JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                processor,
+                processor::execute,
                 eventExecutor,
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
@@ -124,7 +124,7 @@ public class NettyExecutionAdapterIntegrationTest {
         JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                processor,
+                processor::execute,
                 eventExecutor,
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),

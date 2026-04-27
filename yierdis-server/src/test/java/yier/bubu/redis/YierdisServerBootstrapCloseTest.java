@@ -98,7 +98,7 @@ public class YierdisServerBootstrapCloseTest {
             YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    processor,
+                    processor::execute,
                     commandGroup.next(),
                     new yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory(),
                     new NettyExecutionIoAdapter(),

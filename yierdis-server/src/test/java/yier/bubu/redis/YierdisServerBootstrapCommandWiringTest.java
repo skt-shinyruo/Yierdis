@@ -415,7 +415,7 @@ public class YierdisServerBootstrapCommandWiringTest {
             this.replyWriterFactory = new JsonLineReplyWriterFactory();
             this.executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    processor,
+                    processor::execute,
                     ImmediateEventExecutor.INSTANCE,
                     replyWriterFactory,
                     new NettyExecutionIoAdapter(),

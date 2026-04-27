@@ -497,6 +497,39 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void executorCoreMustNotDependOnCoreCommand() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path executorRoot = repoRoot.getParent().resolve("yierdis-executor-core").normalize();
+        Path executorPom = executorRoot.resolve("pom.xml");
+        Assert.assertTrue("缺少 yierdis-executor-core/pom.xml", Files.isRegularFile(executorPom));
+
+        String pom = Files.readString(executorPom, StandardCharsets.UTF_8);
+        Assert.assertFalse(
+                "yierdis-executor-core must not depend on yierdis-core-command",
+                pom.contains("<artifactId>yierdis-core-command</artifactId>")
+        );
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                executorRoot.resolve("src/main/java"),
+                offenders,
+                "import yier.bubu.redis.command.",
+                "yier.bubu.redis.command."
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-executor-core Java 文件", scanned > 0);
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 yierdis-executor-core 依赖 core-command（executor-core 应只依赖执行契约）：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
     public void executorCoreMustNotDependOnNetty() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);

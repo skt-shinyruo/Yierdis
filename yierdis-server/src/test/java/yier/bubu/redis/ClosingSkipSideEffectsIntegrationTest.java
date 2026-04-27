@@ -33,7 +33,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                processor,
+                processor::execute,
                 eventExecutor,
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
@@ -95,7 +95,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                processor,
+                processor::execute,
                 eventExecutor,
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
