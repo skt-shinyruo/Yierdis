@@ -94,7 +94,6 @@ final class YierdisDbComponentFactory {
         return new YierdisDbComponents(
                 storage,
                 config,
-                memoryEstimator,
                 ledger,
                 mutationExecutor,
                 expirationSupport,

@@ -9,7 +9,6 @@ import yier.bubu.redis.ops.MemoryOps;
 final class YierdisDbComponents {
     final YierdisDbStorageComponents storage;
     final YierdisDbConfig config;
-    final YierdisDbMemoryEstimator memoryEstimator;
     final YierdisDbMemoryLedger ledger;
     final YierdisDbMutationExecutor mutationExecutor;
     final YierdisDbExpirationSupport expirationSupport;
@@ -35,7 +34,6 @@ final class YierdisDbComponents {
     YierdisDbComponents(
             YierdisDbStorageComponents storage,
             YierdisDbConfig config,
-            YierdisDbMemoryEstimator memoryEstimator,
             YierdisDbMemoryLedger ledger,
             YierdisDbMutationExecutor mutationExecutor,
             YierdisDbExpirationSupport expirationSupport,
@@ -60,7 +58,6 @@ final class YierdisDbComponents {
     ) {
         this.storage = storage;
         this.config = config;
-        this.memoryEstimator = memoryEstimator;
         this.ledger = ledger;
         this.mutationExecutor = mutationExecutor;
         this.expirationSupport = expirationSupport;

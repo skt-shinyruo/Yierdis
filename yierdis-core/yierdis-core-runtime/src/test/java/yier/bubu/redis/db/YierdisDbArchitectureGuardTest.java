@@ -117,6 +117,7 @@ public class YierdisDbArchitectureGuardTest {
                 "globMatches(",
                 "findGlobClassEnd(",
                 "globClassMatches(",
+                "new YierdisFfmMemoryRuntime(",
                 "new YierdisFfmBlobStore(",
                 "new YierdisFfmKeyspace",
                 "new YierdisFfmExpireIndex(",
