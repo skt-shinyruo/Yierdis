@@ -2,16 +2,14 @@ package yier.bubu.redis.db;
 
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.db.memory.ffm.YierdisFfmBlobStore;
 import yier.bubu.redis.db.memory.ffm.YierdisFfmExpireIndex;
 import yier.bubu.redis.db.memory.ffm.YierdisFfmKeyspace;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.db.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
-import yier.bubu.redis.offheap.api.OffHeapBuf;
 import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
-import yier.bubu.redis.ops.ValueType;
-import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.db.memory.MemoryLedger;
 import yier.bubu.redis.db.memory.MemoryLedgerOutOfMemoryException;
 import yier.bubu.redis.ops.DbLifecycleOps;
@@ -37,7 +35,6 @@ import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 public final class YierdisDb implements RuntimeDbEngine {
@@ -48,8 +45,6 @@ public final class YierdisDb implements RuntimeDbEngine {
     }
 
     private static final long TTL_ENTRY_BYTES_ESTIMATE = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-    private static final long SET_MEMBER_OVERHEAD_BYTES_ESTIMATE = 32L;
-    private static final long ZSET_MEMBER_OVERHEAD_BYTES_ESTIMATE = 96L;
 
     final YierdisKeyspace<YierdisObject> store;
     final YierdisExpireIndex expires;
@@ -81,6 +76,7 @@ public final class YierdisDb implements RuntimeDbEngine {
     private final YierdisDbMaxmemorySupport maxmemorySupport;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final YierdisDbInternals internals;
+    private final YierdisDbMemoryEstimator memoryEstimator;
     private final YierdisStringOps stringOps;
     private final YierdisHashOps hashOps;
     private final YierdisListOps listOps;
@@ -234,12 +230,13 @@ public final class YierdisDb implements RuntimeDbEngine {
                 this::adjustUsedBytes
         );
         this.internals = new DbInternals();
-        this.stringOps = new YierdisStringOps(internals, this::estimateEntryBytes);
-        this.hashOps = new YierdisHashOps(internals, this::estimateEntryBytes);
-        this.listOps = new YierdisListOps(internals, this::estimateEntryBytes);
-        this.setOps = new YierdisSetOps(internals, this::estimateEntryBytes);
-        this.zsetOps = new YierdisZSetOps(internals, this::estimateEntryBytes);
-        this.hllOps = new YierdisHllOps(internals, this::estimateEntryBytes);
+        this.memoryEstimator = new YierdisDbMemoryEstimator(this.keysStoredOffHeap, this.offHeapAllocator);
+        this.stringOps = new YierdisStringOps(internals, this.memoryEstimator::estimateEntryBytes);
+        this.hashOps = new YierdisHashOps(internals, this.memoryEstimator::estimateEntryBytes);
+        this.listOps = new YierdisListOps(internals, this.memoryEstimator::estimateEntryBytes);
+        this.setOps = new YierdisSetOps(internals, this.memoryEstimator::estimateEntryBytes);
+        this.zsetOps = new YierdisZSetOps(internals, this.memoryEstimator::estimateEntryBytes);
+        this.hllOps = new YierdisHllOps(internals, this.memoryEstimator::estimateEntryBytes);
         this.ttlOps = new YierdisTtlOps(internals);
         this.keyspaceOps = new YierdisKeyspaceOps(internals);
         this.memoryReporter = new YierdisDbMemoryReporter(
@@ -465,94 +462,6 @@ public final class YierdisDb implements RuntimeDbEngine {
 
     public long estimatedUsedBytes() {
         return memoryReporter.estimatedUsedBytes();
-    }
-
-    private long estimateEntryBytes(KeyHandle keyHandle, YierdisObject e) {
-        if (keyHandle == null || e == null) {
-            return 0;
-        }
-        int keyLen = Math.max(0, keyHandle.len());
-        int keyBytesCost = keysStoredOffHeap ? 0 : keyLen;
-        return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + keyBytesCost + estimateValueBytes(e);
-    }
-
-    private long estimateValueBytes(YierdisObject e) {
-        if (e == null) {
-            return 0;
-        }
-        if (e.type == ValueType.STRING) {
-            if (e.encoding == ValueEncoding.STRING_INT) {
-                return Long.BYTES;
-            }
-            // 字符串 payload 若存放在 off-heap，则其容量由 allocator.usedBytes() 统计；这里避免重复计入。
-            if (offHeapAllocator != null && e.payload instanceof OffHeapBuf) {
-                return 0;
-            }
-            return e.rawLen;
-        }
-
-        if (e.payload instanceof HashValue hv) {
-            return hv.estimatedBytes();
-        }
-        if (e.payload instanceof ListValue lv) {
-            return lv.estimatedBytes();
-        }
-        if (e.payload instanceof SetValue sv) {
-            return sv.estimatedBytes();
-        }
-        if (e.payload instanceof ZSetValue zv) {
-            return zv.estimatedBytes();
-        }
-
-        return 0;
-    }
-
-    static long estimateStringWriteUpperBound(int keyLength, int valueLength) {
-        return (long) Math.max(0, keyLength) + Math.max(0, valueLength) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-    }
-
-    static long sumByteLengths(List<byte[]> values) {
-        if (values == null || values.isEmpty()) {
-            return 0L;
-        }
-        long total = 0L;
-        for (byte[] value : values) {
-            if (value != null) {
-                total += value.length;
-            }
-        }
-        return total;
-    }
-
-    private static long estimateCollectionWriteUpperBound(int keyLength, long payloadBytes, long structuralBytes) {
-        return estimateStringWriteUpperBound(keyLength, 0) + Math.max(0L, payloadBytes) + Math.max(0L, structuralBytes);
-    }
-
-    static long estimateSetWriteUpperBound(int keyLength, List<byte[]> members) {
-        int memberCount = members == null ? 0 : members.size();
-        return estimateCollectionWriteUpperBound(
-                keyLength,
-                sumByteLengths(members),
-                Math.multiplyExact((long) memberCount, SET_MEMBER_OVERHEAD_BYTES_ESTIMATE)
-        );
-    }
-
-    static long estimateZSetWriteUpperBound(int keyLength, List<byte[]> scoreMemberPairs) {
-        int memberCount = scoreMemberPairs == null ? 0 : scoreMemberPairs.size() / 2;
-        long memberBytes = 0L;
-        if (scoreMemberPairs != null) {
-            for (int i = 1; i < scoreMemberPairs.size(); i += 2) {
-                byte[] member = scoreMemberPairs.get(i);
-                if (member != null) {
-                    memberBytes += member.length;
-                }
-            }
-        }
-        return estimateCollectionWriteUpperBound(
-                keyLength,
-                memberBytes,
-                Math.multiplyExact((long) memberCount, ZSET_MEMBER_OVERHEAD_BYTES_ESTIMATE)
-        );
     }
 
     YierdisDbIntrospection introspection() {

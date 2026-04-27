@@ -185,12 +185,12 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
     private long estimateSetWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> members) {
         YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
         if (existing == null) {
-            return YierdisDb.estimateSetWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, members);
+            return YierdisDbMemoryEstimator.estimateSetWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, members);
         }
         if (existing.type != ValueType.SET) {
             return 0L;
         }
-        return YierdisDb.sumByteLengths(members);
+        return YierdisDbMemoryEstimator.sumByteLengths(members);
     }
 
     private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {

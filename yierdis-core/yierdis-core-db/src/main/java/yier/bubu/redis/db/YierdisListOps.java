@@ -1,7 +1,6 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.key.KeyHandle;
-import yier.bubu.redis.ops.DbMemoryConstants;
 import yier.bubu.redis.ops.ListReadOps;
 import yier.bubu.redis.ops.ListWriteOps;
 import yier.bubu.redis.ops.ValueType;
@@ -205,7 +204,7 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
         if (existing.type != ValueType.LIST) {
             return 0L;
         }
-        return sumByteLengths(values);
+        return YierdisDbMemoryEstimator.sumByteLengths(values);
     }
 
     private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
@@ -217,32 +216,11 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
 
     private static long estimateListWriteUpperBound(int keyLength, List<byte[]> values) {
         int itemCount = values == null ? 0 : values.size();
-        return estimateCollectionWriteUpperBound(
+        return YierdisDbMemoryEstimator.estimateCollectionWriteUpperBound(
                 keyLength,
-                sumByteLengths(values),
+                YierdisDbMemoryEstimator.sumByteLengths(values),
                 Math.multiplyExact((long) itemCount, LIST_ELEMENT_OVERHEAD_BYTES_ESTIMATE)
         );
-    }
-
-    private static long estimateCollectionWriteUpperBound(int keyLength, long payloadBytes, long structuralBytes) {
-        return estimateStringWriteUpperBound(keyLength, 0) + Math.max(0L, payloadBytes) + Math.max(0L, structuralBytes);
-    }
-
-    private static long estimateStringWriteUpperBound(int keyLength, int valueLength) {
-        return (long) Math.max(0, keyLength) + Math.max(0, valueLength) + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-    }
-
-    private static long sumByteLengths(List<byte[]> values) {
-        if (values == null || values.isEmpty()) {
-            return 0L;
-        }
-        long total = 0L;
-        for (byte[] value : values) {
-            if (value != null) {
-                total += value.length;
-            }
-        }
-        return total;
     }
 
     private static BulkStringSequence sequenceOf(IntSupplier countSupplier, BulkEmitter emitter) {
