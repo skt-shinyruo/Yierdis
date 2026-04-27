@@ -51,7 +51,10 @@ YierdisInstance
 
 ## `YierdisDb` 拥有什么
 
-从构造函数看，`YierdisDb` 长期持有下面这些核心对象。
+`YierdisDb` 仍然长期持有单 DB 运行所需的核心对象，但这些对象的创建不再集中在
+`YierdisDb` 构造函数里。构造细节由 `YierdisDbConfig`、
+`YierdisDbStorageComponents`、`YierdisDbComponents` 和
+`YierdisDbComponentFactory` 收敛。
 
 ### 1. 主存储和过期索引
 
@@ -139,10 +142,30 @@ YierdisInstance
 
 这一步很关键，因为它说明命令层看到的不是 `YierdisDb` 本体，而是经过能力裁剪后的 facade。
 
+### 7. 构造和纯工具类
+
+为了避免 `YierdisDb` 再次变成所有细节的落点，几个非 facade 职责被放在独立类里：
+
+- `YierdisDbConfig`
+  负责校验构造参数、解析本地 maxmemory policy、计算时间预算和 LRU 开关。
+- `YierdisDbStorageComponents`
+  负责 FFM runtime、allocator、keyspace、expire index 和 owned resources 的组装结果。
+- `YierdisDbComponents`
+  负责承载 factory 返回的包内对象图 bundle。
+- `YierdisDbComponentFactory`
+  负责把 storage、ledger、mutation executor、key lifecycle、ops 和 facade 拼成对象图。
+- `YierdisDbMemoryEstimator`
+  负责 entry 估算和写入上界估算。
+- `YierdisGlobMatcher`
+  负责 `KEYS` / `SCAN` 使用的 Redis 风格 byte glob 匹配。
+
+这几个类的共同点是：它们是 DB 包内部实现细节，不扩大 command 层或 runtime 层能看到的 API。
+
 ## 可以把 `YierdisDb` 想成下面这张图
 
 ```text
 YierdisDb
+  -> components/config/factory assemble object graph
   -> store(key -> YierdisObject)
   -> expires(key -> expireAt)
   -> threadGuard

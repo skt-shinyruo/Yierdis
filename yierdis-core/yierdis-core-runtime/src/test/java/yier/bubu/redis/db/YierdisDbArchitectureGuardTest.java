@@ -16,6 +16,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class YierdisDbArchitectureGuardTest {
     @Test
@@ -90,6 +92,97 @@ public class YierdisDbArchitectureGuardTest {
         }
     }
 
+    @Test
+    public void yierdisDbMustNotOwnExtractedConstructionMatchingOrEstimationDetails() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("unable to resolve repository root", repoRoot);
+
+        Path dbFile = repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDb.java");
+        Assert.assertTrue("missing YierdisDb.java", Files.isRegularFile(dbFile));
+
+        List<String> offenders = new ArrayList<>();
+        scanFileForForbiddenText(
+                repoRoot,
+                dbFile,
+                offenders,
+                "parseMaxmemoryPolicy(",
+                "estimateEntryBytes(",
+                "estimateValueBytes(",
+                "estimateStringWriteUpperBound(",
+                "estimateCollectionWriteUpperBound(",
+                "estimateSetWriteUpperBound(",
+                "estimateZSetWriteUpperBound(",
+                "sumByteLengths(",
+                "sumZSetMemberByteLengths(",
+                "globMatches(",
+                "findGlobClassEnd(",
+                "globClassMatches(",
+                "new YierdisFfmBlobStore(",
+                "new YierdisFfmKeyspace",
+                "new YierdisFfmExpireIndex(",
+                "new YierdisStringOps(",
+                "new YierdisHashOps(",
+                "new YierdisListOps(",
+                "new YierdisSetOps(",
+                "new YierdisZSetOps(",
+                "new YierdisHllOps(",
+                "new YierdisTtlOps(",
+                "new YierdisKeyspaceOps(",
+                "new YierdisDbReads(",
+                "new YierdisDbWrites(",
+                "new YierdisDbExpirationManager(",
+                "new YierdisDbMemoryOps(",
+                "new YierdisDbLifecycleOps(",
+                "new YierdisDbMemoryReporter(",
+                "new YierdisDbIntrospection(",
+                "new YierdisDbMemoryLedger(",
+                "new YierdisDbMutationExecutor(",
+                "new YierdisDbExpirationSupport(",
+                "new YierdisDbMaxmemorySupport(",
+                "new YierdisDbKeyLifecycle(",
+                "new YierdisDbMemoryEstimator("
+        );
+
+        String source = Files.readString(dbFile, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "YierdisDb must keep delegating object graph assembly to YierdisDbComponentFactory.create(",
+                stripJavaCommentsAndLiterals(source).contains("YierdisDbComponentFactory.create(")
+        );
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "YierdisDb still owns extracted construction/matching/estimation details:\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void keyspaceOpsMustUseExtractedGlobMatcher() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("unable to resolve repository root", repoRoot);
+
+        Path keyspaceOpsFile = repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisKeyspaceOps.java");
+        Assert.assertTrue("missing YierdisKeyspaceOps.java", Files.isRegularFile(keyspaceOpsFile));
+
+        String source = Files.readString(keyspaceOpsFile, StandardCharsets.UTF_8);
+        String code = stripJavaCommentsAndLiterals(source);
+        Pattern legacyMatcherCall = Pattern.compile("YierdisDb\\s*\\.\\s*globMatches\\s*\\(");
+        Matcher legacyMatcher = legacyMatcherCall.matcher(code);
+        Assert.assertFalse(
+                "YierdisKeyspaceOps must not call YierdisDb.globMatches from executable code",
+                legacyMatcher.find()
+        );
+
+        Pattern extractedMatcherCall = Pattern.compile("YierdisGlobMatcher\\s*\\.\\s*matches\\s*\\(");
+        int extractedMatcherCalls = countMatches(extractedMatcherCall, code);
+        Assert.assertTrue(
+                "YierdisKeyspaceOps must use YierdisGlobMatcher.matches in both KEYS and SCAN paths; found "
+                        + extractedMatcherCalls + " executable call site(s)",
+                extractedMatcherCalls >= 2
+        );
+    }
+
     private static Method findDeclaredMethod(Class<?> type, String name, Class<?>... parameterTypes) {
         try {
             return type.getDeclaredMethod(name, parameterTypes);
@@ -128,6 +221,108 @@ public class YierdisDbArchitectureGuardTest {
                 offenders.add(rel + " contains forbidden text: " + forbiddenText);
             }
         }
+    }
+
+    private static int countMatches(Pattern pattern, String source) {
+        Matcher matcher = pattern.matcher(source);
+        int count = 0;
+        while (matcher.find()) {
+            count++;
+        }
+        return count;
+    }
+
+    private static String stripJavaCommentsAndLiterals(String source) {
+        StringBuilder out = new StringBuilder(source.length());
+        boolean inLineComment = false;
+        boolean inBlockComment = false;
+        boolean inString = false;
+        boolean inTextBlock = false;
+        boolean inChar = false;
+        boolean escaped = false;
+
+        for (int i = 0; i < source.length(); i++) {
+            char c = source.charAt(i);
+            char next = i + 1 < source.length() ? source.charAt(i + 1) : '\0';
+            char next2 = i + 2 < source.length() ? source.charAt(i + 2) : '\0';
+
+            if (inLineComment) {
+                if (c == '\n') {
+                    inLineComment = false;
+                    out.append(c);
+                } else {
+                    out.append(' ');
+                }
+                continue;
+            }
+            if (inBlockComment) {
+                if (c == '*' && next == '/') {
+                    out.append("  ");
+                    i++;
+                    inBlockComment = false;
+                } else {
+                    out.append(c == '\n' ? '\n' : ' ');
+                }
+                continue;
+            }
+            if (inTextBlock) {
+                if (c == '"' && next == '"' && next2 == '"') {
+                    out.append("   ");
+                    i += 2;
+                    inTextBlock = false;
+                } else {
+                    out.append(c == '\n' ? '\n' : ' ');
+                }
+                continue;
+            }
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                out.append(c == '\n' ? '\n' : ' ');
+                continue;
+            }
+            if (inChar) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '\'') {
+                    inChar = false;
+                }
+                out.append(c == '\n' ? '\n' : ' ');
+                continue;
+            }
+
+            if (c == '/' && next == '/') {
+                out.append("  ");
+                i++;
+                inLineComment = true;
+            } else if (c == '/' && next == '*') {
+                out.append("  ");
+                i++;
+                inBlockComment = true;
+            } else if (c == '"' && next == '"' && next2 == '"') {
+                out.append("   ");
+                i += 2;
+                inTextBlock = true;
+            } else if (c == '"') {
+                out.append(' ');
+                inString = true;
+                escaped = false;
+            } else if (c == '\'') {
+                out.append(' ');
+                inChar = true;
+                escaped = false;
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
     }
 
     private static String relativePath(Path root, Path path) {
