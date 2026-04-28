@@ -9,14 +9,17 @@ import yier.bubu.redis.ops.RuntimeDbEngine;
 import yier.bubu.redis.ops.DbLifecycleOps;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.ExpirationManager;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.ops.MemoryOps;
 
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class DbEngineFactoryInjectionTest {
     @Test
     public void createUsesInjectedFactory() {
         AtomicInteger created = new AtomicInteger(0);
+        AtomicReference<MaxmemoryPolicy> receivedPolicy = new AtomicReference<>();
         RuntimeDbEngine[] createdEngines = new RuntimeDbEngine[2];
 
         DbEngineFactory factory = new DbEngineFactory() {
@@ -24,12 +27,13 @@ public class DbEngineFactoryInjectionTest {
             public RuntimeDbEngine create(
                     int dbIndex,
                     long maxmemoryBytes,
-                    String maxmemoryPolicy,
+                    MaxmemoryPolicy maxmemoryPolicy,
                     int maxmemorySamples,
                     long evictionTimeLimitMillis,
                     long expireCleanupTimeLimitMillis
             ) {
                 created.incrementAndGet();
+                receivedPolicy.set(maxmemoryPolicy);
                 StubEngine engine = new StubEngine();
                 if (dbIndex >= 0 && dbIndex < createdEngines.length) {
                     createdEngines[dbIndex] = engine;
@@ -53,6 +57,7 @@ public class DbEngineFactoryInjectionTest {
             Assert.assertEquals(2, engines.length);
             Assert.assertSame(createdEngines[0], engines[0]);
             Assert.assertSame(createdEngines[1], engines[1]);
+            Assert.assertEquals(MaxmemoryPolicy.NOEVICTION, receivedPolicy.get());
         }
     }
 

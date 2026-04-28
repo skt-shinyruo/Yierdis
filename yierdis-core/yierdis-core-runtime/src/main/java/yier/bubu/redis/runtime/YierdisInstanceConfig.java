@@ -1,10 +1,7 @@
 package yier.bubu.redis.runtime;
 
-// YierdisInstanceConfig：定义可嵌入 instance 的装配参数（Netty-free），作为 core runtime 的稳定输入口径。
-
 import yier.bubu.redis.ops.DbEngineFactory;
-
-import java.util.Locale;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 
 public final class YierdisInstanceConfig {
     public enum MaxmemoryScope {
@@ -17,7 +14,7 @@ public final class YierdisInstanceConfig {
 
     private final long maxmemoryBytes;
     private final MaxmemoryScope maxmemoryScope;
-    private final String maxmemoryPolicy;
+    private final MaxmemoryPolicy maxmemoryPolicy;
     private final int maxmemorySamples;
     private final long evictionTimeLimitMillis;
     private final long expireCleanupTimeLimitMillis;
@@ -53,7 +50,7 @@ public final class YierdisInstanceConfig {
         return maxmemoryScope;
     }
 
-    public String maxmemoryPolicy() {
+    public MaxmemoryPolicy maxmemoryPolicy() {
         return maxmemoryPolicy;
     }
 
@@ -75,7 +72,7 @@ public final class YierdisInstanceConfig {
 
         private long maxmemoryBytes;
         private MaxmemoryScope maxmemoryScope = MaxmemoryScope.PER_DB;
-        private String maxmemoryPolicy = "noeviction";
+        private MaxmemoryPolicy maxmemoryPolicy = MaxmemoryPolicy.NOEVICTION;
         private int maxmemorySamples = 5;
         private long evictionTimeLimitMillis = 5;
         private long expireCleanupTimeLimitMillis = 5;
@@ -118,8 +115,18 @@ public final class YierdisInstanceConfig {
             return this;
         }
 
-        public Builder maxmemoryPolicy(String maxmemoryPolicy) {
+        public Builder maxmemoryPolicy(MaxmemoryPolicy maxmemoryPolicy) {
             this.maxmemoryPolicy = maxmemoryPolicy;
+            return this;
+        }
+
+        @Deprecated
+        public Builder maxmemoryPolicy(String rawPolicy) {
+            if (rawPolicy == null || rawPolicy.isBlank()) {
+                this.maxmemoryPolicy = MaxmemoryPolicy.NOEVICTION;
+            } else {
+                this.maxmemoryPolicy = MaxmemoryPolicy.parse(rawPolicy);
+            }
             return this;
         }
 
@@ -153,12 +160,7 @@ public final class YierdisInstanceConfig {
                 throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be > 0");
             }
             MaxmemoryScope scope = maxmemoryScope == null ? MaxmemoryScope.PER_DB : maxmemoryScope;
-
-            String policy = maxmemoryPolicy == null ? "noeviction" : maxmemoryPolicy.trim();
-            if (policy.isEmpty()) {
-                policy = "noeviction";
-            }
-            policy = policy.toLowerCase(Locale.ROOT);
+            MaxmemoryPolicy policy = maxmemoryPolicy == null ? MaxmemoryPolicy.NOEVICTION : maxmemoryPolicy;
 
             Builder normalized = this;
             normalized.databases = dbs;

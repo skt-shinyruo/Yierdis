@@ -2,6 +2,7 @@ package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.ops.DbEngineFactory;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.ops.RuntimeDbEngine;
 
 import java.util.Objects;
@@ -24,15 +25,16 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
     public RuntimeDbEngine create(
             int dbIndex,
             long maxmemoryBytes,
-            String maxmemoryPolicy,
+            MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
+        String policyName = Objects.requireNonNull(maxmemoryPolicy, "maxmemoryPolicy").redisName();
         if (memoryRuntime == null) {
             return YierdisDb.createWithOwnedFfmRuntime(
                     maxmemoryBytes,
-                    maxmemoryPolicy,
+                    policyName,
                     maxmemorySamples,
                     evictionTimeLimitMillis,
                     expireCleanupTimeLimitMillis
@@ -41,7 +43,7 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
         return YierdisDb.createWithSharedFfmRuntime(
                 memoryRuntime,
                 maxmemoryBytes,
-                maxmemoryPolicy,
+                policyName,
                 maxmemorySamples,
                 evictionTimeLimitMillis,
                 expireCleanupTimeLimitMillis
