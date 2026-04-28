@@ -188,6 +188,26 @@ public class TransactionCommandTest {
         });
     }
 
+    @Test
+    public void builtInWrongArityInsideMultiAbortsBeforeExecAfterParserMigration() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            TestSession session = new TestSession();
+            try (FastTestClient client = new FastTestClient(processor, session)) {
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
+
+                ReplyObject wrongArity = client.execute(Arrays.asList(b("GET")));
+                Assert.assertTrue(wrongArity instanceof ReplyError);
+                Assert.assertEquals("ERR wrong number of arguments for 'get' command", ((ReplyError) wrongArity).message());
+                Assert.assertEquals(0, session.transactionState().size());
+
+                ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
+                Assert.assertTrue(exec instanceof ReplyError);
+                Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", ((ReplyError) exec).message());
+            }
+        });
+    }
+
     private static final class TestSession implements ServerSession {
         private int dbIndex;
         private String clientName;

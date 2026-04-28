@@ -17,20 +17,22 @@ final class HashCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("HSET", this::hset, CommandDescriptor.of(-4, 1, 1, 1));
+        registration.register(
+                "HSET",
+                CommandDescriptor.of(-4, 1, 1, 1),
+                CommandParsers.pairTail(4, 2, "hset"),
+                this::hset
+        );
         registration.register("HGET", this::hget, CommandDescriptor.of(3, 1, 1, 1));
         registration.register("HGETALL", this::hgetall, CommandDescriptor.of(2, 1, 1, 1));
         registration.register("HLEN", this::hlen, CommandDescriptor.of(2, 1, 1, 1));
         registration.register("HDEL", this::hdel, CommandDescriptor.of(-3, 1, 1, 1));
     }
 
-    private void hset(ExecutionRequest request, CommandContext ctx) {
+    private void hset(ArgReader args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (request.argc() < 4) {
-            CommandSupport.wrongArity(out, "hset");
-            return;
-        }
-        int pairsLen = request.argc() - 2;
+        int pairsLen = args.argc() - 2;
+        ExecutionRequest request = args.request();
         support.sliceResetFromRequest(request, 2, pairsLen);
         try {
             long added = support.dbWrites(ctx).hashes().hset(request.readOnlyByteArray(1), support.slice());
