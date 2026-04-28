@@ -2,9 +2,10 @@ package yier.bubu.redis.command;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ByteArrayExecutionRequest;
+import yier.bubu.redis.contract.ExecutionRequest;
 
-import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Locale;
 
 public class CommandRegistryTest {
@@ -13,39 +14,35 @@ public class CommandRegistryTest {
     @Test
     public void findIsCaseInsensitive() {
         CommandRegistry registry = new CommandRegistry();
-        registry.register("PING", (cmd, out) -> {
-        }, PING);
+        registerNoop(registry, "PING", PING);
 
-        try (TestCommand c1 = new TestCommand("PING")) {
-            Assert.assertNotNull(registry.find(c1));
+        try (ExecutionRequest c1 = request("PING")) {
+            Assert.assertNotNull(registry.spec(c1));
         }
-        try (TestCommand c2 = new TestCommand("ping")) {
-            Assert.assertNotNull(registry.find(c2));
+        try (ExecutionRequest c2 = request("ping")) {
+            Assert.assertNotNull(registry.spec(c2));
         }
-        try (TestCommand c3 = new TestCommand("PiNg")) {
-            Assert.assertNotNull(registry.find(c3));
+        try (ExecutionRequest c3 = request("PiNg")) {
+            Assert.assertNotNull(registry.spec(c3));
         }
     }
 
     @Test
     public void unknownCommandReturnsNull() {
         CommandRegistry registry = new CommandRegistry();
-        registry.register("PING", (cmd, out) -> {
-        }, PING);
+        registerNoop(registry, "PING", PING);
 
-        try (TestCommand cmd = new TestCommand("NOPE")) {
-            Assert.assertNull(registry.find(cmd));
+        try (ExecutionRequest cmd = request("NOPE")) {
+            Assert.assertNull(registry.spec(cmd));
         }
     }
 
     @Test
     public void duplicateRegistrationIsRejected() {
         CommandRegistry registry = new CommandRegistry();
-        registry.register("PING", (cmd, out) -> {
-        }, PING);
+        registerNoop(registry, "PING", PING);
         try {
-            registry.register("ping", (cmd, out) -> {
-            }, PING);
+            registerNoop(registry, "ping", PING);
             Assert.fail("expected duplicate registration to throw");
         } catch (IllegalArgumentException expected) {
             // ok
@@ -83,57 +80,27 @@ public class CommandRegistryTest {
         };
 
         for (String name : names) {
-            registry.register(name, (cmd, out) -> {
-            }, CommandDescriptor.of(1, 0, 0, 0));
+            registerNoop(registry, name, CommandDescriptor.of(1, 0, 0, 0));
         }
 
         for (String name : names) {
-            try (TestCommand cmd = new TestCommand(name.toLowerCase(Locale.ROOT))) {
-                Assert.assertNotNull("expected handler for " + name, registry.find(cmd));
+            try (ExecutionRequest cmd = request(name.toLowerCase(Locale.ROOT))) {
+                Assert.assertNotNull("expected spec for " + name, registry.spec(cmd));
             }
         }
     }
 
-    private static final class TestCommand implements Command {
-        private final byte[] commandName;
+    private static void registerNoop(CommandRegistry registry, String name, CommandDescriptor descriptor) {
+        registry.register(
+                name,
+                descriptor,
+                CommandParsers.exactRequest(1, name.toLowerCase(Locale.ROOT)),
+                (request, ctx) -> {
+                }
+        );
+    }
 
-        private TestCommand(String commandName) {
-            this.commandName = commandName.getBytes(StandardCharsets.UTF_8);
-        }
-
-        @Override
-        public int argc() {
-            return 1;
-        }
-
-        @Override
-        public boolean isNull(int index) {
-            return false;
-        }
-
-        @Override
-        public int len(int index) {
-            return commandName.length;
-        }
-
-        @Override
-        public byte byteAt(int index, int offset) {
-            return commandName[offset];
-        }
-
-        @Override
-        public void copyToByteArray(int index, byte[] dst, int dstOff) {
-            System.arraycopy(commandName, 0, dst, dstOff, commandName.length);
-        }
-
-        @Override
-        public byte[] toByteArray(int index) {
-            return commandName.clone();
-        }
-
-        @Override
-        public void close() {
-            // no-op
-        }
+    private static ExecutionRequest request(String commandName) {
+        return ByteArrayExecutionRequest.fromUtf8(commandName, List.of());
     }
 }

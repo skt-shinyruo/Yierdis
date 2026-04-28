@@ -118,12 +118,14 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 - `DbReads`
 - `DbWrites`
 - `MemoryOps`
+- `KeyHandle`
 - 各种 `*ReadOps` / `*WriteOps`
 
 它的意义是：
 
 - 命令层只依赖稳定的能力接口
 - 不直接依赖 `YierdisDb` 具体实现
+- TTL / maxmemory 等 storage pressure path 可以通过 API 级 `KeyHandle` 表达 key identity
 
 对初学者来说，可以把它理解成：
 
@@ -140,8 +142,11 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 - TTL
 - maxmemory
 - memory accounting
+- internal `db.key.KeyHandle`
 
 这里是数据结构和存储策略最密集的模块。
+
+`core-db` 里的 internal `KeyHandle` 实现 API 层的 `ops.KeyHandle`。热点 TTL cleanup 和 maxmemory eviction 走 handle API；heap `byte[]` 主要保留在协议边界、显式 materialization、测试和 client-facing 结果里。
 
 ### `yierdis-core-command`
 
@@ -159,13 +164,15 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 从代码逻辑上看，`core-command` 的职责可以再具体化成：
 
 - `YierdisFastCommandProcessor`
-  负责命令注册、事务前置判定、错误转换和最终分发
+  负责命令注册、`CommandSpec<T>` 查找、事务前置判定、错误转换和最终分发
 - `CommandSupport`
   负责把 `CommandContext` 里的会话态、DB 路由和参数解析 helper 收敛到一起
 - 各个 `*Commands`
-  负责具体命令的参数解释和回包语义
+  负责具体命令的 typed parser、参数语义和回包语义
 
 也就是说，命令层更像“翻译层”，而不是“存储实现层”。
+
+生产命令注册已经收敛到 `CommandSpec<T>`：descriptor、parser、typed handler 和 MULTI policy 是一个整体。旧的 handler-only 注册和生产 `Command` 兼容执行路径不再是主路径。
 
 ### `yierdis-core-engine`
 
@@ -173,20 +180,19 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 它的职责是：
 
-- 对外暴露唯一的命令执行入口 `YierdisEngine`
+- 对外暴露唯一的命令执行入口 `YierdisEngine.execute(Session, ExecutionRequest, ReplyWriter)`
 - 把 server 从 `YierdisFastCommandProcessor` 的具体构造里解耦出来
+- 提供 `EngineSession`，承接连接级 DB index、transaction、client metadata 和认证状态
+- 通过只读 `ConnectionStatsView` 支持 `INFO/STATS` 观测，而不拥有 executor 计数器
 - 把定时 maintenance 入口也收敛到 engine 上
-- 为后续迁移 session / transaction ownership 留出稳定边界
 
-当前阶段的 `DefaultYierdisEngine` 仍然委托已有的 `YierdisFastCommandProcessor` 执行命令，也委托 runtime maintenance hook 做清理。
+当前 `DefaultYierdisEngine` 仍然委托已有的 `YierdisFastCommandProcessor` 执行命令，也委托 runtime maintenance hook 做清理。
 
-因此它不是新的命令实现层，而是先把“谁是执行入口”这件事固定下来：
+因此它不是新的命令实现层，而是把“谁是执行入口、谁创建命令上下文”固定下来：
 
 - server 只调用 `YierdisEngine.execute(...)`
 - executor 只接收 `engine::execute`
 - maintenance 只调用 `engine.maintenanceTick()`
-
-后续如果要把事务状态、session 状态或 typed command parsing 继续迁进 engine，外层 server / executor 不需要再被迫知道这些细节。
 
 ### `yierdis-core-runtime`
 
@@ -230,6 +236,9 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 - 提交和背压决策逻辑不必散落在 server 里
 - 算法层可以不和具体 I/O 实现绑死
+- 它只知道 `Session`、`ExecutionRequest`、`ReplyWriter` 这些执行契约，不创建 `CommandContext`
+
+它不拥有 selected DB、transaction queue、client name 或 authenticated 这类命令会话语义；这些状态属于 `EngineSession`。
 
 ### `yierdis-args`
 
@@ -255,7 +264,8 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 - 参数转 runtime config
 - Netty pipeline
 - protocol request -> `ExecutionRequest` 的适配
-- command executor 和 runtime seam 的对接
+- `NettyExecutionConnection` 的创建和 channel attr ownership
+- command executor、engine 和 runtime seam 的对接
 - server-facing command module
 
 换句话说，server 是“组装层”，不是“把所有逻辑都重新实现一遍的层”。
@@ -264,7 +274,9 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 - protocol 车道产出协议请求对象
 - server 里的 `ProtocolCommandAdapter` 把它变成 `ExecutionRequest`
-- server 把 `ExecutionRequest` 交给 `YierdisEngine`
+- server 创建持有 `EngineSession` 的 `NettyExecutionConnection`
+- server 把 `ExecutionRequest` 提交给 `CommandExecutor`
+- executor 在 owner thread 上调用 `YierdisEngine`
 - engine 再把请求交给当前命令处理实现
 - reply 最后再通过 `ReplyWriter` 落回 server 的协议输出
 
@@ -324,26 +336,29 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 
 - command processor 的注册、事务、错误转换等细节不继续散落到 bootstrap
 - maintenance 也通过同一个 engine 入口回到 runtime/storage
-- 后续重构可以把 session/transaction 继续迁入 engine，而不改变 server/executor 的接线模型
+- `EngineSession` 承接 selected DB、transaction 和 client metadata
+- executor-core 只调度 `Session + ExecutionRequest + ReplyWriter`，不创建 `CommandContext`
 
 如果把一次请求跨模块的过程写成最短路径，大致是：
 
 1. `protocol-netty`
    把网络输入交给 decoder
 2. `server`
-   把协议请求适配为 `ExecutionRequest`
-3. `core-engine`
-   作为统一执行入口接收 `ExecutionRequest`
-4. `core-command`
-   根据 `ExecutionRequest` 和 `CommandContext` 分发命令
-5. `core-api`
+   创建 `NettyExecutionConnection`，把协议请求适配为 `ExecutionRequest`
+3. `executor-core`
+   做排队、背压和 owner-thread 调度
+4. `core-engine`
+   接收 `Session + ExecutionRequest + ReplyWriter`，创建 command context
+5. `core-command`
+   通过 `CommandSpec<T>` parse 后分发到 typed handler
+6. `core-api`
    通过 `DbReads/DbWrites` 暴露能力边界
-6. `core-db`
+7. `core-db`
    执行实际读写
-7. `server`
+8. `server`
    通过 `ReplyWriter` 把结果编码回协议
 
-初学者如果能把这 7 步记住，读整个仓库时就不容易迷路。
+初学者如果能把这 8 步记住，读整个仓库时就不容易迷路。
 
 ## 构建和测试层面的护栏
 
@@ -367,6 +382,10 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 - bootstrap 不重新内联 owner-thread 生命周期逻辑
 - request DTO 和 `ExecutionRequest` 的边界不被重新打穿
 - server bootstrap 不绕过 `YierdisEngine` 直接接线 command processor 或 maintenance
+- `YierdisEngine` 和 executor seam 继续暴露 `Session + ExecutionRequest + ReplyWriter`
+- executor-core 不重新拥有 `CommandContext`、selected DB 或 transaction state
+- command parsing 不泄漏到 server/executor/runtime/protocol/storage
+- TTL/maxmemory pressure path 继续使用 `KeyHandle`
 
 这类测试的意义，不只是“防止依赖写错”，更是在保护整个阅读模型：
 
@@ -374,6 +393,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 - runtime 必须继续只管生命周期
 - server 必须继续只做组装，而不是把所有责任拿回去
 - engine 必须继续是 command execution 的唯一入口
+- executor 必须继续只是调度和背压，不变成命令语义层
 
 ### `ReplySsoTGuardTest`
 

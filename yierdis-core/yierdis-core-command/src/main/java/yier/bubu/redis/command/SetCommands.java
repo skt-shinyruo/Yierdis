@@ -17,11 +17,11 @@ final class SetCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("SADD", this::sadd, CommandDescriptor.of(-3, 1, 1, 1));
-        registration.register("SREM", this::srem, CommandDescriptor.of(-3, 1, 1, 1));
-        registration.register("SMEMBERS", this::smembers, CommandDescriptor.of(2, 1, 1, 1));
-        registration.register("SISMEMBER", this::sismember, CommandDescriptor.of(3, 1, 1, 1));
-        registration.register("SCARD", this::scard, CommandDescriptor.of(2, 1, 1, 1));
+        registration.register("SADD", CommandDescriptor.of(-3, 1, 1, 1), CommandParsers.minRequest(3, "sadd"), this::sadd);
+        registration.register("SREM", CommandDescriptor.of(-3, 1, 1, 1), CommandParsers.minRequest(3, "srem"), this::srem);
+        registration.register("SMEMBERS", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "smembers"), this::smembers);
+        registration.register("SISMEMBER", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "sismember"), this::sismember);
+        registration.register("SCARD", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "scard"), this::scard);
     }
 
     private void sadd(ExecutionRequest request, CommandContext ctx) {

@@ -547,6 +547,29 @@ final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
         return r < size0 ? randomKeyFromTable(keys1, states1) : randomKeyFromTable(keys0, states0);
     }
 
+    @Override
+    public KeyHandle randomKeyHandle() {
+        rehashStep();
+        int total = size();
+        if (total == 0) {
+            return null;
+        }
+        if (keys1 == null) {
+            return randomKeyHandleFromTable(keys0, hashes0, states0);
+        }
+
+        int r = ThreadLocalRandom.current().nextInt(total);
+        KeyHandle handle = r < size0
+                ? randomKeyHandleFromTable(keys0, hashes0, states0)
+                : randomKeyHandleFromTable(keys1, hashes1, states1);
+        if (handle != null) {
+            return handle;
+        }
+        return r < size0
+                ? randomKeyHandleFromTable(keys1, hashes1, states1)
+                : randomKeyHandleFromTable(keys0, hashes0, states0);
+    }
+
     private static byte[] randomKeyFromTable(byte[][] keys, byte[] states) {
         if (keys == null) {
             return null;
@@ -570,6 +593,34 @@ final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
             int idx = (start + i) & mask;
             if (states[idx] == STATE_FILLED) {
                 return keys[idx];
+            }
+        }
+        return null;
+    }
+
+    private static KeyHandle randomKeyHandleFromTable(byte[][] keys, int[] hashes, byte[] states) {
+        if (keys == null) {
+            return null;
+        }
+        int len = states.length;
+        if (len == 0) {
+            return null;
+        }
+        int mask = len - 1;
+        int start = ThreadLocalRandom.current().nextInt(len);
+
+        int quickSteps = Math.min(16, len);
+        for (int i = 0; i < quickSteps; i++) {
+            int idx = (start + i) & mask;
+            if (states[idx] == STATE_FILLED) {
+                return KeyHandle.forHeap(keys[idx], hashes[idx]);
+            }
+        }
+
+        for (int i = 0; i < len; i++) {
+            int idx = (start + i) & mask;
+            if (states[idx] == STATE_FILLED) {
+                return KeyHandle.forHeap(keys[idx], hashes[idx]);
             }
         }
         return null;

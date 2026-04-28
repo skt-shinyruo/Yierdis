@@ -6,7 +6,7 @@ import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.engine.YierdisEngine;
 import yier.bubu.redis.executor.CommandExecutor;
 import yier.bubu.redis.executor.CommandExecutorConfig;
@@ -146,7 +146,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         }
     }
 
-    private static final class ExplodingCommand implements Command {
+    private static final class ExplodingCommand implements ExecutionRequest {
         @Override
         public int argc() {
             throw new RuntimeException("boom");

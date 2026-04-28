@@ -79,11 +79,6 @@ final class CommandRegistry implements CommandModule.Registration {
         ));
     }
 
-    CommandModule.Handler find(ExecutionRequest request) {
-        CommandSpec spec = spec(request);
-        return spec == null ? null : spec.handler();
-    }
-
     String disallowedInMultiError(ExecutionRequest request) {
         CommandSpec spec = spec(request);
         return spec == null ? null : spec.disallowedInMultiError();

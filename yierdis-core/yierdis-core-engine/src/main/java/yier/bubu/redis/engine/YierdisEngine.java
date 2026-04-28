@@ -1,17 +1,16 @@
 package yier.bubu.redis.engine;
 
-import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ExecutionRequest;
+import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.contract.Session;
 
 /**
  * Engine facade for command execution and owner-thread maintenance.
- *
- * This phase keeps the existing CommandContext shape so executor-core can keep
- * using its transport-neutral CommandExecutionEngine seam. Later phases will
- * move business session state behind an engine-owned session type.
+ * Executor and transport code pass only the session contract, request, and
+ * writer; the engine/command layer owns the command context construction.
  */
 public interface YierdisEngine extends AutoCloseable {
-    void execute(ExecutionRequest request, CommandContext context);
+    void execute(Session session, ExecutionRequest request, ReplyWriter out);
 
     void maintenanceTick();
 

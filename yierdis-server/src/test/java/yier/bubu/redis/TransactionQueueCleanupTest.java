@@ -16,7 +16,7 @@ public class TransactionQueueCleanupTest {
         EmbeddedChannel ch = new EmbeddedChannel();
         try {
             NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 1, 16);
-            TransactionState tx = connection.context().session().transaction();
+            TransactionState tx = connection.session().transaction();
 
             tx.begin();
             Assert.assertTrue(tx.active());
@@ -30,7 +30,7 @@ public class TransactionQueueCleanupTest {
             Assert.assertNotNull(tx.tryEnqueue(request("GET", "k")));
             Assert.assertTrue(tx.aborted());
 
-            Assert.assertTrue(connection.context().markClosing());
+            Assert.assertTrue(connection.markClosing());
             Assert.assertFalse(tx.active());
             Assert.assertFalse(tx.aborted());
             Assert.assertEquals(0, tx.size());

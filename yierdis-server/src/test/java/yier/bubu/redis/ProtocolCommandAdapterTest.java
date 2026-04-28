@@ -4,7 +4,6 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
 import yier.bubu.redis.protocol.v1.CustomProtocolV1ArgvRequest;
@@ -27,7 +26,6 @@ public class ProtocolCommandAdapterTest {
 
             Object inbound = ch.readInbound();
             Assert.assertTrue(inbound instanceof ExecutionRequest);
-            Assert.assertFalse(inbound instanceof Command);
 
             adapted = (ExecutionRequest) inbound;
             Assert.assertSame(cmd, adapted.readOnlyByteArray(0));
@@ -51,7 +49,6 @@ public class ProtocolCommandAdapterTest {
 
             Object inbound = ch.readInbound();
             Assert.assertTrue(inbound instanceof ExecutionRequest);
-            Assert.assertFalse(inbound instanceof Command);
 
             adapted = (ExecutionRequest) inbound;
             Assert.assertArrayEquals(utf8("PING"), adapted.readOnlyByteArray(0));

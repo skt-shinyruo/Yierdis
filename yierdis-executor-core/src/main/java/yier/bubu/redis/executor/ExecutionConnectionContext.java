@@ -1,6 +1,6 @@
 package yier.bubu.redis.executor;
 
-import yier.bubu.redis.contract.ServerSession;
+import yier.bubu.redis.contract.ConnectionStatsView;
 
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -9,7 +9,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class ExecutionConnectionContext {
-    private final DefaultExecutionSession session;
     private final QueueState queueState = new QueueState();
     private final AtomicInteger pending = new AtomicInteger(0);
     private final AtomicLong pendingBytes = new AtomicLong(0);
@@ -22,15 +21,6 @@ public final class ExecutionConnectionContext {
     private final AtomicLong closeAfterReply = new AtomicLong(0);
     private final AtomicLong backpressureEnter = new AtomicLong(0);
     private final AtomicLong backpressureExit = new AtomicLong(0);
-
-    public ExecutionConnectionContext(DefaultExecutionSession session) {
-        this.session = session;
-        this.session.attach(this);
-    }
-
-    public ServerSession session() {
-        return session;
-    }
 
     public ExecutorKeyState<Object> queueState() {
         return queueState;
@@ -49,11 +39,7 @@ public final class ExecutionConnectionContext {
     }
 
     public boolean markClosing() {
-        if (!closing.compareAndSet(false, true)) {
-            return false;
-        }
-        session.discardTransaction();
-        return true;
+        return closing.compareAndSet(false, true);
     }
 
     public void recordCommandEnqueued(int retainedBytes) {
@@ -130,7 +116,7 @@ public final class ExecutionConnectionContext {
             long closeAfterReply,
             long backpressureEnter,
             long backpressureExit
-    ) {
+    ) implements ConnectionStatsView {
     }
 
     private static final class QueueState implements ExecutorKeyState<Object> {

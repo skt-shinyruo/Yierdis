@@ -117,4 +117,9 @@ public interface YierdisKeyspace<V> {
     ScanCursorV2 scan(ScanCursorV2 cursor, int maxSteps, ScanConsumer<V> consumer);
 
     byte[] randomKey();
+
+    /**
+     * Returns a random stable key identity without materializing a canonical heap copy.
+     */
+    KeyHandle randomKeyHandle();
 }

@@ -40,7 +40,7 @@ final class YierdisDbMaxmemorySupport {
             if (System.nanoTime() >= deadline) {
                 break;
             }
-            byte[] victim = pickEvictionKey(nowMillis);
+            KeyHandle victim = pickEvictionKey(nowMillis);
             if (victim == null) {
                 break;
             }
@@ -67,20 +67,20 @@ final class YierdisDbMaxmemorySupport {
             return null;
         }
 
-        byte[] key = db.store.randomKey();
-        if (key == null) {
+        KeyHandle keyHandle = db.store.randomKeyHandle();
+        if (keyHandle == null) {
             return null;
         }
-        YierdisObject e = db.store.get(key);
+        YierdisObject e = db.store.get(keyHandle);
         if (e == null) {
             return null;
         }
-        if (db.isKeyExpired(key, nowMillis)) {
+        if (db.isKeyExpired(keyHandle, nowMillis)) {
             return null;
         }
 
         long lruClock = policy == MaxmemoryPolicy.ALLKEYS_LRU ? e.lruClock : 0L;
-        return new MaxmemoryCandidate(db, key, lruClock);
+        return new MaxmemoryCandidate(db, keyHandle, lruClock);
     }
 
     MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
@@ -111,11 +111,7 @@ final class YierdisDbMaxmemorySupport {
         if (bestKeyHandle == null) {
             return null;
         }
-        byte[] keyBytes = YierdisDb.toByteArray(bestKeyHandle);
-        if (keyBytes == null) {
-            return null;
-        }
-        return new MaxmemoryCandidate(db, keyBytes, bestLruRef[0]);
+        return new MaxmemoryCandidate(db, bestKeyHandle, bestLruRef[0]);
     }
 
     boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
@@ -123,7 +119,9 @@ final class YierdisDbMaxmemorySupport {
             return false;
         }
 
-        byte[] key = candidate.key();
+        if (!(candidate.keyHandle() instanceof KeyHandle key)) {
+            return false;
+        }
         YierdisObject e = db.store.get(key);
         if (e == null) {
             return false;
@@ -140,13 +138,13 @@ final class YierdisDbMaxmemorySupport {
         return false;
     }
 
-    private byte[] pickEvictionKey(long nowMillis) {
+    private KeyHandle pickEvictionKey(long nowMillis) {
         if (db.store.size() == 0) {
             return null;
         }
 
         if (maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_RANDOM) {
-            return db.store.randomKey();
+            return db.store.randomKeyHandle();
         }
 
         if (maxmemoryPolicy != MaxmemoryPolicy.ALLKEYS_LRU) {
@@ -154,14 +152,14 @@ final class YierdisDbMaxmemorySupport {
         }
 
         int total = db.store.size();
-        byte[] bestKey = null;
+        KeyHandle bestKey = null;
         long bestLru = Long.MAX_VALUE;
         int samples = Math.max(1, maxmemorySamples);
 
         if (samples >= total) {
-            final byte[][] bestKeyRef = new byte[1][];
+            final KeyHandle[] bestKeyRef = new KeyHandle[1];
             final long[] bestLruRef = new long[]{Long.MAX_VALUE};
-            db.store.forEach((k, e) -> {
+            db.store.forEachKeyHandle((k, e) -> {
                 if (db.isKeyExpired(k, nowMillis)) {
                     return;
                 }
@@ -175,7 +173,7 @@ final class YierdisDbMaxmemorySupport {
         }
 
         for (int i = 0; i < samples; i++) {
-            byte[] key = db.store.randomKey();
+            KeyHandle key = db.store.randomKeyHandle();
             if (key == null) {
                 break;
             }

@@ -21,8 +21,9 @@ public class CommandDescriptorRegistryTest {
         CommandRegistry registry = new CommandRegistry();
         registry.registerDisallowedInMulti(
                 "HELLO",
-                (cmd, ctx) -> ctx.out().simpleString("OK"),
                 CommandDescriptor.of(-1, 0, 0, 0),
+                CommandParsers.minRequest(1, "hello"),
+                (cmd, ctx) -> ctx.out().simpleString("OK"),
                 "ERR HELLO is not allowed in MULTI"
         );
 
@@ -66,8 +67,9 @@ public class CommandDescriptorRegistryTest {
                     SlowCommandGovernor.DEFAULT,
                     registration -> registration.register(
                             "HELLO",
-                            (cmd, ctx) -> ctx.out().simpleString("OK"),
-                            CommandDescriptor.of(7, 2, 2, 1)
+                            CommandDescriptor.of(7, 2, 2, 1),
+                            CommandParsers.minRequest(1, "hello"),
+                            (cmd, ctx) -> ctx.out().simpleString("OK")
                     )
             );
 
@@ -93,11 +95,17 @@ public class CommandDescriptorRegistryTest {
                     null,
                     SlowCommandGovernor.DEFAULT,
                     registration -> {
-                        registration.register("INFO", (cmd, ctx) -> ctx.out().simpleString("OK"), CommandDescriptor.of(-1, 0, 0, 0));
+                        registration.register(
+                                "INFO",
+                                CommandDescriptor.of(-1, 0, 0, 0),
+                                CommandParsers.minRequest(1, "info"),
+                                (cmd, ctx) -> ctx.out().simpleString("OK")
+                        );
                         registration.registerDisallowedInMulti(
                                 "HELLO",
-                                (cmd, ctx) -> ctx.out().simpleString("OK"),
                                 CommandDescriptor.of(-1, 0, 0, 0),
+                                CommandParsers.minRequest(1, "hello"),
+                                (cmd, ctx) -> ctx.out().simpleString("OK"),
                                 "ERR HELLO is not allowed in MULTI"
                         );
                     }

@@ -49,8 +49,9 @@ public class CommandMetadataRegressionTest {
                     SlowCommandGovernor.DEFAULT,
                     registration -> registration.register(
                             "HELLO",
-                            (cmd, ctx) -> ctx.out().simpleString("OK"),
-                            CommandDescriptor.of(-1, 0, 0, 0)
+                            CommandDescriptor.of(-1, 0, 0, 0),
+                            CommandParsers.minRequest(1, "hello"),
+                            (cmd, ctx) -> ctx.out().simpleString("OK")
                     )
             );
             try (FastTestClient client = new FastTestClient(processor)) {

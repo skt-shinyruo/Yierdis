@@ -1,105 +1,90 @@
 # Request Execution Flow
 
-本文说明一条请求是如何从网络入口一路走到命令执行、DB 读写和回包写出的。
+本文说明一条请求如何从网络入口进入 engine，再到命令解析、DB 读写和回包。
 
-它重点回答两个问题：
+## 全局主链
 
-- 一般情况下，一条命令会经过哪些核心对象
-- 对 `PING` 和 `SET` 这种代表性命令，调用链分别是什么
+当前官方主链是：
 
-## 先看全局主链
+```text
+Netty ByteBuf
+  -> CustomRequestDecoder
+  -> protocol request DTO
+  -> ProtocolCommandAdapter
+  -> ExecutionRequest
+  -> YierdisFastCommandHandler
+  -> CommandExecutor.trySubmit(connection, request)
+  -> owner thread
+  -> YierdisEngine.execute(session, request, replyWriter)
+  -> YierdisFastCommandProcessor
+  -> CommandSpec<T>.parse(...)
+  -> typed command handler
+  -> DbEngine / DbReads / DbWrites
+  -> core-db storage
+  -> ReplyWriter
+  -> NettyExecutionIoAdapter
+  -> transport flush
+```
 
-可以把一次请求的主链路压缩成 8 步：
+这里最重要的边界是：
 
-1. `YierdisServer` 启动 server
-2. `YierdisServerBootstrap` 组装 `YierdisInstance`、`YierdisEngine`、`NettyCommandExecutor`
-3. `YierdisServerChannelInitializer` 为每个连接建立 Netty pipeline 和连接态
-4. `CustomRequestDecoder` 把网络帧解成协议请求对象
-5. `ProtocolCommandAdapter` 把协议请求适配为 `ExecutionRequest`
-6. `YierdisFastCommandHandler` 把 `ExecutionRequest` 提交给 command executor
-7. `NettyCommandDrainLoop` 在单线程 executor 上串行执行命令
-8. `YierdisEngine` 接收统一执行调用，当前默认实现再委托 `YierdisFastCommandProcessor` 分发到具体命令处理器，并通过 `ReplyWriter` 写回
+- protocol 只负责把网络数据解成协议 DTO；
+- server 只负责连接、协议适配和 I/O glue；
+- executor-core 只负责排队、背压、closing 和 owner-thread 调度；
+- engine 是命令执行入口；
+- command 层负责 `CommandSpec<T>` 查找、解析、事务判定和 typed handler 分发；
+- DB/storage 负责真实数据结构、TTL、maxmemory 和内存生命周期。
 
-其中真正保证 Redis 风格单线程语义的关键点是：
+## 启动阶段
 
-- I/O 线程不直接碰 DB
-- DB 访问只发生在 command executor 线程上
+`YierdisServerBootstrap.startInternal()` 在真正接收请求前完成组装：
 
-## 启动阶段的组装
+1. 根据 runtime config 创建 `YierdisInstance`。
+2. 从 instance 拿到 `YierdisInstanceRuntimeAccess`、maintenance hook 和 observability。
+3. 创建 `NettyServerInfoProvider`，绑定 runtime observability。
+4. 创建 `DefaultYierdisEngine`，把 DB router、server info、slow governor、maintenance 和 server-local command module 交给 engine。
+5. 创建 `CommandExecutor<NettyExecutionConnection>`，把 `commandEngine::execute` 作为唯一命令执行函数交给 executor。
+6. `executor.start()` 在 owner thread 上调用 `runtimeAccess.bindToCurrentThread()`，固定 DB 访问线程。
+7. Netty pipeline 开始接收外部请求。
 
-请求路径在 server 启动阶段就已经被拼好。
+因此 server bootstrap 是 composition root，不是命令语义的所有者。它可以接线，但不应该直接构造或调用 `YierdisFastCommandProcessor`。
 
-关键对象可以分成三个外层对象和一个当前内部执行实现：
+## 连接状态
 
-### `YierdisInstance`
+每个 channel 初始化时，`YierdisServerChannelInitializer` 会创建或获取一个 `NettyExecutionConnection`。
 
-负责装配多 DB、runtime seam、instance 级资源 ownership。
+`NettyExecutionConnection` 是 server 侧连接根对象，拥有：
 
-### `YierdisEngine`
+- Netty `Channel`；
+- 一个 `EngineSession`；
+- 一个 `ExecutionConnectionContext`。
 
-这是 server 和 executor 看到的命令执行中心。
+这三类状态必须分开理解。
 
-当前阶段它负责：
+`EngineSession` 是 engine-owned 业务会话态，保存：
 
-- 暴露 `execute(request, context)` 作为统一执行入口
-- 持有当前默认 command processor
-- 暴露 `maintenanceTick()`，让定时清理也从同一个入口进入
+- 当前 DB index；
+- transaction state；
+- client id/name；
+- authenticated 标记；
+- `discardTransaction()` 关闭清理语义。
 
-`DefaultYierdisEngine` 现在仍然包装已有的 `YierdisFastCommandProcessor`。也就是说，本阶段先收敛数据流入口，不一次性改变所有命令内部实现。
+它还可以暴露一个只读 `ConnectionStatsView` 供 `INFO/STATS` 使用。真实 pending、backpressure 和计数器仍由 `ExecutionConnectionContext` 持有，`EngineSession` 只绑定 supplier，不拥有这些调度状态。
 
-### `YierdisFastCommandProcessor`
+`ExecutionConnectionContext` 是 executor-local 调度状态，保存：
 
-负责：
+- pending command count；
+- pending retained bytes；
+- closing flag；
+- input-disabled-by-executor flag；
+- executor stats；
+- fair scheduling queue state。
 
-- 注册默认命令模块
-- 运行时事务判定
-- 命令查找与分发
-- 错误转换
-- 变更事件 gate
+它不拥有 DB index、事务队列、client name 或认证状态。
 
-### `NettyCommandExecutor`
+## Pipeline
 
-负责：
-
-- I/O 线程提交命令
-- command executor 线程串行执行
-- 有界 backlog
-- 背压
-- drain budget
-- reply flush batching
-
-### 用代码逻辑再展开一层
-
-如果把启动过程写成“对象如何接对象”，大致是下面这条链：
-
-1. `YierdisServer.main(...)` 解析 CLI，并在真正启动前检查 FFM 是否可用
-2. `YierdisServerBootstrap.startInternal()` 先根据 runtime config 构造 `YierdisInstanceConfig`
-3. `YierdisInstance.create(...)` 创建多 DB、FFM runtime 和可选的全局 maxmemory governor
-4. bootstrap 再创建 `NettyServerInfoProvider`
-5. bootstrap 创建 `DefaultYierdisEngine`
-6. `DefaultYierdisEngine` 内部创建当前默认 `YierdisFastCommandProcessor`
-7. bootstrap 创建 `NettyCommandExecutor`，并把 `engine::execute` 交给 executor
-8. `executor.start()` 会先在 executor 线程上执行 `bindToCurrentThread`
-9. 之后 Netty pipeline 才开始真正接收外部请求
-
-这条顺序的关键不是“代码写得有几层”，而是：
-
-- DB 的 owner thread 在 server 开始工作前就被固定下来
-- engine 在启动时就已经持有命令执行和 maintenance 入口
-- command processor 在 engine 内部已经知道有哪些命令模块
-- server 只是把协议流量送到已经准备好的 engine/runtime 组合里
-
-## 连接建立时发生什么
-
-每个连接建立时，`YierdisServerChannelInitializer` 会先初始化统一的连接状态根对象 `ServerConnectionContext`。
-
-它里面同时持有三类状态：
-
-- 会话态：`ServerSessionState`
-- 运行态：pending、closing、计数器等
-- 调度态：executor 相关 channel 状态
-
-然后 pipeline 会按下面顺序挂上 handler：
+连接上的 pipeline 顺序是：
 
 1. `writeBufferBackpressure`
 2. `customRequestDecoder`
@@ -107,395 +92,194 @@
 4. `protocolErrorReply`
 5. `commandHandler`
 
-理解这个顺序很重要：
+`CustomRequestDecoder` 只产出协议请求或协议错误事件。`ProtocolCommandAdapter` 把协议请求转换成 `ExecutionRequest`。`YierdisFastCommandHandler` 不执行命令，只调用 `CommandExecutor.trySubmit(...)`。
 
-- 协议错误先在 decoder 阶段被发现
-- 协议对象只在 server 适配层里被转换
-- 真正命令提交只接收 `ExecutionRequest`
+## ExecutionRequest
 
-### `ServerConnectionContext` 为什么是根对象
+`ExecutionRequest` 是 protocol 和 command 之间的公共请求模型。
 
-对初学者来说，`ServerConnectionContext` 最容易被低估。
+它的作用是：
 
-它存在的意义是：server 只在一个地方拥有 `Channel.attr(...)`。
+- 让命令层不依赖 protocol DTO；
+- 让 direct execution 和 transaction replay 使用同一份请求语义；
+- 为队列和事务快照提供统一的 retained-bytes 生命周期。
 
-它把三个原本容易散落在各层的状态切片统一到一起：
+旧的 `Command` 兼容入口已经不再是生产执行路径。生产执行只接受 `ExecutionRequest`。
 
-- `ServerSessionState`
-  连接级逻辑状态，比如 `dbIndex`、事务队列、closing 相关联动
-- `ServerRuntimeState`
-  连接的 pending、pendingBytes、计数器、autoReadDisabled 标记
-- `NettyExecutorChannelState`
-  调度器需要的队列 /公平调度状态
+## Executor
 
-这样一来：
+`CommandExecutor` 及其协作者位于 `yierdis-executor-core`，不依赖 Netty，也不依赖 `core-command`。
 
-- pipeline handler 不必各自挂一份 channel state
-- command executor 可以通过 channel 回到连接态
-- `SELECT` / `MULTI` / backpressure 都能沿着同一根对象协作
+提交阶段由 `CommandExecutorSubmitter` 和 `ExecutorBacklogBudget` 负责：
 
-## `ExecutionRequest` 为什么重要
+- 检查 executor 是否运行；
+- 检查全局 queue slot；
+- 检查 queued bytes；
+- 记录连接 pending / pendingBytes；
+- 在达到高水位时通过 `ExecutorBackpressureController` 关闭输入。
 
-Yierdis 当前的命令执行统一围绕 `ExecutionRequest` 展开，而不是围绕 protocol DTO。
+执行阶段由 `CommandExecutorDrainLoop` 和 `CommandExecutorExecutionSupport` 负责：
 
-这意味着：
+1. 在 owner thread 上取出任务。
+2. 如果连接已经 closing，跳过副作用并释放请求。
+3. 通过 `ReplyWriterFactory` 创建 writer。
+4. 调用 `CommandExecutionEngine.execute(session, request, writer)`。
+5. 如果 writer 请求 close-after-reply，调用 `connection.markClosing()`。
+6. 通过 `ExecutionIoAdapter` 写出 buffered reply。
+7. 释放请求、slot 和 bytes 预算。
+8. pending 降到低水位后恢复输入。
 
-- protocol 层和 command 层解耦
-- 事务重放和 change event 也复用同一份命令快照语义
-- 命令层不需要知道请求最初来自 JSON DTO 还是别的 transport
+注意：executor 不再创建 `CommandContext`。它只把 `Session`、`ExecutionRequest` 和 `ReplyWriter` 交给 engine seam。
 
-这也是仓库里多处架构护栏要守住的边界之一。
+## Engine
 
-对初学者来说，可以把 `ExecutionRequest` 理解成：
+`YierdisEngine` 的执行入口是：
 
-- “协议层和命令层之间的公共语言”
+```java
+void execute(Session session, ExecutionRequest request, ReplyWriter out);
+```
 
-一旦请求已经变成 `ExecutionRequest`：
+实际 server 传入的 `Session` 是 `EngineSession`。`DefaultYierdisEngine` 在内部创建 `CommandContext(session, out)`，再委托当前命令处理实现 `YierdisFastCommandProcessor`。
 
-- 命令层就不需要知道原始 JSON DTO 长什么样
-- 事务队列里存的也是统一快照
-- change event 记录的也是统一快照
+这一层的意义是把外部主链固定成：
 
-## 提交到 command executor 之后
+```text
+executor schedules; engine executes.
+```
 
-`YierdisFastCommandHandler` 收到 `ExecutionRequest` 后，不直接执行，而是调用 `NettyCommandExecutor.trySubmitWithReason(...)`。
+后续即使继续重构 `YierdisFastCommandProcessor`、事务实现或命令注册细节，server 和 executor 也不需要重新知道这些内部结构。
 
-提交阶段会做几件事：
+## CommandSpec 和命令分发
 
-- 检查 executor 是否还在运行
-- 检查全局队列容量是否已满
-- 检查 queued bytes 预算是否超限
-- 更新连接 pending / pendingBytes
-- 在需要时关闭该连接的 `autoRead`
+`YierdisFastCommandProcessor` 当前仍是 command 层的执行实现。它负责：
 
-如果提交失败，server 立即回 `ERR busy ...` 并关闭 /回收当前请求对象。
+- 用 `ExecutionRequest` 查找 `CommandSpec<T>`；
+- 在事务入队前运行同一个 parser；
+- 把 parse error 映射成统一错误回复；
+- 将解析结果交给 typed handler；
+- 处理运行时异常和 change event gate。
 
-如果提交成功：
+命令注册只能走 `CommandSpec<T>`：
 
-- executor 接管请求生命周期
-- drain loop 之后会在 command executor 线程里真正执行
+```text
+CommandSpec<T> = descriptor + parser + typed handler + MULTI policy
+```
 
-## drain loop 里发生什么
+server-local 命令也一样使用 typed spec；普通 server handler、executor、protocol、runtime 和 storage 都不应该重新解析命令参数。
 
-`NettyCommandDrainLoop` 是真正的执行核心。
+## PING
 
-每次执行一个命令时，它会：
-
-1. 检查连接是否已经 closing
-2. 为这条命令创建 `ReplyWriter`
-3. 从连接里取出 `ServerSessionState`
-4. 复用或重置一个 `CommandContext(session, out)`
-5. 调用 `YierdisEngine.execute(...)`
-6. 把输出 buffer 批量写回
-7. 释放请求对象和 backlog 预算
-8. 在 pending 降到低水位后尝试重新开启 `autoRead`
-
-这条链说明：命令上下文的会话态和输出口是在 executor 线程内配对的，而不是在 I/O 线程内配好的。
-
-### `CommandContext` 在这里起什么作用
-
-`CommandContext` 很简单，但它是命令层看到的上下文入口：
-
-- `session`
-- `ReplyWriter out`
-
-在 executor 线程里，`NettyCommandExecutionSupport` 会把：
-
-- 当前连接的 `ServerSessionState`
-- 当前命令的 `ReplyWriter`
-
-装进一个可复用的 `CommandContext` 对象，再交给 `YierdisEngine`。
-
-当前阶段 `DefaultYierdisEngine` 会继续委托给 `YierdisFastCommandProcessor`。这层 facade 的价值是让 executor 不再知道具体 command processor。
-
-所以命令层能做的两件事其实非常固定：
-
-- 通过 `ctx.serverSessionOrNull()` 读取连接态
-- 通过 `ctx.out()` 写回复
-
-命令层不需要也不应该直接知道 Netty 的 `ChannelHandlerContext`。
-
-## `PING` 的调用链
-
-`PING` 是最短的一条命令链，适合用来理解“非 DB 命令怎么走”。
-
-### 路径
+`PING` 是最短路径：
 
 1. `CustomRequestDecoder`
 2. `ProtocolCommandAdapter`
 3. `YierdisFastCommandHandler`
-4. `NettyCommandExecutor`
-5. `NettyCommandDrainLoop`
-6. `NettyCommandExecutionSupport`
-7. `YierdisEngine`
-8. `YierdisFastCommandProcessor`
-9. `CoreConnectionCommands.ping(...)`
-10. `ReplyWriter.simpleString("PONG")`
-11. `JsonLineReplyWriter` 编码为 NDJSON
+4. `CommandExecutor`
+5. `YierdisEngine`
+6. `YierdisFastCommandProcessor`
+7. `CommandSpec<ExecutionRequest>.parse(...)`
+8. `CoreConnectionCommands.ping(...)`
+9. `ReplyWriter.simpleString("PONG")`
+10. `NettyExecutionIoAdapter` 写回
 
-### 特征
+它不访问 DB，主要验证协议适配、提交、owner-thread 执行和回包链路。
 
-- 不访问 DB
-- 不修改会话状态
-- 主要验证协议、提交、执行器和回包链路
+## SET
 
-## `SET` 的调用链
+`SET` 更适合理解 DB 写路径：
 
-`SET` 是理解本项目 DB 内核设计的更好例子。
+1. `StringCommands.set(...)` 由 typed parser 解析 `NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL`。
+2. `CommandSupport.dbWrites(ctx)` 按 `EngineSession.dbIndex()` 通过 `YierdisDbRouter` 选 DB。
+3. `YierdisStringOps.set(...)` 估算写入上界并构造 mutation。
+4. `YierdisDbMutationExecutor.execute(...)` 先 reserve memory，再执行 mutation，最后 commit 或 rollback。
+5. `YierdisDbKeyLifecycle.computeWithHandle(...)` 处理 keyspace、旧值释放、TTL、LRU touch 和内存记账。
+6. `YierdisObject` 根据内容选择内部编码，必要时使用 off-heap payload。
 
-### 命令层
+命令层只看到 `DbReads/DbWrites` 能力接口，不直接改 `YierdisDb` 内部结构。
 
-`YierdisEngine` 接收执行请求后，当前默认实现会委托 `YierdisFastCommandProcessor` 命中 `StringCommands.set(...)`。这里负责：
+## 事务
 
-- 解析 `NX` / `XX`
-- 解析 `GET`
-- 解析 `EX` / `PX` / `EXAT` / `PXAT` / `KEEPTTL`
-- 做语法和参数合法性校验
-- 把选项映射成 `SetMode` 和 `ExpireOption`
+事务状态现在属于 `EngineSession.transaction()`。
 
-然后命令层并不直接访问具体 DB 实现，而是走：
+入队阶段：
 
-- `support.dbWrites(ctx).strings().set(...)`
+```text
+YierdisEngine.execute(...)
+  -> YierdisFastCommandProcessor
+  -> lookup CommandSpec
+  -> parse request before queueing
+  -> EngineSession.transaction.tryEnqueue(snapshot)
+  -> QUEUED
+```
 
-### DB 路由
+`tryEnqueue(...)` 会使用 `ByteArrayExecutionRequest.copyOf(request)` 保存快照。这样原请求即使在 executor finally 中被释放，事务队列里的命令仍然独立存活。
 
-`CommandSupport.dbWrites(ctx)` 会按当前连接态里的 DB index 做路由。
+`EXEC` 阶段：
 
-也就是说：
+```text
+EXEC
+  -> EngineSession.transaction.drain()
+  -> TransactionCommands.exec(...)
+  -> replay through YierdisFastCommandProcessor internal execution path
+  -> same parser, handler, DB routing, error mapping, and change tracking rules
+```
 
-- `SELECT` 改的是连接会话态
-- 每次执行命令时，命令层再按当前会话态选中对应 DB
+事务不是额外 IR。它排队和重放的都是 `ExecutionRequest` 快照。
 
-所以多 DB 行为是“连接级别的逻辑路由”，不是命令层硬编码某个 DB。
+## TTL 和 Maxmemory
 
-### 这里真正协作的 4 个对象
+storage pressure path 使用 key handle，而不是在热路径上把 key 统一物化为 heap `byte[]`。
 
-如果把这段 DB 路由逻辑拆开看，实际参与协作的是：
+当前规则：
 
-1. `ServerSessionState`
-   保存当前连接选中的 `dbIndex`
-2. `CommandContext`
-   通过 `dbIndexProviderOrNull()` 暴露会话里的 DB index
-3. `CommandSupport`
-   调用 `dbRouter.dbFor(ctx.dbIndexProviderOrNull())`
-4. `YierdisDbRouter`
-   最终从 `YierdisInstance.engines()` 里挑出对应的 `DbEngine`
+- API 层有 `yier.bubu.redis.ops.KeyHandle`；
+- DB 内部有 `yier.bubu.redis.db.key.KeyHandle`，并实现 API handle；
+- `MaxmemoryCandidate` 保存 `KeyHandle keyHandle`；
+- TTL cleanup 通过 `randomKeyHandle()` 采样；
+- maxmemory eviction 通过 `forEachKeyHandle(...)` / `randomKeyHandle()` 选择 victim。
 
-理解这 4 个对象后，初学者通常就能明白：
-
-- `SELECT` 为什么只是改连接态
-- 命令层为什么总是通过 `DbReads/DbWrites` 间接到 DB
-- 多 DB 路由为什么不需要把 `dbIndex` 手工传遍所有命令实现
-
-### 写入阶段
-
-真正写入发生在 `YierdisStringOps.set(...)`。
-
-这一步不是直接改对象，而是先走 mutation executor：
-
-1. 估算本次写入的 `upperBoundBytes`
-2. 进入 `YierdisDbMutationExecutor`
-3. `ledger.reserve(...)`
-4. 真正执行 mutation
-5. `commit(...)` 或 `rollback(...)`
-
-这一步是 `maxmemory / eviction / OOM` 的关键闭环。
-
-### 如果把 `SET` 写路径再拆细一点
-
-对初学者来说，`SET` 的代码逻辑可以按下面顺序理解：
-
-1. `StringCommands.set(...)`
-   解析选项并做语法校验
-2. `CommandSupport.dbWrites(ctx).strings().set(...)`
-   按当前连接路由到目标 DB 的 string write ops
-3. `YierdisStringOps.set(...)`
-   估算写入上界，准备 mutation plan
-4. `YierdisDbMutationExecutor.execute(...)`
-   先 `reserve`，再执行 mutation，最后 `commit` 或 `rollback`
-5. `YierdisDbKeyLifecycle.computeWithHandle(...)`
-   在 keyspace 上读写 key 和 object
-6. `YierdisObject.newString(...)` 或 `overwriteWithString(...)`
-   构造或覆盖真实字符串对象
-7. `YierdisDbKeyLifecycle.setExpireAtMillis(...)` / `removeExpire(...)`
-   处理 TTL
-
-这条链有一个非常重要的工程化特点：
-
-- 命令层不直接改对象
-- `*Ops` 也不直接无保护地改内存
-- 所有真正的 mutation 都被 memory ledger 和 lifecycle 包裹住
-
-### key 生命周期
-
-具体 mutation 里，字符串写入会通过 `YierdisDbKeyLifecycle.computeWithHandle(...)` 操作 keyspace。
-
-这里统一处理：
-
-- 是否已有旧值
-- 旧 key 是否已经过期
-- `NX/XX` 语义
-- 覆盖旧 payload 时的释放
-- TTL 设置或删除
-- LRU touch
-- used bytes 调整
-
-### value 表示
-
-新字符串值最终会落成 `YierdisObject`。
-
-当前字符串内部编码会根据内容和长度选择：
-
-- `STRING_INT`
-- `STRING_EMBSTR`
-- `STRING_RAW`
-
-如果当前路径启用了 off-heap allocator，payload 会进入 `OffHeapBuf`；否则会留在 heap。
-
-初学者读这里时，可以带着一个简单问题：
-
-- “为什么 `SET` 不是把 `byte[]` 塞进 `Map<byte[], byte[]>` 就结束？”
-
-答案是：
-
-- 项目想保留 Redis 风格的内部编码切换
-- 还要考虑 TTL、内存记账、off-heap、LRU touch、wrong-type 等行为
-
-所以 value 最终不是一个原始字节数组，而是带类型、编码和 payload 生命周期的 `YierdisObject`。
-
-## 事务怎么排队和重放
-
-事务逻辑主要不在 protocol 层，而在连接态和命令处理器里。
-
-### 入队阶段
-
-当前阶段，`YierdisEngine.execute(...)` 会进入 `YierdisFastCommandProcessor.execute(...)`。处理器在真正执行命令前，会先看：
-
-- `ctx.serverSessionOrNull()`
-- `session.transaction()`
-
-如果当前连接正处于 `MULTI` 状态，并且命令不是 `MULTI/EXEC/DISCARD` 本身，那么处理器不会立刻执行命令，而是：
-
-1. 检查该命令是否允许在事务中出现
-2. 调用 `tx.tryEnqueue(request)`
-3. 成功则返回 `QUEUED`
-4. 队列超限则把事务标记成 aborted
-
-### 为什么事务队列存的是快照
-
-`ServerSessionState.ConnectionTransactionState.tryEnqueue(...)` 不会直接把当前 `ExecutionRequest` 引用放进队列，而是：
-
-- 调用 `ByteArrayExecutionRequest.copyOf(request)` 做一份快照
-
-原因是：
-
-- 当前请求对象的生命周期归 executor 管理
-- 事务里的命令必须独立存活到未来的 `EXEC`
-- 避免原请求对象被回收后事务队列里留下悬空引用
-
-### `EXEC` 时发生什么
-
-`EXEC` 最终会从事务队列里 `drain()` 出这些命令快照，再逐条重新走命令执行逻辑。
-
-因此，事务不是“把写操作先记成某种特殊 IR 再解释”，而是：
-
-- 把统一的 `ExecutionRequest` 快照先排队
-- 到 `EXEC` 时再逐条重放
-
-这也解释了为什么这个项目特别强调 `ExecutionRequest/ExecutionRecord` 是统一边界。
-
-在后续 engine-centric 重构阶段，事务和 selected DB 这类 session ownership 会继续从 executor/server 侧状态迁向 engine session；但本阶段还没有改变事务语义，只是先把执行入口固定到 engine。
+heap `byte[]` 仍允许出现在协议边界、显式 materialization、测试和 client-facing 结果里，但不应该重新成为 TTL/maxmemory 压力路径的默认 key identity。
 
 ## 错误、关闭和背压
 
-这条请求链还有三个容易忽略但很关键的侧面：
+协议错误优先由 decoder 转成可回复的协议错误事件。无法安全恢复帧边界时，连接会关闭。
 
-### 1. 协议错误尽量可恢复
+内部错误或 `QUIT` 会通过 `NettyExecutionConnection.markClosing()` 进入 closing。该方法先切换 `ExecutionConnectionContext` 的 closing flag，成功后丢弃 `EngineSession` 上的事务，避免已入队但未执行命令继续产生副作用。
 
-decoder 会尽量把协议错误转成 `ProtocolError` 事件，再由上层统一编码错误响应；在无法安全继续同步帧边界时，才会关闭连接。
+背压由 executor 决定，Netty 只提供 `autoRead` 和 channel writability 这些机械开关。相关对象是：
 
-### 2. 连接进入 closing 后，已入队命令会被跳过
-
-如果连接因为 `QUIT` 或内部错误进入 closing，后续已经入队但尚未执行的命令不会再产生副作用，而是只做资源回收。
-
-### 3. 背压是连接级和全局预算一起生效
-
-进入背压不只取决于单连接 pending 条数，还和：
-
-- pending bytes
-- 全局队列容量
-- 全局 queued bytes 预算
-
-一起决定。
-
-## 背压到底由谁决定
-
-对初学者来说，最容易混淆的是“背压到底在 Netty 里，还是在 executor 里”。
-
-更准确的说法是：
-
-- Netty 提供 `autoRead` 和 channel writability 这些机械开关
-- 什么时候关、什么时候开，由 executor 侧的背压逻辑决定
-
-真正参与协作的对象有：
-
-- `NettyCommandSubmitter`
-  入队时检查队列容量和 bytes 预算
+- `CommandExecutorSubmitter`
 - `ExecutorBacklogBudget`
-  管全局 slot 和 queued bytes
 - `ExecutorBackpressureController`
-  负责进入 /退出 backpressure，以及恢复 `autoRead`
-- `NettyCommandDrainLoop`
-  命令执行完成后释放 slot 和 bytes 预算
-- `ServerConnectionContext`
-  记录单连接 pending / pendingBytes 和状态计数
-
-也就是说：
-
-- 入队阶段负责“发现压力过大”
-- drain 阶段负责“压力释放后恢复”
-
-这不是某个单独类一把抓，而是 submitter、drain loop 和 backpressure controller 三方协作。
+- `CommandExecutorDrainLoop`
+- `ExecutionConnectionContext`
+- `NettyExecutionIoAdapter`
 
 ## 建议先看的测试
 
-如果你想把本文里的代码逻辑和真实行为对上，下面这些测试最适合初学者：
-
-- `yierdis-server/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
-  看启动后 server、核心命令和 server 命令是怎么真正接在一起的
 - `yierdis-core/yierdis-core-engine/src/test/java/yier/bubu/redis/engine/DefaultYierdisEngineTest.java`
-  看 engine facade 如何把请求执行和 maintenance 入口统一起来
-- `yierdis-server/src/test/java/yier/bubu/redis/NettyCommandExecutorTest.java`
-  看 drain 限制、queued bytes 预算、`QUIT` 后跳过后续命令等执行器行为
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java`
-  看 `SET`、`GET`、`NX`、`KEEPTTL` 等命令行为
+- `yierdis-core/yierdis-core-engine/src/test/java/yier/bubu/redis/engine/EngineSessionTest.java`
+- `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorTest.java`
+- `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/ExecutionConnectionContextTest.java`
+- `yierdis-server/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
+- `yierdis-server/src/test/java/yier/bubu/redis/TransactionQueueCleanupTest.java`
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/TransactionCommandTest.java`
-  看事务 `QUEUED`、`EXEC` 重放和队列行为
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/db/OffHeapStringStorageTest.java`
-  看字符串 off-heap 写入、读取和释放
+- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 
-## 读这条链时推荐打开的文件
+## 推荐打开的文件
 
+- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
 - `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`
+- `yierdis-server/src/main/java/yier/bubu/redis/NettyExecutionConnection.java`
 - `yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java`
 - `yierdis-server/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandExecutor.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandSubmitter.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandDrainLoop.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandExecutionSupport.java`
+- `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutor.java`
+- `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorExecutionSupport.java`
 - `yierdis-core/yierdis-core-engine/src/main/java/yier/bubu/redis/engine/YierdisEngine.java`
-- `yierdis-core/yierdis-core-engine/src/main/java/yier/bubu/redis/engine/DefaultYierdisEngine.java`
+- `yierdis-core/yierdis-core-engine/src/main/java/yier/bubu/redis/engine/EngineSession.java`
 - `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
-- `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/StringCommands.java`
-- `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisStringOps.java`
-- `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbKeyLifecycle.java`
+- `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/CommandSpec.java`
+- `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbMaxmemorySupport.java`
+- `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbExpirationSupport.java`
 
-如果你想先继续按源码顺序把这条主链读透，下一篇建议看 [`main-path-walkthrough.md`](./main-path-walkthrough.md)。
-
-如果你想把这条链路里出现的 request/reply 线格式讲清楚，接着看 [`protocol-reference.md`](./protocol-reference.md)。
-
-如果你想进一步理解命令分发落到哪些逻辑类型和内部编码上，接着看 [`commands-and-data-model.md`](./commands-and-data-model.md)。
-
-如果你想进一步把提交、drain、queue budget 和 autoRead 背压机制讲细，接着看 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
-
-如果你打算真正改命令行为，再继续看 [`development-navigation.md`](./development-navigation.md)。
+如果你想继续理解模块边界，接着看 [`module-architecture.md`](./module-architecture.md)。

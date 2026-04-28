@@ -2,9 +2,6 @@ package yier.bubu.redis.corecommand;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.contract.Command;
-import yier.bubu.redis.contract.CommandContext;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -90,17 +87,7 @@ public class CoreCommandBoundaryGuardTest {
     }
 
     @Test
-    public void executeCommandCompatibilityOverloadMustBeExplicitlyDeprecated() throws NoSuchMethodException {
-        Assert.assertTrue(
-                "execute(Command, CommandContext) 必须显式标记为兼容层 @Deprecated overload",
-                YierdisFastCommandProcessor.class
-                        .getDeclaredMethod("execute", Command.class, CommandContext.class)
-                        .isAnnotationPresent(Deprecated.class)
-        );
-    }
-
-    @Test
-    public void coreCommandMustOnlyUseCommandCompatibilitySurfacesTemporarily() throws IOException {
+    public void coreCommandMustNotUseDeprecatedCommandCompatibilitySurfaces() throws IOException {
         Path moduleRoot = resolveModuleRoot();
         Assert.assertNotNull("无法定位 yierdis-core-command 模块根目录（未找到 src/main/java）", moduleRoot);
 
@@ -108,26 +95,13 @@ public class CoreCommandBoundaryGuardTest {
         int scanned = scanForForbiddenPattern(
                 moduleRoot.resolve("src/main/java/yier/bubu/redis/command"),
                 offenders,
-                Pattern.compile("\\byier\\.bubu\\.redis\\.contract\\.Command\\b")
+                Pattern.compile("\\byier\\.bubu\\.redis\\.contract\\.Command\\b|instanceof\\s+Command|execute\\(Command")
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
 
-        allowOnly(
-                offenders,
-                "src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java",
-                "src/main/java/yier/bubu/redis/command/CommandSupport.java"
-        );
         if (!offenders.isEmpty()) {
-            Assert.fail("core-command 只能在 Task 2 允许的兼容面保留 Command 引用：\n" + String.join("\n", offenders));
+            Assert.fail("core-command 不应继续使用 deprecated Command 兼容面：\n" + String.join("\n", offenders));
         }
-
-        Path supportFile = moduleRoot.resolve("src/main/java/yier/bubu/redis/command/CommandSupport.java");
-        Assert.assertTrue("缺少 CommandSupport.java", Files.isRegularFile(supportFile));
-        String source = Files.readString(supportFile, StandardCharsets.UTF_8);
-        Assert.assertTrue(
-                "CommandSupport 必须显式说明当前 zero-copy Command fallback 是临时兼容 seam",
-                source.contains("temporary compatibility seam for zero-copy/frame-backed Command producers")
-        );
     }
 
     private static int scanForForbiddenImports(Path srcRoot, List<String> offenders) throws IOException {
@@ -225,29 +199,6 @@ public class CoreCommandBoundaryGuardTest {
                 }
             }
         }
-    }
-
-    private static void allowOnly(List<String> offenders, String... allowedSuffixes) {
-        if (offenders.isEmpty()) {
-            return;
-        }
-        offenders.removeIf(offender -> {
-            String path = offender;
-            int marker = offender.indexOf(" -> ");
-            if (marker >= 0) {
-                path = offender.substring(0, marker);
-            }
-            int lineSep = path.lastIndexOf(':');
-            if (lineSep > 1) {
-                path = path.substring(0, lineSep);
-            }
-            for (String suffix : allowedSuffixes) {
-                if (path.endsWith(suffix)) {
-                    return true;
-                }
-            }
-            return false;
-        });
     }
 
     private static Path resolveModuleRoot() {

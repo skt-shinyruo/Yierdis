@@ -4,7 +4,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
@@ -15,7 +14,6 @@ import yier.bubu.redis.ops.DbWrites;
 import yier.bubu.redis.ops.ExpirationManager;
 import yier.bubu.redis.ops.MemoryOps;
 
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public class YierdisFastCommandProcessorModuleTest {
@@ -40,15 +38,14 @@ public class YierdisFastCommandProcessorModuleTest {
                 SlowCommandGovernor.DEFAULT,
                 registrar -> registrar.register(
                         "LOCAL",
+                        CommandDescriptor.of(1, 0, 0, 0),
+                        CommandParsers.exactRequest(1, "local"),
                         (request, ctx) -> {
-                            Assert.assertFalse(request instanceof Command);
                             ctx.out().simpleString(CommandSupport.utf8(request, 0));
-                        },
-                        CommandDescriptor.of(1, 0, 0, 0)
+                        }
                 )
         );
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of());
-        Assert.assertFalse(request instanceof Command);
 
         CapturingReplyWriter out = new CapturingReplyWriter();
         processor.execute(request, new CommandContext(null, out));
@@ -65,7 +62,6 @@ public class YierdisFastCommandProcessorModuleTest {
                 SlowCommandGovernor.DEFAULT
         );
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("PING", List.of());
-        Assert.assertFalse(request instanceof Command);
 
         CapturingReplyWriter out = new CapturingReplyWriter();
         processor.execute(request, new CommandContext(null, out));
@@ -75,74 +71,34 @@ public class YierdisFastCommandProcessorModuleTest {
     }
 
     @Test
-    public void extraModulesMustProvideDescriptorMetadata() {
-        try {
-            new YierdisFastCommandProcessor(
-                    new NoopDbEngine(),
-                    null,
-                    SlowCommandGovernor.DEFAULT,
-                    registrar -> registrar.register("LOCAL", (cmd, ctx) -> ctx.out().simpleString("LOCAL_OK"))
-            );
-            Assert.fail("expected descriptor-less extra module registration to fail");
-        } catch (UnsupportedOperationException expected) {
-            Assert.assertTrue(expected.getMessage().contains("descriptor is required"));
-        }
+    public void extraModulesCanRegisterTypedCommandSpecsDirectly() {
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+                new NoopDbEngine(),
+                null,
+                SlowCommandGovernor.DEFAULT,
+                registrar -> registrar.register(
+                        "LOCAL",
+                        CommandSpec.of(
+                                CommandDescriptor.of(1, 0, 0, 0),
+                                CommandParsers.exactRequest(1, "local"),
+                                (request, ctx) -> ctx.out().simpleString("LOCAL_OK")
+                        )
+                )
+        );
+
+        CapturingReplyWriter out = new CapturingReplyWriter();
+        processor.execute(ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()), new CommandContext(null, out));
+
+        Assert.assertEquals("LOCAL_OK", out.simpleStringValue);
+        Assert.assertNull(out.errorValue);
     }
 
     private static void assertUnknownCommand(YierdisFastCommandProcessor processor, String commandName) {
         CapturingReplyWriter out = new CapturingReplyWriter();
-        processor.execute(new StaticCommand(commandName), new CommandContext(null, out));
+        processor.execute(ByteArrayExecutionRequest.fromUtf8(commandName, List.of()), new CommandContext(null, out));
 
         Assert.assertNull(out.simpleStringValue);
         Assert.assertEquals("ERR unknown command '" + commandName + "'", out.errorValue);
-    }
-
-    private static final class StaticCommand implements Command {
-        private final byte[][] argv;
-
-        private StaticCommand(String... args) {
-            this.argv = new byte[args.length][];
-            for (int i = 0; i < args.length; i++) {
-                this.argv[i] = args[i] == null ? null : args[i].getBytes(StandardCharsets.US_ASCII);
-            }
-        }
-
-        @Override
-        public int argc() {
-            return argv.length;
-        }
-
-        @Override
-        public boolean isNull(int index) {
-            return argv[index] == null;
-        }
-
-        @Override
-        public int len(int index) {
-            byte[] arg = argv[index];
-            return arg == null ? -1 : arg.length;
-        }
-
-        @Override
-        public byte byteAt(int index, int offset) {
-            return argv[index][offset];
-        }
-
-        @Override
-        public void copyToByteArray(int index, byte[] dst, int dstOff) {
-            byte[] arg = argv[index];
-            System.arraycopy(arg, 0, dst, dstOff, arg.length);
-        }
-
-        @Override
-        public byte[] toByteArray(int index) {
-            byte[] arg = argv[index];
-            return arg == null ? null : arg.clone();
-        }
-
-        @Override
-        public void close() {
-        }
     }
 
     private static final class CapturingReplyWriter implements ReplyWriter {

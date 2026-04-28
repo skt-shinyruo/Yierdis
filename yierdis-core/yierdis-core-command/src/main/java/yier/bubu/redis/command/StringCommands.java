@@ -27,7 +27,7 @@ final class StringCommands implements CommandModule {
         registration.register("APPEND", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exact(3, "append"), this::append);
         registration.register("SETBIT", CommandDescriptor.of(4, 1, 1, 1), CommandParsers.exact(4, "setbit"), this::setbit);
         registration.register("GETBIT", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exact(3, "getbit"), this::getbit);
-        registration.register("BITCOUNT", this::bitcount, CommandDescriptor.of(-2, 1, 1, 1));
+        registration.register("BITCOUNT", CommandDescriptor.of(-2, 1, 1, 1), CommandParsers.oneOfRequest("bitcount", 2, 4), this::bitcount);
         registration.register("INCR", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "incr"), this::incr);
         registration.register("DECR", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "decr"), this::decr);
     }

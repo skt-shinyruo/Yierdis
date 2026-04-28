@@ -4,7 +4,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.DbIndexProvider;
 import yier.bubu.redis.contract.ExecutionRequest;
@@ -12,11 +11,7 @@ import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.runtime.api.YierdisChangeSink;
 
-import java.lang.reflect.Array;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
@@ -34,28 +29,20 @@ public class YierdisFastCommandProcessorRegistrationTest {
     };
 
     @Test
-    public void constructorRegistersDefaultAndCallerSuppliedModules() throws Exception {
-        Class<?> moduleType = loadRequiredType("yier.bubu.redis.command.CommandModule");
-        Class<?> registrationType = loadRequiredType("yier.bubu.redis.command.CommandModule$Registration");
-        Class<?> handlerType = loadRequiredType("yier.bubu.redis.command.CommandModule$Handler");
-
-        Object extraModule = Proxy.newProxyInstance(
-                moduleType.getClassLoader(),
-                new Class[]{moduleType},
-                newExtraModuleHandler(registrationType, handlerType)
+    public void constructorRegistersDefaultAndCallerSuppliedModules() {
+        CommandModule extraModule = registration -> registration.register(
+                "TRACE",
+                CommandDescriptor.of(1, 0, 0, 0),
+                CommandParsers.exactRequest(1, "trace"),
+                (request, ctx) -> ctx.out().simpleString("TRACE-OK")
         );
 
-        Class<?> moduleArrayType = Array.newInstance(moduleType, 0).getClass();
-        Constructor<YierdisFastCommandProcessor> constructor = loadRequiredConstructor(moduleArrayType);
-        Object extraModules = Array.newInstance(moduleType, 1);
-        Array.set(extraModules, 0, extraModule);
-
-        YierdisFastCommandProcessor processor = constructor.newInstance(
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
                 TEST_ROUTER,
                 null,
                 YierdisChangeSink.NOOP,
                 null,
-                extraModules
+                extraModule
         );
 
         Assert.assertEquals("PONG", executeSimpleString(processor, "PING"));
@@ -63,20 +50,24 @@ public class YierdisFastCommandProcessorRegistrationTest {
     }
 
     @Test
-    public void handlerSignatureMustUseExecutionRequest() throws Exception {
-        Class<?> handlerType = loadRequiredType("yier.bubu.redis.command.CommandModule$Handler");
-        Method execute = handlerType.getMethod("execute", ExecutionRequest.class, CommandContext.class);
-
-        Assert.assertEquals(void.class, execute.getReturnType());
+    public void commandModuleRegistrationDoesNotExposeLegacyHandlerOverloads() {
+        for (Class<?> nested : CommandModule.class.getDeclaredClasses()) {
+            Assert.assertNotEquals("Handler", nested.getSimpleName());
+        }
+        for (Method method : CommandModule.Registration.class.getMethods()) {
+            if (!"register".equals(method.getName()) && !"registerDisallowedInMulti".equals(method.getName())) {
+                continue;
+            }
+            for (Class<?> parameterType : method.getParameterTypes()) {
+                Assert.assertFalse(parameterType.getName().endsWith("CommandModule$Handler"));
+            }
+        }
     }
 
     @Test
     public void registryLookupAndHelpersMustAcceptExecutionRequest() throws Exception {
         Method spec = CommandRegistry.class.getDeclaredMethod("spec", ExecutionRequest.class);
         Assert.assertEquals(CommandSpec.class, spec.getReturnType());
-
-        Method find = CommandRegistry.class.getDeclaredMethod("find", ExecutionRequest.class);
-        Assert.assertEquals(CommandModule.Handler.class, find.getReturnType());
 
         Method descriptor = CommandRegistry.class.getDeclaredMethod("descriptor", ExecutionRequest.class);
         Assert.assertEquals(CommandDescriptor.class, descriptor.getReturnType());
@@ -147,84 +138,9 @@ public class YierdisFastCommandProcessorRegistrationTest {
         Assert.assertEquals("ERR wrong number of arguments for 'strict' command", out.error());
     }
 
-    private static Class<?> loadRequiredType(String className) {
-        try {
-            return Class.forName(className);
-        } catch (ClassNotFoundException e) {
-            Assert.fail("missing command registration extension point type: " + className);
-            return null;
-        }
-    }
-
-    private static Constructor<YierdisFastCommandProcessor> loadRequiredConstructor(Class<?> moduleArrayType) {
-        try {
-            return YierdisFastCommandProcessor.class.getConstructor(
-                    YierdisDbRouter.class,
-                    ServerInfoProvider.class,
-                    YierdisChangeSink.class,
-                    SlowCommandGovernor.class,
-                    moduleArrayType
-            );
-        } catch (NoSuchMethodException e) {
-            Assert.fail("missing constructor overload for caller-supplied command modules");
-            return null;
-        }
-    }
-
-    private static InvocationHandler newExtraModuleHandler(Class<?> registrationType, Class<?> handlerType) {
-        return (proxy, method, args) -> {
-            if (method.getDeclaringClass() == Object.class) {
-                return handleObjectMethod(proxy, method, args);
-            }
-            Assert.assertEquals("register", method.getName());
-            Assert.assertNotNull(args);
-            Assert.assertEquals(1, args.length);
-
-            Object registration = args[0];
-            Object traceHandler = Proxy.newProxyInstance(
-                    handlerType.getClassLoader(),
-                    new Class[]{handlerType},
-                    (handlerProxy, handlerMethod, handlerArgs) -> {
-                        if (handlerMethod.getDeclaringClass() == Object.class) {
-                            return handleObjectMethod(handlerProxy, handlerMethod, handlerArgs);
-                        }
-                        Assert.assertEquals("execute", handlerMethod.getName());
-                        Assert.assertNotNull(handlerArgs);
-                        Assert.assertEquals(2, handlerArgs.length);
-                        Assert.assertTrue(handlerArgs[0] instanceof ExecutionRequest);
-                        CommandContext ctx = (CommandContext) handlerArgs[1];
-                        ctx.out().simpleString("TRACE-OK");
-                        return null;
-                    }
-            );
-            Method register = registrationType.getMethod(
-                    "register",
-                    String.class,
-                    handlerType,
-                    CommandDescriptor.class
-            );
-            register.invoke(registration, "TRACE", traceHandler, CommandDescriptor.of(1, 0, 0, 0));
-            return null;
-        };
-    }
-
-    private static Object handleObjectMethod(Object proxy, Method method, Object[] args) {
-        String name = method.getName();
-        if ("toString".equals(name)) {
-            return proxy.getClass().getName();
-        }
-        if ("hashCode".equals(name)) {
-            return System.identityHashCode(proxy);
-        }
-        if ("equals".equals(name)) {
-            return proxy == args[0];
-        }
-        throw new UnsupportedOperationException("unexpected Object method: " + name);
-    }
-
     private static String executeSimpleString(YierdisFastCommandProcessor processor, String... argv) {
         TestReplyWriter writer = new TestReplyWriter();
-        processor.execute(new ArrayCommand(argv), new CommandContext(null, writer));
+        processor.execute(new ArrayExecutionRequest(argv), new CommandContext(null, writer));
         if (writer.error() != null) {
             Assert.fail("expected simple string reply, got error: " + writer.error());
         }
@@ -239,10 +155,10 @@ public class YierdisFastCommandProcessorRegistrationTest {
         return out.bulkString();
     }
 
-    private static final class ArrayCommand implements Command {
+    private static final class ArrayExecutionRequest implements ExecutionRequest {
         private final byte[][] argv;
 
-        private ArrayCommand(String... argv) {
+        private ArrayExecutionRequest(String... argv) {
             this.argv = new byte[argv.length][];
             for (int i = 0; i < argv.length; i++) {
                 this.argv[i] = argv[i] == null ? null : argv[i].getBytes(StandardCharsets.US_ASCII);

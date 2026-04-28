@@ -23,10 +23,10 @@ final class HashCommands implements CommandModule {
                 CommandParsers.pairTail(4, 2, "hset"),
                 this::hset
         );
-        registration.register("HGET", this::hget, CommandDescriptor.of(3, 1, 1, 1));
-        registration.register("HGETALL", this::hgetall, CommandDescriptor.of(2, 1, 1, 1));
-        registration.register("HLEN", this::hlen, CommandDescriptor.of(2, 1, 1, 1));
-        registration.register("HDEL", this::hdel, CommandDescriptor.of(-3, 1, 1, 1));
+        registration.register("HGET", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "hget"), this::hget);
+        registration.register("HGETALL", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "hgetall"), this::hgetall);
+        registration.register("HLEN", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "hlen"), this::hlen);
+        registration.register("HDEL", CommandDescriptor.of(-3, 1, 1, 1), CommandParsers.minRequest(3, "hdel"), this::hdel);
     }
 
     private void hset(ArgReader args, CommandContext ctx) {

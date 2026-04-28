@@ -116,8 +116,9 @@ public class TransactionCommandTest {
                     SlowCommandGovernor.DEFAULT,
                     registration -> registration.registerDisallowedInMulti(
                             "HELLO",
-                            (cmd, ctx) -> ctx.out().simpleString("HELLO"),
                             CommandDescriptor.of(-1, 0, 0, 0),
+                            CommandParsers.minRequest(1, "hello"),
+                            (cmd, ctx) -> ctx.out().simpleString("HELLO"),
                             "ERR HELLO is not allowed in MULTI"
                     )
             );

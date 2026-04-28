@@ -49,7 +49,6 @@ final class YierdisDbComponentFactory {
         YierdisDbMutationExecutor mutationExecutor = new YierdisDbMutationExecutor(owner::checkThread, ledger);
         YierdisDbExpirationSupport expirationSupport = new YierdisDbExpirationSupport(
                 owner.db(),
-                storage.keysStoredOffHeap,
                 config.expireCleanupTimeLimitNanos
         );
         YierdisDbMaxmemorySupport maxmemorySupport = new YierdisDbMaxmemorySupport(

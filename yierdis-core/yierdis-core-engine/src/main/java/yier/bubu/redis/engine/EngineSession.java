@@ -1,6 +1,8 @@
-package yier.bubu.redis.executor;
+package yier.bubu.redis.engine;
 
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
+import yier.bubu.redis.contract.ConnectionStatsProvider;
+import yier.bubu.redis.contract.ConnectionStatsView;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
@@ -8,31 +10,40 @@ import yier.bubu.redis.contract.TransactionState;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
-public final class DefaultExecutionSession implements ServerSession {
+/**
+ * Engine-owned per-connection command session state.
+ */
+public final class EngineSession implements ServerSession, ConnectionStatsProvider {
     private static final AtomicLong NEXT_CLIENT_ID = new AtomicLong(1);
 
     private final long clientId = NEXT_CLIENT_ID.getAndIncrement();
     private final DefaultTransactionState transaction;
-    private ExecutionConnectionContext connectionContext;
+    private volatile Supplier<ConnectionStatsView> connectionStatsSupplier = () -> null;
     private int dbIndex;
     private String clientName;
     private boolean authenticated;
 
-    public DefaultExecutionSession(int maxQueuedCommands, long maxQueuedBytes) {
+    public EngineSession(int maxQueuedCommands, long maxQueuedBytes) {
         this.transaction = new DefaultTransactionState(maxQueuedCommands, maxQueuedBytes);
     }
 
-    void attach(ExecutionConnectionContext connectionContext) {
-        this.connectionContext = connectionContext;
-    }
-
-    public ExecutionConnectionContext connectionContext() {
-        return connectionContext;
-    }
-
-    void discardTransaction() {
+    public void discardTransaction() {
         transaction.discard();
+    }
+
+    /**
+     * Binds a read-only stats supplier owned by the transport/executor connection.
+     * The session does not own these counters; it only exposes them to INFO/STATS.
+     */
+    public void bindConnectionStatsSupplier(Supplier<ConnectionStatsView> supplier) {
+        connectionStatsSupplier = supplier == null ? () -> null : supplier;
+    }
+
+    @Override
+    public ConnectionStatsView connectionStats() {
+        return connectionStatsSupplier.get();
     }
 
     @Override

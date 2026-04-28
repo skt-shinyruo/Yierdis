@@ -1,5 +1,7 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.db.key.KeyHandle;
+
 import java.util.Objects;
 
 final class YierdisDbExpirationSupport {
@@ -7,12 +9,10 @@ final class YierdisDbExpirationSupport {
     private static final int CLEANUP_MAX_LOOPS = 16;
 
     private final YierdisDb db;
-    private final boolean keysStoredOffHeap;
     private final long expireCleanupTimeLimitNanos;
 
-    YierdisDbExpirationSupport(YierdisDb db, boolean keysStoredOffHeap, long expireCleanupTimeLimitNanos) {
+    YierdisDbExpirationSupport(YierdisDb db, long expireCleanupTimeLimitNanos) {
         this.db = Objects.requireNonNull(db, "db");
-        this.keysStoredOffHeap = keysStoredOffHeap;
         this.expireCleanupTimeLimitNanos = expireCleanupTimeLimitNanos;
     }
 
@@ -37,9 +37,7 @@ final class YierdisDbExpirationSupport {
                 return;
             }
 
-            int expired = keysStoredOffHeap
-                    ? cleanupOffHeapSamples(samples, nowFixed)
-                    : cleanupHeapSamples(samples, nowFixed);
+            int expired = cleanupSamples(samples, nowFixed);
 
             loops++;
             if (expired <= samples / 4) {
@@ -54,65 +52,37 @@ final class YierdisDbExpirationSupport {
         }
     }
 
-    private int cleanupOffHeapSamples(int samples, long nowMillis) {
+    private int cleanupSamples(int samples, long nowMillis) {
         int expired = 0;
         for (int i = 0; i < samples; i++) {
-            byte[] keyBytes = db.expires.randomKey();
-            if (keyBytes == null) {
+            KeyHandle keyHandle = db.expires.randomKeyHandle();
+            if (keyHandle == null) {
                 break;
             }
 
-            Long expireAtMillis = db.expires.get(keyBytes);
+            Long expireAtMillis = db.expires.get(keyHandle);
             if (expireAtMillis == null) {
-                db.removeExpire(keyBytes);
+                db.removeExpire(keyHandle);
                 continue;
             }
 
-            YierdisObject e = db.store.get(keyBytes);
+            YierdisObject e = db.store.get(keyHandle);
             if (e == null) {
-                db.removeExpire(keyBytes);
+                db.removeExpire(keyHandle);
                 continue;
             }
 
             if (expireAtMillis <= nowMillis) {
-                removeExpiredValue(keyBytes, e);
+                removeExpiredValue(keyHandle, e);
                 expired++;
             }
         }
         return expired;
     }
 
-    private int cleanupHeapSamples(int samples, long nowMillis) {
-        int expired = 0;
-        for (int i = 0; i < samples; i++) {
-            byte[] keyBytes = db.expires.randomKey();
-            if (keyBytes == null) {
-                break;
-            }
-
-            Long expireAtMillis = db.expires.get(keyBytes);
-            if (expireAtMillis == null) {
-                db.removeExpire(keyBytes);
-                continue;
-            }
-
-            YierdisObject e = db.store.get(keyBytes);
-            if (e == null) {
-                db.removeExpire(keyBytes);
-                continue;
-            }
-
-            if (expireAtMillis <= nowMillis) {
-                removeExpiredValue(keyBytes, e);
-                expired++;
-            }
-        }
-        return expired;
-    }
-
-    private void removeExpiredValue(byte[] keyBytes, YierdisObject e) {
-        db.removeExpire(keyBytes);
-        if (db.store.remove(keyBytes, e)) {
+    private void removeExpiredValue(KeyHandle keyHandle, YierdisObject e) {
+        db.removeExpire(keyHandle);
+        if (db.store.remove(keyHandle, e)) {
             e.releasePayloadIfAny();
             db.adjustUsedBytes(-e.estimatedBytes);
         }

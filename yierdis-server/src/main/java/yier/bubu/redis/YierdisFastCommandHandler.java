@@ -82,7 +82,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
             } else {
                 // 标记该连接进入 closing：避免 internal error 触发 close 后，已入队命令仍在 executor 中继续执行产生副作用。
                 NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
-                if (connection != null && connection.context().markClosing()) {
+                if (connection != null && connection.markClosing()) {
                     safeDisableAutoRead(ctx);
                 }
                 writer.internalError("ERR internal error");
