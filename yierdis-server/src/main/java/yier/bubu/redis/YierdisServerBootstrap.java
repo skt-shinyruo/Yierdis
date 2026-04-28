@@ -112,7 +112,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .databases(databases)
                 .maxmemoryBytes(runtimeConfig.maxmemoryBytes())
                 .maxmemoryScope(scope)
-                .maxmemoryPolicy(runtimeConfig.maxmemoryPolicy().argvValue())
+                .maxmemoryPolicy(runtimeConfig.maxmemoryPolicy())
                 .maxmemorySamples(runtimeConfig.maxmemorySamples())
                 .evictionTimeLimitMillis(runtimeConfig.evictionTimeLimitMillis())
                 .expireCleanupTimeLimitMillis(runtimeConfig.expireCleanupTimeLimitMillis());

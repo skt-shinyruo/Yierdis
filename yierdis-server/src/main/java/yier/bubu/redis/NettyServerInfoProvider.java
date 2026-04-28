@@ -240,7 +240,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             sb.append("used_memory_dataset:").append(memStats.heapDataBytesEstimate()).append("\r\n");
             sb.append("used_memory_overhead:").append(overheadBytesEstimate).append("\r\n");
             sb.append("maxmemory:").append(config.maxmemoryBytes()).append("\r\n");
-            sb.append("maxmemory_policy:").append(config.maxmemoryPolicy().argvValue()).append("\r\n");
+            sb.append("maxmemory_policy:").append(config.maxmemoryPolicy().redisName()).append("\r\n");
             sb.append("yierdis_maxmemory_scope:")
                     .append(config.maxmemoryScope().argvValue())
                     .append("\r\n");

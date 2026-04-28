@@ -12,6 +12,7 @@ import yier.bubu.redis.contract.TransactionState;
 import yier.bubu.redis.executor.CommandExecutor;
 import yier.bubu.redis.executor.CommandExecutorConfig;
 import yier.bubu.redis.executor.SchedulingPolicy;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
 import yier.bubu.redis.protocol.json.JsonArray;
 import yier.bubu.redis.protocol.json.JsonBoolean;
@@ -385,7 +386,7 @@ public class YierdisServerBootstrapCommandWiringTest {
                 protocolMaxLineBytes,
                 0,
                 YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL,
-                YierdisServerRuntimeConfig.MaxmemoryPolicy.NOEVICTION,
+                MaxmemoryPolicy.NOEVICTION,
                 5,
                 5,
                 5,

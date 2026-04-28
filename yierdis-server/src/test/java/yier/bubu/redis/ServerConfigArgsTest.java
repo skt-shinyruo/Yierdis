@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.args.YierdisCliException;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
@@ -104,7 +105,7 @@ public class ServerConfigArgsTest {
         Assert.assertEquals(4096, runtimeConfig.get("protocolMaxLineBytes"));
         Assert.assertEquals(1048576L, runtimeConfig.get("maxmemoryBytes"));
         Assert.assertEquals(YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB, runtimeConfig.get("maxmemoryScope"));
-        Assert.assertEquals(YierdisServerRuntimeConfig.MaxmemoryPolicy.ALLKEYS_RANDOM, runtimeConfig.get("maxmemoryPolicy"));
+        Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_RANDOM, runtimeConfig.get("maxmemoryPolicy"));
         Assert.assertEquals(9, runtimeConfig.get("maxmemorySamples"));
         Assert.assertEquals(11L, runtimeConfig.get("evictionTimeLimitMillis"));
         Assert.assertEquals(13L, runtimeConfig.get("expireCleanupTimeLimitMillis"));
@@ -113,6 +114,15 @@ public class ServerConfigArgsTest {
         Assert.assertFalse(runtimeConfig.containsKey("offheapBackend"));
         Assert.assertFalse(runtimeConfig.containsKey("offheapMaxBytes"));
         Assert.assertFalse(runtimeConfig.containsKey("offheapKeysEnabled"));
+    }
+
+    @Test
+    public void maxmemoryPolicyUnderscoreInputNormalizesToCoreEnum() {
+        ServerConfig config = ServerConfig.fromArgs(new String[]{
+                "--maxmemoryPolicy", "ALLKEYS_RANDOM"
+        });
+
+        Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_RANDOM, config.runtimeConfig().maxmemoryPolicy());
     }
 
     @Test
