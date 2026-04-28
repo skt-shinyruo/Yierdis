@@ -48,7 +48,7 @@ final class KeyCommands implements CommandModule {
         registration.register("MEMORY", this::memory, CommandDescriptor.of(-2, 0, 0, 0));
         registration.register("OBJECT", this::object, CommandDescriptor.of(-2, 0, 0, 0));
         registration.register("KEYS", this::keys, CommandDescriptor.of(2, 0, 0, 0));
-        registration.register("SCAN", this::scan, CommandDescriptor.of(-2, 0, 0, 0));
+        registration.register("SCAN", CommandDescriptor.of(-2, 0, 0, 0), this::parseScan, this::scan);
         registration.register("DEL", this::del, CommandDescriptor.of(-2, 1, -1, 1));
         registration.register("EXISTS", this::exists, CommandDescriptor.of(-2, 1, -1, 1));
         registration.register("EXPIRE", this::expire, CommandDescriptor.of(3, 1, 1, 1));
@@ -209,43 +209,60 @@ final class KeyCommands implements CommandModule {
         ));
     }
 
-    private void scan(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
-        if (request.argc() < 2) {
-            CommandSupport.wrongArity(out, "scan");
-            return;
-        }
-        long cursor = CommandSupport.parseNonNegativeLong(request, 1, "cursor");
+    private record ScanArgs(long cursor, byte[] match, int count) {
+    }
 
+    private CommandParseResult<ScanArgs> parseScan(ArgReader args) {
+        CommandParseError arity = CommandArity.min(2, "scan").validate(args);
+        if (arity != null) {
+            return CommandParseResult.error(arity);
+        }
+        long cursor;
+        try {
+            cursor = args.nonNegativeLongAt(1);
+        } catch (IllegalArgumentException e) {
+            return CommandParseResult.error(CommandParseError.integerOutOfRange());
+        }
         byte[] match = null;
         int count = 10;
-        for (int i = 2; i < request.argc(); i++) {
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "MATCH")) {
-                if (i + 1 >= request.argc()) {
-                    out.error("ERR syntax error");
-                    return;
+        for (int i = 2; i < args.argc(); i++) {
+            if (args.is(i, "MATCH")) {
+                if (i + 1 >= args.argc()) {
+                    return CommandParseResult.error(CommandParseError.syntax());
                 }
-                match = request.readOnlyByteArray(++i);
+                match = args.bytes(++i);
                 continue;
             }
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "COUNT")) {
-                if (i + 1 >= request.argc()) {
-                    out.error("ERR syntax error");
-                    return;
+            if (args.is(i, "COUNT")) {
+                if (i + 1 >= args.argc()) {
+                    return CommandParseResult.error(CommandParseError.syntax());
                 }
-                long v = CommandSupport.parseNonNegativeLong(request, ++i, "count");
+                long v;
+                try {
+                    v = args.nonNegativeLongAt(++i);
+                } catch (IllegalArgumentException e) {
+                    return CommandParseResult.error(CommandParseError.integerOutOfRange());
+                }
                 if (v <= 0 || v > Integer.MAX_VALUE) {
-                    throw new IllegalArgumentException("value is not an integer or out of range");
+                    return CommandParseResult.error(CommandParseError.integerOutOfRange());
                 }
                 count = (int) v;
                 continue;
             }
-            out.error("ERR syntax error");
-            return;
+            return CommandParseResult.error(CommandParseError.syntax());
         }
+        return CommandParseResult.ok(new ScanArgs(cursor, match, count));
+    }
 
+    private void scan(ScanArgs args, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         List<byte[]> keys = new ArrayList<>();
-        ScanCursorV2 next = support.dbReads(ctx).keyspace().scan(ScanCursorV2.of(cursor), match, count, keys);
+        ScanCursorV2 next = support.dbReads(ctx).keyspace().scan(
+                ScanCursorV2.of(args.cursor()),
+                args.match(),
+                args.count(),
+                keys
+        );
 
         // Redis-compatible: reply is [cursor, keys].
         out.arrayHeader(2);
