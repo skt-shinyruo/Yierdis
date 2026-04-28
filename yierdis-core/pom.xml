@@ -21,6 +21,7 @@
         <module>yierdis-core-api</module>
         <module>yierdis-core-db</module>
         <module>yierdis-core-command</module>
+        <module>yierdis-core-engine</module>
         <module>yierdis-core-runtime</module>
     </modules>
 </project>

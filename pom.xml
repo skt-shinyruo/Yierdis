@@ -113,6 +113,11 @@
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-core-engine</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-core-runtime</artifactId>
                 <version>${project.version}</version>
             </dependency>

@@ -12,13 +12,13 @@
 可以把一次请求的主链路压缩成 8 步：
 
 1. `YierdisServer` 启动 server
-2. `YierdisServerBootstrap` 组装 `YierdisInstance`、`YierdisFastCommandProcessor`、`NettyCommandExecutor`
+2. `YierdisServerBootstrap` 组装 `YierdisInstance`、`YierdisEngine`、`NettyCommandExecutor`
 3. `YierdisServerChannelInitializer` 为每个连接建立 Netty pipeline 和连接态
 4. `CustomRequestDecoder` 把网络帧解成协议请求对象
 5. `ProtocolCommandAdapter` 把协议请求适配为 `ExecutionRequest`
 6. `YierdisFastCommandHandler` 把 `ExecutionRequest` 提交给 command executor
 7. `NettyCommandDrainLoop` 在单线程 executor 上串行执行命令
-8. `YierdisFastCommandProcessor` 分发到具体命令处理器，并通过 `ReplyWriter` 写回
+8. `YierdisEngine` 接收统一执行调用，当前默认实现再委托 `YierdisFastCommandProcessor` 分发到具体命令处理器，并通过 `ReplyWriter` 写回
 
 其中真正保证 Redis 风格单线程语义的关键点是：
 
@@ -29,11 +29,23 @@
 
 请求路径在 server 启动阶段就已经被拼好。
 
-关键对象有三个：
+关键对象可以分成三个外层对象和一个当前内部执行实现：
 
 ### `YierdisInstance`
 
 负责装配多 DB、runtime seam、instance 级资源 ownership。
+
+### `YierdisEngine`
+
+这是 server 和 executor 看到的命令执行中心。
+
+当前阶段它负责：
+
+- 暴露 `execute(request, context)` 作为统一执行入口
+- 持有当前默认 command processor
+- 暴露 `maintenanceTick()`，让定时清理也从同一个入口进入
+
+`DefaultYierdisEngine` 现在仍然包装已有的 `YierdisFastCommandProcessor`。也就是说，本阶段先收敛数据流入口，不一次性改变所有命令内部实现。
 
 ### `YierdisFastCommandProcessor`
 
@@ -64,16 +76,18 @@
 2. `YierdisServerBootstrap.startInternal()` 先根据 runtime config 构造 `YierdisInstanceConfig`
 3. `YierdisInstance.create(...)` 创建多 DB、FFM runtime 和可选的全局 maxmemory governor
 4. bootstrap 再创建 `NettyServerInfoProvider`
-5. bootstrap 创建 `YierdisFastCommandProcessor`
-6. bootstrap 创建 `NettyCommandExecutor`
-7. `executor.start()` 会先在 executor 线程上执行 `bindToCurrentThread`
-8. 之后 Netty pipeline 才开始真正接收外部请求
+5. bootstrap 创建 `DefaultYierdisEngine`
+6. `DefaultYierdisEngine` 内部创建当前默认 `YierdisFastCommandProcessor`
+7. bootstrap 创建 `NettyCommandExecutor`，并把 `engine::execute` 交给 executor
+8. `executor.start()` 会先在 executor 线程上执行 `bindToCurrentThread`
+9. 之后 Netty pipeline 才开始真正接收外部请求
 
 这条顺序的关键不是“代码写得有几层”，而是：
 
 - DB 的 owner thread 在 server 开始工作前就被固定下来
-- command processor 在启动时就已经知道有哪些命令模块
-- server 只是把协议流量送到已经准备好的 command/runtime 组合里
+- engine 在启动时就已经持有命令执行和 maintenance 入口
+- command processor 在 engine 内部已经知道有哪些命令模块
+- server 只是把协议流量送到已经准备好的 engine/runtime 组合里
 
 ## 连接建立时发生什么
 
@@ -171,7 +185,7 @@ Yierdis 当前的命令执行统一围绕 `ExecutionRequest` 展开，而不是�
 2. 为这条命令创建 `ReplyWriter`
 3. 从连接里取出 `ServerSessionState`
 4. 复用或重置一个 `CommandContext(session, out)`
-5. 调用 `YierdisFastCommandProcessor.execute(...)`
+5. 调用 `YierdisEngine.execute(...)`
 6. 把输出 buffer 批量写回
 7. 释放请求对象和 backlog 预算
 8. 在 pending 降到低水位后尝试重新开启 `autoRead`
@@ -190,7 +204,9 @@ Yierdis 当前的命令执行统一围绕 `ExecutionRequest` 展开，而不是�
 - 当前连接的 `ServerSessionState`
 - 当前命令的 `ReplyWriter`
 
-装进一个可复用的 `CommandContext` 对象，再交给 `YierdisFastCommandProcessor`。
+装进一个可复用的 `CommandContext` 对象，再交给 `YierdisEngine`。
+
+当前阶段 `DefaultYierdisEngine` 会继续委托给 `YierdisFastCommandProcessor`。这层 facade 的价值是让 executor 不再知道具体 command processor。
 
 所以命令层能做的两件事其实非常固定：
 
@@ -211,10 +227,11 @@ Yierdis 当前的命令执行统一围绕 `ExecutionRequest` 展开，而不是�
 4. `NettyCommandExecutor`
 5. `NettyCommandDrainLoop`
 6. `NettyCommandExecutionSupport`
-7. `YierdisFastCommandProcessor`
-8. `CoreConnectionCommands.ping(...)`
-9. `ReplyWriter.simpleString("PONG")`
-10. `JsonLineReplyWriter` 编码为 NDJSON
+7. `YierdisEngine`
+8. `YierdisFastCommandProcessor`
+9. `CoreConnectionCommands.ping(...)`
+10. `ReplyWriter.simpleString("PONG")`
+11. `JsonLineReplyWriter` 编码为 NDJSON
 
 ### 特征
 
@@ -228,7 +245,7 @@ Yierdis 当前的命令执行统一围绕 `ExecutionRequest` 展开，而不是�
 
 ### 命令层
 
-`YierdisFastCommandProcessor` 命中 `StringCommands.set(...)`。这里负责：
+`YierdisEngine` 接收执行请求后，当前默认实现会委托 `YierdisFastCommandProcessor` 命中 `StringCommands.set(...)`。这里负责：
 
 - 解析 `NX` / `XX`
 - 解析 `GET`
@@ -352,7 +369,7 @@ Yierdis 当前的命令执行统一围绕 `ExecutionRequest` 展开，而不是�
 
 ### 入队阶段
 
-`YierdisFastCommandProcessor.execute(...)` 在真正执行命令前，会先看：
+当前阶段，`YierdisEngine.execute(...)` 会进入 `YierdisFastCommandProcessor.execute(...)`。处理器在真正执行命令前，会先看：
 
 - `ctx.serverSessionOrNull()`
 - `session.transaction()`
@@ -386,6 +403,8 @@ Yierdis 当前的命令执行统一围绕 `ExecutionRequest` 展开，而不是�
 - 到 `EXEC` 时再逐条重放
 
 这也解释了为什么这个项目特别强调 `ExecutionRequest/ExecutionRecord` 是统一边界。
+
+在后续 engine-centric 重构阶段，事务和 selected DB 这类 session ownership 会继续从 executor/server 侧状态迁向 engine session；但本阶段还没有改变事务语义，只是先把执行入口固定到 engine。
 
 ## 错误、关闭和背压
 
@@ -444,6 +463,8 @@ decoder 会尽量把协议错误转成 `ProtocolError` 事件，再由上层统�
 
 - `yierdis-server/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
   看启动后 server、核心命令和 server 命令是怎么真正接在一起的
+- `yierdis-core/yierdis-core-engine/src/test/java/yier/bubu/redis/engine/DefaultYierdisEngineTest.java`
+  看 engine facade 如何把请求执行和 maintenance 入口统一起来
 - `yierdis-server/src/test/java/yier/bubu/redis/NettyCommandExecutorTest.java`
   看 drain 限制、queued bytes 预算、`QUIT` 后跳过后续命令等执行器行为
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java`
@@ -462,6 +483,8 @@ decoder 会尽量把协议错误转成 `ProtocolError` 事件，再由上层统�
 - `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandSubmitter.java`
 - `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandDrainLoop.java`
 - `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandExecutionSupport.java`
+- `yierdis-core/yierdis-core-engine/src/main/java/yier/bubu/redis/engine/YierdisEngine.java`
+- `yierdis-core/yierdis-core-engine/src/main/java/yier/bubu/redis/engine/DefaultYierdisEngine.java`
 - `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
 - `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/StringCommands.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisStringOps.java`

@@ -4,7 +4,7 @@ import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.engine.YierdisEngine;
 import yier.bubu.redis.executor.CommandExecutor;
 import yier.bubu.redis.executor.CommandExecutorConfig;
 import yier.bubu.redis.executor.SchedulingPolicy;
@@ -95,10 +95,10 @@ public class YierdisServerBootstrapCloseTest {
                     .engineFactory(factory)
                     .build());
 
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+            YierdisEngine engine = TestYierdisEngines.forInstance(instance);
             CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    processor::execute,
+                    engine::execute,
                     commandGroup.next(),
                     new yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory(),
                     new NettyExecutionIoAdapter(),

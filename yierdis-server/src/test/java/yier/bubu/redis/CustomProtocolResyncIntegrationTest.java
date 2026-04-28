@@ -7,7 +7,7 @@ import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.engine.YierdisEngine;
 import yier.bubu.redis.executor.CommandExecutor;
 import yier.bubu.redis.executor.CommandExecutorConfig;
 import yier.bubu.redis.executor.SchedulingPolicy;
@@ -85,11 +85,11 @@ public class CustomProtocolResyncIntegrationTest {
         private TestEnv() {
             this.instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
             this.group = new DefaultEventExecutorGroup(1);
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+            YierdisEngine engine = TestYierdisEngines.forInstance(instance);
             JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
             this.executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    processor::execute,
+                    engine::execute,
                     group.next(),
                     replyWriterFactory,
                     new NettyExecutionIoAdapter(),
