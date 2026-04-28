@@ -3,6 +3,7 @@ package yier.bubu.redis.db;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 
 public class YierdisDbConstructionTest {
     @Test
@@ -13,10 +14,9 @@ public class YierdisDbConstructionTest {
     }
 
     @Test
-    public void policyAdapterDefaultsNullAndBlankToNoeviction() {
-        assertParsesPolicy(null, YierdisDb.MaxmemoryPolicy.NOEVICTION);
-        assertParsesPolicy("", YierdisDb.MaxmemoryPolicy.NOEVICTION);
-        assertParsesPolicy("   ", YierdisDb.MaxmemoryPolicy.NOEVICTION);
+    public void typedConfigDefaultsNullPolicyToNoeviction() {
+        YierdisDbConfig config = YierdisDbConfig.create(0, null, 5, 5, 5);
+        Assert.assertSame(MaxmemoryPolicy.NOEVICTION, config.maxmemoryPolicy);
     }
 
     @Test
@@ -27,13 +27,15 @@ public class YierdisDbConstructionTest {
     }
 
     @Test
-    public void policyAdapterMapsExternalPoliciesToDbPolicies() {
-        assertParsesPolicy("noeviction", YierdisDb.MaxmemoryPolicy.NOEVICTION);
-        assertParsesPolicy("  NoEviction  ", YierdisDb.MaxmemoryPolicy.NOEVICTION);
-        assertParsesPolicy("allkeys-random", YierdisDb.MaxmemoryPolicy.ALLKEYS_RANDOM);
-        assertParsesPolicy("ALLKEYS_RANDOM", YierdisDb.MaxmemoryPolicy.ALLKEYS_RANDOM);
-        assertParsesPolicy("allkeys-lru", YierdisDb.MaxmemoryPolicy.ALLKEYS_LRU);
-        assertParsesPolicy("allkeys_LRU", YierdisDb.MaxmemoryPolicy.ALLKEYS_LRU);
+    public void typedConfigComputesLruEnabledFromCorePolicy() {
+        YierdisDbConfig lru = YierdisDbConfig.create(1, MaxmemoryPolicy.ALLKEYS_LRU, 5, 5, 5);
+        Assert.assertTrue(lru.lruEnabled);
+
+        YierdisDbConfig noLimit = YierdisDbConfig.create(0, MaxmemoryPolicy.ALLKEYS_LRU, 5, 5, 5);
+        Assert.assertFalse(noLimit.lruEnabled);
+
+        YierdisDbConfig random = YierdisDbConfig.create(1, MaxmemoryPolicy.ALLKEYS_RANDOM, 5, 5, 5);
+        Assert.assertFalse(random.lruEnabled);
     }
 
     @Test
@@ -42,7 +44,7 @@ public class YierdisDbConstructionTest {
             new YierdisDb((OffHeapAllocator) null, 0, "unknown-policy", 5, 5, 5);
             Assert.fail("unknown policy should fail construction");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("unsupported maxmemoryPolicy"));
+            Assert.assertTrue(e.getMessage().contains("unknown maxmemory policy"));
         }
     }
 
@@ -61,10 +63,6 @@ public class YierdisDbConstructionTest {
         } finally {
             db.shutdown();
         }
-    }
-
-    private static void assertParsesPolicy(String policy, YierdisDb.MaxmemoryPolicy expected) {
-        Assert.assertSame(expected, YierdisDbMaxmemoryPolicies.parseOrDefault(policy));
     }
 
     private static void assertInvalid(

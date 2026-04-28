@@ -3,6 +3,7 @@ package yier.bubu.redis.db;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.offheap.api.OffHeapAllocator;
 import yier.bubu.redis.ops.MaxmemoryCoordinator;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 
 final class YierdisDbComponentFactory {
     private YierdisDbComponentFactory() {
@@ -15,7 +16,7 @@ final class YierdisDbComponentFactory {
             boolean ownsOffHeapAllocator,
             boolean ownsMemoryRuntime,
             long maxmemoryBytes,
-            String maxmemoryPolicy,
+            MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis

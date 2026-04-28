@@ -30,11 +30,11 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        String policyName = Objects.requireNonNull(maxmemoryPolicy, "maxmemoryPolicy").redisName();
+        MaxmemoryPolicy policy = Objects.requireNonNull(maxmemoryPolicy, "maxmemoryPolicy");
         if (memoryRuntime == null) {
             return YierdisDb.createWithOwnedFfmRuntime(
                     maxmemoryBytes,
-                    policyName,
+                    policy,
                     maxmemorySamples,
                     evictionTimeLimitMillis,
                     expireCleanupTimeLimitMillis
@@ -43,7 +43,7 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
         return YierdisDb.createWithSharedFfmRuntime(
                 memoryRuntime,
                 maxmemoryBytes,
-                policyName,
+                policy,
                 maxmemorySamples,
                 evictionTimeLimitMillis,
                 expireCleanupTimeLimitMillis

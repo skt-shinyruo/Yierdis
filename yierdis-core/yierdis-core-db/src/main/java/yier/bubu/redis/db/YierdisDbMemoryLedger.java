@@ -4,6 +4,7 @@ import yier.bubu.redis.db.memory.MemoryLedger;
 import yier.bubu.redis.db.memory.MemoryLedgerOutOfMemoryException;
 import yier.bubu.redis.db.memory.MemoryReservation;
 import yier.bubu.redis.ops.MaxmemoryCoordinator;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.ops.YierdisCommandException;
 
 import java.util.Objects;
@@ -13,7 +14,7 @@ import java.util.function.Supplier;
 
 final class YierdisDbMemoryLedger implements MemoryLedger {
     private final long limitBytes;
-    private final YierdisDb.MaxmemoryPolicy maxmemoryPolicy;
+    private final MaxmemoryPolicy maxmemoryPolicy;
     private final Runnable cleanupExpired;
     private final LongConsumer evictUntilUnder;
     private final LongSupplier usedBytesForMaxmemory;
@@ -24,7 +25,7 @@ final class YierdisDbMemoryLedger implements MemoryLedger {
 
     YierdisDbMemoryLedger(
             long limitBytes,
-            YierdisDb.MaxmemoryPolicy maxmemoryPolicy,
+            MaxmemoryPolicy maxmemoryPolicy,
             Runnable cleanupExpired,
             LongConsumer evictUntilUnder,
             LongSupplier usedBytesForMaxmemory,
@@ -85,7 +86,7 @@ final class YierdisDbMemoryLedger implements MemoryLedger {
                 limit = 0;
             }
             if (usedBytesForMaxmemory.getAsLong() > limit) {
-                if (maxmemoryPolicy == YierdisDb.MaxmemoryPolicy.NOEVICTION) {
+                if (maxmemoryPolicy == MaxmemoryPolicy.NOEVICTION) {
                     if (estimatedExtraBytes > 0) {
                         throw new MemoryLedgerOutOfMemoryException();
                     }
