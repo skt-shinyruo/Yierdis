@@ -23,7 +23,7 @@ The target architecture does not start by moving many Maven modules. It starts
 by creating one unavoidable execution kernel:
 
 ```text
-YierdisEngine.execute(session, request, reply)
+YierdisEngine.execute(session, request, replyWriter)
 ```
 
 After this design is implemented, all command requests must pass through
@@ -35,20 +35,20 @@ roles around that kernel instead of sharing command execution ownership.
 Yierdis currently has a macro architecture, but the micro data flow is still a
 transition-state graph rather than one official path.
 
-The main symptoms are:
+The original symptoms were:
 
-- Request objects have multiple forms: protocol DTOs, `ExecutionRequest`, and a
+- Request objects had multiple forms: protocol DTOs, `ExecutionRequest`, and a
   deprecated `Command` compatibility surface.
-- Commands are partly migrated to typed `CommandSpec<T>` parsing, but legacy
-  handler registration still allows handlers to parse and emit syntax errors
+- Commands were partly migrated to typed `CommandSpec<T>` parsing, but legacy
+  handler registration still allowed handlers to parse and emit syntax errors
   directly.
-- Session and transaction ownership sits in executor-facing context, which makes
+- Session and transaction ownership sat in executor-facing context, which made
   the executor look like part of command semantics rather than pure scheduling
   infrastructure.
 - DB-facing data uses several representations: `byte[]`, `BytesView`,
   `BytesSlice`, and internal `KeyHandle`.
-- TTL and maxmemory pressure paths still materialize off-heap key identity into
-  heap `byte[]` in important paths.
+- TTL and maxmemory pressure paths materialized off-heap key identity into heap
+  `byte[]` in important paths.
 - Server bootstrap is a composition root, but it still reads as the place where
   command execution, runtime lifecycle, maintenance, and observability are all
   assembled by hand.
@@ -85,25 +85,28 @@ intermediate ownership seams remain visible to readers and future changes.
   guard tests.
 - No public protocol redesign.
 
-## Current Facts
+## Current Implementation Status
 
 - `ProtocolCommandAdapter` already adapts protocol DTOs into
   `ExecutionRequest`.
-- `CommandExecutor` already accepts a transport-neutral `CommandExecutionEngine`
-  and can dispatch `processor::execute`.
-- `YierdisFastCommandProcessor` currently owns command registry lookup,
-  transaction pre-checks, command execution, runtime error mapping, and change
-  tracking.
-- `ExecutionConnectionContext` owns executor-local state such as pending counts,
-  pending bytes, closing flags, and input-disabled state.
-- `DefaultExecutionSession` currently carries command-facing session state such
-  as selected DB and transaction state.
-- `CommandSpec<T>` exists, but legacy command handlers and legacy registration
-  surfaces still remain.
-- `YierdisExpireIndex` already exposes `KeyHandle` methods, including
-  `randomKeyHandle()`.
-- `MaxmemoryCandidate` currently stores `byte[] key`, forcing heap key
-  materialization in maxmemory paths.
+- `CommandExecutor` accepts a transport-neutral `CommandExecutionEngine` shaped
+  as `Session + ExecutionRequest + ReplyWriter`.
+- `YierdisEngine` is the server/executor command execution entry point and owns
+  command-context construction.
+- `EngineSession` carries selected DB, transaction state, client metadata, and
+  authentication state.
+- `EngineSession` can expose read-only `ConnectionStatsView` for INFO/STATS,
+  while the actual pending/backpressure counters remain owned by
+  `ExecutionConnectionContext`.
+- `ExecutionConnectionContext` owns executor-local state only: pending counts,
+  pending bytes, closing flags, input-disabled state, queue state, and stats.
+- `CommandSpec<T>` is the production command registration and parsing contract.
+- The production `Command` compatibility execution path is removed; production
+  execution uses `ExecutionRequest`.
+- `YierdisExpireIndex` and keyspace implementations expose handle-based methods
+  such as `randomKeyHandle()`.
+- `MaxmemoryCandidate` stores `KeyHandle keyHandle`, avoiding mandatory heap key
+  materialization in maxmemory victim selection.
 - Existing architecture specs already cover command contract unification,
   executor-core extraction, maxmemory policy unification, and `YierdisDb`
   decomposition. This design sits above those specs and defines the target
@@ -171,11 +174,9 @@ surface should be small:
 
 ```java
 public interface YierdisEngine extends AutoCloseable {
-    void execute(EngineSession session, ExecutionRequest request, ReplyWriter out);
+    void execute(Session session, ExecutionRequest request, ReplyWriter out);
 
     void maintenanceTick();
-
-    EngineObservability observability();
 
     @Override
     void close();
@@ -236,8 +237,7 @@ Must not:
 
 ### Engine
 
-Likely module area: a new `yierdis-core-engine` module, or an internal package
-inside `yierdis-core-command` during the first migration slice.
+Module area: `yierdis-core-engine`.
 
 Responsibilities:
 
@@ -308,6 +308,7 @@ Netty ByteBuf
   -> CommandExecutor.trySubmit(connection, request)
   -> owner thread
   -> YierdisEngine.execute(session, request, replyWriter)
+  -> YierdisFastCommandProcessor
   -> CommandSpec<T>.parse(...)
   -> typed command handler
   -> DbEngine capability interface
@@ -390,7 +391,9 @@ Owns:
 - executor-local stats;
 - fair scheduling queue state.
 
-It should reference `EngineSession`, but it should not own business semantics.
+It must not reference or own `EngineSession`; the concrete connection object
+owns both `EngineSession` and `ExecutionConnectionContext` as separate state
+slices.
 
 ### `CommandSpec<T>`
 
@@ -403,7 +406,8 @@ Contains:
 - typed handler;
 - MULTI policy.
 
-Legacy `CommandModule.Handler` should be removed after migration.
+Legacy `CommandModule.Handler` and legacy handler-only registration are removed
+from production command registration.
 
 ### `Storage Key Identity`
 
@@ -431,6 +435,8 @@ Acceptance criteria:
 - Maintenance calls `engine.maintenanceTick()`.
 - Existing behavior remains unchanged.
 
+Status in this branch: implemented.
+
 ### Phase 2: Move Engine Session Ownership
 
 Move selected DB index and transaction state from executor-owned session types
@@ -441,6 +447,8 @@ Acceptance criteria:
 - Executor tests can run without command/DB session semantics.
 - Command tests can construct `EngineSession` without Netty or executor context.
 - `ExecutionConnectionContext` contains only scheduling and transport state.
+
+Status in this branch: implemented.
 
 ### Phase 3: Complete CommandSpec Migration
 
@@ -454,6 +462,8 @@ Acceptance criteria:
 - Transaction queueing validates through the same parser used by direct
   execution.
 
+Status in this branch: implemented.
+
 ### Phase 4: Remove Legacy Request Compatibility
 
 Delete the deprecated `Command` execution path and move any remaining zero-copy
@@ -464,6 +474,8 @@ Acceptance criteria:
 - `YierdisFastCommandProcessor.execute(Command, ...)` no longer exists.
 - `CommandSupport` no longer checks `request instanceof Command`.
 - Protocol-to-execution adaptation produces only `ExecutionRequest`.
+
+Status in this branch: implemented.
 
 ### Phase 5: Normalize Storage Data Flow
 
@@ -478,6 +490,8 @@ Acceptance criteria:
 - `YierdisFfmKeyspace.randomKey()` and `forEach(...)` are not used on hot
   pressure paths that can use handles.
 
+Status in this branch: implemented.
+
 ### Phase 6: Strengthen Architecture Guards And Docs
 
 Update docs and add guard tests for the new engine-centered ownership model.
@@ -488,6 +502,9 @@ Acceptance criteria:
 - Architecture guard tests prevent command parsing from moving into server,
   executor, runtime, protocol, or storage.
 - Guard tests prevent executor session state from owning transaction semantics.
+
+Status in this branch: implemented by updating docs and architecture boundary
+guards for the engine-centered flow.
 
 ## Testing Strategy
 

@@ -25,7 +25,7 @@ final class ZSetCommands implements CommandModule {
                 this::zadd
         );
         registration.register("ZRANGE", CommandDescriptor.of(-4, 1, 1, 1), this::parseZRange, this::zrange);
-        registration.register("ZREVRANGE", this::zrevrange, CommandDescriptor.of(-4, 1, 1, 1));
+        registration.register("ZREVRANGE", CommandDescriptor.of(-4, 1, 1, 1), CommandParsers.oneOfRequest("zrevrange", 4, 5), this::zrevrange);
         registration.register(
                 "ZRANGEBYSCORE",
                 CommandDescriptor.of(-4, 1, 1, 1),
@@ -38,9 +38,19 @@ final class ZSetCommands implements CommandModule {
                 args -> parseZRangeByScore(args, true),
                 this::zrevrangebyscore
         );
-        registration.register("ZREMRANGEBYSCORE", this::zremrangebyscore, CommandDescriptor.of(4, 1, 1, 1));
-        registration.register("ZREMRANGEBYRANK", this::zremrangebyrank, CommandDescriptor.of(4, 1, 1, 1));
-        registration.register("ZREM", this::zrem, CommandDescriptor.of(-3, 1, 1, 1));
+        registration.register(
+                "ZREMRANGEBYSCORE",
+                CommandDescriptor.of(4, 1, 1, 1),
+                CommandParsers.exactRequest(4, "zremrangebyscore"),
+                this::zremrangebyscore
+        );
+        registration.register(
+                "ZREMRANGEBYRANK",
+                CommandDescriptor.of(4, 1, 1, 1),
+                CommandParsers.exactRequest(4, "zremrangebyrank"),
+                this::zremrangebyrank
+        );
+        registration.register("ZREM", CommandDescriptor.of(-3, 1, 1, 1), CommandParsers.minRequest(3, "zrem"), this::zrem);
     }
 
     private void zadd(ArgReader args, CommandContext ctx) {

@@ -24,12 +24,17 @@ final class CoreConnectionCommands {
 
     void register(CommandRegistry registry) {
         Objects.requireNonNull(registry, "registry");
-        registry.register("PING", this::ping, CommandDescriptor.of(-1, 0, 0, 0));
-        registry.register("ECHO", this::echo, CommandDescriptor.of(2, 0, 0, 0));
-        registry.register("COMMAND", (cmd, ctx) -> command(cmd, ctx.out(), registry), CommandDescriptor.of(-1, 0, 0, 0));
-        registry.register("SELECT", this::select, CommandDescriptor.of(2, 0, 0, 0));
-        registry.register("QUIT", this::quit, CommandDescriptor.of(1, 0, 0, 0));
-        registry.register("FLUSHDB", this::flushdb, CommandDescriptor.of(-1, 0, 0, 0));
+        registry.register("PING", CommandDescriptor.of(-1, 0, 0, 0), CommandParsers.oneOfRequest("ping", 1, 2), this::ping);
+        registry.register("ECHO", CommandDescriptor.of(2, 0, 0, 0), CommandParsers.exactRequest(2, "echo"), this::echo);
+        registry.register(
+                "COMMAND",
+                CommandDescriptor.of(-1, 0, 0, 0),
+                CommandParsers.minRequest(1, "command"),
+                (cmd, ctx) -> command(cmd, ctx.out(), registry)
+        );
+        registry.register("SELECT", CommandDescriptor.of(2, 0, 0, 0), CommandParsers.exactRequest(2, "select"), this::select);
+        registry.register("QUIT", CommandDescriptor.of(1, 0, 0, 0), CommandParsers.exactRequest(1, "quit"), this::quit);
+        registry.register("FLUSHDB", CommandDescriptor.of(-1, 0, 0, 0), CommandParsers.oneOfRequest("flushdb", 1, 2), this::flushdb);
     }
 
     private void ping(ExecutionRequest request, CommandContext ctx) {

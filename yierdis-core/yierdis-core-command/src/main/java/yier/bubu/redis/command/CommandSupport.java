@@ -418,15 +418,8 @@ final class CommandSupport {
         CommandArgBytesSlice reset(ExecutionRequest request, int argIndex) {
             this.request = request;
             this.argIndex = argIndex;
-            // temporary compatibility seam for zero-copy/frame-backed Command producers
-            // until the remaining producer migration lands in later tasks.
-            if (request instanceof yier.bubu.redis.contract.Command cmd) {
-                this.frame = cmd.frame();
-                this.frameOffset = frame == null ? -1 : cmd.argOffset(argIndex);
-            } else {
-                this.frame = null;
-                this.frameOffset = -1;
-            }
+            this.frame = request.frame();
+            this.frameOffset = frame == null ? -1 : request.argOffset(argIndex);
             return this;
         }
 

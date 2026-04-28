@@ -1,7 +1,9 @@
 package yier.bubu.redis;
 
 import yier.bubu.redis.command.CommandModule;
+import yier.bubu.redis.command.CommandParsers;
 import yier.bubu.redis.command.CommandDescriptor;
+import yier.bubu.redis.command.CommandSpec;
 import yier.bubu.redis.command.ServerInfoProvider;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ExecutionRequest;
@@ -31,14 +33,17 @@ final class ServerCommandModule implements CommandModule {
     @Override
     public void register(Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.registerDisallowedInMulti(
+        registration.register(
                 "HELLO",
-                this::hello,
-                CommandDescriptor.of(-1, 0, 0, 0),
-                "ERR HELLO is not allowed in MULTI"
+                CommandSpec.disallowedInMulti(
+                        CommandDescriptor.of(-1, 0, 0, 0),
+                        CommandParsers.oneOfRequest("hello", 1, 2),
+                        this::hello,
+                        "ERR HELLO is not allowed in MULTI"
+                )
         );
-        registration.register("INFO", this::info, CommandDescriptor.of(-1, 0, 0, 0));
-        registration.register("STATS", this::stats, CommandDescriptor.of(1, 0, 0, 0));
+        registration.register("INFO", CommandDescriptor.of(-1, 0, 0, 0), CommandParsers.oneOfRequest("info", 1, 2), this::info);
+        registration.register("STATS", CommandDescriptor.of(1, 0, 0, 0), CommandParsers.exactRequest(1, "stats"), this::stats);
     }
 
     private void info(ExecutionRequest request, CommandContext ctx) {

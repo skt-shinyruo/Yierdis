@@ -5,13 +5,11 @@ package yier.bubu.redis;
 import yier.bubu.redis.command.ServerInfoProvider;
 import yier.bubu.redis.ops.YierdisMemoryStats;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.contract.ConnectionStatsView;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
-import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.executor.CommandExecutor;
-import yier.bubu.redis.executor.DefaultExecutionSession;
-import yier.bubu.redis.executor.ExecutionConnectionContext;
 import yier.bubu.redis.protocol.YierdisBuildInfo;
 import yier.bubu.redis.runtime.YierdisInstanceObservability;
 
@@ -124,7 +122,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
 
         CommandExecutor.StatsSnapshot s = ex.statsSnapshot();
-        Object stats = connectionStats(ctx);
+        ConnectionStatsView stats = connectionStats(ctx);
 
         int pairs = 15 + (stats == null ? 0 : 11);
         writeHeader(out, pairs);
@@ -149,20 +147,17 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             return;
         }
 
-        if (stats instanceof ExecutionConnectionContext.ConnectionStatsSnapshot snapshot) {
-            writePair(out, KEY_CONN_PENDING, snapshot.pending());
-            writePair(out, KEY_CONN_PENDING_BYTES, snapshot.pendingBytes());
-            writePair(out, KEY_CONN_AUTOREAD_DISABLED, snapshot.inputDisabledByExecutor() ? 1 : 0);
-            writePair(out, KEY_CONN_CLOSING, snapshot.closing() ? 1 : 0);
-            writePair(out, KEY_CONN_COMMANDS_ENQUEUED, snapshot.commandsEnqueued());
-            writePair(out, KEY_CONN_COMMANDS_EXECUTED, snapshot.commandsExecuted());
-            writePair(out, KEY_CONN_COMMANDS_REJECTED, snapshot.commandsRejected());
-            writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, snapshot.commandsSkippedClosing());
-            writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, snapshot.closeAfterReply());
-            writePair(out, KEY_CONN_BACKPRESSURE_ENTER, snapshot.backpressureEnter());
-            writePair(out, KEY_CONN_BACKPRESSURE_EXIT, snapshot.backpressureExit());
-            return;
-        }
+        writePair(out, KEY_CONN_PENDING, stats.pending());
+        writePair(out, KEY_CONN_PENDING_BYTES, stats.pendingBytes());
+        writePair(out, KEY_CONN_AUTOREAD_DISABLED, stats.inputDisabledByExecutor() ? 1 : 0);
+        writePair(out, KEY_CONN_CLOSING, stats.closing() ? 1 : 0);
+        writePair(out, KEY_CONN_COMMANDS_ENQUEUED, stats.commandsEnqueued());
+        writePair(out, KEY_CONN_COMMANDS_EXECUTED, stats.commandsExecuted());
+        writePair(out, KEY_CONN_COMMANDS_REJECTED, stats.commandsRejected());
+        writePair(out, KEY_CONN_COMMANDS_SKIPPED_CLOSING, stats.commandsSkippedClosing());
+        writePair(out, KEY_CONN_CLOSE_AFTER_REPLY, stats.closeAfterReply());
+        writePair(out, KEY_CONN_BACKPRESSURE_ENTER, stats.backpressureEnter());
+        writePair(out, KEY_CONN_BACKPRESSURE_EXIT, stats.backpressureExit());
     }
 
     @Override
@@ -324,16 +319,11 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         );
     }
 
-    private static Object connectionStats(CommandContext ctx) {
+    private static ConnectionStatsView connectionStats(CommandContext ctx) {
         if (ctx == null) {
             return null;
         }
-        ServerSession serverSession = ctx.serverSessionOrNull();
-        if (serverSession instanceof DefaultExecutionSession session) {
-            ExecutionConnectionContext context = session.connectionContext();
-            return context == null ? null : context.statsSnapshot();
-        }
-        return null;
+        return ctx.connectionStatsOrNull();
     }
 
     private static void writeHeader(ReplyWriter out, int pairs) {

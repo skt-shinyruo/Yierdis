@@ -450,6 +450,25 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
         return r < table0.size ? randomKeyFromTable(table1) : randomKeyFromTable(table0);
     }
 
+    @Override
+    public KeyHandle randomKeyHandle() {
+        rehashStep();
+        int total = size();
+        if (total == 0) {
+            return null;
+        }
+        if (table1 == null) {
+            return randomKeyHandleFromTable(table0);
+        }
+
+        int r = ThreadLocalRandom.current().nextInt(total);
+        KeyHandle handle = r < table0.size ? randomKeyHandleFromTable(table0) : randomKeyHandleFromTable(table1);
+        if (handle != null) {
+            return handle;
+        }
+        return r < table0.size ? randomKeyHandleFromTable(table1) : randomKeyHandleFromTable(table0);
+    }
+
     private void ensureTable0() {
         if (table0 == null) {
             table0 = new Table(MIN_CAPACITY);
@@ -521,6 +540,30 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
             int idx = (start + i) & mask;
             if (table.stateAt(idx) == STATE_FILLED) {
                 return blobStore.toByteArray(table.refs[idx]);
+            }
+        }
+        return null;
+    }
+
+    private KeyHandle randomKeyHandleFromTable(Table table) {
+        if (table == null || table.capacity == 0) {
+            return null;
+        }
+        int mask = table.capacity - 1;
+        int start = ThreadLocalRandom.current().nextInt(table.capacity);
+
+        int quickSteps = Math.min(16, table.capacity);
+        for (int i = 0; i < quickSteps; i++) {
+            int idx = (start + i) & mask;
+            if (table.stateAt(idx) == STATE_FILLED) {
+                return KeyHandle.forFfm(table.refs[idx], table.hashAt(idx));
+            }
+        }
+
+        for (int i = 0; i < table.capacity; i++) {
+            int idx = (start + i) & mask;
+            if (table.stateAt(idx) == STATE_FILLED) {
+                return KeyHandle.forFfm(table.refs[idx], table.hashAt(idx));
             }
         }
         return null;

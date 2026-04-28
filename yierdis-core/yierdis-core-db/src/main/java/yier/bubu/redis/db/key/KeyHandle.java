@@ -23,7 +23,7 @@ import java.util.Objects;
  *   <li>实现必须是只读的，不得暴露可变 byte[] 的写入入口</li>
  * </ul>
  */
-public interface KeyHandle extends BytesView {
+public interface KeyHandle extends yier.bubu.redis.ops.KeyHandle {
     /**
      * 兼容历史语义：KeyHandle 仍以 {@code len + byteAt} 作为最小能力视图。
      */

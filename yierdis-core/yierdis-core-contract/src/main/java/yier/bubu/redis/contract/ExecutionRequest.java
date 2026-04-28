@@ -1,5 +1,7 @@
 package yier.bubu.redis.contract;
 
+import yier.bubu.redis.bytes.BytesSource;
+
 /**
  * Primary protocol-agnostic request contract for command execution.
  * <p>
@@ -27,6 +29,20 @@ public interface ExecutionRequest extends AutoCloseable {
      */
     default byte[] readOnlyByteArray(int index) {
         return toByteArray(index);
+    }
+
+    /**
+     * Optional backing bytes for implementations that can expose a zero-copy frame.
+     */
+    default BytesSource frame() {
+        return null;
+    }
+
+    /**
+     * Optional argument offset within {@link #frame()}.
+     */
+    default int argOffset(int index) {
+        return -1;
     }
 
     /**

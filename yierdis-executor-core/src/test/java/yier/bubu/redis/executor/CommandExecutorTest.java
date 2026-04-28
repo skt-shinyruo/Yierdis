@@ -57,7 +57,7 @@ public class CommandExecutorTest {
     @Test
     public void ioAdapterContractCanBufferFlushAndCloseOneConnection() {
         RecordingIoAdapter io = new RecordingIoAdapter();
-        TestConnection connection = new TestConnection("c-1", new ExecutionConnectionContext(new DefaultExecutionSession(4, 128)));
+        TestConnection connection = new TestConnection("c-1", new ExecutionConnectionContext());
         AtomicBoolean closed = new AtomicBoolean(false);
 
         Assert.assertTrue(io.isActive(connection));
@@ -90,8 +90,8 @@ public class CommandExecutorTest {
     @Test
     public void ioAdapterStateIsScopedPerConnectionAndFlushCallsCountInvocations() {
         RecordingIoAdapter io = new RecordingIoAdapter();
-        TestConnection first = new TestConnection("c-1", new ExecutionConnectionContext(new DefaultExecutionSession(4, 128)));
-        TestConnection second = new TestConnection("c-2", new ExecutionConnectionContext(new DefaultExecutionSession(4, 128)));
+        TestConnection first = new TestConnection("c-1", new ExecutionConnectionContext());
+        TestConnection second = new TestConnection("c-2", new ExecutionConnectionContext());
         AtomicBoolean firstClosed = new AtomicBoolean(false);
         AtomicBoolean secondClosed = new AtomicBoolean(false);
 
@@ -161,7 +161,7 @@ public class CommandExecutorTest {
 
         TrackingExecutionRequest queuedButClosing = TrackingExecutionRequest.ofUtf8("PING");
         Assert.assertNull(executor.trySubmit(connection, queuedButClosing));
-        connection.context().markClosing();
+        connection.markClosing();
         ownerExecutor.runAll();
 
         Assert.assertEquals(1, queuedButClosing.closeCalls());

@@ -5,7 +5,6 @@ import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.WrongTypeException;
 import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ExecutionRecord;
 import yier.bubu.redis.contract.DbIndexProvider;
@@ -91,15 +90,6 @@ public final class YierdisFastCommandProcessor {
         new ZSetCommands(support).register(registry);
         registerExtraModules(registry, extraModules);
         this.registry = registry;
-    }
-
-    /**
-     * Transitional compatibility overload for existing embedders/tests; production code should call
-     * {@link #execute(ExecutionRequest, CommandContext)}.
-     */
-    @Deprecated(forRemoval = false)
-    public void execute(Command cmd, CommandContext ctx) {
-        execute((ExecutionRequest) cmd, ctx);
     }
 
     public void execute(ExecutionRequest request, CommandContext ctx) {

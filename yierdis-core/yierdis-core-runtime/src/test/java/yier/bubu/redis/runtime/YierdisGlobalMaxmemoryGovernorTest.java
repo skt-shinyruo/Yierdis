@@ -3,6 +3,7 @@ package yier.bubu.redis.runtime;
 import org.junit.Assert;
 import org.junit.Assume;
 import org.junit.Test;
+import yier.bubu.redis.ops.KeyHandle;
 import yier.bubu.redis.ops.MaxmemoryCandidate;
 import yier.bubu.redis.ops.MaxmemoryErrors;
 import yier.bubu.redis.ops.MaxmemoryParticipant;
@@ -86,7 +87,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
             @Override
             public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
-                return new MaxmemoryCandidate(this, new byte[]{'k'}, 0);
+                return new MaxmemoryCandidate(this, handle(new byte[]{'k'}), 0);
             }
 
             @Override
@@ -142,7 +143,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
             @Override
             public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
-                return new MaxmemoryCandidate(this, new byte[]{'k'}, 0);
+                return new MaxmemoryCandidate(this, handle(new byte[]{'k'}), 0);
             }
 
             @Override
@@ -201,7 +202,7 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
             @Override
             public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
-                return new MaxmemoryCandidate(this, new byte[]{'k'}, 0);
+                return new MaxmemoryCandidate(this, handle(new byte[]{'k'}), 0);
             }
 
             @Override
@@ -261,12 +262,12 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
             @Override
             public MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
-                return new MaxmemoryCandidate(this, expectedKey, 0);
+                return new MaxmemoryCandidate(this, handle(expectedKey), 0);
             }
 
             @Override
             public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
-                evictedKey.set(candidate.key());
+                evictedKey.set(bytes(candidate.keyHandle()));
                 usedBytes.set(0);
                 return true;
             }
@@ -285,6 +286,37 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         Assert.assertEquals("sampling should not be used", 0, sampled.get());
         Assert.assertArrayEquals("must evict expected key", expectedKey, evictedKey.get());
+    }
+
+    private static KeyHandle handle(byte[] key) {
+        return new KeyHandle() {
+            @Override
+            public int len() {
+                return key.length;
+            }
+
+            @Override
+            public byte byteAt(int index) {
+                return key[index];
+            }
+
+            @Override
+            public int dictHash() {
+                int h = 1;
+                for (byte b : key) {
+                    h = 31 * h + b;
+                }
+                return h;
+            }
+        };
+    }
+
+    private static byte[] bytes(KeyHandle keyHandle) {
+        byte[] out = new byte[keyHandle.len()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = keyHandle.byteAt(i);
+        }
+        return out;
     }
 
     @Test

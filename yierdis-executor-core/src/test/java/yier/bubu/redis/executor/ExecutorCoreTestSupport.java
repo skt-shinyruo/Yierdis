@@ -5,6 +5,7 @@ import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ReplyWriterFactory;
+import yier.bubu.redis.contract.Session;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -21,7 +22,7 @@ final class ExecutorCoreTestSupport {
     }
 
     static TestConnection newConnection(String connectionId) {
-        return new TestConnection(connectionId, new ExecutionConnectionContext(new DefaultExecutionSession(4, 128)));
+        return new TestConnection(connectionId);
     }
 
     static ManualOwnerExecutor manualOwnerExecutor() {
@@ -50,17 +51,17 @@ final class ExecutorCoreTestSupport {
     }
 
     static CommandExecutionEngine simpleCommandEngine() {
-        return (request, ctx) -> {
+        return (session, request, out) -> {
             if (asciiEqualsIgnoreCase(request, 0, "PING")) {
-                ctx.out().simpleString("PONG");
+                out.simpleString("PONG");
                 return;
             }
             if (asciiEqualsIgnoreCase(request, 0, "QUIT")) {
-                ctx.out().simpleString("OK");
-                ctx.out().requestCloseAfterReply();
+                out.simpleString("OK");
+                out.requestCloseAfterReply();
                 return;
             }
-            ctx.out().error("ERR unsupported test command");
+            out.error("ERR unsupported test command");
         };
     }
 
@@ -85,7 +86,12 @@ final class ExecutorCoreTestSupport {
 
 final class TestConnection implements ExecutionConnection {
     private final String connectionId;
+    private final Session session = new TestSession();
     private final ExecutionConnectionContext context;
+
+    TestConnection(String connectionId) {
+        this(connectionId, new ExecutionConnectionContext());
+    }
 
     TestConnection(String connectionId, ExecutionConnectionContext context) {
         this.connectionId = connectionId;
@@ -98,8 +104,21 @@ final class TestConnection implements ExecutionConnection {
     }
 
     @Override
+    public Session session() {
+        return session;
+    }
+
+    @Override
     public ExecutionConnectionContext context() {
         return context;
+    }
+
+    @Override
+    public boolean markClosing() {
+        return context.markClosing();
+    }
+
+    private static final class TestSession implements Session {
     }
 }
 

@@ -58,5 +58,15 @@ public final class CommandContext {
         }
         return null;
     }
-}
 
+    /**
+     * Best-effort: returns read-only connection stats when available, otherwise null.
+     */
+    public ConnectionStatsView connectionStatsOrNull() {
+        Session s = session;
+        if (s instanceof ConnectionStatsProvider p) {
+            return p.connectionStats();
+        }
+        return null;
+    }
+}

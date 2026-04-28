@@ -3,11 +3,11 @@ package yier.bubu.redis.engine;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.command.CommandParsers;
 import yier.bubu.redis.command.CommandDescriptor;
 import yier.bubu.redis.command.SlowCommandGovernor;
 import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.DbIndexProvider;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.ops.DbEngine;
@@ -31,15 +31,17 @@ public class DefaultYierdisEngineTest {
                 },
                 registration -> registration.register(
                         "LOCAL",
-                        (request, ctx) -> ctx.out().simpleString("LOCAL_OK"),
-                        CommandDescriptor.of(1, 0, 0, 0)
+                        CommandDescriptor.of(1, 0, 0, 0),
+                        CommandParsers.exactRequest(1, "local"),
+                        (request, ctx) -> ctx.out().simpleString("LOCAL_OK")
                 )
         );
 
         CapturingReplyWriter out = new CapturingReplyWriter();
         engine.execute(
+                null,
                 ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()),
-                new CommandContext(null, out)
+                out
         );
 
         Assert.assertEquals("LOCAL_OK", out.simpleStringValue);

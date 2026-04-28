@@ -44,20 +44,20 @@ final class KeyCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("TYPE", this::type, CommandDescriptor.of(2, 1, 1, 1));
-        registration.register("MEMORY", this::memory, CommandDescriptor.of(-2, 0, 0, 0));
-        registration.register("OBJECT", this::object, CommandDescriptor.of(-2, 0, 0, 0));
-        registration.register("KEYS", this::keys, CommandDescriptor.of(2, 0, 0, 0));
+        registration.register("TYPE", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "type"), this::type);
+        registration.register("MEMORY", CommandDescriptor.of(-2, 0, 0, 0), CommandParsers.minRequest(2, "memory"), this::memory);
+        registration.register("OBJECT", CommandDescriptor.of(-2, 0, 0, 0), CommandParsers.minRequest(2, "object"), this::object);
+        registration.register("KEYS", CommandDescriptor.of(2, 0, 0, 0), CommandParsers.exactRequest(2, "keys"), this::keys);
         registration.register("SCAN", CommandDescriptor.of(-2, 0, 0, 0), this::parseScan, this::scan);
-        registration.register("DEL", this::del, CommandDescriptor.of(-2, 1, -1, 1));
-        registration.register("EXISTS", this::exists, CommandDescriptor.of(-2, 1, -1, 1));
-        registration.register("EXPIRE", this::expire, CommandDescriptor.of(3, 1, 1, 1));
-        registration.register("PEXPIRE", this::pexpire, CommandDescriptor.of(3, 1, 1, 1));
-        registration.register("EXPIREAT", this::expireat, CommandDescriptor.of(3, 1, 1, 1));
-        registration.register("PEXPIREAT", this::pexpireat, CommandDescriptor.of(3, 1, 1, 1));
-        registration.register("PERSIST", this::persist, CommandDescriptor.of(2, 1, 1, 1));
-        registration.register("TTL", this::ttl, CommandDescriptor.of(2, 1, 1, 1));
-        registration.register("PTTL", this::pttl, CommandDescriptor.of(2, 1, 1, 1));
+        registration.register("DEL", CommandDescriptor.of(-2, 1, -1, 1), CommandParsers.minRequest(2, "del"), this::del);
+        registration.register("EXISTS", CommandDescriptor.of(-2, 1, -1, 1), CommandParsers.minRequest(2, "exists"), this::exists);
+        registration.register("EXPIRE", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "expire"), this::expire);
+        registration.register("PEXPIRE", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "pexpire"), this::pexpire);
+        registration.register("EXPIREAT", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "expireat"), this::expireat);
+        registration.register("PEXPIREAT", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exactRequest(3, "pexpireat"), this::pexpireat);
+        registration.register("PERSIST", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "persist"), this::persist);
+        registration.register("TTL", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "ttl"), this::ttl);
+        registration.register("PTTL", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exactRequest(2, "pttl"), this::pttl);
     }
 
     private void type(ExecutionRequest request, CommandContext ctx) {

@@ -76,6 +76,10 @@ public class YierdisServerBootstrapCommandWiringTest {
                 JsonObject statsResult = objectField(stats, "result");
                 Assert.assertTrue(mapContainsKey(statsResult, "queued_tasks"));
                 Assert.assertTrue(mapContainsKey(statsResult, "commands_executed_total"));
+                Assert.assertTrue(mapContainsKey(statsResult, "conn_commands_enqueued"));
+                Assert.assertTrue(mapContainsKey(statsResult, "conn_commands_executed"));
+                Assert.assertTrue(longValue(mapValue(statsResult, "conn_commands_enqueued")) > 0L);
+                Assert.assertTrue(longValue(mapValue(statsResult, "conn_commands_executed")) > 0L);
                 Assert.assertTrue(
                         "expected STATS to expose non-zero submit totals after accepted commands",
                         longValue(mapValue(statsResult, "submit_accepted_total")) > 0L
@@ -190,7 +194,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
                 NettyExecutionConnection connection = NettyExecutionConnection.get(commandLimitedChannel);
                 Assert.assertNotNull(connection);
-                TransactionState tx = connection.context().session().transaction();
+                TransactionState tx = connection.session().transaction();
                 tx.begin();
                 Assert.assertNull(tx.tryEnqueue(request("SET", "k", "v")));
                 Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(request("GET", "k")));
@@ -205,7 +209,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
                 NettyExecutionConnection connection = NettyExecutionConnection.get(byteLimitedChannel);
                 Assert.assertNotNull(connection);
-                TransactionState tx = connection.context().session().transaction();
+                TransactionState tx = connection.session().transaction();
                 tx.begin();
                 Assert.assertNull(tx.tryEnqueue(request("GET", "k")));
                 Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(request("SET", "x", "y")));

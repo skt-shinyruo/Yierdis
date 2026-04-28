@@ -1,9 +1,7 @@
 package yier.bubu.redis.executor;
 
-import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.contract.ReplyWriterFactory;
-import yier.bubu.redis.contract.Session;
 
 import java.util.Collection;
 import java.util.Objects;
@@ -23,7 +21,6 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     private final LongAdder commandsExecuted = new LongAdder();
     private final LongAdder commandsSkippedClosing = new LongAdder();
     private final LongAdder closeAfterReply = new LongAdder();
-    private CommandContext execCtx;
 
     CommandExecutorExecutionSupport(
             CommandExecutionEngine commandProcessor,
@@ -71,11 +68,11 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         boolean executed = false;
         try {
             ReplyWriter writer = replyWriterFactory.newWriter(ioAdapter.newReplySink(connection));
-            commandProcessor.execute(task.request, context(context.session(), writer));
+            commandProcessor.execute(connection.session(), task.request, writer);
             if (writer.closeAfterReplyRequested()) {
                 context.recordCloseAfterReply();
                 closeAfterReply.increment();
-                context.markClosing();
+                connection.markClosing();
             }
             ioAdapter.writeBufferedReply(connection, writer.closeAfterReplyRequested());
             touchedConnections.add(connection);
@@ -126,15 +123,6 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         return closeAfterReply.sum();
     }
 
-    private CommandContext context(Session session, ReplyWriter writer) {
-        CommandContext existing = execCtx;
-        if (existing == null) {
-            execCtx = new CommandContext(session, writer);
-            return execCtx;
-        }
-        return existing.reset(session, writer);
-    }
-
     private void finishTask(C connection, int retainedBytes, boolean executed) {
         try {
             connection.context().recordCommandFinished(retainedBytes, executed);
@@ -171,7 +159,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
             Collection<C> touchedConnections
     ) {
         try {
-            if (context.markClosing()) {
+            if (connection.markClosing()) {
                 backpressureController.disableAutoRead(connection);
             }
         } catch (Throwable ignored) {

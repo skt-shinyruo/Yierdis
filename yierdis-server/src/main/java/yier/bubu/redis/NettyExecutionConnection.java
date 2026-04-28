@@ -3,7 +3,7 @@ package yier.bubu.redis;
 import io.netty.channel.Channel;
 import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
-import yier.bubu.redis.executor.DefaultExecutionSession;
+import yier.bubu.redis.engine.EngineSession;
 import yier.bubu.redis.executor.ExecutionConnection;
 import yier.bubu.redis.executor.ExecutionConnectionContext;
 
@@ -21,10 +21,13 @@ final class NettyExecutionConnection implements ExecutionConnection {
             return existing;
         }
 
-        DefaultExecutionSession session = new DefaultExecutionSession(txMaxCommands, txMaxBytes);
+        ExecutionConnectionContext context = new ExecutionConnectionContext();
+        EngineSession session = new EngineSession(txMaxCommands, txMaxBytes);
+        session.bindConnectionStatsSupplier(context::statsSnapshot);
         NettyExecutionConnection created = new NettyExecutionConnection(
                 channel,
-                new ExecutionConnectionContext(session)
+                session,
+                context
         );
         NettyExecutionConnection raced = attr.setIfAbsent(created);
         return raced == null ? created : raced;
@@ -38,10 +41,12 @@ final class NettyExecutionConnection implements ExecutionConnection {
     }
 
     private final Channel channel;
+    private final EngineSession session;
     private final ExecutionConnectionContext context;
 
-    private NettyExecutionConnection(Channel channel, ExecutionConnectionContext context) {
+    private NettyExecutionConnection(Channel channel, EngineSession session, ExecutionConnectionContext context) {
         this.channel = Objects.requireNonNull(channel, "channel");
+        this.session = Objects.requireNonNull(session, "session");
         this.context = Objects.requireNonNull(context, "context");
     }
 
@@ -55,7 +60,21 @@ final class NettyExecutionConnection implements ExecutionConnection {
     }
 
     @Override
+    public EngineSession session() {
+        return session;
+    }
+
+    @Override
     public ExecutionConnectionContext context() {
         return context;
+    }
+
+    @Override
+    public boolean markClosing() {
+        if (!context.markClosing()) {
+            return false;
+        }
+        session.discardTransaction();
+        return true;
     }
 }

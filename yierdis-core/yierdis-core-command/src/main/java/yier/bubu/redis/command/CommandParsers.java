@@ -1,9 +1,11 @@
 package yier.bubu.redis.command;
 
+import yier.bubu.redis.contract.ExecutionRequest;
+
 import java.util.Objects;
 import java.util.function.Function;
 
-final class CommandParsers {
+public final class CommandParsers {
     private CommandParsers() {
     }
 
@@ -29,6 +31,26 @@ final class CommandParsers {
 
     static CommandParser<ArgReader> pairTail(int minArgc, int tailStartIndex, String commandLower) {
         return arity(CommandArity.pairTail(minArgc, tailStartIndex, commandLower));
+    }
+
+    public static CommandParser<ExecutionRequest> exactRequest(int argc, String commandLower) {
+        return request(CommandArity.exact(argc, commandLower));
+    }
+
+    public static CommandParser<ExecutionRequest> minRequest(int minArgc, String commandLower) {
+        return request(CommandArity.min(minArgc, commandLower));
+    }
+
+    public static CommandParser<ExecutionRequest> rangeRequest(int minArgc, int maxArgc, String commandLower) {
+        return request(CommandArity.range(minArgc, maxArgc, commandLower));
+    }
+
+    public static CommandParser<ExecutionRequest> oneOfRequest(String commandLower, int... allowedArgc) {
+        return request(CommandArity.oneOf(commandLower, allowedArgc));
+    }
+
+    static CommandParser<ExecutionRequest> request(CommandArity arity) {
+        return arity(arity, ArgReader::request);
     }
 
     static <T> CommandParser<T> arity(CommandArity arity, Function<ArgReader, T> mapper) {

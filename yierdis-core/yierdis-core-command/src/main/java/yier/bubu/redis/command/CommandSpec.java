@@ -14,19 +14,6 @@ public final class CommandSpec<T> {
     private final CommandDescriptor descriptor;
     private final String disallowedInMultiError;
 
-    public CommandSpec(
-            CommandModule.Handler handler,
-            CommandDescriptor descriptor,
-            String disallowedInMultiError
-    ) {
-        this(
-                legacyParser(),
-                legacyHandler(handler),
-                descriptor,
-                disallowedInMultiError
-        );
-    }
-
     private CommandSpec(
             CommandParser<T> parser,
             CommandHandler<T> handler,
@@ -66,33 +53,11 @@ public final class CommandSpec<T> {
         handler.execute(typed, ctx);
     }
 
-    CommandModule.Handler handler() {
-        return (request, ctx) -> {
-            CommandParseResult<T> result = parse(request);
-            if (!result.ok()) {
-                ctx.out().error(result.error().toReplyMessage());
-                return;
-            }
-            handler.execute(result.value(), ctx);
-        };
-    }
-
     public CommandDescriptor descriptor() {
         return descriptor;
     }
 
     public String disallowedInMultiError() {
         return disallowedInMultiError;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static <T> CommandParser<T> legacyParser() {
-        return args -> (CommandParseResult<T>) CommandParseResult.ok(args.request());
-    }
-
-    @SuppressWarnings("unchecked")
-    private static <T> CommandHandler<T> legacyHandler(CommandModule.Handler handler) {
-        Objects.requireNonNull(handler, "handler");
-        return (CommandHandler<T>) (CommandHandler<ExecutionRequest>) handler::execute;
     }
 }
