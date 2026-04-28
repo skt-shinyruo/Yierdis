@@ -5,6 +5,7 @@ import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.ops.DbMemoryConstants;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
@@ -28,7 +29,7 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
                 .databases(2)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
                 .maxmemoryBytes(maxmemoryBytes)
-                .maxmemoryPolicy("allkeys-lru")
+                .maxmemoryPolicy(MaxmemoryPolicy.ALLKEYS_LRU)
                 // samples >= total global keys to force deterministic scan (avoid test flakiness)
                 .maxmemorySamples(10)
                 .evictionTimeLimitMillis(1000)
@@ -79,7 +80,7 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
                 .databases(2)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
                 .maxmemoryBytes(1_000_000)
-                .maxmemoryPolicy("allkeys-lru")
+                .maxmemoryPolicy(MaxmemoryPolicy.ALLKEYS_LRU)
                 .maxmemorySamples(10)
                 .evictionTimeLimitMillis(1000)
                 .build();

@@ -9,7 +9,7 @@ public interface DbEngineFactory {
     RuntimeDbEngine create(
             int dbIndex,
             long maxmemoryBytes,
-            String maxmemoryPolicy,
+            MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis

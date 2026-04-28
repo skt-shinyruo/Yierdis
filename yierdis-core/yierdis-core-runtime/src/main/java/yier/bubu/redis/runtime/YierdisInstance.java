@@ -6,7 +6,6 @@ import yier.bubu.redis.db.YierdisDbEngineFactory;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.DbEngineFactory;
-import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.ops.MaxmemoryUsageSource;
 import yier.bubu.redis.ops.RuntimeDbEngine;
 
@@ -102,7 +101,7 @@ public final class YierdisInstance implements AutoCloseable {
                         participants,
                         sharedUsage,
                         config.maxmemoryBytes(),
-                        MaxmemoryPolicy.parse(config.maxmemoryPolicy()),
+                        config.maxmemoryPolicy(),
                         config.maxmemorySamples(),
                         TimeUnit.MILLISECONDS.toNanos(config.evictionTimeLimitMillis())
                 );

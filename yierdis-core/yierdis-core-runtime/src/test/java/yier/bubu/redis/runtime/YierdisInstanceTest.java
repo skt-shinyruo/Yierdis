@@ -13,6 +13,7 @@ import yier.bubu.redis.ops.DbLifecycleOps;
 import yier.bubu.redis.ops.DbReads;
 import yier.bubu.redis.ops.DbWrites;
 import yier.bubu.redis.ops.ExpirationManager;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.ops.MemoryOps;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.RuntimeDbEngine;
@@ -35,7 +36,7 @@ public class YierdisInstanceTest {
                 .databases(2)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
                 .maxmemoryBytes(9000)
-                .maxmemoryPolicy("noeviction")
+                .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
@@ -63,7 +64,7 @@ public class YierdisInstanceTest {
                 .databases(2)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
                 .maxmemoryBytes(20_000)
-                .maxmemoryPolicy("noeviction")
+                .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
@@ -92,7 +93,7 @@ public class YierdisInstanceTest {
                 .databases(2)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
                 .maxmemoryBytes(0)
-                .maxmemoryPolicy("noeviction")
+                .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
@@ -116,6 +117,29 @@ public class YierdisInstanceTest {
             Assert.assertTrue("expected off-heap to be included in maxmemory accounting", stats.offHeapIncludedInMaxmemory());
             Assert.assertEquals("expected instance off-heap to sum across DBs in per-db scope", expected, stats.offHeapUsedBytes());
         }
+    }
+
+    @Test
+    public void maxmemoryPolicyBuilderUsesDomainEnumAndKeepsStringCompatibility() {
+        YierdisInstanceConfig typed = YierdisInstanceConfig.builder()
+                .maxmemoryPolicy(MaxmemoryPolicy.ALLKEYS_LRU)
+                .build();
+        Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_LRU, typed.maxmemoryPolicy());
+
+        YierdisInstanceConfig defaulted = YierdisInstanceConfig.builder()
+                .maxmemoryPolicy((MaxmemoryPolicy) null)
+                .build();
+        Assert.assertEquals(MaxmemoryPolicy.NOEVICTION, defaulted.maxmemoryPolicy());
+
+        YierdisInstanceConfig legacyString = YierdisInstanceConfig.builder()
+                .maxmemoryPolicy("ALLKEYS_RANDOM")
+                .build();
+        Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_RANDOM, legacyString.maxmemoryPolicy());
+
+        YierdisInstanceConfig legacyBlank = YierdisInstanceConfig.builder()
+                .maxmemoryPolicy(" ")
+                .build();
+        Assert.assertEquals(MaxmemoryPolicy.NOEVICTION, legacyBlank.maxmemoryPolicy());
     }
 
     @Test
@@ -185,7 +209,7 @@ public class YierdisInstanceTest {
             public RuntimeDbEngine create(
                     int dbIndex,
                     long maxmemoryBytes,
-                    String maxmemoryPolicy,
+                    MaxmemoryPolicy maxmemoryPolicy,
                     int maxmemorySamples,
                     long evictionTimeLimitMillis,
                     long expireCleanupTimeLimitMillis
