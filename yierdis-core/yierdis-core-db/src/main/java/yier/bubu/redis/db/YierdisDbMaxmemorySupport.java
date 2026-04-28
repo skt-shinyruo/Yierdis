@@ -2,18 +2,19 @@ package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.ops.MaxmemoryCandidate;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 
 import java.util.Objects;
 
 final class YierdisDbMaxmemorySupport {
     private final YierdisDb db;
-    private final YierdisDb.MaxmemoryPolicy maxmemoryPolicy;
+    private final MaxmemoryPolicy maxmemoryPolicy;
     private final int maxmemorySamples;
     private final long evictionTimeLimitNanos;
 
     YierdisDbMaxmemorySupport(
             YierdisDb db,
-            YierdisDb.MaxmemoryPolicy maxmemoryPolicy,
+            MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
             long evictionTimeLimitNanos
     ) {
@@ -58,8 +59,8 @@ final class YierdisDbMaxmemorySupport {
         }
     }
 
-    MaxmemoryCandidate sampleCandidate(yier.bubu.redis.ops.MaxmemoryPolicy policy, long nowMillis) {
-        if (policy == null || policy == yier.bubu.redis.ops.MaxmemoryPolicy.NOEVICTION) {
+    MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
+        if (policy == null || policy == MaxmemoryPolicy.NOEVICTION) {
             return null;
         }
         if (db.store.size() == 0) {
@@ -78,12 +79,12 @@ final class YierdisDbMaxmemorySupport {
             return null;
         }
 
-        long lruClock = policy == yier.bubu.redis.ops.MaxmemoryPolicy.ALLKEYS_LRU ? e.lruClock : 0L;
+        long lruClock = policy == MaxmemoryPolicy.ALLKEYS_LRU ? e.lruClock : 0L;
         return new MaxmemoryCandidate(db, key, lruClock);
     }
 
-    MaxmemoryCandidate scanBestCandidate(yier.bubu.redis.ops.MaxmemoryPolicy policy, long nowMillis) {
-        if (policy != yier.bubu.redis.ops.MaxmemoryPolicy.ALLKEYS_LRU) {
+    MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
+        if (policy != MaxmemoryPolicy.ALLKEYS_LRU) {
             return null;
         }
         if (db.store.size() == 0) {
@@ -144,11 +145,11 @@ final class YierdisDbMaxmemorySupport {
             return null;
         }
 
-        if (maxmemoryPolicy == YierdisDb.MaxmemoryPolicy.ALLKEYS_RANDOM) {
+        if (maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_RANDOM) {
             return db.store.randomKey();
         }
 
-        if (maxmemoryPolicy != YierdisDb.MaxmemoryPolicy.ALLKEYS_LRU) {
+        if (maxmemoryPolicy != MaxmemoryPolicy.ALLKEYS_LRU) {
             return null;
         }
 

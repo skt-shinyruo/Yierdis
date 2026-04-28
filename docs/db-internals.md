@@ -147,7 +147,7 @@ YierdisInstance
 为了避免 `YierdisDb` 再次变成所有细节的落点，几个非 facade 职责被放在独立类里：
 
 - `YierdisDbConfig`
-  负责校验构造参数、解析本地 maxmemory policy、计算时间预算和 LRU 开关。
+  负责校验构造参数、保存 core-api maxmemory policy、计算时间预算和 LRU 开关。
 - `YierdisDbStorageComponents`
   负责 FFM runtime、allocator、keyspace、expire index 和 owned resources 的组装结果。
 - `YierdisDbComponents`

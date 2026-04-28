@@ -1,10 +1,12 @@
 package yier.bubu.redis.db;
 
+import yier.bubu.redis.ops.MaxmemoryPolicy;
+
 import java.util.concurrent.TimeUnit;
 
 final class YierdisDbConfig {
     final long maxmemoryBytes;
-    final YierdisDb.MaxmemoryPolicy maxmemoryPolicy;
+    final MaxmemoryPolicy maxmemoryPolicy;
     final int maxmemorySamples;
     final boolean lruEnabled;
     final long evictionTimeLimitNanos;
@@ -12,7 +14,7 @@ final class YierdisDbConfig {
 
     private YierdisDbConfig(
             long maxmemoryBytes,
-            YierdisDb.MaxmemoryPolicy maxmemoryPolicy,
+            MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
             long evictionTimeLimitNanos,
             long expireCleanupTimeLimitNanos
@@ -20,14 +22,14 @@ final class YierdisDbConfig {
         this.maxmemoryBytes = maxmemoryBytes;
         this.maxmemoryPolicy = maxmemoryPolicy;
         this.maxmemorySamples = maxmemorySamples;
-        this.lruEnabled = maxmemoryBytes > 0 && maxmemoryPolicy == YierdisDb.MaxmemoryPolicy.ALLKEYS_LRU;
+        this.lruEnabled = maxmemoryBytes > 0 && maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_LRU;
         this.evictionTimeLimitNanos = evictionTimeLimitNanos;
         this.expireCleanupTimeLimitNanos = expireCleanupTimeLimitNanos;
     }
 
     static YierdisDbConfig create(
             long maxmemoryBytes,
-            String maxmemoryPolicy,
+            MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
@@ -46,7 +48,7 @@ final class YierdisDbConfig {
         }
         return new YierdisDbConfig(
                 maxmemoryBytes,
-                YierdisDbMaxmemoryPolicies.parseOrDefault(maxmemoryPolicy),
+                maxmemoryPolicy == null ? MaxmemoryPolicy.NOEVICTION : maxmemoryPolicy,
                 maxmemorySamples,
                 TimeUnit.MILLISECONDS.toNanos(evictionTimeLimitMillis),
                 TimeUnit.MILLISECONDS.toNanos(expireCleanupTimeLimitMillis)

@@ -5,6 +5,7 @@ import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.ops.ExpireOption;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.ops.ScanCursorV2;
 import yier.bubu.redis.ops.SetMode;
 
@@ -65,6 +66,16 @@ public class YierdisDbArchitectureGuardTest {
     }
 
     @Test
+    public void maxmemoryPolicyMustUseCoreApiEnumOnly() {
+        Assert.assertNull(findDeclaredClass(YierdisDb.class, "MaxmemoryPolicy"));
+        Assert.assertEquals(MaxmemoryPolicy.class, fieldType(YierdisDb.class, "maxmemoryPolicy"));
+        Assert.assertEquals(MaxmemoryPolicy.class, fieldType(YierdisDbConfig.class, "maxmemoryPolicy"));
+        Assert.assertEquals(MaxmemoryPolicy.class, fieldType(YierdisDbMemoryLedger.class, "maxmemoryPolicy"));
+        Assert.assertEquals(MaxmemoryPolicy.class, fieldType(YierdisDbMaxmemorySupport.class, "maxmemoryPolicy"));
+        Assert.assertNull(findDeclaredMethod(YierdisDb.class, "parse" + "MaxmemoryPolicy", String.class));
+    }
+
+    @Test
     public void yierdisDbMustDelegateResourceLifetimeAndLedgerImplementation() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("unable to resolve repository root", repoRoot);
@@ -105,7 +116,7 @@ public class YierdisDbArchitectureGuardTest {
                 repoRoot,
                 dbFile,
                 offenders,
-                "parseMaxmemoryPolicy(",
+                "parse" + "MaxmemoryPolicy(",
                 "estimateEntryBytes(",
                 "estimateValueBytes(",
                 "estimateStringWriteUpperBound(",
@@ -188,6 +199,25 @@ public class YierdisDbArchitectureGuardTest {
         try {
             return type.getDeclaredMethod(name, parameterTypes);
         } catch (NoSuchMethodException ignored) {
+            return null;
+        }
+    }
+
+    private static Class<?> findDeclaredClass(Class<?> type, String simpleName) {
+        for (Class<?> nested : type.getDeclaredClasses()) {
+            if (nested.getSimpleName().equals(simpleName)) {
+                return nested;
+            }
+        }
+        return null;
+    }
+
+    private static Class<?> fieldType(Class<?> type, String fieldName) {
+        try {
+            java.lang.reflect.Field field = type.getDeclaredField(fieldName);
+            return field.getType();
+        } catch (NoSuchFieldException e) {
+            Assert.fail("missing field " + type.getName() + "." + fieldName);
             return null;
         }
     }

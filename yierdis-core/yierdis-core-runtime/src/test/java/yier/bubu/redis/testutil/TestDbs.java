@@ -2,6 +2,7 @@ package yier.bubu.redis.testutil;
 
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -26,7 +27,7 @@ public final class TestDbs {
         }
     }
 
-    public static void forEachDbWithMaxmemory(long maxmemoryBytes, String maxmemoryPolicy, int maxmemorySamples, Consumer<YierdisDb> test) {
+    public static void forEachDbWithMaxmemory(long maxmemoryBytes, MaxmemoryPolicy maxmemoryPolicy, int maxmemorySamples, Consumer<YierdisDb> test) {
         Objects.requireNonNull(test, "test");
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("test-db")) {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, 5, 5);
@@ -37,5 +38,13 @@ public final class TestDbs {
                 db.shutdown();
             }
         }
+    }
+
+    @Deprecated
+    public static void forEachDbWithMaxmemory(long maxmemoryBytes, String maxmemoryPolicy, int maxmemorySamples, Consumer<YierdisDb> test) {
+        MaxmemoryPolicy policy = maxmemoryPolicy == null || maxmemoryPolicy.isBlank()
+                ? MaxmemoryPolicy.NOEVICTION
+                : MaxmemoryPolicy.parse(maxmemoryPolicy);
+        forEachDbWithMaxmemory(maxmemoryBytes, policy, maxmemorySamples, test);
     }
 }
