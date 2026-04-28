@@ -29,6 +29,11 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-core-engine</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-protocol-netty</artifactId>
         </dependency>
 

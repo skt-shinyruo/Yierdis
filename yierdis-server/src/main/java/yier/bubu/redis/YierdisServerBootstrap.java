@@ -16,8 +16,9 @@ import org.slf4j.LoggerFactory;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.command.SlowCommandGovernor;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.CommandContext;
+import yier.bubu.redis.engine.DefaultYierdisEngine;
+import yier.bubu.redis.engine.YierdisEngine;
 import yier.bubu.redis.executor.CommandExecutor;
 import yier.bubu.redis.executor.CommandExecutorConfig;
 import yier.bubu.redis.ops.DbEngine;
@@ -48,6 +49,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
     // Core resources (closed in reverse order).
     private YierdisInstance instance;
+    private YierdisEngine engine;
     private CommandExecutor<NettyExecutionConnection> executor;
     private NettyServerInfoProvider infoProvider;
     private EventExecutorGroup commandGroup;
@@ -118,7 +120,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .expireCleanupTimeLimitMillis(runtimeConfig.expireCleanupTimeLimitMillis());
         instance = YierdisInstance.create(instanceConfig.build());
         YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
-        YierdisInstanceMaintenance maintenance = new YierdisInstanceMaintenance(instance);
+        Runnable maintenanceTick = new YierdisInstanceMaintenance(instance)::maintenanceTick;
         YierdisInstanceObservability observability = instance.observability();
 
         infoProvider = new NettyServerInfoProvider(runtimeConfig);
@@ -138,18 +140,20 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 return runtimeConfig.keysMaxResults();
             }
         };
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+        YierdisEngine commandEngine = new DefaultYierdisEngine(
                 dbRouter(instance),
                 infoProvider,
                 slowGovernor,
+                maintenanceTick,
                 new ServerCommandModule(infoProvider)
         );
+        engine = commandEngine;
         commandGroup = new DefaultEventExecutorGroup(1);
         JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
         CommandExecutorConfig executorConfig = CommandExecutorConfigs.from(runtimeConfig);
         executor = new CommandExecutor<>(
                 runtimeAccess::bindToCurrentThread,
-                processor::execute,
+                commandEngine::execute,
                 commandGroup.next(),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
@@ -177,7 +181,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 }
                 exForTask.executeMaintenance(() -> {
                     try {
-                        maintenance.maintenanceTick();
+                        commandEngine.maintenanceTick();
                     } catch (Exception e) {
                         log.debug("Expiration cleanup error", e);
                     } finally {
@@ -226,6 +230,16 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 failure = recordCloseFailure(failure, t);
             }
         }
+
+        YierdisEngine eng = engine;
+        if (eng != null) {
+            try {
+                eng.close();
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
+            }
+        }
+        engine = null;
 
         YierdisInstance inst = instance;
         if (inst != null) {

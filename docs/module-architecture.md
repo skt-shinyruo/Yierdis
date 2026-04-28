@@ -11,7 +11,7 @@ bytes-lib
 ├─ core-contract ──> core-api ──> core-db ──> core-runtime
 │                     ^             ^
 │                     │             └─ memory-foreign
-│                     └─ core-command
+│                     └─ core-command ──> core-engine
 │
 ├─ protocol-model ──> protocol-codec ──> protocol-netty
 │
@@ -21,7 +21,7 @@ bytes-lib
 │
 ├─ client  -> protocol-netty
 ├─ bench   -> args + protocol-codec + protocol-netty
-└─ server  -> core-contract + core-command + core-runtime
+└─ server  -> core-contract + core-engine + core-command + core-runtime
              + protocol-netty + bytes-netty + executor-core + args + memory-foreign
 ```
 
@@ -167,6 +167,27 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 也就是说，命令层更像“翻译层”，而不是“存储实现层”。
 
+### `yierdis-core-engine`
+
+这是当前重构引入的 command execution kernel 边界。
+
+它的职责是：
+
+- 对外暴露唯一的命令执行入口 `YierdisEngine`
+- 把 server 从 `YierdisFastCommandProcessor` 的具体构造里解耦出来
+- 把定时 maintenance 入口也收敛到 engine 上
+- 为后续迁移 session / transaction ownership 留出稳定边界
+
+当前阶段的 `DefaultYierdisEngine` 仍然委托已有的 `YierdisFastCommandProcessor` 执行命令，也委托 runtime maintenance hook 做清理。
+
+因此它不是新的命令实现层，而是先把“谁是执行入口”这件事固定下来：
+
+- server 只调用 `YierdisEngine.execute(...)`
+- executor 只接收 `engine::execute`
+- maintenance 只调用 `engine.maintenanceTick()`
+
+后续如果要把事务状态、session 状态或 typed command parsing 继续迁进 engine，外层 server / executor 不需要再被迫知道这些细节。
+
 ### `yierdis-core-runtime`
 
 负责 runtime 级组装，而不是协议处理。
@@ -243,7 +264,8 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 - protocol 车道产出协议请求对象
 - server 里的 `ProtocolCommandAdapter` 把它变成 `ExecutionRequest`
-- core-command 基于 `ExecutionRequest` 工作
+- server 把 `ExecutionRequest` 交给 `YierdisEngine`
+- engine 再把请求交给当前命令处理实现
 - reply 最后再通过 `ReplyWriter` 落回 server 的协议输出
 
 这也是为什么很多“看起来可以顺手改到 core 里”的事情，其实应该只在 server 做。
@@ -294,22 +316,34 @@ bench 也主要依赖协议和参数模块，说明它在设计上更像：
 
 `YierdisInstance` 负责 DB 生命周期、owner-thread 协作和资源 ownership，但不重新承担 command processor 装配职责。
 
+### 5. engine 是命令执行入口
+
+server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisEngine`。
+
+这条边界的意义是：
+
+- command processor 的注册、事务、错误转换等细节不继续散落到 bootstrap
+- maintenance 也通过同一个 engine 入口回到 runtime/storage
+- 后续重构可以把 session/transaction 继续迁入 engine，而不改变 server/executor 的接线模型
+
 如果把一次请求跨模块的过程写成最短路径，大致是：
 
 1. `protocol-netty`
    把网络输入交给 decoder
 2. `server`
    把协议请求适配为 `ExecutionRequest`
-3. `core-command`
+3. `core-engine`
+   作为统一执行入口接收 `ExecutionRequest`
+4. `core-command`
    根据 `ExecutionRequest` 和 `CommandContext` 分发命令
-4. `core-api`
+5. `core-api`
    通过 `DbReads/DbWrites` 暴露能力边界
-5. `core-db`
+6. `core-db`
    执行实际读写
-6. `server`
+7. `server`
    通过 `ReplyWriter` 把结果编码回协议
 
-初学者如果能把这 6 步记住，读整个仓库时就不容易迷路。
+初学者如果能把这 7 步记住，读整个仓库时就不容易迷路。
 
 ## 构建和测试层面的护栏
 
@@ -332,12 +366,14 @@ bench 也主要依赖协议和参数模块，说明它在设计上更像：
 - `protocol-codec` 不依赖 `core-contract`
 - bootstrap 不重新内联 owner-thread 生命周期逻辑
 - request DTO 和 `ExecutionRequest` 的边界不被重新打穿
+- server bootstrap 不绕过 `YierdisEngine` 直接接线 command processor 或 maintenance
 
 这类测试的意义，不只是“防止依赖写错”，更是在保护整个阅读模型：
 
 - 协议层看到的对象和命令层看到的对象必须继续分离
 - runtime 必须继续只管生命周期
 - server 必须继续只做组装，而不是把所有责任拿回去
+- engine 必须继续是 command execution 的唯一入口
 
 ### `ReplySsoTGuardTest`
 
@@ -362,6 +398,7 @@ Yierdis 的模块设计重点，不是“按包名分目录”，而是：
 
 - protocol 负责线上协议
 - core-contract / core-api 负责执行契约和 DB 能力边界
+- core-engine 负责统一命令执行入口
 - core-db 负责真实存储
 - core-runtime 负责实例生命周期
 - server 负责最后的组装
@@ -376,15 +413,17 @@ Yierdis 的模块设计重点，不是“按包名分目录”，而是：
 
 1. `yierdis-server`
    先知道项目怎么启动、怎么收请求
-2. `yierdis-core-command`
+2. `yierdis-core-engine`
+   再知道 server 最终把请求交给哪个执行入口
+3. `yierdis-core-command`
    再知道命令是怎么被解释和分发的
-3. `yierdis-core-api`
+4. `yierdis-core-api`
    再知道命令层到底能向 DB 要什么能力
-4. `yierdis-core-db`
+5. `yierdis-core-db`
    最后再进入实际存储实现
-5. `yierdis-core-runtime`
+6. `yierdis-core-runtime`
    回过头理解多 DB、owner thread 和实例级生命周期
-6. `yierdis-protocol-*`
+7. `yierdis-protocol-*`
    最后补协议细节和外部工具链
 
 这样读会更符合“先看主路径，再看细节分层”的学习顺序。

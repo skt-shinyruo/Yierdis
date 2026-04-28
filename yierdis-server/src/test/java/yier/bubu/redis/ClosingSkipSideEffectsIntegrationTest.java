@@ -6,8 +6,8 @@ import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.Command;
+import yier.bubu.redis.engine.YierdisEngine;
 import yier.bubu.redis.executor.CommandExecutor;
 import yier.bubu.redis.executor.CommandExecutorConfig;
 import yier.bubu.redis.executor.ExecutionConnectionContext;
@@ -29,11 +29,11 @@ public class ClosingSkipSideEffectsIntegrationTest {
         EventExecutor eventExecutor = group.next();
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+        YierdisEngine engine = TestYierdisEngines.forInstance(instance);
         JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                processor::execute,
+                engine::execute,
                 eventExecutor,
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
@@ -91,11 +91,11 @@ public class ClosingSkipSideEffectsIntegrationTest {
         EventExecutor eventExecutor = group.next();
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+        YierdisEngine engine = TestYierdisEngines.forInstance(instance);
         JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
-                processor::execute,
+                engine::execute,
                 eventExecutor,
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),

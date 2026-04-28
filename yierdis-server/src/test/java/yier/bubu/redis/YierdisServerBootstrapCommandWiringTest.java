@@ -5,10 +5,10 @@ import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.ReplyWriterFactory;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.TransactionState;
+import yier.bubu.redis.engine.YierdisEngine;
 import yier.bubu.redis.executor.CommandExecutor;
 import yier.bubu.redis.executor.CommandExecutorConfig;
 import yier.bubu.redis.executor.SchedulingPolicy;
@@ -412,11 +412,11 @@ public class YierdisServerBootstrapCommandWiringTest {
 
         private InitializerTestEnv() {
             this.instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+            YierdisEngine engine = TestYierdisEngines.forInstance(instance);
             this.replyWriterFactory = new JsonLineReplyWriterFactory();
             this.executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
-                    processor::execute,
+                    engine::execute,
                     ImmediateEventExecutor.INSTANCE,
                     replyWriterFactory,
                     new NettyExecutionIoAdapter(),

@@ -602,6 +602,43 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void serverBootstrapMustWireCommandExecutionThroughYierdisEngine() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path engineFile = repoRoot.resolve(
+                "yierdis-core-engine/src/main/java/yier/bubu/redis/engine/YierdisEngine.java"
+        );
+        Assert.assertTrue(
+                "缺少 YierdisEngine facade，server bootstrap 不应继续直接接线 command processor",
+                Files.isRegularFile(engineFile)
+        );
+
+        Path bootstrapFile = repoRoot.getParent().resolve(
+                "yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java"
+        ).normalize();
+        Assert.assertTrue("缺少 YierdisServerBootstrap.java", Files.isRegularFile(bootstrapFile));
+
+        List<String> offenders = new ArrayList<>();
+        scanFileForForbiddenText(
+                repoRoot,
+                bootstrapFile,
+                offenders,
+                "import yier.bubu.redis.command.YierdisFastCommandProcessor;",
+                "new YierdisFastCommandProcessor(",
+                "processor::execute",
+                "maintenance.maintenanceTick()"
+        );
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 server bootstrap 仍绕过 YierdisEngine 直接接线 command processor 或 maintenance：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
     public void executorCoreMustNotDependOnNetty() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
