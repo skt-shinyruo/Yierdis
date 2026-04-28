@@ -29,6 +29,15 @@ public class CommandMetadataRegressionTest {
         } catch (NoSuchMethodException e) {
             Assert.fail("CommandModule.Registration should expose register(String, CommandSpec)");
         }
+
+        Class<?> parserType = Class.forName("yier.bubu.redis.command.CommandParser");
+        Class<?> handlerType = Class.forName("yier.bubu.redis.command.CommandHandler");
+        Assert.assertNotNull(CommandSpec.class.getMethod(
+                "of",
+                CommandDescriptor.class,
+                parserType,
+                handlerType
+        ));
     }
 
     @Test
