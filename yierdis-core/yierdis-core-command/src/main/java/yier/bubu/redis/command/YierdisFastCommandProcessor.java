@@ -141,11 +141,19 @@ public final class YierdisFastCommandProcessor {
             boolean isExec = CommandSupport.asciiEqualsIgnoreCase(request, 0, "EXEC");
             boolean isDiscard = CommandSupport.asciiEqualsIgnoreCase(request, 0, "DISCARD");
             if (!isMulti && !isExec && !isDiscard) {
-                CommandSpec spec = registry.spec(request);
-                String disallowedInMultiError = spec == null ? null : spec.disallowedInMultiError();
+                CommandSpec<?> spec = registry.spec(request);
+                if (spec == null) {
+                    tx.markAborted();
+                    out.error(unknownCommandMessage(request));
+                    return;
+                }
+                String disallowedInMultiError = spec.disallowedInMultiError();
                 if (disallowedInMultiError != null) {
                     tx.markAborted();
                     out.error(disallowedInMultiError);
+                    return;
+                }
+                if (!validateBeforeQueue(spec, request, tx, out)) {
                     return;
                 }
                 String enqueueErr = tx.tryEnqueue(request);
@@ -211,6 +219,16 @@ public final class YierdisFastCommandProcessor {
 
     private void executeParsedSpec(CommandSpec<?> spec, Object parsed, CommandContext ctx) {
         spec.executeParsed(parsed, ctx);
+    }
+
+    private boolean validateBeforeQueue(CommandSpec<?> spec, ExecutionRequest request, TransactionState tx, ReplyWriter out) {
+        CommandParseResult<?> parsed = spec.parse(request);
+        if (parsed.ok()) {
+            return true;
+        }
+        tx.markAborted();
+        out.error(parsed.error().toReplyMessage());
+        return false;
     }
 
     private static String unknownCommandMessage(ExecutionRequest request) {
