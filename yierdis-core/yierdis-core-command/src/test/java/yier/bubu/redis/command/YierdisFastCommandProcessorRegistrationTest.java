@@ -119,6 +119,34 @@ public class YierdisFastCommandProcessorRegistrationTest {
         Assert.assertEquals("value", executeBulkString(processor, "TYPED", "value"));
     }
 
+    @Test
+    public void processorReturnsParseErrorBeforeTypedHandlerRuns() {
+        final boolean[] handlerCalled = {false};
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+                TEST_ROUTER,
+                null,
+                YierdisChangeSink.NOOP,
+                null,
+                registration -> registration.register(
+                        "STRICT",
+                        CommandSpec.of(
+                                CommandDescriptor.of(2, 0, 0, 0),
+                                CommandParsers.exact(2, "strict"),
+                                (args, ctx) -> {
+                                    handlerCalled[0] = true;
+                                    ctx.out().simpleString("OK");
+                                }
+                        )
+                )
+        );
+
+        TestReplyWriter out = new TestReplyWriter();
+        processor.execute(ByteArrayExecutionRequest.fromUtf8("STRICT", List.of()), new CommandContext(null, out));
+
+        Assert.assertFalse(handlerCalled[0]);
+        Assert.assertEquals("ERR wrong number of arguments for 'strict' command", out.error());
+    }
+
     private static Class<?> loadRequiredType(String className) {
         try {
             return Class.forName(className);

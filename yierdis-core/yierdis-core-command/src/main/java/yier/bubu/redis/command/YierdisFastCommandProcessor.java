@@ -159,21 +159,20 @@ public final class YierdisFastCommandProcessor {
         }
 
         try {
-            CommandSpec spec = registry.spec(request);
+            CommandSpec<?> spec = registry.spec(request);
             if (spec == null) {
                 out.error(unknownCommandMessage(request));
                 return;
             }
-            CommandModule.Handler handler = spec.handler();
             boolean sinkEnabled = changeSink != YierdisChangeSink.NOOP;
             boolean changed = false;
             if (sinkEnabled) {
                 try (YierdisChangeTracking.Scope ignored = YierdisChangeTracking.beginScope()) {
-                    handler.execute(request, ctx);
+                    executeSpec(spec, request, ctx);
                     changed = YierdisChangeTracking.changedAny();
                 }
             } else {
-                handler.execute(request, ctx);
+                executeSpec(spec, request, ctx);
             }
 
             // 变更事件：仅在命令执行成功后触发；仅当本次命令产生“真实变更”（Keyspace/Value/TTL 元数据）时 emit。
@@ -199,6 +198,19 @@ public final class YierdisFastCommandProcessor {
         } catch (IllegalArgumentException e) {
             out.error("ERR " + e.getMessage());
         }
+    }
+
+    private void executeSpec(CommandSpec<?> spec, ExecutionRequest request, CommandContext ctx) {
+        CommandParseResult<?> parsed = spec.parse(request);
+        if (!parsed.ok()) {
+            ctx.out().error(parsed.error().toReplyMessage());
+            return;
+        }
+        executeParsedSpec(spec, parsed.value(), ctx);
+    }
+
+    private void executeParsedSpec(CommandSpec<?> spec, Object parsed, CommandContext ctx) {
+        spec.executeParsed(parsed, ctx);
     }
 
     private static String unknownCommandMessage(ExecutionRequest request) {
