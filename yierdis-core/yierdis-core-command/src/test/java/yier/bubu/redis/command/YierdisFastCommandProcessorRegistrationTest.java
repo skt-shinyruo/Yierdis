@@ -3,6 +3,7 @@ package yier.bubu.redis.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.Command;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.DbIndexProvider;
@@ -98,6 +99,26 @@ public class YierdisFastCommandProcessorRegistrationTest {
         Assert.assertEquals(long.class, parseLong.getReturnType());
     }
 
+    @Test
+    public void typedCommandSpecCanBeRegisteredAndExecuted() {
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+                TEST_ROUTER,
+                null,
+                YierdisChangeSink.NOOP,
+                null,
+                registration -> registration.register(
+                        "TYPED",
+                        CommandSpec.of(
+                                CommandDescriptor.of(2, 0, 0, 0),
+                                CommandParsers.exact(2, "typed"),
+                                (args, ctx) -> ctx.out().bulkString(args.bytes(1))
+                        )
+                )
+        );
+
+        Assert.assertEquals("value", executeBulkString(processor, "TYPED", "value"));
+    }
+
     private static Class<?> loadRequiredType(String className) {
         try {
             return Class.forName(className);
@@ -183,6 +204,13 @@ public class YierdisFastCommandProcessorRegistrationTest {
         return writer.simpleString();
     }
 
+    private static String executeBulkString(YierdisFastCommandProcessor processor, String command, String arg) {
+        TestReplyWriter out = new TestReplyWriter();
+        processor.execute(ByteArrayExecutionRequest.fromUtf8(command, List.of(arg)), new CommandContext(null, out));
+        Assert.assertNull(out.error());
+        return out.bulkString();
+    }
+
     private static final class ArrayCommand implements Command {
         private final byte[][] argv;
 
@@ -233,6 +261,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
 
     private static final class TestReplyWriter implements ReplyWriter {
         private String simpleString;
+        private String bulkString;
         private String error;
         private boolean closeAfterReplyRequested;
 
@@ -242,6 +271,10 @@ public class YierdisFastCommandProcessorRegistrationTest {
 
         private String error() {
             return error;
+        }
+
+        private String bulkString() {
+            return bulkString;
         }
 
         @Override
@@ -341,7 +374,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
 
         @Override
         public void bulkString(byte[] data) {
-            throw unsupported();
+            this.bulkString = data == null ? null : new String(data, StandardCharsets.UTF_8);
         }
 
         @Override

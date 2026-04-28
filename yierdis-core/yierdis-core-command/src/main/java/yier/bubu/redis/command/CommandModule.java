@@ -16,6 +16,15 @@ public interface CommandModule {
     interface Registration {
         void register(String name, CommandSpec spec);
 
+        default <T> void register(
+                String name,
+                CommandDescriptor descriptor,
+                CommandParser<T> parser,
+                CommandHandler<T> handler
+        ) {
+            register(name, CommandSpec.of(descriptor, parser, handler));
+        }
+
         default void register(String name, Handler handler) {
             throw new UnsupportedOperationException(
                     "descriptor is required; use register(String, Handler, CommandDescriptor)"
@@ -39,6 +48,16 @@ public interface CommandModule {
                 String errorMessage
         ) {
             register(name, new CommandSpec(handler, descriptor, errorMessage));
+        }
+
+        default <T> void registerDisallowedInMulti(
+                String name,
+                CommandDescriptor descriptor,
+                CommandParser<T> parser,
+                CommandHandler<T> handler,
+                String errorMessage
+        ) {
+            register(name, CommandSpec.disallowedInMulti(descriptor, parser, handler, errorMessage));
         }
 
         int commandCount();

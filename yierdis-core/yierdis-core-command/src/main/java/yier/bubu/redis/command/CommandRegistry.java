@@ -75,7 +75,7 @@ final class CommandRegistry implements CommandModule.Registration {
         insert(new Entry(
                 ascii,
                 hash,
-                new CommandSpec(spec.handler(), spec.descriptor(), disallowedInMultiError)
+                spec
         ));
     }
 
