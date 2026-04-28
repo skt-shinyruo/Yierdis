@@ -191,6 +191,78 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void migratedCommandsDoNotWriteSyntaxErrorsDirectly() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录", repoRoot);
+
+        List<String> offenders = new ArrayList<>();
+        scanMethodForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/StringCommands.java"),
+                "parseSet(ArgReader args)",
+                offenders,
+                "out.error(\"ERR syntax error\")"
+        );
+        scanMethodForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/StringCommands.java"),
+                "set(SetArgs args, CommandContext ctx)",
+                offenders,
+                "out.error(\"ERR syntax error\")"
+        );
+        scanMethodForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/KeyCommands.java"),
+                "parseScan(ArgReader args)",
+                offenders,
+                "out.error(\"ERR syntax error\")"
+        );
+        scanMethodForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/KeyCommands.java"),
+                "scan(ScanArgs args, CommandContext ctx)",
+                offenders,
+                "out.error(\"ERR syntax error\")"
+        );
+        scanMethodForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/ZSetCommands.java"),
+                "parseZRange(ArgReader args)",
+                offenders,
+                "out.error(\"ERR syntax error\")"
+        );
+        scanMethodForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/ZSetCommands.java"),
+                "parseZRangeByScore(ArgReader args, boolean reverse)",
+                offenders,
+                "out.error(\"ERR syntax error\")"
+        );
+        Assert.assertTrue(String.join("\n", offenders), offenders.isEmpty());
+    }
+
+    @Test
+    public void dbLayerDoesNotOwnCommandPairTailSyntax() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录", repoRoot);
+
+        List<String> offenders = new ArrayList<>();
+        scanFileForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisHashOps.java"),
+                offenders,
+                "wrong number of arguments for 'hset' command"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisZSetOps.java"),
+                offenders,
+                "wrong number of arguments for 'zadd' command"
+        );
+        Assert.assertTrue(String.join("\n", offenders), offenders.isEmpty());
+    }
+
+    @Test
     public void replaySurfacesMustUseExecutionContracts() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
@@ -654,6 +726,50 @@ public class ArchitectureBoundaryTest {
                 if (line.contains(snippet)) {
                     offenders.add(relativePath(repoRoot, file) + ":" + (i + 1) + " -> " + snippet);
                 }
+            }
+        }
+    }
+
+    private static void scanMethodForForbiddenText(
+            Path repoRoot,
+            Path file,
+            String methodSignature,
+            List<String> offenders,
+            String... forbiddenSnippets
+    ) throws IOException {
+        Assert.assertTrue("缺少文件：" + file, Files.isRegularFile(file));
+        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        int start = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).contains(methodSignature)) {
+                start = i;
+                break;
+            }
+        }
+        Assert.assertTrue("缺少方法：" + relativePath(repoRoot, file) + "#" + methodSignature, start >= 0);
+
+        int depth = 0;
+        boolean inBody = false;
+        for (int i = start; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (inBody) {
+                for (String snippet : forbiddenSnippets) {
+                    if (line.contains(snippet)) {
+                        offenders.add(relativePath(repoRoot, file) + ":" + (i + 1) + " -> " + snippet);
+                    }
+                }
+            }
+            for (int j = 0; j < line.length(); j++) {
+                char c = line.charAt(j);
+                if (c == '{') {
+                    depth++;
+                    inBody = true;
+                } else if (c == '}') {
+                    depth--;
+                }
+            }
+            if (inBody && depth == 0) {
+                return;
             }
         }
     }

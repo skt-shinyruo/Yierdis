@@ -6,7 +6,6 @@ import yier.bubu.redis.ops.HashReadOps;
 import yier.bubu.redis.ops.HashWriteOps;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.WrongTypeException;
-import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.ops.result.BulkStringMapPairs;
 import yier.bubu.redis.ops.result.BulkStringSink;
 import yier.bubu.redis.runtime.api.YierdisChangeTracking;
@@ -33,7 +32,7 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
     public long hset(byte[] keyBytes, List<byte[]> fieldValuePairs) {
         internals.checkThread();
         if (fieldValuePairs.size() % 2 != 0) {
-            throw new YierdisCommandException("ERR wrong number of arguments for 'hset' command");
+            throw new IllegalArgumentException("fieldValuePairs must contain field/value pairs");
         }
         long now = System.currentTimeMillis();
         long upperBound = estimateHashWriteUpperBoundForMutation(keyBytes, fieldValuePairs);

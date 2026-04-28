@@ -3,7 +3,6 @@ package yier.bubu.redis.db;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.WrongTypeException;
-import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.ops.ZSetReadOps;
 import yier.bubu.redis.ops.ZSetWriteOps;
 import yier.bubu.redis.ops.result.BulkStringSequence;
@@ -30,7 +29,7 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     public long zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
         internals.checkThread();
         if (scoreMemberPairs.size() % 2 != 0) {
-            throw new YierdisCommandException("ERR wrong number of arguments for 'zadd' command");
+            throw new IllegalArgumentException("scoreMemberPairs must contain score/member pairs");
         }
         long now = System.currentTimeMillis();
         long upperBound = estimateZSetWriteUpperBoundForMutation(keyBytes, scoreMemberPairs);
