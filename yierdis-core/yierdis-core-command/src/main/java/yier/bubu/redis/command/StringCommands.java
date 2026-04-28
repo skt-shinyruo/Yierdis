@@ -10,6 +10,7 @@ import java.util.Objects;
 
 final class StringCommands implements CommandModule {
     private static final long MAX_STRING_BYTES = 512L * 1024 * 1024;
+    private static final String INVALID_SET_EXPIRE = "ERR invalid expire time in 'set' command";
 
     private final CommandSupport support;
 
@@ -20,7 +21,7 @@ final class StringCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("SET", this::set, CommandDescriptor.of(-3, 1, 1, 1));
+        registration.register("SET", CommandDescriptor.of(-3, 1, 1, 1), this::parseSet, this::set);
         registration.register("GET", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "get"), this::get);
         registration.register("STRLEN", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "strlen"), this::strlen);
         registration.register("APPEND", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exact(3, "append"), this::append);
@@ -31,135 +32,108 @@ final class StringCommands implements CommandModule {
         registration.register("DECR", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "decr"), this::decr);
     }
 
-    private void set(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
-        if (request.argc() < 3) {
-            CommandSupport.wrongArity(out, "set");
-            return;
-        }
+    private record SetArgs(ExecutionRequest request, byte[] key, int valueIndex, SetMode mode, ExpireOption expire, boolean getOld) {
+    }
 
-        byte[] key = request.readOnlyByteArray(1);
+    private CommandParseResult<SetArgs> parseSet(ArgReader args) {
+        CommandParseError arity = CommandArity.min(3, "set").validate(args);
+        if (arity != null) {
+            return CommandParseResult.error(arity);
+        }
+        byte[] key = args.bytes(1);
         SetMode mode = SetMode.NORMAL;
         ExpireOption expire = null;
         boolean getOld = false;
 
-        for (int i = 3; i < request.argc(); i++) {
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "NX")) {
-                if (mode == SetMode.XX) {
-                    out.error("ERR syntax error");
-                    return;
-                }
-                if (mode == SetMode.NX) {
-                    out.error("ERR syntax error");
-                    return;
+        for (int i = 3; i < args.argc(); i++) {
+            if (args.is(i, "NX")) {
+                if (mode != SetMode.NORMAL) {
+                    return CommandParseResult.error(CommandParseError.syntax());
                 }
                 mode = SetMode.NX;
                 continue;
             }
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "XX")) {
-                if (mode == SetMode.NX) {
-                    out.error("ERR syntax error");
-                    return;
-                }
-                if (mode == SetMode.XX) {
-                    out.error("ERR syntax error");
-                    return;
+            if (args.is(i, "XX")) {
+                if (mode != SetMode.NORMAL) {
+                    return CommandParseResult.error(CommandParseError.syntax());
                 }
                 mode = SetMode.XX;
                 continue;
             }
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "GET")) {
+            if (args.is(i, "GET")) {
                 if (getOld) {
-                    out.error("ERR syntax error");
-                    return;
+                    return CommandParseResult.error(CommandParseError.syntax());
                 }
                 getOld = true;
                 continue;
             }
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "KEEPTTL")) {
+            if (args.is(i, "KEEPTTL")) {
                 if (expire != null) {
-                    out.error("ERR syntax error");
-                    return;
+                    return CommandParseResult.error(CommandParseError.syntax());
                 }
                 expire = ExpireOption.keepTtl();
                 continue;
             }
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "EX")) {
-                if (expire != null || i + 1 >= request.argc()) {
-                    out.error("ERR syntax error");
-                    return;
+            if (args.is(i, "EX") || args.is(i, "PX") || args.is(i, "EXAT") || args.is(i, "PXAT")) {
+                if (expire != null || i + 1 >= args.argc()) {
+                    return CommandParseResult.error(CommandParseError.syntax());
                 }
-                long seconds = CommandSupport.parseLong(request, ++i, "seconds");
-                if (seconds <= 0) {
-                    out.error("ERR invalid expire time in 'set' command");
-                    return;
-                }
-                expire = ExpireOption.ex(seconds);
-                continue;
-            }
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "PX")) {
-                if (expire != null || i + 1 >= request.argc()) {
-                    out.error("ERR syntax error");
-                    return;
-                }
-                long millis = CommandSupport.parseLong(request, ++i, "milliseconds");
-                if (millis <= 0) {
-                    out.error("ERR invalid expire time in 'set' command");
-                    return;
-                }
-                expire = ExpireOption.px(millis);
-                continue;
-            }
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "EXAT")) {
-                if (expire != null || i + 1 >= request.argc()) {
-                    out.error("ERR syntax error");
-                    return;
-                }
-                long unixSeconds = CommandSupport.parseLong(request, ++i, "seconds");
-                if (unixSeconds <= 0) {
-                    out.error("ERR invalid expire time in 'set' command");
-                    return;
-                }
-                long expireAtMillis;
+                String option = CommandSupport.utf8(args.bytes(i));
+                long value;
                 try {
-                    expireAtMillis = Math.multiplyExact(unixSeconds, 1000L);
-                } catch (ArithmeticException e) {
-                    expireAtMillis = Long.MAX_VALUE;
+                    value = args.longAt(++i);
+                } catch (IllegalArgumentException e) {
+                    return CommandParseResult.error(CommandParseError.integerOutOfRange());
                 }
-                if (expireAtMillis <= System.currentTimeMillis()) {
-                    out.error("ERR invalid expire time in 'set' command");
-                    return;
+                if (value <= 0) {
+                    return CommandParseResult.error(CommandParseError.custom(INVALID_SET_EXPIRE));
                 }
-                expire = ExpireOption.exAt(unixSeconds);
+                if ("EX".equalsIgnoreCase(option)) {
+                    expire = ExpireOption.ex(value);
+                    continue;
+                }
+                if ("PX".equalsIgnoreCase(option)) {
+                    expire = ExpireOption.px(value);
+                    continue;
+                }
+                if ("EXAT".equalsIgnoreCase(option)) {
+                    long expireAtMillis;
+                    try {
+                        expireAtMillis = Math.multiplyExact(value, 1000L);
+                    } catch (ArithmeticException e) {
+                        expireAtMillis = Long.MAX_VALUE;
+                    }
+                    if (expireAtMillis <= System.currentTimeMillis()) {
+                        return CommandParseResult.error(CommandParseError.custom(INVALID_SET_EXPIRE));
+                    }
+                    expire = ExpireOption.exAt(value);
+                    continue;
+                }
+                if (value <= System.currentTimeMillis()) {
+                    return CommandParseResult.error(CommandParseError.custom(INVALID_SET_EXPIRE));
+                }
+                expire = ExpireOption.pxAt(value);
                 continue;
             }
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "PXAT")) {
-                if (expire != null || i + 1 >= request.argc()) {
-                    out.error("ERR syntax error");
-                    return;
-                }
-                long unixMillis = CommandSupport.parseLong(request, ++i, "milliseconds");
-                if (unixMillis <= 0) {
-                    out.error("ERR invalid expire time in 'set' command");
-                    return;
-                }
-                if (unixMillis <= System.currentTimeMillis()) {
-                    out.error("ERR invalid expire time in 'set' command");
-                    return;
-                }
-                expire = ExpireOption.pxAt(unixMillis);
-                continue;
-            }
-            out.error("ERR syntax error");
-            return;
+            return CommandParseResult.error(CommandParseError.syntax());
         }
+        return CommandParseResult.ok(new SetArgs(args.request(), key, 2, mode, expire, getOld));
+    }
 
-        var result = support.dbWrites(ctx).strings().set(key, support.argSlice(request, 2), mode, expire, getOld);
+    private void set(SetArgs args, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
+        var result = support.dbWrites(ctx).strings().set(
+                args.key(),
+                support.argSlice(args.request(), args.valueIndex()),
+                args.mode(),
+                args.expire(),
+                args.getOld()
+        );
         if (!result.applied()) {
             out.bulkString((byte[]) null);
             return;
         }
-        if (getOld) {
+        if (args.getOld()) {
             out.bulkString(result.oldValue());
             return;
         }
