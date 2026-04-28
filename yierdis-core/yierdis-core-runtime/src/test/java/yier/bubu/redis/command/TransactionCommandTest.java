@@ -136,6 +136,58 @@ public class TransactionCommandTest {
         });
     }
 
+    @Test
+    public void syntaxErrorInsideMultiAbortsBeforeExec() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+                    db,
+                    null,
+                    SlowCommandGovernor.DEFAULT,
+                    registration -> registration.register(
+                            "STRICT",
+                            CommandSpec.of(
+                                    CommandDescriptor.of(2, 0, 0, 0),
+                                    CommandParsers.exact(2, "strict"),
+                                    (args, ctx) -> ctx.out().simpleString("OK")
+                            )
+                    )
+            );
+            TestSession session = new TestSession();
+            try (FastTestClient client = new FastTestClient(processor, session)) {
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
+
+                ReplyObject wrongArity = client.execute(Arrays.asList(b("STRICT")));
+                Assert.assertTrue(wrongArity instanceof ReplyError);
+                Assert.assertEquals("ERR wrong number of arguments for 'strict' command", ((ReplyError) wrongArity).message());
+                Assert.assertEquals(0, session.transactionState().size());
+
+                ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
+                Assert.assertTrue(exec instanceof ReplyError);
+                Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", ((ReplyError) exec).message());
+            }
+        });
+    }
+
+    @Test
+    public void unknownCommandInsideMultiAbortsBeforeExec() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            TestSession session = new TestSession();
+            try (FastTestClient client = new FastTestClient(processor, session)) {
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
+
+                ReplyObject unknown = client.execute(Arrays.asList(b("NO_SUCH_COMMAND")));
+                Assert.assertTrue(unknown instanceof ReplyError);
+                Assert.assertEquals("ERR unknown command 'NO_SUCH_COMMAND'", ((ReplyError) unknown).message());
+                Assert.assertEquals(0, session.transactionState().size());
+
+                ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
+                Assert.assertTrue(exec instanceof ReplyError);
+                Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", ((ReplyError) exec).message());
+            }
+        });
+    }
+
     private static final class TestSession implements ServerSession {
         private int dbIndex;
         private String clientName;
