@@ -98,6 +98,9 @@ public class CommandErrorTest {
             ReplyError hsetWrongArity = (ReplyError) client.execute(Arrays.asList(b("HSET"), b("k"), b("f")));
             Assert.assertEquals("ERR wrong number of arguments for 'hset' command", hsetWrongArity.message());
 
+            ReplyError hsetMissingValue = (ReplyError) client.execute(Arrays.asList(b("HSET"), b("k"), b("f1"), b("v1"), b("f2")));
+            Assert.assertEquals("ERR wrong number of arguments for 'hset' command", hsetMissingValue.message());
+
             ReplyError zaddWrongArity = (ReplyError) client.execute(Arrays.asList(b("ZADD"), b("k"), b("1"), b("a"), b("2")));
             Assert.assertEquals("ERR wrong number of arguments for 'zadd' command", zaddWrongArity.message());
 

@@ -21,14 +21,14 @@ final class StringCommands implements CommandModule {
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
         registration.register("SET", this::set, CommandDescriptor.of(-3, 1, 1, 1));
-        registration.register("GET", this::get, CommandDescriptor.of(2, 1, 1, 1));
-        registration.register("STRLEN", this::strlen, CommandDescriptor.of(2, 1, 1, 1));
-        registration.register("APPEND", this::append, CommandDescriptor.of(3, 1, 1, 1));
-        registration.register("SETBIT", this::setbit, CommandDescriptor.of(4, 1, 1, 1));
-        registration.register("GETBIT", this::getbit, CommandDescriptor.of(3, 1, 1, 1));
+        registration.register("GET", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "get"), this::get);
+        registration.register("STRLEN", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "strlen"), this::strlen);
+        registration.register("APPEND", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exact(3, "append"), this::append);
+        registration.register("SETBIT", CommandDescriptor.of(4, 1, 1, 1), CommandParsers.exact(4, "setbit"), this::setbit);
+        registration.register("GETBIT", CommandDescriptor.of(3, 1, 1, 1), CommandParsers.exact(3, "getbit"), this::getbit);
         registration.register("BITCOUNT", this::bitcount, CommandDescriptor.of(-2, 1, 1, 1));
-        registration.register("INCR", this::incr, CommandDescriptor.of(2, 1, 1, 1));
-        registration.register("DECR", this::decr, CommandDescriptor.of(2, 1, 1, 1));
+        registration.register("INCR", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "incr"), this::incr);
+        registration.register("DECR", CommandDescriptor.of(2, 1, 1, 1), CommandParsers.exact(2, "decr"), this::decr);
     }
 
     private void set(ExecutionRequest request, CommandContext ctx) {
@@ -166,40 +166,28 @@ final class StringCommands implements CommandModule {
         out.simpleString("OK");
     }
 
-    private void get(ExecutionRequest request, CommandContext ctx) {
+    private void get(ArgReader args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (request.argc() != 2) {
-            CommandSupport.wrongArity(out, "get");
-            return;
-        }
+        ExecutionRequest request = args.request();
         support.dbReads(ctx).strings().getStringValue(support.argView(request, 1)).writeTo(new BulkStringReplyAdapter(out));
     }
 
-    private void strlen(ExecutionRequest request, CommandContext ctx) {
+    private void strlen(ArgReader args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (request.argc() != 2) {
-            CommandSupport.wrongArity(out, "strlen");
-            return;
-        }
+        ExecutionRequest request = args.request();
         out.integer(support.dbReads(ctx).strings().strlen(support.argView(request, 1)));
     }
 
-    private void append(ExecutionRequest request, CommandContext ctx) {
+    private void append(ArgReader args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (request.argc() != 3) {
-            CommandSupport.wrongArity(out, "append");
-            return;
-        }
+        ExecutionRequest request = args.request();
         long len = support.dbWrites(ctx).strings().append(request.readOnlyByteArray(1), support.argSlice(request, 2));
         out.integer(len);
     }
 
-    private void setbit(ExecutionRequest request, CommandContext ctx) {
+    private void setbit(ArgReader args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (request.argc() != 4) {
-            CommandSupport.wrongArity(out, "setbit");
-            return;
-        }
+        ExecutionRequest request = args.request();
         long offset = CommandSupport.parseNonNegativeLong(request, 2, "offset");
         long v = CommandSupport.parseLong(request, 3, "value");
         if (v != 0 && v != 1) {
@@ -216,12 +204,9 @@ final class StringCommands implements CommandModule {
         out.integer(old);
     }
 
-    private void getbit(ExecutionRequest request, CommandContext ctx) {
+    private void getbit(ArgReader args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (request.argc() != 3) {
-            CommandSupport.wrongArity(out, "getbit");
-            return;
-        }
+        ExecutionRequest request = args.request();
         long offset = CommandSupport.parseNonNegativeLong(request, 2, "offset");
         out.integer(support.dbReads(ctx).strings().getBit(support.argView(request, 1), offset));
     }
@@ -241,20 +226,17 @@ final class StringCommands implements CommandModule {
         out.integer(support.dbReads(ctx).strings().bitcount(support.argView(request, 1), start, end));
     }
 
-    private void incr(ExecutionRequest request, CommandContext ctx) {
-        incrBy(request, ctx, 1);
+    private void incr(ArgReader args, CommandContext ctx) {
+        incrBy(args, ctx, 1);
     }
 
-    private void decr(ExecutionRequest request, CommandContext ctx) {
-        incrBy(request, ctx, -1);
+    private void decr(ArgReader args, CommandContext ctx) {
+        incrBy(args, ctx, -1);
     }
 
-    private void incrBy(ExecutionRequest request, CommandContext ctx, long delta) {
+    private void incrBy(ArgReader args, CommandContext ctx, long delta) {
         ReplyWriter out = ctx.out();
-        if (request.argc() != 2) {
-            CommandSupport.wrongArity(out, delta > 0 ? "incr" : "decr");
-            return;
-        }
+        ExecutionRequest request = args.request();
         long value = support.dbWrites(ctx).strings().incrBy(request.readOnlyByteArray(1), delta);
         out.integer(value);
     }

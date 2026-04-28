@@ -17,7 +17,12 @@ final class ZSetCommands implements CommandModule {
     @Override
     public void register(CommandModule.Registration registration) {
         Objects.requireNonNull(registration, "registration");
-        registration.register("ZADD", this::zadd, CommandDescriptor.of(-4, 1, 1, 1));
+        registration.register(
+                "ZADD",
+                CommandDescriptor.of(-4, 1, 1, 1),
+                CommandParsers.pairTail(4, 2, "zadd"),
+                this::zadd
+        );
         registration.register("ZRANGE", this::zrange, CommandDescriptor.of(-4, 1, 1, 1));
         registration.register("ZREVRANGE", this::zrevrange, CommandDescriptor.of(-4, 1, 1, 1));
         registration.register("ZRANGEBYSCORE", this::zrangebyscore, CommandDescriptor.of(-4, 1, 1, 1));
@@ -27,13 +32,10 @@ final class ZSetCommands implements CommandModule {
         registration.register("ZREM", this::zrem, CommandDescriptor.of(-3, 1, 1, 1));
     }
 
-    private void zadd(ExecutionRequest request, CommandContext ctx) {
+    private void zadd(ArgReader args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (request.argc() < 4) {
-            CommandSupport.wrongArity(out, "zadd");
-            return;
-        }
-        int pairsLen = request.argc() - 2;
+        int pairsLen = args.argc() - 2;
+        ExecutionRequest request = args.request();
         support.sliceResetFromRequest(request, 2, pairsLen);
         try {
             long added = support.dbWrites(ctx).zsets().zadd(request.readOnlyByteArray(1), support.slice());
