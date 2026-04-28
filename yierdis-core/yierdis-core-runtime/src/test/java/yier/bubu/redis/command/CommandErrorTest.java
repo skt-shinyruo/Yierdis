@@ -123,6 +123,18 @@ public class CommandErrorTest {
             ReplyError setBadInt = (ReplyError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("EX"), b("abc")));
             Assert.assertEquals("ERR value is not an integer or out of range", setBadInt.message());
 
+            ReplyError setConflictingModes = (ReplyError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("NX"), b("XX")));
+            Assert.assertEquals("ERR syntax error", setConflictingModes.message());
+
+            ReplyError setMissingExpire = (ReplyError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("EX")));
+            Assert.assertEquals("ERR syntax error", setMissingExpire.message());
+
+            ReplyError setInvalidExpire = (ReplyError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("EX"), b("0")));
+            Assert.assertEquals("ERR invalid expire time in 'set' command", setInvalidExpire.message());
+
+            ReplyError setDuplicateGet = (ReplyError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("GET"), b("GET")));
+            Assert.assertEquals("ERR syntax error", setDuplicateGet.message());
+
             }
         });
     }
