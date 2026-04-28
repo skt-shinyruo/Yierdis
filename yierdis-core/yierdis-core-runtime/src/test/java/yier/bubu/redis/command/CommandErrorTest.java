@@ -107,6 +107,19 @@ public class CommandErrorTest {
             ReplyError zrangeSyntax = (ReplyError) client.execute(Arrays.asList(b("ZRANGE"), b("k"), b("0"), b("-1"), b("WITHSCORESX")));
             Assert.assertEquals("ERR syntax error", zrangeSyntax.message());
 
+            ReplyError scanMissingMatch = (ReplyError) client.execute(Arrays.asList(b("SCAN"), b("0"), b("MATCH")));
+            Assert.assertEquals("ERR syntax error", scanMissingMatch.message());
+
+            ReplyError scanBadCount = (ReplyError) client.execute(Arrays.asList(b("SCAN"), b("0"), b("COUNT"), b("x")));
+            Assert.assertEquals("ERR value is not an integer or out of range", scanBadCount.message());
+
+            ReplyObject zrangeDuplicate = client.execute(Arrays.asList(b("ZRANGE"), b("k"), b("0"), b("-1"), b("WITHSCORES"), b("WITHSCORES")));
+            Assert.assertTrue(zrangeDuplicate instanceof ReplyError);
+            Assert.assertEquals("ERR syntax error", ((ReplyError) zrangeDuplicate).message());
+
+            ReplyError zrangeDuplicateUnknown = (ReplyError) client.execute(Arrays.asList(b("ZRANGE"), b("k"), b("0"), b("-1"), b("WITHSCORES"), b("BAD")));
+            Assert.assertEquals("ERR syntax error", zrangeDuplicateUnknown.message());
+
             ReplyError setBadInt = (ReplyError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("EX"), b("abc")));
             Assert.assertEquals("ERR value is not an integer or out of range", setBadInt.message());
 

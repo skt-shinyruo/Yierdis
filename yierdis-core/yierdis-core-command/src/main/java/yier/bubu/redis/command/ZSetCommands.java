@@ -1,6 +1,7 @@
 package yier.bubu.redis.command;
 
 import yier.bubu.redis.ops.result.BulkStringSequence;
+import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
@@ -23,10 +24,20 @@ final class ZSetCommands implements CommandModule {
                 CommandParsers.pairTail(4, 2, "zadd"),
                 this::zadd
         );
-        registration.register("ZRANGE", this::zrange, CommandDescriptor.of(-4, 1, 1, 1));
+        registration.register("ZRANGE", CommandDescriptor.of(-4, 1, 1, 1), this::parseZRange, this::zrange);
         registration.register("ZREVRANGE", this::zrevrange, CommandDescriptor.of(-4, 1, 1, 1));
-        registration.register("ZRANGEBYSCORE", this::zrangebyscore, CommandDescriptor.of(-4, 1, 1, 1));
-        registration.register("ZREVRANGEBYSCORE", this::zrevrangebyscore, CommandDescriptor.of(-4, 1, 1, 1));
+        registration.register(
+                "ZRANGEBYSCORE",
+                CommandDescriptor.of(-4, 1, 1, 1),
+                args -> parseZRangeByScore(args, false),
+                this::zrangebyscore
+        );
+        registration.register(
+                "ZREVRANGEBYSCORE",
+                CommandDescriptor.of(-4, 1, 1, 1),
+                args -> parseZRangeByScore(args, true),
+                this::zrevrangebyscore
+        );
         registration.register("ZREMRANGEBYSCORE", this::zremrangebyscore, CommandDescriptor.of(4, 1, 1, 1));
         registration.register("ZREMRANGEBYRANK", this::zremrangebyrank, CommandDescriptor.of(4, 1, 1, 1));
         registration.register("ZREM", this::zrem, CommandDescriptor.of(-3, 1, 1, 1));
@@ -45,34 +56,49 @@ final class ZSetCommands implements CommandModule {
         }
     }
 
-    private void zrange(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
-        if (request.argc() < 4 || request.argc() > 6) {
-            CommandSupport.wrongArity(out, "zrange");
-            return;
-        }
-        long start = CommandSupport.parseLong(request, 2, "start");
-        long stop = CommandSupport.parseLong(request, 3, "stop");
+    private record ZRangeArgs(byte[] key, long start, long stop, boolean withScores, boolean rev) {
+    }
 
+    private CommandParseResult<ZRangeArgs> parseZRange(ArgReader args) {
+        CommandParseError arity = CommandArity.range(4, 6, "zrange").validate(args);
+        if (arity != null) {
+            return CommandParseResult.error(arity);
+        }
+        long start;
+        long stop;
+        try {
+            start = args.longAt(2);
+            stop = args.longAt(3);
+        } catch (IllegalArgumentException e) {
+            return CommandParseResult.error(CommandParseError.integerOutOfRange());
+        }
         boolean withScores = false;
         boolean rev = false;
-        for (int i = 4; i < request.argc(); i++) {
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "WITHSCORES")) {
+        for (int i = 4; i < args.argc(); i++) {
+            if (args.is(i, "WITHSCORES")) {
+                if (withScores) {
+                    return CommandParseResult.error(CommandParseError.syntax());
+                }
                 withScores = true;
                 continue;
             }
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "REV")) {
+            if (args.is(i, "REV")) {
+                if (rev) {
+                    return CommandParseResult.error(CommandParseError.syntax());
+                }
                 rev = true;
                 continue;
             }
-            out.error("ERR syntax error");
-            return;
+            return CommandParseResult.error(CommandParseError.syntax());
         }
+        return CommandParseResult.ok(new ZRangeArgs(args.bytes(1), start, stop, withScores, rev));
+    }
 
-        byte[] key = request.readOnlyByteArray(1);
-        BulkStringSequence seq = rev
-                ? support.dbReads(ctx).zsets().zrevrange(key, start, stop, withScores)
-                : support.dbReads(ctx).zsets().zrange(key, start, stop, withScores);
+    private void zrange(ZRangeArgs args, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
+        BulkStringSequence seq = args.rev()
+                ? support.dbReads(ctx).zsets().zrevrange(args.key(), args.start(), args.stop(), args.withScores())
+                : support.dbReads(ctx).zsets().zrange(args.key(), args.start(), args.stop(), args.withScores());
         int count = seq.count();
         out.arrayHeader(count);
         if (count == 0) {
@@ -109,51 +135,75 @@ final class ZSetCommands implements CommandModule {
         seq.emitTo(new BulkStringReplyAdapter(out));
     }
 
-    private void zrangebyscore(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
-        if (request.argc() < 4) {
-            CommandSupport.wrongArity(out, "zrangebyscore");
-            return;
+    private record ZRangeByScoreArgs(
+            byte[] key,
+            CommandSupport.ScoreBound min,
+            CommandSupport.ScoreBound max,
+            boolean withScores,
+            long offset,
+            long count
+    ) {
+    }
+
+    private CommandParseResult<ZRangeByScoreArgs> parseZRangeByScore(ArgReader args, boolean reverse) {
+        String commandLower = reverse ? "zrevrangebyscore" : "zrangebyscore";
+        CommandParseError arity = CommandArity.min(4, commandLower).validate(args);
+        if (arity != null) {
+            return CommandParseResult.error(arity);
         }
-
-        CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(request.readOnlyByteArray(2));
-        CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(request.readOnlyByteArray(3));
-
+        CommandSupport.ScoreBound first;
+        CommandSupport.ScoreBound second;
+        try {
+            first = CommandSupport.parseScoreBound(args.bytes(2));
+            second = CommandSupport.parseScoreBound(args.bytes(3));
+        } catch (YierdisCommandException e) {
+            return CommandParseResult.error(CommandParseError.custom(e.getMessage()));
+        }
+        CommandSupport.ScoreBound min = reverse ? second : first;
+        CommandSupport.ScoreBound max = reverse ? first : second;
         boolean withScores = false;
         long offset = 0;
         long count = Long.MAX_VALUE;
 
         int i = 4;
-        while (i < request.argc()) {
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "WITHSCORES")) {
+        while (i < args.argc()) {
+            if (args.is(i, "WITHSCORES")) {
+                if (withScores) {
+                    return CommandParseResult.error(CommandParseError.syntax());
+                }
                 withScores = true;
                 i++;
                 continue;
             }
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "LIMIT")) {
-                if (i + 2 >= request.argc()) {
-                    out.error("ERR syntax error");
-                    return;
+            if (args.is(i, "LIMIT")) {
+                if (i + 2 >= args.argc()) {
+                    return CommandParseResult.error(CommandParseError.syntax());
                 }
-                offset = CommandSupport.parseNonNegativeLong(request, i + 1, "offset");
-                count = CommandSupport.parseNonNegativeLong(request, i + 2, "count");
+                try {
+                    offset = args.nonNegativeLongAt(i + 1);
+                    count = args.nonNegativeLongAt(i + 2);
+                } catch (IllegalArgumentException e) {
+                    return CommandParseResult.error(CommandParseError.integerOutOfRange());
+                }
                 i += 3;
                 continue;
             }
-            out.error("ERR syntax error");
-            return;
+            return CommandParseResult.error(CommandParseError.syntax());
         }
+        return CommandParseResult.ok(new ZRangeByScoreArgs(args.bytes(1), min, max, withScores, offset, count));
+    }
 
-        byte[] key = request.readOnlyByteArray(1);
+    private void zrangebyscore(ZRangeByScoreArgs args, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
         BulkStringSequence seq = support.dbReads(ctx).zsets().zrangeByScore(
-                key,
-                min.value,
-                min.exclusive,
-                max.value,
-                max.exclusive,
-                withScores,
-                offset,
-                count
+                args.key(),
+                args.min().value,
+                args.min().exclusive,
+                args.max().value,
+                args.max().exclusive,
+                args.withScores(),
+                args.offset(),
+                args.count()
         );
         int replyCount = seq.count();
         out.arrayHeader(replyCount);
@@ -175,51 +225,17 @@ final class ZSetCommands implements CommandModule {
         out.integer(support.dbWrites(ctx).zsets().zremrangeByScore(request.readOnlyByteArray(1), min.value, min.exclusive, max.value, max.exclusive));
     }
 
-    private void zrevrangebyscore(ExecutionRequest request, CommandContext ctx) {
+    private void zrevrangebyscore(ZRangeByScoreArgs args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (request.argc() < 4) {
-            CommandSupport.wrongArity(out, "zrevrangebyscore");
-            return;
-        }
-
-        CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(request.readOnlyByteArray(2));
-        CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(request.readOnlyByteArray(3));
-
-        boolean withScores = false;
-        long offset = 0;
-        long count = Long.MAX_VALUE;
-
-        int i = 4;
-        while (i < request.argc()) {
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "WITHSCORES")) {
-                withScores = true;
-                i++;
-                continue;
-            }
-            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "LIMIT")) {
-                if (i + 2 >= request.argc()) {
-                    out.error("ERR syntax error");
-                    return;
-                }
-                offset = CommandSupport.parseNonNegativeLong(request, i + 1, "offset");
-                count = CommandSupport.parseNonNegativeLong(request, i + 2, "count");
-                i += 3;
-                continue;
-            }
-            out.error("ERR syntax error");
-            return;
-        }
-
-        byte[] key = request.readOnlyByteArray(1);
         BulkStringSequence seq = support.dbReads(ctx).zsets().zrevrangeByScore(
-                key,
-                min.value,
-                min.exclusive,
-                max.value,
-                max.exclusive,
-                withScores,
-                offset,
-                count
+                args.key(),
+                args.min().value,
+                args.min().exclusive,
+                args.max().value,
+                args.max().exclusive,
+                args.withScores(),
+                args.offset(),
+                args.count()
         );
         int replyCount = seq.count();
         out.arrayHeader(replyCount);
