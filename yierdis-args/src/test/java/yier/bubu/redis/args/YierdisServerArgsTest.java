@@ -3,6 +3,7 @@ package yier.bubu.redis.args;
 import org.junit.Assert;
 import org.junit.Test;
 import picocli.CommandLine;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.protocol.ProtocolLimits;
 
 import java.lang.reflect.RecordComponent;
@@ -84,7 +85,7 @@ public class YierdisServerArgsTest {
         Assert.assertEquals(4096, runtimeConfig.get("protocolMaxLineBytes"));
         Assert.assertEquals(1048576L, runtimeConfig.get("maxmemoryBytes"));
         Assert.assertEquals(YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB, runtimeConfig.get("maxmemoryScope"));
-        Assert.assertEquals(YierdisServerRuntimeConfig.MaxmemoryPolicy.ALLKEYS_RANDOM, runtimeConfig.get("maxmemoryPolicy"));
+        Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_RANDOM, runtimeConfig.get("maxmemoryPolicy"));
         Assert.assertEquals(9, runtimeConfig.get("maxmemorySamples"));
         Assert.assertEquals(11L, runtimeConfig.get("evictionTimeLimitMillis"));
         Assert.assertEquals(13L, runtimeConfig.get("expireCleanupTimeLimitMillis"));
@@ -158,6 +159,16 @@ public class YierdisServerArgsTest {
     public void invalidMaxmemoryPolicyIsRejected() {
         YierdisServerArgs args = parse("--maxmemoryPolicy", "random-evict");
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
+    }
+
+    @Test
+    public void normalizeAcceptsCorePolicyUnderscoreAliases() {
+        YierdisServerArgs args = parse("--maxmemoryPolicy", "ALLKEYS_RANDOM");
+
+        args.normalizeAndValidate();
+
+        Assert.assertEquals("allkeys-random", args.maxmemoryPolicy);
+        Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_RANDOM, args.toRuntimeConfig().maxmemoryPolicy());
     }
 
     @Test

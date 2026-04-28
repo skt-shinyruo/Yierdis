@@ -1,5 +1,7 @@
 package yier.bubu.redis.args;
 
+import yier.bubu.redis.ops.MaxmemoryPolicy;
+
 import java.util.Locale;
 import java.util.Objects;
 
@@ -110,41 +112,4 @@ public record YierdisServerRuntimeConfig(
         }
     }
 
-    public enum MaxmemoryPolicy {
-        NOEVICTION("noeviction"),
-        ALLKEYS_RANDOM("allkeys-random"),
-        ALLKEYS_LRU("allkeys-lru");
-
-        private final String argvValue;
-
-        MaxmemoryPolicy(String argvValue) {
-            this.argvValue = argvValue;
-        }
-
-        public String argvValue() {
-            return argvValue;
-        }
-
-        public static MaxmemoryPolicy parseCliValue(String rawValue) {
-            if (rawValue == null || rawValue.isBlank()) {
-                throw new IllegalArgumentException("maxmemoryPolicy must not be blank");
-            }
-            String normalized = rawValue.trim().toLowerCase(Locale.ROOT);
-            return switch (normalized) {
-                case "noeviction" -> NOEVICTION;
-                case "allkeys-random" -> ALLKEYS_RANDOM;
-                case "allkeys-lru" -> ALLKEYS_LRU;
-                default -> throw new IllegalArgumentException("unsupported maxmemoryPolicy: " + rawValue);
-            };
-        }
-
-        public static MaxmemoryPolicy fromArgvValue(String argvValue) {
-            return switch (argvValue) {
-                case "noeviction" -> NOEVICTION;
-                case "allkeys-random" -> ALLKEYS_RANDOM;
-                case "allkeys-lru" -> ALLKEYS_LRU;
-                default -> throw new IllegalStateException("maxmemoryPolicy is not normalized: " + argvValue);
-            };
-        }
-    }
 }

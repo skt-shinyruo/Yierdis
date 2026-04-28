@@ -2,6 +2,7 @@ package yier.bubu.redis.args;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
+import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.protocol.ProtocolLimits;
 
 import java.util.ArrayList;
@@ -319,7 +320,7 @@ public final class YierdisServerArgs {
                 protocolMaxLineBytes,
                 maxmemoryBytes,
                 YierdisServerRuntimeConfig.MaxmemoryScope.fromArgvValue(maxmemoryScope),
-                YierdisServerRuntimeConfig.MaxmemoryPolicy.fromArgvValue(maxmemoryPolicy),
+                MaxmemoryPolicy.parse(maxmemoryPolicy),
                 maxmemorySamples,
                 evictionTimeLimitMillis,
                 expireCleanupTimeLimitMillis,
@@ -418,6 +419,6 @@ public final class YierdisServerArgs {
     }
 
     private static String normalizeMaxmemoryPolicy(String rawValue) {
-        return YierdisServerRuntimeConfig.MaxmemoryPolicy.parseCliValue(rawValue).argvValue();
+        return MaxmemoryPolicy.parse(rawValue).redisName();
     }
 }
