@@ -13,27 +13,34 @@ the request path clearer, but they do not fully fix the larger structural issue:
 several modules still bundle multiple architectural concepts under broad names
 such as `core-api`, `core-command`, `core-db`, and `server`.
 
-The target architecture is:
+The revised target architecture is:
 
 ```text
-foundation -> execution-api -> command kernel/features
-           -> storage-api -> storage implementations/policies
-           -> runtime
-           -> protocol/transport adapters
-           -> applications
+stable APIs -> engine and command kernel
+            -> storage runtime
+            -> protocol/transport adapters
+            -> applications
 ```
 
 In practical terms, this means moving from the current "core plus server" shape
-to a system organized around four explicit ownership areas:
+to a system organized around five explicit ownership areas:
 
-- execution kernel contracts
-- storage contracts and implementations
-- command feature modules
+- stable execution, storage, memory, and runtime APIs
+- execution and command kernel behavior
+- one in-memory storage runtime with strong internal package boundaries
 - protocol, transport, and application adapters
+- architecture and integration tests outside production modules
 
 This is a roadmap spec. It is too large and too risky to implement as one
 mechanical commit. Each phase must preserve behavior, keep the project
 buildable, and add or update architecture guards before the next phase starts.
+
+The important correction from an overly aggressive split is that Maven modules
+should express stable compile-time boundaries. Domain organization inside a
+still-coupled area should first be expressed with packages and tests. A package
+or collaborator should become a Maven module only after it has a narrow public
+contract and does not require making internal storage or command types public
+just to satisfy the build.
 
 ## Problem Statement
 
@@ -77,15 +84,18 @@ expanding wide modules instead of creating narrow, explicit ownership seams.
   storage, runtime, adapter, and application ownership.
 - Split `core-api` into narrower API modules so command code does not see
   memory/runtime contracts it does not need.
-- Split `core-command` into command API, command kernel, and command-family
-  modules.
-- Split `core-db` into storage API, storage memory implementation, keyspace,
-  value, memory, expiration, and maxmemory policy modules where the split gives
-  real compile-time ownership.
+- Split `core-command` into command API, command kernel, and a default command
+  bundle; keep command families as internal packages until they need independent
+  compilation.
+- Split `core-db` into storage API, one storage-memory implementation module,
+  and a storage testkit; organize keyspace, values, expiration, maxmemory, and
+  FFM internals as packages first.
 - Move cross-module architecture tests out of `core-runtime`.
 - Make Custom Protocol v1 a first-class adapter family, including request
   parsing and execution reply encoding.
 - Reduce `server` to an application composition module.
+- Promote command-family or storage-internal packages to Maven modules only
+  after they become mature seams with narrow public contracts.
 - Preserve the current behavioral scope: Custom Protocol v1, single-node
   in-memory storage, current command semantics, Netty server/client, and JDK 25
   FFM memory.
@@ -154,37 +164,61 @@ contracts, and application adapters to drift together.
 Rejected because the project already has too many broad buckets. The next
 architecture should introduce sharper boundaries, not fewer vague modules.
 
-### Approach C: Kernel, Storage, Feature Commands, And Adapters
+### Approach C: Maximum Kernel, Storage, Feature Commands, And Adapters Split
 
 Split the system by ownership:
 
 - foundational bytes and memory APIs;
 - execution API and engine kernel;
-- storage API and storage implementations;
-- command API, command kernel, and command-family modules;
+- storage API plus separate storage keyspace, values, expire, maxmemory, and
+  memory implementation modules;
+- command API, command kernel, and one Maven module per command family;
 - runtime assembly over storage and command modules;
 - protocol and transport adapters;
 - applications and cross-module tests.
 
-Chosen because it makes compile-time dependencies match the way the system is
-explained: execution contracts, command behavior, storage behavior, runtime
-lifecycle, adapters, and applications each have separate owners.
+This is architecturally explicit, but it creates too many modules before the
+code has enough stable seams. In the current storage code, keyspace, values,
+expiration, maxmemory, memory accounting, and DB facade behavior still cooperate
+through package-private implementation details. Splitting them immediately would
+force premature public APIs. Command families have a similar risk: they share
+registry, parser, support, transaction, and reply mechanics.
+
+Rejected as the immediate target. It remains a possible long-term direction for
+specific seams after those seams are proven inside fewer modules.
+
+### Approach D: Stable APIs, Kernel, Storage Runtime, Adapters, And Apps
+
+Split only the boundaries that need compile-time isolation now:
+
+- stable execution, storage, memory, and runtime APIs;
+- engine and command kernel;
+- one command-defaults module with command-family packages;
+- one storage-memory module with storage-internal packages;
+- Custom Protocol v1 wire/execution/Netty adapter modules;
+- server, client, bench, architecture-test, and integration-test modules.
+
+This avoids module explosion while still fixing the broad ownership problem.
+It gives the project sharper API boundaries first, then allows later promotion
+of command-family or storage-internal packages into Maven modules only when
+there is a narrow public seam.
+
+Chosen.
 
 ## Architectural Decision
 
-Adopt Approach C.
+Adopt Approach D.
 
 The target architecture should make these rules obvious from module names and
 dependencies:
 
 ```text
-Commands depend on execution-api and storage-api.
-Storage implementations depend on storage-api and memory APIs.
-Runtime depends on storage implementations and runtime-api.
+Command kernel/defaults depend on execution-api and storage-api.
+Storage-memory depends on storage-api and memory APIs.
+Runtime depends on storage-memory and runtime-api.
 Executor depends on execution-api only.
-Protocol adapters depend on protocol APIs and execution-api where they encode
-or decode execution-facing messages.
-Applications depend on adapters, runtime, command features, and executor.
+Custom-v1 execution adapters depend on wire APIs and execution-api.
+Applications depend on adapters, runtime, command defaults, and executor.
 ```
 
 The old `core-*` names should be retired gradually. The destination names should
@@ -248,10 +282,6 @@ implementations, protocol DTOs, Netty, or runtime implementations.
 yierdis-storage
 ├─ yierdis-storage-api
 ├─ yierdis-storage-memory
-├─ yierdis-storage-keyspace
-├─ yierdis-storage-values
-├─ yierdis-storage-expire
-├─ yierdis-storage-maxmemory
 └─ yierdis-storage-testkit
 ```
 
@@ -263,31 +293,40 @@ Responsibilities:
   `DbEngineFactory`, and storage-facing result types.
 - `yierdis-storage-memory`: concrete in-memory DB facade and orchestration:
   `YierdisDb`, `YierdisDbEngineFactory`, component factory, lifecycle, and
-  read/write facade wiring.
-- `yierdis-storage-keyspace`: heap and FFM keyspace structures, key handles,
-  byte-array maps/sets, canonical key handling, and scan/key iteration
-  primitives.
-- `yierdis-storage-values`: string, hash, list, set, zset, HLL value
-  implementations and compact encodings.
-- `yierdis-storage-expire`: expire indexes, expiration manager implementation,
-  cleanup policy, and key-sharing rules.
-- `yierdis-storage-maxmemory`: maxmemory participant/coordinator contracts,
-  eviction policy implementation, candidate sampling, memory accounting, and
-  noeviction errors.
+  read/write facade wiring. Internally it should use packages for keyspace,
+  values, expiration, maxmemory, memory accounting, and FFM-backed structures.
 - `yierdis-storage-testkit`: reusable storage fixtures and conformance tests
   consumed by integration and command tests.
+
+Initial internal package structure for `yierdis-storage-memory`:
+
+```text
+yier.bubu.redis.storage.memory
+├─ keyspace
+├─ values
+├─ expire
+├─ maxmemory
+├─ accounting
+└─ ffm
+```
+
+These packages are not separate Maven modules at first. They are candidate
+seams. A package can be promoted later only if it exposes a narrow contract and
+does not require broadening storage internals just for compile visibility.
 
 Current source mapping:
 
 - Most of `yierdis-core-api/ops` maps to `yierdis-storage-api`.
-- `yierdis-core-db` maps across the storage implementation modules.
+- `yierdis-core-db` maps primarily to `yierdis-storage-memory` first, with
+  internal package reorganization before any further module split.
 - `yierdis-core-runtime` tests under storage packages should move to
   `yierdis-storage-testkit`, `yierdis-integration-tests`, or
   `yierdis-architecture-tests` depending on scope.
 
-The storage split should be implemented carefully. Classes should move only when
-the new module owns a coherent concept. If moving a class forces many internal
-types to become public, delay that class until a narrower interface is defined.
+The storage split should deliberately stop at `storage-memory` until the
+internal package boundaries prove stable. If moving a class would force many
+package-private collaborators to become public, keep that cluster in
+`storage-memory`.
 
 ### Commands
 
@@ -295,15 +334,6 @@ types to become public, delay that class until a narrower interface is defined.
 yierdis-command
 ├─ yierdis-command-api
 ├─ yierdis-command-kernel
-├─ yierdis-command-string
-├─ yierdis-command-hash
-├─ yierdis-command-list
-├─ yierdis-command-set
-├─ yierdis-command-zset
-├─ yierdis-command-keyspace
-├─ yierdis-command-transaction
-├─ yierdis-command-connection
-├─ yierdis-command-admin
 └─ yierdis-command-defaults
 ```
 
@@ -316,14 +346,29 @@ Responsibilities:
   `YierdisCommandProcessor` or successor, processor lifecycle, parse/dispatch
   pipeline, runtime error mapping, transaction queuing rules, and common
   `ArgReader` mechanics.
-- `yierdis-command-*`: command-family implementations. Each family registers
-  its own commands and depends only on command API/kernel support,
-  execution-api, and storage-api.
-- `yierdis-command-admin`: transport-neutral admin commands such as
-  `COMMAND`, `FLUSHDB`, memory-related command behavior, and other commands
-  that are not tied to a single value type.
-- `yierdis-command-defaults`: the default command module bundle used by
-  embedded runtime and server-app composition.
+- `yierdis-command-defaults`: the default transport-neutral command bundle used
+  by embedded runtime and server-app composition. It contains command-family
+  packages such as string, hash, list, set, zset, keyspace, transaction,
+  connection, and admin.
+
+Initial internal package structure for `yierdis-command-defaults`:
+
+```text
+yier.bubu.redis.command.defaults
+├─ string
+├─ hash
+├─ list
+├─ set
+├─ zset
+├─ keyspace
+├─ transaction
+├─ connection
+└─ admin
+```
+
+Command-family packages are not separate Maven modules at first. They can be
+promoted later only if a family needs independent enablement, independent
+dependencies, or independent conformance testing.
 
 Current source mapping:
 
@@ -332,9 +377,9 @@ Current source mapping:
   Netty/executor observability should remain application or adapter commands,
   not move into transport-neutral command modules.
 
-Command-family modules must not depend on concrete storage implementations.
-They may depend on `yierdis-storage-api`, `yierdis-execution-api`, and
-`yierdis-command-api`.
+Command-family packages must not depend on concrete storage implementations.
+The `yierdis-command-defaults` module may depend on `yierdis-storage-api`,
+`yierdis-execution-api`, `yierdis-command-api`, and `yierdis-command-kernel`.
 
 ### Runtime
 
@@ -386,24 +431,24 @@ implementations, runtime implementations, protocol DTOs, or Netty.
 
 ```text
 yierdis-adapter
-├─ yierdis-protocol-custom-v1-api
-├─ yierdis-protocol-custom-v1-codec
-├─ yierdis-protocol-custom-v1-netty
+├─ yierdis-custom-v1-wire
+├─ yierdis-custom-v1-execution-adapter
+├─ yierdis-custom-v1-netty
 ├─ yierdis-transport-netty
 └─ yierdis-cli-common
 ```
 
 Responsibilities:
 
-- `yierdis-protocol-custom-v1-api`: protocol DTOs, protocol limits, protocol
-  version constants, and Custom Protocol v1 request/reply model needed by
-  tools. Application build information belongs to `yierdis-server-app`, not the
-  protocol API.
-- `yierdis-protocol-custom-v1-codec`: JSON parser/writer, request encoder,
-  request payload parser, reply parser, reply inspector, NDJSON reply writer,
-  and reply writer factory for Custom Protocol v1.
-- `yierdis-protocol-custom-v1-netty`: Netty decoder/encoder glue for Custom
-  Protocol v1.
+- `yierdis-custom-v1-wire`: Custom Protocol v1 wire DTOs, limits, version
+  constants, JSON parser/writer, request frame encoder, request payload parser,
+  reply parser, reply inspector, and protocol-side reply value tooling.
+  Application build information belongs to `yierdis-server-app`, not the wire
+  API.
+- `yierdis-custom-v1-execution-adapter`: adapters between Custom Protocol v1
+  and execution contracts. This includes protocol DTO to `ExecutionRequest`
+  conversion, `JsonLineReplyWriter`, and `JsonLineReplyWriterFactory`.
+- `yierdis-custom-v1-netty`: Netty decoder/encoder glue for Custom Protocol v1.
 - `yierdis-transport-netty`: transport-level connection integration that is not
   specific to Custom Protocol v1.
 - `yierdis-cli-common`: shared CLI argument parsing primitives that are not
@@ -411,14 +456,17 @@ Responsibilities:
 
 Important decision:
 
-`yierdis-protocol-custom-v1-codec` may depend on `yierdis-execution-api` for
-`ReplyWriter` and `ReplyWriterFactory`.
+`yierdis-custom-v1-wire` must not depend on execution contracts.
+`yierdis-custom-v1-execution-adapter` may depend on `yierdis-execution-api` for
+`ExecutionRequest`, `ReplyWriter`, and `ReplyWriterFactory`.
 
 This replaces the current awkward rule that protocol-codec must not depend on
 core-contract while server owns `JsonLineReplyWriter`. The new boundary is:
 
-- protocol adapters may know execution-facing reply contracts;
-- protocol adapters must not know command modules, storage APIs, storage
+- wire code knows only the wire protocol;
+- execution adapters know wire DTOs and execution contracts;
+- Netty adapters know wire codecs and Netty;
+- no protocol adapter knows command modules, storage APIs, storage
   implementations, runtime implementations, or application classes.
 
 ### Applications And Tests
@@ -457,13 +505,13 @@ The final request flow should remain linear:
 Netty bytes
   -> custom-v1 netty decoder
   -> custom-v1 request DTO
-  -> protocol adapter converts to ExecutionRequest
+  -> custom-v1 execution adapter converts to ExecutionRequest
   -> executor-core schedules Session + ExecutionRequest + ReplyWriter
   -> yierdis-engine executes
   -> command-kernel lookup/parse/dispatch
-  -> command-family handler calls storage-api
-  -> storage implementation mutates or reads data
-  -> ReplyWriter encodes custom-v1 NDJSON reply
+  -> command-defaults handler calls storage-api
+  -> storage-memory mutates or reads data
+  -> custom-v1 execution adapter ReplyWriter encodes NDJSON reply
   -> Netty flush
 ```
 
@@ -479,80 +527,32 @@ The architecture-test module should enforce at least these rules:
 - `yierdis-command-api` imports no storage implementation, protocol, runtime
   implementation, application, or Netty packages.
 - `yierdis-command-kernel` imports no concrete storage implementation packages.
-- `yierdis-command-*` imports no concrete storage implementation packages.
+- `yierdis-command-defaults` imports no concrete storage implementation
+  packages.
 - `yierdis-storage-api` imports no command, protocol, application, or Netty
   packages.
 - `yierdis-storage-memory` imports no command implementation packages and no
-  protocol packages.
+  protocol packages. Internal package boundaries should prevent unrelated
+  storage concerns from drifting back into the DB facade.
 - `yierdis-executor-core` imports only execution contracts and executor-owned
   support types.
 - `yierdis-runtime-api` imports no storage implementation, protocol, command
   implementation, application, or Netty packages.
 - `yierdis-runtime-memory` may depend on storage implementations and runtime
   API, but must not own command parser registration.
-- `yierdis-protocol-custom-v1-codec` may import execution reply contracts, but
-  must not import command or storage packages.
-- `yierdis-protocol-custom-v1-netty` may import Netty and custom-v1 codec, but
-  must not import command or storage packages.
+- `yierdis-custom-v1-wire` imports no execution, command, storage, runtime,
+  application, or Netty packages.
+- `yierdis-custom-v1-execution-adapter` may import execution contracts and
+  custom-v1 wire packages, but must not import command or storage packages.
+- `yierdis-custom-v1-netty` may import Netty and custom-v1 wire/adapter
+  packages, but must not import command or storage packages.
 - `yierdis-server-app` may compose all production modules, but source guards
   should prevent it from constructing command contexts, parsing command syntax,
   or directly using storage internals.
 
 ## Migration Phases
 
-### Phase 1: Extract Execution API
-
-Move command execution contracts out of `yierdis-core-contract` into
-`yierdis-execution-api`.
-
-Scope:
-
-- `ExecutionRequest`
-- `ExecutionRecord`
-- `ByteArrayExecutionRequest`
-- `ReplyWriter`
-- `ReplyWriterFactory`
-- `ReplySink`
-- `Session`
-- server/session capability interfaces
-- `CommandContext`
-- connection stat views
-
-Acceptance criteria:
-
-- Existing engine, executor, command, and server modules compile against
-  `yierdis-execution-api`.
-- No protocol DTO moves into execution API.
-- Architecture guards assert execution API has no dependency on protocol,
-  command implementation, storage implementation, runtime implementation,
-  application, or Netty.
-
-### Phase 2: Split Storage, Memory, And Runtime APIs
-
-Split `yierdis-core-api` into:
-
-- `yierdis-storage-api`
-- `yierdis-memory-api`
-- `yierdis-runtime-api`
-
-Scope:
-
-- DB operation contracts move to storage API.
-- Off-heap contracts move to memory API.
-- change tracking and runtime observability contracts move to runtime API.
-- maxmemory contracts are classified explicitly as storage API or storage
-  maxmemory implementation contracts.
-
-Acceptance criteria:
-
-- Command modules depend on storage API but not memory API unless a concrete
-  command genuinely requires a memory contract.
-- Storage implementation modules depend on memory API and storage API.
-- Runtime modules depend on runtime API and storage API.
-- Former broad `ops` imports are replaced or intentionally kept only in storage
-  API packages.
-
-### Phase 3: Move Architecture And Integration Tests Out Of Runtime
+### Phase 0: Move Architecture And Integration Tests First
 
 Create:
 
@@ -564,82 +564,77 @@ Scope:
 - Move source-scanning architecture tests out of `core-runtime`.
 - Move tests that require multiple modules into integration tests.
 - Keep focused unit tests with their owning modules.
+- Make the architecture-test module understand both the current module names
+  and the target names during migration.
 
 Acceptance criteria:
 
 - Runtime module tests cover runtime behavior, not whole-repo architecture.
-- Architecture tests enforce the new dependency rules.
+- Architecture tests enforce the current dependency rules before other modules
+  move.
 - Integration tests cover server/client/protocol/runtime command paths.
+- Later phases can update architecture guards without leaving `core-runtime` as
+  the global guard-test owner.
 
-### Phase 4: Split Command API, Kernel, And Feature Modules
+### Phase 1: Extract Stable API Modules
 
-Split `yierdis-core-command` into command API, command kernel, and command
-feature modules.
+Create the stable API modules before moving implementation-heavy code:
 
-Scope:
-
-- Command contracts and metadata move to `yierdis-command-api`.
-- Registry, parse/dispatch lifecycle, transaction queuing, and processor logic
-  move to `yierdis-command-kernel`.
-- Command families move to focused modules.
-- A `yierdis-command-defaults` module composes the default transport-neutral
-  command set.
-
-Acceptance criteria:
-
-- Each command-family module depends on storage API, execution API, command API,
-  and only the narrow command-kernel support it needs.
-- Adding a new command family no longer requires editing one broad command
-  module except for default bundle registration.
-- Transaction syntax validation and replay still pass existing tests.
-- Server-facing commands that require application/runtime/protocol observability
-  remain outside transport-neutral command modules.
-
-### Phase 5: Split Storage Implementations
-
-Split concrete storage code by ownership.
-
-Initial safe order:
-
-1. `yierdis-storage-keyspace`
-2. `yierdis-storage-values`
-3. `yierdis-storage-expire`
-4. `yierdis-storage-maxmemory`
-5. `yierdis-storage-memory`
-
-The split should proceed only when each module can expose narrow package or
-public contracts without making storage internals broadly public.
-
-Acceptance criteria:
-
-- Command modules still depend only on storage API.
-- Runtime-memory depends on storage-memory as the default implementation.
-- Keyspace and value tests move with their owning modules.
-- Maxmemory and expiration tests move to their owning modules or integration
-  tests based on whether they require a full DB instance.
-- Existing off-heap leak and memory accounting tests still pass.
-
-### Phase 6: Reframe Custom Protocol V1 As An Adapter Family
-
-Rename and reorganize protocol modules around Custom Protocol v1.
+- `yierdis-execution-api`
+- `yierdis-storage-api`
+- `yierdis-memory-api`
+- `yierdis-runtime-api`
 
 Scope:
 
-- Protocol DTOs and limits move to `yierdis-protocol-custom-v1-api`.
-- JSON and Custom Protocol v1 codecs move to
-  `yierdis-protocol-custom-v1-codec`.
+- Move execution contracts out of `yierdis-core-contract`.
+- Move command-facing DB operation contracts out of `yierdis-core-api`.
+- Move off-heap contracts out of `yierdis-core-api`.
+- Move runtime change tracking, runtime access, and observability contracts out
+  of broad API ownership.
+- Classify maxmemory contracts explicitly as storage API, storage-memory
+  implementation, or runtime API.
+
+Acceptance criteria:
+
+- Existing engine, executor, command, and server modules compile against
+  `yierdis-execution-api`.
+- Existing command and storage modules compile against `yierdis-storage-api`.
+- No protocol DTO moves into execution API.
+- Command modules depend on storage API but not memory API unless a concrete
+  command genuinely requires a memory contract.
+- Storage implementation modules depend on memory API and storage API.
+- Runtime modules depend on runtime API and storage API.
+- Architecture guards assert that each API module stays narrow.
+
+### Phase 2: Reframe Custom Protocol V1 As Wire And Execution Adapters
+
+Rename and reorganize protocol modules around Custom Protocol v1:
+
+- `yierdis-custom-v1-wire`
+- `yierdis-custom-v1-execution-adapter`
+- `yierdis-custom-v1-netty`
+
+Scope:
+
+- Protocol DTOs, limits, JSON parser/writer, request encoder, reply parser, and
+  protocol-side reply model move to wire.
+- Protocol DTO to `ExecutionRequest` conversion moves from server into the
+  execution adapter.
 - `JsonLineReplyWriter` and `JsonLineReplyWriterFactory` move from server into
-  codec.
-- Netty-specific decoder glue moves to `yierdis-protocol-custom-v1-netty`.
+  the execution adapter.
+- Netty-specific decoder glue moves to custom-v1-netty.
 
 Acceptance criteria:
 
-- Custom-v1 codec may depend on execution API for reply writing.
-- Custom-v1 codec does not depend on command modules or storage modules.
+- Wire imports no execution, command, storage, runtime, application, or Netty
+  packages.
+- Execution adapter may depend on wire and execution API.
+- Execution adapter does not depend on command or storage modules.
 - Server-app no longer owns protocol-specific reply writer implementation.
-- Client and bench consume protocol adapter modules directly.
+- Client and bench consume wire/netty modules directly.
 
-### Phase 7: Reduce Server To Application Composition
+### Phase 3: Reduce Server To Application Composition
 
 Create `yierdis-server-app` as the composition root.
 
@@ -650,17 +645,90 @@ Scope:
   wiring into server-app.
 - Move reusable Netty transport pieces to adapter modules where they are not
   server-app-specific.
-- Keep server-app tests focused on process wiring, pipeline order, server-facing
-  commands, close behavior, and integration.
+- Keep server-app tests focused on process wiring, pipeline order,
+  server-facing commands, close behavior, packaging, and integration.
 
 Acceptance criteria:
 
 - Server-app may depend on many modules, but does not own command parsing,
-  storage internals, protocol codec internals, or executor algorithms.
+  storage internals, protocol wire internals, or executor algorithms.
 - Existing smoke scripts still start server and run CLI commands successfully.
 - Packaging still produces runnable server and client jars.
 
-### Phase 8: Retire Old Core Module Names
+### Phase 4: Split Command API, Kernel, And Defaults
+
+Split `yierdis-core-command` into command API, command kernel, and one default
+command bundle.
+
+Scope:
+
+- Command contracts and metadata move to `yierdis-command-api`.
+- Registry, parse/dispatch lifecycle, transaction queuing, and processor logic
+  move to `yierdis-command-kernel`.
+- Command families move to packages inside `yierdis-command-defaults`.
+- `yierdis-command-defaults` composes the default transport-neutral command set.
+
+Acceptance criteria:
+
+- `yierdis-command-defaults` depends on storage API, execution API, command API,
+  and command kernel, but not concrete storage implementations.
+- Adding a new command family usually means adding a package and updating the
+  default bundle registration, not editing registry or processor internals.
+- Transaction syntax validation and replay still pass existing tests.
+- Server-facing commands that require application/runtime/protocol observability
+  remain outside transport-neutral command modules.
+
+### Phase 5: Reorganize Storage-Memory Internals
+
+Move the concrete storage implementation into `yierdis-storage-memory`, then
+organize internals by package instead of splitting more Maven modules.
+
+Initial package targets:
+
+1. `storage.memory.keyspace`
+2. `storage.memory.values`
+3. `storage.memory.expire`
+4. `storage.memory.maxmemory`
+5. `storage.memory.accounting`
+6. `storage.memory.ffm`
+
+This phase should reduce `YierdisDb` and make the internal ownership model
+clear without forcing internal collaborators into public Maven-module APIs.
+
+Acceptance criteria:
+
+- Command modules still depend only on storage API.
+- Runtime-memory depends on storage-memory as the default implementation.
+- Keyspace, value, maxmemory, expiration, and memory accounting tests move with
+  their owning packages or to storage testkit/integration tests based on scope.
+- Storage-memory architecture guards prevent unrelated responsibilities from
+  drifting back into `YierdisDb`.
+- Existing off-heap leak and memory accounting tests still pass.
+
+### Phase 6: Promote Mature Seams Only
+
+After the package-level reorganization proves stable, evaluate whether any
+internal seam deserves its own Maven module.
+
+Candidate promotions:
+
+- command-family modules for independently enabled command sets;
+- storage keyspace module if it exposes a narrow reusable keyspace contract;
+- storage values module if value encodings can be tested and reused separately;
+- storage maxmemory module if it becomes a policy engine independent from
+  `YierdisDb`;
+- transport-netty module if it is shared by server and client beyond
+  Custom Protocol v1.
+
+Acceptance criteria:
+
+- Promotion reduces coupling or enables independent tests/dependencies.
+- Promotion does not require making broad internal implementation types public.
+- Architecture tests capture the new dependency rule before or with the
+  promotion.
+- If a candidate fails these checks, it remains an internal package.
+
+### Phase 7: Retire Old Core Module Names
 
 Once behavior is stable under the new module families, remove or convert the old
 aggregators:
@@ -695,26 +763,29 @@ yier.bubu.redis.execution
 yier.bubu.redis.engine
 yier.bubu.redis.storage.api
 yier.bubu.redis.storage.memory
-yier.bubu.redis.storage.keyspace
-yier.bubu.redis.storage.values
-yier.bubu.redis.storage.expire
-yier.bubu.redis.storage.maxmemory
+yier.bubu.redis.storage.memory.keyspace
+yier.bubu.redis.storage.memory.values
+yier.bubu.redis.storage.memory.expire
+yier.bubu.redis.storage.memory.maxmemory
+yier.bubu.redis.storage.memory.accounting
+yier.bubu.redis.storage.memory.ffm
 yier.bubu.redis.command.api
 yier.bubu.redis.command.kernel
-yier.bubu.redis.command.string
-yier.bubu.redis.command.hash
-yier.bubu.redis.command.list
-yier.bubu.redis.command.set
-yier.bubu.redis.command.zset
-yier.bubu.redis.command.keyspace
-yier.bubu.redis.command.transaction
-yier.bubu.redis.command.connection
-yier.bubu.redis.command.admin
+yier.bubu.redis.command.defaults
+yier.bubu.redis.command.defaults.string
+yier.bubu.redis.command.defaults.hash
+yier.bubu.redis.command.defaults.list
+yier.bubu.redis.command.defaults.set
+yier.bubu.redis.command.defaults.zset
+yier.bubu.redis.command.defaults.keyspace
+yier.bubu.redis.command.defaults.transaction
+yier.bubu.redis.command.defaults.connection
+yier.bubu.redis.command.defaults.admin
 yier.bubu.redis.runtime.api
 yier.bubu.redis.runtime.memory
-yier.bubu.redis.protocol.custom.v1
-yier.bubu.redis.protocol.custom.v1.codec
-yier.bubu.redis.protocol.custom.v1.netty
+yier.bubu.redis.custom.v1.wire
+yier.bubu.redis.custom.v1.execution
+yier.bubu.redis.custom.v1.netty
 yier.bubu.redis.transport.netty
 yier.bubu.redis.app.server
 yier.bubu.redis.app.client
@@ -733,9 +804,10 @@ configuration bucket.
 Target:
 
 - Server runtime config belongs to `yierdis-server-app`.
-- Protocol limits belong to custom-v1 protocol API.
-- Storage policies such as `MaxmemoryPolicy` belong to storage API or storage
-  maxmemory.
+- Protocol limits belong to `yierdis-custom-v1-wire`.
+- Storage policies such as `MaxmemoryPolicy` belong either to storage API or to
+  storage-memory internals, depending on whether command/runtime code must see
+  them.
 - Shared CLI parsing helpers belong to `yierdis-cli-common`.
 - Bench-specific options belong to `yierdis-bench`.
 
@@ -795,6 +867,8 @@ Mitigation:
 
 - Use parent aggregators by module family.
 - Split only where compile-time ownership improves.
+- Keep command families and storage internals as packages until they pass a
+  module-promotion gate.
 - Delay storage internals that would require poor public APIs.
 
 ### Risk: Public API surface grows during storage split
@@ -836,14 +910,16 @@ Mitigation:
 
 - The root Maven graph exposes explicit foundation, execution, storage,
   command, runtime, executor, adapter, app, integration-test, and
-  architecture-test module families.
+  architecture-test module families without creating one Maven module for every
+  command family or storage-internal concern up front.
 - `core-api`, `core-command`, `core-db`, and `server` no longer act as broad
   conceptual buckets.
-- Command-family modules compile without concrete storage implementation
-  dependencies.
+- Command-defaults and its command-family packages compile without concrete
+  storage implementation dependencies.
 - Executor-core compiles without command, storage, runtime, protocol, Netty, or
   app dependencies.
-- Custom Protocol v1 owns both request codec and execution reply codec.
+- Custom Protocol v1 wire and execution adapter modules own request codec and
+  execution reply codec.
 - Server-app is a composition root with minimal business logic.
 - Architecture tests enforce the new dependency rules.
 - Existing command behavior, Custom Protocol v1 behavior, server/client smoke
@@ -857,10 +933,12 @@ The end state should make the codebase easier to reason about at a structural
 level:
 
 - execution contracts are small and reusable;
-- command behavior is split by command family and no longer hides behind one
-  large command module;
+- command behavior is organized by command family inside a default command
+  bundle and no longer hides behind one large command module;
 - storage APIs are separate from storage implementation and memory runtime
   details;
+- storage implementation internals are organized by package before any
+  premature Maven split;
 - protocol adapters own protocol concerns instead of pushing reply encoding into
   server;
 - server is clearly an application composition module;
