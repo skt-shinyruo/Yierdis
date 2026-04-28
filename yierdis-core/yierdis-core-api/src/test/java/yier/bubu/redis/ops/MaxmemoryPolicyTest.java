@@ -18,6 +18,13 @@ public class MaxmemoryPolicyTest {
         Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_LRU, MaxmemoryPolicy.parse("allkeys_LRU"));
     }
 
+    @Test
+    public void redisName_shouldReturnNormalizedConfigNames() {
+        Assert.assertEquals("noeviction", MaxmemoryPolicy.NOEVICTION.redisName());
+        Assert.assertEquals("allkeys-random", MaxmemoryPolicy.ALLKEYS_RANDOM.redisName());
+        Assert.assertEquals("allkeys-lru", MaxmemoryPolicy.ALLKEYS_LRU.redisName());
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void parse_shouldThrowOnUnknownPolicies() {
         MaxmemoryPolicy.parse("unknown-policy");

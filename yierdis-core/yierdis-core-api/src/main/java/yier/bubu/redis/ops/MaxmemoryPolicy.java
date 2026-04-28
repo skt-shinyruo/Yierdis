@@ -6,9 +6,19 @@ import java.util.Locale;
  * Redis-like maxmemory eviction policy.
  */
 public enum MaxmemoryPolicy {
-    NOEVICTION,
-    ALLKEYS_RANDOM,
-    ALLKEYS_LRU;
+    NOEVICTION("noeviction"),
+    ALLKEYS_RANDOM("allkeys-random"),
+    ALLKEYS_LRU("allkeys-lru");
+
+    private final String redisName;
+
+    MaxmemoryPolicy(String redisName) {
+        this.redisName = redisName;
+    }
+
+    public String redisName() {
+        return redisName;
+    }
 
     /**
      * Parse a Redis-style policy string.
@@ -43,4 +53,3 @@ public enum MaxmemoryPolicy {
         };
     }
 }
-
