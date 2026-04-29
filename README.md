@@ -91,6 +91,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - **instance 暴露面**：`YierdisInstance` 仅负责 DB 生命周期、资源 ownership 与 `DbEngine` 能力视图（`engine(int)` / `engines()` 防御性拷贝），避免上层依赖 `YierdisDb` 具体实现，也不再承担 command processor 组装。
 - **runtime owner-thread seam**：server 不应再通过公开 `DbEngine` 视图做 `RuntimeDbEngine` 向下转型，也不应在 bootstrap 中内联 `bindToCurrentThread()/close()` 细节；owner-thread 维护、maintenance、关闭应通过 `yierdis-core-runtime` 提供的 runtime-local seam 协作。
 - **DB 内部协作者**：`YierdisDb` 仍然是状态 owner，但过期清理、maxmemory/淘汰这类高密度内部策略应优先收敛到 package-local collaborator，而不是继续在单个超大类中内联扩张。
+- **off-heap contract 兼容面**：`OffHeapAllocator` / `OffHeapBuf` / `OffHeapSlice` / `OffHeapOutOfMemoryException` 位于 `yierdis-memory-api`；包名仍为 `yier.bubu.redis.offheap.api`，需要这些 contract 的模块应直接依赖 `yierdis-memory-api`，不要通过 `core-api` 传递依赖。
 - **native memory 组装**：server 直接依赖 `yierdis-memory-foreign`，统一使用 JDK 25 `java.lang.foreign` FFM API；不再存在多 backend 发现/切换。
 
 ## 启动
