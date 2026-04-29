@@ -29,7 +29,6 @@ MAX_DIRECT_MEMORY="${MAX_DIRECT_MEMORY:-}"
 
 # Server args overrides (keep empty to use yierdis-server-app defaults in yierdis-args)
 MAXMEMORY_BYTES="${MAXMEMORY_BYTES:-}"
-OFFHEAP_MAX_BYTES="${OFFHEAP_MAX_BYTES:-}"
 MAXMEMORY_POLICY="${MAXMEMORY_POLICY:-}"
 MAXMEMORY_SAMPLES="${MAXMEMORY_SAMPLES:-}"
 
@@ -107,7 +106,6 @@ main() {
   [[ -n "$MAXMEMORY_BYTES" ]] && server_args+=(--maxmemoryBytes "$MAXMEMORY_BYTES")
   [[ -n "$MAXMEMORY_POLICY" ]] && server_args+=(--maxmemoryPolicy "$MAXMEMORY_POLICY")
   [[ -n "$MAXMEMORY_SAMPLES" ]] && server_args+=(--maxmemorySamples "$MAXMEMORY_SAMPLES")
-  [[ -n "$OFFHEAP_MAX_BYTES" ]] && server_args+=(--offheapMaxBytes "$OFFHEAP_MAX_BYTES")
 
   # SERVER_ARGS_EXTRA is appended as-is (split by shell)
   # shellcheck disable=SC2206

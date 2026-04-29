@@ -26,18 +26,18 @@ Yierdis 不是“收到请求就立刻执行”的 server。
 
 ```text
 YierdisFastCommandHandler
-  -> NettyCommandExecutor
-     -> NettyCommandSubmitter
+  -> CommandExecutor
+     -> CommandExecutorSubmitter
      -> ExecutorBacklogBudget
      -> ExecutorTaskQueue
-     -> NettyCommandDrainLoop
-     -> NettyCommandExecutionSupport
+     -> CommandExecutorDrainLoop
+     -> CommandExecutorExecutionSupport
      -> ExecutorBackpressureController
 ```
 
 另外还有一个经常被忽略但很关键的连接态根对象：
 
-- `ServerConnectionContext`
+- `NettyExecutionConnection`
 
 它承载：
 
@@ -47,16 +47,16 @@ YierdisFastCommandHandler
 - backpressure 统计
 - fair scheduling 所需的 queue state
 
-## `NettyCommandExecutor` 是总控台
+## `CommandExecutor` 是总控台
 
-`NettyCommandExecutor` 自己并不把所有逻辑写死在一个方法里，而是像总控台一样把几个子组件接起来：
+`CommandExecutor` 自己并不把所有逻辑写死在一个方法里，而是像总控台一样把几个子组件接起来：
 
 - `ExecutorBacklogBudget`
 - `ExecutorTaskQueue`
 - `ExecutorBackpressureController`
-- `NettyCommandSubmitter`
-- `NettyCommandDrainLoop`
-- `NettyCommandExecutionSupport`
+- `CommandExecutorSubmitter`
+- `CommandExecutorDrainLoop`
+- `CommandExecutorExecutionSupport`
 
 所以理解它时，最好不要把它看成“一个大执行函数”，而是看成：
 
@@ -70,7 +70,7 @@ YierdisFastCommandHandler
 
 这层只做一件事：
 
-- 把 `ExecutionRequest` 交给 `NettyCommandExecutor.trySubmitWithReason(...)`
+- 把 `ExecutionRequest` 交给 `CommandExecutor.trySubmitWithReason(...)`
 
 如果提交失败，handler 立刻回：
 
@@ -81,9 +81,9 @@ YierdisFastCommandHandler
 
 也就是说，拒绝策略不是“默默丢请求”，而是 fail-fast。
 
-## `NettyCommandSubmitter` 真正在做什么
+## `CommandExecutorSubmitter` 真正在做什么
 
-提交逻辑主要在 `NettyCommandSubmitter.trySubmitWithReason(...)`。
+提交逻辑主要在 `CommandExecutorSubmitter.trySubmitWithReason(...)`。
 
 这条路径可以记成：
 
@@ -170,21 +170,21 @@ YierdisFastCommandHandler
 - 避免单连接长期霸占执行器
 - 更适合多连接竞争下的公平性
 
-### `ServerConnectionContext` 在这里为什么重要
+### `NettyExecutionConnection` 在这里为什么重要
 
 因为 fair scheduling 需要每个连接都带一份调度状态。
 
 这份状态不放在 protocol DTO，也不放在 session 本体，而是放在：
 
-- `ServerConnectionContext.queueState()`
+- `NettyExecutionConnection.context().queueState()`
 
-这也是 `ServerConnectionContext` 作为“连接态根对象”的一个关键作用。
+这也是 `NettyExecutionConnection` 作为“连接态根对象”的一个关键作用。
 
-## `NettyCommandDrainLoop` 是真正执行命令的地方
+## `CommandExecutorDrainLoop` 是真正执行命令的地方
 
 提交成功并不代表命令已经执行。真正执行发生在：
 
-- `NettyCommandDrainLoop`
+- `CommandExecutorDrainLoop`
 
 ### drain tick 做什么
 
@@ -224,16 +224,15 @@ drain loop 使用了 `NettyReplyFlushBatch` 做 flush coalescing：
 
 这让执行器在高频命令下减少 flush 次数。
 
-## `NettyCommandExecutionSupport` 为什么存在
+## `CommandExecutorExecutionSupport` 为什么存在
 
 这个类的职责是把“执行器视角”和“命令处理器视角”接起来。
 
 它负责：
 
-- 用 `NettyByteBufSink` 创建 `ReplyWriter`
-- 从 channel 上取 `ServerSessionState`
-- 复用 `CommandContext`
-- 调用 `YierdisFastCommandProcessor.execute(...)`
+- 通过 transport adapter 创建 `ReplyWriter`
+- 从 connection 上取 `EngineSession`
+- 调用 `CommandExecutionEngine.execute(...)`
 - 在命令结束后归还 backlog 预算
 - 在条件满足时恢复 `autoRead`
 
@@ -299,7 +298,7 @@ Yierdis 的背压不是只有一种，而是三类因素一起作用。
 - `ExecutorBackpressureRuntime`
 - `ExecutorBackpressureObserver`
 
-真正的 Netty 行为由 `NettyCommandExecutor` 在装配时提供。
+真正的 Netty 行为由 `CommandExecutor` 在装配时提供。
 
 这样做的好处是：
 
@@ -321,7 +320,7 @@ Yierdis 的背压不是只有一种，而是三类因素一起作用。
 
 ## maintenance 为什么也走执行器
 
-`NettyCommandExecutor.executeMaintenance(...)` 会把 maintenance task 提交到同一个 executor 上执行。
+`CommandExecutor.executeMaintenance(...)` 会把 maintenance task 提交到同一个 executor 上执行。
 
 这意味着：
 
@@ -344,7 +343,7 @@ Yierdis 的背压不是只有一种，而是三类因素一起作用。
 - `drainLimitedByMaxCommands`
 - `drainLimitedByTimeBudget`
 
-连接本地统计则放在 `ServerConnectionContext` 里。
+连接本地统计则放在 `NettyExecutionConnection` 里。
 
 最终这些会被：
 
@@ -355,30 +354,30 @@ Yierdis 的背压不是只有一种，而是三类因素一起作用。
 
 ## 对照源码时推荐看的顺序
 
-1. `NettyCommandExecutor`
+1. `CommandExecutor`
    看总装和参数校验
-2. `NettyCommandSubmitter`
+2. `CommandExecutorSubmitter`
    看请求如何进入系统
 3. `ExecutorBacklogBudget`
    看全局预算和水位
 4. `ExecutorTaskQueue`
    看 GLOBAL/FAIR 调度
-5. `NettyCommandDrainLoop`
+5. `CommandExecutorDrainLoop`
    看 cooperative drain
-6. `NettyCommandExecutionSupport`
+6. `CommandExecutorExecutionSupport`
    看命令执行和预算释放
 7. `ExecutorBackpressureController`
    看 autoRead enter/exit/global recovery
-8. `ServerConnectionContext`
+8. `NettyExecutionConnection`
    看连接级统计和调度状态
 
 ## 最值得看的测试
 
-- `NettyCommandExecutorTest`
+- `CommandExecutorTest`
   看执行器主流程
-- `NettyCommandExecutorBackpressureTest`
+- `CommandExecutorBackpressureTest`
   看 `queue_full`、autoRead enter/exit 和 global recovery
-- `NettyCommandExecutorFairSchedulingTest`
+- `CommandExecutorFairSchedulingTest`
   看 fair scheduling 行为
 - `YierdisServerBootstrapCommandWiringTest`
   看 runtime config 如何把这些机制接进 server

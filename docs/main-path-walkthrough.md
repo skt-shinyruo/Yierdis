@@ -36,10 +36,10 @@ YierdisServer
   -> CustomRequestDecoder
   -> ProtocolCommandAdapter
   -> YierdisFastCommandHandler
-  -> NettyCommandExecutor
-     -> NettyCommandSubmitter
-     -> NettyCommandDrainLoop
-     -> NettyCommandExecutionSupport
+  -> CommandExecutor
+     -> CommandExecutorSubmitter
+     -> CommandExecutorDrainLoop
+     -> CommandExecutorExecutionSupport
   -> YierdisFastCommandProcessor
   -> StringCommands / CoreConnectionCommands / ...
   -> CommandSupport
@@ -98,7 +98,7 @@ YierdisServer
 这个类长期持有并最终负责关闭的核心资源包括：
 
 - `YierdisInstance`
-- `NettyCommandExecutor`
+- `CommandExecutor`
 - command executor 对应的 `EventExecutorGroup`
 - Netty `bossGroup`
 - Netty `workerGroup`
@@ -124,8 +124,8 @@ YierdisServer
    - `observability`
 5. 创建 `NettyServerInfoProvider`
 6. 创建 `SlowCommandGovernor`
-7. 创建 `YierdisFastCommandProcessor`
-8. 创建 `NettyCommandExecutor`
+7. 创建 `DefaultYierdisEngine`，由 engine 内部持有当前命令处理实现
+8. 创建 `CommandExecutor`
 9. 启动 executor，把 DB 绑定到 executor 线程
 10. 如果开启了 cleanup interval，则调度 maintenance task
 11. 组装 Netty `ServerBootstrap`
@@ -223,11 +223,11 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 它做的第一件事不是加 decoder，而是：
 
-- `ServerConnectionContext.getOrCreate(...)`
+- `NettyExecutionConnection.getOrCreate(...)`
 
 这一步非常关键，因为它把连接级状态先挂到了 `Channel` 上。
 
-### 为什么先建 `ServerConnectionContext`
+### 为什么先建 `NettyExecutionConnection`
 
 因为后面的很多 handler 都需要共享同一份连接状态：
 
@@ -331,12 +331,12 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 这部分的核心类有 4 个：
 
-- [`NettyCommandExecutor`](../yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandExecutor.java)
-- [`NettyCommandSubmitter`](../yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandSubmitter.java)
-- [`NettyCommandDrainLoop`](../yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandDrainLoop.java)
+- [`CommandExecutor`](../yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutor.java)
+- [`CommandExecutorSubmitter`](../yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorSubmitter.java)
+- [`CommandExecutorDrainLoop`](../yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorDrainLoop.java)
 - [`ExecutorBackpressureController`](../yierdis-executor-core/src/main/java/yier/bubu/redis/executor/ExecutorBackpressureController.java)
 
-### 先看 `NettyCommandExecutor`
+### 先看 `CommandExecutor`
 
 它不是单一算法类，而是一个“组装容器”。
 
@@ -345,16 +345,16 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 - `ExecutorTaskQueue`
 - `ExecutorBacklogBudget`
 - `ExecutorBackpressureController`
-- `NettyCommandExecutionSupport`
-- `NettyCommandSubmitter`
-- `NettyCommandDrainLoop`
+- `CommandExecutorExecutionSupport`
+- `CommandExecutorSubmitter`
+- `CommandExecutorDrainLoop`
 
 也就是说：
 
-- `NettyCommandExecutor` 自己更像总控台
+- `CommandExecutor` 自己更像总控台
 - 真正的入队、执行、恢复逻辑分散在各个协作者里
 
-### 再看 `NettyCommandSubmitter`
+### 再看 `CommandExecutorSubmitter`
 
 初学者读这部分时，可以带着一个固定问题：
 
@@ -374,13 +374,13 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 所以“背压”并不是执行阶段才发生，入队阶段就已经开始生效了。
 
-### 然后看 `NettyCommandDrainLoop`
+### 然后看 `CommandExecutorDrainLoop`
 
 这个类是在 command executor 线程上真正“取任务并执行”的地方。
 
 每条命令的大致路径是：
 
-1. 拿到 `NettyExecutorTask`
+1. 拿到 `CommandExecutorTask`
 2. 检查 channel 是否 active 或 closing
 3. 为本次执行分配出站 buffer
 4. 创建 `ReplyWriter`
@@ -398,21 +398,21 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 所以对初学者最重要的理解是：
 
-- `NettyCommandSubmitter` 负责“发现压力”
-- `NettyCommandDrainLoop` 负责“释放压力后的回收”
+- `CommandExecutorSubmitter` 负责“发现压力”
+- `CommandExecutorDrainLoop` 负责“释放压力后的回收”
 - `ExecutorBackpressureController` 负责“把 enter / exit / recovery 变成统一策略”
 
 ## 阶段 8：真正执行命令
 
 这一层的桥梁是：
 
-- [`NettyCommandExecutionSupport`](../yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandExecutionSupport.java)
+- [`CommandExecutorExecutionSupport`](../yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorExecutionSupport.java)
 
 ### 它做了哪几件关键事
 
-1. 从 channel 上拿到 `ServerSessionState`
+1. 从 channel 上拿到 `EngineSession`
 2. 创建或复用 `CommandContext`
-3. 调 `YierdisFastCommandProcessor.execute(request, ctx)`
+3. 调 `YierdisEngine.execute(session, request, writer)`
 4. 命令执行结束后释放 slot 和 bytes 预算
 5. 在条件满足时恢复 `autoRead`
 
@@ -647,7 +647,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 ### 2. 执行器行为
 
-- [`yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/NettyCommandExecutorTest.java`](../yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/NettyCommandExecutorTest.java)
+- [`yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorTest.java`](../yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorTest.java)
 
 看点：
 

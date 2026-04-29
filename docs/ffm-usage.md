@@ -332,7 +332,7 @@ keyspace 是 FFM 使用最核心的部分之一。
 
 `DbThreadGuard` 强制每个 `YierdisDb` 必须显式绑定到唯一 owner thread。未绑定访问或跨线程访问都会直接失败。
 
-server 启动时，`NettyCommandExecutor` 会先调用 `runtimeAccess::bindToCurrentThread`，把 DB 绑定到命令执行线程。后台 maintenance 虽然是由 worker event loop 定时触发，但真正的 cleanup / maxmemory enforcement 会通过 `executeMaintenance(...)` 回到同一个 command executor 线程执行。
+server 启动时，`CommandExecutor` 会先调用 `runtimeAccess::bindToCurrentThread`，把 DB 绑定到命令执行线程。后台 maintenance 虽然是由 worker event loop 定时触发，但真正的 cleanup / maxmemory enforcement 会通过 `executeMaintenance(...)` 回到同一个 command executor 线程执行。
 
 这使得项目可以把大部分 FFM 内存都建立在 `Arena.ofConfined()` 上，而不必为了并发共享去设计更复杂的 arena 同步策略。
 

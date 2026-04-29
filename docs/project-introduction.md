@@ -227,7 +227,7 @@ db + runtime + memory
 负责“实例如何存活、线程如何协作、资源如何约束”：
 
 - `YierdisInstance`
-- `NettyCommandExecutor`
+- `CommandExecutor`
 - maxmemory 协调
 - maintenance
 - backpressure
@@ -235,7 +235,7 @@ db + runtime + memory
 代表文件：
 
 - `yierdis-core/.../runtime/YierdisInstance.java`
-- `yierdis-app/yierdis-server-app/.../NettyCommandExecutor.java`
+- `yierdis-executor-core/.../CommandExecutor.java`
 - `yierdis-executor-core/.../ExecutorBackpressureController.java`
 
 ### 5. server wiring
@@ -265,8 +265,8 @@ db + runtime + memory
 3. `ForeignMemoryAutoModules.ensureFfmAvailable()` 检查当前 JVM 是否支持 JDK 25 FFM
 4. `YierdisServerBootstrap.start(...)` 开始真正组装系统
 5. 创建 `YierdisInstance`
-6. 创建 `YierdisFastCommandProcessor`
-7. 创建 `NettyCommandExecutor`
+6. 创建 `DefaultYierdisEngine`
+7. 创建 `CommandExecutor`
 8. 启动 executor，把 DB 绑定到 owner thread
 9. 创建 Netty pipeline 并开始监听端口
 
@@ -284,8 +284,8 @@ socket bytes
   -> CustomRequestDecoder
   -> ProtocolCommandAdapter
   -> YierdisFastCommandHandler
-  -> NettyCommandExecutor
-  -> NettyCommandDrainLoop
+  -> CommandExecutor
+  -> CommandExecutorDrainLoop
   -> YierdisFastCommandProcessor
   -> *Commands
   -> DbReads / DbWrites
@@ -386,7 +386,7 @@ socket bytes
 
 ### 执行器和回包
 
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandExecutor.java`
+- `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutor.java`
 - `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
 - `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java`
 
@@ -404,7 +404,7 @@ socket bytes
   看 server 是不是真的把命令、协议和 observability 接通了
 - `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/CustomProtocolResyncIntegrationTest.java`
   看协议错误后如何恢复到下一帧
-- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/NettyCommandExecutorBackpressureTest.java`
+- `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorBackpressureTest.java`
   看背压和 `ERR busy ...` 的行为
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java`
   看命令处理主流程

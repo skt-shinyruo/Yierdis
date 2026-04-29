@@ -203,8 +203,8 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 会话状态入口
 
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/ServerConnectionContext.java`
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/ServerSessionState.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyExecutionConnection.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/EngineSession.java`
 - `yierdis-execution/yierdis-execution-api/src/main/java/yier/bubu/redis/contract/CommandContext.java`
 
 `yierdis-core-contract` 目前只是临时兼容桥；新的执行契约源码都在 `yierdis-execution-api`。
@@ -232,7 +232,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 如果你只想先搞懂事务是怎么工作的，建议只盯住这 3 个点：
 
-1. `ServerSessionState`
+1. `EngineSession`
    保存事务队列和 `dbIndex`
 2. `YierdisFastCommandProcessor`
    决定命令是立刻执行还是 `QUEUED`
@@ -280,16 +280,16 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 总入口
 
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandExecutor.java`
+- `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutor.java`
 
 ### 提交路径
 
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandSubmitter.java`
+- `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorSubmitter.java`
 
 ### drain 路径
 
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandDrainLoop.java`
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandExecutionSupport.java`
+- `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorDrainLoop.java`
+- `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorExecutionSupport.java`
 
 ### 通用背压算法
 
@@ -297,9 +297,9 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 建议先看的测试
 
-- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/NettyCommandExecutorTest.java`
-- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/NettyCommandExecutorBackpressureTest.java`
-- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/NettyCommandExecutorFairSchedulingTest.java`
+- `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorTest.java`
+- `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorBackpressureTest.java`
+- `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorFairSchedulingTest.java`
 
 ### 初学者理解背压的最短路径
 
@@ -307,11 +307,11 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 更好的顺序是：
 
-1. `NettyCommandExecutor`
+1. `CommandExecutor`
    先看有哪些协作者被组装起来
-2. `NettyCommandSubmitter`
+2. `CommandExecutorSubmitter`
    再看入队失败和进入背压的条件
-3. `NettyCommandDrainLoop`
+3. `CommandExecutorDrainLoop`
    再看执行后如何释放预算和恢复连接
 4. `ExecutorBackpressureController`
    最后再看通用的 enter / exit / recovery 逻辑

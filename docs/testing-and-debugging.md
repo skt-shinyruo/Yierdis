@@ -96,15 +96,15 @@
 
 - `YierdisServerBootstrapCommandWiringTest`
 - `CustomProtocolResyncIntegrationTest`
-- `NettyCommandExecutorTest`
-- `NettyCommandExecutorBackpressureTest`
-- `NettyCommandExecutorFairSchedulingTest`
+- `CommandExecutorTest`
+- `CommandExecutorBackpressureTest`
+- `CommandExecutorFairSchedulingTest`
 - `TransactionQueueCleanupTest`
 
 如果你改的是：
 
 - Netty pipeline
-- `ServerConnectionContext`
+- `NettyExecutionConnection`
 - backpressure / queue reject
 - protocol error 回包
 
@@ -194,12 +194,13 @@ mvn -Dtest=OffHeapStringStorageTest,MemoryStatsCommandTest,MaxmemoryEvictionTest
 
 - `ServerConfigArgsTest`
 - `YierdisServerBootstrapCommandWiringTest`
-- `NettyCommandExecutorBackpressureTest`
-- `NettyCommandExecutorTest`
+- `CommandExecutorBackpressureTest`
+- `CommandExecutorTest`
 
 ```bash
-cd yierdis-app/yierdis-server-app
-mvn -Dtest=ServerConfigArgsTest,YierdisServerBootstrapCommandWiringTest,NettyCommandExecutorBackpressureTest,NettyCommandExecutorTest test
+mvn -pl yierdis-app/yierdis-server-app,yierdis-executor-core -am \
+  -Dtest=ServerConfigArgsTest,YierdisServerBootstrapCommandWiringTest,CommandExecutorBackpressureTest,CommandExecutorTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 ### 不确定改动影响面时
@@ -290,8 +291,8 @@ REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 先看：
 
 - `YierdisFastCommandHandler`
-- `NettyCommandExecutor`
-- `NettyCommandExecutorBackpressureTest`
+- `CommandExecutor`
+- `CommandExecutorBackpressureTest`
 - `STATS`
 
 重点确认：
@@ -305,7 +306,7 @@ REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 先看：
 
 - `TransactionCommands`
-- `ServerConnectionContext`
+- `NettyExecutionConnection`
 - `TransactionQueueCleanupTest`
 - `TransactionCommandTest`
 

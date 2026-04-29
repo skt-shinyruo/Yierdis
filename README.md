@@ -349,7 +349,7 @@ REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 - `REQUESTS` / `CLIENTS` / `PIPELINE`：吞吐压测参数（每种命令单独跑一次）
 - `DATA_SIZE` / `KEYSPACE`：value 大小与 keyspace
 - `XMS` / `XMX` / `MAX_DIRECT_MEMORY`：JVM 内存与 Direct Memory 上限
-- `MAXMEMORY_BYTES` / `OFFHEAP_MAX_BYTES`：server 预算参数（容器环境建议保守）
+- `MAXMEMORY_BYTES` / `MAX_DIRECT_MEMORY`：server 预算参数（容器环境建议保守）
 - `SKIP_PREFILL=1`：跳过预置数据（可能导致 GET 大量 miss，影响可比性）
 - `SKIP_LATENCY=1`：跳过延迟压测
 
