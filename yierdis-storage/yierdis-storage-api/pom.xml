@@ -6,30 +6,20 @@
 
     <parent>
         <groupId>yier.bubu.redis</groupId>
-        <artifactId>yierdis-parent</artifactId>
+        <artifactId>yierdis-storage</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>yierdis-args</artifactId>
+    <artifactId>yierdis-storage-api</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis-args</name>
-    <description>Shared CLI argument models for yierdis server and tools.</description>
+    <name>yierdis-storage-api</name>
+    <description>Neutral storage API contracts for Yierdis.</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-protocol-model</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-storage-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>info.picocli</groupId>
-            <artifactId>picocli</artifactId>
+            <artifactId>yierdis-bytes-lib</artifactId>
         </dependency>
 
         <dependency>

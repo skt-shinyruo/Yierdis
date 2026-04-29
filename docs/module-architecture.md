@@ -10,12 +10,14 @@
 bytes-lib
 ├─ memory-api ──> memory-foreign
 │
+├─ storage-api ──> core-command ──> core-engine
+│        └───────> core-db ──> core-runtime
+│                       ^  ^
+│                       │  └─ memory-foreign
+│                       └──── memory-api
+│
 ├─ execution-api ──> core-contract (temporary bridge)
-│        ├─────────> core-api ──> core-db ──> core-runtime
-│        │             ^             ^  ^
-│        │             │             │  └─ memory-foreign
-│        │             │             └──── memory-api
-│        │             └─ core-command ──> core-engine
+│        └─────────> core-api (temporary runtime/storage bridge)
 │
 ├─ protocol-model ──> protocol-codec ──> protocol-netty
 │
@@ -40,6 +42,7 @@ bytes-lib
 - `yierdis-protocol`
 - `yierdis-bytes`
 - `yierdis-memory`
+- `yierdis-storage`
 
 它们的作用主要是：
 
@@ -120,7 +123,11 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 ### `yierdis-core-api`
 
-这是 command-facing DB 能力边界，放的是：
+这是临时兼容桥，当前保留 runtime API 源码，并依赖 `yierdis-execution-api` 与 `yierdis-storage-api` 以便旧模块迁移。新的 command-facing DB 能力接口不要再加到这里。
+
+### `yierdis-storage-api`
+
+这是 command-facing DB 能力边界，包名仍为 `yier.bubu.redis.ops.*` 以保持迁移兼容，放的是：
 
 - `DbEngine`
 - `DbReads`
@@ -137,7 +144,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 对初学者来说，可以把它理解成：
 
-- `core-api` 定义“命令层可以向 DB 提什么要求”
+- `storage-api` 定义“命令层可以向 DB 提什么要求”
 - `core-db` 决定“这些要求具体怎么完成”
 
 ### `yierdis-core-db`
@@ -235,7 +242,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 这些类型的包名仍然是 `yier.bubu.redis.offheap.api`，用于迁移兼容；模块边界已经迁到 `yierdis-memory-api`。
 
-需要使用这些 off-heap contract 的生产模块应该直接依赖 `yierdis-memory-api`。`yierdis-core-api` 不重新导出这组类型，也不作为兼容桥。命令层不直接依赖这个模块；storage / DB 层负责把 off-heap backend 的失败转换成 `core-api` 能表达的命令错误。
+需要使用这些 off-heap contract 的生产模块应该直接依赖 `yierdis-memory-api`。`yierdis-core-api` 不重新导出这组类型，也不作为兼容桥。命令层不直接依赖这个模块；storage / DB 层负责把 off-heap backend 的失败转换成 `yierdis-storage-api` 能表达的命令错误。
 
 ### `yierdis-memory-foreign`
 
@@ -332,7 +339,7 @@ bench 也主要依赖协议和参数模块，说明它在设计上更像：
 
 ### 2. `core-command` 不能依赖 `core-db` 或 memory backend
 
-命令层只能看 `DbEngine` / `DbReads` / `DbWrites`，不能直接看 `YierdisDb`，也不能 import `yier.bubu.redis.offheap.api.*` 或依赖 `yierdis-memory-api`。
+命令层只能通过 `yierdis-storage-api` 看 `DbEngine` / `DbReads` / `DbWrites`，不能直接看 `YierdisDb`，也不能 import `yier.bubu.redis.offheap.api.*` 或依赖 `yierdis-memory-api`。
 
 这样做的目的很明确：
 
@@ -373,7 +380,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
    接收 `Session + ExecutionRequest + ReplyWriter`，创建 command context
 5. `core-command`
    通过 `CommandSpec<T>` parse 后分发到 typed handler
-6. `core-api`
+6. `storage-api`
    通过 `DbReads/DbWrites` 暴露能力边界
 7. `core-db`
    执行实际读写
@@ -400,8 +407,10 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 
 这个测试会扫描源码，确保：
 
-- `core-db/core-api/core-command` 不 import `yier.bubu.redis.protocol.*`
+- `core-db/storage-api/core-command` 不 import `yier.bubu.redis.protocol.*`
 - `core-command` 不依赖 `yierdis-memory-api`，也不 import `yier.bubu.redis.offheap.api.*`
+- `storage-api` 保持中立 contract 模块，不依赖 command、protocol、application/server、Netty、concrete storage implementation 或 memory-foreign
+- `core-api` 保持临时兼容桥形态：依赖 execution-api + storage-api，只保留 runtime/api 源码，不重新拥有 ops/offheap 源码
 - `memory-api` 保持中立 contract 模块，不依赖 command、storage implementation、protocol、runtime implementation、server/app、Netty 或 memory-foreign
 - `protocol-codec` 不依赖 `core-contract`
 - bootstrap 不重新内联 owner-thread 生命周期逻辑
@@ -442,7 +451,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 Yierdis 的模块设计重点，不是“按包名分目录”，而是：
 
 - protocol 负责线上协议
-- execution-api / core-api 负责执行契约和 DB 能力边界
+- execution-api / storage-api 负责执行契约和 DB 能力边界
 - memory-api 负责 off-heap contract 兼容面
 - core-engine 负责统一命令执行入口
 - core-db 负责真实存储
@@ -463,7 +472,7 @@ Yierdis 的模块设计重点，不是“按包名分目录”，而是：
    再知道 server 最终把请求交给哪个执行入口
 3. `yierdis-core-command`
    再知道命令是怎么被解释和分发的
-4. `yierdis-core-api`
+4. `yierdis-storage-api`
    再知道命令层到底能向 DB 要什么能力
 5. `yierdis-core-db`
    最后再进入实际存储实现
