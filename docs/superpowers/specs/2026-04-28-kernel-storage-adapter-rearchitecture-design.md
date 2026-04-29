@@ -213,9 +213,12 @@ The target architecture should make these rules obvious from module names and
 dependencies:
 
 ```text
-Command kernel/defaults depend on execution-api and storage-api.
-Storage-memory depends on storage-api and memory APIs.
-Runtime depends on storage-memory and runtime-api.
+Stable API modules expose consumer APIs and explicit SPI packages only.
+Command-kernel depends on command-api.
+Command-defaults depends on command-api, execution-api, and storage-api.
+Engine depends on execution-api, command-api/kernel, and storage-api ports only.
+Storage-memory depends on storage-api and memory APIs/SPI.
+Runtime depends on storage-memory and runtime-api, and composes command modules.
 Executor depends on execution-api only.
 Custom-v1 execution adapters depend on wire APIs and execution-api.
 Applications depend on adapters, runtime, command defaults, and executor.
@@ -223,6 +226,34 @@ Applications depend on adapters, runtime, command defaults, and executor.
 
 The old `core-*` names should be retired gradually. The destination names should
 describe architectural ownership, not historical location.
+
+## API And SPI Boundary Rules
+
+Each extracted API module must classify every exported type before it moves:
+
+- **API** is the stable consumer contract used by commands, applications,
+  adapters, or embedded users. It must be small, behavior-oriented, and free of
+  concrete implementation vocabulary.
+- **SPI** is an implementation or composition contract used by storage,
+  runtime, engine, or adapter implementations. SPI may live in the same Maven
+  artifact as the related API, but it must use an explicit `.spi` package.
+- **Internal** implementation types must stay package-private or under an
+  `.internal` package inside their owning implementation module. Production
+  modules outside that owner must not import `.internal` packages.
+
+Hard rules:
+
+- A type may become public only when at least two modules need it or when it is
+  the only clean boundary between a consumer and an implementation.
+- Moving a type into an API module requires naming its audience: command,
+  runtime, adapter, application, testkit, or implementation SPI.
+- API packages must not expose concrete class names such as `YierdisDb`, Netty
+  types, FFM implementation types, keyspace node classes, value encoding
+  classes, or command-family implementation classes.
+- SPI packages must not be imported by command-family packages or protocol wire
+  modules unless the importing module is itself an implementation adapter.
+- Each phase that adds or moves public API/SPI types must update the architecture
+  tests with an allowed-import rule and must add or move focused contract tests.
 
 ## Target Maven Structure
 
@@ -265,13 +296,22 @@ Responsibilities:
   `ReplyWriterFactory`, `Session`, `ServerSession`, `CommandContext`, and
   connection stat views.
 - `yierdis-engine`: `YierdisEngine`, `EngineSession`, default engine
-  implementation, command context construction, transaction replay entry, and
-  maintenance delegation.
+  implementation, command context construction, and execution-use-case
+  orchestration.
 
-The engine module may depend on command-kernel and command API, but it should
-receive command modules through construction rather than depending on the
-default command bundle directly. That keeps embedded runtimes and applications
-free to compose a different command set later without changing engine code.
+The engine boundary is deliberately thin. It turns `Session`,
+`ExecutionRequest`, storage ports, and a configured command processor into a
+single execution use case. It may call command-kernel for parse/dispatch and may
+construct `CommandContext`, but it must not own command registration, command
+syntax, command-family implementations, storage lifecycle, owner-thread
+lifecycle, maxmemory policy, protocol encoding, transport concerns, or
+application startup.
+
+The engine module may depend on command-kernel and command API, but it receives
+command processor/configuration objects through construction rather than
+depending on the default command bundle directly. That keeps embedded runtimes
+and applications free to compose a different command set later without changing
+engine code.
 
 Current source mapping:
 
@@ -279,7 +319,9 @@ Current source mapping:
 - `yierdis-core-engine` maps to `yierdis-engine`.
 
 `yierdis-execution-api` must not depend on command modules, storage
-implementations, protocol DTOs, Netty, or runtime implementations.
+implementations, protocol DTOs, Netty, runtime implementations, or application
+modules. Engine implementation code must not instantiate `YierdisDb`, Netty
+handlers, server bootstrap classes, or default command modules.
 
 ### Storage
 
@@ -333,6 +375,21 @@ internal package boundaries prove stable. If moving a class would force many
 package-private collaborators to become public, keep that cluster in
 `storage-memory`.
 
+`yierdis-storage-api` is a port surface, not a storage model dump. It may expose
+only command-facing DB operation ports, immutable result/status types,
+configuration enums that commands or embedded runtime genuinely need, and
+explicit SPI such as storage factory contracts. It must not expose concrete
+keyspace containers, value encodings, off-heap segment layout, eviction data
+structures, memory-accounting internals, or `YierdisDb` construction details.
+
+Maxmemory contracts must be split by audience:
+
+- command-visible policy or status types may live in storage API;
+- runtime-only participant/coordinator hooks must live in storage SPI or runtime
+  SPI;
+- storage-memory enforcement algorithms and accounting structures stay internal
+  to storage-memory.
+
 ### Commands
 
 ```text
@@ -384,16 +441,21 @@ Current source mapping:
 
 Command-family packages must not depend on concrete storage implementations.
 The `yierdis-command-defaults` module may depend on `yierdis-storage-api`,
-`yierdis-execution-api`, `yierdis-command-api`, and `yierdis-command-kernel`.
+`yierdis-execution-api`, and `yierdis-command-api`.
 
-The dependency direction is one-way:
+The dependency direction is split, not stacked:
 
 ```text
-command-defaults -> command-kernel -> command-api
+command-kernel -> command-api
+command-defaults -> command-api + execution-api + storage-api
+server-app/runtime composition -> command-kernel + command-defaults
 ```
 
-`command-kernel` must not depend on `command-defaults`. Applications or runtime
-composition code pass the default command modules into the kernel/engine.
+`command-kernel` must not depend on `command-defaults`, and
+`command-defaults` must not depend on `command-kernel`. Applications or runtime
+composition code pass the default command modules into the kernel/engine. A
+default command family implements command API contracts; it does not register
+itself by reaching into kernel internals.
 
 ### Runtime
 
@@ -552,17 +614,18 @@ The architecture-test module should enforce at least these rules:
 - `yierdis-execution-api` imports no protocol, command, storage implementation,
   runtime implementation, application, or Netty packages.
 - `yierdis-engine` may import execution API, command API/kernel, and storage API
-  abstractions, but must not import command-defaults, concrete storage
-  implementations, protocol adapters, runtime implementations, applications, or
-  Netty packages.
+  ports, but must not import command-defaults, concrete storage implementations,
+  protocol adapters, runtime implementations, applications, Netty packages, or
+  storage-memory internal packages.
 - `yierdis-command-api` imports no storage implementation, protocol, runtime
   implementation, application, or Netty packages.
 - `yierdis-command-kernel` imports no concrete storage implementation packages
   and no command-defaults packages.
 - `yierdis-command-defaults` imports no concrete storage implementation
-  packages.
+  packages and no command-kernel packages.
 - `yierdis-storage-api` imports no command, protocol, application, or Netty
-  packages, and no concrete storage implementation packages.
+  packages, no concrete storage implementation packages, and no
+  storage-memory internal packages.
 - `yierdis-memory-api` imports no storage implementation, command, protocol,
   runtime implementation, application, or Netty packages.
 - `yierdis-storage-memory` imports no command implementation packages and no
@@ -586,6 +649,68 @@ The architecture-test module should enforce at least these rules:
   should prevent it from constructing command contexts, parsing command syntax,
   or directly using storage internals.
 
+All modules outside the owner of an `.internal` package must fail architecture
+tests if they import that package. All SPI imports must be allowlisted by module
+and package; accidental SPI imports count as architecture violations.
+
+## Architecture Guard Mechanism
+
+The architecture-test module is an enforcement layer, not a documentation
+mirror. It should maintain a small dependency policy table that names, for each
+module:
+
+- allowed Maven dependencies;
+- allowed production import package prefixes;
+- forbidden package prefixes, especially `.internal` packages;
+- allowed SPI package imports;
+- source-ownership assertions that prevent high-risk behavior from moving back
+  into broad modules.
+
+Guard implementation should become stronger over time:
+
+1. Phase 0 may keep the current source-string scans while moving them out of
+   `core-runtime`.
+2. Module-split phases must add POM dependency checks for newly created modules.
+3. Package-split phases must add import-prefix allowlist checks, not only
+   forbidden-string checks.
+4. Final phases should prefer structured checks such as parsed Java imports,
+   Maven dependency graph assertions, or `jdeps`/ArchUnit-style checks where
+   practical.
+
+Architecture tests must fail when a guarded source root is missing. A missing
+module or skipped scan is a broken guard, not a passing condition.
+
+## Migration Compatibility Strategy
+
+Each phase must be reversible by reverting that phase alone. To keep that true,
+implementation plans must follow these rules:
+
+- Do not mix behavior changes with module moves. A phase may move ownership or
+  change behavior, but not both, unless the behavior change has its own focused
+  spec and tests.
+- Create the new module and guard rules first, then migrate one ownership area,
+  then remove old imports. Do not delete old module names until no production
+  module depends on them.
+- Temporary bridge modules or deprecated facades are allowed for one migration
+  phase when they reduce review risk. They must contain no business logic and
+  must have a documented removal phase.
+- Package renames and artifactId renames must preserve test coverage before and
+  after the move. A rename-only commit should be reviewable without semantic
+  changes.
+- Every phase must name its compatibility surface: old artifactId, old package,
+  public type, CLI behavior, wire behavior, or none.
+- Every phase must name its rollback point and the tests that prove rollback is
+  safe.
+
+The default implementation pattern is:
+
+1. Add target module with minimal API/SPI and guard tests.
+2. Move or duplicate contracts behind temporary adapters if needed.
+3. Move implementations in the smallest coherent cluster.
+4. Update consumers to the target module.
+5. Remove temporary bridge code once production dependencies no longer require
+   it.
+
 ## Migration Phases
 
 ### Phase 0: Move Architecture And Integration Tests First
@@ -608,6 +733,8 @@ Acceptance criteria:
 - Runtime module tests cover runtime behavior, not whole-repo architecture.
 - Architecture tests enforce the current dependency rules before other modules
   move.
+- Architecture tests include a policy table for Maven dependencies, allowed
+  imports, forbidden imports, SPI imports, and source-ownership assertions.
 - Integration tests cover server/client/protocol/runtime command paths.
 - The shared scanning helpers move with the architecture-test module, so later
   phases update one guard-test home instead of keeping `core-runtime` as the
@@ -633,9 +760,13 @@ Acceptance criteria:
 - Engine, executor, command, protocol execution adapter, and server code compile
   against `yierdis-execution-api`.
 - No protocol DTO moves into execution API.
+- Every public execution API/SPI type is classified by audience before it moves.
 - Architecture guards assert that execution API has no dependency on protocol,
   command implementation, storage implementation, runtime implementation,
   application, or Netty.
+- Architecture guards assert that engine imports no command-defaults,
+  storage-memory, protocol adapter, runtime implementation, application, or
+  Netty packages.
 
 ### Phase 1b: Extract Storage API And Memory API
 
@@ -649,8 +780,8 @@ Scope:
 - Move command-facing DB operation contracts out of `yierdis-core-api`.
 - Move off-heap contracts out of `yierdis-core-api`.
 - Keep runtime-specific contracts in place for this phase.
-- Classify maxmemory contracts explicitly as storage API or storage-memory
-  implementation contracts.
+- Classify maxmemory contracts explicitly as storage API, storage SPI, runtime
+  SPI, or storage-memory implementation contracts.
 
 Acceptance criteria:
 
@@ -658,6 +789,9 @@ Acceptance criteria:
 - Command modules depend on storage API but not memory API unless a concrete
   command genuinely requires a memory contract.
 - Storage implementation modules depend on memory API and storage API.
+- Public storage API exposes operation ports, immutable result/status types, and
+  explicit SPI only; concrete keyspace/value/maxmemory/accounting structures
+  stay inside storage-memory.
 - Architecture guards assert that storage API has no command, protocol,
   application, Netty, or concrete storage implementation imports.
 - Architecture guards assert that memory API has no storage implementation,
@@ -682,6 +816,8 @@ Acceptance criteria:
 - Runtime modules depend on runtime API and storage API.
 - Runtime API may depend on storage API abstractions, but not on
   `yierdis-storage-memory`.
+- Runtime-only storage hooks are classified as runtime API, runtime SPI, storage
+  SPI, or storage-memory internal before they move.
 - Architecture guards assert that runtime API has no storage implementation,
   command implementation, protocol adapter, Netty, or application imports.
 
@@ -713,6 +849,8 @@ Acceptance criteria:
 - Execution adapter imports no Netty packages.
 - Netty handlers are thin wrappers around wire decoding and the pure execution
   adapter.
+- Wire DTO to `ExecutionRequest` mapping and `ReplyWriter` to NDJSON encoding
+  have golden tests in the adapter module.
 - Server-app no longer owns protocol-specific reply writer implementation.
 - Client and bench consume wire/netty modules directly.
 
@@ -734,6 +872,11 @@ Acceptance criteria:
 
 - Server-app may depend on many modules, but does not own command parsing,
   storage internals, protocol wire internals, or executor algorithms.
+- Server-app does not construct command contexts, instantiate command processors
+  directly, implement protocol reply encoders, or import storage-memory internal
+  packages.
+- Server-only commands are isolated behind an explicit server-local command
+  module or package and do not leak into transport-neutral command-defaults.
 - Existing smoke scripts still start server and run CLI commands successfully.
 - Packaging still produces runnable server and client jars.
 
@@ -752,8 +895,11 @@ Scope:
 
 Acceptance criteria:
 
-- `yierdis-command-defaults` depends on storage API, execution API, command API,
-  and command kernel, but not concrete storage implementations.
+- `yierdis-command-kernel` depends on command API but not command-defaults.
+- `yierdis-command-defaults` depends on storage API, execution API, and command
+  API, but not command-kernel or concrete storage implementations.
+- Runtime/server composition wires command-defaults into command-kernel; command
+  family packages do not self-register through kernel internals.
 - Adding a new command family usually means adding a package and updating the
   default bundle registration, not editing registry or processor internals.
 - Transaction syntax validation and replay still pass existing tests.
@@ -887,9 +1033,10 @@ Target:
 
 - Server runtime config belongs to `yierdis-server-app`.
 - Protocol limits belong to `yierdis-custom-v1-wire`.
-- Storage policies such as `MaxmemoryPolicy` belong either to storage API or to
-  storage-memory internals, depending on whether command/runtime code must see
-  them.
+- Storage policies such as `MaxmemoryPolicy` belong to storage API only if
+  commands or embedded runtime consumers need them; runtime-only hooks belong to
+  runtime/storage SPI, and storage enforcement details stay in storage-memory
+  internals.
 - Shared CLI parsing helpers belong to `yierdis-cli-common`.
 - Bench-specific options belong to `yierdis-bench`.
 
@@ -921,6 +1068,15 @@ Each migration phase needs three test layers:
 - focused unit tests in the owning module;
 - integration tests for request execution and server/client paths;
 - architecture tests for dependency and source-ownership rules.
+
+Architecture tests must cover four mechanisms:
+
+- Maven dependency assertions for forbidden artifact edges;
+- import-prefix allowlists and forbidden-import checks for production source;
+- API/SPI surface checks for public types and `.internal` package imports;
+- high-risk source ownership checks for command parsing, command context
+  construction, protocol reply encoding, storage internals, and server-app
+  composition.
 
 Recommended final verification after each major phase:
 
@@ -960,6 +1116,29 @@ Mitigation:
 - Prefer moving cohesive clusters together.
 - Introduce narrow interfaces before splitting modules.
 - Keep implementation packages package-private until a clean seam exists.
+- Classify each exported type as API, SPI, or internal before moving it.
+- Reject moves that expose storage-memory data structures only to make Maven
+  compilation pass.
+
+### Risk: Engine becomes the new broad core module
+
+Mitigation:
+
+- Keep engine as an execution-use-case orchestrator.
+- Put command parsing/registration in command-kernel, lifecycle in runtime,
+  storage maintenance in storage/runtime, and protocol encoding in adapters.
+- Add architecture guards forbidding engine imports of command-defaults,
+  storage-memory, protocol adapters, runtime implementations, applications, and
+  Netty.
+
+### Risk: Command-defaults couples to kernel internals
+
+Mitigation:
+
+- Make command-defaults implement command API contracts only.
+- Wire command-defaults into command-kernel from runtime/server composition.
+- Add guards forbidding command-defaults imports of command-kernel and
+  command-kernel imports of command-defaults.
 
 ### Risk: Protocol codec depending on execution API feels like a layering
 change
@@ -978,6 +1157,9 @@ Mitigation:
 - Update docs in each phase, not only at the end.
 - Keep compatibility aggregators temporarily if needed, but do not leave them as
   permanent aliases.
+- Each temporary bridge or facade must have a documented removal phase.
+- Each phase plan must name old artifact/package compatibility and rollback
+  points before source moves begin.
 
 ### Risk: The rearchitecture delays feature work
 
@@ -996,14 +1178,23 @@ Mitigation:
   command family or storage-internal concern up front.
 - `core-api`, `core-command`, `core-db`, and `server` no longer act as broad
   conceptual buckets.
+- Public contracts are classified as API or SPI, `.internal` packages are not
+  imported outside their owner, and API modules do not expose implementation
+  vocabulary.
+- Engine remains an execution-use-case orchestrator and does not own command
+  registration, storage lifecycle, maxmemory policy, protocol encoding,
+  transport concerns, or application startup.
 - Command-defaults and its command-family packages compile without concrete
-  storage implementation dependencies.
+  storage implementation dependencies and without command-kernel dependencies.
 - Executor-core compiles without command, storage, runtime, protocol, Netty, or
   app dependencies.
 - Custom Protocol v1 wire and execution adapter modules own request codec and
   execution reply codec.
 - Server-app is a composition root with minimal business logic.
-- Architecture tests enforce the new dependency rules.
+- Architecture tests enforce Maven dependency rules, import allowlists, API/SPI
+  surface rules, `.internal` package ownership, and high-risk source ownership.
+- Temporary compatibility bridges or deprecated facades have been removed or have
+  a documented removal phase with no business logic inside the bridge.
 - Existing command behavior, Custom Protocol v1 behavior, server/client smoke
   behavior, maxmemory behavior, TTL behavior, and FFM memory tests pass.
 - Documentation reflects the new architecture and no longer describes the old
