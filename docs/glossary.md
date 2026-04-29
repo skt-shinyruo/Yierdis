@@ -138,7 +138,7 @@ server 侧真正执行命令的处理器。它负责：
 
 指 runtime 层暴露给 server 的那条“受控接缝”。比如 owner-thread 绑定、maintenance 调度、关闭过程，不希望 server 直接向下转型或内联细节，而是通过 runtime seam 协作。
 
-### `ServerConnectionContext`
+### `NettyExecutionConnection`
 
 连接级状态总入口。它把下面这些连接态放在一起：
 

@@ -159,8 +159,8 @@ policy 有三种：
 2. 用 runtime config 组出 `YierdisInstanceConfig`
 3. 创建 `YierdisInstance`
 4. 创建 `NettyServerInfoProvider`
-5. 创建 `YierdisFastCommandProcessor`
-6. 创建 `NettyCommandExecutor`
+5. 创建 `DefaultYierdisEngine`
+6. 创建 `CommandExecutor`
 7. 启动 executor，并在 owner thread 绑定 runtime
 8. 如果开启清理任务，则调度 maintenance tick
 9. 装配 Netty pipeline
@@ -335,11 +335,11 @@ policy 有三种：
    看参数解析、归一化和失败路径
 2. `YierdisServerBootstrapCommandWiringTest`
    看 runtime config 如何真正装进 pipeline 和 observability
-3. `NettyCommandExecutorBackpressureTest`
+3. `CommandExecutorBackpressureTest`
    看队列满、背压进入和恢复
-4. `NettyCommandExecutorTest`
+4. `CommandExecutorTest`
    看执行器主流程
-5. `NettyCommandExecutorFairSchedulingTest`
+5. `CommandExecutorFairSchedulingTest`
    看 `fair` 调度语义
 6. `MemoryStatsCommandTest`
    看内存观测字段是否稳定

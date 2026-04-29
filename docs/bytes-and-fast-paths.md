@@ -168,7 +168,7 @@ Yierdis 选择的是中间路线：
 1. `ReplyWriterFactory` 和协议编码器可以保持 Netty-free 接口风格
 2. 当下游真的是 `ByteBuf` 时，又能通过 `hasMemoryAddress()/memoryAddress()` 等能力走 fast-path
 
-这也是为什么 `NettyCommandExecutionSupport.newReplyWriter(...)` 会把 `ByteBuf` 包成：
+这也是为什么 server-app 的 `NettyExecutionIoAdapter` 会把 `ByteBuf` 包成：
 
 - `new NettyByteBufSink(out)`
 
@@ -241,7 +241,7 @@ Yierdis 选择的是中间路线：
 - `YierdisStringOps`
 - `CustomProtocolV1NdjsonEncoder`
 - `JsonLineReplyWriter`
-- `NettyCommandExecutionSupport`
+- `NettyExecutionIoAdapter`
 
 ## 最值得看的测试
 

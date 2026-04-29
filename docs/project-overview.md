@@ -138,8 +138,8 @@ Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格�
 2. 启动前调用 `ForeignMemoryAutoModules.ensureFfmAvailable()`，确保当前 JVM 支持 `java.lang.foreign`
 3. `YierdisServerBootstrap` 把 `ServerConfig` 转成 runtime config
 4. 基于 runtime config 创建 `YierdisInstance`
-5. 基于 instance 和 server 观测信息创建 `YierdisFastCommandProcessor`
-6. 基于 command processor 创建 `NettyCommandExecutor`
+5. 基于 instance 和 server 观测信息创建 `DefaultYierdisEngine`
+6. 基于 engine 创建 `CommandExecutor`
 7. 启动 executor，把 DB 绑定到 executor 线程
 8. 创建 Netty 的 boss / worker group 和 channel pipeline
 9. `bind(port)` 后进入正常工作状态
