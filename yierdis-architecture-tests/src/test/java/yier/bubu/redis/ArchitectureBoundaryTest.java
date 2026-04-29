@@ -607,6 +607,33 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("architecture policy must name yierdis-execution-api", policy.contains("yierdis-execution-api:"));
         Assert.assertTrue("architecture policy must forbid Netty imports from execution API", policy.contains("io.netty"));
 
+        Path packageInfo = workspaceRoot.resolve(
+                "yierdis-execution/yierdis-execution-api/src/main/java/yier/bubu/redis/contract/package-info.java"
+        ).normalize();
+        Assert.assertTrue("execution API contracts must document API/SPI audience in package-info.java", Files.isRegularFile(packageInfo));
+        String packageInfoText = Files.readString(packageInfo, StandardCharsets.UTF_8);
+        for (String requiredClassification : List.of(
+                "ExecutionRequest - API",
+                "ByteArrayExecutionRequest - API",
+                "ExecutionRecord - API",
+                "ReplySink - API",
+                "ReplyWriter - API",
+                "ReplyWriterFactory - API",
+                "Session - API",
+                "ServerSession - API",
+                "DbIndexProvider - API",
+                "ConnectionStatsProvider - API",
+                "ConnectionStatsView - API",
+                "TransactionState - API",
+                "CommandContext - API",
+                "Command - compatibility/deprecated"
+        )) {
+            Assert.assertTrue(
+                    "execution API package-info.java must classify " + requiredClassification,
+                    packageInfoText.contains(requiredClassification)
+            );
+        }
+
         String pom = Files.readString(apiPom, StandardCharsets.UTF_8);
         for (String forbiddenDependency : List.of(
                 "<artifactId>yierdis-core-command</artifactId>",
@@ -650,6 +677,70 @@ public class ArchitectureBoundaryTest {
         if (!offenders.isEmpty()) {
             Assert.fail(
                     "检测到 yierdis-execution-api 依赖协议、命令实现、存储实现、运行时实现、应用或 Netty：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void coreEngineMustAvoidFutureProhibitedImplementationFamilies() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
+
+        Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
+        Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
+        String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
+        Assert.assertTrue("architecture policy must name yierdis-core-engine", policy.contains("yierdis-core-engine:"));
+        Assert.assertTrue("architecture policy must forbid server imports from core engine", policy.contains("yier.bubu.redis.server"));
+        Assert.assertTrue("architecture policy must forbid Netty imports from core engine", policy.contains("io.netty"));
+
+        Path enginePom = repoRoot.resolve("yierdis-core-engine/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-core-engine/pom.xml", Files.isRegularFile(enginePom));
+        String pom = Files.readString(enginePom, StandardCharsets.UTF_8);
+        for (String forbiddenDependency : List.of(
+                "<artifactId>yierdis-protocol-model</artifactId>",
+                "<artifactId>yierdis-protocol-codec</artifactId>",
+                "<artifactId>yierdis-protocol-netty</artifactId>",
+                "<artifactId>yierdis-core-db</artifactId>",
+                "<artifactId>yierdis-core-runtime</artifactId>",
+                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-memory-foreign</artifactId>",
+                "<artifactId>yierdis-bytes-netty</artifactId>",
+                "<artifactId>netty-all</artifactId>"
+        )) {
+            Assert.assertFalse(
+                    "yierdis-core-engine must not depend on future-prohibited implementation/module dependency "
+                            + forbiddenDependency,
+                    pom.contains(forbiddenDependency)
+            );
+        }
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-engine/src/main/java").normalize(),
+                offenders,
+                "import yier.bubu.redis.command.defaults.",
+                "yier.bubu.redis.command.defaults.",
+                "import yier.bubu.redis.storage.",
+                "yier.bubu.redis.storage.",
+                "import yier.bubu.redis.protocol.",
+                "yier.bubu.redis.protocol.",
+                "import yier.bubu.redis.runtime.",
+                "yier.bubu.redis.runtime.",
+                "import yier.bubu.redis.server.",
+                "yier.bubu.redis.server.",
+                "import yier.bubu.redis.db.",
+                "yier.bubu.redis.db.",
+                "import io.netty.",
+                "io.netty."
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-core-engine Java 文件", scanned > 0);
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 yierdis-core-engine 依赖 command-defaults、storage-memory、protocol adapter、runtime implementation、application/server、Netty 或 concrete DB runtime：\n"
                             + String.join("\n", offenders)
             );
         }
