@@ -1224,6 +1224,81 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void runtimeChangeTrackingSpiImportsMustBeAllowlisted() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
+
+        Path commandRoot = repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command").normalize();
+        Path dbRoot = repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db").normalize();
+        List<Path> allowedRoots = List.of(commandRoot, dbRoot);
+
+        Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
+        Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
+        String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
+        String commandPolicy = policySection(policy, "yierdis-core-command");
+        String dbPolicy = policySection(policy, "yierdis-core-db");
+
+        for (String policySection : List.of(commandPolicy, dbPolicy)) {
+            Assert.assertTrue(
+                    "runtime change tracking SPI consumers must name allowed_spi_imports",
+                    policySection.contains("allowed_spi_imports:")
+            );
+            Assert.assertTrue(
+                    "runtime change tracking SPI consumers must explicitly allowlist YierdisChangeTracking",
+                    policySection.contains("yier.bubu.redis.runtime.api.YierdisChangeTracking")
+            );
+        }
+        Assert.assertTrue(
+                "core-command SPI allowlist must name the command production source path",
+                commandPolicy.contains("yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command")
+        );
+        Assert.assertTrue(
+                "core-db SPI allowlist must name the DB production source path",
+                dbPolicy.contains("yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db")
+        );
+
+        List<String> offenders = new ArrayList<>();
+        List<String> allowedImports = new ArrayList<>();
+        Path importRoot = workspaceRoot.normalize();
+        try (Stream<Path> paths = Files.walk(importRoot)) {
+            paths.filter(p -> p != null
+                            && p.toString().endsWith(".java")
+                            && p.normalize().toString().contains("/src/main/java/"))
+                    .sorted()
+                    .forEach(file -> {
+                        try {
+                            String source = Files.readString(file, StandardCharsets.UTF_8);
+                            if (!source.contains("import yier.bubu.redis.runtime.api.YierdisChangeTracking;")) {
+                                return;
+                            }
+                            Path normalized = file.normalize();
+                            boolean allowed = allowedRoots.stream().anyMatch(root -> isUnder(normalized, root));
+                            String relative = workspaceRoot.relativize(normalized).toString().replace('\\', '/');
+                            if (allowed) {
+                                allowedImports.add(relative);
+                            } else {
+                                offenders.add(relative);
+                            }
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+        }
+
+        Assert.assertFalse(
+                "runtime change tracking SPI guard expected production imports in command/db modules",
+                allowedImports.isEmpty()
+        );
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 YierdisChangeTracking SPI import 出现在未 allowlist 的生产模块/路径：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
     public void coreApiMustRemainCompatibilityBridge() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
@@ -1261,6 +1336,48 @@ public class ArchitectureBoundaryTest {
                     scanned
             );
         }
+    }
+
+    @Test
+    public void coreRuntimeMustDeclareRuntimeApiBoundary() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
+
+        Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
+        Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
+        String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
+        String coreRuntimePolicy = policySection(policy, "yierdis-core-runtime");
+        Assert.assertTrue(
+                "core-runtime policy must declare allowed production dependencies",
+                coreRuntimePolicy.contains("allowed_dependencies:")
+        );
+        for (String allowedDependency : List.of(
+                "yierdis-core-db",
+                "yierdis-storage-api",
+                "yierdis-runtime-api"
+        )) {
+            Assert.assertTrue(
+                    "core-runtime policy must allow direct dependency " + allowedDependency,
+                    coreRuntimePolicy.contains(allowedDependency)
+            );
+        }
+
+        Path runtimePom = repoRoot.resolve("yierdis-core-runtime/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-core-runtime/pom.xml", Files.isRegularFile(runtimePom));
+        String pom = Files.readString(runtimePom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "yierdis-core-runtime must declare yierdis-storage-api directly for runtime lifecycle/storage boundaries",
+                pom.contains("<artifactId>yierdis-storage-api</artifactId>")
+        );
+        Assert.assertTrue(
+                "yierdis-core-runtime must declare yierdis-runtime-api directly for embedded runtime config contracts",
+                pom.contains("<artifactId>yierdis-runtime-api</artifactId>")
+        );
+        Assert.assertFalse(
+                "yierdis-core-runtime must not rely on yierdis-core-api for runtime API contracts",
+                pom.contains("<artifactId>yierdis-core-api</artifactId>")
+        );
     }
 
     @Test
@@ -2053,6 +2170,10 @@ public class ArchitectureBoundaryTest {
             return String.valueOf(file);
         }
         return repoRoot.relativize(file).toString().replace('\\', '/');
+    }
+
+    private static boolean isUnder(Path file, Path root) {
+        return file != null && root != null && file.normalize().startsWith(root.normalize());
     }
 
     private static Path resolveRepoRoot() {
