@@ -35,8 +35,7 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-server</artifactId>
-            <version>${project.version}</version>
+            <artifactId>yierdis-server-app</artifactId>
             <scope>test</scope>
         </dependency>
 

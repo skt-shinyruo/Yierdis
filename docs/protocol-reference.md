@@ -148,7 +148,7 @@ CustomRequestDecoder
 
 - `yierdis-protocol/.../CustomRequestDecoder.java`
 - `yierdis-protocol/.../CustomProtocolV1RequestPayloadParser.java`
-- `yierdis-server/.../ProtocolCommandAdapter.java`
+- `yierdis-app/yierdis-server-app/.../ProtocolCommandAdapter.java`
 
 ## Reply Format
 

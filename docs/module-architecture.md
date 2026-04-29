@@ -307,7 +307,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 ## 最外层壳子
 
-### `yierdis-server`
+### `yierdis-server-app`
 
 这是唯一真正把 protocol lane 和 core lane 拼起来的模块。
 
@@ -500,7 +500,7 @@ Yierdis 的模块设计重点，不是“按包名分目录”，而是：
 
 如果你想把模块和代码逻辑一起读懂，建议按这个顺序：
 
-1. `yierdis-server`
+1. `yierdis-server-app`
    先知道项目怎么启动、怎么收请求
 2. `yierdis-core-engine`
    再知道 server 最终把请求交给哪个执行入口

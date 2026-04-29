@@ -89,7 +89,7 @@ public class ArchitectureBoundaryTest {
                 "yierdis-core-command/src/main/java/yier/bubu/redis/command/ServerCommands.java"
         );
         if (Files.exists(serverCommands)) {
-            offenders.add(relativePath(repoRoot, serverCommands) + " (server-facing commands should live in yierdis-server)");
+            offenders.add(relativePath(repoRoot, serverCommands) + " (server-facing commands should live in yierdis-server-app)");
         }
 
         Path processorFile = repoRoot.resolve(
@@ -159,7 +159,7 @@ public class ArchitectureBoundaryTest {
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 server-facing commands 回流到 core 默认装配（这些命令应由 yierdis-server 组装）：\n"
+                    "检测到 server-facing commands 回流到 core 默认装配（这些命令应由 yierdis-server-app 组装）：\n"
                             + String.join("\n", offenders)
             );
         }
@@ -365,7 +365,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java").normalize(),
+                repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java").normalize(),
                 offenders,
                 "SimpleChannelInboundHandler<Command>"
         );
@@ -401,7 +401,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFilesMatchingRegex(
                 repoRoot,
-                repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis").normalize(),
+                repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis").normalize(),
                 offenders,
                 "registration\\.register\\(\\s*\"[A-Z0-9_]+\"\\s*,\\s*this::",
                 "registration\\.registerDisallowedInMulti\\("
@@ -426,7 +426,7 @@ public class ArchitectureBoundaryTest {
         );
         scanForForbiddenText(
                 repoRoot,
-                repoRoot.getParent().resolve("yierdis-server/src/main/java").normalize(),
+                repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java").normalize(),
                 offenders,
                 "import yier.bubu.redis.contract.Command;",
                 "SimpleChannelInboundHandler<Command>",
@@ -535,7 +535,7 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
-        Path serverRoot = repoRoot.getParent().resolve("yierdis-server/src/main/java").normalize();
+        Path serverRoot = repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java").normalize();
         Path serverCommandModule = serverRoot.resolve("yier/bubu/redis/ServerCommandModule.java").normalize();
         List<Path> allowedServerFiles = List.of(serverCommandModule);
 
@@ -624,7 +624,7 @@ public class ArchitectureBoundaryTest {
                 "<artifactId>yierdis-core-runtime</artifactId>",
                 "<artifactId>yierdis-runtime-api</artifactId>",
                 "<artifactId>yierdis-storage-api</artifactId>",
-                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-server-app</artifactId>",
                 "<artifactId>yierdis-bytes-netty</artifactId>",
                 "<artifactId>netty-all</artifactId>"
         )) {
@@ -637,7 +637,7 @@ public class ArchitectureBoundaryTest {
                 "<artifactId>yierdis-core-runtime</artifactId>",
                 "<artifactId>yierdis-runtime-api</artifactId>",
                 "<artifactId>yierdis-storage-api</artifactId>",
-                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-server-app</artifactId>",
                 "<artifactId>yierdis-bytes-netty</artifactId>",
                 "<artifactId>netty-all</artifactId>"
         )) {
@@ -650,7 +650,7 @@ public class ArchitectureBoundaryTest {
                 "<artifactId>yierdis-core-runtime</artifactId>",
                 "<artifactId>yierdis-runtime-api</artifactId>",
                 "<artifactId>yierdis-storage-api</artifactId>",
-                "<artifactId>yierdis-server</artifactId>"
+                "<artifactId>yierdis-server-app</artifactId>"
         )) {
             Assert.assertFalse("custom-v1-netty must not depend on " + forbiddenDependency, nettyPom.contains(forbiddenDependency));
         }
@@ -719,11 +719,11 @@ public class ArchitectureBoundaryTest {
 
         Assert.assertFalse(
                 "server production code must not own JsonLineReplyWriter implementation",
-                Files.isRegularFile(workspaceRoot.resolve("yierdis-server/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java"))
+                Files.isRegularFile(workspaceRoot.resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java"))
         );
         Assert.assertFalse(
                 "server production code must not own ProtocolCommandAdapter implementation",
-                Files.isRegularFile(workspaceRoot.resolve("yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java"))
+                Files.isRegularFile(workspaceRoot.resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java"))
         );
     }
 
@@ -794,7 +794,7 @@ public class ArchitectureBoundaryTest {
                 "<artifactId>yierdis-protocol-model</artifactId>",
                 "<artifactId>yierdis-protocol-codec</artifactId>",
                 "<artifactId>yierdis-protocol-netty</artifactId>",
-                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-server-app</artifactId>",
                 "<artifactId>yierdis-memory-foreign</artifactId>",
                 "<artifactId>yierdis-bytes-netty</artifactId>",
                 "<artifactId>netty-all</artifactId>"
@@ -888,7 +888,7 @@ public class ArchitectureBoundaryTest {
                 "yierdis-protocol-model",
                 "yierdis-protocol-codec",
                 "yierdis-protocol-netty",
-                "yierdis-server",
+                "yierdis-server-app",
                 "yierdis-memory-foreign",
                 "yierdis-bytes-netty",
                 "netty-all",
@@ -925,7 +925,7 @@ public class ArchitectureBoundaryTest {
                 "<artifactId>yierdis-protocol-model</artifactId>",
                 "<artifactId>yierdis-protocol-codec</artifactId>",
                 "<artifactId>yierdis-protocol-netty</artifactId>",
-                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-server-app</artifactId>",
                 "<artifactId>yierdis-memory-foreign</artifactId>",
                 "<artifactId>yierdis-bytes-netty</artifactId>",
                 "<artifactId>netty-all</artifactId>"
@@ -1020,7 +1020,7 @@ public class ArchitectureBoundaryTest {
                 "yierdis-protocol-model",
                 "yierdis-protocol-codec",
                 "yierdis-protocol-netty",
-                "yierdis-server",
+                "yierdis-server-app",
                 "yierdis-memory-foreign",
                 "yierdis-bytes-netty",
                 "netty-all",
@@ -1058,7 +1058,7 @@ public class ArchitectureBoundaryTest {
                 "<artifactId>yierdis-protocol-model</artifactId>",
                 "<artifactId>yierdis-protocol-codec</artifactId>",
                 "<artifactId>yierdis-protocol-netty</artifactId>",
-                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-server-app</artifactId>",
                 "<artifactId>yierdis-memory-foreign</artifactId>",
                 "<artifactId>yierdis-bytes-netty</artifactId>",
                 "<artifactId>netty-all</artifactId>"
@@ -1212,7 +1212,7 @@ public class ArchitectureBoundaryTest {
                 "yierdis-protocol-model",
                 "yierdis-protocol-codec",
                 "yierdis-protocol-netty",
-                "yierdis-server",
+                "yierdis-server-app",
                 "yierdis-memory-foreign",
                 "yierdis-bytes-netty",
                 "netty-all",
@@ -1252,7 +1252,7 @@ public class ArchitectureBoundaryTest {
                 "<artifactId>yierdis-protocol-model</artifactId>",
                 "<artifactId>yierdis-protocol-codec</artifactId>",
                 "<artifactId>yierdis-protocol-netty</artifactId>",
-                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-server-app</artifactId>",
                 "<artifactId>yierdis-memory-foreign</artifactId>",
                 "<artifactId>yierdis-bytes-netty</artifactId>",
                 "<artifactId>netty-all</artifactId>"
@@ -1545,7 +1545,7 @@ public class ArchitectureBoundaryTest {
                 "<artifactId>yierdis-protocol-netty</artifactId>",
                 "<artifactId>yierdis-core-db</artifactId>",
                 "<artifactId>yierdis-core-runtime</artifactId>",
-                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-server-app</artifactId>",
                 "<artifactId>yierdis-memory-foreign</artifactId>",
                 "<artifactId>yierdis-bytes-netty</artifactId>",
                 "<artifactId>netty-all</artifactId>"
@@ -1616,7 +1616,7 @@ public class ArchitectureBoundaryTest {
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
                 repoRoot,
-                repoRoot.getParent().resolve("yierdis-server/src/main/java"),
+                repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java"),
                 offenders,
                 "ReplyValue.",
                 "ReplyArray(",
@@ -1746,7 +1746,7 @@ public class ArchitectureBoundaryTest {
         );
         Assert.assertTrue("缺少 YierdisInstanceRuntimeAccess.java，无法约束 bootstrap 生命周期边界", Files.isRegularFile(runtimeAccessFile));
 
-        Path bootstrapFile = repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java").normalize();
+        Path bootstrapFile = repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java").normalize();
         Assert.assertTrue("缺少 YierdisServerBootstrap.java", Files.isRegularFile(bootstrapFile));
 
         List<String> offenders = new ArrayList<>();
@@ -1774,7 +1774,7 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
-        Path infoProviderFile = repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis/NettyServerInfoProvider.java").normalize();
+        Path infoProviderFile = repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyServerInfoProvider.java").normalize();
         Assert.assertTrue("缺少 NettyServerInfoProvider.java", Files.isRegularFile(infoProviderFile));
 
         List<String> offenders = new ArrayList<>();
@@ -1844,7 +1844,7 @@ public class ArchitectureBoundaryTest {
         );
 
         Path bootstrapFile = repoRoot.getParent().resolve(
-                "yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java"
+                "yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java"
         ).normalize();
         Assert.assertTrue("缺少 YierdisServerBootstrap.java", Files.isRegularFile(bootstrapFile));
 
@@ -1875,18 +1875,91 @@ public class ArchitectureBoundaryTest {
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
                 repoRoot,
-                repoRoot.getParent().resolve("yierdis-server/src/main/java").normalize(),
+                repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java").normalize(),
                 offenders,
                 "import yier.bubu.redis.command.YierdisFastCommandProcessor;",
                 "new YierdisFastCommandProcessor(",
                 "new CommandContext(",
                 ".execute(request, new CommandContext"
         );
-        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server Java 文件", scanned > 0);
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server-app Java 文件", scanned > 0);
 
         if (!offenders.isEmpty()) {
             Assert.fail(
                     "检测到 server 生产代码绕过 YierdisEngine 构造命令处理器或命令上下文：\n"
+                    + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void serverAppMustReplaceLegacyServerArtifactAndAvoidStorageInternals() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
+
+        Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
+        Assert.assertTrue("缺少 root pom.xml", Files.isRegularFile(rootPom));
+        String rootPomText = Files.readString(rootPom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "root pom.xml must aggregate yierdis-app/yierdis-server-app",
+                rootPomText.contains("<module>yierdis-app/yierdis-server-app</module>")
+        );
+        Assert.assertFalse(
+                "root pom.xml must not keep legacy yierdis-server module",
+                rootPomText.contains("<module>yierdis-server</module>")
+        );
+        Assert.assertFalse(
+                "root dependencyManagement must not keep legacy yierdis-server artifact",
+                rootPomText.contains("<artifactId>yierdis-server</artifactId>")
+        );
+        Assert.assertTrue(
+                "root dependencyManagement must expose yierdis-server-app artifact",
+                rootPomText.contains("<artifactId>yierdis-server-app</artifactId>")
+        );
+
+        Path legacyServerDir = workspaceRoot.resolve("yierdis-server").normalize();
+        Assert.assertFalse("legacy yierdis-server directory must be retired", Files.exists(legacyServerDir));
+
+        Path serverAppPom = workspaceRoot.resolve("yierdis-app/yierdis-server-app/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-app/yierdis-server-app/pom.xml", Files.isRegularFile(serverAppPom));
+        String serverAppPomText = Files.readString(serverAppPom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "server-app pom must declare yierdis-server-app artifactId",
+                serverAppPomText.contains("<artifactId>yierdis-server-app</artifactId>")
+        );
+        Assert.assertTrue(
+                "server-app pom must keep the runnable server main class",
+                serverAppPomText.contains("<mainClass>yier.bubu.redis.YierdisServer</mainClass>")
+        );
+
+        Path clientPom = workspaceRoot.resolve("yierdis-client/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-client/pom.xml", Files.isRegularFile(clientPom));
+        String clientPomText = Files.readString(clientPom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "client tests must depend on yierdis-server-app for process-boundary smoke coverage",
+                clientPomText.contains("<artifactId>yierdis-server-app</artifactId>")
+        );
+        Assert.assertFalse(
+                "client pom must not depend on legacy yierdis-server artifact",
+                clientPomText.contains("<artifactId>yierdis-server</artifactId>")
+        );
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                workspaceRoot.resolve("yierdis-app/yierdis-server-app/src/main/java").normalize(),
+                offenders,
+                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.storage.memory.",
+                "import yier.bubu.redis.storage.internal.",
+                "import yier.bubu.redis.db.memory.",
+                "new YierdisDb("
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server-app Java 文件", scanned > 0);
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 server-app 直接依赖 storage implementation/internal，而不是只做应用组装：\n"
                             + String.join("\n", offenders)
             );
         }
@@ -1901,28 +1974,28 @@ public class ArchitectureBoundaryTest {
         Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
         Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
         String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
-        String serverPolicy = policySection(policy, "yierdis-server");
+        String serverPolicy = policySection(policy, "yierdis-server-app");
         Assert.assertTrue(
                 "server policy must allow direct storage-api dependency when server imports storage API types",
                 serverPolicy.contains("yierdis-storage-api")
         );
 
-        Path serverPom = workspaceRoot.resolve("yierdis-server/pom.xml").normalize();
-        Assert.assertTrue("缺少 yierdis-server/pom.xml", Files.isRegularFile(serverPom));
+        Path serverPom = workspaceRoot.resolve("yierdis-app/yierdis-server-app/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-app/yierdis-server-app/pom.xml", Files.isRegularFile(serverPom));
         String pom = Files.readString(serverPom, StandardCharsets.UTF_8);
         Assert.assertTrue(
-                "yierdis-server must declare yierdis-storage-api directly because production server code imports storage API types",
+                "yierdis-server-app must declare yierdis-storage-api directly because production server code imports storage API types",
                 pom.contains("<artifactId>yierdis-storage-api</artifactId>")
         );
 
         List<String> storageApiUsers = new ArrayList<>();
         int scanned = scanForForbiddenText(
                 repoRoot,
-                workspaceRoot.resolve("yierdis-server/src/main/java").normalize(),
+                workspaceRoot.resolve("yierdis-app/yierdis-server-app/src/main/java").normalize(),
                 storageApiUsers,
                 "import yier.bubu.redis.ops."
         );
-        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server Java 文件", scanned > 0);
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server-app Java 文件", scanned > 0);
         Assert.assertFalse(
                 "server guard expected at least one production storage-api import; remove this direct-dependency guard if server stops using storage API",
                 storageApiUsers.isEmpty()
@@ -1939,30 +2012,30 @@ public class ArchitectureBoundaryTest {
         Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
         Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
         String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
-        String serverPolicy = policySection(policy, "yierdis-server");
+        String serverPolicy = policySection(policy, "yierdis-server-app");
         Assert.assertTrue(
                 "server policy must allow direct runtime-api dependency when server imports runtime API types",
                 serverPolicy.contains("yierdis-runtime-api")
         );
 
-        Path serverPom = workspaceRoot.resolve("yierdis-server/pom.xml").normalize();
-        Assert.assertTrue("缺少 yierdis-server/pom.xml", Files.isRegularFile(serverPom));
+        Path serverPom = workspaceRoot.resolve("yierdis-app/yierdis-server-app/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-app/yierdis-server-app/pom.xml", Files.isRegularFile(serverPom));
         String pom = Files.readString(serverPom, StandardCharsets.UTF_8);
         Assert.assertTrue(
-                "yierdis-server must declare yierdis-runtime-api directly because production server code imports runtime API types",
+                "yierdis-server-app must declare yierdis-runtime-api directly because production server code imports runtime API types",
                 pom.contains("<artifactId>yierdis-runtime-api</artifactId>")
         );
 
         List<String> runtimeApiUsers = new ArrayList<>();
         int scanned = scanForForbiddenText(
                 repoRoot,
-                workspaceRoot.resolve("yierdis-server/src/main/java").normalize(),
+                workspaceRoot.resolve("yierdis-app/yierdis-server-app/src/main/java").normalize(),
                 runtimeApiUsers,
                 "yier.bubu.redis.runtime.YierdisInstanceConfig",
                 "import yier.bubu.redis.runtime.*;",
                 "yier.bubu.redis.runtime.api."
         );
-        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server Java 文件", scanned > 0);
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server-app Java 文件", scanned > 0);
         Assert.assertFalse(
                 "server guard expected at least one production runtime-api import/reference; remove this direct-dependency guard if server stops using runtime API",
                 runtimeApiUsers.isEmpty()
@@ -1996,8 +2069,8 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
-        Path serverRoot = repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis").normalize();
-        Assert.assertTrue("缺少 yierdis-server/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
+        Path serverRoot = repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis").normalize();
+        Assert.assertTrue("缺少 yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
 
         List<String> offenders = new ArrayList<>();
         for (String name : List.of(
@@ -2031,8 +2104,8 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
-        Path serverRoot = repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis").normalize();
-        Assert.assertTrue("缺少 yierdis-server/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
+        Path serverRoot = repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis").normalize();
+        Assert.assertTrue("缺少 yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
 
         Path allowedConnectionOwner = serverRoot.resolve("NettyExecutionConnection.java");
         Path allowedIoOwner = serverRoot.resolve("NettyExecutionIoAdapter.java");
@@ -2062,11 +2135,11 @@ public class ArchitectureBoundaryTest {
                         }
                     });
         }
-        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server Java 文件", scanned[0] > 0);
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server-app Java 文件", scanned[0] > 0);
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 yierdis-server 存在分散的 Channel.attr 所有权（仅允许 NettyExecutionConnection/NettyExecutionIoAdapter 持有）：\n"
+                    "检测到 yierdis-server-app 存在分散的 Channel.attr 所有权（仅允许 NettyExecutionConnection/NettyExecutionIoAdapter 持有）：\n"
                             + String.join("\n", offenders)
             );
         }
@@ -2077,8 +2150,8 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
-        Path serverRoot = repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis").normalize();
-        Assert.assertTrue("缺少 yierdis-server/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
+        Path serverRoot = repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis").normalize();
+        Assert.assertTrue("缺少 yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
 
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
@@ -2089,7 +2162,7 @@ public class ArchitectureBoundaryTest {
                 ".session()",
                 ".scheduling()"
         );
-        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server Java 文件", scanned > 0);
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server-app Java 文件", scanned > 0);
         if (!offenders.isEmpty()) {
             Assert.fail(
                     "检测到 server 代码仍访问已经废弃的 legacy 连接切片 API：\n"

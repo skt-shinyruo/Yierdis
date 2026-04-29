@@ -24,7 +24,7 @@ server 启动时，会先检查当前 JVM 是否支持 `java.lang.foreign`。如
 
 代表路径：
 
-- `yierdis-server/src/main/java/yier/bubu/redis/ForeignMemoryAutoModules.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/ForeignMemoryAutoModules.java`
 
 真正的组装链路是：
 
@@ -37,7 +37,7 @@ server 启动时，会先检查当前 JVM 是否支持 `java.lang.foreign`。如
 
 代表路径：
 
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
 - `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbEngineFactory.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDb.java`
@@ -341,7 +341,7 @@ server 启动时，`NettyCommandExecutor` 会先调用 `runtimeAccess::bindToCur
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/DbThreadGuard.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDb.java`
 - `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
 
 ## 内存统计、maxmemory 和泄漏检查
 

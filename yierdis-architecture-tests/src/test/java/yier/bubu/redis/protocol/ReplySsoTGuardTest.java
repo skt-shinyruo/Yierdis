@@ -22,7 +22,7 @@ public class ReplySsoTGuardTest {
         int scanned = 0;
         scanned += scanForProtocolReplyModelAuthorityLeaks(
                 workspaceRoot,
-                workspaceRoot.resolve("yierdis-server/src/main/java"),
+                workspaceRoot.resolve("yierdis-app/yierdis-server-app/src/main/java"),
                 offenders
         );
         scanned += scanCoreModulesForProtocolReplyModelAuthorityLeaks(
@@ -48,7 +48,7 @@ public class ReplySsoTGuardTest {
         int scanned = 0;
         scanned += scanForEncoderAuthorityHelperLeaks(
                 workspaceRoot,
-                workspaceRoot.resolve("yierdis-server/src/main/java"),
+                workspaceRoot.resolve("yierdis-app/yierdis-server-app/src/main/java"),
                 offenders
         );
         scanned += scanCoreModulesForEncoderAuthorityHelperLeaks(
@@ -73,7 +73,7 @@ public class ReplySsoTGuardTest {
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenTexts(
                 workspaceRoot,
-                workspaceRoot.resolve("yierdis-server/src/main/java"),
+                workspaceRoot.resolve("yierdis-app/yierdis-server-app/src/main/java"),
                 offenders,
                 "ReplyValue.",
                 "ReplyArray(",
@@ -421,7 +421,7 @@ public class ReplySsoTGuardTest {
     private static boolean isWorkspaceRoot(Path path) {
         return Files.isRegularFile(path.resolve("README.md"))
                 && Files.isDirectory(path.resolve("yierdis-core"))
-                && Files.isDirectory(path.resolve("yierdis-server/src/main/java"))
+                && Files.isDirectory(path.resolve("yierdis-app/yierdis-server-app/src/main/java"))
                 && Files.isDirectory(path.resolve("yierdis-protocol"));
     }
 }

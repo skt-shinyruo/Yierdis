@@ -58,7 +58,7 @@ YierdisServer
 
 入口文件是：
 
-- [`yierdis-server/src/main/java/yier/bubu/redis/YierdisServer.java`](../yierdis-server/src/main/java/yier/bubu/redis/YierdisServer.java)
+- [`yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServer.java`](../yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServer.java)
 
 这个类很小，但它决定了启动的最外层行为。
 
@@ -89,7 +89,7 @@ YierdisServer
 
 组装中心在：
 
-- [`yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`](../yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java)
+- [`yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`](../yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java)
 
 这是整个主链里最重要的类之一。
 
@@ -217,7 +217,7 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 入口在：
 
-- [`yierdis-server/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`](../yierdis-server/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java)
+- [`yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`](../yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java)
 
 ### `initChannel(...)` 先做什么
 
@@ -301,7 +301,7 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 命令提交入口在：
 
-- [`yierdis-server/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`](../yierdis-server/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java)
+- [`yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`](../yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java)
 
 ### `channelRead0(...)` 在做什么
 
@@ -331,9 +331,9 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 这部分的核心类有 4 个：
 
-- [`NettyCommandExecutor`](../yierdis-server/src/main/java/yier/bubu/redis/NettyCommandExecutor.java)
-- [`NettyCommandSubmitter`](../yierdis-server/src/main/java/yier/bubu/redis/NettyCommandSubmitter.java)
-- [`NettyCommandDrainLoop`](../yierdis-server/src/main/java/yier/bubu/redis/NettyCommandDrainLoop.java)
+- [`NettyCommandExecutor`](../yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandExecutor.java)
+- [`NettyCommandSubmitter`](../yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandSubmitter.java)
+- [`NettyCommandDrainLoop`](../yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandDrainLoop.java)
 - [`ExecutorBackpressureController`](../yierdis-executor-core/src/main/java/yier/bubu/redis/executor/ExecutorBackpressureController.java)
 
 ### 先看 `NettyCommandExecutor`
@@ -406,7 +406,7 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 这一层的桥梁是：
 
-- [`NettyCommandExecutionSupport`](../yierdis-server/src/main/java/yier/bubu/redis/NettyCommandExecutionSupport.java)
+- [`NettyCommandExecutionSupport`](../yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandExecutionSupport.java)
 
 ### 它做了哪几件关键事
 
@@ -638,7 +638,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 ### 1. 启动和整体接线
 
-- [`yierdis-server/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`](../yierdis-server/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java)
+- [`yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`](../yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java)
 
 看点：
 
@@ -647,7 +647,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 ### 2. 执行器行为
 
-- [`yierdis-server/src/test/java/yier/bubu/redis/NettyCommandExecutorTest.java`](../yierdis-server/src/test/java/yier/bubu/redis/NettyCommandExecutorTest.java)
+- [`yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/NettyCommandExecutorTest.java`](../yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/NettyCommandExecutorTest.java)
 
 看点：
 

@@ -15,7 +15,7 @@
 3. 对应的 `*Ops`
 4. 必要时再看 `YierdisDb` 和底层 value 结构
 
-### 2. 改 server 行为，优先停留在 `yierdis-server`
+### 2. 改 server 行为，优先停留在 `yierdis-server-app`
 
 除非你确认要变的是 transport-agnostic 的 core 能力，否则不要为了省事把 server 细节塞进 core。
 
@@ -120,8 +120,8 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 新增 server-facing 命令的常见入口
 
-- `yierdis-server/src/main/java/yier/bubu/redis/ServerCommandModule.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/NettyServerInfoProvider.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/ServerCommandModule.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyServerInfoProvider.java`
 
 如果你拿不准命令该放哪层，可以先问自己：
 
@@ -163,7 +163,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 - `yierdis-core/yierdis-core-command/src/test/java/yier/bubu/redis/command/YierdisFastCommandProcessorModuleTest.java`
 - `yierdis-core/yierdis-core-command/src/test/java/yier/bubu/redis/command/YierdisFastCommandProcessorRegistrationTest.java`
-- `yierdis-server/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
+- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
 
 ## 任务 3：改协议
 
@@ -203,15 +203,15 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 会话状态入口
 
-- `yierdis-server/src/main/java/yier/bubu/redis/ServerConnectionContext.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/ServerSessionState.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/ServerConnectionContext.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/ServerSessionState.java`
 - `yierdis-execution/yierdis-execution-api/src/main/java/yier/bubu/redis/contract/CommandContext.java`
 
 `yierdis-core-contract` 目前只是临时兼容桥；新的执行契约源码都在 `yierdis-execution-api`。
 
 ### 路由入口
 
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
 - `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/CommandSupport.java`
 - `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
 
@@ -280,16 +280,16 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 总入口
 
-- `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandExecutor.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandExecutor.java`
 
 ### 提交路径
 
-- `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandSubmitter.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandSubmitter.java`
 
 ### drain 路径
 
-- `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandDrainLoop.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandExecutionSupport.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandDrainLoop.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandExecutionSupport.java`
 
 ### 通用背压算法
 
@@ -297,9 +297,9 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 建议先看的测试
 
-- `yierdis-server/src/test/java/yier/bubu/redis/NettyCommandExecutorTest.java`
-- `yierdis-server/src/test/java/yier/bubu/redis/NettyCommandExecutorBackpressureTest.java`
-- `yierdis-server/src/test/java/yier/bubu/redis/NettyCommandExecutorFairSchedulingTest.java`
+- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/NettyCommandExecutorTest.java`
+- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/NettyCommandExecutorBackpressureTest.java`
+- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/NettyCommandExecutorFairSchedulingTest.java`
 
 ### 初学者理解背压的最短路径
 
@@ -322,11 +322,11 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### server-facing 命令入口
 
-- `yierdis-server/src/main/java/yier/bubu/redis/ServerCommandModule.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/ServerCommandModule.java`
 
 ### 数据汇总和输出
 
-- `yierdis-server/src/main/java/yier/bubu/redis/NettyServerInfoProvider.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyServerInfoProvider.java`
 - `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstanceObservability.java`
 
 如果你改的是：
@@ -365,7 +365,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 - `README.md`
 - `docs/request-execution-flow.md`
 - `docs/module-architecture.md`
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
 - `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDb.java`
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`

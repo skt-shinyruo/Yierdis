@@ -275,7 +275,7 @@ public final class YierdisBench {
     }
 
     private static Path findServerJar() {
-        Path target = Path.of("yierdis-server", "target");
+        Path target = Path.of("yierdis-app", "yierdis-server-app", "target");
         if (!Files.isDirectory(target)) {
             throw new IllegalStateException("未找到目录: " + target.toAbsolutePath());
         }

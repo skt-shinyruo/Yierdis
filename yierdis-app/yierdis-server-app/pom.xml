@@ -8,13 +8,14 @@
         <groupId>yier.bubu.redis</groupId>
         <artifactId>yierdis-parent</artifactId>
         <version>0.1.0-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
     </parent>
 
-    <artifactId>yierdis-server</artifactId>
+    <artifactId>yierdis-server-app</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis-server</name>
-    <description>A simplified Yierdis server (Custom Protocol v1) built with Netty.</description>
+    <name>yierdis-server-app</name>
+    <description>Yierdis server application composition root (Custom Protocol v1, Netty).</description>
 
     <dependencies>
         <dependency>

@@ -236,14 +236,14 @@ Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格�
 
 ### 进程和启动入口
 
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServer.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServer.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
 
 ### 请求主链路入口
 
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`
 - `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
 
 ### 命令处理主入口
 

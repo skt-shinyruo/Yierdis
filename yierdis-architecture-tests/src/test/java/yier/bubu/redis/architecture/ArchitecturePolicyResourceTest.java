@@ -17,12 +17,14 @@ public class ArchitecturePolicyResourceTest {
             Assert.assertTrue(policy.contains("yierdis-storage-api:"));
             Assert.assertTrue(policy.contains("yierdis-runtime-api:"));
             Assert.assertTrue(policy.contains("yierdis-core-api:"));
-            Assert.assertTrue(policy.contains("yierdis-server:"));
+            Assert.assertTrue(policy.contains("yierdis-server-app:"));
             Assert.assertTrue(policy.contains("yierdis-custom-v1-wire:"));
             Assert.assertTrue(policy.contains("yierdis-custom-v1-execution-adapter:"));
             Assert.assertTrue(policy.contains("yierdis-custom-v1-netty:"));
             Assert.assertTrue(policy.contains("forbidden_imports:"));
             Assert.assertTrue(policy.contains("yier.bubu.redis.protocol.reply"));
+            Assert.assertTrue(policy.contains("application_composition_root"));
+            Assert.assertTrue(policy.contains("no_storage_internal_imports"));
         }
     }
 }

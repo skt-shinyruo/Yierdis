@@ -239,7 +239,7 @@ public class JsonLineReplyWriterTest {
         Path cursor = cwd;
         while (cursor != null) {
             if (Files.isRegularFile(cursor.resolve("README.md"))
-                    && Files.isDirectory(cursor.resolve("yierdis-server/src/main/java"))
+                    && Files.isDirectory(cursor.resolve("yierdis-app/yierdis-server-app/src/main/java"))
                     && Files.isDirectory(cursor.resolve("yierdis-protocol/yierdis-custom-v1-wire/src/main/java"))
                     && Files.isDirectory(cursor.resolve("yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java"))) {
                 return cursor;

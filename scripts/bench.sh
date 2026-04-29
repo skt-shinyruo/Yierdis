@@ -27,7 +27,7 @@ XMS="${XMS:-}"
 XMX="${XMX:-}"
 MAX_DIRECT_MEMORY="${MAX_DIRECT_MEMORY:-}"
 
-# Server args overrides (keep empty to use yierdis-server defaults in yierdis-args)
+# Server args overrides (keep empty to use yierdis-server-app defaults in yierdis-args)
 MAXMEMORY_BYTES="${MAXMEMORY_BYTES:-}"
 OFFHEAP_MAX_BYTES="${OFFHEAP_MAX_BYTES:-}"
 MAXMEMORY_POLICY="${MAXMEMORY_POLICY:-}"
@@ -70,7 +70,7 @@ main() {
   build_if_needed
 
   local server_jar bench_jar
-  server_jar="$(pick_jar "$ROOT_DIR/yierdis-server/target/yierdis-server-*.jar" "original-")"
+  server_jar="$(pick_jar "$ROOT_DIR/yierdis-app/yierdis-server-app/target/yierdis-server-app-*.jar" "original-")"
   bench_jar="$(pick_jar "$ROOT_DIR/yierdis-bench/target/yierdis-bench-*.jar" "original-")"
 
   local args=()
