@@ -6,40 +6,31 @@
 
     <parent>
         <groupId>yier.bubu.redis</groupId>
-        <artifactId>yierdis-core</artifactId>
+        <artifactId>yierdis-runtime</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>yierdis-core-db</artifactId>
+    <artifactId>yierdis-runtime-api</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis-core-db</name>
-    <description>DB/storage implementation for Yierdis core.</description>
+    <name>yierdis-runtime-api</name>
+    <description>Runtime API and SPI contracts for Yierdis.</description>
 
     <dependencies>
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-execution-api</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-storage-api</artifactId>
         </dependency>
 
         <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-runtime-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-bytes-lib</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-memory-foreign</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-memory-api</artifactId>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

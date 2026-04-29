@@ -29,7 +29,7 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-core-api</artifactId>
+            <artifactId>yierdis-runtime-api</artifactId>
         </dependency>
 
         <dependency>

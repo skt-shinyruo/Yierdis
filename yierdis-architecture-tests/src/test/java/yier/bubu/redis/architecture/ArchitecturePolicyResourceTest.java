@@ -15,6 +15,7 @@ public class ArchitecturePolicyResourceTest {
             Assert.assertTrue(policy.contains("yierdis-core-command:"));
             Assert.assertTrue(policy.contains("yierdis-executor-core:"));
             Assert.assertTrue(policy.contains("yierdis-storage-api:"));
+            Assert.assertTrue(policy.contains("yierdis-runtime-api:"));
             Assert.assertTrue(policy.contains("yierdis-core-api:"));
             Assert.assertTrue(policy.contains("yierdis-server:"));
             Assert.assertTrue(policy.contains("forbidden_imports:"));
