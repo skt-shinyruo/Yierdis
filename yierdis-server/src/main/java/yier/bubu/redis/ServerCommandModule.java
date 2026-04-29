@@ -8,7 +8,6 @@ import yier.bubu.redis.command.ServerInfoProvider;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
-import yier.bubu.redis.protocol.YierdisBuildInfo;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;

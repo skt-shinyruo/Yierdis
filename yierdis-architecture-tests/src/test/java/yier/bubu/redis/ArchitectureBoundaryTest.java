@@ -359,7 +359,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.getParent().resolve("yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java").normalize(),
+                repoRoot.getParent().resolve("yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java").normalize(),
                 offenders,
                 "new AdaptedCommand("
         );
@@ -571,9 +571,9 @@ public class ArchitectureBoundaryTest {
                 "wrong number of arguments for"
         );
         for (Path protocolMain : List.of(
-                repoRoot.getParent().resolve("yierdis-protocol/yierdis-protocol-model/src/main/java").normalize(),
-                repoRoot.getParent().resolve("yierdis-protocol/yierdis-protocol-codec/src/main/java").normalize(),
-                repoRoot.getParent().resolve("yierdis-protocol/yierdis-protocol-netty/src/main/java").normalize()
+                repoRoot.getParent().resolve("yierdis-protocol/yierdis-custom-v1-wire/src/main/java").normalize(),
+                repoRoot.getParent().resolve("yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java").normalize(),
+                repoRoot.getParent().resolve("yierdis-protocol/yierdis-custom-v1-netty/src/main/java").normalize()
         )) {
             scanned += scanForForbiddenText(
                     repoRoot,
@@ -603,35 +603,128 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void protocolCodecMustNotDependOnCoreContract() throws IOException {
+    public void customV1AdapterModulesMustKeepTheirBoundaries() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
 
-        Path codecPom = repoRoot.resolve("yierdis-protocol/yierdis-protocol-codec/pom.xml");
-        if (!Files.isRegularFile(codecPom) && repoRoot.getParent() != null) {
-            codecPom = repoRoot.getParent().resolve("yierdis-protocol/yierdis-protocol-codec/pom.xml");
+        Path wireRoot = workspaceRoot.resolve("yierdis-protocol/yierdis-custom-v1-wire").normalize();
+        Path executionAdapterRoot = workspaceRoot.resolve("yierdis-protocol/yierdis-custom-v1-execution-adapter").normalize();
+        Path nettyRoot = workspaceRoot.resolve("yierdis-protocol/yierdis-custom-v1-netty").normalize();
+        Assert.assertTrue("缺少 yierdis-custom-v1-wire/pom.xml", Files.isRegularFile(wireRoot.resolve("pom.xml")));
+        Assert.assertTrue("缺少 yierdis-custom-v1-execution-adapter/pom.xml", Files.isRegularFile(executionAdapterRoot.resolve("pom.xml")));
+        Assert.assertTrue("缺少 yierdis-custom-v1-netty/pom.xml", Files.isRegularFile(nettyRoot.resolve("pom.xml")));
+
+        String wirePom = Files.readString(wireRoot.resolve("pom.xml"), StandardCharsets.UTF_8);
+        for (String forbiddenDependency : List.of(
+                "<artifactId>yierdis-execution-api</artifactId>",
+                "<artifactId>yierdis-core-contract</artifactId>",
+                "<artifactId>yierdis-core-command</artifactId>",
+                "<artifactId>yierdis-core-db</artifactId>",
+                "<artifactId>yierdis-core-runtime</artifactId>",
+                "<artifactId>yierdis-runtime-api</artifactId>",
+                "<artifactId>yierdis-storage-api</artifactId>",
+                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-bytes-netty</artifactId>",
+                "<artifactId>netty-all</artifactId>"
+        )) {
+            Assert.assertFalse("custom-v1-wire must not depend on " + forbiddenDependency, wirePom.contains(forbiddenDependency));
         }
-        Assert.assertTrue("缺少 yierdis-protocol-codec/pom.xml", Files.isRegularFile(codecPom));
-
-        String pom = Files.readString(codecPom, StandardCharsets.UTF_8);
-        Assert.assertFalse("protocol-codec 不应再依赖 yierdis-core-contract", pom.contains("<artifactId>yierdis-core-contract</artifactId>"));
+        String executionAdapterPom = Files.readString(executionAdapterRoot.resolve("pom.xml"), StandardCharsets.UTF_8);
+        for (String forbiddenDependency : List.of(
+                "<artifactId>yierdis-core-command</artifactId>",
+                "<artifactId>yierdis-core-db</artifactId>",
+                "<artifactId>yierdis-core-runtime</artifactId>",
+                "<artifactId>yierdis-runtime-api</artifactId>",
+                "<artifactId>yierdis-storage-api</artifactId>",
+                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-bytes-netty</artifactId>",
+                "<artifactId>netty-all</artifactId>"
+        )) {
+            Assert.assertFalse("custom-v1-execution-adapter must not depend on " + forbiddenDependency, executionAdapterPom.contains(forbiddenDependency));
+        }
+        String nettyPom = Files.readString(nettyRoot.resolve("pom.xml"), StandardCharsets.UTF_8);
+        for (String forbiddenDependency : List.of(
+                "<artifactId>yierdis-core-command</artifactId>",
+                "<artifactId>yierdis-core-db</artifactId>",
+                "<artifactId>yierdis-core-runtime</artifactId>",
+                "<artifactId>yierdis-runtime-api</artifactId>",
+                "<artifactId>yierdis-storage-api</artifactId>",
+                "<artifactId>yierdis-server</artifactId>"
+        )) {
+            Assert.assertFalse("custom-v1-netty must not depend on " + forbiddenDependency, nettyPom.contains(forbiddenDependency));
+        }
 
         List<String> offenders = new ArrayList<>();
-        int scanned = scanForForbiddenText(
+        int scanned = 0;
+        scanned += scanForForbiddenText(
                 repoRoot,
-                codecPom.getParent().resolve("src/main/java"),
+                wireRoot.resolve("src/main/java"),
                 offenders,
                 "import yier.bubu.redis.contract.",
-                "yier.bubu.redis.contract."
+                "import yier.bubu.redis.command.",
+                "import yier.bubu.redis.ops.",
+                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.runtime.",
+                "import yier.bubu.redis.server.",
+                "import io.netty.",
+                "yier.bubu.redis.contract.",
+                "yier.bubu.redis.command.",
+                "yier.bubu.redis.ops.",
+                "yier.bubu.redis.db.",
+                "yier.bubu.redis.runtime.",
+                "yier.bubu.redis.server.",
+                "io.netty."
         );
-        Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
+        scanned += scanForForbiddenText(
+                repoRoot,
+                executionAdapterRoot.resolve("src/main/java"),
+                offenders,
+                "import yier.bubu.redis.command.",
+                "import yier.bubu.redis.ops.",
+                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.runtime.",
+                "import yier.bubu.redis.server.",
+                "import io.netty.",
+                "yier.bubu.redis.command.",
+                "yier.bubu.redis.ops.",
+                "yier.bubu.redis.db.",
+                "yier.bubu.redis.runtime.",
+                "yier.bubu.redis.server.",
+                "io.netty."
+        );
+        scanned += scanForForbiddenText(
+                repoRoot,
+                nettyRoot.resolve("src/main/java"),
+                offenders,
+                "import yier.bubu.redis.command.",
+                "import yier.bubu.redis.ops.",
+                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.runtime.",
+                "import yier.bubu.redis.server.",
+                "yier.bubu.redis.command.",
+                "yier.bubu.redis.ops.",
+                "yier.bubu.redis.db.",
+                "yier.bubu.redis.runtime.",
+                "yier.bubu.redis.server."
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 custom-v1 Java 文件", scanned > 0);
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 protocol-codec 仍依赖 core-contract：\n"
+                    "检测到 Custom Protocol v1 wire/execution/netty 模块边界违规：\n"
                             + String.join("\n", offenders)
             );
         }
+
+        Assert.assertFalse(
+                "server production code must not own JsonLineReplyWriter implementation",
+                Files.isRegularFile(workspaceRoot.resolve("yierdis-server/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java"))
+        );
+        Assert.assertFalse(
+                "server production code must not own ProtocolCommandAdapter implementation",
+                Files.isRegularFile(workspaceRoot.resolve("yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java"))
+        );
     }
 
     @Test
@@ -1500,7 +1593,7 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
         Path requestFile = repoRoot.getParent().resolve(
-                "yierdis-protocol/yierdis-protocol-model/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1Request.java"
+                "yierdis-protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1Request.java"
         );
         Assert.assertTrue("缺少 CustomProtocolV1Request.java", Files.isRegularFile(requestFile));
         String requestSource = Files.readString(requestFile, StandardCharsets.UTF_8);

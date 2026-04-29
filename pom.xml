@@ -71,17 +71,17 @@
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-protocol-model</artifactId>
+                <artifactId>yierdis-custom-v1-wire</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-protocol-codec</artifactId>
+                <artifactId>yierdis-custom-v1-execution-adapter</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-protocol-netty</artifactId>
+                <artifactId>yierdis-custom-v1-netty</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

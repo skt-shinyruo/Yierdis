@@ -187,7 +187,7 @@ db + runtime + memory
 
 - `yierdis-protocol/.../CustomProtocolV1RequestEncoder.java`
 - `yierdis-protocol/.../CustomRequestDecoder.java`
-- `yierdis-server/.../JsonLineReplyWriter.java`
+- `yierdis-protocol/yierdis-custom-v1-execution-adapter/.../JsonLineReplyWriter.java`
 
 ### 2. command lane
 
@@ -381,14 +381,14 @@ socket bytes
 ### 连接和协议入口
 
 - `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`
-- `yierdis-protocol/yierdis-protocol-netty/src/main/java/yier/bubu/redis/protocol/netty/CustomRequestDecoder.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java`
+- `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/CustomRequestDecoder.java`
+- `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
 
 ### 执行器和回包
 
 - `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandExecutor.java`
 - `yierdis-server/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java`
+- `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java`
 
 ### 命令与 DB
 

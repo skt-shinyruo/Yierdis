@@ -21,16 +21,18 @@ bytes-lib
 │        ├─────────> runtime-api
 │        └─────────> core-api (temporary execution/storage/runtime bridge)
 │
-├─ protocol-model ──> protocol-codec ──> protocol-netty
+├─ custom-v1-wire ──> custom-v1-execution-adapter ──> custom-v1-netty
+│        └───────────────────────────────────────────────^
 │
 ├─ bytes-netty
 ├─ executor-core
 ├─ args
 │
-├─ client  -> protocol-netty
-├─ bench   -> args + protocol-codec + protocol-netty
+├─ client  -> custom-v1-wire + custom-v1-netty
+├─ bench   -> args + custom-v1-wire + custom-v1-netty
 └─ server  -> execution-api + storage-api + runtime-api + core-engine + core-command + core-runtime
-             + protocol-netty + bytes-netty + executor-core + args + memory-foreign
+             + custom-v1-execution-adapter + custom-v1-netty + bytes-netty
+             + executor-core + args + memory-foreign
 ```
 
 理解这张图时，最重要的判断不是“谁依赖谁”，而是“谁负责线上协议、谁负责执行契约、谁负责 DB、谁负责最后的组装”。
@@ -77,33 +79,38 @@ bytes-lib
 
 protocol 车道只负责“线上协议长什么样”，不负责命令执行语义。
 
-### `yierdis-protocol-model`
+### `yierdis-custom-v1-wire`
 
-放协议侧 DTO、协议 reply model、构建信息和一些协议侧类型。
+放 Custom Protocol v1 的 wire-only 内容：
 
-关键认知：
+- 协议侧 DTO
+- `ProtocolLimits`
+- JSON parser / writer
+- request frame encoder / request payload parser
+- reply parser / inspector
+- 协议侧 reply model
 
-- 它是 protocol-side model，不是 command execution model
-- server 回包的语义 authority 不是这里，而是 `ReplyWriter`
+它不依赖 execution、command、storage、runtime、server/app 或 Netty。
 
-### `yierdis-protocol-codec`
+### `yierdis-custom-v1-execution-adapter`
 
 负责：
 
-- JSON parser / writer
-- Custom Protocol v1 的请求编码
-- reply 解析与 codec 辅助
+- Custom Protocol v1 DTO -> `ExecutionRequest`
+- `JsonLineReplyWriter`
+- `JsonLineReplyWriterFactory`
 
-它仍然是 Netty-free 的纯 codec 层。
+它可以依赖 `yierdis-execution-api` 和 `yierdis-custom-v1-wire`，但仍然是 Netty-free 的纯执行适配层。
 
-### `yierdis-protocol-netty`
+### `yierdis-custom-v1-netty`
 
 负责：
 
 - Netty decoder
-- Netty 侧协议 glue
+- Netty handler glue
+- protocol error event -> Custom Protocol v1 reply 写回
 
-它是 protocol 车道中唯一真正碰 Netty 的模块。
+它是 protocol 车道中唯一真正碰 Netty 的模块。它只把 Netty pipeline 接到 wire/adapter，不拥有命令解析、DB 访问或 runtime 组装。
 
 ## core 车道
 
@@ -319,12 +326,12 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 从代码逻辑上看，server 模块最核心的价值是把两条车道接起来：
 
 - protocol 车道产出协议请求对象
-- server 里的 `ProtocolCommandAdapter` 把它变成 `ExecutionRequest`
+- `yierdis-custom-v1-netty` 里的 `ProtocolCommandAdapter` 调用纯 execution adapter，把它变成 `ExecutionRequest`
 - server 创建持有 `EngineSession` 的 `NettyExecutionConnection`
 - server 把 `ExecutionRequest` 提交给 `CommandExecutor`
 - executor 在 owner thread 上调用 `YierdisEngine`
 - engine 再把请求交给当前命令处理实现
-- reply 最后再通过 `ReplyWriter` 落回 server 的协议输出
+- reply 最后再通过 `JsonLineReplyWriter` 落回 Custom Protocol v1 NDJSON 输出
 
 这也是为什么很多“看起来可以顺手改到 core 里”的事情，其实应该只在 server 做。
 
@@ -348,7 +355,7 @@ bench 也主要依赖协议和参数模块，说明它在设计上更像：
 
 ### 1. protocol 不等于 command contract
 
-`ExecutionRequest` / `ReplyWriter` 由 `yierdis-execution-api` 拥有，不在 `protocol-model`；`yierdis-core-contract` 只是临时兼容桥。
+`ExecutionRequest` / `ReplyWriter` 由 `yierdis-execution-api` 拥有，不在 `custom-v1-wire`；`yierdis-core-contract` 只是临时兼容桥。
 
 这意味着：
 
@@ -365,9 +372,9 @@ bench 也主要依赖协议和参数模块，说明它在设计上更像：
 - DB 能力边界在 API 层稳定下来
 - maxmemory / off-heap OOM 这类 storage pressure 错误先在 DB/API 边界转换，再由命令层按 `YierdisCommandException` 回包
 
-### 3. server 才是 protocol -> core 的桥
+### 3. custom-v1 adapter 才是 protocol -> execution 的桥
 
-协议请求适配为 `ExecutionRequest` 的桥只应该留在 server。
+协议请求适配为 `ExecutionRequest` 的桥属于 `yierdis-custom-v1-execution-adapter`；Netty handler 属于 `yierdis-custom-v1-netty`；server 只负责把这些 adapter 接进 pipeline。
 
 这让 protocol 车道和 core 车道可以各自演进，而不至于互相拖住。
 
@@ -388,24 +395,26 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 
 如果把一次请求跨模块的过程写成最短路径，大致是：
 
-1. `protocol-netty`
+1. `custom-v1-netty`
    把网络输入交给 decoder
-2. `server`
-   创建 `NettyExecutionConnection`，把协议请求适配为 `ExecutionRequest`
-3. `executor-core`
+2. `custom-v1-execution-adapter`
+   把协议请求适配为 `ExecutionRequest`
+3. `server`
+   创建 `NettyExecutionConnection` 并提交执行请求
+4. `executor-core`
    做排队、背压和 owner-thread 调度
-4. `core-engine`
+5. `core-engine`
    接收 `Session + ExecutionRequest + ReplyWriter`，创建 command context
-5. `core-command`
+6. `core-command`
    通过 `CommandSpec<T>` parse 后分发到 typed handler
-6. `storage-api`
+7. `storage-api`
    通过 `DbReads/DbWrites` 暴露能力边界
-7. `core-db`
+8. `core-db`
    执行实际读写
-8. `server`
-   通过 `ReplyWriter` 把结果编码回协议
+9. `custom-v1-execution-adapter`
+   通过 `JsonLineReplyWriter` 把结果编码回协议
 
-初学者如果能把这 8 步记住，读整个仓库时就不容易迷路。
+初学者如果能把这 9 步记住，读整个仓库时就不容易迷路。
 
 ## 构建和测试层面的护栏
 
@@ -417,7 +426,10 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 
 - `yierdis-core-db`
 - `yierdis-memory-api`
-- `yierdis-protocol-model`
+- legacy `yierdis-protocol-model`
+- `yierdis-custom-v1-wire`
+- `yierdis-custom-v1-execution-adapter`
+- `yierdis-custom-v1-netty`
 
 这是硬依赖护栏。
 
@@ -431,7 +443,9 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 - `runtime-api` 保持中立 contract 模块，不依赖 command/storage implementation、protocol、application/server、Netty 或 memory-foreign
 - `core-api` 保持临时兼容桥形态：依赖 execution-api + storage-api + runtime-api，不重新拥有 ops/offheap/runtime-api 源码
 - `memory-api` 保持中立 contract 模块，不依赖 command、storage implementation、protocol、runtime implementation、server/app、Netty 或 memory-foreign
-- `protocol-codec` 不依赖 `core-contract`
+- `custom-v1-wire` 不依赖 execution、command、storage、runtime、server/app 或 Netty
+- `custom-v1-execution-adapter` 不依赖 command、storage、runtime、server/app 或 Netty
+- `custom-v1-netty` 不依赖 command、storage、runtime 或 server/app
 - bootstrap 不重新内联 owner-thread 生命周期逻辑
 - request DTO 和 `ExecutionRequest` 的边界不被重新打穿
 - server bootstrap 不绕过 `YierdisEngine` 直接接线 command processor 或 maintenance
@@ -462,7 +476,8 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 - `yierdis-core/yierdis-core-command/pom.xml`
 - `yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/protocol/ReplySsoTGuardTest.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java`
+- `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1ExecutionAdapter.java`
+- `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
 - `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
 
 ## 一句话总结

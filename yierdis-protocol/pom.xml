@@ -14,12 +14,12 @@
     <packaging>pom</packaging>
 
     <name>yierdis-protocol</name>
-    <description>Parent and aggregator for Yierdis protocol modules (model/codec/netty).</description>
+    <description>Parent and aggregator for Custom Protocol v1 wire, execution adapter, and Netty modules.</description>
 
     <modules>
-        <module>yierdis-protocol-model</module>
-        <module>yierdis-protocol-codec</module>
-        <module>yierdis-protocol-netty</module>
+        <module>yierdis-custom-v1-wire</module>
+        <module>yierdis-custom-v1-execution-adapter</module>
+        <module>yierdis-custom-v1-netty</module>
     </modules>
 
 </project>

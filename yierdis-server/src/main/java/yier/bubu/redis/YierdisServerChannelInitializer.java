@@ -5,21 +5,23 @@ package yier.bubu.redis;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
-import yier.bubu.redis.contract.ReplyWriterFactory;
 import yier.bubu.redis.executor.CommandExecutor;
 import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
+import yier.bubu.redis.protocol.netty.ProtocolCommandAdapter;
+import yier.bubu.redis.protocol.netty.ProtocolErrorReplyHandler;
+import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 
 import java.util.Objects;
 
 final class YierdisServerChannelInitializer extends ChannelInitializer<SocketChannel> {
     private final YierdisServerRuntimeConfig config;
     private final CommandExecutor<NettyExecutionConnection> executor;
-    private final ReplyWriterFactory replyWriterFactory;
+    private final JsonLineReplyWriterFactory replyWriterFactory;
 
     YierdisServerChannelInitializer(
             YierdisServerRuntimeConfig config,
             CommandExecutor<NettyExecutionConnection> executor,
-            ReplyWriterFactory replyWriterFactory
+            JsonLineReplyWriterFactory replyWriterFactory
     ) {
         this.config = Objects.requireNonNull(config, "config");
         this.executor = Objects.requireNonNull(executor, "executor");

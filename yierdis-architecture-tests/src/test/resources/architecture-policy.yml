@@ -8,6 +8,9 @@ modules:
       - yierdis-core-db
       - yierdis-memory-api
       - yierdis-protocol-model
+      - yierdis-custom-v1-wire
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-custom-v1-netty
       - yierdis-server
     forbidden_imports:
       - yier.bubu.redis.db
@@ -29,6 +32,9 @@ modules:
       - yierdis-core-db
       - yierdis-core-runtime
       - yierdis-protocol-model
+      - yierdis-custom-v1-wire
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-custom-v1-netty
       - yierdis-protocol-netty
       - yierdis-server
     forbidden_imports:
@@ -47,6 +53,9 @@ modules:
       - yierdis-protocol-model
       - yierdis-protocol-codec
       - yierdis-protocol-netty
+      - yierdis-custom-v1-wire
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-custom-v1-netty
       - yierdis-server
       - yierdis-memory-foreign
       - yierdis-bytes-netty
@@ -69,6 +78,9 @@ modules:
       - yierdis-protocol-model
       - yierdis-protocol-codec
       - yierdis-protocol-netty
+      - yierdis-custom-v1-wire
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-custom-v1-netty
       - yierdis-server
       - yierdis-memory-foreign
       - yierdis-bytes-netty
@@ -94,6 +106,9 @@ modules:
       - yierdis-protocol-model
       - yierdis-protocol-codec
       - yierdis-protocol-netty
+      - yierdis-custom-v1-wire
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-custom-v1-netty
       - yierdis-server
       - yierdis-memory-foreign
       - yierdis-bytes-netty
@@ -120,6 +135,9 @@ modules:
       - yierdis-protocol-model
       - yierdis-protocol-codec
       - yierdis-protocol-netty
+      - yierdis-custom-v1-wire
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-custom-v1-netty
       - yierdis-server
       - yierdis-memory-foreign
       - yierdis-bytes-netty
@@ -147,6 +165,9 @@ modules:
       - yierdis-protocol-model
       - yierdis-protocol-codec
       - yierdis-protocol-netty
+      - yierdis-custom-v1-wire
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-custom-v1-netty
       - yierdis-core-db
       - yierdis-core-runtime
       - yierdis-server
@@ -167,7 +188,8 @@ modules:
       - yierdis-storage-api
       - yierdis-core-command
       - yierdis-core-engine
-      - yierdis-protocol-netty
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-custom-v1-netty
       - yierdis-bytes-netty
       - yierdis-core-runtime
       - yierdis-runtime-api
@@ -183,11 +205,68 @@ modules:
     source_ownership:
       - no_command_context_construction
       - no_protocol_reply_model_authority
-  yierdis-protocol-codec:
+  yierdis-custom-v1-wire:
+    allowed_dependencies:
+      - yierdis-bytes-lib
     forbidden_dependencies:
+      - yierdis-execution-api
       - yierdis-core-contract
+      - yierdis-core-command
+      - yierdis-core-db
+      - yierdis-core-runtime
+      - yierdis-runtime-api
+      - yierdis-storage-api
+      - yierdis-server
+      - yierdis-bytes-netty
+      - netty-all
     forbidden_imports:
       - yier.bubu.redis.contract
+      - yier.bubu.redis.command
+      - yier.bubu.redis.ops
+      - yier.bubu.redis.db
+      - yier.bubu.redis.runtime
+      - yier.bubu.redis.server
+      - io.netty
+  yierdis-custom-v1-execution-adapter:
+    allowed_dependencies:
+      - yierdis-custom-v1-wire
+      - yierdis-execution-api
+      - yierdis-bytes-lib
+    forbidden_dependencies:
+      - yierdis-core-command
+      - yierdis-core-db
+      - yierdis-core-runtime
+      - yierdis-runtime-api
+      - yierdis-storage-api
+      - yierdis-server
+      - yierdis-bytes-netty
+      - netty-all
+    forbidden_imports:
+      - yier.bubu.redis.command
+      - yier.bubu.redis.ops
+      - yier.bubu.redis.db
+      - yier.bubu.redis.runtime
+      - yier.bubu.redis.server
+      - io.netty
+  yierdis-custom-v1-netty:
+    allowed_dependencies:
+      - yierdis-custom-v1-wire
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-bytes-netty
+      - netty-all
+    forbidden_dependencies:
+      - yierdis-core-command
+      - yierdis-core-db
+      - yierdis-core-runtime
+      - yierdis-runtime-api
+      - yierdis-storage-api
+      - yierdis-server
+    forbidden_imports:
+      - yier.bubu.redis.command
+      - yier.bubu.redis.ops
+      - yier.bubu.redis.db
+      - yier.bubu.redis.runtime
+      - yier.bubu.redis.server
   yierdis-core-runtime:
     allowed_dependencies:
       - yierdis-core-db

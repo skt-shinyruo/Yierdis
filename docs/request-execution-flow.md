@@ -271,7 +271,7 @@ heap `byte[]` 仍允许出现在协议边界、显式 materialization、测试�
 - `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
 - `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`
 - `yierdis-server/src/main/java/yier/bubu/redis/NettyExecutionConnection.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java`
+- `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
 - `yierdis-server/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
 - `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutor.java`
 - `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorExecutionSupport.java`
