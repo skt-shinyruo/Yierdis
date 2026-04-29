@@ -268,6 +268,11 @@ Responsibilities:
   implementation, command context construction, transaction replay entry, and
   maintenance delegation.
 
+The engine module may depend on command-kernel and command API, but it should
+receive command modules through construction rather than depending on the
+default command bundle directly. That keeps embedded runtimes and applications
+free to compose a different command set later without changing engine code.
+
 Current source mapping:
 
 - `yierdis-core-contract` maps mostly to `yierdis-execution-api`.
@@ -381,6 +386,15 @@ Command-family packages must not depend on concrete storage implementations.
 The `yierdis-command-defaults` module may depend on `yierdis-storage-api`,
 `yierdis-execution-api`, `yierdis-command-api`, and `yierdis-command-kernel`.
 
+The dependency direction is one-way:
+
+```text
+command-defaults -> command-kernel -> command-api
+```
+
+`command-kernel` must not depend on `command-defaults`. Applications or runtime
+composition code pass the default command modules into the kernel/engine.
+
 ### Runtime
 
 ```text
@@ -402,6 +416,12 @@ Current source mapping:
 - `yierdis-core-runtime` production code maps to these modules.
 - `YierdisChangeEvent`, `YierdisChangeSink`, and `YierdisChangeTracking` should
   move from broad storage API ownership to runtime API ownership.
+
+`yierdis-runtime-api` may depend on `yierdis-storage-api` abstractions such as
+`DbEngine`, `DbEngineFactory`, or storage policy enums when they are part of the
+embedded runtime contract. It must not depend on `yierdis-storage-memory`,
+command implementation modules, protocol adapters, Netty, or application
+modules.
 
 Runtime should not own command parser registration. It may accept a command
 bundle or engine factory during composition.
@@ -459,6 +479,8 @@ Important decision:
 `yierdis-custom-v1-wire` must not depend on execution contracts.
 `yierdis-custom-v1-execution-adapter` may depend on `yierdis-execution-api` for
 `ExecutionRequest`, `ReplyWriter`, and `ReplyWriterFactory`.
+It must remain Netty-free. Netty handlers may call the pure execution adapter,
+but the adapter itself should not import Netty.
 
 This replaces the current awkward rule that protocol-codec must not depend on
 core-contract while server owns `JsonLineReplyWriter`. The new boundary is:
@@ -468,6 +490,11 @@ core-contract while server owns `JsonLineReplyWriter`. The new boundary is:
 - Netty adapters know wire codecs and Netty;
 - no protocol adapter knows command modules, storage APIs, storage
   implementations, runtime implementations, or application classes.
+
+Wire-side `ReplyValue` remains a protocol/tooling/client model. It must not
+become the command write-back authority. Server command execution continues to
+write through `ReplyWriter`, with `JsonLineReplyWriter` as the Custom Protocol
+v1 execution-facing encoder.
 
 ### Applications And Tests
 
@@ -524,16 +551,23 @@ The architecture-test module should enforce at least these rules:
 
 - `yierdis-execution-api` imports no protocol, command, storage implementation,
   runtime implementation, application, or Netty packages.
+- `yierdis-engine` may import execution API, command API/kernel, and storage API
+  abstractions, but must not import command-defaults, concrete storage
+  implementations, protocol adapters, runtime implementations, applications, or
+  Netty packages.
 - `yierdis-command-api` imports no storage implementation, protocol, runtime
   implementation, application, or Netty packages.
-- `yierdis-command-kernel` imports no concrete storage implementation packages.
+- `yierdis-command-kernel` imports no concrete storage implementation packages
+  and no command-defaults packages.
 - `yierdis-command-defaults` imports no concrete storage implementation
   packages.
 - `yierdis-storage-api` imports no command, protocol, application, or Netty
-  packages.
+  packages, and no concrete storage implementation packages.
+- `yierdis-memory-api` imports no storage implementation, command, protocol,
+  runtime implementation, application, or Netty packages.
 - `yierdis-storage-memory` imports no command implementation packages and no
-  protocol packages. Internal package boundaries should prevent unrelated
-  storage concerns from drifting back into the DB facade.
+  protocol, application, or Netty packages. Internal package boundaries should
+  prevent unrelated storage concerns from drifting back into the DB facade.
 - `yierdis-executor-core` imports only execution contracts and executor-owned
   support types.
 - `yierdis-runtime-api` imports no storage implementation, protocol, command
@@ -543,9 +577,11 @@ The architecture-test module should enforce at least these rules:
 - `yierdis-custom-v1-wire` imports no execution, command, storage, runtime,
   application, or Netty packages.
 - `yierdis-custom-v1-execution-adapter` may import execution contracts and
-  custom-v1 wire packages, but must not import command or storage packages.
+  custom-v1 wire packages, but must not import command, storage, runtime,
+  application, or Netty packages.
 - `yierdis-custom-v1-netty` may import Netty and custom-v1 wire/adapter
-  packages, but must not import command or storage packages.
+  packages, but must not import command, storage, runtime, or application
+  packages.
 - `yierdis-server-app` may compose all production modules, but source guards
   should prevent it from constructing command contexts, parsing command syntax,
   or directly using storage internals.
@@ -564,8 +600,8 @@ Scope:
 - Move source-scanning architecture tests out of `core-runtime`.
 - Move tests that require multiple modules into integration tests.
 - Keep focused unit tests with their owning modules.
-- Make the architecture-test module understand both the current module names
-  and the target names during migration.
+- Keep Phase 0 guards focused on the current module names and current rules.
+  Later phases update the relevant guards when they rename or split modules.
 
 Acceptance criteria:
 
@@ -573,39 +609,81 @@ Acceptance criteria:
 - Architecture tests enforce the current dependency rules before other modules
   move.
 - Integration tests cover server/client/protocol/runtime command paths.
-- Later phases can update architecture guards without leaving `core-runtime` as
-  the global guard-test owner.
+- The shared scanning helpers move with the architecture-test module, so later
+  phases update one guard-test home instead of keeping `core-runtime` as the
+  global guard-test owner.
 
-### Phase 1: Extract Stable API Modules
+### Phase 1a: Extract Execution API
 
-Create the stable API modules before moving implementation-heavy code:
+Create the execution contract module first:
 
 - `yierdis-execution-api`
-- `yierdis-storage-api`
-- `yierdis-memory-api`
-- `yierdis-runtime-api`
 
 Scope:
 
 - Move execution contracts out of `yierdis-core-contract`.
-- Move command-facing DB operation contracts out of `yierdis-core-api`.
-- Move off-heap contracts out of `yierdis-core-api`.
-- Move runtime change tracking, runtime access, and observability contracts out
-  of broad API ownership.
-- Classify maxmemory contracts explicitly as storage API, storage-memory
-  implementation, or runtime API.
+- Move `ExecutionRequest`, `ExecutionRecord`, `ByteArrayExecutionRequest`,
+  `ReplyWriter`, `ReplyWriterFactory`, `ReplySink`, `Session`,
+  server/session capability interfaces, `CommandContext`, and connection stat
+  views.
+- Leave storage, memory, and runtime contracts in place for this phase.
 
 Acceptance criteria:
 
-- Existing engine, executor, command, and server modules compile against
-  `yierdis-execution-api`.
-- Existing command and storage modules compile against `yierdis-storage-api`.
+- Engine, executor, command, protocol execution adapter, and server code compile
+  against `yierdis-execution-api`.
 - No protocol DTO moves into execution API.
+- Architecture guards assert that execution API has no dependency on protocol,
+  command implementation, storage implementation, runtime implementation,
+  application, or Netty.
+
+### Phase 1b: Extract Storage API And Memory API
+
+Create the storage and memory contract modules after execution API is stable:
+
+- `yierdis-storage-api`
+- `yierdis-memory-api`
+
+Scope:
+
+- Move command-facing DB operation contracts out of `yierdis-core-api`.
+- Move off-heap contracts out of `yierdis-core-api`.
+- Keep runtime-specific contracts in place for this phase.
+- Classify maxmemory contracts explicitly as storage API or storage-memory
+  implementation contracts.
+
+Acceptance criteria:
+
+- Existing command and storage modules compile against `yierdis-storage-api`.
 - Command modules depend on storage API but not memory API unless a concrete
   command genuinely requires a memory contract.
 - Storage implementation modules depend on memory API and storage API.
+- Architecture guards assert that storage API has no command, protocol,
+  application, Netty, or concrete storage implementation imports.
+- Architecture guards assert that memory API has no storage implementation,
+  command, protocol, Netty, runtime implementation, or application imports.
+
+### Phase 1c: Extract Runtime API
+
+Create the runtime contract module after storage API is stable:
+
+- `yierdis-runtime-api`
+
+Scope:
+
+- Move runtime change tracking, runtime access, and observability contracts out
+  of broad API ownership.
+- Move embedded runtime configuration contracts that need to be visible outside
+  the default runtime implementation.
+- Keep concrete instance assembly in `yierdis-runtime-memory`.
+
+Acceptance criteria:
+
 - Runtime modules depend on runtime API and storage API.
-- Architecture guards assert that each API module stays narrow.
+- Runtime API may depend on storage API abstractions, but not on
+  `yierdis-storage-memory`.
+- Architecture guards assert that runtime API has no storage implementation,
+  command implementation, protocol adapter, Netty, or application imports.
 
 ### Phase 2: Reframe Custom Protocol V1 As Wire And Execution Adapters
 
@@ -620,10 +698,11 @@ Scope:
 - Protocol DTOs, limits, JSON parser/writer, request encoder, reply parser, and
   protocol-side reply model move to wire.
 - Protocol DTO to `ExecutionRequest` conversion moves from server into the
-  execution adapter.
+  pure execution adapter.
 - `JsonLineReplyWriter` and `JsonLineReplyWriterFactory` move from server into
   the execution adapter.
-- Netty-specific decoder glue moves to custom-v1-netty.
+- Netty-specific decoder glue and Netty handler adapters move to custom-v1-netty
+  and call the pure execution adapter.
 
 Acceptance criteria:
 
@@ -631,6 +710,9 @@ Acceptance criteria:
   packages.
 - Execution adapter may depend on wire and execution API.
 - Execution adapter does not depend on command or storage modules.
+- Execution adapter imports no Netty packages.
+- Netty handlers are thin wrappers around wire decoding and the pure execution
+  adapter.
 - Server-app no longer owns protocol-specific reply writer implementation.
 - Client and bench consume wire/netty modules directly.
 
