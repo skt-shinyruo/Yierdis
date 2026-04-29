@@ -583,6 +583,79 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void executionApiMustRemainNeutralContractModule() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
+
+        Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
+        Assert.assertTrue("缺少 root pom.xml", Files.isRegularFile(rootPom));
+        String rootPomText = Files.readString(rootPom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "root pom.xml must aggregate yierdis-execution",
+                rootPomText.contains("<module>yierdis-execution</module>")
+        );
+
+        Path executionPom = workspaceRoot.resolve("yierdis-execution/pom.xml").normalize();
+        Path apiPom = workspaceRoot.resolve("yierdis-execution/yierdis-execution-api/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-execution/pom.xml", Files.isRegularFile(executionPom));
+        Assert.assertTrue("缺少 yierdis-execution/yierdis-execution-api/pom.xml", Files.isRegularFile(apiPom));
+
+        Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
+        Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
+        String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
+        Assert.assertTrue("architecture policy must name yierdis-execution-api", policy.contains("yierdis-execution-api:"));
+        Assert.assertTrue("architecture policy must forbid Netty imports from execution API", policy.contains("io.netty"));
+
+        String pom = Files.readString(apiPom, StandardCharsets.UTF_8);
+        for (String forbiddenDependency : List.of(
+                "<artifactId>yierdis-core-command</artifactId>",
+                "<artifactId>yierdis-core-db</artifactId>",
+                "<artifactId>yierdis-core-runtime</artifactId>",
+                "<artifactId>yierdis-protocol-model</artifactId>",
+                "<artifactId>yierdis-protocol-codec</artifactId>",
+                "<artifactId>yierdis-protocol-netty</artifactId>",
+                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-memory-foreign</artifactId>",
+                "<artifactId>yierdis-bytes-netty</artifactId>",
+                "<artifactId>netty-all</artifactId>"
+        )) {
+            Assert.assertFalse(
+                    "yierdis-execution-api must not depend on forbidden implementation/module dependency "
+                            + forbiddenDependency,
+                    pom.contains(forbiddenDependency)
+            );
+        }
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                workspaceRoot.resolve("yierdis-execution/yierdis-execution-api/src/main/java").normalize(),
+                offenders,
+                "import yier.bubu.redis.protocol.",
+                "import yier.bubu.redis.command.",
+                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.runtime.",
+                "import yier.bubu.redis.server.",
+                "import io.netty.",
+                "yier.bubu.redis.protocol.",
+                "yier.bubu.redis.command.",
+                "yier.bubu.redis.db.",
+                "yier.bubu.redis.runtime.",
+                "yier.bubu.redis.server.",
+                "io.netty."
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-execution-api Java 文件", scanned > 0);
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 yierdis-execution-api 依赖协议、命令实现、存储实现、运行时实现、应用或 Netty：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
     public void protocolRequestAndServerReplyBoundariesMustStayDocumented() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);

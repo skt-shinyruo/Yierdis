@@ -19,7 +19,7 @@
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-core-contract</artifactId>
+            <artifactId>yierdis-execution-api</artifactId>
         </dependency>
 
         <dependency>

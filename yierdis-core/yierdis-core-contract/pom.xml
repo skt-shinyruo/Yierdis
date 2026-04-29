@@ -14,18 +14,12 @@
     <packaging>jar</packaging>
 
     <name>yierdis-core-contract</name>
-    <description>Execution contract types shared by Yierdis modules (Netty-free).</description>
+    <description>Temporary compatibility bridge for execution contracts.</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-bytes-lib</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>junit</groupId>
-            <artifactId>junit</artifactId>
-            <scope>test</scope>
+            <artifactId>yierdis-execution-api</artifactId>
         </dependency>
     </dependencies>
 </project>
