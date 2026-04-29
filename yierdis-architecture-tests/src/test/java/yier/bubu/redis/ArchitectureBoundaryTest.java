@@ -274,9 +274,13 @@ public class ArchitectureBoundaryTest {
                 offenders,
                 "byte[][] argv"
         );
+        Path transactionStateFile = repoRoot.getParent().resolve(
+                "yierdis-execution/yierdis-execution-api/src/main/java/yier/bubu/redis/contract/TransactionState.java"
+        ).normalize();
+        Assert.assertTrue("缺少 execution-api TransactionState.java，无法约束事务回放 surface", Files.isRegularFile(transactionStateFile));
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-contract/src/main/java/yier/bubu/redis/contract/TransactionState.java"),
+                transactionStateFile,
                 offenders,
                 "enqueue(byte[][]",
                 "tryEnqueue(byte[][]",
@@ -604,8 +608,15 @@ public class ArchitectureBoundaryTest {
         Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
         Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
         String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
-        Assert.assertTrue("architecture policy must name yierdis-execution-api", policy.contains("yierdis-execution-api:"));
-        Assert.assertTrue("architecture policy must forbid Netty imports from execution API", policy.contains("io.netty"));
+        String executionPolicy = policySection(policy, "yierdis-execution-api");
+        Assert.assertTrue(
+                "execution-api policy must forbid Netty imports from execution API",
+                executionPolicy.contains("io.netty")
+        );
+        Assert.assertTrue(
+                "execution-api policy must forbid protocol imports from execution API",
+                executionPolicy.contains("yier.bubu.redis.protocol")
+        );
 
         Path packageInfo = workspaceRoot.resolve(
                 "yierdis-execution/yierdis-execution-api/src/main/java/yier/bubu/redis/contract/package-info.java"
@@ -683,6 +694,41 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void coreContractMustRemainCompatibilityBridge() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path bridgePom = repoRoot.resolve("yierdis-core-contract/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-core-contract/pom.xml", Files.isRegularFile(bridgePom));
+        String pom = Files.readString(bridgePom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "yierdis-core-contract must depend on yierdis-execution-api as a compatibility bridge",
+                pom.contains("<artifactId>yierdis-execution-api</artifactId>")
+        );
+        Assert.assertTrue(
+                "yierdis-core-contract description must identify it as a compatibility bridge",
+                pom.contains("Temporary compatibility bridge")
+        );
+
+        Path sourceRoot = repoRoot.resolve("yierdis-core-contract").resolve("src/main/java").normalize();
+        List<String> offenders = new ArrayList<>();
+        if (Files.exists(sourceRoot)) {
+            try (Stream<Path> paths = Files.walk(sourceRoot)) {
+                paths.filter(p -> p != null && p.toString().endsWith(".java"))
+                        .sorted()
+                        .forEach(file -> offenders.add(relativePath(repoRoot, file)));
+            }
+        }
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "yierdis-core-contract must not reintroduce main Java contract sources; use yierdis-execution-api:\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
     public void coreEngineMustAvoidFutureProhibitedImplementationFamilies() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
@@ -691,9 +737,23 @@ public class ArchitectureBoundaryTest {
         Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
         Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
         String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
-        Assert.assertTrue("architecture policy must name yierdis-core-engine", policy.contains("yierdis-core-engine:"));
-        Assert.assertTrue("architecture policy must forbid server imports from core engine", policy.contains("yier.bubu.redis.server"));
-        Assert.assertTrue("architecture policy must forbid Netty imports from core engine", policy.contains("io.netty"));
+        String enginePolicy = policySection(policy, "yierdis-core-engine");
+        Assert.assertTrue(
+                "core-engine policy must allow current core-command dependency until the command split",
+                enginePolicy.contains("yierdis-core-command")
+        );
+        Assert.assertTrue(
+                "core-engine policy must forbid server imports",
+                enginePolicy.contains("yier.bubu.redis.server")
+        );
+        Assert.assertTrue(
+                "core-engine policy must forbid Netty imports",
+                enginePolicy.contains("io.netty")
+        );
+        Assert.assertTrue(
+                "core-engine policy must forbid concrete DB/runtime dependency",
+                enginePolicy.contains("yierdis-core-db")
+        );
 
         Path enginePom = repoRoot.resolve("yierdis-core-engine/pom.xml").normalize();
         Assert.assertTrue("缺少 yierdis-core-engine/pom.xml", Files.isRegularFile(enginePom));
@@ -1313,6 +1373,28 @@ public class ArchitectureBoundaryTest {
                 return;
             }
         }
+    }
+
+    private static String policySection(String policy, String moduleName) {
+        String[] lines = policy.split("\\R", -1);
+        StringBuilder section = new StringBuilder();
+        boolean found = false;
+        for (String line : lines) {
+            boolean moduleHeader = line.startsWith("  ")
+                    && !line.startsWith("    ")
+                    && line.endsWith(":");
+            if (moduleHeader) {
+                if (found) {
+                    break;
+                }
+                found = line.equals("  " + moduleName + ":");
+            }
+            if (found) {
+                section.append(line).append('\n');
+            }
+        }
+        Assert.assertTrue("architecture policy must name " + moduleName, found);
+        return section.toString();
     }
 
     private static void retainOnly(List<String> offenders, String allowedRelativeFile) {

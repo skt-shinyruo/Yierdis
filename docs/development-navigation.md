@@ -204,7 +204,9 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 - `yierdis-server/src/main/java/yier/bubu/redis/ServerConnectionContext.java`
 - `yierdis-server/src/main/java/yier/bubu/redis/ServerSessionState.java`
-- `yierdis-core/yierdis-core-contract/src/main/java/yier/bubu/redis/contract/CommandContext.java`
+- `yierdis-execution/yierdis-execution-api/src/main/java/yier/bubu/redis/contract/CommandContext.java`
+
+`yierdis-core-contract` 目前只是临时兼容桥；新的执行契约源码都在 `yierdis-execution-api`。
 
 ### 路由入口
 
