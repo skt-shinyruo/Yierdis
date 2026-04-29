@@ -14,6 +14,13 @@ modules:
       - yier.bubu.redis.offheap.api
       - yier.bubu.redis.protocol
       - yier.bubu.redis.server
+    allowed_spi_imports:
+      yier.bubu.redis.runtime.api.YierdisChangeTracking:
+        - yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command
+  yierdis-core-db:
+    allowed_spi_imports:
+      yier.bubu.redis.runtime.api.YierdisChangeTracking:
+        - yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db
   yierdis-executor-core:
     allowed_dependencies:
       - yierdis-execution-api
@@ -182,6 +189,10 @@ modules:
     forbidden_imports:
       - yier.bubu.redis.contract
   yierdis-core-runtime:
+    allowed_dependencies:
+      - yierdis-core-db
+      - yierdis-storage-api
+      - yierdis-runtime-api
     source_ownership:
       - runtime_lifecycle_only
       - no_whole_repo_architecture_tests
