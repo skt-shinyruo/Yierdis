@@ -17,6 +17,7 @@
     <description>Aggregator and parent for Yierdis memory modules.</description>
 
     <modules>
+        <module>api</module>
         <module>foreign</module>
     </modules>
 </project>

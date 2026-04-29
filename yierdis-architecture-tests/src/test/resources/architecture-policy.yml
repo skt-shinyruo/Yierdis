@@ -48,6 +48,30 @@ modules:
       - yier.bubu.redis.protocol
       - yier.bubu.redis.server
       - io.netty
+  yierdis-memory-api:
+    allowed_dependencies:
+      - yierdis-bytes-lib
+    forbidden_dependencies:
+      - yierdis-core-api
+      - yierdis-core-command
+      - yierdis-core-db
+      - yierdis-core-runtime
+      - yierdis-protocol-model
+      - yierdis-protocol-codec
+      - yierdis-protocol-netty
+      - yierdis-server
+      - yierdis-memory-foreign
+      - yierdis-bytes-netty
+      - netty-all
+    forbidden_imports:
+      - yier.bubu.redis.command
+      - yier.bubu.redis.db
+      - yier.bubu.redis.storage
+      - yier.bubu.redis.runtime
+      - yier.bubu.redis.protocol
+      - yier.bubu.redis.server
+      - yier.bubu.redis.db.memory.foreign
+      - io.netty
   yierdis-core-engine:
     allowed_dependencies:
       - yierdis-execution-api

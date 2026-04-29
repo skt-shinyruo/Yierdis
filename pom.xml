@@ -135,6 +135,11 @@
                 <artifactId>yierdis-memory-foreign</artifactId>
                 <version>${project.version}</version>
             </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-memory-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
