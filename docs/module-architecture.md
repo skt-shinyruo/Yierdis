@@ -475,7 +475,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 - `pom.xml`
 - `yierdis-core/yierdis-core-command/pom.xml`
 - `yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/protocol/ReplySsoTGuardTest.java`
+- `yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/ReplySsoTGuardTest.java`
 - `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1ExecutionAdapter.java`
 - `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
 - `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
