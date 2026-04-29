@@ -10,7 +10,7 @@
 ## Heap -> Off-Heap
 
 - 当前 server 的常见写入路径里，请求参数先在 heap。协议适配层会把请求里的命令和参数转成 heap `byte[]`。
-  代表路径：`yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java`
+  代表路径：`yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
 - `SET`、`APPEND` 等字符串写入命令，在启用 off-heap 后端时，会把这些 heap `byte[]` 或 `BytesSlice` 复制到 native memory。
   代表路径：`yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisObject.java`
 - 如果启用了 off-heap keyspace，第一次插入 key 时，也会把 key 从 heap `byte[]` 复制到 native memory。
@@ -43,8 +43,8 @@
   代表路径：`yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisStringOps.java`
 - reply 写回链路支持 `BytesSlice` 直通；如果下游是 direct `ByteBuf` 或带内存地址的 sink，可以直接把 bytes 拷到目标 native memory。
   代表路径：
-  - `yierdis-server/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java`
-  - `yierdis-protocol/yierdis-protocol-codec/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1NdjsonEncoder.java`
+  - `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java`
+  - `yierdis-protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1NdjsonEncoder.java`
   - `yierdis-memory/netty/src/main/java/yier/bubu/redis/db/memory/netty/YierdisNettyOffHeapAllocator.java`
   - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/memory/offheap/YierdisUnsafeOffHeapString.java`
 - 集合类也有同样分界。例如 `HGETALL` 的流式写回路径，可以把 off-heap field/value 直接按 `BulkStringSink` 输出，而不必先拼成 `List<byte[]>`。

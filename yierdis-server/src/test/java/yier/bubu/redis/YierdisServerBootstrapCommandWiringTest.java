@@ -5,7 +5,6 @@ import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
-import yier.bubu.redis.contract.ReplyWriterFactory;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.TransactionState;
 import yier.bubu.redis.engine.YierdisEngine;
@@ -14,6 +13,7 @@ import yier.bubu.redis.executor.CommandExecutorConfig;
 import yier.bubu.redis.executor.SchedulingPolicy;
 import yier.bubu.redis.ops.MaxmemoryPolicy;
 import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
+import yier.bubu.redis.protocol.netty.ProtocolCommandAdapter;
 import yier.bubu.redis.protocol.json.JsonArray;
 import yier.bubu.redis.protocol.json.JsonBoolean;
 import yier.bubu.redis.protocol.json.JsonLimits;
@@ -411,7 +411,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     private static final class InitializerTestEnv implements AutoCloseable {
         private final YierdisInstance instance;
-        private final ReplyWriterFactory replyWriterFactory;
+        private final JsonLineReplyWriterFactory replyWriterFactory;
         private final CommandExecutor<NettyExecutionConnection> executor;
 
         private InitializerTestEnv() {

@@ -55,7 +55,7 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-protocol-codec</artifactId>
+            <artifactId>yierdis-custom-v1-wire</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

@@ -82,11 +82,11 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 本项目内部模块做过一次“边界收敛”，目的是让依赖方向更清晰（执行契约在 execution-api，协议模型专注协议，组装在 server）：
 
-- **执行契约（`ExecutionRequest` / `ExecutionRecord` / `ReplyWriter` / session contracts）**：统一由 `yierdis-execution-api` 拥有（包名仍为 `yier.bubu.redis.contract.*`，便于迁移），不再放在 `yierdis-protocol-model`；`yierdis-core-contract` 只是临时兼容桥，旧的 `Command` 仅保留为兼容/废弃类型。
+- **执行契约（`ExecutionRequest` / `ExecutionRecord` / `ReplyWriter` / session contracts）**：统一由 `yierdis-execution-api` 拥有（包名仍为 `yier.bubu.redis.contract.*`，便于迁移），不放在 Custom Protocol v1 wire 模块；`yierdis-core-contract` 只是临时兼容桥，旧的 `Command` 仅保留为兼容/废弃类型。
 - **存储能力契约（`DbEngine` / `DbReads` / `DbWrites` / `MemoryOps` / maxmemory hooks）**：统一由 `yierdis-storage-api` 拥有；包名仍为 `yier.bubu.redis.ops.*`，便于迁移。需要这些 ops contract 的模块应直接依赖 `yierdis-storage-api`，不要把新 ops 加回 `core-api`。
 - **运行时契约（`YierdisInstanceConfig` / `YierdisChangeEvent` / `YierdisChangeSink` / `YierdisChangeTracking`）**：统一由 `yierdis-runtime-api` 拥有；包名保持 `yier.bubu.redis.runtime*`，便于迁移。需要这些 runtime contract 的模块应直接依赖 `yierdis-runtime-api`，不要通过 `core-api` 传递依赖。
-- **协议模型（limits/build-info/reply tooling/client/parser model）**：继续位于 `yierdis-protocol-model`（包名 `yier.bubu.redis.protocol.*`）；其中 `ReplyValue` 仅用于协议侧客户端/工具/解析器与编码辅助，server 命令写回语义仍以 `ReplyWriter` 为单一事实来源，server command execution write-back still uses ReplyWriter.
-- **协议请求适配**：`CustomProtocolV1Request` 只能在 `yierdis-server` 中通过 `ProtocolCommandAdapter` 适配为 `ExecutionRequest`；在 command-spec SSOT 和 `YierdisDb` 收敛工作完成前，不应重启一轮 protocol-layer rewrite。
+- **协议模型（limits/reply tooling/client/parser model）**：位于 `yierdis-custom-v1-wire`（包名仍为 `yier.bubu.redis.protocol.*`，便于迁移）；其中 `ReplyValue` 仅用于协议侧客户端/工具/解析器与编码辅助，server 命令写回语义仍以 `ReplyWriter` 为单一事实来源，server command execution write-back still uses ReplyWriter.
+- **协议请求适配**：`CustomProtocolV1Request` 由 `yierdis-custom-v1-execution-adapter` 适配为 `ExecutionRequest`；Netty handler glue 位于 `yierdis-custom-v1-netty`；`yierdis-server` 只做应用组装。
 - **事务回放 / 变更事件**：连接级事务重放与 `YierdisChangeEvent` 都应复用 `ExecutionRecord` 快照，而不是重新引入新的 argv 容器或 server-local `Command` 包装。
 - **core-command 默认装配**：`yierdis-core-command` 仅保留传输无关的默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server`，而 `PING/ECHO/COMMAND/SELECT/QUIT/FLUSHDB` 这类传输无关或 DB 生命周期命令继续留在 core。
 - **CLI 输入解析**：`InlineCommandParser` 位于 `yierdis-client`（`yier.bubu.redis.client.InlineCommandParser`）。

@@ -94,7 +94,7 @@ public class ReplySsoTGuardTest {
         Assert.assertNotNull("无法定位仓库根目录", workspaceRoot);
 
         Path requestFile = workspaceRoot.resolve(
-                "yierdis-protocol/yierdis-protocol-model/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1Request.java"
+                "yierdis-protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1Request.java"
         );
         Assert.assertTrue("缺少 CustomProtocolV1Request.java", Files.isRegularFile(requestFile));
 
@@ -108,7 +108,7 @@ public class ReplySsoTGuardTest {
         Assert.assertNotNull("无法定位仓库根目录", workspaceRoot);
 
         Path replyValueFile = workspaceRoot.resolve(
-                "yierdis-protocol/yierdis-protocol-model/src/main/java/yier/bubu/redis/protocol/reply/ReplyValue.java"
+                "yierdis-protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/reply/ReplyValue.java"
         );
         Assert.assertTrue("缺少 ReplyValue.java", Files.isRegularFile(replyValueFile));
 
@@ -123,14 +123,14 @@ public class ReplySsoTGuardTest {
         Path workspaceRoot = resolveWorkspaceRoot();
         Assert.assertNotNull("无法定位仓库根目录", workspaceRoot);
 
-        Path pomFile = workspaceRoot.resolve("yierdis-protocol/yierdis-protocol-model/pom.xml");
-        Assert.assertTrue("缺少 yierdis-protocol-model/pom.xml", Files.isRegularFile(pomFile));
+        Path pomFile = workspaceRoot.resolve("yierdis-protocol/yierdis-custom-v1-wire/pom.xml");
+        Assert.assertTrue("缺少 yierdis-custom-v1-wire/pom.xml", Files.isRegularFile(pomFile));
 
         String pom = Files.readString(pomFile, StandardCharsets.UTF_8);
-        Assert.assertFalse("protocol-model 模块描述不应再使用 Reply IR wording", pom.contains("Reply IR model"));
+        Assert.assertFalse("custom-v1-wire 模块描述不应再使用 Reply IR wording", pom.contains("Reply IR model"));
 
         Path replyPackage = workspaceRoot.resolve(
-                "yierdis-protocol/yierdis-protocol-model/src/main/java/yier/bubu/redis/protocol/reply"
+                "yierdis-protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/reply"
         );
         Assert.assertTrue("缺少 protocol reply package", Files.isDirectory(replyPackage));
 
@@ -161,7 +161,7 @@ public class ReplySsoTGuardTest {
         Assert.assertNotNull("无法定位仓库根目录", workspaceRoot);
 
         Path encoderFile = workspaceRoot.resolve(
-                "yierdis-protocol/yierdis-protocol-codec/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1NdjsonEncoder.java"
+                "yierdis-protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1NdjsonEncoder.java"
         );
         Assert.assertTrue("缺少 CustomProtocolV1NdjsonEncoder.java", Files.isRegularFile(encoderFile));
 

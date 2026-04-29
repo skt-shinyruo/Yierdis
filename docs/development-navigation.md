@@ -171,23 +171,24 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 先看：
 
-- `yierdis-protocol/yierdis-protocol-netty/src/main/java/yier/bubu/redis/protocol/netty/CustomRequestDecoder.java`
-- `yierdis-protocol/yierdis-protocol-codec/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1RequestEncoder.java`
+- `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/CustomRequestDecoder.java`
+- `yierdis-protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1RequestEncoder.java`
 
 ### protocol -> execution bridge
 
 只看：
 
-- `yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java`
+- `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1ExecutionAdapter.java`
+- `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
 
-这里是 protocol DTO 转成 `ExecutionRequest` 的唯一桥。
+这里是 protocol DTO 转成 `ExecutionRequest` 的唯一桥；Netty handler 只负责调用纯 adapter。
 
 ### reply 侧
 
 先看：
 
-- `yierdis-server/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java`
-- `yierdis-protocol/yierdis-protocol-codec/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1ReplyParser.java`
+- `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java`
+- `yierdis-protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1ReplyParser.java`
 
 ### 需要特别注意
 

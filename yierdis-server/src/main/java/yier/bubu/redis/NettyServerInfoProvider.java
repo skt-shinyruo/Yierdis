@@ -10,7 +10,6 @@ import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.executor.CommandExecutor;
-import yier.bubu.redis.protocol.YierdisBuildInfo;
 import yier.bubu.redis.runtime.YierdisInstanceObservability;
 
 import java.nio.charset.StandardCharsets;

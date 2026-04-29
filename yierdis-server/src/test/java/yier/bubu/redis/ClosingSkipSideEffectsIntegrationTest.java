@@ -12,6 +12,7 @@ import yier.bubu.redis.executor.CommandExecutor;
 import yier.bubu.redis.executor.CommandExecutorConfig;
 import yier.bubu.redis.executor.ExecutionConnectionContext;
 import yier.bubu.redis.executor.SchedulingPolicy;
+import yier.bubu.redis.protocol.netty.ProtocolCommandAdapter;
 import yier.bubu.redis.protocol.v1.CustomProtocolV1Request;
 import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
 import yier.bubu.redis.runtime.YierdisInstance;

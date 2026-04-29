@@ -49,12 +49,6 @@
             <artifactId>yierdis-core-command</artifactId>
             <scope>test</scope>
         </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-protocol-netty</artifactId>
-            <scope>test</scope>
-        </dependency>
     </dependencies>
 
     <build>

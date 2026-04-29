@@ -58,6 +58,9 @@
                                         <exclude>yier.bubu.redis:yierdis-core-db</exclude>
                                         <exclude>yier.bubu.redis:yierdis-memory-api</exclude>
                                         <exclude>yier.bubu.redis:yierdis-protocol-model</exclude>
+                                        <exclude>yier.bubu.redis:yierdis-custom-v1-wire</exclude>
+                                        <exclude>yier.bubu.redis:yierdis-custom-v1-execution-adapter</exclude>
+                                        <exclude>yier.bubu.redis:yierdis-custom-v1-netty</exclude>
                                     </excludes>
                                     <searchTransitive>true</searchTransitive>
                                 </bannedDependencies>

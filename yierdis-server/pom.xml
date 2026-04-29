@@ -39,7 +39,12 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-protocol-netty</artifactId>
+            <artifactId>yierdis-custom-v1-execution-adapter</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-custom-v1-netty</artifactId>
         </dependency>
 
         <dependency>

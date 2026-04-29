@@ -270,7 +270,7 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 桥接类是：
 
-- [`yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java`](../yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java)
+- [`yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`](../yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java)
 
 ### 它做的事非常专一
 

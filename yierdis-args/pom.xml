@@ -19,7 +19,7 @@
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-protocol-model</artifactId>
+            <artifactId>yierdis-custom-v1-wire</artifactId>
         </dependency>
 
         <dependency>

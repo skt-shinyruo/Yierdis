@@ -18,6 +18,9 @@ public class ArchitecturePolicyResourceTest {
             Assert.assertTrue(policy.contains("yierdis-runtime-api:"));
             Assert.assertTrue(policy.contains("yierdis-core-api:"));
             Assert.assertTrue(policy.contains("yierdis-server:"));
+            Assert.assertTrue(policy.contains("yierdis-custom-v1-wire:"));
+            Assert.assertTrue(policy.contains("yierdis-custom-v1-execution-adapter:"));
+            Assert.assertTrue(policy.contains("yierdis-custom-v1-netty:"));
             Assert.assertTrue(policy.contains("forbidden_imports:"));
             Assert.assertTrue(policy.contains("yier.bubu.redis.protocol.reply"));
         }

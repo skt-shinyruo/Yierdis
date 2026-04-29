@@ -138,12 +138,17 @@
 如果你想单跑某一个模块，最稳妥的方式是进入对应模块目录：
 
 ```bash
-cd yierdis-protocol/yierdis-protocol-codec
-mvn -Dtest=CustomProtocolV1RequestEncoderTest,CustomProtocolV1ReplyParserTest,JsonLineReplyWriterTest test
+cd yierdis-protocol/yierdis-custom-v1-wire
+mvn -Dtest=CustomProtocolV1RequestEncoderTest,CustomProtocolV1ReplyParserTest test
 ```
 
 ```bash
-cd yierdis-protocol/yierdis-protocol-netty
+cd yierdis-protocol/yierdis-custom-v1-execution-adapter
+mvn -Dtest=CustomProtocolV1ExecutionAdapterTest,JsonLineReplyWriterTest test
+```
+
+```bash
+cd yierdis-protocol/yierdis-custom-v1-netty
 mvn -Dtest=CustomRequestDecoderTest test
 ```
 

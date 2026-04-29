@@ -242,7 +242,7 @@ Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格�
 ### 请求主链路入口
 
 - `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java`
+- `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
 - `yierdis-server/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
 
 ### 命令处理主入口
