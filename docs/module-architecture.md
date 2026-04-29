@@ -8,10 +8,11 @@
 
 ```text
 bytes-lib
-├─ core-contract ──> core-api ──> core-db ──> core-runtime
-│                     ^             ^
-│                     │             └─ memory-foreign
-│                     └─ core-command ──> core-engine
+├─ execution-api ──> core-contract (temporary bridge)
+│        ├─────────> core-api ──> core-db ──> core-runtime
+│        │             ^             ^
+│        │             │             └─ memory-foreign
+│        │             └─ core-command ──> core-engine
 │
 ├─ protocol-model ──> protocol-codec ──> protocol-netty
 │
@@ -21,7 +22,7 @@ bytes-lib
 │
 ├─ client  -> protocol-netty
 ├─ bench   -> args + protocol-codec + protocol-netty
-└─ server  -> core-contract + core-engine + core-command + core-runtime
+└─ server  -> execution-api + core-engine + core-command + core-runtime
              + protocol-netty + bytes-netty + executor-core + args + memory-foreign
 ```
 
@@ -99,9 +100,9 @@ protocol 车道只负责“线上协议长什么样”，不负责命令执行�
 
 core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发包”。
 
-### `yierdis-core-contract`
+### `yierdis-execution-api`
 
-这是执行契约层，放的是 transport-agnostic 的命令执行语义对象，例如：
+这是执行契约层，放的是 transport-agnostic 的命令执行语义对象（包名仍为 `yier.bubu.redis.contract.*` 以保持迁移兼容），例如：
 
 - `ExecutionRequest`
 - `ExecutionRecord`
@@ -109,6 +110,10 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 - `Session`
 
 它的作用是把命令执行从 protocol DTO 里抽出来。
+
+### `yierdis-core-contract`
+
+这是临时兼容桥，只依赖 `yierdis-execution-api`，不再拥有执行契约业务源码。
 
 ### `yierdis-core-api`
 
@@ -302,7 +307,7 @@ bench 也主要依赖协议和参数模块，说明它在设计上更像：
 
 ### 1. protocol 不等于 command contract
 
-`ExecutionRequest` / `ReplyWriter` 在 `core-contract`，不是在 `protocol-model`。
+`ExecutionRequest` / `ReplyWriter` 由 `yierdis-execution-api` 拥有，不在 `protocol-model`；`yierdis-core-contract` 只是临时兼容桥。
 
 这意味着：
 
@@ -417,7 +422,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 Yierdis 的模块设计重点，不是“按包名分目录”，而是：
 
 - protocol 负责线上协议
-- core-contract / core-api 负责执行契约和 DB 能力边界
+- execution-api / core-api 负责执行契约和 DB 能力边界
 - core-engine 负责统一命令执行入口
 - core-db 负责真实存储
 - core-runtime 负责实例生命周期

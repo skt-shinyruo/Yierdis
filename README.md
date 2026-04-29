@@ -80,9 +80,9 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 ## 开发者：模块边界（契约 / 组装）
 
-本项目内部模块做过一次“边界收敛”，目的是让依赖方向更清晰（契约在 core，协议模型专注协议，组装在 server）：
+本项目内部模块做过一次“边界收敛”，目的是让依赖方向更清晰（执行契约在 execution-api，协议模型专注协议，组装在 server）：
 
-- **执行契约（`ExecutionRequest` / `ExecutionRecord` / `ReplyWriter` / session contracts）**：统一放在 `yierdis-core-contract`（包名 `yier.bubu.redis.contract.*`），不再放在 `yierdis-protocol-model`；旧的 `Command` 仅保留为兼容层。
+- **执行契约（`ExecutionRequest` / `ExecutionRecord` / `ReplyWriter` / session contracts）**：统一由 `yierdis-execution-api` 拥有（包名仍为 `yier.bubu.redis.contract.*`，便于迁移），不再放在 `yierdis-protocol-model`；`yierdis-core-contract` 只是临时兼容桥，旧的 `Command` 仅保留为兼容/废弃类型。
 - **协议模型（limits/build-info/reply tooling/client/parser model）**：继续位于 `yierdis-protocol-model`（包名 `yier.bubu.redis.protocol.*`）；其中 `ReplyValue` 仅用于协议侧客户端/工具/解析器与编码辅助，server 命令写回语义仍以 `ReplyWriter` 为单一事实来源，server command execution write-back still uses ReplyWriter.
 - **协议请求适配**：`CustomProtocolV1Request` 只能在 `yierdis-server` 中通过 `ProtocolCommandAdapter` 适配为 `ExecutionRequest`；在 command-spec SSOT 和 `YierdisDb` 收敛工作完成前，不应重启一轮 protocol-layer rewrite。
 - **事务回放 / 变更事件**：连接级事务重放与 `YierdisChangeEvent` 都应复用 `ExecutionRecord` 快照，而不是重新引入新的 argv 容器或 server-local `Command` 包装。
