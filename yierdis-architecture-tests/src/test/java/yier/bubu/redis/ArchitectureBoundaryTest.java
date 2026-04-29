@@ -1197,10 +1197,17 @@ public class ArchitectureBoundaryTest {
             return null;
         }
 
+        Path workspaceCore = base.resolve("yierdis-core");
+        if (Files.isDirectory(workspaceCore.resolve("yierdis-core-api/src/main/java"))
+                && Files.isDirectory(workspaceCore.resolve("yierdis-core-db/src/main/java"))
+                && Files.isRegularFile(workspaceCore.resolve("pom.xml"))) {
+            return workspaceCore.normalize();
+        }
+
         if (Files.isDirectory(base.resolve("yierdis-core-api/src/main/java"))
                 && Files.isDirectory(base.resolve("yierdis-core-db/src/main/java"))
                 && Files.isRegularFile(base.resolve("pom.xml"))) {
-            return base;
+            return base.normalize();
         }
         return null;
     }

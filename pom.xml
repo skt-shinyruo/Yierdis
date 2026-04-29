@@ -34,6 +34,8 @@
         <module>yierdis-client</module>
         <module>yierdis-server</module>
         <module>yierdis-bench</module>
+        <module>yierdis-architecture-tests</module>
+        <module>yierdis-integration-tests</module>
     </modules>
 
     <dependencyManagement>

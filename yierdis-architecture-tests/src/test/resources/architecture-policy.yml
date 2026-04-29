@@ -1,0 +1,44 @@
+modules:
+  yierdis-core-command:
+    allowed_dependencies:
+      - yierdis-core-api
+      - yierdis-core-contract
+    forbidden_dependencies:
+      - yierdis-core-db
+      - yierdis-protocol-model
+      - yierdis-server
+    forbidden_imports:
+      - yier.bubu.redis.db
+      - yier.bubu.redis.protocol
+      - yier.bubu.redis.server
+  yierdis-executor-core:
+    allowed_dependencies:
+      - yierdis-core-contract
+    forbidden_dependencies:
+      - yierdis-core-command
+      - yierdis-core-db
+      - yierdis-core-runtime
+      - yierdis-protocol-model
+      - yierdis-protocol-netty
+      - yierdis-server
+    forbidden_imports:
+      - yier.bubu.redis.command
+      - yier.bubu.redis.db
+      - yier.bubu.redis.runtime
+      - yier.bubu.redis.protocol
+      - io.netty
+  yierdis-server:
+    forbidden_imports:
+      - yier.bubu.redis.protocol.reply
+    source_ownership:
+      - no_command_context_construction
+      - no_protocol_reply_model_authority
+  yierdis-protocol-codec:
+    forbidden_dependencies:
+      - yierdis-core-contract
+    forbidden_imports:
+      - yier.bubu.redis.contract
+  yierdis-core-runtime:
+    source_ownership:
+      - runtime_lifecycle_only
+      - no_whole_repo_architecture_tests
