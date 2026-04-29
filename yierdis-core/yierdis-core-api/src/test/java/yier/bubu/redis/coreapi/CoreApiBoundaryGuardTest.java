@@ -16,7 +16,7 @@ public class CoreApiBoundaryGuardTest {
     @Test
     public void coreApiMustBeNettyFreeAndMustNotImportDbImplPackages() throws IOException {
         Path moduleRoot = resolveModuleRoot();
-        Assert.assertNotNull("无法定位 yierdis-core-api 模块根目录（未找到 src/main/java）", moduleRoot);
+        Assert.assertNotNull("无法定位 yierdis-core-api 模块根目录（未找到 pom.xml/src/test/java）", moduleRoot);
 
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenImports(moduleRoot.resolve("src/main/java"), offenders);
@@ -33,7 +33,7 @@ public class CoreApiBoundaryGuardTest {
     @Test
     public void coreApiMustNotRetainLegacyMixedOpsInterfaces() throws IOException {
         Path moduleRoot = resolveModuleRoot();
-        Assert.assertNotNull("无法定位 yierdis-core-api 模块根目录（未找到 src/main/java）", moduleRoot);
+        Assert.assertNotNull("无法定位 yierdis-core-api 模块根目录（未找到 pom.xml/src/test/java）", moduleRoot);
 
         List<String> legacyInterfaces = List.of(
                 "StringOps.java",
@@ -118,13 +118,31 @@ public class CoreApiBoundaryGuardTest {
         if (base == null) {
             return null;
         }
-        if (Files.isDirectory(base.resolve("src/main/java"))) {
+        if (isCoreApiModuleRoot(base)) {
             return base;
         }
         Path nested = base.resolve("yierdis-core-api");
-        if (Files.isDirectory(nested.resolve("src/main/java"))) {
+        if (isCoreApiModuleRoot(nested)) {
             return nested;
         }
+        Path nestedUnderCore = base.resolve("yierdis-core/yierdis-core-api");
+        if (isCoreApiModuleRoot(nestedUnderCore)) {
+            return nestedUnderCore;
+        }
         return null;
+    }
+
+    private static boolean isCoreApiModuleRoot(Path candidate) {
+        if (candidate == null
+                || !Files.isRegularFile(candidate.resolve("pom.xml"))
+                || !Files.isDirectory(candidate.resolve("src/test/java"))) {
+            return false;
+        }
+        try {
+            String pom = Files.readString(candidate.resolve("pom.xml"), StandardCharsets.UTF_8);
+            return pom.contains("<artifactId>yierdis-core-api</artifactId>");
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

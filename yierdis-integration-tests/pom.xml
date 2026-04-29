@@ -25,6 +25,12 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-bytes-lib</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-core-runtime</artifactId>
             <scope>test</scope>
         </dependency>
