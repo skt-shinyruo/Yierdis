@@ -316,7 +316,9 @@ public class ArchitectureBoundaryTest {
         List<String> offenders = new ArrayList<>();
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeEvent.java"),
+                repoRoot.getParent().resolve(
+                        "yierdis-runtime/yierdis-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeEvent.java"
+                ).normalize(),
                 offenders,
                 "byte[][] argv"
         );
@@ -1061,7 +1063,168 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void coreApiMustRemainRuntimeAndStorageCompatibilityBridge() throws IOException {
+    public void runtimeApiMustRemainNeutralContractModule() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
+
+        Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
+        Assert.assertTrue("缺少 root pom.xml", Files.isRegularFile(rootPom));
+        String rootPomText = Files.readString(rootPom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "root pom.xml must aggregate yierdis-runtime",
+                rootPomText.contains("<module>yierdis-runtime</module>")
+        );
+        Assert.assertTrue(
+                "root dependencyManagement must include yierdis-runtime-api",
+                rootPomText.contains("<artifactId>yierdis-runtime-api</artifactId>")
+        );
+
+        Path runtimePom = workspaceRoot.resolve("yierdis-runtime/pom.xml").normalize();
+        Path apiPom = workspaceRoot.resolve("yierdis-runtime/yierdis-runtime-api/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-runtime/pom.xml", Files.isRegularFile(runtimePom));
+        String runtimePomText = Files.readString(runtimePom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "yierdis-runtime parent must aggregate yierdis-runtime-api",
+                runtimePomText.contains("<module>yierdis-runtime-api</module>")
+        );
+        Assert.assertTrue("缺少 yierdis-runtime/yierdis-runtime-api/pom.xml", Files.isRegularFile(apiPom));
+
+        Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
+        Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
+        String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
+        String runtimeApiPolicy = policySection(policy, "yierdis-runtime-api");
+        Assert.assertTrue(
+                "runtime-api policy must allow direct execution-api dependency",
+                runtimeApiPolicy.contains("yierdis-execution-api")
+        );
+        Assert.assertTrue(
+                "runtime-api policy must allow direct storage-api dependency for embedded runtime config contracts",
+                runtimeApiPolicy.contains("yierdis-storage-api")
+        );
+        Assert.assertTrue(
+                "runtime-api policy must name forbidden dependency section",
+                runtimeApiPolicy.contains("forbidden_dependencies:")
+        );
+        Assert.assertTrue(
+                "runtime-api policy must name forbidden import section",
+                runtimeApiPolicy.contains("forbidden_imports:")
+        );
+        for (String requiredForbidden : List.of(
+                "yierdis-core-api",
+                "yierdis-core-command",
+                "yierdis-core-db",
+                "yierdis-core-runtime",
+                "yierdis-executor-core",
+                "yierdis-protocol-model",
+                "yierdis-protocol-codec",
+                "yierdis-protocol-netty",
+                "yierdis-server",
+                "yierdis-memory-foreign",
+                "yierdis-bytes-netty",
+                "netty-all",
+                "yier.bubu.redis.command",
+                "yier.bubu.redis.db",
+                "yier.bubu.redis.protocol",
+                "yier.bubu.redis.server",
+                "yier.bubu.redis.db.memory.foreign",
+                "io.netty"
+        )) {
+            Assert.assertTrue(
+                    "runtime-api policy must forbid " + requiredForbidden,
+                    runtimeApiPolicy.contains(requiredForbidden)
+            );
+        }
+
+        String pom = Files.readString(apiPom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "yierdis-runtime-api must depend on yierdis-execution-api for change event records",
+                pom.contains("<artifactId>yierdis-execution-api</artifactId>")
+        );
+        Assert.assertTrue(
+                "yierdis-runtime-api must depend on yierdis-storage-api for embedded runtime configuration contracts",
+                pom.contains("<artifactId>yierdis-storage-api</artifactId>")
+        );
+        Assert.assertTrue(
+                "yierdis-runtime-api tests must depend on JUnit",
+                pom.contains("<artifactId>junit</artifactId>")
+                        && pom.contains("<scope>test</scope>")
+        );
+        for (String forbiddenDependency : List.of(
+                "<artifactId>yierdis-core-api</artifactId>",
+                "<artifactId>yierdis-core-command</artifactId>",
+                "<artifactId>yierdis-core-db</artifactId>",
+                "<artifactId>yierdis-core-runtime</artifactId>",
+                "<artifactId>yierdis-executor-core</artifactId>",
+                "<artifactId>yierdis-protocol-model</artifactId>",
+                "<artifactId>yierdis-protocol-codec</artifactId>",
+                "<artifactId>yierdis-protocol-netty</artifactId>",
+                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-memory-foreign</artifactId>",
+                "<artifactId>yierdis-bytes-netty</artifactId>",
+                "<artifactId>netty-all</artifactId>"
+        )) {
+            Assert.assertFalse(
+                    "yierdis-runtime-api must not depend on forbidden implementation/module dependency "
+                            + forbiddenDependency,
+                    pom.contains(forbiddenDependency)
+            );
+        }
+
+        Path apiPackageInfo = workspaceRoot.resolve(
+                "yierdis-runtime/yierdis-runtime-api/src/main/java/yier/bubu/redis/runtime/api/package-info.java"
+        ).normalize();
+        Assert.assertTrue("runtime API package must document API/SPI audience in package-info.java", Files.isRegularFile(apiPackageInfo));
+        String apiPackageInfoText = Files.readString(apiPackageInfo, StandardCharsets.UTF_8);
+        for (String requiredClassification : List.of(
+                "YierdisChangeEvent - API",
+                "YierdisChangeSink - API",
+                "YierdisChangeTracking - SPI-in-legacy-package"
+        )) {
+            Assert.assertTrue(
+                    "runtime API package-info.java must classify " + requiredClassification,
+                    apiPackageInfoText.contains(requiredClassification)
+            );
+        }
+
+        Path runtimePackageInfo = workspaceRoot.resolve(
+                "yierdis-runtime/yierdis-runtime-api/src/main/java/yier/bubu/redis/runtime/package-info.java"
+        ).normalize();
+        Assert.assertTrue("runtime package must document embedded runtime configuration API audience in package-info.java", Files.isRegularFile(runtimePackageInfo));
+        String runtimePackageInfoText = Files.readString(runtimePackageInfo, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "runtime package-info.java must classify YierdisInstanceConfig",
+                runtimePackageInfoText.contains("YierdisInstanceConfig - embedded runtime configuration API")
+        );
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                workspaceRoot.resolve("yierdis-runtime/yierdis-runtime-api/src/main/java").normalize(),
+                offenders,
+                "import yier.bubu.redis.command.",
+                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.protocol.",
+                "import yier.bubu.redis.server.",
+                "import io.netty.",
+                "yier.bubu.redis.command.",
+                "yier.bubu.redis.db.",
+                "yier.bubu.redis.protocol.",
+                "yier.bubu.redis.server.",
+                "io.netty."
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-runtime-api Java 文件", scanned > 0);
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 yierdis-runtime-api 依赖命令实现、存储实现、协议、应用/server、Netty 或 memory-foreign：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void coreApiMustRemainCompatibilityBridge() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
@@ -1077,35 +1240,23 @@ public class ArchitectureBoundaryTest {
                 pom.contains("<artifactId>yierdis-storage-api</artifactId>")
         );
         Assert.assertTrue(
+                "yierdis-core-api must depend on yierdis-runtime-api as a temporary compatibility bridge",
+                pom.contains("<artifactId>yierdis-runtime-api</artifactId>")
+        );
+        Assert.assertTrue(
                 "yierdis-core-api description must identify it as a temporary compatibility bridge",
                 pom.contains("Temporary compatibility bridge")
         );
 
-        Path runtimeApiSourceRoot = repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/runtime/api").normalize();
-        List<String> runtimeApiOffenders = new ArrayList<>();
-        int runtimeApiScanned = scanForForbiddenText(
-                repoRoot,
-                runtimeApiSourceRoot,
-                runtimeApiOffenders,
-                "import yier.bubu.redis.ops.",
-                "import yier.bubu.redis.offheap.api."
-        );
-        Assert.assertTrue("core-api compatibility bridge must retain runtime/api sources", runtimeApiScanned > 0);
-        if (!runtimeApiOffenders.isEmpty()) {
-            Assert.fail(
-                    "检测到 runtime/api source 反向依赖 storage/memory API：\n"
-                            + String.join("\n", runtimeApiOffenders)
-            );
-        }
-
         for (Path forbiddenSourceRoot : List.of(
                 repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/ops").normalize(),
-                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/offheap").normalize()
+                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/offheap").normalize(),
+                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/runtime").normalize()
         )) {
             List<String> offenders = new ArrayList<>();
             int scanned = scanForForbiddenText(repoRoot, forbiddenSourceRoot, offenders, "package ");
             Assert.assertEquals(
-                    "core-api compatibility bridge must not retain ops/offheap main sources under " + forbiddenSourceRoot,
+                    "core-api compatibility bridge must not retain ops/offheap/runtime-api main sources under " + forbiddenSourceRoot,
                     0,
                     scanned
             );
@@ -1568,6 +1719,43 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void serverRuntimeApiImportsMustHaveDirectDependency() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
+
+        Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
+        Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
+        String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
+        String serverPolicy = policySection(policy, "yierdis-server");
+        Assert.assertTrue(
+                "server policy must allow direct runtime-api dependency when server imports runtime API types",
+                serverPolicy.contains("yierdis-runtime-api")
+        );
+
+        Path serverPom = workspaceRoot.resolve("yierdis-server/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-server/pom.xml", Files.isRegularFile(serverPom));
+        String pom = Files.readString(serverPom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "yierdis-server must declare yierdis-runtime-api directly because production server code imports YierdisInstanceConfig",
+                pom.contains("<artifactId>yierdis-runtime-api</artifactId>")
+        );
+
+        List<String> runtimeApiUsers = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                workspaceRoot.resolve("yierdis-server/src/main/java").normalize(),
+                runtimeApiUsers,
+                "import yier.bubu.redis.runtime.YierdisInstanceConfig;"
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server Java 文件", scanned > 0);
+        Assert.assertFalse(
+                "server guard expected at least one production YierdisInstanceConfig import; remove this direct-dependency guard if server stops using runtime API config",
+                runtimeApiUsers.isEmpty()
+        );
+    }
+
+    @Test
     public void executorCoreMustNotDependOnNetty() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
@@ -1900,13 +2088,13 @@ public class ArchitectureBoundaryTest {
         }
 
         Path workspaceCore = base.resolve("yierdis-core");
-        if (Files.isDirectory(workspaceCore.resolve("yierdis-core-api/src/main/java"))
+        if (Files.isRegularFile(workspaceCore.resolve("yierdis-core-api/pom.xml"))
                 && Files.isDirectory(workspaceCore.resolve("yierdis-core-db/src/main/java"))
                 && Files.isRegularFile(workspaceCore.resolve("pom.xml"))) {
             return workspaceCore.normalize();
         }
 
-        if (Files.isDirectory(base.resolve("yierdis-core-api/src/main/java"))
+        if (Files.isRegularFile(base.resolve("yierdis-core-api/pom.xml"))
                 && Files.isDirectory(base.resolve("yierdis-core-db/src/main/java"))
                 && Files.isRegularFile(base.resolve("pom.xml"))) {
             return base.normalize();

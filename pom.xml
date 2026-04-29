@@ -29,6 +29,7 @@
         <module>yierdis-bytes</module>
         <module>yierdis-execution</module>
         <module>yierdis-storage</module>
+        <module>yierdis-runtime</module>
         <module>yierdis-protocol</module>
         <module>yierdis-core</module>
         <module>yierdis-executor-core</module>
@@ -103,6 +104,11 @@
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-storage-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-runtime-api</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

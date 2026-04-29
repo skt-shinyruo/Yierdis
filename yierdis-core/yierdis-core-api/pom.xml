@@ -14,7 +14,7 @@
     <packaging>jar</packaging>
 
     <name>yierdis-core-api</name>
-    <description>Temporary compatibility bridge for Yierdis runtime API and storage API contracts.</description>
+    <description>Temporary compatibility bridge for Yierdis execution, storage, and runtime API contracts.</description>
 
     <dependencies>
         <dependency>
@@ -24,6 +24,10 @@
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-storage-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-runtime-api</artifactId>
         </dependency>
 
         <dependency>

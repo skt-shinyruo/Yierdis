@@ -11,13 +11,15 @@ bytes-lib
 ├─ memory-api ──> memory-foreign
 │
 ├─ storage-api ──> core-command ──> core-engine
-│        └───────> core-db ──> core-runtime
-│                       ^  ^
-│                       │  └─ memory-foreign
-│                       └──── memory-api
+│        ├───────> core-db ──> core-runtime
+│        │              ^  ^
+│        │              │  └─ memory-foreign
+│        │              └──── memory-api
+│        └───────> runtime-api ──> core-command + core-db + core-runtime
 │
 ├─ execution-api ──> core-contract (temporary bridge)
-│        └─────────> core-api (temporary runtime/storage bridge)
+│        ├─────────> runtime-api
+│        └─────────> core-api (temporary execution/storage/runtime bridge)
 │
 ├─ protocol-model ──> protocol-codec ──> protocol-netty
 │
@@ -27,7 +29,7 @@ bytes-lib
 │
 ├─ client  -> protocol-netty
 ├─ bench   -> args + protocol-codec + protocol-netty
-└─ server  -> execution-api + storage-api + core-engine + core-command + core-runtime
+└─ server  -> execution-api + storage-api + runtime-api + core-engine + core-command + core-runtime
              + protocol-netty + bytes-netty + executor-core + args + memory-foreign
 ```
 
@@ -43,6 +45,7 @@ bytes-lib
 - `yierdis-bytes`
 - `yierdis-memory`
 - `yierdis-storage`
+- `yierdis-runtime`
 
 它们的作用主要是：
 
@@ -123,7 +126,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 ### `yierdis-core-api`
 
-这是临时兼容桥，当前保留 runtime API 源码，并依赖 `yierdis-execution-api` 与 `yierdis-storage-api` 以便旧模块迁移。新的 command-facing DB 能力接口不要再加到这里。
+这是临时兼容桥，当前不再拥有 execution/storage/runtime 业务源码，只依赖 `yierdis-execution-api`、`yierdis-storage-api` 与 `yierdis-runtime-api` 以便旧模块迁移。新的 command-facing DB 能力接口或 runtime contract 不要再加到这里。
 
 ### `yierdis-storage-api`
 
@@ -146,6 +149,21 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 - `storage-api` 定义“命令层可以向 DB 提什么要求”
 - `core-db` 决定“这些要求具体怎么完成”
+
+### `yierdis-runtime-api`
+
+这是 embedded runtime contract 边界，包名仍保持 `yier.bubu.redis.runtime*` 以迁移兼容，放的是：
+
+- `YierdisInstanceConfig`
+- `YierdisChangeEvent`
+- `YierdisChangeSink`
+- `YierdisChangeTracking`
+
+它的意义是：
+
+- server / embedded users 直接依赖实例配置 API
+- command / storage implementation 通过 legacy package 中的 change-tracking SPI 协作
+- `core-api` 不再重新拥有 runtime API 源码
 
 ### `yierdis-core-db`
 
@@ -410,7 +428,8 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 - `core-db/storage-api/core-command` 不 import `yier.bubu.redis.protocol.*`
 - `core-command` 不依赖 `yierdis-memory-api`，也不 import `yier.bubu.redis.offheap.api.*`
 - `storage-api` 保持中立 contract 模块，不依赖 command、protocol、application/server、Netty、concrete storage implementation 或 memory-foreign
-- `core-api` 保持临时兼容桥形态：依赖 execution-api + storage-api，只保留 runtime/api 源码，不重新拥有 ops/offheap 源码
+- `runtime-api` 保持中立 contract 模块，不依赖 command/storage implementation、protocol、application/server、Netty 或 memory-foreign
+- `core-api` 保持临时兼容桥形态：依赖 execution-api + storage-api + runtime-api，不重新拥有 ops/offheap/runtime-api 源码
 - `memory-api` 保持中立 contract 模块，不依赖 command、storage implementation、protocol、runtime implementation、server/app、Netty 或 memory-foreign
 - `protocol-codec` 不依赖 `core-contract`
 - bootstrap 不重新内联 owner-thread 生命周期逻辑
@@ -451,7 +470,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 Yierdis 的模块设计重点，不是“按包名分目录”，而是：
 
 - protocol 负责线上协议
-- execution-api / storage-api 负责执行契约和 DB 能力边界
+- execution-api / storage-api / runtime-api 负责执行契约、DB 能力边界和 embedded runtime contract
 - memory-api 负责 off-heap contract 兼容面
 - core-engine 负责统一命令执行入口
 - core-db 负责真实存储

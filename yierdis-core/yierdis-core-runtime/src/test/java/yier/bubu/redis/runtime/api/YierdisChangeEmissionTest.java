@@ -4,7 +4,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.ExecutionRecord;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
@@ -17,26 +16,12 @@ import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 import static yier.bubu.redis.testutil.TestBytes.cmd;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
-public class YierdisChangeSinkTest {
-    @Test
-    public void changeEventExposesExecutionRecordFacts() {
-        ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("SET", Arrays.asList("key", "value"));
-
-        YierdisChangeEvent event = new YierdisChangeEvent(new ExecutionRecord(-4, request));
-
-        Assert.assertEquals(0, event.dbIndex());
-        Assert.assertNotNull(event.record());
-        Assert.assertArrayEquals("SET".getBytes(StandardCharsets.US_ASCII), event.request().toByteArray(0));
-        Assert.assertArrayEquals("key".getBytes(StandardCharsets.US_ASCII), event.request().toByteArray(1));
-        Assert.assertArrayEquals("value".getBytes(StandardCharsets.US_ASCII), event.request().toByteArray(2));
-    }
-
+public class YierdisChangeEmissionTest {
     @Test
     public void emitsEventsForRealChangesOnly() {
         forEachDb(db -> {
@@ -59,7 +44,6 @@ public class YierdisChangeSinkTest {
                 Assert.assertEquals("k", arg(e, 1));
                 Assert.assertEquals("v", arg(e, 2));
 
-                // No-op writes: should not emit.
                 events.clear();
                 ReplyObject nx = client.execute(cmd("SET", "k", "v2", "NX"));
                 Assert.assertTrue(nx instanceof ReplyNull);
@@ -83,7 +67,6 @@ public class YierdisChangeSinkTest {
                 Assert.assertEquals(0, ((ReplyInteger) persistNoTtl).value());
                 Assert.assertEquals(0, events.size());
 
-                // TTL metadata changes: should emit.
                 events.clear();
                 ReplyObject expireOk = client.execute(cmd("EXPIRE", "k", "10"));
                 Assert.assertTrue(expireOk instanceof ReplyInteger);
