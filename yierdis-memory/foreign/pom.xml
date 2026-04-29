@@ -19,7 +19,7 @@
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-core-api</artifactId>
+            <artifactId>yierdis-memory-api</artifactId>
         </dependency>
 
         <dependency>
