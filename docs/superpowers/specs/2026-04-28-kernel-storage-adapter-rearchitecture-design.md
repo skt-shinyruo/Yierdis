@@ -139,6 +139,30 @@ after the rearchitecture, even if their module names change:
 Existing guard tests should not simply be deleted. They should move to a new
 architecture-test module and be rewritten against the new module names.
 
+## Spec Precedence
+
+This spec supersedes older roadmap or design guidance when module ownership,
+dependency direction, or execution responsibility conflicts.
+
+Affected prior specs:
+
+- `docs/superpowers/specs/2026-04-28-engine-centric-architecture-design.md`
+  remains useful historical context for why execution entered through
+  `YierdisEngine`, but its broader statements that engine owns command registry,
+  command semantics, maintenance access, or change emission are superseded by
+  this spec. In this roadmap, engine is an execution-use-case orchestrator.
+- `docs/superpowers/specs/2026-04-27-yierdis-architecture-optimization-roadmap-design.md`
+  remains useful context for earlier risk-ordered slices, but its old module
+  names and guard locations are superseded by this spec once the rearchitecture
+  starts.
+- Focused behavior specs, such as command contract unification or storage
+  decomposition specs, still own command or storage semantics unless this spec
+  explicitly changes their module ownership.
+
+If two docs disagree during implementation, apply this spec for module
+ownership and dependency rules, then update or mark the older doc in the same
+phase that resolves the conflict.
+
 ## Considered Approaches
 
 ### Approach A: Package-Level Cleanup Only
@@ -254,6 +278,18 @@ Hard rules:
   modules unless the importing module is itself an implementation adapter.
 - Each phase that adds or moves public API/SPI types must update the architecture
   tests with an allowed-import rule and must add or move focused contract tests.
+
+SPI placement rules:
+
+- If an SPI is used by only one implementation module, keep it inside that
+  implementation module until a second consumer appears.
+- If an SPI is used by several implementations or adapters and has the same
+  dependency weight as the API, it may live in an explicit `.spi` package in the
+  related API artifact.
+- If an SPI needs heavier dependencies than the consumer API, split it into a
+  `*-spi` artifact rather than adding those dependencies to `*-api`.
+- No phase may add a public SPI only to avoid package-private compiler errors.
+  That is a signal to move a larger coherent cluster together.
 
 ## Target Maven Structure
 
@@ -457,19 +493,34 @@ composition code pass the default command modules into the kernel/engine. A
 default command family implements command API contracts; it does not register
 itself by reaching into kernel internals.
 
+Command composition protocol:
+
+1. `yierdis-command-defaults` exposes one or more `CommandModule` providers
+   through command API types only.
+2. The runtime or server composition root collects `CommandModule` instances
+   from defaults and any server-local command package.
+3. The composition root passes the collected modules to command-kernel.
+4. Command-kernel builds the registry and processor from `CommandModule`
+   contracts.
+5. Engine receives the configured command processor or command-kernel facade
+   through construction.
+
+This keeps command declaration, command registry construction, and application
+composition as separate responsibilities.
+
 ### Runtime
 
 ```text
 yierdis-runtime
 ├─ yierdis-runtime-api
-└─ yierdis-runtime-memory
+└─ yierdis-runtime-embedded
 ```
 
 Responsibilities:
 
 - `yierdis-runtime-api`: embedded instance configuration, runtime access,
   observability, change tracking, and lifecycle contracts.
-- `yierdis-runtime-memory`: default in-memory runtime assembly:
+- `yierdis-runtime-embedded`: default embedded single-node runtime assembly:
   multi-DB instance creation, owner-thread access, global maxmemory
   coordination, maintenance, and resource cleanup.
 
@@ -478,6 +529,11 @@ Current source mapping:
 - `yierdis-core-runtime` production code maps to these modules.
 - `YierdisChangeEvent`, `YierdisChangeSink`, and `YierdisChangeTracking` should
   move from broad storage API ownership to runtime API ownership.
+
+`yierdis-runtime-embedded` is the target artifact name. Older notes may describe
+this role as runtime-memory, but the target name should avoid confusion with
+`yierdis-storage-memory`; runtime owns instance lifecycle and composition, not a
+second storage implementation.
 
 `yierdis-runtime-api` may depend on `yierdis-storage-api` abstractions such as
 `DbEngine`, `DbEngineFactory`, or storage policy enums when they are part of the
@@ -607,6 +663,27 @@ Netty bytes
 The important ownership difference is that each step belongs to a module family
 with a narrow dependency rule.
 
+## State Ownership
+
+State ownership must remain explicit during and after migration:
+
+| State Or Decision | Owner | Must Not Move To |
+| --- | --- | --- |
+| selected logical DB index | execution session or engine session contract | executor, protocol, server-app |
+| transaction queue and replay state | command-kernel over execution session state | executor, protocol, storage-memory |
+| command registry and parse/dispatch lifecycle | command-kernel | engine, command-defaults, server-app |
+| command definitions and handlers | command-defaults or server-local command package | command-kernel internals, protocol, storage-memory |
+| owner-thread lifecycle and embedded instance lifecycle | runtime-embedded | engine, executor, server-app |
+| pending counts, pending bytes, backpressure, close-after-reply | executor-core | engine, runtime, command modules |
+| protocol request/reply DTOs and wire limits | custom-v1-wire | execution API, command API, storage API |
+| protocol-to-execution conversion and NDJSON reply writer | custom-v1-execution-adapter | server-app, custom-v1-wire, command modules |
+| keyspace, value, expire, maxmemory, accounting structures | storage-memory internals | storage-api, command modules, server-app |
+| storage operation ports and immutable result/status types | storage-api | storage-memory internals only |
+| server runtime config and process lifecycle | server-app | runtime-api, protocol wire, command-defaults |
+
+If a field or collaborator does not fit this table, the implementation phase
+must update the table before moving code.
+
 ## Target Dependency Rules
 
 The architecture-test module should enforce at least these rules:
@@ -635,7 +712,7 @@ The architecture-test module should enforce at least these rules:
   support types.
 - `yierdis-runtime-api` imports no storage implementation, protocol, command
   implementation, application, or Netty packages.
-- `yierdis-runtime-memory` may depend on storage implementations and runtime
+- `yierdis-runtime-embedded` may depend on storage implementations and runtime
   API, but must not own command parser registration.
 - `yierdis-custom-v1-wire` imports no execution, command, storage, runtime,
   application, or Netty packages.
@@ -665,6 +742,46 @@ module:
 - allowed SPI package imports;
 - source-ownership assertions that prevent high-risk behavior from moving back
   into broad modules.
+
+The policy should be machine-readable so documentation and tests cannot drift.
+The target location is `yierdis-architecture-tests/src/test/resources/architecture-policy.yml`
+or an equivalent test resource owned by the architecture-test module.
+
+Example policy shape:
+
+```yaml
+modules:
+  yierdis-command-defaults:
+    allowed_dependencies:
+      - yierdis-command-api
+      - yierdis-execution-api
+      - yierdis-storage-api
+    forbidden_dependencies:
+      - yierdis-command-kernel
+      - yierdis-storage-memory
+    allowed_imports:
+      - yier.bubu.redis.command.api
+      - yier.bubu.redis.execution
+      - yier.bubu.redis.storage.api
+    forbidden_imports:
+      - yier.bubu.redis.command.kernel
+      - yier.bubu.redis.storage.memory
+      - yier.bubu.redis.*.internal
+  yierdis-engine:
+    allowed_dependencies:
+      - yierdis-execution-api
+      - yierdis-command-api
+      - yierdis-command-kernel
+      - yierdis-storage-api
+    forbidden_dependencies:
+      - yierdis-command-defaults
+      - yierdis-storage-memory
+      - yierdis-server-app
+    allowed_spi_imports: []
+```
+
+Each phase that changes Maven modules or package ownership must update this
+policy in the same commit as the code move.
 
 Guard implementation should become stronger over time:
 
@@ -711,6 +828,31 @@ The default implementation pattern is:
 5. Remove temporary bridge code once production dependencies no longer require
    it.
 
+Compatibility verification must compare old and new paths where both exist:
+
+- command migrations use the same command behavior tests for legacy and target
+  registration paths until the legacy path is removed;
+- protocol migrations use golden wire request/reply samples before and after the
+  adapter move;
+- storage migrations use storage-testkit conformance tests for old facade and
+  target storage-memory APIs when a bridge exists;
+- runtime/server migrations keep smoke tests that exercise the external CLI and
+  Custom Protocol v1 behavior through the process boundary;
+- architecture-test migrations prove the old forbidden edge is still caught
+  before deleting the old guard.
+
+Stop conditions:
+
+- Stop a phase if it requires widening public API/SPI beyond the classified
+  audience list.
+- Stop a phase if a temporary bridge would need business logic instead of
+  delegation.
+- Stop a phase if the architecture policy cannot express the intended rule.
+- Stop a phase if behavior changes are needed; write a focused behavior spec
+  before continuing the module move.
+- Stop further module promotion if the candidate seam cannot be tested or built
+  without exposing implementation internals.
+
 ## Migration Phases
 
 ### Phase 0: Move Architecture And Integration Tests First
@@ -735,6 +877,8 @@ Acceptance criteria:
   move.
 - Architecture tests include a policy table for Maven dependencies, allowed
   imports, forbidden imports, SPI imports, and source-ownership assertions.
+- The policy is stored as a test-owned machine-readable resource and at least one
+  guard test reads from it.
 - Integration tests cover server/client/protocol/runtime command paths.
 - The shared scanning helpers move with the architecture-test module, so later
   phases update one guard-test home instead of keeping `core-runtime` as the
@@ -809,7 +953,7 @@ Scope:
   of broad API ownership.
 - Move embedded runtime configuration contracts that need to be visible outside
   the default runtime implementation.
-- Keep concrete instance assembly in `yierdis-runtime-memory`.
+- Keep concrete instance assembly in `yierdis-runtime-embedded`.
 
 Acceptance criteria:
 
@@ -900,6 +1044,8 @@ Acceptance criteria:
   API, but not command-kernel or concrete storage implementations.
 - Runtime/server composition wires command-defaults into command-kernel; command
   family packages do not self-register through kernel internals.
+- Command-defaults exposes command modules through command API provider methods
+  or service-style factories, not by constructing a `CommandRegistry`.
 - Adding a new command family usually means adding a package and updating the
   default bundle registration, not editing registry or processor internals.
 - Transaction syntax validation and replay still pass existing tests.
@@ -926,7 +1072,7 @@ clear without forcing internal collaborators into public Maven-module APIs.
 Acceptance criteria:
 
 - Command modules still depend only on storage API.
-- Runtime-memory depends on storage-memory as the default implementation.
+- Runtime-embedded depends on storage-memory as the default implementation.
 - Keyspace, value, maxmemory, expiration, and memory accounting tests move with
   their owning packages or to storage testkit/integration tests based on scope.
 - Storage-memory architecture guards prevent unrelated responsibilities from
@@ -1010,7 +1156,7 @@ yier.bubu.redis.command.defaults.transaction
 yier.bubu.redis.command.defaults.connection
 yier.bubu.redis.command.defaults.admin
 yier.bubu.redis.runtime.api
-yier.bubu.redis.runtime.memory
+yier.bubu.redis.runtime.embedded
 yier.bubu.redis.custom.v1.wire
 yier.bubu.redis.custom.v1.execution
 yier.bubu.redis.custom.v1.netty
@@ -1058,6 +1204,8 @@ Required docs:
   integration test modules.
 - Update README module boundary bullets after each phase that changes public
   structure.
+- Mark older specs as superseded or update them when their ownership rules
+  conflict with this roadmap.
 - Keep this spec as the high-level roadmap and create focused implementation
   plans per phase.
 
@@ -1068,6 +1216,7 @@ Each migration phase needs three test layers:
 - focused unit tests in the owning module;
 - integration tests for request execution and server/client paths;
 - architecture tests for dependency and source-ownership rules.
+- compatibility tests when old and new paths coexist during a phase.
 
 Architecture tests must cover four mechanisms:
 
@@ -1077,6 +1226,11 @@ Architecture tests must cover four mechanisms:
 - high-risk source ownership checks for command parsing, command context
   construction, protocol reply encoding, storage internals, and server-app
   composition.
+
+Compatibility tests should be temporary and named after the bridge they protect.
+When the bridge is removed, the compatibility test should either be removed in
+the same commit or converted into a permanent contract/conformance test owned by
+the target module.
 
 Recommended final verification after each major phase:
 
@@ -1140,6 +1294,26 @@ Mitigation:
 - Add guards forbidding command-defaults imports of command-kernel and
   command-kernel imports of command-defaults.
 
+### Risk: Architecture policy drifts from prose
+
+Mitigation:
+
+- Treat the machine-readable architecture policy as the executable source of
+  truth for module dependency and import rules.
+- Update prose and policy in the same commit when a boundary changes.
+- Fail the architecture-test module if a module listed in the policy is missing
+  or if a source root has zero scanned files.
+
+### Risk: State ownership moves implicitly during refactors
+
+Mitigation:
+
+- Keep the state ownership table updated before moving fields or collaborators.
+- Add source-ownership guards for selected DB, transactions, owner-thread
+  lifecycle, pending state, and protocol reply encoding.
+- Stop the phase if a field needs to move to a module not listed in the ownership
+  table.
+
 ### Risk: Protocol codec depending on execution API feels like a layering
 change
 
@@ -1193,8 +1367,15 @@ Mitigation:
 - Server-app is a composition root with minimal business logic.
 - Architecture tests enforce Maven dependency rules, import allowlists, API/SPI
   surface rules, `.internal` package ownership, and high-risk source ownership.
+- Architecture tests read a machine-readable policy owned by
+  `yierdis-architecture-tests`.
+- State ownership remains documented and enforced for selected DB, transaction
+  state, owner-thread lifecycle, executor pending state, protocol encoding, and
+  storage internals.
 - Temporary compatibility bridges or deprecated facades have been removed or have
   a documented removal phase with no business logic inside the bridge.
+- Older specs that conflict with this roadmap are updated or marked as
+  superseded for module ownership guidance.
 - Existing command behavior, Custom Protocol v1 behavior, server/client smoke
   behavior, maxmemory behavior, TTL behavior, and FFM memory tests pass.
 - Documentation reflects the new architecture and no longer describes the old
