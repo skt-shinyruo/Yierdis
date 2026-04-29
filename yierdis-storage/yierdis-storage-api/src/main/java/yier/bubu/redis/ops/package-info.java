@@ -5,10 +5,11 @@
  * name as a migration compatibility bridge while the owning Maven module is
  * {@code yierdis-storage-api}.</p>
  *
- * <p>Factory and maxmemory coordination hooks are marked
- * SPI-in-legacy-package for this phase. Follow-up: move those hooks to an
- * explicit {@code .spi} package once the runtime-api and storage-memory phase
- * lands.</p>
+ * <p>Factory hooks, maxmemory coordination hooks, and implementation-shaped
+ * pressure/observability records are marked SPI-in-legacy-package for this
+ * phase. Follow-up: move those hooks to an explicit {@code .spi} package, and
+ * split public observability views from storage-memory accounting details once
+ * the runtime-api and storage-memory phases land.</p>
  *
  * <ul>
  *     <li>DbEngine - API. Audience: command handlers, engine/runtime routing, tests.</li>
@@ -39,18 +40,18 @@
  *     <li>MaxmemoryCoordinatorAware - SPI-in-legacy-package. Audience: storage implementations joining maxmemory coordination.</li>
  *     <li>MaxmemoryParticipant - SPI-in-legacy-package. Audience: runtime governor and participating storage engines.</li>
  *     <li>MaxmemoryUsageSource - SPI-in-legacy-package. Audience: runtime maxmemory accounting.</li>
- *     <li>MaxmemoryCandidate - API. Audience: maxmemory coordination and tests; key identity uses KeyHandle.</li>
+ *     <li>MaxmemoryCandidate - SPI-in-legacy-package. Audience: maxmemory coordination and tests; key identity uses KeyHandle.</li>
  *     <li>MaxmemoryPolicy - API. Audience: CLI args, runtime config, storage implementations, tests.</li>
  *     <li>MaxmemoryErrors - API. Audience: storage implementations and command error mapping.</li>
- *     <li>DbMemoryConstants - API. Audience: storage accounting and focused tests.</li>
- *     <li>YierdisMemoryStats - API. Audience: server/runtime observability and memory views.</li>
+ *     <li>DbMemoryConstants - SPI-in-legacy-package. Audience: storage accounting and focused tests.</li>
+ *     <li>YierdisMemoryStats - compatibility observability API. Audience: server/runtime observability and memory views; contains storage-memory accounting details that must split later.</li>
  *     <li>YierdisCommandException - API. Audience: storage implementations and command handlers.</li>
  *     <li>WrongTypeException - API. Audience: storage implementations and command handlers.</li>
  *     <li>ExpireOption - API. Audience: command handlers and storage implementations.</li>
  *     <li>SetMode - API. Audience: command handlers and storage implementations.</li>
  *     <li>ValueType - API. Audience: command handlers, observability, and storage implementations.</li>
- *     <li>ScanCursorV2 - API. Audience: keyspace/HLL scan command handlers and storage implementations.</li>
- *     <li>KeyHandle - API. Audience: pressure-path key identity without heap materialization.</li>
+ *     <li>ScanCursorV2 - compatibility API. Audience: keyspace/HLL scan command handlers and storage implementations; contains keyspace cursor details that must split later.</li>
+ *     <li>KeyHandle - SPI-in-legacy-package. Audience: pressure-path key identity without heap materialization.</li>
  * </ul>
  */
 package yier.bubu.redis.ops;
