@@ -131,6 +131,21 @@ modules:
       - yier.bubu.redis.db
       - io.netty
   yierdis-server:
+    allowed_dependencies:
+      - yierdis-execution-api
+      - yierdis-storage-api
+      - yierdis-core-command
+      - yierdis-core-engine
+      - yierdis-protocol-netty
+      - yierdis-bytes-netty
+      - yierdis-core-runtime
+      - yierdis-executor-core
+      - yierdis-args
+      - yierdis-memory-foreign
+      - netty-all
+      - picocli
+      - slf4j-api
+      - logback-classic
     forbidden_imports:
       - yier.bubu.redis.protocol.reply
     source_ownership:

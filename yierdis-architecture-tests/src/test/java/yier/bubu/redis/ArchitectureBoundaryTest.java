@@ -1531,6 +1531,43 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void serverStorageApiImportsMustHaveDirectDependency() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
+
+        Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
+        Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
+        String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
+        String serverPolicy = policySection(policy, "yierdis-server");
+        Assert.assertTrue(
+                "server policy must allow direct storage-api dependency when server imports storage API types",
+                serverPolicy.contains("yierdis-storage-api")
+        );
+
+        Path serverPom = workspaceRoot.resolve("yierdis-server/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-server/pom.xml", Files.isRegularFile(serverPom));
+        String pom = Files.readString(serverPom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "yierdis-server must declare yierdis-storage-api directly because production server code imports storage API types",
+                pom.contains("<artifactId>yierdis-storage-api</artifactId>")
+        );
+
+        List<String> storageApiUsers = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                workspaceRoot.resolve("yierdis-server/src/main/java").normalize(),
+                storageApiUsers,
+                "import yier.bubu.redis.ops."
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server Java 文件", scanned > 0);
+        Assert.assertFalse(
+                "server guard expected at least one production storage-api import; remove this direct-dependency guard if server stops using storage API",
+                storageApiUsers.isEmpty()
+        );
+    }
+
+    @Test
     public void executorCoreMustNotDependOnNetty() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
