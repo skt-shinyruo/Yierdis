@@ -14,16 +14,16 @@
     <packaging>jar</packaging>
 
     <name>yierdis-core-api</name>
-    <description>Core API boundary for Yierdis (Netty-free).</description>
+    <description>Temporary compatibility bridge for Yierdis runtime API and storage API contracts.</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-bytes-lib</artifactId>
+            <artifactId>yierdis-execution-api</artifactId>
         </dependency>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-execution-api</artifactId>
+            <artifactId>yierdis-storage-api</artifactId>
         </dependency>
 
         <dependency>

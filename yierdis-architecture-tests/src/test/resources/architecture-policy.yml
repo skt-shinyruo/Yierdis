@@ -3,6 +3,7 @@ modules:
     allowed_dependencies:
       - yierdis-core-api
       - yierdis-execution-api
+      - yierdis-storage-api
     forbidden_dependencies:
       - yierdis-core-db
       - yierdis-memory-api
@@ -74,6 +75,39 @@ modules:
       - yier.bubu.redis.server
       - yier.bubu.redis.db.memory.foreign
       - io.netty
+  yierdis-storage-api:
+    allowed_dependencies:
+      - yierdis-bytes-lib
+    forbidden_dependencies:
+      - yierdis-core-api
+      - yierdis-execution-api
+      - yierdis-core-command
+      - yierdis-core-db
+      - yierdis-core-runtime
+      - yierdis-protocol-model
+      - yierdis-protocol-codec
+      - yierdis-protocol-netty
+      - yierdis-server
+      - yierdis-memory-foreign
+      - yierdis-bytes-netty
+      - netty-all
+    forbidden_imports:
+      - yier.bubu.redis.command
+      - yier.bubu.redis.contract
+      - yier.bubu.redis.db
+      - yier.bubu.redis.runtime
+      - yier.bubu.redis.protocol
+      - yier.bubu.redis.server
+      - yier.bubu.redis.db.memory.foreign
+      - io.netty
+  yierdis-core-api:
+    allowed_dependencies:
+      - yierdis-execution-api
+      - yierdis-storage-api
+    source_ownership:
+      - temporary_runtime_and_storage_api_compatibility_bridge
+      - runtime_api_sources_only
+      - no_ops_or_offheap_main_sources
   yierdis-core-engine:
     allowed_dependencies:
       - yierdis-execution-api

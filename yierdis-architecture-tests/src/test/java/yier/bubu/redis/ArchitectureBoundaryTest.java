@@ -18,6 +18,7 @@ public class ArchitectureBoundaryTest {
         List<String> offenders = new ArrayList<>();
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
 
         int scanned = 0;
         scanned += scanForForbiddenText(
@@ -28,7 +29,7 @@ public class ArchitectureBoundaryTest {
         );
         scanned += scanForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/ops"),
+                workspaceRoot.resolve("yierdis-storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops"),
                 offenders,
                 "import yier.bubu.redis.protocol."
         );
@@ -42,7 +43,7 @@ public class ArchitectureBoundaryTest {
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到协议模型依赖泄漏（core-db/core-api/core-command 禁止 import yier.bubu.redis.protocol.*）：\n"
+                    "检测到协议模型依赖泄漏（core-db/storage-api/core-command 禁止 import yier.bubu.redis.protocol.*）：\n"
                             + String.join("\n", offenders)
             );
         }
@@ -441,7 +442,7 @@ public class ArchitectureBoundaryTest {
         List<String> offenders = new ArrayList<>();
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/ops/MaxmemoryCandidate.java"),
+                repoRoot.getParent().resolve("yierdis-storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/MaxmemoryCandidate.java"),
                 offenders,
                 "byte[] key"
         );
@@ -867,6 +868,242 @@ public class ArchitectureBoundaryTest {
             Assert.fail(
                     "检测到 yierdis-memory-api 依赖命令、存储实现、协议、运行时实现、应用、Netty 或 memory-foreign：\n"
                             + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void storageApiMustRemainNeutralContractModule() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
+
+        Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
+        Assert.assertTrue("缺少 root pom.xml", Files.isRegularFile(rootPom));
+        String rootPomText = Files.readString(rootPom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "root pom.xml must aggregate yierdis-storage",
+                rootPomText.contains("<module>yierdis-storage</module>")
+        );
+        Assert.assertTrue(
+                "root dependencyManagement must include yierdis-storage-api",
+                rootPomText.contains("<artifactId>yierdis-storage-api</artifactId>")
+        );
+
+        Path storagePom = workspaceRoot.resolve("yierdis-storage/pom.xml").normalize();
+        Path apiPom = workspaceRoot.resolve("yierdis-storage/yierdis-storage-api/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-storage/pom.xml", Files.isRegularFile(storagePom));
+        String storagePomText = Files.readString(storagePom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "yierdis-storage parent must aggregate yierdis-storage-api",
+                storagePomText.contains("<module>yierdis-storage-api</module>")
+        );
+        Assert.assertTrue("缺少 yierdis-storage/yierdis-storage-api/pom.xml", Files.isRegularFile(apiPom));
+
+        Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
+        Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
+        String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
+        String storageApiPolicy = policySection(policy, "yierdis-storage-api");
+        Assert.assertTrue(
+                "storage-api policy must allow only yierdis-bytes-lib as production dependency",
+                storageApiPolicy.contains("yierdis-bytes-lib")
+        );
+        Assert.assertTrue(
+                "storage-api policy must name forbidden dependency section",
+                storageApiPolicy.contains("forbidden_dependencies:")
+        );
+        Assert.assertTrue(
+                "storage-api policy must name forbidden import section",
+                storageApiPolicy.contains("forbidden_imports:")
+        );
+        for (String requiredForbidden : List.of(
+                "yierdis-core-api",
+                "yierdis-execution-api",
+                "yierdis-core-command",
+                "yierdis-core-db",
+                "yierdis-core-runtime",
+                "yierdis-protocol-model",
+                "yierdis-protocol-codec",
+                "yierdis-protocol-netty",
+                "yierdis-server",
+                "yierdis-memory-foreign",
+                "yierdis-bytes-netty",
+                "netty-all",
+                "yier.bubu.redis.command",
+                "yier.bubu.redis.contract",
+                "yier.bubu.redis.db",
+                "yier.bubu.redis.runtime",
+                "yier.bubu.redis.protocol",
+                "yier.bubu.redis.server",
+                "yier.bubu.redis.db.memory.foreign",
+                "io.netty"
+        )) {
+            Assert.assertTrue(
+                    "storage-api policy must forbid " + requiredForbidden,
+                    storageApiPolicy.contains(requiredForbidden)
+            );
+        }
+
+        String pom = Files.readString(apiPom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "yierdis-storage-api must depend on yierdis-bytes-lib",
+                pom.contains("<artifactId>yierdis-bytes-lib</artifactId>")
+        );
+        Assert.assertTrue(
+                "yierdis-storage-api tests must depend on JUnit",
+                pom.contains("<artifactId>junit</artifactId>")
+                        && pom.contains("<scope>test</scope>")
+        );
+        for (String forbiddenDependency : List.of(
+                "<artifactId>yierdis-core-api</artifactId>",
+                "<artifactId>yierdis-execution-api</artifactId>",
+                "<artifactId>yierdis-core-command</artifactId>",
+                "<artifactId>yierdis-core-db</artifactId>",
+                "<artifactId>yierdis-core-runtime</artifactId>",
+                "<artifactId>yierdis-protocol-model</artifactId>",
+                "<artifactId>yierdis-protocol-codec</artifactId>",
+                "<artifactId>yierdis-protocol-netty</artifactId>",
+                "<artifactId>yierdis-server</artifactId>",
+                "<artifactId>yierdis-memory-foreign</artifactId>",
+                "<artifactId>yierdis-bytes-netty</artifactId>",
+                "<artifactId>netty-all</artifactId>"
+        )) {
+            Assert.assertFalse(
+                    "yierdis-storage-api must not depend on forbidden implementation/module dependency "
+                            + forbiddenDependency,
+                    pom.contains(forbiddenDependency)
+            );
+        }
+
+        for (Path packageInfo : List.of(
+                workspaceRoot.resolve("yierdis-storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/package-info.java").normalize(),
+                workspaceRoot.resolve("yierdis-storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/result/package-info.java").normalize()
+        )) {
+            Assert.assertTrue("storage API packages must document API/SPI audience in package-info.java: " + packageInfo,
+                    Files.isRegularFile(packageInfo));
+            String packageInfoText = Files.readString(packageInfo, StandardCharsets.UTF_8);
+            Assert.assertTrue(
+                    "storage API package-info must document legacy package migration compatibility",
+                    packageInfoText.contains("legacy package")
+                            && packageInfoText.contains("yierdis-storage-api")
+            );
+        }
+
+        String opsPackageInfo = Files.readString(
+                workspaceRoot.resolve("yierdis-storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/package-info.java").normalize(),
+                StandardCharsets.UTF_8
+        );
+        for (String requiredClassification : List.of(
+                "DbReads - API",
+                "DbWrites - API",
+                "DbEngine - API",
+                "RuntimeDbEngine - SPI-in-legacy-package",
+                "DbEngineFactory - SPI-in-legacy-package",
+                "MaxmemoryCoordinator - SPI-in-legacy-package",
+                "MaxmemoryParticipant - SPI-in-legacy-package",
+                "MaxmemoryCandidate - API",
+                "MaxmemoryPolicy - API"
+        )) {
+            Assert.assertTrue(
+                    "storage API package-info must classify " + requiredClassification,
+                    opsPackageInfo.contains(requiredClassification)
+            );
+        }
+
+        String resultPackageInfo = Files.readString(
+                workspaceRoot.resolve("yierdis-storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/result/package-info.java").normalize(),
+                StandardCharsets.UTF_8
+        );
+        for (String requiredClassification : List.of(
+                "BulkStringSink - API",
+                "BulkStringSequence - API",
+                "BulkStringMapPairs - API",
+                "BulkStringValue - API"
+        )) {
+            Assert.assertTrue(
+                    "storage API result package-info must classify " + requiredClassification,
+                    resultPackageInfo.contains(requiredClassification)
+            );
+        }
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                workspaceRoot.resolve("yierdis-storage/yierdis-storage-api/src/main/java").normalize(),
+                offenders,
+                "import yier.bubu.redis.command.",
+                "import yier.bubu.redis.contract.",
+                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.runtime.",
+                "import yier.bubu.redis.protocol.",
+                "import yier.bubu.redis.server.",
+                "import io.netty.",
+                "yier.bubu.redis.command.",
+                "yier.bubu.redis.contract.",
+                "yier.bubu.redis.db.",
+                "yier.bubu.redis.runtime.",
+                "yier.bubu.redis.protocol.",
+                "yier.bubu.redis.server.",
+                "io.netty."
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-storage-api Java 文件", scanned > 0);
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 yierdis-storage-api 依赖命令、执行、存储实现、协议、运行时实现、应用、Netty 或 memory-foreign：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void coreApiMustRemainRuntimeAndStorageCompatibilityBridge() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+
+        Path bridgePom = repoRoot.resolve("yierdis-core-api/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-core-api/pom.xml", Files.isRegularFile(bridgePom));
+        String pom = Files.readString(bridgePom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "yierdis-core-api must depend on yierdis-execution-api as a temporary compatibility bridge",
+                pom.contains("<artifactId>yierdis-execution-api</artifactId>")
+        );
+        Assert.assertTrue(
+                "yierdis-core-api must depend on yierdis-storage-api as a temporary compatibility bridge",
+                pom.contains("<artifactId>yierdis-storage-api</artifactId>")
+        );
+        Assert.assertTrue(
+                "yierdis-core-api description must identify it as a temporary compatibility bridge",
+                pom.contains("Temporary compatibility bridge")
+        );
+
+        Path runtimeApiSourceRoot = repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/runtime/api").normalize();
+        List<String> runtimeApiOffenders = new ArrayList<>();
+        int runtimeApiScanned = scanForForbiddenText(
+                repoRoot,
+                runtimeApiSourceRoot,
+                runtimeApiOffenders,
+                "import yier.bubu.redis.ops.",
+                "import yier.bubu.redis.offheap.api."
+        );
+        Assert.assertTrue("core-api compatibility bridge must retain runtime/api sources", runtimeApiScanned > 0);
+        if (!runtimeApiOffenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 runtime/api source 反向依赖 storage/memory API：\n"
+                            + String.join("\n", runtimeApiOffenders)
+            );
+        }
+
+        for (Path forbiddenSourceRoot : List.of(
+                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/ops").normalize(),
+                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/offheap").normalize()
+        )) {
+            List<String> offenders = new ArrayList<>();
+            int scanned = scanForForbiddenText(repoRoot, forbiddenSourceRoot, offenders, "package ");
+            Assert.assertEquals(
+                    "core-api compatibility bridge must not retain ops/offheap main sources under " + forbiddenSourceRoot,
+                    0,
+                    scanned
             );
         }
     }

@@ -132,19 +132,19 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 如果命令需要读 DB
 
-先看当前 `core-api` 是否已经有需要的能力接口。
+先看当前 `yierdis-storage-api` 是否已经有需要的能力接口。
 
 最常用入口：
 
-- `yierdis-core/yierdis-core-api/src/main/java/yier/bubu/redis/ops/DbReads.java`
-- `yierdis-core/yierdis-core-api/src/main/java/yier/bubu/redis/ops/KeyspaceReadOps.java`
-- `yierdis-core/yierdis-core-api/src/main/java/yier/bubu/redis/ops/MemoryOps.java`
+- `yierdis-storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/DbReads.java`
+- `yierdis-storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/KeyspaceReadOps.java`
+- `yierdis-storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/MemoryOps.java`
 
 如果接口已经有能力，就直接从命令层通过 `support.dbReads(ctx)` 调。
 
 如果没有，就按下面顺序加：
 
-1. 先加 `core-api` 接口
+1. 先加 `yierdis-storage-api` 接口
 2. 再加 `core-db` 实现
 3. 再回到命令层调用
 
@@ -154,7 +154,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 - 看到 `YierdisDb` 里已经有方法，就直接去命令层调 `YierdisDb`
 
-但这个项目故意要求你先经过 `core-api`，原因是：
+但这个项目故意要求你先经过 `yierdis-storage-api`，原因是：
 
 - 命令层依赖的是能力边界
 - 不是某个具体实现类的私有方法
