@@ -70,7 +70,7 @@ Create `architecture-policy.yml` with current-module rules for `yierdis-core-com
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -q -pl yierdis-architecture-tests -am -Dtest=ArchitecturePolicyResourceTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -q -pl yierdis-architecture-tests -am -Dtest=ArchitecturePolicyResourceTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
@@ -99,7 +99,7 @@ git mv yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/db/Yierdi
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -q -pl yierdis-architecture-tests -am -Dtest=ArchitectureBoundaryTest,ReplySsoTGuardTest,YierdisDbArchitectureGuardTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -q -pl yierdis-architecture-tests -am -Dtest=ArchitectureBoundaryTest,ReplySsoTGuardTest,YierdisDbArchitectureGuardTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
@@ -121,6 +121,7 @@ Expected: no matches.
 - Create: `yierdis-integration-tests/pom.xml`
 - Move: `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/runtime/ContractsIntegrationSmokeTest.java` to `yierdis-integration-tests/src/test/java/yier/bubu/redis/runtime/ContractsIntegrationSmokeTest.java`
 - Create: `yierdis-integration-tests/src/test/java/yier/bubu/redis/runtime/TestDbRouters.java`
+- Copy: minimal `yier.bubu.redis.testutil` fixtures used by `ContractsIntegrationSmokeTest` into `yierdis-integration-tests/src/test/java`
 
 - [ ] **Step 1: Add integration module dependencies**
 
@@ -132,12 +133,14 @@ Move `ContractsIntegrationSmokeTest.java` with `git mv`.
 
 Create `TestDbRouters.java` in the integration module with the same package and content as the runtime test helper so the moved smoke test remains package-local and does not force runtime test helpers into a public API.
 
+Copy the minimal `yier.bubu.redis.testutil` classes required by `ContractsIntegrationSmokeTest` into the integration module so the integration module does not depend on another module's test classes.
+
 - [ ] **Step 3: Run the moved smoke test**
 
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -q -pl yierdis-integration-tests -am -Dtest=ContractsIntegrationSmokeTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -q -pl yierdis-integration-tests -am -Dtest=ContractsIntegrationSmokeTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
