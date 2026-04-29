@@ -256,14 +256,20 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### off-heap / FFM
 
+- `yierdis-memory/api/src/main/java/yier/bubu/redis/offheap/api/OffHeapAllocator.java`
+- `yierdis-memory/api/src/main/java/yier/bubu/redis/offheap/api/OffHeapBuf.java`
+- `yierdis-memory/api/src/main/java/yier/bubu/redis/offheap/api/OffHeapSlice.java`
 - `yierdis-memory/foreign/src/main/java/yier/bubu/redis/db/memory/foreign/YierdisFfmMemoryRuntime.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/memory/ffm/YierdisFfmKeyspace.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/memory/ffm/YierdisFfmExpireIndex.java`
 - `docs/ffm-usage.md`
 - `docs/offheap-copy-behavior.md`
 
+`yierdis-memory-api` 是 off-heap contract 的模块兼容面；包名仍然是 `yier.bubu.redis.offheap.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`，不要通过 `core-api` 间接拿到。`core-command` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
+
 ### 建议先看的测试
 
+- `yierdis-memory/api/src/test/java/yier/bubu/redis/offheap/api/OffHeapContractsSmokeTest.java`
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/db/OffHeapStringStorageTest.java`
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/db/UnsafeOffHeapDbSmokeTest.java`
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/runtime/GlobalMaxmemoryLruAcrossDbsTest.java`

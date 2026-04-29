@@ -5,10 +5,12 @@ modules:
       - yierdis-execution-api
     forbidden_dependencies:
       - yierdis-core-db
+      - yierdis-memory-api
       - yierdis-protocol-model
       - yierdis-server
     forbidden_imports:
       - yier.bubu.redis.db
+      - yier.bubu.redis.offheap.api
       - yier.bubu.redis.protocol
       - yier.bubu.redis.server
   yierdis-executor-core:

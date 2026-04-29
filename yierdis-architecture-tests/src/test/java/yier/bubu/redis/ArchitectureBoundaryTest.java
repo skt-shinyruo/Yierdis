@@ -191,6 +191,51 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void coreCommandMustStayIndependentFromMemoryApi() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
+
+        Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
+        Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
+        String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
+        String coreCommandPolicy = policySection(policy, "yierdis-core-command");
+        Assert.assertTrue(
+                "core-command policy must forbid direct memory-api dependency",
+                coreCommandPolicy.contains("yierdis-memory-api")
+        );
+        Assert.assertTrue(
+                "core-command policy must forbid offheap API imports",
+                coreCommandPolicy.contains("yier.bubu.redis.offheap.api")
+        );
+
+        Path commandPom = repoRoot.resolve("yierdis-core-command/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-core-command/pom.xml", Files.isRegularFile(commandPom));
+        String pom = Files.readString(commandPom, StandardCharsets.UTF_8);
+        Assert.assertFalse(
+                "yierdis-core-command must not depend on yierdis-memory-api",
+                pom.contains("<artifactId>yierdis-memory-api</artifactId>")
+        );
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-core-command/src/main/java"),
+                offenders,
+                "import yier.bubu.redis.offheap.api.",
+                "yier.bubu.redis.offheap.api."
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-core-command Java 文件", scanned > 0);
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 core-command 依赖 memory-api/offheap API（命令层只能接收 DB/API 层转换后的错误）：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
     public void migratedCommandsDoNotWriteSyntaxErrorsDirectly() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录", repoRoot);
@@ -730,6 +775,14 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue(
                 "memory-api policy must allow only yierdis-bytes-lib as production dependency",
                 memoryApiPolicy.contains("yierdis-bytes-lib")
+        );
+        Assert.assertTrue(
+                "memory-api policy must name forbidden dependency section",
+                memoryApiPolicy.contains("forbidden_dependencies:")
+        );
+        Assert.assertTrue(
+                "memory-api policy must name forbidden import section",
+                memoryApiPolicy.contains("forbidden_imports:")
         );
         for (String requiredForbidden : List.of(
                 "yierdis-core-api",

@@ -8,10 +8,13 @@
 
 ```text
 bytes-lib
+├─ memory-api ──> memory-foreign
+│
 ├─ execution-api ──> core-contract (temporary bridge)
 │        ├─────────> core-api ──> core-db ──> core-runtime
-│        │             ^             ^
-│        │             │             └─ memory-foreign
+│        │             ^             ^  ^
+│        │             │             │  └─ memory-foreign
+│        │             │             └──── memory-api
 │        │             └─ core-command ──> core-engine
 │
 ├─ protocol-model ──> protocol-codec ──> protocol-netty
@@ -221,6 +224,19 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 ## 运行时 / 内存 / 调度辅助模块
 
+### `yierdis-memory-api`
+
+这是 off-heap contract 模块，当前兼容面包括：
+
+- `OffHeapAllocator`
+- `OffHeapBuf`
+- `OffHeapSlice`
+- `OffHeapOutOfMemoryException`
+
+这些类型的包名仍然是 `yier.bubu.redis.offheap.api`，用于迁移兼容；模块边界已经迁到 `yierdis-memory-api`。
+
+需要使用这些 off-heap contract 的生产模块应该直接依赖 `yierdis-memory-api`。`yierdis-core-api` 不重新导出这组类型，也不作为兼容桥。命令层不直接依赖这个模块；storage / DB 层负责把 off-heap backend 的失败转换成 `core-api` 能表达的命令错误。
+
 ### `yierdis-memory-foreign`
 
 这是 JDK 25 FFM backend。
@@ -314,14 +330,15 @@ bench 也主要依赖协议和参数模块，说明它在设计上更像：
 - protocol DTO 不是命令层的事实来源
 - server 最终写回语义仍以 `ReplyWriter` 为准
 
-### 2. `core-command` 不能依赖 `core-db`
+### 2. `core-command` 不能依赖 `core-db` 或 memory backend
 
-命令层只能看 `DbEngine` / `DbReads` / `DbWrites`，不能直接看 `YierdisDb`。
+命令层只能看 `DbEngine` / `DbReads` / `DbWrites`，不能直接看 `YierdisDb`，也不能 import `yier.bubu.redis.offheap.api.*` 或依赖 `yierdis-memory-api`。
 
 这样做的目的很明确：
 
 - 命令层不和具体存储实现耦死
 - DB 能力边界在 API 层稳定下来
+- maxmemory / off-heap OOM 这类 storage pressure 错误先在 DB/API 边界转换，再由命令层按 `YierdisCommandException` 回包
 
 ### 3. server 才是 protocol -> core 的桥
 
@@ -374,6 +391,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 `yierdis-core-command/pom.xml` 直接通过 `maven-enforcer-plugin` 禁止：
 
 - `yierdis-core-db`
+- `yierdis-memory-api`
 - `yierdis-protocol-model`
 
 这是硬依赖护栏。
@@ -383,6 +401,8 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 这个测试会扫描源码，确保：
 
 - `core-db/core-api/core-command` 不 import `yier.bubu.redis.protocol.*`
+- `core-command` 不依赖 `yierdis-memory-api`，也不 import `yier.bubu.redis.offheap.api.*`
+- `memory-api` 保持中立 contract 模块，不依赖 command、storage implementation、protocol、runtime implementation、server/app、Netty 或 memory-foreign
 - `protocol-codec` 不依赖 `core-contract`
 - bootstrap 不重新内联 owner-thread 生命周期逻辑
 - request DTO 和 `ExecutionRequest` 的边界不被重新打穿
@@ -412,7 +432,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 - `README.md`
 - `pom.xml`
 - `yierdis-core/yierdis-core-command/pom.xml`
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
+- `yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/protocol/ReplySsoTGuardTest.java`
 - `yierdis-server/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java`
 - `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
@@ -423,6 +443,7 @@ Yierdis 的模块设计重点，不是“按包名分目录”，而是：
 
 - protocol 负责线上协议
 - execution-api / core-api 负责执行契约和 DB 能力边界
+- memory-api 负责 off-heap contract 兼容面
 - core-engine 负责统一命令执行入口
 - core-db 负责真实存储
 - core-runtime 负责实例生命周期

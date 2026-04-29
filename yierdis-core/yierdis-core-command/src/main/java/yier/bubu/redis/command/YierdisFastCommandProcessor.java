@@ -1,6 +1,5 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.offheap.api.OffHeapOutOfMemoryException;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.WrongTypeException;
 import yier.bubu.redis.ops.YierdisCommandException;
@@ -191,8 +190,6 @@ public final class YierdisFastCommandProcessor {
             out.error(e.getMessage());
         } catch (YierdisCommandException e) {
             out.error(e.getMessage());
-        } catch (OffHeapOutOfMemoryException e) {
-            out.error("OOM off-heap memory limit exceeded");
         } catch (IllegalArgumentException e) {
             out.error("ERR " + e.getMessage());
         }
