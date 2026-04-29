@@ -23,7 +23,7 @@ public class HllCommandTest {
     @Test
     public void hllCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
         String source = Files.readString(Path.of(
-                "..", "yierdis-core-command", "src", "main", "java", "yier", "bubu", "redis", "command", "HllCommands.java"
+                "..", "..", "yierdis-command", "yierdis-command-defaults", "src", "main", "java", "yier", "bubu", "redis", "command", "HllCommands.java"
         ));
 
         Assert.assertFalse(source.contains("eviction().prepareWrite("));
@@ -33,7 +33,7 @@ public class HllCommandTest {
     @Test
     public void pfaddCreatesAndUpdates() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 ReplyInteger add1 = (ReplyInteger) client.execute(cmd("PFADD", "h", "a"));
                 Assert.assertEquals(1, add1.value());
@@ -50,7 +50,7 @@ public class HllCommandTest {
     @Test
     public void pfcountAndPfmergeWorkOnUnion() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 client.execute(cmd("PFADD", "h1", "foo", "bar"));
                 client.execute(cmd("PFADD", "h2", "bar", "baz"));
@@ -79,7 +79,7 @@ public class HllCommandTest {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
             try {
                 db.bindToCurrentThread();
-                YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+                YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
                 try (FastTestClient client = new FastTestClient(processor)) {
                     client.execute(cmd("PFADD", "src", "a", "b"));
 
@@ -104,7 +104,7 @@ public class HllCommandTest {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 13000, "noeviction", 5, 5, 5);
             db.bindToCurrentThread();
             try {
-                YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+                YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
                 try (FastTestClient client = new FastTestClient(processor)) {
                     client.execute(cmd("PFADD", "src", "a", "b"));
                     client.execute(cmd("PFMERGE", "dense", "src"));
@@ -126,7 +126,7 @@ public class HllCommandTest {
     @Test
     public void pfaddErrorsOnNonHllString() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 client.execute(cmd("SET", "k", "v"));
 

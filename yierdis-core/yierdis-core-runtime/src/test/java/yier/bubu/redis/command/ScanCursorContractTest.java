@@ -16,7 +16,7 @@ public class ScanCursorContractTest {
     @Test
     public void cursorTerminatesAtZeroAndMakesProgress() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 for (int i = 0; i < 50; i++) {
                     client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
@@ -46,7 +46,7 @@ public class ScanCursorContractTest {
     @Test
     public void countAndMatchNeverDeadlockEvenWhenNoKeyMatches() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 for (int i = 0; i < 20; i++) {
                     client.execute(Arrays.asList(b("SET"), b("k" + i), b("v")));
@@ -73,7 +73,7 @@ public class ScanCursorContractTest {
     @Test
     public void cursorTerminatesEvenWhenDatasetMutatesDuringRehash() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 // Fill enough keys to trigger growth/rehash at least once.
                 for (int i = 0; i < 200; i++) {

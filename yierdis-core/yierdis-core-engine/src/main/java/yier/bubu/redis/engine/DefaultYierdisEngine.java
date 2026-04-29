@@ -1,9 +1,6 @@
 package yier.bubu.redis.engine;
 
 import yier.bubu.redis.command.CommandModule;
-import yier.bubu.redis.command.ServerInfoProvider;
-import yier.bubu.redis.command.SlowCommandGovernor;
-import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ExecutionRequest;
@@ -19,20 +16,9 @@ public final class DefaultYierdisEngine implements YierdisEngine {
     private final YierdisFastCommandProcessor commandProcessor;
     private final Runnable maintenanceTick;
 
-    public DefaultYierdisEngine(
-            YierdisDbRouter dbRouter,
-            ServerInfoProvider infoProvider,
-            SlowCommandGovernor slowGovernor,
-            Runnable maintenanceTick,
-            CommandModule... extraModules
-    ) {
+    public DefaultYierdisEngine(Runnable maintenanceTick, CommandModule... commandModules) {
         this(
-                new YierdisFastCommandProcessor(
-                        Objects.requireNonNull(dbRouter, "dbRouter"),
-                        infoProvider,
-                        slowGovernor,
-                        extraModules
-                ),
+                new YierdisFastCommandProcessor(commandModules),
                 maintenanceTick
         );
     }

@@ -19,7 +19,7 @@ public class MemoryStatsCommandTest {
     @Test
     public void memoryStatsReturnsStableKeyValuePairs() {
         forEachDb(db -> {
-                YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+                YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 ReplyObject resp = client.execute(cmd("MEMORY", "STATS"));
                 Assert.assertTrue(resp instanceof ReplyMap);

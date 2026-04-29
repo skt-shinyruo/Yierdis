@@ -61,10 +61,8 @@ public class CommandDescriptorRegistryTest {
     @Test
     public void commandInfoUsesDescriptorFromRegistryRegistration() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(
                     db,
-                    null,
-                    SlowCommandGovernor.DEFAULT,
                     registration -> registration.register(
                             "HELLO",
                             CommandDescriptor.of(7, 2, 2, 1),
@@ -90,10 +88,8 @@ public class CommandDescriptorRegistryTest {
     @Test
     public void registrySpecsRemainAuthoritativeForBuiltInAndExtraMetadata() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(
                     db,
-                    null,
-                    SlowCommandGovernor.DEFAULT,
                     registration -> {
                         registration.register(
                                 "INFO",

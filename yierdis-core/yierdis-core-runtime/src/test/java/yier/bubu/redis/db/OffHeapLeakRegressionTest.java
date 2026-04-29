@@ -3,6 +3,7 @@ package yier.bubu.redis.db;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.TestCommandProcessors;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyInteger;
@@ -21,7 +22,7 @@ public class OffHeapLeakRegressionTest {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 2500, "allkeys-random", 5, 5, 5);
             try {
                 db.bindToCurrentThread();
-                YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+                YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
                 try (FastTestClient client = new FastTestClient(processor)) {
                     byte[] v1600 = repeat((byte) 'x', 1600);
 
@@ -51,7 +52,7 @@ public class OffHeapLeakRegressionTest {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 4500, "allkeys-random", 5, 5, 5);
             try {
                 db.bindToCurrentThread();
-                YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+                YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
                 try (FastTestClient client = new FastTestClient(processor)) {
                     byte[] v1600 = repeat((byte) 'x', 1600);
 

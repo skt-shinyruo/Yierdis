@@ -88,7 +88,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - **协议模型（limits/reply tooling/client/parser model）**：位于 `yierdis-custom-v1-wire`（包名仍为 `yier.bubu.redis.protocol.*`，便于迁移）；其中 `ReplyValue` 仅用于协议侧客户端/工具/解析器与编码辅助，server 命令写回语义仍以 `ReplyWriter` 为单一事实来源，server command execution write-back still uses ReplyWriter.
 - **协议请求适配**：`CustomProtocolV1Request` 由 `yierdis-custom-v1-execution-adapter` 适配为 `ExecutionRequest`；Netty handler glue 位于 `yierdis-custom-v1-netty`；`yierdis-server-app` 只做应用组装。
 - **事务回放 / 变更事件**：连接级事务重放与 `YierdisChangeEvent` 都应复用 `ExecutionRecord` 快照，而不是重新引入新的 argv 容器或 server-local `Command` 包装。
-- **core-command 默认装配**：`yierdis-core-command` 仅保留传输无关的默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server-app`，而 `PING/ECHO/COMMAND/SELECT/QUIT/FLUSHDB` 这类传输无关或 DB 生命周期命令继续留在 core。
+- **command-api/kernel/defaults 默认装配**：`yierdis-command-api` 暴露命令 SPI，`yierdis-command-kernel` 持有 registry/processor/transaction replay，`yierdis-command-defaults` 提供传输无关默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server-app`，而 `PING/ECHO/COMMAND/SELECT/QUIT/FLUSHDB` 这类传输无关或 DB 生命周期命令由 defaults 模块提供并在应用组合根注入。
 - **CLI 输入解析**：`InlineCommandParser` 位于 `yierdis-client`（`yier.bubu.redis.client.InlineCommandParser`）。
 - **instance 暴露面**：`YierdisInstance` 仅负责 DB 生命周期、资源 ownership 与 `DbEngine` 能力视图（`engine(int)` / `engines()` 防御性拷贝），避免上层依赖 `YierdisDb` 具体实现，也不再承担 command processor 组装。
 - **runtime owner-thread seam**：server 不应再通过公开 `DbEngine` 视图做 `RuntimeDbEngine` 向下转型，也不应在 bootstrap 中内联 `bindToCurrentThread()/close()` 细节；owner-thread 维护、maintenance、关闭应通过 `yierdis-core-runtime` 提供的 runtime-local seam 协作。

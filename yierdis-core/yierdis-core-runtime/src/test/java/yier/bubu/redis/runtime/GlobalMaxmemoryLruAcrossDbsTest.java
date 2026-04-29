@@ -3,6 +3,7 @@ package yier.bubu.redis.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.TestCommandProcessors;
 import yier.bubu.redis.db.YierdisDb;
 import yier.bubu.redis.ops.DbMemoryConstants;
 import yier.bubu.redis.ops.MaxmemoryPolicy;
@@ -37,7 +38,7 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forRouter(TestDbRouters.forInstance(instance));
 
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("a"), value))).value());

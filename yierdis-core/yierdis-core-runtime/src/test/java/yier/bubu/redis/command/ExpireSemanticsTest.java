@@ -20,7 +20,7 @@ public class ExpireSemanticsTest {
     @Test
     public void expireZeroRemovesListAndSubsequentWritesRecreate() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("list");
@@ -43,7 +43,7 @@ public class ExpireSemanticsTest {
     @Test
     public void expireZeroRemovesHashAndSubsequentWritesRecreate() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("hash");
@@ -66,7 +66,7 @@ public class ExpireSemanticsTest {
     @Test
     public void expireZeroRemovesSetAndSubsequentWritesRecreate() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("set");
@@ -89,7 +89,7 @@ public class ExpireSemanticsTest {
     @Test
     public void expireZeroRemovesZsetAndSubsequentWritesRecreate() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("zset");

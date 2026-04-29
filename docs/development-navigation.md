@@ -21,7 +21,7 @@
 
 ### 3. 改协议，只走 protocol 车道和 server 适配层
 
-如果问题是 request / reply 格式、编解码、decoder 行为，不要去改 `core-command` 或 `core-db`。
+如果问题是 request / reply 格式、编解码、decoder 行为，不要去改 `command-defaults` 或 `core-db`。
 
 ### 4. 先找最接近的测试，再改实现
 
@@ -33,7 +33,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 先看哪里
 
-- `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/StringCommands.java`
+- `yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/StringCommands.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisStringOps.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbKeyLifecycle.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbMutationExecutor.java`
@@ -90,7 +90,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 先判断命令属于哪一层
 
-如果命令是 transport-agnostic 的，通常放 `core-command`。
+如果命令是 transport-agnostic 的，通常放 `command-defaults`。
 
 例如：
 
@@ -108,9 +108,9 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 新增 transport-agnostic 命令的常见入口
 
-- `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
+- `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
 - 对应的 `*Commands.java`
-- `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/CommandSupport.java`
+- `yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/CommandSupport.java`
 
 对初学者来说，一个“简单命令”的最小逻辑通常只有三步：
 
@@ -127,7 +127,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 - 这个命令离开 Netty server / runtime observability 还能成立吗？
 
-如果答案是“能”，通常优先放 `core-command`。
+如果答案是“能”，通常优先放 `command-defaults`。
 如果答案是“不能”，通常放 `server`。
 
 ### 如果命令需要读 DB
@@ -148,7 +148,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 2. 再加 `core-db` 实现
 3. 再回到命令层调用
 
-不要在 `core-command` 里直接 import `YierdisDb`。
+不要在 `command-defaults` 里直接 import `YierdisDb`。
 
 初学者这里最容易犯的错是：
 
@@ -161,8 +161,8 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 建议先看的测试
 
-- `yierdis-core/yierdis-core-command/src/test/java/yier/bubu/redis/command/YierdisFastCommandProcessorModuleTest.java`
-- `yierdis-core/yierdis-core-command/src/test/java/yier/bubu/redis/command/YierdisFastCommandProcessorRegistrationTest.java`
+- `yierdis-command/yierdis-command-kernel/src/test/java/yier/bubu/redis/command/YierdisFastCommandProcessorModuleTest.java`
+- `yierdis-command/yierdis-command-kernel/src/test/java/yier/bubu/redis/command/YierdisFastCommandProcessorRegistrationTest.java`
 - `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
 
 ## 任务 3：改协议
@@ -212,12 +212,12 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 ### 路由入口
 
 - `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
-- `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/CommandSupport.java`
+- `yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/CommandSupport.java`
 - `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
 
 ### 事务判定入口
 
-- `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
+- `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
 
 如果你要改的是：
 
@@ -266,7 +266,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 - `docs/ffm-usage.md`
 - `docs/offheap-copy-behavior.md`
 
-`yierdis-memory-api` 是 off-heap contract 的模块兼容面；包名仍然是 `yier.bubu.redis.offheap.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`，不要通过 `core-api` 间接拿到。`core-command` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
+`yierdis-memory-api` 是 off-heap contract 的模块兼容面；包名仍然是 `yier.bubu.redis.offheap.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`，不要通过 `core-api` 间接拿到。`command-defaults` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
 
 ### 建议先看的测试
 
@@ -366,7 +366,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 - `docs/request-execution-flow.md`
 - `docs/module-architecture.md`
 - `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
-- `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
+- `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDb.java`
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 

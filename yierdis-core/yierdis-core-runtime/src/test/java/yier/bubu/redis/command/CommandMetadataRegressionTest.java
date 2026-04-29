@@ -43,10 +43,8 @@ public class CommandMetadataRegressionTest {
     @Test
     public void commandInfoKeepsMetadataForBuiltInAndExtraCommands() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(
                     db,
-                    null,
-                    SlowCommandGovernor.DEFAULT,
                     registration -> registration.register(
                             "HELLO",
                             CommandDescriptor.of(-1, 0, 0, 0),

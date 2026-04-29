@@ -434,7 +434,7 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 命令分发中心在：
 
-- [`yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`](../yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java)
+- [`yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`](../yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java)
 
 ### 构造时它做了什么
 
@@ -484,7 +484,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 文件：
 
-- [`yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/StringCommands.java`](../yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/StringCommands.java)
+- [`yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/StringCommands.java`](../yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/StringCommands.java)
 
 它负责：
 
@@ -502,7 +502,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 文件：
 
-- [`yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/CommandSupport.java`](../yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/CommandSupport.java)
+- [`yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/CommandSupport.java`](../yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/CommandSupport.java)
 
 这里最关键的一句是：
 

@@ -19,7 +19,7 @@ public class MaxmemoryDoubleReplyRegressionTest {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 40, "noeviction", 5, 5, 5);
             try {
                 db.bindToCurrentThread();
-                YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+                YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
                 try (FastTestClient client = new FastTestClient(processor)) {
                     ReplyObject reply = client.execute(Arrays.asList(
                             b("APPEND"),

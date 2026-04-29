@@ -21,7 +21,7 @@ public class SetCommandTest {
     @Test
     public void setCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
         String source = Files.readString(Path.of(
-                "..", "yierdis-core-command", "src", "main", "java", "yier", "bubu", "redis", "command", "SetCommands.java"
+                "..", "..", "yierdis-command", "yierdis-command-defaults", "src", "main", "java", "yier", "bubu", "redis", "command", "SetCommands.java"
         ));
 
         Assert.assertFalse(source.contains("eviction().prepareWrite("));
@@ -31,7 +31,7 @@ public class SetCommandTest {
     @Test
     public void upgradeFromIntsetKeepsExistingMembers() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = new byte[]{'s', 0, 1};
@@ -72,7 +72,7 @@ public class SetCommandTest {
     @Test
     public void setMembersAreBinarySafeEvenWhenIntegerLike() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("s");
@@ -115,7 +115,7 @@ public class SetCommandTest {
     @Test
     public void sremDeletesKeyWhenEmpty() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = new byte[]{0, 's'};

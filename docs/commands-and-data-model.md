@@ -190,7 +190,7 @@ HLL 在逻辑上是一组独立命令，但在存储上并不是独立 `ValueTyp
 - `INFO`
 - `STATS`
 
-这一组命令故意不放在 core-command，因为它们依赖 server runtime 里的真实统计和 build info。
+这一组命令故意不放在 command-defaults，因为它们依赖 server runtime 里的真实统计和 build info。
 
 ## 从命令层到 DB 能力边界
 

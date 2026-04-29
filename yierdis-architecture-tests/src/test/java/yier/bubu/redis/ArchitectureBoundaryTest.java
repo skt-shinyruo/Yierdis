@@ -35,7 +35,19 @@ public class ArchitectureBoundaryTest {
         );
         scanned += scanForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java"),
+                commandApiMain(repoRoot),
+                offenders,
+                "import yier.bubu.redis.protocol."
+        );
+        scanned += scanForForbiddenText(
+                repoRoot,
+                commandKernelMain(repoRoot),
+                offenders,
+                "import yier.bubu.redis.protocol."
+        );
+        scanned += scanForForbiddenText(
+                repoRoot,
+                commandDefaultsMain(repoRoot),
                 offenders,
                 "import yier.bubu.redis.protocol."
         );
@@ -43,7 +55,7 @@ public class ArchitectureBoundaryTest {
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到协议模型依赖泄漏（core-db/storage-api/core-command 禁止 import yier.bubu.redis.protocol.*）：\n"
+                    "检测到协议模型依赖泄漏（core-db/storage-api/command-* 禁止 import yier.bubu.redis.protocol.*）：\n"
                             + String.join("\n", offenders)
             );
         }
@@ -86,16 +98,16 @@ public class ArchitectureBoundaryTest {
 
         List<String> offenders = new ArrayList<>();
         Path serverCommands = repoRoot.resolve(
-                "yierdis-core-command/src/main/java/yier/bubu/redis/command/ServerCommands.java"
+                "../yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/ServerCommands.java"
         );
         if (Files.exists(serverCommands)) {
             offenders.add(relativePath(repoRoot, serverCommands) + " (server-facing commands should live in yierdis-server-app)");
         }
 
         Path processorFile = repoRoot.resolve(
-                "yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java"
-        );
-        Assert.assertTrue("缺少 YierdisFastCommandProcessor.java，无法执行 core-command 默认装配护栏", Files.isRegularFile(processorFile));
+                "../yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java"
+        ).normalize();
+        Assert.assertTrue("缺少 YierdisFastCommandProcessor.java，无法执行 command-kernel 默认装配护栏", Files.isRegularFile(processorFile));
         scanFileForForbiddenText(
                 repoRoot,
                 processorFile,
@@ -112,15 +124,15 @@ public class ArchitectureBoundaryTest {
         );
         scanForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java"),
+                commandDefaultsMain(repoRoot),
                 offenders,
                 "register(\"HELLO\"",
                 "register(\"INFO\"",
                 "register(\"STATS\""
         );
         Path coreConnectionFile = repoRoot.resolve(
-                "yierdis-core-command/src/main/java/yier/bubu/redis/command/CoreConnectionCommands.java"
-        );
+                "../yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/CoreConnectionCommands.java"
+        ).normalize();
         Assert.assertTrue("缺少 CoreConnectionCommands.java，无法执行 COMMAND metadata 护栏", Files.isRegularFile(coreConnectionFile));
         scanFileForForbiddenText(
                 repoRoot,
@@ -131,8 +143,8 @@ public class ArchitectureBoundaryTest {
                 "case \"STATS\":"
         );
         Path descriptorFile = repoRoot.resolve(
-                "yierdis-core-command/src/main/java/yier/bubu/redis/command/CommandDescriptor.java"
-        );
+                "../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/CommandDescriptor.java"
+        ).normalize();
         Assert.assertTrue("缺少 CommandDescriptor.java，无法执行 COMMAND descriptor 护栏", Files.isRegularFile(descriptorFile));
         scanFileForForbiddenText(
                 repoRoot,
@@ -143,8 +155,8 @@ public class ArchitectureBoundaryTest {
                 "case \"STATS\":"
         );
         Path registryFile = repoRoot.resolve(
-                "yierdis-core-command/src/main/java/yier/bubu/redis/command/CommandRegistry.java"
-        );
+                "../yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/CommandRegistry.java"
+        ).normalize();
         Assert.assertTrue("缺少 CommandRegistry.java，无法执行 COMMAND metadata fallback 护栏", Files.isRegularFile(registryFile));
         scanFileForForbiddenText(
                 repoRoot,
@@ -173,7 +185,7 @@ public class ArchitectureBoundaryTest {
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java"),
+                commandDefaultsMain(repoRoot),
                 offenders,
                 ".values()",
                 ".eviction()",
@@ -185,7 +197,7 @@ public class ArchitectureBoundaryTest {
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 core-command 仍依赖 legacy 写预留/混合 DB API：\n"
+                    "检测到 command-defaults 仍依赖 legacy 写预留/混合 DB API：\n"
                             + String.join("\n", offenders)
             );
         }
@@ -200,37 +212,53 @@ public class ArchitectureBoundaryTest {
         Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
         Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
         String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
-        String coreCommandPolicy = policySection(policy, "yierdis-core-command");
+        String apiPolicy = policySection(policy, "yierdis-command-api");
+        String kernelPolicy = policySection(policy, "yierdis-command-kernel");
+        String defaultsPolicy = policySection(policy, "yierdis-command-defaults");
         Assert.assertTrue(
-                "core-command policy must forbid direct memory-api dependency",
-                coreCommandPolicy.contains("yierdis-memory-api")
+                "command-api policy must forbid direct memory-api dependency",
+                apiPolicy.contains("yierdis-memory-api")
         );
         Assert.assertTrue(
-                "core-command policy must forbid offheap API imports",
-                coreCommandPolicy.contains("yier.bubu.redis.offheap.api")
+                "command-kernel policy must forbid direct memory-api dependency",
+                kernelPolicy.contains("yierdis-memory-api")
+        );
+        Assert.assertTrue(
+                "command-defaults policy must forbid direct memory-api dependency",
+                defaultsPolicy.contains("yierdis-memory-api")
+        );
+        Assert.assertTrue(
+                "command policies must forbid offheap API imports",
+                apiPolicy.contains("yier.bubu.redis.offheap.api")
+                        && kernelPolicy.contains("yier.bubu.redis.offheap.api")
+                        && defaultsPolicy.contains("yier.bubu.redis.offheap.api")
         );
 
-        Path commandPom = repoRoot.resolve("yierdis-core-command/pom.xml").normalize();
-        Assert.assertTrue("缺少 yierdis-core-command/pom.xml", Files.isRegularFile(commandPom));
-        String pom = Files.readString(commandPom, StandardCharsets.UTF_8);
-        Assert.assertFalse(
-                "yierdis-core-command must not depend on yierdis-memory-api",
-                pom.contains("<artifactId>yierdis-memory-api</artifactId>")
-        );
+        for (Path commandPom : List.of(
+                repoRoot.getParent().resolve("yierdis-command/yierdis-command-api/pom.xml").normalize(),
+                repoRoot.getParent().resolve("yierdis-command/yierdis-command-kernel/pom.xml").normalize(),
+                repoRoot.getParent().resolve("yierdis-command/yierdis-command-defaults/pom.xml").normalize()
+        )) {
+            Assert.assertTrue("缺少 command module pom.xml: " + commandPom, Files.isRegularFile(commandPom));
+            String pom = Files.readString(commandPom, StandardCharsets.UTF_8);
+            Assert.assertFalse(
+                    "command modules must not depend on yierdis-memory-api: " + commandPom,
+                    pom.contains("<artifactId>yierdis-memory-api</artifactId>")
+            );
+        }
 
         List<String> offenders = new ArrayList<>();
-        int scanned = scanForForbiddenText(
+        int scanned = scanCommandMainForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java"),
                 offenders,
                 "import yier.bubu.redis.offheap.api.",
                 "yier.bubu.redis.offheap.api."
         );
-        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-core-command Java 文件", scanned > 0);
+        Assert.assertTrue("架构护栏扫描未扫描到任何 command-* Java 文件", scanned > 0);
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 core-command 依赖 memory-api/offheap API（命令层只能接收 DB/API 层转换后的错误）：\n"
+                    "检测到 command-* 依赖 memory-api/offheap API（命令层只能接收 DB/API 层转换后的错误）：\n"
                             + String.join("\n", offenders)
             );
         }
@@ -244,42 +272,42 @@ public class ArchitectureBoundaryTest {
         List<String> offenders = new ArrayList<>();
         scanMethodForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/StringCommands.java"),
+                commandDefaultsFile(repoRoot, "StringCommands.java"),
                 "parseSet(ArgReader args)",
                 offenders,
                 "out.error(\"ERR syntax error\")"
         );
         scanMethodForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/StringCommands.java"),
+                commandDefaultsFile(repoRoot, "StringCommands.java"),
                 "set(SetArgs args, CommandContext ctx)",
                 offenders,
                 "out.error(\"ERR syntax error\")"
         );
         scanMethodForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/KeyCommands.java"),
+                commandDefaultsFile(repoRoot, "KeyCommands.java"),
                 "parseScan(ArgReader args)",
                 offenders,
                 "out.error(\"ERR syntax error\")"
         );
         scanMethodForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/KeyCommands.java"),
+                commandDefaultsFile(repoRoot, "KeyCommands.java"),
                 "scan(ScanArgs args, CommandContext ctx)",
                 offenders,
                 "out.error(\"ERR syntax error\")"
         );
         scanMethodForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/ZSetCommands.java"),
+                commandDefaultsFile(repoRoot, "ZSetCommands.java"),
                 "parseZRange(ArgReader args)",
                 offenders,
                 "out.error(\"ERR syntax error\")"
         );
         scanMethodForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/ZSetCommands.java"),
+                commandDefaultsFile(repoRoot, "ZSetCommands.java"),
                 "parseZRangeByScore(ArgReader args, boolean reverse)",
                 offenders,
                 "out.error(\"ERR syntax error\")"
@@ -345,7 +373,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/TransactionCommands.java"),
+                commandKernelFile(repoRoot, "TransactionCommands.java"),
                 offenders,
                 "drainRequests(",
                 "new QueuedCommand(",
@@ -353,7 +381,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java"),
+                commandKernelFile(repoRoot, "YierdisFastCommandProcessor.java"),
                 offenders,
                 "tx.tryEnqueue(ByteArrayExecutionRequest.copyOf(request))"
         );
@@ -384,9 +412,8 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
-        scanForForbiddenText(
+        scanCommandMainForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command"),
                 offenders,
                 "CommandModule.Handler",
                 "new CommandSpec(",
@@ -395,7 +422,13 @@ public class ArchitectureBoundaryTest {
         );
         scanFilesMatchingRegex(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command"),
+                commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command"),
+                offenders,
+                "registration\\.register\\(\\s*\"[A-Z0-9_]+\"\\s*,\\s*this::"
+        );
+        scanFilesMatchingRegex(
+                repoRoot,
+                commandKernelMain(repoRoot).resolve("yier/bubu/redis/command"),
                 offenders,
                 "registration\\.register\\(\\s*\"[A-Z0-9_]+\"\\s*,\\s*this::"
         );
@@ -416,9 +449,8 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
-        scanForForbiddenText(
+        scanCommandMainForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-command/src/main/java"),
                 offenders,
                 "import yier.bubu.redis.contract.Command;",
                 "instanceof yier.bubu.redis.contract.Command",
@@ -597,6 +629,86 @@ public class ArchitectureBoundaryTest {
         if (!offenders.isEmpty()) {
             Assert.fail(
                     "检测到 command parsing 泄漏到 server/executor/runtime/protocol/storage（除 ServerCommandModule 的 server-local 命令注册外）：\n"
+                    + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void commandModulesMustBeSplitIntoApiKernelAndDefaults() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
+
+        Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
+        Assert.assertTrue("缺少 root pom.xml", Files.isRegularFile(rootPom));
+        String rootPomText = Files.readString(rootPom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "root pom.xml must aggregate yierdis-command",
+                rootPomText.contains("<module>yierdis-command</module>")
+        );
+        Assert.assertFalse(
+                "root pom.xml must not keep legacy yierdis-core-command dependency management",
+                rootPomText.contains("<artifactId>yierdis-core-command</artifactId>")
+        );
+        for (String artifactId : List.of("yierdis-command-api", "yierdis-command-kernel", "yierdis-command-defaults")) {
+            Assert.assertTrue(
+                    "root dependencyManagement must include " + artifactId,
+                    rootPomText.contains("<artifactId>" + artifactId + "</artifactId>")
+            );
+        }
+
+        Path commandRoot = workspaceRoot.resolve("yierdis-command").normalize();
+        Assert.assertTrue("缺少 yierdis-command/pom.xml", Files.isRegularFile(commandRoot.resolve("pom.xml")));
+        String commandPom = Files.readString(commandRoot.resolve("pom.xml"), StandardCharsets.UTF_8);
+        Assert.assertTrue("yierdis-command must aggregate command-api", commandPom.contains("<module>yierdis-command-api</module>"));
+        Assert.assertTrue("yierdis-command must aggregate command-kernel", commandPom.contains("<module>yierdis-command-kernel</module>"));
+        Assert.assertTrue("yierdis-command must aggregate command-defaults", commandPom.contains("<module>yierdis-command-defaults</module>"));
+
+        Path commandApi = commandRoot.resolve("yierdis-command-api").normalize();
+        Path commandKernel = commandRoot.resolve("yierdis-command-kernel").normalize();
+        Path commandDefaults = commandRoot.resolve("yierdis-command-defaults").normalize();
+        Assert.assertTrue("缺少 yierdis-command-api/pom.xml", Files.isRegularFile(commandApi.resolve("pom.xml")));
+        Assert.assertTrue("缺少 yierdis-command-kernel/pom.xml", Files.isRegularFile(commandKernel.resolve("pom.xml")));
+        Assert.assertTrue("缺少 yierdis-command-defaults/pom.xml", Files.isRegularFile(commandDefaults.resolve("pom.xml")));
+
+        String kernelPom = Files.readString(commandKernel.resolve("pom.xml"), StandardCharsets.UTF_8);
+        Assert.assertTrue("command-kernel must depend on command-api", kernelPom.contains("<artifactId>yierdis-command-api</artifactId>"));
+        Assert.assertFalse("command-kernel must not depend on command-defaults", kernelPom.contains("<artifactId>yierdis-command-defaults</artifactId>"));
+
+        String defaultsPom = Files.readString(commandDefaults.resolve("pom.xml"), StandardCharsets.UTF_8);
+        Assert.assertTrue("command-defaults must depend on command-api", defaultsPom.contains("<artifactId>yierdis-command-api</artifactId>"));
+        Assert.assertTrue("command-defaults must depend on execution-api", defaultsPom.contains("<artifactId>yierdis-execution-api</artifactId>"));
+        Assert.assertTrue("command-defaults must depend on storage-api", defaultsPom.contains("<artifactId>yierdis-storage-api</artifactId>"));
+        Assert.assertFalse("command-defaults must not depend on command-kernel", defaultsPom.contains("<artifactId>yierdis-command-kernel</artifactId>"));
+        Assert.assertFalse("command-defaults must not depend on concrete storage", defaultsPom.contains("<artifactId>yierdis-core-db</artifactId>"));
+
+        Path enginePom = repoRoot.resolve("yierdis-core-engine/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-core-engine/pom.xml", Files.isRegularFile(enginePom));
+        String enginePomText = Files.readString(enginePom, StandardCharsets.UTF_8);
+        Assert.assertTrue("engine must depend on command-api", enginePomText.contains("<artifactId>yierdis-command-api</artifactId>"));
+        Assert.assertTrue("engine must depend on command-kernel", enginePomText.contains("<artifactId>yierdis-command-kernel</artifactId>"));
+        Assert.assertFalse("engine must not depend on command-defaults", enginePomText.contains("<artifactId>yierdis-command-defaults</artifactId>"));
+
+        Path serverAppPom = workspaceRoot.resolve("yierdis-app/yierdis-server-app/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-app/yierdis-server-app/pom.xml", Files.isRegularFile(serverAppPom));
+        String serverAppPomText = Files.readString(serverAppPom, StandardCharsets.UTF_8);
+        Assert.assertTrue("server-app must compose command-kernel", serverAppPomText.contains("<artifactId>yierdis-command-kernel</artifactId>"));
+        Assert.assertTrue("server-app must compose command-defaults", serverAppPomText.contains("<artifactId>yierdis-command-defaults</artifactId>"));
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                commandDefaults.resolve("src/main/java").normalize(),
+                offenders,
+                "import yier.bubu.redis.command.YierdisFastCommandProcessor;",
+                "import yier.bubu.redis.command.CommandRegistry;",
+                "new CommandRegistry("
+        );
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-command-defaults Java 文件", scanned > 0);
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 command-defaults 依赖 command-kernel 内部注册/处理器，而不是通过 command-api factory 暴露默认命令模块：\n"
                             + String.join("\n", offenders)
             );
         }
@@ -1323,14 +1435,14 @@ public class ArchitectureBoundaryTest {
         Path workspaceRoot = repoRoot.getParent();
         assertRuntimeChangeTrackingSpiDetectorCoversReviewCases();
 
-        Path commandRoot = repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command").normalize();
+        Path commandRoot = commandKernelMain(repoRoot).resolve("yier/bubu/redis/command").normalize();
         Path dbRoot = repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db").normalize();
         List<Path> allowedRoots = List.of(commandRoot, dbRoot);
 
         Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
         Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
         String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
-        String commandPolicy = policySection(policy, "yierdis-core-command");
+        String commandPolicy = policySection(policy, "yierdis-command-kernel");
         String dbPolicy = policySection(policy, "yierdis-core-db");
 
         for (String policySection : List.of(commandPolicy, dbPolicy)) {
@@ -1344,8 +1456,8 @@ public class ArchitectureBoundaryTest {
             );
         }
         Assert.assertTrue(
-                "core-command SPI allowlist must name the command production source path",
-                commandPolicy.contains("yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command")
+                "command-kernel SPI allowlist must name the command production source path",
+                commandPolicy.contains("yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command")
         );
         Assert.assertTrue(
                 "core-db SPI allowlist must name the DB production source path",
@@ -1520,8 +1632,16 @@ public class ArchitectureBoundaryTest {
         String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
         String enginePolicy = policySection(policy, "yierdis-core-engine");
         Assert.assertTrue(
-                "core-engine policy must allow current core-command dependency until the command split",
-                enginePolicy.contains("yierdis-core-command")
+                "core-engine policy must allow command-api dependency",
+                enginePolicy.contains("yierdis-command-api")
+        );
+        Assert.assertTrue(
+                "core-engine policy must allow command-kernel dependency",
+                enginePolicy.contains("yierdis-command-kernel")
+        );
+        Assert.assertTrue(
+                "core-engine policy must forbid command-defaults dependency",
+                enginePolicy.contains("yierdis-command-defaults")
         );
         Assert.assertTrue(
                 "core-engine policy must forbid server imports",
@@ -2260,6 +2380,35 @@ public class ArchitectureBoundaryTest {
                 }
             }
         }
+    }
+
+    private static int scanCommandMainForForbiddenText(Path repoRoot, List<String> offenders, String... forbiddenSnippets)
+            throws IOException {
+        int scanned = 0;
+        scanned += scanForForbiddenText(repoRoot, commandApiMain(repoRoot), offenders, forbiddenSnippets);
+        scanned += scanForForbiddenText(repoRoot, commandKernelMain(repoRoot), offenders, forbiddenSnippets);
+        scanned += scanForForbiddenText(repoRoot, commandDefaultsMain(repoRoot), offenders, forbiddenSnippets);
+        return scanned;
+    }
+
+    private static Path commandApiMain(Path repoRoot) {
+        return repoRoot.getParent().resolve("yierdis-command/yierdis-command-api/src/main/java").normalize();
+    }
+
+    private static Path commandKernelMain(Path repoRoot) {
+        return repoRoot.getParent().resolve("yierdis-command/yierdis-command-kernel/src/main/java").normalize();
+    }
+
+    private static Path commandDefaultsMain(Path repoRoot) {
+        return repoRoot.getParent().resolve("yierdis-command/yierdis-command-defaults/src/main/java").normalize();
+    }
+
+    private static Path commandKernelFile(Path repoRoot, String fileName) {
+        return commandKernelMain(repoRoot).resolve("yier/bubu/redis/command").resolve(fileName).normalize();
+    }
+
+    private static Path commandDefaultsFile(Path repoRoot, String fileName) {
+        return commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command").resolve(fileName).normalize();
     }
 
     private static void assertRuntimeChangeTrackingSpiDetectorCoversReviewCases() {

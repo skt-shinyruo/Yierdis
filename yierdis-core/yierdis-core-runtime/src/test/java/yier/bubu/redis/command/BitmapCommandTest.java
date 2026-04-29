@@ -19,7 +19,7 @@ public class BitmapCommandTest {
     @Test
     public void getbitSetbitBasicSemantics() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 byte[] key = b("k");
 
@@ -45,7 +45,7 @@ public class BitmapCommandTest {
     @Test
     public void bitcountRangeFollowsRedisByteRangeRules() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 byte[] key = b("k");
 
@@ -70,7 +70,7 @@ public class BitmapCommandTest {
     @Test
     public void setbitZeroFillsGrownBytesWithinCapacity() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 byte[] key = b("k");
 
@@ -91,7 +91,7 @@ public class BitmapCommandTest {
     public void bitmapCommandsErrorOnWrongType() {
         forEachDb(db -> {
             // 复用现有 list 命令制造非 string 类型
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 client.execute(Arrays.asList(b("LPUSH"), b("k"), b("x")));
 
