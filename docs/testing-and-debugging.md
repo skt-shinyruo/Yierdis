@@ -16,7 +16,7 @@
 代表测试：
 
 - `yierdis-args/.../YierdisServerArgsTest.java`
-- `yierdis-server/.../ServerConfigArgsTest.java`
+- `yierdis-app/yierdis-server-app/.../ServerConfigArgsTest.java`
 - `yierdis-core-runtime/.../ArchitectureBoundaryTest.java`
 - `yierdis-core-runtime/.../ReplySsoTGuardTest.java`
 
@@ -153,7 +153,7 @@ mvn -Dtest=CustomRequestDecoderTest test
 ```
 
 ```bash
-cd yierdis-server
+cd yierdis-app/yierdis-server-app
 mvn -Dtest=CustomProtocolResyncIntegrationTest test
 ```
 
@@ -198,7 +198,7 @@ mvn -Dtest=OffHeapStringStorageTest,MemoryStatsCommandTest,MaxmemoryEvictionTest
 - `NettyCommandExecutorTest`
 
 ```bash
-cd yierdis-server
+cd yierdis-app/yierdis-server-app
 mvn -Dtest=ServerConfigArgsTest,YierdisServerBootstrapCommandWiringTest,NettyCommandExecutorBackpressureTest,NettyCommandExecutorTest test
 ```
 

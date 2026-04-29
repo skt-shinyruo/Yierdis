@@ -235,7 +235,7 @@ db + runtime + memory
 代表文件：
 
 - `yierdis-core/.../runtime/YierdisInstance.java`
-- `yierdis-server/.../NettyCommandExecutor.java`
+- `yierdis-app/yierdis-server-app/.../NettyCommandExecutor.java`
 - `yierdis-executor-core/.../ExecutorBackpressureController.java`
 
 ### 5. server wiring
@@ -249,10 +249,10 @@ db + runtime + memory
 
 代表文件：
 
-- `yierdis-server/.../YierdisServer.java`
-- `yierdis-server/.../YierdisServerBootstrap.java`
-- `yierdis-server/.../YierdisServerChannelInitializer.java`
-- `yierdis-server/.../ProtocolCommandAdapter.java`
+- `yierdis-app/yierdis-server-app/.../YierdisServer.java`
+- `yierdis-app/yierdis-server-app/.../YierdisServerBootstrap.java`
+- `yierdis-app/yierdis-server-app/.../YierdisServerChannelInitializer.java`
+- `yierdis-app/yierdis-server-app/.../ProtocolCommandAdapter.java`
 
 ## 启动时到底发生了什么
 
@@ -375,19 +375,19 @@ socket bytes
 
 ### 进程和启动
 
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServer.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServer.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
 
 ### 连接和协议入口
 
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`
 - `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/CustomRequestDecoder.java`
 - `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
 
 ### 执行器和回包
 
-- `yierdis-server/src/main/java/yier/bubu/redis/NettyCommandExecutor.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyCommandExecutor.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
 - `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java`
 
 ### 命令与 DB
@@ -400,11 +400,11 @@ socket bytes
 
 如果你不想一上来就啃实现类，建议先看这些测试：
 
-- `yierdis-server/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
+- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
   看 server 是不是真的把命令、协议和 observability 接通了
-- `yierdis-server/src/test/java/yier/bubu/redis/CustomProtocolResyncIntegrationTest.java`
+- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/CustomProtocolResyncIntegrationTest.java`
   看协议错误后如何恢复到下一帧
-- `yierdis-server/src/test/java/yier/bubu/redis/NettyCommandExecutorBackpressureTest.java`
+- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/NettyCommandExecutorBackpressureTest.java`
   看背压和 `ERR busy ...` 的行为
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java`
   看命令处理主流程

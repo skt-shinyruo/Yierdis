@@ -35,7 +35,7 @@
         <module>yierdis-executor-core</module>
         <module>yierdis-args</module>
         <module>yierdis-client</module>
-        <module>yierdis-server</module>
+        <module>yierdis-app/yierdis-server-app</module>
         <module>yierdis-bench</module>
         <module>yierdis-architecture-tests</module>
         <module>yierdis-integration-tests</module>
@@ -161,6 +161,11 @@
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-executor-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-server-app</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>

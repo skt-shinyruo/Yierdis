@@ -86,9 +86,9 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - **存储能力契约（`DbEngine` / `DbReads` / `DbWrites` / `MemoryOps` / maxmemory hooks）**：统一由 `yierdis-storage-api` 拥有；包名仍为 `yier.bubu.redis.ops.*`，便于迁移。需要这些 ops contract 的模块应直接依赖 `yierdis-storage-api`，不要把新 ops 加回 `core-api`。
 - **运行时契约（`YierdisInstanceConfig` / `YierdisChangeEvent` / `YierdisChangeSink` / `YierdisChangeTracking`）**：统一由 `yierdis-runtime-api` 拥有；包名保持 `yier.bubu.redis.runtime*`，便于迁移。需要这些 runtime contract 的模块应直接依赖 `yierdis-runtime-api`，不要通过 `core-api` 传递依赖。
 - **协议模型（limits/reply tooling/client/parser model）**：位于 `yierdis-custom-v1-wire`（包名仍为 `yier.bubu.redis.protocol.*`，便于迁移）；其中 `ReplyValue` 仅用于协议侧客户端/工具/解析器与编码辅助，server 命令写回语义仍以 `ReplyWriter` 为单一事实来源，server command execution write-back still uses ReplyWriter.
-- **协议请求适配**：`CustomProtocolV1Request` 由 `yierdis-custom-v1-execution-adapter` 适配为 `ExecutionRequest`；Netty handler glue 位于 `yierdis-custom-v1-netty`；`yierdis-server` 只做应用组装。
+- **协议请求适配**：`CustomProtocolV1Request` 由 `yierdis-custom-v1-execution-adapter` 适配为 `ExecutionRequest`；Netty handler glue 位于 `yierdis-custom-v1-netty`；`yierdis-server-app` 只做应用组装。
 - **事务回放 / 变更事件**：连接级事务重放与 `YierdisChangeEvent` 都应复用 `ExecutionRecord` 快照，而不是重新引入新的 argv 容器或 server-local `Command` 包装。
-- **core-command 默认装配**：`yierdis-core-command` 仅保留传输无关的默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server`，而 `PING/ECHO/COMMAND/SELECT/QUIT/FLUSHDB` 这类传输无关或 DB 生命周期命令继续留在 core。
+- **core-command 默认装配**：`yierdis-core-command` 仅保留传输无关的默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server-app`，而 `PING/ECHO/COMMAND/SELECT/QUIT/FLUSHDB` 这类传输无关或 DB 生命周期命令继续留在 core。
 - **CLI 输入解析**：`InlineCommandParser` 位于 `yierdis-client`（`yier.bubu.redis.client.InlineCommandParser`）。
 - **instance 暴露面**：`YierdisInstance` 仅负责 DB 生命周期、资源 ownership 与 `DbEngine` 能力视图（`engine(int)` / `engines()` 防御性拷贝），避免上层依赖 `YierdisDb` 具体实现，也不再承担 command processor 组装。
 - **runtime owner-thread seam**：server 不应再通过公开 `DbEngine` 视图做 `RuntimeDbEngine` 向下转型，也不应在 bootstrap 中内联 `bindToCurrentThread()/close()` 细节；owner-thread 维护、maintenance、关闭应通过 `yierdis-core-runtime` 提供的 runtime-local seam 协作。
@@ -100,7 +100,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 ```bash
 mvn -q -DskipTests package
-java -jar yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378
+java -jar yierdis-app/yierdis-server-app/target/yierdis-server-app-0.1.0-SNAPSHOT.jar --port 6378
 ```
 
 然后使用项目内置 CLI 连接（默认 `127.0.0.1:6378`）：
@@ -266,7 +266,7 @@ Yierdis 提供一个“Redis 风格、但刻意简化”的 maxmemory/淘汰机�
 示例：开启 10MB 内存预算，并使用 LRU 淘汰：
 
 ```bash
-java -jar yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar \
+java -jar yierdis-app/yierdis-server-app/target/yierdis-server-app-0.1.0-SNAPSHOT.jar \
   --port 6378 \
   --maxmemoryBytes 10485760 \
   --maxmemoryScope global \
@@ -319,7 +319,7 @@ Yierdis 现在要求使用 JDK 25，并且始终使用 `java.lang.foreign` FFM A
 ```bash
 mvn test
 mvn -DskipTests package
-java -jar yierdis-server/target/yierdis-server-0.1.0-SNAPSHOT.jar --port 6378
+java -jar yierdis-app/yierdis-server-app/target/yierdis-server-app-0.1.0-SNAPSHOT.jar --port 6378
 ```
 
 如果当前 JVM 不支持 `java.lang.foreign`，server 会在启动阶段直接报错并要求改用 JDK 25。

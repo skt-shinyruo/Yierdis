@@ -261,18 +261,18 @@ heap `byte[]` 仍允许出现在协议边界、显式 materialization、测试�
 - `yierdis-core/yierdis-core-engine/src/test/java/yier/bubu/redis/engine/EngineSessionTest.java`
 - `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorTest.java`
 - `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/ExecutionConnectionContextTest.java`
-- `yierdis-server/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
-- `yierdis-server/src/test/java/yier/bubu/redis/TransactionQueueCleanupTest.java`
+- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
+- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/TransactionQueueCleanupTest.java`
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/TransactionCommandTest.java`
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 
 ## 推荐打开的文件
 
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/NettyExecutionConnection.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyExecutionConnection.java`
 - `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
-- `yierdis-server/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
+- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
 - `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutor.java`
 - `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorExecutionSupport.java`
 - `yierdis-core/yierdis-core-engine/src/main/java/yier/bubu/redis/engine/YierdisEngine.java`

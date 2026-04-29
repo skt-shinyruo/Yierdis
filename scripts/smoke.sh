@@ -65,7 +65,7 @@ main() {
   build_if_needed
 
   local server_jar bench_jar client_jar
-  server_jar="$(pick_jar "$ROOT_DIR/yierdis-server/target/yierdis-server-*.jar" "original-")"
+  server_jar="$(pick_jar "$ROOT_DIR/yierdis-app/yierdis-server-app/target/yierdis-server-app-*.jar" "original-")"
   bench_jar="$(pick_jar "$ROOT_DIR/yierdis-bench/target/yierdis-bench-*.jar" "original-")"
   client_jar="$(pick_jar "$ROOT_DIR/yierdis-client/target/yierdis-client-*.jar" "original-")"
 
@@ -98,7 +98,6 @@ main() {
   printf "[smoke] bench（connect-only + strictReplies）\n"
   java -jar "$bench_jar" \
     --noStartServer \
-    --backends none \
     --host "$HOST" \
     --portBase "$PORT" \
     --keyspace "$KEYSPACE" \

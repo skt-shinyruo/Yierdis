@@ -276,7 +276,7 @@ bench 可以开启：
 
 所以脚本层不是另起一套实现，而是把：
 
-- `yierdis-server`
+- `yierdis-server-app`
 - `yierdis-client`
 - `yierdis-bench`
 
