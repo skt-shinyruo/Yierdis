@@ -1001,8 +1001,12 @@ public class ArchitectureBoundaryTest {
                 "DbEngineFactory - SPI-in-legacy-package",
                 "MaxmemoryCoordinator - SPI-in-legacy-package",
                 "MaxmemoryParticipant - SPI-in-legacy-package",
-                "MaxmemoryCandidate - API",
-                "MaxmemoryPolicy - API"
+                "MaxmemoryCandidate - SPI-in-legacy-package",
+                "MaxmemoryPolicy - API",
+                "DbMemoryConstants - SPI-in-legacy-package",
+                "YierdisMemoryStats - compatibility observability API",
+                "ScanCursorV2 - compatibility API",
+                "KeyHandle - SPI-in-legacy-package"
         )) {
             Assert.assertTrue(
                     "storage API package-info must classify " + requiredClassification,
