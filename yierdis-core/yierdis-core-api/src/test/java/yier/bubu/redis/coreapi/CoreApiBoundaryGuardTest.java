@@ -20,11 +20,14 @@ public class CoreApiBoundaryGuardTest {
 
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenImports(moduleRoot.resolve("src/main/java"), offenders);
-        Assert.assertTrue("架构护栏扫描未扫描到任何 Java 文件（请检查测试工作目录/构建配置）", scanned > 0);
-
         if (!offenders.isEmpty()) {
             Assert.fail("检测到 core-api 违规 import（禁止 import io.netty.* / yier.bubu.redis.db.*）：\n" + String.join("\n", offenders));
         }
+        Assert.assertEquals(
+                "core-api is a compatibility bridge and must not own main Java sources",
+                0,
+                scanned
+        );
     }
 
     @Test

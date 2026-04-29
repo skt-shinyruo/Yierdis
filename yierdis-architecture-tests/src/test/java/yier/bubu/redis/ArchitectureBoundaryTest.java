@@ -1228,6 +1228,7 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
+        assertRuntimeChangeTrackingSpiDetectorCoversReviewCases();
 
         Path commandRoot = repoRoot.resolve("yierdis-core-command/src/main/java/yier/bubu/redis/command").normalize();
         Path dbRoot = repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db").normalize();
@@ -1269,7 +1270,7 @@ public class ArchitectureBoundaryTest {
                     .forEach(file -> {
                         try {
                             String source = Files.readString(file, StandardCharsets.UTF_8);
-                            if (!source.contains("import yier.bubu.redis.runtime.api.YierdisChangeTracking;")) {
+                            if (!containsRuntimeChangeTrackingSpiReference(source)) {
                                 return;
                             }
                             Path normalized = file.normalize();
@@ -1292,7 +1293,7 @@ public class ArchitectureBoundaryTest {
         );
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 YierdisChangeTracking SPI import 出现在未 allowlist 的生产模块/路径：\n"
+                    "检测到 YierdisChangeTracking SPI import/reference 出现在未 allowlist 的生产模块/路径：\n"
                             + String.join("\n", offenders)
             );
         }
@@ -1840,6 +1841,7 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-core-db 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
+        assertRuntimeApiDetectorCoversPackageWideReviewCases();
 
         Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
         Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
@@ -1854,7 +1856,7 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("缺少 yierdis-server/pom.xml", Files.isRegularFile(serverPom));
         String pom = Files.readString(serverPom, StandardCharsets.UTF_8);
         Assert.assertTrue(
-                "yierdis-server must declare yierdis-runtime-api directly because production server code imports YierdisInstanceConfig",
+                "yierdis-server must declare yierdis-runtime-api directly because production server code imports runtime API types",
                 pom.contains("<artifactId>yierdis-runtime-api</artifactId>")
         );
 
@@ -1863,11 +1865,13 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 workspaceRoot.resolve("yierdis-server/src/main/java").normalize(),
                 runtimeApiUsers,
-                "import yier.bubu.redis.runtime.YierdisInstanceConfig;"
+                "yier.bubu.redis.runtime.YierdisInstanceConfig",
+                "import yier.bubu.redis.runtime.*;",
+                "yier.bubu.redis.runtime.api."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server Java 文件", scanned > 0);
         Assert.assertFalse(
-                "server guard expected at least one production YierdisInstanceConfig import; remove this direct-dependency guard if server stops using runtime API config",
+                "server guard expected at least one production runtime-api import/reference; remove this direct-dependency guard if server stops using runtime API",
                 runtimeApiUsers.isEmpty()
         );
     }
@@ -2090,6 +2094,65 @@ public class ArchitectureBoundaryTest {
                 }
             }
         }
+    }
+
+    private static void assertRuntimeChangeTrackingSpiDetectorCoversReviewCases() {
+        Assert.assertTrue(
+                "runtime change tracking SPI guard must catch exact imports",
+                containsRuntimeChangeTrackingSpiReference("import yier.bubu.redis.runtime.api.YierdisChangeTracking;")
+        );
+        Assert.assertTrue(
+                "runtime change tracking SPI guard must catch wildcard runtime-api imports",
+                containsRuntimeChangeTrackingSpiReference("import yier.bubu.redis.runtime.api.*;")
+        );
+        Assert.assertTrue(
+                "runtime change tracking SPI guard must catch fully-qualified references",
+                containsRuntimeChangeTrackingSpiReference(
+                        "yier.bubu.redis.runtime.api.YierdisChangeTracking.markValueChanged();"
+                )
+        );
+        Assert.assertFalse(
+                "runtime change tracking SPI guard must not catch unrelated runtime-api types",
+                containsRuntimeChangeTrackingSpiReference("import yier.bubu.redis.runtime.api.YierdisChangeEvent;")
+        );
+    }
+
+    private static boolean containsRuntimeChangeTrackingSpiReference(String source) {
+        return source.contains("yier.bubu.redis.runtime.api.YierdisChangeTracking")
+                || source.contains("import yier.bubu.redis.runtime.api.*;");
+    }
+
+    private static void assertRuntimeApiDetectorCoversPackageWideReviewCases() {
+        Assert.assertTrue(
+                "server runtime-api guard must catch legacy-package runtime API imports",
+                containsRuntimeApiReference("import yier.bubu.redis.runtime.YierdisInstanceConfig;")
+        );
+        Assert.assertTrue(
+                "server runtime-api guard must catch legacy-package runtime wildcard imports",
+                containsRuntimeApiReference("import yier.bubu.redis.runtime.*;")
+        );
+        Assert.assertTrue(
+                "server runtime-api guard must catch fully-qualified legacy-package runtime API references",
+                containsRuntimeApiReference("yier.bubu.redis.runtime.YierdisInstanceConfig.builder();")
+        );
+        Assert.assertTrue(
+                "server runtime-api guard must catch runtime-api package imports",
+                containsRuntimeApiReference("import yier.bubu.redis.runtime.api.YierdisChangeEvent;")
+        );
+        Assert.assertTrue(
+                "server runtime-api guard must catch fully-qualified runtime-api package references",
+                containsRuntimeApiReference("yier.bubu.redis.runtime.api.YierdisChangeSink.NOOP.publish(null);")
+        );
+        Assert.assertFalse(
+                "server runtime-api guard must not catch runtime implementation imports",
+                containsRuntimeApiReference("import yier.bubu.redis.runtime.YierdisInstance;")
+        );
+    }
+
+    private static boolean containsRuntimeApiReference(String source) {
+        return source.contains("yier.bubu.redis.runtime.YierdisInstanceConfig")
+                || source.contains("import yier.bubu.redis.runtime.*;")
+                || source.contains("yier.bubu.redis.runtime.api.");
     }
 
     private static void scanMethodForForbiddenText(
