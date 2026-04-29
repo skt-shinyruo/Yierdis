@@ -12,7 +12,9 @@ public class ArchitecturePolicyResourceTest {
         try (InputStream in = ArchitecturePolicyResourceTest.class.getResourceAsStream("/architecture-policy.yml")) {
             Assert.assertNotNull("missing architecture-policy.yml", in);
             String policy = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            Assert.assertTrue(policy.contains("yierdis-core-command:"));
+            Assert.assertTrue(policy.contains("yierdis-command-api:"));
+            Assert.assertTrue(policy.contains("yierdis-command-kernel:"));
+            Assert.assertTrue(policy.contains("yierdis-command-defaults:"));
             Assert.assertTrue(policy.contains("yierdis-executor-core:"));
             Assert.assertTrue(policy.contains("yierdis-storage-api:"));
             Assert.assertTrue(policy.contains("yierdis-runtime-api:"));

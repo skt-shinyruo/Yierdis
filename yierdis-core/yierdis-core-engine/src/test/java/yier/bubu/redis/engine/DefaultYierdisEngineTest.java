@@ -3,19 +3,10 @@ package yier.bubu.redis.engine;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.command.CommandParsers;
 import yier.bubu.redis.command.CommandDescriptor;
-import yier.bubu.redis.command.SlowCommandGovernor;
-import yier.bubu.redis.command.YierdisDbRouter;
+import yier.bubu.redis.command.CommandParsers;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.DbIndexProvider;
 import yier.bubu.redis.contract.ReplyWriter;
-import yier.bubu.redis.ops.DbEngine;
-import yier.bubu.redis.ops.DbLifecycleOps;
-import yier.bubu.redis.ops.DbReads;
-import yier.bubu.redis.ops.DbWrites;
-import yier.bubu.redis.ops.ExpirationManager;
-import yier.bubu.redis.ops.MemoryOps;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -24,9 +15,6 @@ public class DefaultYierdisEngineTest {
     @Test
     public void executeDelegatesThroughOwnedCommandProcessor() {
         YierdisEngine engine = new DefaultYierdisEngine(
-                singleDbRouter(new NoopDbEngine()),
-                null,
-                SlowCommandGovernor.DEFAULT,
                 () -> {
                 },
                 registration -> registration.register(
@@ -52,9 +40,6 @@ public class DefaultYierdisEngineTest {
     public void maintenanceTickDelegatesToOwnerThreadRuntimeHook() {
         AtomicInteger ticks = new AtomicInteger();
         YierdisEngine engine = new DefaultYierdisEngine(
-                singleDbRouter(new NoopDbEngine()),
-                null,
-                SlowCommandGovernor.DEFAULT,
                 ticks::incrementAndGet
         );
 
@@ -62,47 +47,6 @@ public class DefaultYierdisEngineTest {
         engine.maintenanceTick();
 
         Assert.assertEquals(2, ticks.get());
-    }
-
-    private static YierdisDbRouter singleDbRouter(DbEngine engine) {
-        return new YierdisDbRouter() {
-            @Override
-            public DbEngine dbFor(DbIndexProvider dbIndexProvider) {
-                return engine;
-            }
-
-            @Override
-            public int databases() {
-                return 1;
-            }
-        };
-    }
-
-    private static final class NoopDbEngine implements DbEngine {
-        @Override
-        public DbReads reads() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public DbWrites writes() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public ExpirationManager expiration() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public MemoryOps memory() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public DbLifecycleOps lifecycle() {
-            throw new UnsupportedOperationException();
-        }
     }
 
     private static final class CapturingReplyWriter implements ReplyWriter {

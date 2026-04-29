@@ -5,6 +5,7 @@ package yier.bubu.redis.runtime;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.TestCommandProcessors;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
@@ -41,7 +42,7 @@ public class YierdisInstanceTest {
 
         try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forRouter(TestDbRouters.forInstance(instance));
             TestSession session = new TestSession();
             byte[] value = new byte[4000];
             Arrays.fill(value, (byte) 'a');
@@ -327,7 +328,7 @@ public class YierdisInstanceTest {
                 .build();
         try (YierdisInstance instance = YierdisInstance.create(config)) {
             instance.bindToCurrentThread();
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(TestDbRouters.forInstance(instance), null);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forRouter(TestDbRouters.forInstance(instance));
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), b("k0"), b("v0")))).value());

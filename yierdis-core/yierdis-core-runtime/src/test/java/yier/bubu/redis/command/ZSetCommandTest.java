@@ -24,7 +24,7 @@ public class ZSetCommandTest {
     @Test
     public void zsetCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
         String source = Files.readString(Path.of(
-                "..", "yierdis-core-command", "src", "main", "java", "yier", "bubu", "redis", "command", "ZSetCommands.java"
+                "..", "..", "yierdis-command", "yierdis-command-defaults", "src", "main", "java", "yier", "bubu", "redis", "command", "ZSetCommands.java"
         ));
 
         Assert.assertFalse(source.contains("eviction().prepareWrite("));
@@ -34,7 +34,7 @@ public class ZSetCommandTest {
     @Test
     public void zaddRejectsInvalidScores() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             FastTestClient client = new FastTestClient(processor);
             try {
                 byte[] key = b("z");
@@ -59,7 +59,7 @@ public class ZSetCommandTest {
     @Test
     public void zrangeTieBreakIsRawByteLexAndBoundsWork() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
         byte[] key = new byte[]{'z', 0};
@@ -112,7 +112,7 @@ public class ZSetCommandTest {
     @Test
     public void zrevrangeAndZrangeRevReturnReverseOrder() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
         byte[] key = b("zrev");
@@ -160,7 +160,7 @@ public class ZSetCommandTest {
     @Test
     public void zremDeletesKeyWhenEmpty() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
         byte[] key = new byte[]{0, 'z'};
@@ -185,7 +185,7 @@ public class ZSetCommandTest {
     @Test
     public void zsetUpgradesAfterManyElementsAndKeepsOrder() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
         byte[] key = b("big-zset");
@@ -219,7 +219,7 @@ public class ZSetCommandTest {
     @Test
     public void zsetUpgradesWhenMemberIsTooLargeForListpack() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
         byte[] key = b("zset:big-member");
@@ -246,7 +246,7 @@ public class ZSetCommandTest {
     @Test
     public void zrangeByScoreRespectsBoundsLimitAndWithScores() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
         byte[] key = b("zbyscore");
@@ -303,7 +303,7 @@ public class ZSetCommandTest {
     @Test
     public void zremrangeByScoreRemovesAndDeletesKeyWhenEmpty() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
         byte[] key = b("zrembyscore");
@@ -334,7 +334,7 @@ public class ZSetCommandTest {
     @Test
     public void zrangeByScoreWorksAfterUpgradeToSkiplist() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
         byte[] key = b("zbyscore:upgrade");
@@ -360,7 +360,7 @@ public class ZSetCommandTest {
     @Test
     public void zrevrangeByScoreRespectsBoundsLimitAndWithScores() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
         byte[] key = b("zrevbyscore");
@@ -414,7 +414,7 @@ public class ZSetCommandTest {
     @Test
     public void zremrangeByRankRemovesAndDeletesKeyWhenEmpty() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
         byte[] key = b("zrembyrank");
@@ -450,7 +450,7 @@ public class ZSetCommandTest {
     @Test
     public void zrevrangeByScoreAndZremrangeByRankWorkAfterUpgradeToSkiplist() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
         byte[] key = b("zrange:upgrade2");

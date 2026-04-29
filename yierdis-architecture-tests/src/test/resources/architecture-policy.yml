@@ -1,10 +1,30 @@
 modules:
-  yierdis-core-command:
+  yierdis-command-api:
     allowed_dependencies:
       - yierdis-execution-api
       - yierdis-storage-api
+    forbidden_dependencies:
+      - yierdis-command-kernel
+      - yierdis-command-defaults
+      - yierdis-core-db
+      - yierdis-memory-api
+      - yierdis-protocol-model
+      - yierdis-custom-v1-wire
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-custom-v1-netty
+      - yierdis-server-app
+    forbidden_imports:
+      - yier.bubu.redis.db
+      - yier.bubu.redis.offheap.api
+      - yier.bubu.redis.protocol
+      - yier.bubu.redis.runtime
+      - yier.bubu.redis.server
+  yierdis-command-kernel:
+    allowed_dependencies:
+      - yierdis-command-api
       - yierdis-runtime-api
     forbidden_dependencies:
+      - yierdis-command-defaults
       - yierdis-core-db
       - yierdis-memory-api
       - yierdis-protocol-model
@@ -19,7 +39,28 @@ modules:
       - yier.bubu.redis.server
     allowed_spi_imports:
       yier.bubu.redis.runtime.api.YierdisChangeTracking:
-        - yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command
+        - yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command
+  yierdis-command-defaults:
+    allowed_dependencies:
+      - yierdis-command-api
+      - yierdis-execution-api
+      - yierdis-storage-api
+      - yierdis-bytes-lib
+    forbidden_dependencies:
+      - yierdis-command-kernel
+      - yierdis-core-db
+      - yierdis-memory-api
+      - yierdis-protocol-model
+      - yierdis-custom-v1-wire
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-custom-v1-netty
+      - yierdis-server-app
+    forbidden_imports:
+      - yier.bubu.redis.db
+      - yier.bubu.redis.offheap.api
+      - yier.bubu.redis.protocol
+      - yier.bubu.redis.runtime
+      - yier.bubu.redis.server
   yierdis-core-db:
     allowed_spi_imports:
       yier.bubu.redis.runtime.api.YierdisChangeTracking:
@@ -160,8 +201,10 @@ modules:
   yierdis-core-engine:
     allowed_dependencies:
       - yierdis-execution-api
-      - yierdis-core-command
+      - yierdis-command-api
+      - yierdis-command-kernel
     forbidden_dependencies:
+      - yierdis-command-defaults
       - yierdis-protocol-model
       - yierdis-protocol-codec
       - yierdis-protocol-netty
@@ -186,7 +229,9 @@ modules:
     allowed_dependencies:
       - yierdis-execution-api
       - yierdis-storage-api
-      - yierdis-core-command
+      - yierdis-command-api
+      - yierdis-command-kernel
+      - yierdis-command-defaults
       - yierdis-core-engine
       - yierdis-custom-v1-execution-adapter
       - yierdis-custom-v1-netty

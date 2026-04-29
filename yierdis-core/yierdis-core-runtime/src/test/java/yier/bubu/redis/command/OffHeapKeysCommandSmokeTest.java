@@ -23,7 +23,7 @@ public class OffHeapKeysCommandSmokeTest {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
             try {
                 db.bindToCurrentThread();
-                YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+                YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
                 try (FastTestClient client = new FastTestClient(processor)) {
                     byte[] v = b("v");
                     byte[] a1 = b("a1");

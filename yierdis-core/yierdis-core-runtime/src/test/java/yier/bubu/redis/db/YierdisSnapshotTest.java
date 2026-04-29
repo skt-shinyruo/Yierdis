@@ -5,6 +5,7 @@ import yier.bubu.redis.ops.ScanCursorV2;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.TestCommandProcessors;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplySimpleString;
@@ -23,7 +24,7 @@ public class YierdisSnapshotTest {
         db.bindToCurrentThread();
 
         try {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertTrue(client.execute(cmd("SET", "a", "1")) instanceof ReplySimpleString);
                 Assert.assertTrue(client.execute(cmd("SET", "b", "2")) instanceof ReplySimpleString);

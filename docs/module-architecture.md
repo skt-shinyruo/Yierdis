@@ -10,12 +10,12 @@
 bytes-lib
 ├─ memory-api ──> memory-foreign
 │
-├─ storage-api ──> core-command ──> core-engine
+├─ storage-api ──> command-api/kernel/defaults ──> core-engine
 │        ├───────> core-db ──> core-runtime
 │        │              ^  ^
 │        │              │  └─ memory-foreign
 │        │              └──── memory-api
-│        └───────> runtime-api ──> core-command + core-db + core-runtime
+│        └───────> runtime-api ──> command-api/kernel/defaults + core-db + core-runtime
 │
 ├─ execution-api ──> core-contract (temporary bridge)
 │        ├─────────> runtime-api
@@ -30,7 +30,7 @@ bytes-lib
 │
 ├─ client  -> custom-v1-wire + custom-v1-netty
 ├─ bench   -> args + custom-v1-wire + custom-v1-netty
-└─ server  -> execution-api + storage-api + runtime-api + core-engine + core-command + core-runtime
+└─ server  -> execution-api + storage-api + runtime-api + core-engine + command-api/kernel/defaults + core-runtime
              + custom-v1-execution-adapter + custom-v1-netty + bytes-netty
              + executor-core + args + memory-foreign
 ```
@@ -188,7 +188,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 `core-db` 里的 internal `KeyHandle` 实现 API 层的 `ops.KeyHandle`。热点 TTL cleanup 和 maxmemory eviction 走 handle API；heap `byte[]` 主要保留在协议边界、显式 materialization、测试和 client-facing 结果里。
 
-### `yierdis-core-command`
+### `yierdis-command-api/kernel/defaults`
 
 这是传输无关的命令层。
 
@@ -201,7 +201,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 这个模块是整个架构里最刻意做“依赖倒置”的地方。
 
-从代码逻辑上看，`core-command` 的职责可以再具体化成：
+从代码逻辑上看，`command-api/kernel/defaults` 的职责可以再具体化成：
 
 - `YierdisFastCommandProcessor`
   负责命令注册、`CommandSpec<T>` 查找、事务前置判定、错误转换和最终分发
@@ -250,7 +250,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 初学者如果只记一句话，可以记成：
 
 - `core-runtime` 负责“实例怎么活”
-- `core-command` 负责“命令怎么解释”
+- `command-api/kernel/defaults` 负责“命令怎么解释”
 
 这两个模块在职责上是并排关系，不是上下级关系。
 
@@ -362,7 +362,7 @@ bench 也主要依赖协议和参数模块，说明它在设计上更像：
 - protocol DTO 不是命令层的事实来源
 - server 最终写回语义仍以 `ReplyWriter` 为准
 
-### 2. `core-command` 不能依赖 `core-db` 或 memory backend
+### 2. `command-api/kernel/defaults` 不能依赖 `core-db` 或 memory backend
 
 命令层只能通过 `yierdis-storage-api` 看 `DbEngine` / `DbReads` / `DbWrites`，不能直接看 `YierdisDb`，也不能 import `yier.bubu.redis.offheap.api.*` 或依赖 `yierdis-memory-api`。
 
@@ -405,7 +405,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
    做排队、背压和 owner-thread 调度
 5. `core-engine`
    接收 `Session + ExecutionRequest + ReplyWriter`，创建 command context
-6. `core-command`
+6. `command-api/kernel/defaults`
    通过 `CommandSpec<T>` parse 后分发到 typed handler
 7. `storage-api`
    通过 `DbReads/DbWrites` 暴露能力边界
@@ -420,9 +420,9 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 
 这些边界不只是文档约定，仓库里有明确的护栏。
 
-### `core-command` 构建时禁止依赖
+### `command-api/kernel/defaults` 构建时禁止依赖
 
-`yierdis-core-command/pom.xml` 直接通过 `maven-enforcer-plugin` 禁止：
+`yierdis-command-api/kernel/defaults/pom.xml` 直接通过 `maven-enforcer-plugin` 禁止：
 
 - `yierdis-core-db`
 - `yierdis-memory-api`
@@ -437,8 +437,8 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 
 这个测试会扫描源码，确保：
 
-- `core-db/storage-api/core-command` 不 import `yier.bubu.redis.protocol.*`
-- `core-command` 不依赖 `yierdis-memory-api`，也不 import `yier.bubu.redis.offheap.api.*`
+- `core-db/storage-api/command-api/kernel/defaults` 不 import `yier.bubu.redis.protocol.*`
+- `command-api/kernel/defaults` 不依赖 `yierdis-memory-api`，也不 import `yier.bubu.redis.offheap.api.*`
 - `storage-api` 保持中立 contract 模块，不依赖 command、protocol、application/server、Netty、concrete storage implementation 或 memory-foreign
 - `runtime-api` 保持中立 contract 模块，不依赖 command/storage implementation、protocol、application/server、Netty 或 memory-foreign
 - `core-api` 保持临时兼容桥形态：依赖 execution-api + storage-api + runtime-api，不重新拥有 ops/offheap/runtime-api 源码
@@ -473,7 +473,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 
 - `README.md`
 - `pom.xml`
-- `yierdis-core/yierdis-core-command/pom.xml`
+- `yierdis-core/yierdis-command-api/kernel/defaults/pom.xml`
 - `yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 - `yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/ReplySsoTGuardTest.java`
 - `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1ExecutionAdapter.java`
@@ -504,7 +504,7 @@ Yierdis 的模块设计重点，不是“按包名分目录”，而是：
    先知道项目怎么启动、怎么收请求
 2. `yierdis-core-engine`
    再知道 server 最终把请求交给哪个执行入口
-3. `yierdis-core-command`
+3. `yierdis-command-api/kernel/defaults`
    再知道命令是怎么被解释和分发的
 4. `yierdis-storage-api`
    再知道命令层到底能向 DB 要什么能力

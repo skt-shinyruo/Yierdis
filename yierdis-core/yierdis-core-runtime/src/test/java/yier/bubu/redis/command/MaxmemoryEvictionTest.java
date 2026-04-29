@@ -24,7 +24,7 @@ public class MaxmemoryEvictionTest {
     @Test
     public void noevictionRejectsWritesWhenFull() {
         forEachDbWithMaxmemory(3000, "noeviction", 5, db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] v1600 = repeat((byte) 'x', 1600);
@@ -44,7 +44,7 @@ public class MaxmemoryEvictionTest {
     @Test
     public void noevictionRejectsCollectionGrowthWritesBeforeTheyMutate() {
         forEachDbWithMaxmemory(1, "noeviction", 5, db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 assertCollectionWriteRejected(client, List.of(b("LPUSH"), b("l"), b("a")), b("l"));
                 assertCollectionWriteRejected(client, List.of(b("HSET"), b("h"), b("f"), b("v")), b("h"));
@@ -82,7 +82,7 @@ public class MaxmemoryEvictionTest {
     @Test
     public void allkeysRandomEvictsToStayWithinLimit() {
         forEachDbWithMaxmemory(3000, "allkeys-random", 5, db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] v1600 = repeat((byte) 'x', 1600);
@@ -102,7 +102,7 @@ public class MaxmemoryEvictionTest {
     public void allkeysLruEvictsLeastRecentlyUsedWhenSamplesCoverAllKeys() {
         // samples >= total keys triggers a deterministic full scan in eviction.
         forEachDbWithMaxmemory(4500, "allkeys-lru", 10, db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] v1600 = repeat((byte) 'x', 1600);
@@ -129,7 +129,7 @@ public class MaxmemoryEvictionTest {
     @Test
     public void objectEncodingAndMemoryUsageAreExposed() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
         Assert.assertTrue(client.execute(cmd("SET", "k", "1")) instanceof ReplySimpleString);
@@ -206,7 +206,7 @@ public class MaxmemoryEvictionTest {
             setup.apply(bounded.db);
             bounded.setMaxmemory(usedBefore + actualDelta);
 
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(bounded.db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(bounded.db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 ReplyObject reply = client.execute(commandWrite);
                 Assert.assertFalse(reply instanceof ReplyError);

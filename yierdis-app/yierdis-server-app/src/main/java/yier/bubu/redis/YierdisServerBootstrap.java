@@ -14,8 +14,9 @@ import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.args.YierdisServerRuntimeConfig;
-import yier.bubu.redis.command.YierdisDbRouter;
+import yier.bubu.redis.command.DefaultCommandModules;
 import yier.bubu.redis.command.SlowCommandGovernor;
+import yier.bubu.redis.command.YierdisDbRouter;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.engine.DefaultYierdisEngine;
 import yier.bubu.redis.engine.YierdisEngine;
@@ -141,10 +142,8 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             }
         };
         YierdisEngine commandEngine = new DefaultYierdisEngine(
-                dbRouter(instance),
-                infoProvider,
-                slowGovernor,
                 maintenanceTick,
+                DefaultCommandModules.create(dbRouter(instance), infoProvider, slowGovernor),
                 new ServerCommandModule(infoProvider)
         );
         engine = commandEngine;

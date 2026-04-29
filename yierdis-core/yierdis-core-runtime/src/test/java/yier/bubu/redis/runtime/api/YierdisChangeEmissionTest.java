@@ -3,6 +3,7 @@ package yier.bubu.redis.runtime.api;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.TestCommandProcessors;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ServerSession;
@@ -28,7 +29,7 @@ public class YierdisChangeEmissionTest {
             List<YierdisChangeEvent> events = new ArrayList<>();
             YierdisChangeSink sink = events::add;
 
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db, null, sink);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDbWithChangeSink(db, sink);
             try (FastTestClient client = new FastTestClient(processor)) {
                 events.clear();
                 client.execute(cmd("GET", "missing"));
@@ -89,7 +90,7 @@ public class YierdisChangeEmissionTest {
             YierdisChangeSink sink = events::add;
 
             TestSession session = new TestSession();
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db, null, sink);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDbWithChangeSink(db, sink);
             try (FastTestClient client = new FastTestClient(processor, session)) {
                 events.clear();
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("MULTI"))).value());
@@ -117,7 +118,7 @@ public class YierdisChangeEmissionTest {
             List<YierdisChangeEvent> events = new ArrayList<>();
             YierdisChangeSink sink = events::add;
 
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db, null, sink);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDbWithChangeSink(db, sink);
             try (FastTestClient client = new FastTestClient(processor)) {
                 events.clear();
                 ReplyObject first = client.execute(cmd("ZADD", "z", "1", "m"));
@@ -140,7 +141,7 @@ public class YierdisChangeEmissionTest {
             List<YierdisChangeEvent> events = new ArrayList<>();
             YierdisChangeSink sink = events::add;
 
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db, null, sink);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDbWithChangeSink(db, sink);
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertTrue(client.execute(cmd("PFADD", "h1", "a")) instanceof ReplyInteger);
 

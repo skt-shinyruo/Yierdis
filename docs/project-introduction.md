@@ -151,7 +151,7 @@ Yierdis 明确区分了：
 
 这个项目不只是“文档里说分层”，还通过模块拆分和测试把边界守住，例如：
 
-- `core-command` 不直接依赖 `core-db`
+- `command-defaults` 不直接依赖 `core-db`
 - `protocol` 车道不变成命令语义的真相源
 - `server` 只负责组装，不重新拿回所有责任
 
@@ -392,7 +392,7 @@ socket bytes
 
 ### 命令与 DB
 
-- `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
+- `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDb.java`
 - `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
 

@@ -18,7 +18,7 @@ public class OffHeapKeysZeroCopyReadPathTest {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
             try {
                 db.bindToCurrentThread();
-                YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+                YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
                 try (FastTestClient client = new FastTestClient(processor)) {
                     Assert.assertTrue(client.execute(cmd("SET", "k", "v")) instanceof ReplySimpleString);
                     Assert.assertTrue(db.memory().memoryStats().keysStoredOffHeap());

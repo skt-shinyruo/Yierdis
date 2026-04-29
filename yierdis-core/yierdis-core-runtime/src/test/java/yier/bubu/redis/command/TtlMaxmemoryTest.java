@@ -26,7 +26,7 @@ public class TtlMaxmemoryTest {
         YierdisDb db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
         db.bindToCurrentThread();
 
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
         try (FastTestClient client = new FastTestClient(processor)) {
             Assert.assertTrue(client.execute(List.of(b("SET"), key, value)) instanceof ReplySimpleString);
 
@@ -50,7 +50,7 @@ public class TtlMaxmemoryTest {
         YierdisDb db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
         db.bindToCurrentThread();
 
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
         try (FastTestClient client = new FastTestClient(processor)) {
             Assert.assertTrue(client.execute(List.of(b("SET"), key, value)) instanceof ReplySimpleString);
 
@@ -74,7 +74,7 @@ public class TtlMaxmemoryTest {
         YierdisDb db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
         db.bindToCurrentThread();
 
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
         try (FastTestClient client = new FastTestClient(processor)) {
             Assert.assertTrue(client.execute(List.of(b("SET"), key, value)) instanceof ReplySimpleString);
 
@@ -99,7 +99,7 @@ public class TtlMaxmemoryTest {
         YierdisDb db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
         db.bindToCurrentThread();
 
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+        YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
         try (FastTestClient client = new FastTestClient(processor)) {
             ReplyObject set = client.execute(List.of(b("SET"), key, value, b("EX"), b("60")));
             Assert.assertTrue(set instanceof ReplyError);

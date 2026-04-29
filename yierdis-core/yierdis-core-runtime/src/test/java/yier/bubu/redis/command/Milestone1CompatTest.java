@@ -26,7 +26,7 @@ public class Milestone1CompatTest {
     @Test
     public void scanMatchAndCountEventuallyReturnsAllMatchingKeys() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("k1"), b("v"))) instanceof ReplySimpleString);
                 Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("k2"), b("v"))) instanceof ReplySimpleString);
@@ -70,7 +70,7 @@ public class Milestone1CompatTest {
     @Test
     public void ttlFamilyPersistAndPexpireMatchRedisLikeConventions() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("k"), b("v"))) instanceof ReplySimpleString);
 
@@ -92,7 +92,7 @@ public class Milestone1CompatTest {
     @Test
     public void setGetAndKeepTtlBehaveAsExpected() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("EX"), b("5"))) instanceof ReplySimpleString);
                 Assert.assertTrue(((ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("k")))).value() > 0L);
@@ -110,7 +110,7 @@ public class Milestone1CompatTest {
     @Test
     public void setRejectsConflictingModeOptions() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 ReplyError err = (ReplyError) client.execute(Arrays.asList(b("SET"), b("k"), b("v"), b("NX"), b("XX")));
                 Assert.assertEquals("ERR syntax error", err.message());
@@ -121,7 +121,7 @@ public class Milestone1CompatTest {
     @Test
     public void flushdbValidatesOptions() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("k"), b("v"))) instanceof ReplySimpleString);
                 Assert.assertTrue(client.execute(Arrays.asList(b("FLUSHDB"), b("ASYNC"))) instanceof ReplySimpleString);
@@ -136,7 +136,7 @@ public class Milestone1CompatTest {
     @Test
     public void lpopCountHandlesNullArrayAndEmptyArray() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
 		            try (FastTestClient client = new FastTestClient(processor)) {
 		                Assert.assertTrue(client.execute(Arrays.asList(b("LPOP"), b("nope"))) instanceof ReplyNull);
 

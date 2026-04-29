@@ -108,7 +108,7 @@ Netty ByteBuf
 
 ## Executor
 
-`CommandExecutor` 及其协作者位于 `yierdis-executor-core`，不依赖 Netty，也不依赖 `core-command`。
+`CommandExecutor` 及其协作者位于 `yierdis-executor-core`，不依赖 Netty，也不依赖 `command-defaults`。
 
 提交阶段由 `CommandExecutorSubmitter` 和 `ExecutorBacklogBudget` 负责：
 
@@ -277,8 +277,8 @@ heap `byte[]` 仍允许出现在协议边界、显式 materialization、测试�
 - `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorExecutionSupport.java`
 - `yierdis-core/yierdis-core-engine/src/main/java/yier/bubu/redis/engine/YierdisEngine.java`
 - `yierdis-core/yierdis-core-engine/src/main/java/yier/bubu/redis/engine/EngineSession.java`
-- `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
-- `yierdis-core/yierdis-core-command/src/main/java/yier/bubu/redis/command/CommandSpec.java`
+- `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
+- `yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/CommandSpec.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbMaxmemorySupport.java`
 - `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbExpirationSupport.java`
 

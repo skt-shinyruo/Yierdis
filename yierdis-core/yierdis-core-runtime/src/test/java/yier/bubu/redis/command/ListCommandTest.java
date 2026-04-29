@@ -24,7 +24,7 @@ public class ListCommandTest {
     @Test
     public void listCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
         String source = Files.readString(Path.of(
-                "..", "yierdis-core-command", "src", "main", "java", "yier", "bubu", "redis", "command", "ListCommands.java"
+                "..", "..", "yierdis-command", "yierdis-command-defaults", "src", "main", "java", "yier", "bubu", "redis", "command", "ListCommands.java"
         ));
 
         Assert.assertFalse(source.contains("eviction().prepareWrite("));
@@ -34,7 +34,7 @@ public class ListCommandTest {
     @Test
     public void lpopRpopCountVariantsAndDeleteWhenEmpty() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = new byte[]{'l', 0, (byte) 0xFF};
@@ -73,7 +73,7 @@ public class ListCommandTest {
     @Test
     public void lrangeClampsIndicesAndHandlesOutOfRange() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("mylist");
@@ -108,7 +108,7 @@ public class ListCommandTest {
     @Test
     public void listUpgradesAfterManyElementsAndKeepsOrder() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("big-list");
@@ -143,7 +143,7 @@ public class ListCommandTest {
     @Test
     public void lrangeDoesNotOverflowOnHugePositiveIndices() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("list:huge-index");
@@ -161,7 +161,7 @@ public class ListCommandTest {
     @Test
     public void lpopRpopDoNotOverflowOnHugeCount() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("list:huge-count");

@@ -19,7 +19,7 @@ public class CommandErrorTest {
     @Test
     public void wrongTypeOnGetWhenKeyHoldsNonString() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] listKey = b("l");
@@ -43,7 +43,7 @@ public class CommandErrorTest {
     @Test
     public void wrongTypeOnHsetWhenKeyHoldsNonHash() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] stringKey = b("k:string");
@@ -67,7 +67,7 @@ public class CommandErrorTest {
     @Test
     public void wrongTypeOnSaddAndZaddWhenKeyHoldsNonMatchingType() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] stringKey = b("k:string");
@@ -92,7 +92,7 @@ public class CommandErrorTest {
     @Test
     public void arityAndSyntaxErrorsMatchExpectedMessages() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             ReplyError hsetWrongArity = (ReplyError) client.execute(Arrays.asList(b("HSET"), b("k"), b("f")));
@@ -142,7 +142,7 @@ public class CommandErrorTest {
     @Test
     public void scoreRangeCommandsValidateArityAndLimitArguments() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             ReplyError zrangeByScoreWrongArity = (ReplyError) client.execute(Arrays.asList(b("ZRANGEBYSCORE"), b("k"), b("0")));

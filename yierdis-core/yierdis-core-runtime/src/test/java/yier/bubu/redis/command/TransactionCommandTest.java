@@ -24,7 +24,7 @@ public class TransactionCommandTest {
     @Test
     public void multiQueuesAndExecAppliesInOrder() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
@@ -45,7 +45,7 @@ public class TransactionCommandTest {
     @Test
     public void execAndDiscardWithoutMultiReturnErrors() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
                 ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
@@ -62,7 +62,7 @@ public class TransactionCommandTest {
     @Test
     public void multiCannotBeNested() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
@@ -79,7 +79,7 @@ public class TransactionCommandTest {
     @Test
     public void multiQueueCopiesArgvToPreventMutationAfterEnqueue() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
@@ -110,10 +110,8 @@ public class TransactionCommandTest {
     @Test
     public void modulesCanRejectCommandsInsideMultiAndAbortTransaction() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(
                     db,
-                    null,
-                    SlowCommandGovernor.DEFAULT,
                     registration -> registration.registerDisallowedInMulti(
                             "HELLO",
                             CommandDescriptor.of(-1, 0, 0, 0),
@@ -140,10 +138,8 @@ public class TransactionCommandTest {
     @Test
     public void syntaxErrorInsideMultiAbortsBeforeExec() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(
                     db,
-                    null,
-                    SlowCommandGovernor.DEFAULT,
                     registration -> registration.register(
                             "STRICT",
                             CommandSpec.of(
@@ -172,7 +168,7 @@ public class TransactionCommandTest {
     @Test
     public void unknownCommandInsideMultiAbortsBeforeExec() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
@@ -192,7 +188,7 @@ public class TransactionCommandTest {
     @Test
     public void builtInWrongArityInsideMultiAbortsBeforeExecAfterParserMigration() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
@@ -212,7 +208,7 @@ public class TransactionCommandTest {
     @Test
     public void setOptionSyntaxInsideMultiAbortsBeforeExecAfterParserMigration() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             TestSession session = new TestSession();
             try (FastTestClient client = new FastTestClient(processor, session)) {
                 Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());

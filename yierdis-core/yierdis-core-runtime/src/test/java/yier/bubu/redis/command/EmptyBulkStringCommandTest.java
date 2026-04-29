@@ -18,7 +18,7 @@ public class EmptyBulkStringCommandTest {
     @Test
     public void smembersAllowsEmptyMember() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 byte[] key = b("s-empty");
                 byte[] empty = b("");
@@ -35,7 +35,7 @@ public class EmptyBulkStringCommandTest {
     @Test
     public void hgetallAllowsEmptyField() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 byte[] key = b("h-empty");
                 byte[] field = b("");
@@ -54,7 +54,7 @@ public class EmptyBulkStringCommandTest {
     @Test
     public void zrangeAllowsEmptyMemberWithScores() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 byte[] key = b("z-empty");
                 byte[] empty = b("");

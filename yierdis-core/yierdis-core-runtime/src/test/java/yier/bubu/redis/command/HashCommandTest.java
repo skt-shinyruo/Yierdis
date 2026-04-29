@@ -26,7 +26,7 @@ public class HashCommandTest {
     @Test
     public void hashCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
         String source = Files.readString(Path.of(
-                "..", "yierdis-core-command", "src", "main", "java", "yier", "bubu", "redis", "command", "HashCommands.java"
+                "..", "..", "yierdis-command", "yierdis-command-defaults", "src", "main", "java", "yier", "bubu", "redis", "command", "HashCommands.java"
         ));
 
         Assert.assertFalse(source.contains("eviction().prepareWrite("));
@@ -36,7 +36,7 @@ public class HashCommandTest {
     @Test
     public void hsetHgetHlenAndHgetallAreBinarySafe() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = new byte[]{'h', 0, (byte) 0xFF};
@@ -78,7 +78,7 @@ public class HashCommandTest {
     @Test
     public void hdelRemovesHashKeyWhenEmpty() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = new byte[]{0, 'h'};
@@ -111,7 +111,7 @@ public class HashCommandTest {
     @Test
     public void hashUpgradesAfterManyFieldsAndKeepsData() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
             byte[] key = b("big-hash");
@@ -144,7 +144,7 @@ public class HashCommandTest {
     @Test
     public void ffmHashStartsAsListpackAndUpgradesToHashtableAfterThreshold() {
         runDefaultFfm(db -> {
-            YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(db);
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 // 512 is YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES (kept package-private).
                 int threshold = 512;
