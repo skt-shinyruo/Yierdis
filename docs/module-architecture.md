@@ -27,7 +27,7 @@ bytes-lib
 │
 ├─ client  -> protocol-netty
 ├─ bench   -> args + protocol-codec + protocol-netty
-└─ server  -> execution-api + core-engine + core-command + core-runtime
+└─ server  -> execution-api + storage-api + core-engine + core-command + core-runtime
              + protocol-netty + bytes-netty + executor-core + args + memory-foreign
 ```
 

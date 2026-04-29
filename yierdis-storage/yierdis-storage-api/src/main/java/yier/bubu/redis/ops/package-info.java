@@ -6,10 +6,12 @@
  * {@code yierdis-storage-api}.</p>
  *
  * <p>Factory hooks, maxmemory coordination hooks, and implementation-shaped
- * pressure/observability records are marked SPI-in-legacy-package for this
- * phase. Follow-up: move those hooks to an explicit {@code .spi} package, and
- * split public observability views from storage-memory accounting details once
- * the runtime-api and storage-memory phases land.</p>
+ * pressure records are marked SPI-in-legacy-package for this phase.
+ * Observability records that still expose storage-memory accounting details are
+ * marked compatibility API. Follow-up: move SPI hooks to an explicit
+ * {@code .spi} package, and split public observability views from
+ * storage-memory accounting details once the runtime-api and storage-memory
+ * phases land.</p>
  *
  * <ul>
  *     <li>DbEngine - API. Audience: command handlers, engine/runtime routing, tests.</li>
