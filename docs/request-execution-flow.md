@@ -20,7 +20,7 @@ Netty ByteBuf
   -> CommandSpec<T>.parse(...)
   -> typed command handler
   -> DbEngine / DbReads / DbWrites
-  -> core-db storage
+  -> storage-memory storage
   -> ReplyWriter
   -> NettyExecutionIoAdapter
   -> transport flush
@@ -264,7 +264,7 @@ heap `byte[]` 仍允许出现在协议边界、显式 materialization、测试�
 - `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
 - `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/TransactionQueueCleanupTest.java`
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/TransactionCommandTest.java`
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
+- `yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 
 ## 推荐打开的文件
 
@@ -279,7 +279,7 @@ heap `byte[]` 仍允许出现在协议边界、显式 materialization、测试�
 - `yierdis-core/yierdis-core-engine/src/main/java/yier/bubu/redis/engine/EngineSession.java`
 - `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
 - `yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/CommandSpec.java`
-- `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbMaxmemorySupport.java`
-- `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbExpirationSupport.java`
+- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbMaxmemorySupport.java`
+- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbExpirationSupport.java`
 
 如果你想继续理解模块边界，接着看 [`module-architecture.md`](./module-architecture.md)。

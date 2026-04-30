@@ -14,9 +14,11 @@
     <packaging>pom</packaging>
 
     <name>yierdis-storage</name>
-    <description>Aggregator and parent for Yierdis storage contract modules.</description>
+    <description>Aggregator and parent for Yierdis storage contract, fixture, and implementation modules.</description>
 
     <modules>
         <module>yierdis-storage-api</module>
+        <module>yierdis-storage-testkit</module>
+        <module>yierdis-storage-memory</module>
     </modules>
 </project>

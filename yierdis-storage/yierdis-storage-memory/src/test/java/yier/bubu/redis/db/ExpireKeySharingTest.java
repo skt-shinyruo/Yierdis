@@ -9,7 +9,7 @@ import yier.bubu.redis.ops.SetMode;
 
 import java.lang.reflect.Field;
 
-import static yier.bubu.redis.testutil.TestBytes.b;
+import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class ExpireKeySharingTest {
     @Test

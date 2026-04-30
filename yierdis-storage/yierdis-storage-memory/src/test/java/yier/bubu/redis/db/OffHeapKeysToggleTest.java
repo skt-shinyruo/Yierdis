@@ -5,7 +5,7 @@ import org.junit.Test;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.ops.SetMode;
 
-import static yier.bubu.redis.testutil.TestBytes.b;
+import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class OffHeapKeysToggleTest {
     @Test

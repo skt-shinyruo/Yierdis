@@ -7,7 +7,7 @@ import yier.bubu.redis.ops.SetMode;
 
 import java.util.List;
 
-import static yier.bubu.redis.testutil.TestBytes.b;
+import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class UnsafeOffHeapDbSmokeTest {
     @Test

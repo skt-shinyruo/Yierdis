@@ -109,6 +109,16 @@
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-storage-testkit</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-storage-memory</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-runtime-api</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -135,11 +145,6 @@
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-core-api</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-core-db</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

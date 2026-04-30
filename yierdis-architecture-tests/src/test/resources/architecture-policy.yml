@@ -7,6 +7,7 @@ modules:
       - yierdis-command-kernel
       - yierdis-command-defaults
       - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-memory-api
       - yierdis-protocol-model
       - yierdis-custom-v1-wire
@@ -26,6 +27,7 @@ modules:
     forbidden_dependencies:
       - yierdis-command-defaults
       - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-memory-api
       - yierdis-protocol-model
       - yierdis-custom-v1-wire
@@ -49,6 +51,7 @@ modules:
     forbidden_dependencies:
       - yierdis-command-kernel
       - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-memory-api
       - yierdis-protocol-model
       - yierdis-custom-v1-wire
@@ -61,16 +64,72 @@ modules:
       - yier.bubu.redis.protocol
       - yier.bubu.redis.runtime
       - yier.bubu.redis.server
-  yierdis-core-db:
+  yierdis-storage-memory:
+    allowed_dependencies:
+      - yierdis-storage-api
+      - yierdis-runtime-api
+      - yierdis-bytes-lib
+      - yierdis-memory-foreign
+      - yierdis-memory-api
+    forbidden_dependencies:
+      - yierdis-command-api
+      - yierdis-command-kernel
+      - yierdis-command-defaults
+      - yierdis-core-runtime
+      - yierdis-protocol-model
+      - yierdis-protocol-codec
+      - yierdis-protocol-netty
+      - yierdis-custom-v1-wire
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-custom-v1-netty
+      - yierdis-server-app
+      - yierdis-executor-core
+      - yierdis-bytes-netty
+      - netty-all
+    forbidden_imports:
+      - yier.bubu.redis.command
+      - yier.bubu.redis.protocol
+      - yier.bubu.redis.server
+      - yier.bubu.redis.executor
+      - io.netty
     allowed_spi_imports:
       yier.bubu.redis.runtime.api.YierdisChangeTracking:
-        - yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db
+        - yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db
+    source_ownership:
+      - concrete_in_memory_storage_only
+      - no_command_protocol_or_server_imports
+  yierdis-storage-testkit:
+    allowed_dependencies:
+      - yierdis-storage-api
+    forbidden_dependencies:
+      - yierdis-storage-memory
+      - yierdis-core-db
+      - yierdis-core-runtime
+      - yierdis-command-api
+      - yierdis-command-kernel
+      - yierdis-command-defaults
+      - yierdis-protocol-model
+      - yierdis-protocol-codec
+      - yierdis-protocol-netty
+      - yierdis-server-app
+      - yierdis-memory-foreign
+      - netty-all
+    forbidden_imports:
+      - yier.bubu.redis.db
+      - yier.bubu.redis.command
+      - yier.bubu.redis.protocol
+      - yier.bubu.redis.server
+      - yier.bubu.redis.db.memory.foreign
+      - io.netty
+    source_ownership:
+      - storage_fixtures_only
   yierdis-executor-core:
     allowed_dependencies:
       - yierdis-execution-api
     forbidden_dependencies:
       - yierdis-core-command
       - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-core-runtime
       - yierdis-protocol-model
       - yierdis-custom-v1-wire
@@ -90,6 +149,7 @@ modules:
     forbidden_dependencies:
       - yierdis-core-command
       - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-core-runtime
       - yierdis-protocol-model
       - yierdis-protocol-codec
@@ -115,6 +175,7 @@ modules:
       - yierdis-core-api
       - yierdis-core-command
       - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-core-runtime
       - yierdis-protocol-model
       - yierdis-protocol-codec
@@ -143,6 +204,7 @@ modules:
       - yierdis-execution-api
       - yierdis-core-command
       - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-core-runtime
       - yierdis-protocol-model
       - yierdis-protocol-codec
@@ -171,6 +233,7 @@ modules:
       - yierdis-core-api
       - yierdis-core-command
       - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-core-runtime
       - yierdis-executor-core
       - yierdis-protocol-model
@@ -212,6 +275,7 @@ modules:
       - yierdis-custom-v1-execution-adapter
       - yierdis-custom-v1-netty
       - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-core-runtime
       - yierdis-server-app
       - yierdis-memory-foreign
@@ -260,6 +324,7 @@ modules:
       - yierdis-core-contract
       - yierdis-core-command
       - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-core-runtime
       - yierdis-runtime-api
       - yierdis-storage-api
@@ -282,6 +347,7 @@ modules:
     forbidden_dependencies:
       - yierdis-core-command
       - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-core-runtime
       - yierdis-runtime-api
       - yierdis-storage-api
@@ -304,6 +370,7 @@ modules:
     forbidden_dependencies:
       - yierdis-core-command
       - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-core-runtime
       - yierdis-runtime-api
       - yierdis-storage-api
@@ -316,9 +383,37 @@ modules:
       - yier.bubu.redis.server
   yierdis-core-runtime:
     allowed_dependencies:
-      - yierdis-core-db
+      - yierdis-storage-memory
       - yierdis-storage-api
       - yierdis-runtime-api
+      - yierdis-memory-foreign
+    forbidden_dependencies:
+      - yierdis-command-api
+      - yierdis-command-kernel
+      - yierdis-command-defaults
+      - yierdis-execution-api
+      - yierdis-core-api
+      - yierdis-core-contract
+      - yierdis-core-command
+      - yierdis-core-db
+      - yierdis-core-engine
+      - yierdis-executor-core
+      - yierdis-protocol-model
+      - yierdis-protocol-codec
+      - yierdis-protocol-netty
+      - yierdis-custom-v1-wire
+      - yierdis-custom-v1-execution-adapter
+      - yierdis-custom-v1-netty
+      - yierdis-server-app
+      - yierdis-bytes-netty
+      - netty-all
+    forbidden_imports:
+      - yier.bubu.redis.command
+      - yier.bubu.redis.engine
+      - yier.bubu.redis.executor
+      - yier.bubu.redis.protocol
+      - yier.bubu.redis.server
+      - io.netty
     source_ownership:
       - runtime_lifecycle_only
       - no_whole_repo_architecture_tests

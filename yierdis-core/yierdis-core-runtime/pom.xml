@@ -19,7 +19,7 @@
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-core-db</artifactId>
+            <artifactId>yierdis-storage-memory</artifactId>
         </dependency>
 
         <dependency>
@@ -30,6 +30,11 @@
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-runtime-api</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-memory-foreign</artifactId>
         </dependency>
 
         <dependency>
