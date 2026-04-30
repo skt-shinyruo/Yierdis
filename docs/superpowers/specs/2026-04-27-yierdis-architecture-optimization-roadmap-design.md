@@ -1,5 +1,11 @@
 # Yierdis Architecture Optimization Roadmap Design
 
+> Module ownership note: source paths and Maven module names in this older
+> roadmap are superseded by
+> `2026-04-28-kernel-storage-adapter-rearchitecture-design.md`. The behavioral
+> ownership goals still apply; current module locations use the explicit
+> execution, command, storage, runtime, protocol, and app families.
+
 ## Summary
 
 This design defines the next optimization roadmap for Yierdis after the current

@@ -253,15 +253,7 @@ modules:
       - yier.bubu.redis.server
       - yier.bubu.redis.db.memory.foreign
       - io.netty
-  yierdis-core-api:
-    allowed_dependencies:
-      - yierdis-execution-api
-      - yierdis-storage-api
-      - yierdis-runtime-api
-    source_ownership:
-      - temporary_execution_storage_runtime_api_compatibility_bridge
-      - no_ops_offheap_or_runtime_api_main_sources
-  yierdis-core-engine:
+  yierdis-engine:
     allowed_dependencies:
       - yierdis-execution-api
       - yierdis-command-api
@@ -296,14 +288,13 @@ modules:
       - yierdis-command-api
       - yierdis-command-kernel
       - yierdis-command-defaults
-      - yierdis-core-engine
+      - yierdis-engine
       - yierdis-custom-v1-execution-adapter
       - yierdis-custom-v1-netty
       - yierdis-bytes-netty
-      - yierdis-core-runtime
+      - yierdis-runtime-embedded
       - yierdis-runtime-api
       - yierdis-executor-core
-      - yierdis-args
       - yierdis-memory-foreign
       - netty-all
       - picocli
@@ -381,7 +372,7 @@ modules:
       - yier.bubu.redis.db
       - yier.bubu.redis.runtime
       - yier.bubu.redis.server
-  yierdis-core-runtime:
+  yierdis-runtime-embedded:
     allowed_dependencies:
       - yierdis-storage-memory
       - yierdis-storage-api

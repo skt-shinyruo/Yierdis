@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * SPI-driven global maxmemory governor (Redis-like best-effort semantics).
  * <p>
- * This governor depends only on {@code yierdis-core-api} maxmemory SPI and can coordinate across multiple
+ * This governor depends only on {@code yierdis-storage-api} maxmemory SPI and can coordinate across multiple
  * independent participants (e.g. multiple DBs) plus optional shared usage sources (e.g. a shared allocator)
  * that should be counted once.
  */

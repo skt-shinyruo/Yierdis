@@ -35,6 +35,24 @@ This is a roadmap spec. It is too large and too risky to implement as one
 mechanical commit. Each phase must preserve behavior, keep the project
 buildable, and add or update architecture guards before the next phase starts.
 
+## Implementation Status
+
+As of 2026-04-30, this spec has been implemented in the active Maven graph.
+
+- `yierdis-core-*` artifacts have been retired from active Maven modules and
+  dependency management.
+- `yierdis-core-engine` moved to
+  `yierdis-execution/yierdis-engine`.
+- `yierdis-core-runtime` moved to
+  `yierdis-runtime/yierdis-runtime-embedded`.
+- `yierdis-core-api`, `yierdis-core-contract`, and the `yierdis-core` parent
+  are no longer active bridge modules.
+- `yierdis-args` has been retired. Server runtime args/config now live in
+  `yierdis-server-app`; bench owns a local server launch argv model.
+- Architecture policy and guard tests enforce API/SPI dependency direction,
+  command-defaults dependency direction, engine/runtime boundaries, storage
+  exposure limits, retired artifact absence, and migration compatibility.
+
 The important correction from an overly aggressive split is that Maven modules
 should express stable compile-time boundaries. Domain organization inside a
 still-coupled area should first be expressed with packages and tests. A package
@@ -1174,6 +1192,10 @@ transport adapter.
 
 The current `yierdis-args` module should be split instead of kept as one shared
 configuration bucket.
+
+Implementation status: completed. `yierdis-args` is no longer an active Maven
+module. Server config classes moved into `yierdis-server-app`, while
+`yierdis-bench` owns `YierdisBenchServerArgs` for child-process launch argv.
 
 Target:
 

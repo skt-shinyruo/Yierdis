@@ -38,7 +38,7 @@ server 启动时，会先检查当前 JVM 是否支持 `java.lang.foreign`。如
 代表路径：
 
 - `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
-- `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
 - `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbEngineFactory.java`
 - `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDb.java`
 
@@ -340,7 +340,7 @@ server 启动时，`CommandExecutor` 会先调用 `runtimeAccess::bindToCurrentT
 
 - `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/DbThreadGuard.java`
 - `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDb.java`
-- `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java`
 - `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
 
 ## 内存统计、maxmemory 和泄漏检查

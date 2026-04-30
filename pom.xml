@@ -32,9 +32,7 @@
         <module>yierdis-runtime</module>
         <module>yierdis-protocol</module>
         <module>yierdis-command</module>
-        <module>yierdis-core</module>
         <module>yierdis-executor-core</module>
-        <module>yierdis-args</module>
         <module>yierdis-client</module>
         <module>yierdis-app/yierdis-server-app</module>
         <module>yierdis-bench</module>
@@ -139,22 +137,12 @@
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-core-contract</artifactId>
+                <artifactId>yierdis-engine</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-core-api</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-core-engine</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-core-runtime</artifactId>
+                <artifactId>yierdis-runtime-embedded</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
@@ -169,11 +157,6 @@
                 <version>${project.version}</version>
             </dependency>
 
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-args</artifactId>
-                <version>${project.version}</version>
-            </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-executor-core</artifactId>

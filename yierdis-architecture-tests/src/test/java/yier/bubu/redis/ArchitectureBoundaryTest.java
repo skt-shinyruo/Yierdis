@@ -23,7 +23,7 @@ public class ArchitectureBoundaryTest {
     public void dbOpsAndCoreCommandMustNotImportProtocolModel() throws IOException {
         List<String> offenders = new ArrayList<>();
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         int scanned = 0;
@@ -70,10 +70,10 @@ public class ArchitectureBoundaryTest {
     @Test
     public void runtimeMustNotOwnCommandAssemblyAgain() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
-        Path instanceFile = repoRoot.resolve(
-                "yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java"
+        Path instanceFile = runtimeEmbeddedRoot(repoRoot).resolve(
+                "src/main/java/yier/bubu/redis/runtime/YierdisInstance.java"
         );
         Assert.assertTrue("缺少 YierdisInstance.java，无法执行 runtime 边界护栏", Files.isRegularFile(instanceFile));
 
@@ -91,7 +91,7 @@ public class ArchitectureBoundaryTest {
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 core-runtime 重新承担命令处理器组装/装配职责（YierdisInstance 应只负责 DB 生命周期与路由）：\n"
+                    "检测到 runtime-embedded 重新承担命令处理器组装/装配职责（YierdisInstance 应只负责 DB 生命周期与路由）：\n"
                             + String.join("\n", offenders)
             );
         }
@@ -100,7 +100,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void coreDefaultsMustNotOwnServerFacingCommands() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
         Path serverCommands = repoRoot.resolve(
@@ -186,7 +186,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void coreCommandMustNotReferenceLegacyWriteReservationApis() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
@@ -212,7 +212,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void coreCommandMustStayIndependentFromMemoryApi() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
@@ -345,7 +345,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void replaySurfacesMustUseExecutionContracts() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
         scanFileForForbiddenText(
@@ -371,7 +371,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-engine/src/main/java/yier/bubu/redis/engine/EngineSession.java"),
+                engineRoot(repoRoot).resolve("src/main/java/yier/bubu/redis/engine/EngineSession.java"),
                 offenders,
                 "ArrayList<byte[][]>",
                 "List<byte[][]>",
@@ -415,7 +415,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void productionCommandsMustRegisterTypedCommandSpecs() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
         scanCommandMainForForbiddenText(
@@ -452,7 +452,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void productionCodeMustNotUseDeprecatedCommandRequestCompatibility() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
         scanCommandMainForForbiddenText(
@@ -477,7 +477,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void storagePressurePathsMustUseKeyHandles() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
         scanFileForForbiddenText(
@@ -506,10 +506,10 @@ public class ArchitectureBoundaryTest {
     @Test
     public void engineAndExecutorMustExposeSessionRequestReplyBoundary() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path engineFile = repoRoot.resolve(
-                "yierdis-core-engine/src/main/java/yier/bubu/redis/engine/YierdisEngine.java"
+                "yierdis-engine/src/main/java/yier/bubu/redis/engine/YierdisEngine.java"
         );
         Assert.assertTrue("缺少 YierdisEngine.java，无法约束 engine 执行边界", Files.isRegularFile(engineFile));
         String engineSource = Files.readString(engineFile, StandardCharsets.UTF_8);
@@ -540,7 +540,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void executorCoreMustNotOwnCommandSessionSemantics() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
@@ -571,7 +571,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void commandParsingMustStayInCommandModules() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path serverRoot = repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java").normalize();
         Path serverCommandModule = serverRoot.resolve("yier/bubu/redis/ServerCommandModule.java").normalize();
@@ -600,7 +600,7 @@ public class ArchitectureBoundaryTest {
         );
         scanned += scanForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-runtime/src/main/java"),
+                runtimeEmbeddedMain(repoRoot),
                 offenders,
                 "import yier.bubu.redis.command.CommandParsers;",
                 "import yier.bubu.redis.command.CommandSpec;",
@@ -643,7 +643,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void commandModulesMustBeSplitIntoApiKernelAndDefaults() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
@@ -694,8 +694,8 @@ public class ArchitectureBoundaryTest {
             );
         }
 
-        Path enginePom = repoRoot.resolve("yierdis-core-engine/pom.xml").normalize();
-        Assert.assertTrue("缺少 yierdis-core-engine/pom.xml", Files.isRegularFile(enginePom));
+        Path enginePom = engineRoot(repoRoot).resolve("pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-engine/pom.xml", Files.isRegularFile(enginePom));
         String enginePomText = Files.readString(enginePom, StandardCharsets.UTF_8);
         Assert.assertTrue("engine must depend on command-api", enginePomText.contains("<artifactId>yierdis-command-api</artifactId>"));
         Assert.assertTrue("engine must depend on command-kernel", enginePomText.contains("<artifactId>yierdis-command-kernel</artifactId>"));
@@ -728,7 +728,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void customV1AdapterModulesMustKeepTheirBoundaries() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         Path wireRoot = workspaceRoot.resolve("yierdis-protocol/yierdis-custom-v1-wire").normalize();
@@ -856,7 +856,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void executionApiMustRemainNeutralContractModule() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
@@ -964,7 +964,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void memoryApiMustRemainNeutralContractModule() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
@@ -1099,7 +1099,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void storageApiMustRemainNeutralContractModule() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
@@ -1289,7 +1289,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void runtimeApiMustRemainNeutralContractModule() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
@@ -1452,7 +1452,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void runtimeChangeTrackingSpiImportsMustBeAllowlisted() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
         assertRuntimeChangeTrackingSpiDetectorCoversReviewCases();
 
@@ -1528,7 +1528,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void storageMemoryAndTestkitMustReplaceCoreDbImplementationModule() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
@@ -1561,20 +1561,13 @@ public class ArchitectureBoundaryTest {
             );
         }
 
-        Path corePom = repoRoot.resolve("pom.xml").normalize();
-        Assert.assertTrue("缺少 yierdis-core/pom.xml", Files.isRegularFile(corePom));
-        String corePomText = Files.readString(corePom, StandardCharsets.UTF_8);
-        Assert.assertFalse(
-                "yierdis-core parent must not aggregate retired yierdis-core-db",
-                corePomText.contains("<module>yierdis-core-db</module>")
-        );
         Assert.assertFalse(
                 "retired yierdis-core-db pom.xml must not remain in active source tree",
-                Files.exists(repoRoot.resolve("yierdis-core-db/pom.xml"))
+                Files.exists(repoRoot.getParent().resolve("yierdis-core/yierdis-core-db/pom.xml"))
         );
         Assert.assertFalse(
                 "retired yierdis-core-db main sources must not remain in active source tree",
-                Files.exists(repoRoot.resolve("yierdis-core-db/src/main/java"))
+                Files.exists(repoRoot.getParent().resolve("yierdis-core/yierdis-core-db/src/main/java"))
         );
 
         Path storageMemoryPom = workspaceRoot.resolve("yierdis-storage/yierdis-storage-memory/pom.xml").normalize();
@@ -1666,15 +1659,15 @@ public class ArchitectureBoundaryTest {
                         && storageMemoryPackageInfoText.contains("migration compatibility")
         );
 
-        Path runtimePom = repoRoot.resolve("yierdis-core-runtime/pom.xml").normalize();
-        Assert.assertTrue("缺少 yierdis-core-runtime/pom.xml", Files.isRegularFile(runtimePom));
+        Path runtimePom = runtimeEmbeddedRoot(repoRoot).resolve("pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-runtime-embedded/pom.xml", Files.isRegularFile(runtimePom));
         String runtimePomText = Files.readString(runtimePom, StandardCharsets.UTF_8);
         Assert.assertTrue(
-                "yierdis-core-runtime must depend on yierdis-storage-memory as its default embedded implementation",
+                "yierdis-runtime-embedded must depend on yierdis-storage-memory as its default embedded implementation",
                 runtimePomText.contains("<artifactId>yierdis-storage-memory</artifactId>")
         );
         Assert.assertFalse(
-                "yierdis-core-runtime must not depend on retired yierdis-core-db",
+                "yierdis-runtime-embedded must not depend on retired yierdis-core-db",
                 runtimePomText.contains("<artifactId>yierdis-core-db</artifactId>")
         );
 
@@ -1801,57 +1794,112 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void coreApiMustRemainCompatibilityBridge() throws IOException {
+    public void retiredCoreArtifactsMustLeaveActiveMavenGraph() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
+        Path workspaceRoot = repoRoot.getParent();
 
-        Path bridgePom = repoRoot.resolve("yierdis-core-api/pom.xml").normalize();
-        Assert.assertTrue("缺少 yierdis-core-api/pom.xml", Files.isRegularFile(bridgePom));
-        String pom = Files.readString(bridgePom, StandardCharsets.UTF_8);
-        Assert.assertTrue(
-                "yierdis-core-api must depend on yierdis-execution-api as a temporary compatibility bridge",
-                pom.contains("<artifactId>yierdis-execution-api</artifactId>")
-        );
-        Assert.assertTrue(
-                "yierdis-core-api must depend on yierdis-storage-api as a temporary compatibility bridge",
-                pom.contains("<artifactId>yierdis-storage-api</artifactId>")
-        );
-        Assert.assertTrue(
-                "yierdis-core-api must depend on yierdis-runtime-api as a temporary compatibility bridge",
-                pom.contains("<artifactId>yierdis-runtime-api</artifactId>")
-        );
-        Assert.assertTrue(
-                "yierdis-core-api description must identify it as a temporary compatibility bridge",
-                pom.contains("Temporary compatibility bridge")
+        Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
+        Assert.assertTrue("缺少 root pom.xml", Files.isRegularFile(rootPom));
+        String rootPomText = Files.readString(rootPom, StandardCharsets.UTF_8);
+        Assert.assertFalse(
+                "root pom.xml must not aggregate retired yierdis-core module family",
+                rootPomText.contains("<module>yierdis-core</module>")
         );
 
-        for (Path forbiddenSourceRoot : List.of(
-                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/ops").normalize(),
-                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/offheap").normalize(),
-                repoRoot.resolve("yierdis-core-api/src/main/java/yier/bubu/redis/runtime").normalize()
-        )) {
-            List<String> offenders = new ArrayList<>();
-            int scanned = scanForForbiddenText(repoRoot, forbiddenSourceRoot, offenders, "package ");
-            Assert.assertEquals(
-                    "core-api compatibility bridge must not retain ops/offheap/runtime-api main sources under " + forbiddenSourceRoot,
-                    0,
-                    scanned
+        for (String retiredArtifact : retiredCoreArtifacts()) {
+            Assert.assertFalse(
+                    "root dependencyManagement must not expose retired artifact " + retiredArtifact,
+                    rootPomText.contains("<artifactId>" + retiredArtifact + "</artifactId>")
             );
         }
+
+        Path executionPom = workspaceRoot.resolve("yierdis-execution/pom.xml").normalize();
+        Path runtimePom = workspaceRoot.resolve("yierdis-runtime/pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-execution/pom.xml", Files.isRegularFile(executionPom));
+        Assert.assertTrue("缺少 yierdis-runtime/pom.xml", Files.isRegularFile(runtimePom));
+        String executionPomText = Files.readString(executionPom, StandardCharsets.UTF_8);
+        String runtimePomText = Files.readString(runtimePom, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "yierdis-execution parent must aggregate yierdis-engine",
+                executionPomText.contains("<module>yierdis-engine</module>")
+        );
+        Assert.assertTrue(
+                "yierdis-runtime parent must aggregate yierdis-runtime-embedded",
+                runtimePomText.contains("<module>yierdis-runtime-embedded</module>")
+        );
+
+        Assert.assertFalse(
+                "retired yierdis-core parent pom.xml must not remain in active source tree",
+                Files.exists(workspaceRoot.resolve("yierdis-core/pom.xml"))
+        );
+        for (String retiredModule : List.of(
+                "yierdis-core-api",
+                "yierdis-core-contract",
+                "yierdis-core-command",
+                "yierdis-core-db",
+                "yierdis-core-engine",
+                "yierdis-core-runtime"
+        )) {
+            Assert.assertFalse(
+                    "retired " + retiredModule + " pom.xml must not remain in active source tree",
+                    Files.exists(workspaceRoot.resolve("yierdis-core/" + retiredModule + "/pom.xml"))
+            );
+            Assert.assertFalse(
+                    "retired " + retiredModule + " main sources must not remain in active source tree",
+                    Files.exists(workspaceRoot.resolve("yierdis-core/" + retiredModule + "/src/main/java"))
+            );
+        }
+
+        List<String> offenders = new ArrayList<>();
+        try (Stream<Path> paths = Files.walk(workspaceRoot)) {
+            paths.filter(path -> path != null
+                            && Files.isRegularFile(path)
+                            && path.getFileName().toString().equals("pom.xml")
+                            && !path.normalize().toString().contains("/target/"))
+                    .sorted()
+                    .forEach(pom -> {
+                        try {
+                            List<String> productionDependencies = pomProductionDependencyArtifactIds(pom);
+                            for (String retiredArtifact : retiredCoreArtifacts()) {
+                                if (productionDependencies.contains(retiredArtifact)) {
+                                    offenders.add(relativePath(workspaceRoot, pom) + " -> " + retiredArtifact);
+                                }
+                            }
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+        }
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 active POM 仍有 production 依赖指向 retired core artifacts：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+
+        Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
+        Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
+        String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
+        Assert.assertTrue("architecture policy must name yierdis-engine", policy.contains("  yierdis-engine:"));
+        Assert.assertTrue("architecture policy must name yierdis-runtime-embedded", policy.contains("  yierdis-runtime-embedded:"));
+        Assert.assertFalse("architecture policy must not keep yierdis-core-api section", policy.contains("  yierdis-core-api:"));
+        Assert.assertFalse("architecture policy must not keep yierdis-core-engine section", policy.contains("  yierdis-core-engine:"));
+        Assert.assertFalse("architecture policy must not keep yierdis-core-runtime section", policy.contains("  yierdis-core-runtime:"));
     }
 
     @Test
-    public void coreRuntimeMustDeclareRuntimeApiBoundary() throws IOException {
+    public void runtimeEmbeddedMustDeclareRuntimeApiBoundary() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
         Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
         String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
-        String coreRuntimePolicy = policySection(policy, "yierdis-core-runtime");
+        String coreRuntimePolicy = policySection(policy, "yierdis-runtime-embedded");
         Assert.assertTrue(
-                "core-runtime policy must declare allowed production dependencies",
+                "runtime-embedded policy must declare allowed production dependencies",
                 coreRuntimePolicy.contains("allowed_dependencies:")
         );
         for (String allowedDependency : List.of(
@@ -1861,12 +1909,12 @@ public class ArchitectureBoundaryTest {
                 "yierdis-memory-foreign"
         )) {
             Assert.assertTrue(
-                    "core-runtime policy must allow direct dependency " + allowedDependency,
+                    "runtime-embedded policy must allow direct dependency " + allowedDependency,
                     coreRuntimePolicy.contains(allowedDependency)
             );
         }
         Assert.assertTrue(
-                "core-runtime policy must declare forbidden production dependencies",
+                "runtime-embedded policy must declare forbidden production dependencies",
                 coreRuntimePolicy.contains("forbidden_dependencies:")
         );
         for (String forbiddenDependency : List.of(
@@ -1891,12 +1939,12 @@ public class ArchitectureBoundaryTest {
                 "netty-all"
         )) {
             Assert.assertTrue(
-                    "core-runtime policy must forbid production dependency " + forbiddenDependency,
+                    "runtime-embedded policy must forbid production dependency " + forbiddenDependency,
                     coreRuntimePolicy.contains(forbiddenDependency)
             );
         }
         Assert.assertTrue(
-                "core-runtime policy must declare forbidden production imports",
+                "runtime-embedded policy must declare forbidden production imports",
                 coreRuntimePolicy.contains("forbidden_imports:")
         );
         for (String forbiddenImport : List.of(
@@ -1908,24 +1956,24 @@ public class ArchitectureBoundaryTest {
                 "io.netty"
         )) {
             Assert.assertTrue(
-                    "core-runtime policy must forbid production import " + forbiddenImport,
+                    "runtime-embedded policy must forbid production import " + forbiddenImport,
                     coreRuntimePolicy.contains(forbiddenImport)
             );
         }
 
-        Path runtimePom = repoRoot.resolve("yierdis-core-runtime/pom.xml").normalize();
-        Assert.assertTrue("缺少 yierdis-core-runtime/pom.xml", Files.isRegularFile(runtimePom));
+        Path runtimePom = runtimeEmbeddedRoot(repoRoot).resolve("pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-runtime-embedded/pom.xml", Files.isRegularFile(runtimePom));
         String pom = Files.readString(runtimePom, StandardCharsets.UTF_8);
         Assert.assertTrue(
-                "yierdis-core-runtime must declare yierdis-storage-api directly for runtime lifecycle/storage boundaries",
+                "yierdis-runtime-embedded must declare yierdis-storage-api directly for runtime lifecycle/storage boundaries",
                 pom.contains("<artifactId>yierdis-storage-api</artifactId>")
         );
         Assert.assertTrue(
-                "yierdis-core-runtime must declare yierdis-runtime-api directly for embedded runtime config contracts",
+                "yierdis-runtime-embedded must declare yierdis-runtime-api directly for embedded runtime config contracts",
                 pom.contains("<artifactId>yierdis-runtime-api</artifactId>")
         );
         Assert.assertTrue(
-                "yierdis-core-runtime must declare yierdis-memory-foreign directly for embedded off-heap runtime lifecycle",
+                "yierdis-runtime-embedded must declare yierdis-memory-foreign directly for embedded off-heap runtime lifecycle",
                 pom.contains("<artifactId>yierdis-memory-foreign</artifactId>")
         );
         for (String forbiddenDependency : List.of(
@@ -1950,7 +1998,7 @@ public class ArchitectureBoundaryTest {
                 "netty-all"
         )) {
             Assert.assertFalse(
-                    "yierdis-core-runtime production pom must not depend on " + forbiddenDependency,
+                    "yierdis-runtime-embedded production pom must not depend on " + forbiddenDependency,
                     pomHasProductionDependency(runtimePom, forbiddenDependency)
             );
         }
@@ -1958,7 +2006,7 @@ public class ArchitectureBoundaryTest {
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-runtime/src/main/java").normalize(),
+                runtimeEmbeddedMain(repoRoot),
                 offenders,
                 "import yier.bubu.redis.command.",
                 "import yier.bubu.redis.engine.",
@@ -1973,88 +2021,53 @@ public class ArchitectureBoundaryTest {
                 "yier.bubu.redis.server.",
                 "io.netty."
         );
-        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-core-runtime Java 文件", scanned > 0);
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-runtime-embedded Java 文件", scanned > 0);
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 yierdis-core-runtime 依赖 command、engine、executor、protocol、server 或 Netty：\n"
+                    "检测到 yierdis-runtime-embedded 依赖 command、engine、executor、protocol、server 或 Netty：\n"
                             + String.join("\n", offenders)
             );
         }
     }
 
     @Test
-    public void coreContractMustRemainCompatibilityBridge() throws IOException {
+    public void engineMustAvoidFutureProhibitedImplementationFamilies() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
-
-        Path bridgePom = repoRoot.resolve("yierdis-core-contract/pom.xml").normalize();
-        Assert.assertTrue("缺少 yierdis-core-contract/pom.xml", Files.isRegularFile(bridgePom));
-        String pom = Files.readString(bridgePom, StandardCharsets.UTF_8);
-        Assert.assertTrue(
-                "yierdis-core-contract must depend on yierdis-execution-api as a compatibility bridge",
-                pom.contains("<artifactId>yierdis-execution-api</artifactId>")
-        );
-        Assert.assertTrue(
-                "yierdis-core-contract description must identify it as a compatibility bridge",
-                pom.contains("Temporary compatibility bridge")
-        );
-
-        Path sourceRoot = repoRoot.resolve("yierdis-core-contract").resolve("src/main/java").normalize();
-        List<String> offenders = new ArrayList<>();
-        if (Files.exists(sourceRoot)) {
-            try (Stream<Path> paths = Files.walk(sourceRoot)) {
-                paths.filter(p -> p != null && p.toString().endsWith(".java"))
-                        .sorted()
-                        .forEach(file -> offenders.add(relativePath(repoRoot, file)));
-            }
-        }
-
-        if (!offenders.isEmpty()) {
-            Assert.fail(
-                    "yierdis-core-contract must not reintroduce main Java contract sources; use yierdis-execution-api:\n"
-                            + String.join("\n", offenders)
-            );
-        }
-    }
-
-    @Test
-    public void coreEngineMustAvoidFutureProhibitedImplementationFamilies() throws IOException {
-        Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
         Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
         String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
-        String enginePolicy = policySection(policy, "yierdis-core-engine");
+        String enginePolicy = policySection(policy, "yierdis-engine");
         Assert.assertTrue(
-                "core-engine policy must allow command-api dependency",
+                "engine policy must allow command-api dependency",
                 enginePolicy.contains("yierdis-command-api")
         );
         Assert.assertTrue(
-                "core-engine policy must allow command-kernel dependency",
+                "engine policy must allow command-kernel dependency",
                 enginePolicy.contains("yierdis-command-kernel")
         );
         Assert.assertTrue(
-                "core-engine policy must forbid command-defaults dependency",
+                "engine policy must forbid command-defaults dependency",
                 enginePolicy.contains("yierdis-command-defaults")
         );
         Assert.assertTrue(
-                "core-engine policy must forbid server imports",
+                "engine policy must forbid server imports",
                 enginePolicy.contains("yier.bubu.redis.server")
         );
         Assert.assertTrue(
-                "core-engine policy must forbid Netty imports",
+                "engine policy must forbid Netty imports",
                 enginePolicy.contains("io.netty")
         );
         Assert.assertTrue(
-                "core-engine policy must forbid concrete DB/runtime dependency",
+                "engine policy must forbid concrete DB/runtime dependency",
                 enginePolicy.contains("yierdis-core-db")
                         && enginePolicy.contains("yierdis-storage-memory")
         );
 
-        Path enginePom = repoRoot.resolve("yierdis-core-engine/pom.xml").normalize();
-        Assert.assertTrue("缺少 yierdis-core-engine/pom.xml", Files.isRegularFile(enginePom));
+        Path enginePom = engineRoot(repoRoot).resolve("pom.xml").normalize();
+        Assert.assertTrue("缺少 yierdis-engine/pom.xml", Files.isRegularFile(enginePom));
         String pom = Files.readString(enginePom, StandardCharsets.UTF_8);
         for (String forbiddenDependency : List.of(
                 "<artifactId>yierdis-protocol-model</artifactId>",
@@ -2069,7 +2082,7 @@ public class ArchitectureBoundaryTest {
                 "<artifactId>netty-all</artifactId>"
         )) {
             Assert.assertFalse(
-                    "yierdis-core-engine must not depend on future-prohibited implementation/module dependency "
+                    "yierdis-engine must not depend on future-prohibited implementation/module dependency "
                             + forbiddenDependency,
                     pom.contains(forbiddenDependency)
             );
@@ -2078,7 +2091,7 @@ public class ArchitectureBoundaryTest {
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-core-engine/src/main/java").normalize(),
+                engineRoot(repoRoot).resolve("src/main/java").normalize(),
                 offenders,
                 "import yier.bubu.redis.command.defaults.",
                 "yier.bubu.redis.command.defaults.",
@@ -2095,11 +2108,11 @@ public class ArchitectureBoundaryTest {
                 "import io.netty.",
                 "io.netty."
         );
-        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-core-engine Java 文件", scanned > 0);
+        Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-engine Java 文件", scanned > 0);
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 yierdis-core-engine 依赖 command-defaults、storage-memory、protocol adapter、runtime implementation、application/server、Netty 或 concrete DB runtime：\n"
+                    "检测到 yierdis-engine 依赖 command-defaults、storage-memory、protocol adapter、runtime implementation、application/server、Netty 或 concrete DB runtime：\n"
                             + String.join("\n", offenders)
             );
         }
@@ -2108,7 +2121,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void protocolRequestAndServerReplyBoundariesMustStayDocumented() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path requestFile = repoRoot.getParent().resolve(
                 "yierdis-protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1Request.java"
@@ -2129,7 +2142,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void serverSourceMustNotConstructProtocolReplyModelsDirectly() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
@@ -2152,7 +2165,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void yierdisDbMustNotRetainLegacyReservationHelpers() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path dbFile = storageMemoryMain(repoRoot).resolve("yier/bubu/redis/db/YierdisDb.java");
         Assert.assertTrue("缺少 YierdisDb.java", Files.exists(dbFile));
@@ -2186,15 +2199,15 @@ public class ArchitectureBoundaryTest {
     @Test
     public void runtimeMaintenanceMustNotCastPublicDbViewsBackToRuntime() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
-        Path runtimeAccessFile = repoRoot.resolve(
-                "yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java"
+        Path runtimeAccessFile = runtimeEmbeddedRoot(repoRoot).resolve(
+                "src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java"
         );
         Assert.assertTrue("缺少 YierdisInstanceRuntimeAccess.java，说明 runtime 显式访问 seam 未建立", Files.isRegularFile(runtimeAccessFile));
 
-        Path maintenanceFile = repoRoot.resolve(
-                "yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstanceMaintenance.java"
+        Path maintenanceFile = runtimeEmbeddedRoot(repoRoot).resolve(
+                "src/main/java/yier/bubu/redis/runtime/YierdisInstanceMaintenance.java"
         );
         Assert.assertTrue("缺少 YierdisInstanceMaintenance.java", Files.isRegularFile(maintenanceFile));
 
@@ -2219,15 +2232,15 @@ public class ArchitectureBoundaryTest {
     @Test
     public void runtimeAssemblyMustNotUseRttiOrFirstEngineGlobalMaintenance() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
-        Path instanceFile = repoRoot.resolve(
-                "yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java"
+        Path instanceFile = runtimeEmbeddedRoot(repoRoot).resolve(
+                "src/main/java/yier/bubu/redis/runtime/YierdisInstance.java"
         );
         Assert.assertTrue("缺少 YierdisInstance.java", Files.isRegularFile(instanceFile));
 
-        Path runtimeAccessFile = repoRoot.resolve(
-                "yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java"
+        Path runtimeAccessFile = runtimeEmbeddedRoot(repoRoot).resolve(
+                "src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java"
         );
         Assert.assertTrue("缺少 YierdisInstanceRuntimeAccess.java", Files.isRegularFile(runtimeAccessFile));
 
@@ -2257,10 +2270,10 @@ public class ArchitectureBoundaryTest {
     @Test
     public void serverBootstrapMustNotInlineOwnerThreadLifecycleAgain() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
-        Path runtimeAccessFile = repoRoot.resolve(
-                "yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java"
+        Path runtimeAccessFile = runtimeEmbeddedRoot(repoRoot).resolve(
+                "src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java"
         );
         Assert.assertTrue("缺少 YierdisInstanceRuntimeAccess.java，无法约束 bootstrap 生命周期边界", Files.isRegularFile(runtimeAccessFile));
 
@@ -2290,7 +2303,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void serverInfoProviderMustNotOwnGlobalMemoryAggregationAgain() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path infoProviderFile = repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyServerInfoProvider.java").normalize();
         Assert.assertTrue("缺少 NettyServerInfoProvider.java", Files.isRegularFile(infoProviderFile));
@@ -2318,7 +2331,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void executorCoreMustNotDependOnCoreCommand() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path executorRoot = repoRoot.getParent().resolve("yierdis-executor-core").normalize();
         Path executorPom = executorRoot.resolve("pom.xml");
@@ -2351,10 +2364,10 @@ public class ArchitectureBoundaryTest {
     @Test
     public void serverBootstrapMustWireCommandExecutionThroughYierdisEngine() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
-        Path engineFile = repoRoot.resolve(
-                "yierdis-core-engine/src/main/java/yier/bubu/redis/engine/YierdisEngine.java"
+        Path engineFile = engineRoot(repoRoot).resolve(
+                "src/main/java/yier/bubu/redis/engine/YierdisEngine.java"
         );
         Assert.assertTrue(
                 "缺少 YierdisEngine facade，server bootstrap 不应继续直接接线 command processor",
@@ -2388,7 +2401,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void serverMustNotBypassEngineForCommandExecution() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
@@ -2413,7 +2426,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void serverAppMustReplaceLegacyServerArtifactAndAvoidStorageInternals() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         Path rootPom = workspaceRoot.resolve("pom.xml").normalize();
@@ -2486,7 +2499,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void serverStorageApiImportsMustHaveDirectDependency() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
 
         Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
@@ -2523,7 +2536,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void serverRuntimeApiImportsMustHaveDirectDependency() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
         assertRuntimeApiDetectorCoversPackageWideReviewCases();
 
@@ -2563,7 +2576,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void executorCoreMustNotDependOnNetty() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
@@ -2585,7 +2598,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void serverMustNotContainLegacyExecutorRuntimeFiles() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path serverRoot = repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis").normalize();
         Assert.assertTrue("缺少 yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
@@ -2620,7 +2633,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void serverMustOwnChannelAttrOnlyInNettyExecutionAdapters() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path serverRoot = repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis").normalize();
         Assert.assertTrue("缺少 yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
@@ -2666,7 +2679,7 @@ public class ArchitectureBoundaryTest {
     @Test
     public void serverMustNotReachThroughLegacyConnectionSlices() throws IOException {
         Path repoRoot = resolveRepoRoot();
-        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-core-api/yierdis-storage-memory 模块）", repoRoot);
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path serverRoot = repoRoot.getParent().resolve("yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis").normalize();
         Assert.assertTrue("缺少 yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
@@ -2803,6 +2816,18 @@ public class ArchitectureBoundaryTest {
 
     private static Path storageMemoryMain(Path repoRoot) {
         return repoRoot.getParent().resolve("yierdis-storage/yierdis-storage-memory/src/main/java").normalize();
+    }
+
+    private static Path engineRoot(Path repoRoot) {
+        return repoRoot.resolve("yierdis-engine").normalize();
+    }
+
+    private static Path runtimeEmbeddedRoot(Path repoRoot) {
+        return repoRoot.getParent().resolve("yierdis-runtime/yierdis-runtime-embedded").normalize();
+    }
+
+    private static Path runtimeEmbeddedMain(Path repoRoot) {
+        return runtimeEmbeddedRoot(repoRoot).resolve("src/main/java").normalize();
     }
 
     private static Path commandKernelFile(Path repoRoot, String fileName) {
@@ -2942,6 +2967,17 @@ public class ArchitectureBoundaryTest {
         return pomProductionDependencyArtifactIds(pom).contains(artifactId);
     }
 
+    private static List<String> retiredCoreArtifacts() {
+        return List.of(
+                "yierdis-core-api",
+                "yierdis-core-contract",
+                "yierdis-core-command",
+                "yierdis-core-db",
+                "yierdis-core-engine",
+                "yierdis-core-runtime"
+        );
+    }
+
     private static List<String> pomProductionDependencyArtifactIds(Path pom) throws IOException {
         Assert.assertTrue("缺少 pom.xml: " + pom, Files.isRegularFile(pom));
         Document document;
@@ -3012,7 +3048,7 @@ public class ArchitectureBoundaryTest {
     }
 
     private static Path resolveRepoRoot() {
-        // Maven surefire 下通常为 yierdis-core 模块根目录；IDE/自定义运行环境下可能是仓库根目录。
+        // Maven surefire 下通常为 yierdis-architecture-tests 模块根目录；IDE/自定义运行环境下可能是仓库根目录。
         Path cwd = Paths.get("").toAbsolutePath().normalize();
         Path direct = tryResolveRepoRoot(cwd);
         if (direct != null) {
@@ -3043,14 +3079,14 @@ public class ArchitectureBoundaryTest {
             return null;
         }
 
-        Path workspaceCore = base.resolve("yierdis-core");
-        if (Files.isRegularFile(workspaceCore.resolve("yierdis-core-api/pom.xml"))
+        Path workspaceExecution = base.resolve("yierdis-execution");
+        if (Files.isRegularFile(workspaceExecution.resolve("yierdis-engine/pom.xml"))
                 && Files.isDirectory(base.resolve("yierdis-storage/yierdis-storage-memory/src/main/java"))
-                && Files.isRegularFile(workspaceCore.resolve("pom.xml"))) {
-            return workspaceCore.normalize();
+                && Files.isRegularFile(workspaceExecution.resolve("pom.xml"))) {
+            return workspaceExecution.normalize();
         }
 
-        if (Files.isRegularFile(base.resolve("yierdis-core-api/pom.xml"))
+        if (Files.isRegularFile(base.resolve("yierdis-engine/pom.xml"))
                 && base.getParent() != null
                 && Files.isDirectory(base.getParent().resolve("yierdis-storage/yierdis-storage-memory/src/main/java"))
                 && Files.isRegularFile(base.resolve("pom.xml"))) {

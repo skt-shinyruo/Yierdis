@@ -23,13 +23,15 @@ CLI args
 这条链的分工是：
 
 - `YierdisServerArgs`
-  负责 picocli 参数定义、默认值、归一化和校验
+  负责 picocli 参数定义、默认值、归一化和校验，源码位于 `yierdis-server-app`
 - `YierdisServerRuntimeConfig`
-  负责把字符串参数变成稳定的 record 和 enum
+  负责把字符串参数变成稳定的 record 和 enum，仍属于 server runtime config
 - `ServerConfig`
   负责把参数层错误转换成 CLI 级错误
 - `YierdisServerBootstrap`
   负责真正把 runtime config 装配进 server
+
+bench 不再复用 server runtime config；它在 `yierdis-bench` 内维护自己的 server launch argv 模型，只负责生成子进程启动参数。
 
 ## 参数分组
 

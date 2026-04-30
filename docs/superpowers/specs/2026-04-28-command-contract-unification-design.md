@@ -1,5 +1,11 @@
 # Command Contract Unification Design
 
+> Module ownership note: source paths and Maven module names in this older
+> spec are superseded by
+> `2026-04-28-kernel-storage-adapter-rearchitecture-design.md`. The command
+> contract guidance still applies; current code uses the `yierdis-command`
+> module family.
+
 ## Summary
 
 Unify command metadata, argument validation, option parsing, and handler

@@ -3,7 +3,7 @@ package yier.bubu.redis.ops;
 /**
  * Runtime engine instance contract.
  * <p>
- * This extends {@link DbEngine} with lifecycle hooks required by {@code yierdis-core-runtime}
+ * This extends {@link DbEngine} with lifecycle hooks required by {@code yierdis-runtime-embedded}
  * assembly (thread binding + shutdown). The runtime uses this interface so that it does not
  * need to depend on concrete engine implementations (e.g. {@code YierdisDb}).
  */

@@ -152,7 +152,7 @@ bench 模块不是 JMH，也不是进程内 microbenchmark。
 
 ```text
 YierdisBenchArgs
-  -> parse server args reuse
+  -> parse bench-local server launch argv
   -> BenchConfig
   -> optional ServerProcess
   -> ThroughputWorker / LatencyWorker
@@ -160,24 +160,24 @@ YierdisBenchArgs
   -> summary output
 ```
 
-## bench 为什么会复用 `YierdisServerArgs`
+## bench 为什么有自己的 server launch argv 模型
 
 `YierdisBench` 在处理 bench 自己的参数之后，还会：
 
-1. 再创建一个 `YierdisServerArgs`
+1. 再创建一个 `YierdisBenchServerArgs`
 2. 解析用户附带的 server 参数
 3. 调 `normalizeAndValidate()`
 4. 通过 `BenchConfig.from(...)` 保存成启动 server child process 的基础配置
 
 这意味着：
 
-- bench 并不是自己重新定义一套 server 参数
-- 它复用了真正的 server 参数模型
+- bench 不依赖 server runtime config
+- 它只维护启动子进程所需的 argv 归一化模型
 
 这样做的好处是：
 
-- bench 和 server 启动语义保持一致
-- 不会出现“bench 能传，但 server 实际不认”的漂移
+- bench 不再通过共享参数模块形成隐藏依赖桥
+- server runtime config 可以留在 `yierdis-server-app`
 
 ## `ServerProcess` 做什么
 
@@ -193,9 +193,9 @@ YierdisBenchArgs
 
 这里的 server argv 来自：
 
-- `YierdisServerArgs.toArgv()`
+- `YierdisBenchServerArgs.toArgv()`
 
-也就是说，bench 不是随便拼字符串，而是尽量从同一个参数 SSOT 出发。
+也就是说，bench 不是随便拼字符串，而是从自己的 launch argv 模型生成稳定参数。
 
 ## workload 是怎么跑的
 

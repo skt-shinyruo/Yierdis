@@ -394,7 +394,7 @@ socket bytes
 
 - `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
 - `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDb.java`
-- `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
 
 ## 哪些测试最能帮助你建立信心
 
@@ -406,7 +406,7 @@ socket bytes
   看协议错误后如何恢复到下一帧
 - `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorBackpressureTest.java`
   看背压和 `ERR busy ...` 的行为
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java`
   看命令处理主流程
 - `yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
   看边界并不只是文档约定，而是有测试护栏

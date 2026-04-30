@@ -1,5 +1,11 @@
 # Engine-Centric Architecture Design
 
+> Module ownership note: source paths and Maven module names in this older
+> spec are superseded by
+> `2026-04-28-kernel-storage-adapter-rearchitecture-design.md`. The engine
+> boundary guidance still applies; current code uses `yierdis-engine` and
+> `yierdis-runtime-embedded`.
+
 ## Summary
 
 This design makes `YierdisEngine` the single command execution kernel for

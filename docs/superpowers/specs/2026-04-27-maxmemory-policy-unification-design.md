@@ -1,5 +1,12 @@
 # Maxmemory Policy Unification Design
 
+> Module ownership note: source paths and Maven module names in this older
+> spec are superseded by
+> `2026-04-28-kernel-storage-adapter-rearchitecture-design.md`. The policy
+> unification guidance still applies; current code uses `yierdis-storage-api`,
+> `yierdis-runtime-embedded`, and server-app-owned CLI config instead of the
+> retired core and args artifacts.
+
 ## Summary
 
 Unify maxmemory eviction policy modeling on the existing core API enum
