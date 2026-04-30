@@ -255,7 +255,7 @@ Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格�
 
 ### runtime 主入口
 
-- `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
 
 ## 已有文档如何配合阅读
 

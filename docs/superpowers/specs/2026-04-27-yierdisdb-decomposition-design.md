@@ -1,5 +1,12 @@
 # YierdisDb Decomposition Design
 
+> Module ownership note: source paths and Maven module names in this older
+> spec are superseded by
+> `2026-04-28-kernel-storage-adapter-rearchitecture-design.md`. The behavioral
+> decomposition guidance still applies; use `yierdis-storage-memory`,
+> `yierdis-runtime-embedded`, and `yierdis-architecture-tests` for current
+> module locations.
+
 ## Summary
 
 This design continues the ongoing `YierdisDb` decomposition by reducing

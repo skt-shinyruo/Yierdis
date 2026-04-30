@@ -1,5 +1,11 @@
 # Transport-Neutral Executor Core Design
 
+> Module ownership note: source paths and Maven module names in this older
+> spec are superseded by
+> `2026-04-28-kernel-storage-adapter-rearchitecture-design.md`. The executor
+> ownership guidance still applies; current code uses explicit execution,
+> command, runtime, and app module families.
+
 ## Summary
 
 This design moves Yierdis command execution runtime out of `yierdis-server` and turns

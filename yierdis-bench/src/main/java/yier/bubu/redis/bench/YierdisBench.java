@@ -3,7 +3,6 @@ package yier.bubu.redis.bench;
 import picocli.CommandLine;
 import picocli.CommandLine.ParameterException;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.args.YierdisServerArgs;
 import yier.bubu.redis.protocol.v1.CustomProtocolV1ReplyInspector;
 import yier.bubu.redis.protocol.v1.CustomProtocolV1RequestEncoder;
 
@@ -85,7 +84,7 @@ public final class YierdisBench {
             return;
         }
 
-        YierdisServerArgs baseServerArgs = new YierdisServerArgs();
+        YierdisBenchServerArgs baseServerArgs = new YierdisBenchServerArgs();
         CommandLine serverCmd = new CommandLine(baseServerArgs);
         try {
             serverCmd.parseArgs(benchArgs.serverArgs.toArray(new String[0]));
@@ -135,7 +134,7 @@ public final class YierdisBench {
 
             ServerProcess server = null;
             if (!config.noStartServer) {
-                YierdisServerArgs serverArgsForRun = config.baseServerArgs.copy();
+                YierdisBenchServerArgs serverArgsForRun = config.baseServerArgs.copy();
                 serverArgsForRun.port = port;
                 serverArgsForRun.normalizeAndValidate();
 
@@ -584,7 +583,7 @@ public final class YierdisBench {
         final String serverXms;
         final String serverXmx;
         final String serverMaxDirectMemory;
-        final YierdisServerArgs baseServerArgs;
+        final YierdisBenchServerArgs baseServerArgs;
 
         final int keyspace;
         final int dataSize;
@@ -608,7 +607,7 @@ public final class YierdisBench {
                 String serverXms,
                 String serverXmx,
                 String serverMaxDirectMemory,
-                YierdisServerArgs baseServerArgs,
+                YierdisBenchServerArgs baseServerArgs,
                 int keyspace,
                 int dataSize,
                 int requests,
@@ -642,7 +641,7 @@ public final class YierdisBench {
             this.strictReplies = strictReplies;
         }
 
-        static BenchConfig from(YierdisBenchArgs args, YierdisServerArgs baseServerArgs) {
+        static BenchConfig from(YierdisBenchArgs args, YierdisBenchServerArgs baseServerArgs) {
             Objects.requireNonNull(args, "args");
             Objects.requireNonNull(baseServerArgs, "baseServerArgs");
 
@@ -683,7 +682,7 @@ public final class YierdisBench {
         private final String xms;
         private final String xmx;
         private final String maxDirectMemory;
-        private final YierdisServerArgs serverArgs;
+        private final YierdisBenchServerArgs serverArgs;
         private final Path logFile;
 
         private Process process;
@@ -694,7 +693,7 @@ public final class YierdisBench {
                 String xms,
                 String xmx,
                 String maxDirectMemory,
-                YierdisServerArgs serverArgs,
+                YierdisBenchServerArgs serverArgs,
                 Path logFile
         ) {
             this.javaCmd = Objects.requireNonNull(javaCmd, "javaCmd");

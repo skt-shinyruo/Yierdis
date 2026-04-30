@@ -76,9 +76,9 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 建议先看的测试
 
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java`
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/Milestone1CompatTest.java`
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/CommandErrorTest.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/Milestone1CompatTest.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/CommandErrorTest.java`
 
 读测试时推荐的顺序是：
 
@@ -207,13 +207,13 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 - `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/EngineSession.java`
 - `yierdis-execution/yierdis-execution-api/src/main/java/yier/bubu/redis/contract/CommandContext.java`
 
-`yierdis-core-contract` 目前只是临时兼容桥；新的执行契约源码都在 `yierdis-execution-api`。
+新的执行契约源码都在 `yierdis-execution-api`，旧 `core-contract` artifact 已退休。
 
 ### 路由入口
 
 - `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
 - `yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/CommandSupport.java`
-- `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
 
 ### 事务判定入口
 
@@ -253,7 +253,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 - `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbMemoryLedger.java`
 - `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbMaxmemorySupport.java`
-- `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisGlobalMaxmemoryGovernor.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisGlobalMaxmemoryGovernor.java`
 
 ### off-heap / FFM
 
@@ -266,15 +266,15 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 - `docs/ffm-usage.md`
 - `docs/offheap-copy-behavior.md`
 
-`yierdis-memory-api` 是 off-heap contract 的模块兼容面；包名仍然是 `yier.bubu.redis.offheap.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`，不要通过 `core-api` 间接拿到。`command-defaults` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
+`yierdis-memory-api` 是 off-heap contract 的模块兼容面；包名仍然是 `yier.bubu.redis.offheap.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`。`command-defaults` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
 
 ### 建议先看的测试
 
 - `yierdis-memory/api/src/test/java/yier/bubu/redis/offheap/api/OffHeapContractsSmokeTest.java`
 - `yierdis-storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/db/OffHeapStringStorageTest.java`
 - `yierdis-storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/db/UnsafeOffHeapDbSmokeTest.java`
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/runtime/GlobalMaxmemoryLruAcrossDbsTest.java`
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/TtlMaxmemoryTest.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/runtime/GlobalMaxmemoryLruAcrossDbsTest.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/TtlMaxmemoryTest.java`
 
 ## 任务 6：改执行器、队列、背压
 
@@ -327,7 +327,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 ### 数据汇总和输出
 
 - `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyServerInfoProvider.java`
-- `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstanceObservability.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisInstanceObservability.java`
 
 如果你改的是：
 

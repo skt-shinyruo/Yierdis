@@ -45,7 +45,7 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-core-engine</artifactId>
+            <artifactId>yierdis-engine</artifactId>
         </dependency>
 
         <dependency>
@@ -65,7 +65,7 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-core-runtime</artifactId>
+            <artifactId>yierdis-runtime-embedded</artifactId>
         </dependency>
 
         <dependency>
@@ -76,11 +76,6 @@
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-executor-core</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-args</artifactId>
         </dependency>
 
         <dependency>

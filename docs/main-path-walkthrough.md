@@ -169,7 +169,7 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 实例装配中心在：
 
-- [`yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`](../yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java)
+- [`yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`](../yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java)
 
 ### 这个类不要误解成什么
 
@@ -658,7 +658,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 ### 3. `SET` 和基础命令行为
 
-- [`yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java`](../yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java)
+- [`yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java`](../yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java)
 
 看点：
 
@@ -669,7 +669,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 ### 4. 事务路径
 
-- [`yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/TransactionCommandTest.java`](../yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/TransactionCommandTest.java)
+- [`yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/TransactionCommandTest.java`](../yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/TransactionCommandTest.java)
 
 看点：
 

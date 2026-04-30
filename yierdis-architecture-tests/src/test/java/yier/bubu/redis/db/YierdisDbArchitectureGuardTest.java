@@ -227,12 +227,12 @@ public class YierdisDbArchitectureGuardTest {
         Path cursor = cwd;
         while (cursor != null) {
             if (Files.isDirectory(cursor.resolve("yierdis-storage/yierdis-storage-memory/src/main/java"))
-                    && Files.isDirectory(cursor.resolve("yierdis-core/yierdis-core-runtime"))) {
-                return cursor.resolve("yierdis-core").normalize();
+                    && Files.isDirectory(cursor.resolve("yierdis-runtime/yierdis-runtime-embedded"))) {
+                return cursor.resolve("yierdis-runtime").normalize();
             }
             if (cursor.getParent() != null
                     && Files.isDirectory(cursor.getParent().resolve("yierdis-storage/yierdis-storage-memory/src/main/java"))
-                    && Files.isDirectory(cursor.resolve("yierdis-core-runtime"))) {
+                    && Files.isDirectory(cursor.resolve("yierdis-runtime-embedded"))) {
                 return cursor.normalize();
             }
             cursor = cursor.getParent();

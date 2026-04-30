@@ -172,78 +172,57 @@ public class ReplySsoTGuardTest {
 
     private static int scanCoreModulesForForbiddenText(Path workspaceRoot, List<String> offenders, String forbiddenText)
             throws IOException {
-        Path coreRoot = workspaceRoot.resolve("yierdis-core");
-        Assert.assertTrue("缺少 yierdis-core 模块目录", Files.isDirectory(coreRoot));
-
         int scanned = 0;
-        try (Stream<Path> modules = Files.list(coreRoot)) {
-            List<Path> moduleRoots = modules
-                    .filter(Files::isDirectory)
-                    .map(module -> module.resolve("src/main/java"))
-                    .filter(Files::isDirectory)
-                    .toList();
-            for (Path sourceRoot : moduleRoots) {
-                scanned += scanForForbiddenText(workspaceRoot, sourceRoot, offenders, forbiddenText);
-            }
+        for (Path sourceRoot : activeKernelSourceRoots(workspaceRoot)) {
+            scanned += scanForForbiddenText(workspaceRoot, sourceRoot, offenders, forbiddenText);
         }
         return scanned;
     }
 
     private static int scanCoreModulesForForbiddenTexts(Path workspaceRoot, List<String> offenders, String... forbiddenTexts)
             throws IOException {
-        Path coreRoot = workspaceRoot.resolve("yierdis-core");
-        Assert.assertTrue("缺少 yierdis-core 模块目录", Files.isDirectory(coreRoot));
-
         int scanned = 0;
-        try (Stream<Path> modules = Files.list(coreRoot)) {
-            List<Path> moduleRoots = modules
-                    .filter(Files::isDirectory)
-                    .map(module -> module.resolve("src/main/java"))
-                    .filter(Files::isDirectory)
-                    .toList();
-            for (Path sourceRoot : moduleRoots) {
-                scanned += scanForForbiddenTexts(workspaceRoot, sourceRoot, offenders, forbiddenTexts);
-            }
+        for (Path sourceRoot : activeKernelSourceRoots(workspaceRoot)) {
+            scanned += scanForForbiddenTexts(workspaceRoot, sourceRoot, offenders, forbiddenTexts);
         }
         return scanned;
     }
 
     private static int scanCoreModulesForProtocolReplyModelAuthorityLeaks(Path workspaceRoot, List<String> offenders)
             throws IOException {
-        Path coreRoot = workspaceRoot.resolve("yierdis-core");
-        Assert.assertTrue("缺少 yierdis-core 模块目录", Files.isDirectory(coreRoot));
-
         int scanned = 0;
-        try (Stream<Path> modules = Files.list(coreRoot)) {
-            List<Path> moduleRoots = modules
-                    .filter(Files::isDirectory)
-                    .map(module -> module.resolve("src/main/java"))
-                    .filter(Files::isDirectory)
-                    .toList();
-            for (Path sourceRoot : moduleRoots) {
-                scanned += scanForProtocolReplyModelAuthorityLeaks(workspaceRoot, sourceRoot, offenders);
-            }
+        for (Path sourceRoot : activeKernelSourceRoots(workspaceRoot)) {
+            scanned += scanForProtocolReplyModelAuthorityLeaks(workspaceRoot, sourceRoot, offenders);
         }
         return scanned;
     }
 
     private static int scanCoreModulesForEncoderAuthorityHelperLeaks(Path workspaceRoot, List<String> offenders)
             throws IOException {
-        Path coreRoot = workspaceRoot.resolve("yierdis-core");
-        Assert.assertTrue("缺少 yierdis-core 模块目录", Files.isDirectory(coreRoot));
-
         int scanned = 0;
-        try (Stream<Path> modules = Files.list(coreRoot)) {
-            List<Path> moduleRoots = modules
-                    .filter(Files::isDirectory)
-                    .map(module -> module.resolve("src/main/java"))
-                    .filter(Files::isDirectory)
-                    .toList();
-            for (Path sourceRoot : moduleRoots) {
-                scanned += scanForEncoderAuthorityHelperLeaks(workspaceRoot, sourceRoot, offenders);
-            }
+        for (Path sourceRoot : activeKernelSourceRoots(workspaceRoot)) {
+            scanned += scanForEncoderAuthorityHelperLeaks(workspaceRoot, sourceRoot, offenders);
         }
         return scanned;
+    }
+
+    private static List<Path> activeKernelSourceRoots(Path workspaceRoot) {
+        List<Path> roots = List.of(
+                workspaceRoot.resolve("yierdis-command/yierdis-command-api/src/main/java"),
+                workspaceRoot.resolve("yierdis-command/yierdis-command-kernel/src/main/java"),
+                workspaceRoot.resolve("yierdis-command/yierdis-command-defaults/src/main/java"),
+                workspaceRoot.resolve("yierdis-execution/yierdis-execution-api/src/main/java"),
+                workspaceRoot.resolve("yierdis-execution/yierdis-engine/src/main/java"),
+                workspaceRoot.resolve("yierdis-executor-core/src/main/java"),
+                workspaceRoot.resolve("yierdis-storage/yierdis-storage-api/src/main/java"),
+                workspaceRoot.resolve("yierdis-storage/yierdis-storage-memory/src/main/java"),
+                workspaceRoot.resolve("yierdis-runtime/yierdis-runtime-api/src/main/java"),
+                workspaceRoot.resolve("yierdis-runtime/yierdis-runtime-embedded/src/main/java")
+        );
+        return roots.stream()
+                .map(Path::normalize)
+                .filter(Files::isDirectory)
+                .toList();
     }
 
     private static int scanForForbiddenText(Path workspaceRoot, Path sourceRoot, List<String> offenders, String forbiddenText)
@@ -420,7 +399,8 @@ public class ReplySsoTGuardTest {
 
     private static boolean isWorkspaceRoot(Path path) {
         return Files.isRegularFile(path.resolve("README.md"))
-                && Files.isDirectory(path.resolve("yierdis-core"))
+                && Files.isDirectory(path.resolve("yierdis-execution/yierdis-engine"))
+                && Files.isDirectory(path.resolve("yierdis-runtime/yierdis-runtime-embedded"))
                 && Files.isDirectory(path.resolve("yierdis-app/yierdis-server-app/src/main/java"))
                 && Files.isDirectory(path.resolve("yierdis-protocol"));
     }

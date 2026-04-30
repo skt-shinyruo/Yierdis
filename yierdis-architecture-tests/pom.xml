@@ -43,7 +43,7 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-core-runtime</artifactId>
+            <artifactId>yierdis-runtime-embedded</artifactId>
             <scope>test</scope>
         </dependency>
 

@@ -18,5 +18,6 @@
 
     <modules>
         <module>yierdis-runtime-api</module>
+        <module>yierdis-runtime-embedded</module>
     </modules>
 </project>

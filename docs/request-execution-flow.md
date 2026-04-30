@@ -257,13 +257,13 @@ heap `byte[]` 仍允许出现在协议边界、显式 materialization、测试�
 
 ## 建议先看的测试
 
-- `yierdis-core/yierdis-core-engine/src/test/java/yier/bubu/redis/engine/DefaultYierdisEngineTest.java`
-- `yierdis-core/yierdis-core-engine/src/test/java/yier/bubu/redis/engine/EngineSessionTest.java`
+- `yierdis-execution/yierdis-engine/src/test/java/yier/bubu/redis/engine/DefaultYierdisEngineTest.java`
+- `yierdis-execution/yierdis-engine/src/test/java/yier/bubu/redis/engine/EngineSessionTest.java`
 - `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorTest.java`
 - `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/ExecutionConnectionContextTest.java`
 - `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
 - `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/TransactionQueueCleanupTest.java`
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/TransactionCommandTest.java`
+- `yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/TransactionCommandTest.java`
 - `yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 
 ## 推荐打开的文件
@@ -275,8 +275,8 @@ heap `byte[]` 仍允许出现在协议边界、显式 materialization、测试�
 - `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
 - `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutor.java`
 - `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorExecutionSupport.java`
-- `yierdis-core/yierdis-core-engine/src/main/java/yier/bubu/redis/engine/YierdisEngine.java`
-- `yierdis-core/yierdis-core-engine/src/main/java/yier/bubu/redis/engine/EngineSession.java`
+- `yierdis-execution/yierdis-engine/src/main/java/yier/bubu/redis/engine/YierdisEngine.java`
+- `yierdis-execution/yierdis-engine/src/main/java/yier/bubu/redis/engine/EngineSession.java`
 - `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
 - `yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/CommandSpec.java`
 - `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbMaxmemorySupport.java`

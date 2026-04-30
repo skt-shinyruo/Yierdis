@@ -3,7 +3,6 @@ package yier.bubu.redis.bench;
 import org.junit.Assert;
 import org.junit.Test;
 import picocli.CommandLine;
-import yier.bubu.redis.args.YierdisServerArgs;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -18,7 +17,7 @@ import java.util.List;
 public class BenchServerArgsReuseTest {
     @Test
     public void benchConfigDefaultsToSingleForeignRun() {
-        YierdisServerArgs baseServerArgs = parseServerArgs(
+        YierdisBenchServerArgs baseServerArgs = parseServerArgs(
                 "--port", "6381",
                 "--maxmemoryScope", "Per_Db"
         );
@@ -31,7 +30,7 @@ public class BenchServerArgsReuseTest {
 
     @Test
     public void serverProcessUsesNormalizedArgvFromLaunchCopy() throws Exception {
-        YierdisServerArgs baseServerArgs = parseServerArgs(
+        YierdisBenchServerArgs baseServerArgs = parseServerArgs(
                 "--port", "6381",
                 "--noCleanup",
                 "--executorSchedulingPolicy", "GLOBAL",
@@ -48,7 +47,7 @@ public class BenchServerArgsReuseTest {
         YierdisBench.BenchConfig config = YierdisBench.BenchConfig.from(benchArgs, baseServerArgs);
         Assert.assertEquals(List.of("foreign"), config.backends);
 
-        YierdisServerArgs serverArgsForRun = config.baseServerArgs.copy();
+        YierdisBenchServerArgs serverArgsForRun = config.baseServerArgs.copy();
         serverArgsForRun.port = config.portBase;
         serverArgsForRun.normalizeAndValidate();
 
@@ -99,8 +98,8 @@ public class BenchServerArgsReuseTest {
         }
     }
 
-    private static YierdisServerArgs parseServerArgs(String... argv) {
-        YierdisServerArgs args = new YierdisServerArgs();
+    private static YierdisBenchServerArgs parseServerArgs(String... argv) {
+        YierdisBenchServerArgs args = new YierdisBenchServerArgs();
         new CommandLine(args).parseArgs(argv);
         return args;
     }

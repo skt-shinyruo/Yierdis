@@ -15,10 +15,10 @@
 
 代表测试：
 
-- `yierdis-args/.../YierdisServerArgsTest.java`
+- `yierdis-app/yierdis-server-app/.../args/YierdisServerArgsTest.java`
 - `yierdis-app/yierdis-server-app/.../ServerConfigArgsTest.java`
-- `yierdis-core-runtime/.../ArchitectureBoundaryTest.java`
-- `yierdis-core-runtime/.../ReplySsoTGuardTest.java`
+- `yierdis-architecture-tests/.../ArchitectureBoundaryTest.java`
+- `yierdis-architecture-tests/.../ReplySsoTGuardTest.java`
 
 这层很适合抓：
 
@@ -168,7 +168,7 @@ mvn -Dtest=CustomProtocolResyncIntegrationTest test
 例如改 zset：
 
 ```bash
-cd yierdis-core/yierdis-core-runtime
+cd yierdis-runtime/yierdis-runtime-embedded
 mvn -Dtest=ZSetCommandTest,CommandErrorTest test
 ```
 
@@ -184,7 +184,7 @@ mvn -Dtest=ZSetCommandTest,CommandErrorTest test
 例如改 string / off-heap：
 
 ```bash
-cd yierdis-core/yierdis-core-runtime
+cd yierdis-runtime/yierdis-runtime-embedded
 mvn -Dtest=OffHeapStringStorageTest,MemoryStatsCommandTest,MaxmemoryEvictionTest test
 ```
 

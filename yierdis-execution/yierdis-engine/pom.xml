@@ -6,28 +6,30 @@
 
     <parent>
         <groupId>yier.bubu.redis</groupId>
-        <artifactId>yierdis-core</artifactId>
+        <artifactId>yierdis-execution</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>yierdis-core-api</artifactId>
+    <artifactId>yierdis-engine</artifactId>
     <packaging>jar</packaging>
 
-    <name>yierdis-core-api</name>
-    <description>Temporary compatibility bridge for Yierdis execution, storage, and runtime API contracts.</description>
+    <name>yierdis-engine</name>
+    <description>Engine facade and execution kernel wiring for Yierdis.</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-execution-api</artifactId>
         </dependency>
+
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-storage-api</artifactId>
+            <artifactId>yierdis-command-api</artifactId>
         </dependency>
+
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-runtime-api</artifactId>
+            <artifactId>yierdis-command-kernel</artifactId>
         </dependency>
 
         <dependency>
