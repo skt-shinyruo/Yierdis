@@ -80,7 +80,7 @@ public class YierdisDbArchitectureGuardTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("unable to resolve repository root", repoRoot);
 
-        Path dbFile = repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDb.java");
+        Path dbFile = storageMemoryMain(repoRoot).resolve("yier/bubu/redis/db/YierdisDb.java");
         Assert.assertTrue("missing YierdisDb.java", Files.isRegularFile(dbFile));
 
         List<String> offenders = new ArrayList<>();
@@ -108,7 +108,7 @@ public class YierdisDbArchitectureGuardTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("unable to resolve repository root", repoRoot);
 
-        Path dbFile = repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDb.java");
+        Path dbFile = storageMemoryMain(repoRoot).resolve("yier/bubu/redis/db/YierdisDb.java");
         Assert.assertTrue("missing YierdisDb.java", Files.isRegularFile(dbFile));
 
         List<String> offenders = new ArrayList<>();
@@ -174,7 +174,7 @@ public class YierdisDbArchitectureGuardTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("unable to resolve repository root", repoRoot);
 
-        Path keyspaceOpsFile = repoRoot.resolve("yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisKeyspaceOps.java");
+        Path keyspaceOpsFile = storageMemoryMain(repoRoot).resolve("yier/bubu/redis/db/YierdisKeyspaceOps.java");
         Assert.assertTrue("missing YierdisKeyspaceOps.java", Files.isRegularFile(keyspaceOpsFile));
 
         String source = Files.readString(keyspaceOpsFile, StandardCharsets.UTF_8);
@@ -226,17 +226,22 @@ public class YierdisDbArchitectureGuardTest {
         Path cwd = Paths.get("").toAbsolutePath().normalize();
         Path cursor = cwd;
         while (cursor != null) {
-            if (Files.isDirectory(cursor.resolve("yierdis-core/yierdis-core-db"))
+            if (Files.isDirectory(cursor.resolve("yierdis-storage/yierdis-storage-memory/src/main/java"))
                     && Files.isDirectory(cursor.resolve("yierdis-core/yierdis-core-runtime"))) {
                 return cursor.resolve("yierdis-core").normalize();
             }
-            if (Files.isDirectory(cursor.resolve("yierdis-core-db"))
+            if (cursor.getParent() != null
+                    && Files.isDirectory(cursor.getParent().resolve("yierdis-storage/yierdis-storage-memory/src/main/java"))
                     && Files.isDirectory(cursor.resolve("yierdis-core-runtime"))) {
                 return cursor.normalize();
             }
             cursor = cursor.getParent();
         }
         return null;
+    }
+
+    private static Path storageMemoryMain(Path repoRoot) {
+        return repoRoot.getParent().resolve("yierdis-storage/yierdis-storage-memory/src/main/java").normalize();
     }
 
     private static void scanFileForForbiddenText(Path workspaceRoot, Path file, List<String> offenders, String... forbiddenTexts)

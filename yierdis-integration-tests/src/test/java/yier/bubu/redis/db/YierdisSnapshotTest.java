@@ -5,10 +5,10 @@ import yier.bubu.redis.ops.ScanCursorV2;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.YierdisFastCommandProcessor;
-import yier.bubu.redis.command.TestCommandProcessors;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplySimpleString;
+import yier.bubu.redis.runtime.TestCommandProcessors;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;

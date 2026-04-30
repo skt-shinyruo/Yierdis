@@ -7,7 +7,7 @@ import yier.bubu.redis.ops.DbMemoryConstants;
 import yier.bubu.redis.ops.ExpireOption;
 import yier.bubu.redis.ops.SetMode;
 
-import static yier.bubu.redis.testutil.TestBytes.b;
+import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class ExpireIndexTest {
     @Test

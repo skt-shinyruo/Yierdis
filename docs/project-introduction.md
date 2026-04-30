@@ -151,7 +151,7 @@ Yierdis 明确区分了：
 
 这个项目不只是“文档里说分层”，还通过模块拆分和测试把边界守住，例如：
 
-- `command-defaults` 不直接依赖 `core-db`
+- `command-defaults` 不直接依赖 `storage-memory`
 - `protocol` 车道不变成命令语义的真相源
 - `server` 只负责组装，不重新拿回所有责任
 
@@ -393,7 +393,7 @@ socket bytes
 ### 命令与 DB
 
 - `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
-- `yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDb.java`
+- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDb.java`
 - `yierdis-core/yierdis-core-runtime/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
 
 ## 哪些测试最能帮助你建立信心
@@ -408,7 +408,7 @@ socket bytes
   看背压和 `ERR busy ...` 的行为
 - `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java`
   看命令处理主流程
-- `yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
+- `yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
   看边界并不只是文档约定，而是有测试护栏
 
 ## 推荐阅读顺序

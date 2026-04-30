@@ -17,6 +17,8 @@ public class ArchitecturePolicyResourceTest {
             Assert.assertTrue(policy.contains("yierdis-command-defaults:"));
             Assert.assertTrue(policy.contains("yierdis-executor-core:"));
             Assert.assertTrue(policy.contains("yierdis-storage-api:"));
+            Assert.assertTrue(policy.contains("yierdis-storage-memory:"));
+            Assert.assertTrue(policy.contains("yierdis-storage-testkit:"));
             Assert.assertTrue(policy.contains("yierdis-runtime-api:"));
             Assert.assertTrue(policy.contains("yierdis-core-api:"));
             Assert.assertTrue(policy.contains("yierdis-server-app:"));

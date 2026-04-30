@@ -520,7 +520,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 文件：
 
-- [`yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisStringOps.java`](../yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisStringOps.java)
+- [`yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisStringOps.java`](../yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisStringOps.java)
 
 这是“真正开始把 `SET` 落成 mutation”的地方。
 
@@ -539,7 +539,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 文件：
 
-- [`yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbMutationExecutor.java`](../yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbMutationExecutor.java)
+- [`yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbMutationExecutor.java`](../yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbMutationExecutor.java)
 
 它的核心模板是：
 
@@ -560,7 +560,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 文件：
 
-- [`yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbKeyLifecycle.java`](../yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisDbKeyLifecycle.java)
+- [`yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbKeyLifecycle.java`](../yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbKeyLifecycle.java)
 
 它是 key 生命周期的统一入口。
 
@@ -582,7 +582,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 文件：
 
-- [`yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisObject.java`](../yierdis-core/yierdis-core-db/src/main/java/yier/bubu/redis/db/YierdisObject.java)
+- [`yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisObject.java`](../yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisObject.java)
 
 最终字符串并不是简单的 `byte[]`，而是一个：
 
@@ -679,7 +679,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 ### 5. off-heap 字符串路径
 
-- [`yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/db/OffHeapStringStorageTest.java`](../yierdis-core/yierdis-core-runtime/src/test/java/yier/bubu/redis/db/OffHeapStringStorageTest.java)
+- [`yierdis-storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/db/OffHeapStringStorageTest.java`](../yierdis-storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/db/OffHeapStringStorageTest.java)
 
 看点：
 

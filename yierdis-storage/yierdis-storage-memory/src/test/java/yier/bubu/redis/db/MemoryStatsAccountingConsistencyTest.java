@@ -5,7 +5,7 @@ import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.ops.SetMode;
 
-import static yier.bubu.redis.testutil.TestBytes.b;
+import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class MemoryStatsAccountingConsistencyTest {
     @Test
