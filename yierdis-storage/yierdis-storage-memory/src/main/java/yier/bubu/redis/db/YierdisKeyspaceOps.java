@@ -4,9 +4,10 @@ import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.ops.KeyspaceReadOps;
 import yier.bubu.redis.ops.KeyspaceWriteOps;
+import yier.bubu.redis.ops.MutationOutcome;
 import yier.bubu.redis.ops.ScanCursorV2;
 import yier.bubu.redis.ops.ValueType;
-import yier.bubu.redis.runtime.api.YierdisChangeTracking;
+import yier.bubu.redis.ops.WriteResult;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -24,16 +25,16 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
     }
 
     @Override
-    public long del(Collection<byte[]> keys) {
+    public WriteResult<Long> del(Collection<byte[]> keys) {
         internals.checkThread();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<Long>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return 0;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Long> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 long now = System.currentTimeMillis();
                 long removed = 0;
                 long deltaBytes = 0;
@@ -56,10 +57,11 @@ final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
                         removed++;
                     }
                 }
-                if (removed > 0) {
-                    YierdisChangeTracking.markValueChanged();
-                }
-                return YierdisDbMutationExecutor.MutationResult.of(removed, deltaBytes);
+                MutationOutcome outcome = removed > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of(removed, outcome),
+                        deltaBytes
+                );
             }
         });
     }

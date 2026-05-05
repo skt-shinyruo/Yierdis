@@ -3,8 +3,6 @@ package yier.bubu.redis.command;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
-import yier.bubu.redis.contract.ServerSession;
-
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Objects;
@@ -87,13 +85,7 @@ final class CoreConnectionCommands {
             return;
         }
 
-        ServerSession s = ctx.serverSessionOrNull();
-        if (s != null) {
-            s.setDbIndex(dbIndex);
-        } else if (dbIndex != 0) {
-            out.error("ERR DB index is out of range");
-            return;
-        }
+        ctx.session().setDbIndex(dbIndex);
         out.simpleString("OK");
     }
 
@@ -120,7 +112,7 @@ final class CoreConnectionCommands {
                 return;
             }
         }
-        support.db(ctx).lifecycle().flushDb();
+        support.recordMutation(ctx, support.db(ctx).lifecycle().flushDb());
         out.simpleString("OK");
     }
 

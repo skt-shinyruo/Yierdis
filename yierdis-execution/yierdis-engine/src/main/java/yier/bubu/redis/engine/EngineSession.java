@@ -1,7 +1,6 @@
 package yier.bubu.redis.engine;
 
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.ConnectionStatsProvider;
 import yier.bubu.redis.contract.ConnectionStatsView;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ServerSession;
@@ -15,7 +14,7 @@ import java.util.function.Supplier;
 /**
  * Engine-owned per-connection command session state.
  */
-public final class EngineSession implements ServerSession, ConnectionStatsProvider {
+public final class EngineSession implements ServerSession {
     private static final AtomicLong NEXT_CLIENT_ID = new AtomicLong(1);
 
     private final long clientId = NEXT_CLIENT_ID.getAndIncrement();

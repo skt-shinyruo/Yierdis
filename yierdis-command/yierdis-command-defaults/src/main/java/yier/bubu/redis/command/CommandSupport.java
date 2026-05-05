@@ -7,11 +7,12 @@ import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.ops.DbEngine;
 import yier.bubu.redis.ops.DbReads;
 import yier.bubu.redis.ops.DbWrites;
+import yier.bubu.redis.ops.MutationOutcome;
 import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.contract.DbIndexProvider;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.contract.ServerSession;
 
 import java.nio.charset.StandardCharsets;
 import java.util.AbstractList;
@@ -53,7 +54,7 @@ final class CommandSupport {
 
     DbEngine db(CommandContext ctx) {
         java.util.Objects.requireNonNull(ctx, "ctx");
-        return dbRouter.dbFor(ctx.dbIndexProviderOrNull());
+        return dbRouter.dbFor(ctx.session());
     }
 
     DbReads dbReads(CommandContext ctx) {
@@ -62,6 +63,13 @@ final class CommandSupport {
 
     DbWrites dbWrites(CommandContext ctx) {
         return db(ctx).writes();
+    }
+
+    void recordMutation(CommandContext ctx, MutationOutcome outcome) {
+        if (outcome == null) {
+            return;
+        }
+        ctx.recordMutation(outcome.valueChanged(), outcome.ttlChanged());
     }
 
     int databases() {
@@ -127,7 +135,7 @@ final class CommandSupport {
         DbEngine fixed = java.util.Objects.requireNonNull(engine, "engine");
         return new YierdisDbRouter() {
             @Override
-            public DbEngine dbFor(DbIndexProvider dbIndexProvider) {
+            public DbEngine dbFor(ServerSession session) {
                 return fixed;
             }
 

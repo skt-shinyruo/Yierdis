@@ -26,8 +26,6 @@ import yier.bubu.redis.ops.WrongTypeException;
 import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.ops.result.BulkStringSink;
 import yier.bubu.redis.ops.result.BulkStringValue;
-import yier.bubu.redis.runtime.api.YierdisChangeTracking;
-
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -35,8 +33,8 @@ import java.util.Collections;
 public final class YierdisDb implements RuntimeDbEngine {
     private static final long TTL_ENTRY_BYTES_ESTIMATE = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
 
-    final YierdisKeyspace<YierdisObject> store;
-    final YierdisExpireIndex expires;
+    private final YierdisKeyspace<YierdisObject> store;
+    private final YierdisExpireIndex expires;
     private final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
     private final YierdisDbOwnedResources resources;
@@ -462,18 +460,13 @@ public final class YierdisDb implements RuntimeDbEngine {
         resources.releaseAll(store, expires);
     }
 
-    public void flushDb() {
+    public yier.bubu.redis.ops.MutationOutcome flushDb() {
         checkThread();
         boolean hadKeys = store.size() != 0;
         boolean hadTtl = expires.size() != 0;
         resources.clearData(store, expires);
         ledger.resetUsage();
-        if (hadKeys) {
-            YierdisChangeTracking.markValueChanged();
-        }
-        if (hadTtl) {
-            YierdisChangeTracking.markTtlChanged();
-        }
+        return yier.bubu.redis.ops.MutationOutcome.of(hadKeys, hadTtl);
     }
 
     public int size() {
@@ -536,6 +529,10 @@ public final class YierdisDb implements RuntimeDbEngine {
 
     void removeExpire(KeyHandle keyHandle) {
         keyLifecycle.removeExpire(keyHandle);
+    }
+
+    YierdisDbKeyLifecycle keyLifecycle() {
+        return keyLifecycle;
     }
 
 }

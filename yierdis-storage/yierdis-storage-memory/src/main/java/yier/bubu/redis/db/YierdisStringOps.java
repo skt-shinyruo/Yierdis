@@ -8,13 +8,14 @@ import yier.bubu.redis.offheap.api.OffHeapBuf;
 import yier.bubu.redis.offheap.api.OffHeapSlice;
 import yier.bubu.redis.ops.DbMemoryConstants;
 import yier.bubu.redis.ops.ExpireOption;
+import yier.bubu.redis.ops.MutationOutcome;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.StringReadOps;
 import yier.bubu.redis.ops.StringWriteOps;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.WrongTypeException;
+import yier.bubu.redis.ops.WriteResult;
 import yier.bubu.redis.ops.result.BulkStringValue;
-import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 
 import java.util.Arrays;
 import java.util.Objects;
@@ -58,6 +59,7 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 final KeyHandle[] handleRef = new KeyHandle[]{null};
                 final long[] deltaBytes = new long[]{0};
                 final byte[][] oldValue = new byte[1][];
+                final boolean[] ttlChanged = new boolean[]{false};
 
                 keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
                     handleRef[0] = k;
@@ -102,29 +104,31 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 });
 
                 if (didSet[0]) {
-                    YierdisChangeTracking.markValueChanged();
                     if (keepTtl && existed[0]) {
+                        MutationOutcome outcome = MutationOutcome.VALUE_CHANGED;
                         return YierdisDbMutationExecutor.MutationResult.of(
-                                SetStringResult.of(true, oldValue[0]),
+                                SetStringResult.of(true, oldValue[0], outcome),
                                 deltaBytes[0]
                         );
                     }
                     if (expireAtMillis != null) {
                         keyLifecycle.setExpireAtMillis(handleRef[0], expireAtMillis);
-                        YierdisChangeTracking.markTtlChanged();
+                        ttlChanged[0] = true;
+                        MutationOutcome outcome = MutationOutcome.VALUE_AND_TTL_CHANGED;
                         return YierdisDbMutationExecutor.MutationResult.of(
-                                SetStringResult.of(true, oldValue[0]),
+                                SetStringResult.of(true, oldValue[0], outcome),
                                 deltaBytes[0]
                         );
                     }
                     Long beforeTtl = keyLifecycle.expireAtMillis(handleRef[0]);
                     keyLifecycle.removeExpire(handleRef[0]);
                     if (beforeTtl != null) {
-                        YierdisChangeTracking.markTtlChanged();
+                        ttlChanged[0] = true;
                     }
                 }
+                MutationOutcome outcome = MutationOutcome.of(didSet[0], ttlChanged[0]);
                 return YierdisDbMutationExecutor.MutationResult.of(
-                        SetStringResult.of(didSet[0], oldValue[0]),
+                        SetStringResult.of(didSet[0], oldValue[0], outcome),
                         deltaBytes[0]
                 );
             }
@@ -132,28 +136,30 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
     }
 
     @Override
-    public boolean setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption) {
-        return set(keyBytes, sliceOf(value), mode, expireOption, false).applied();
+    public WriteResult<Boolean> setString(byte[] keyBytes, byte[] value, SetMode mode, ExpireOption expireOption) {
+        SetStringResult result = set(keyBytes, sliceOf(value), mode, expireOption, false);
+        return WriteResult.of(result.applied(), result.mutationOutcome());
     }
 
     @Override
-    public boolean setString(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
-        return set(keyBytes, value, mode, expireOption, false).applied();
+    public WriteResult<Boolean> setString(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption) {
+        SetStringResult result = set(keyBytes, value, mode, expireOption, false);
+        return WriteResult.of(result.applied(), result.mutationOutcome());
     }
 
     @Override
-    public long append(byte[] keyBytes, BytesSlice value) {
+    public WriteResult<Long> append(byte[] keyBytes, BytesSlice value) {
         internals.checkThread();
         long now = System.currentTimeMillis();
         long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, value == null ? 0 : value.len());
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Long> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final int[] newLen = new int[]{0};
                 final boolean[] changed = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
@@ -191,29 +197,35 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     return old;
                 });
                 if (changed[0]) {
-                    YierdisChangeTracking.markValueChanged();
+                    return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of((long) newLen[0], MutationOutcome.VALUE_CHANGED),
+                        deltaBytes[0]
+                    );
                 }
-                return YierdisDbMutationExecutor.MutationResult.of((long) newLen[0], deltaBytes[0]);
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.unchanged((long) newLen[0]),
+                        deltaBytes[0]
+                );
             }
         });
     }
 
     @Override
-    public int setBit(byte[] keyBytes, long offset, int value) {
+    public WriteResult<Integer> setBit(byte[] keyBytes, long offset, int value) {
         internals.checkThread();
         long now = System.currentTimeMillis();
         long currentLen = stringLength(keyBytes);
         long requiredBytes = (offset >>> 3) + 1;
         long growth = Math.max(0L, requiredBytes - currentLen);
         long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, (int) growth);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Integer>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Integer>> apply() {
                 final int[] oldBit = new int[]{0};
                 final boolean[] changed = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
@@ -250,26 +262,32 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     return old;
                 });
                 if (changed[0]) {
-                    YierdisChangeTracking.markValueChanged();
+                    return YierdisDbMutationExecutor.MutationResult.of(
+                            WriteResult.of(oldBit[0], MutationOutcome.VALUE_CHANGED),
+                            deltaBytes[0]
+                    );
                 }
-                return YierdisDbMutationExecutor.MutationResult.of(oldBit[0], deltaBytes[0]);
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.unchanged(oldBit[0]),
+                        deltaBytes[0]
+                );
             }
         });
     }
 
     @Override
-    public long incrBy(byte[] keyBytes, long delta) {
+    public WriteResult<Long> incrBy(byte[] keyBytes, long delta) {
         internals.checkThread();
         long now = System.currentTimeMillis();
         long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, 32);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Long> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final long[] result = new long[]{0L};
                 final long[] deltaBytes = new long[]{0L};
                 final boolean[] changed = new boolean[]{false};
@@ -304,9 +322,15 @@ final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     return old;
                 });
                 if (changed[0]) {
-                    YierdisChangeTracking.markValueChanged();
+                    return YierdisDbMutationExecutor.MutationResult.of(
+                            WriteResult.of(result[0], MutationOutcome.VALUE_CHANGED),
+                            deltaBytes[0]
+                    );
                 }
-                return YierdisDbMutationExecutor.MutationResult.of(result[0], deltaBytes[0]);
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.unchanged(result[0]),
+                        deltaBytes[0]
+                );
             }
         });
     }

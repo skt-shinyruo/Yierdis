@@ -129,6 +129,7 @@ final class StringCommands implements CommandModule {
                 args.expire(),
                 args.getOld()
         );
+        support.recordMutation(ctx, result.mutationOutcome());
         if (!result.applied()) {
             out.bulkString((byte[]) null);
             return;
@@ -155,8 +156,9 @@ final class StringCommands implements CommandModule {
     private void append(ArgReader args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
-        long len = support.dbWrites(ctx).strings().append(request.readOnlyByteArray(1), support.argSlice(request, 2));
-        out.integer(len);
+        var result = support.dbWrites(ctx).strings().append(request.readOnlyByteArray(1), support.argSlice(request, 2));
+        support.recordMutation(ctx, result.mutationOutcome());
+        out.integer(result.value());
     }
 
     private void setbit(ArgReader args, CommandContext ctx) {
@@ -174,8 +176,9 @@ final class StringCommands implements CommandModule {
             out.error("ERR string exceeds maximum allowed size");
             return;
         }
-        int old = support.dbWrites(ctx).strings().setBit(request.readOnlyByteArray(1), offset, (int) v);
-        out.integer(old);
+        var result = support.dbWrites(ctx).strings().setBit(request.readOnlyByteArray(1), offset, (int) v);
+        support.recordMutation(ctx, result.mutationOutcome());
+        out.integer(result.value());
     }
 
     private void getbit(ArgReader args, CommandContext ctx) {
@@ -211,7 +214,8 @@ final class StringCommands implements CommandModule {
     private void incrBy(ArgReader args, CommandContext ctx, long delta) {
         ReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
-        long value = support.dbWrites(ctx).strings().incrBy(request.readOnlyByteArray(1), delta);
-        out.integer(value);
+        var result = support.dbWrites(ctx).strings().incrBy(request.readOnlyByteArray(1), delta);
+        support.recordMutation(ctx, result.mutationOutcome());
+        out.integer(result.value());
     }
 }

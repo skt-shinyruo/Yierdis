@@ -5,5 +5,5 @@ package yier.bubu.redis.ops;
 import java.util.Collection;
 
 public interface KeyspaceWriteOps {
-    long del(Collection<byte[]> keys);
+    WriteResult<Long> del(Collection<byte[]> keys);
 }

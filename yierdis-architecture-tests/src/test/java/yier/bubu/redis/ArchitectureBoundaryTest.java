@@ -899,8 +899,7 @@ public class ArchitectureBoundaryTest {
                 "ReplyWriterFactory - API",
                 "Session - API",
                 "ServerSession - API",
-                "DbIndexProvider - API",
-                "ConnectionStatsProvider - API",
+                "DbIndexProvider - compatibility/deprecated",
                 "ConnectionStatsView - API",
                 "TransactionState - API",
                 "CommandContext - API",
@@ -1404,8 +1403,7 @@ public class ArchitectureBoundaryTest {
         String apiPackageInfoText = Files.readString(apiPackageInfo, StandardCharsets.UTF_8);
         for (String requiredClassification : List.of(
                 "YierdisChangeEvent - API",
-                "YierdisChangeSink - API",
-                "YierdisChangeTracking - SPI-in-legacy-package"
+                "YierdisChangeSink - API"
         )) {
             Assert.assertTrue(
                     "runtime API package-info.java must classify " + requiredClassification,
@@ -1450,43 +1448,17 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void runtimeChangeTrackingSpiImportsMustBeAllowlisted() throws IOException {
+    public void runtimeChangeTrackingSpiImportsMustBeRemoved() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-execution/yierdis-storage-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot.getParent();
-        assertRuntimeChangeTrackingSpiDetectorCoversReviewCases();
-
-        Path commandRoot = commandKernelMain(repoRoot).resolve("yier/bubu/redis/command").normalize();
-        Path dbRoot = storageMemoryMain(repoRoot).resolve("yier/bubu/redis/db").normalize();
-        List<Path> allowedRoots = List.of(commandRoot, dbRoot);
 
         Path policyFile = workspaceRoot.resolve("yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
         Assert.assertTrue("缺少 architecture-policy.yml", Files.isRegularFile(policyFile));
         String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
-        String commandPolicy = policySection(policy, "yierdis-command-kernel");
-        String dbPolicy = policySection(policy, "yierdis-storage-memory");
-
-        for (String policySection : List.of(commandPolicy, dbPolicy)) {
-            Assert.assertTrue(
-                    "runtime change tracking SPI consumers must name allowed_spi_imports",
-                    policySection.contains("allowed_spi_imports:")
-            );
-            Assert.assertTrue(
-                    "runtime change tracking SPI consumers must explicitly allowlist YierdisChangeTracking",
-                    policySection.contains("yier.bubu.redis.runtime.api.YierdisChangeTracking")
-            );
-        }
-        Assert.assertTrue(
-                "command-kernel SPI allowlist must name the command production source path",
-                commandPolicy.contains("yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command")
-        );
-        Assert.assertTrue(
-                "storage-memory SPI allowlist must name the DB production source path",
-                dbPolicy.contains("yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db")
-        );
+        Assert.assertFalse(policy.contains("yier.bubu.redis.runtime.api.YierdisChangeTracking"));
 
         List<String> offenders = new ArrayList<>();
-        List<String> allowedImports = new ArrayList<>();
         Path importRoot = workspaceRoot.normalize();
         try (Stream<Path> paths = Files.walk(importRoot)) {
             paths.filter(p -> p != null
@@ -1499,30 +1471,14 @@ public class ArchitectureBoundaryTest {
                             if (!containsRuntimeChangeTrackingSpiReference(source)) {
                                 return;
                             }
-                            Path normalized = file.normalize();
-                            boolean allowed = allowedRoots.stream().anyMatch(root -> isUnder(normalized, root));
-                            String relative = workspaceRoot.relativize(normalized).toString().replace('\\', '/');
-                            if (allowed) {
-                                allowedImports.add(relative);
-                            } else {
-                                offenders.add(relative);
-                            }
+                            offenders.add(workspaceRoot.relativize(file.normalize()).toString().replace('\\', '/'));
                         } catch (IOException e) {
                             throw new RuntimeException(e);
                         }
                     });
         }
 
-        Assert.assertFalse(
-                "runtime change tracking SPI guard expected production imports in command/db modules",
-                allowedImports.isEmpty()
-        );
-        if (!offenders.isEmpty()) {
-            Assert.fail(
-                    "检测到 YierdisChangeTracking SPI import/reference 出现在未 allowlist 的生产模块/路径：\n"
-                            + String.join("\n", offenders)
-            );
-        }
+        Assert.assertTrue("YierdisChangeTracking must not remain in production code:\n" + String.join("\n", offenders), offenders.isEmpty());
     }
 
     @Test
@@ -2690,7 +2646,6 @@ public class ArchitectureBoundaryTest {
                 serverRoot,
                 offenders,
                 ".runtime()",
-                ".session()",
                 ".scheduling()"
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server-app Java 文件", scanned > 0);

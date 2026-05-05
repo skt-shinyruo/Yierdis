@@ -5,31 +5,29 @@ import java.util.Objects;
 /**
  * Command execution context (transport-agnostic).
  * <p>
- * Groups the "input-side state" (Session) and the output port (ReplyWriter) into a single context object, avoiding
- * leaking routing/transaction/auth decisions into the output layer.
- * <p>
- * Threading: typically reused by a single-thread executor via {@link #reset(Session, ReplyWriter)} and must not be
- * shared across threads.
+ * Groups the required server-side session and the output port. The command path must not silently run with a weaker
+ * marker session because DB routing, transactions, connection metadata, and change emission all depend on explicit
+ * server session semantics.
  */
 public final class CommandContext {
-    private Session session;
+    private ServerSession session;
     private ReplyWriter out;
+    private boolean valueChanged;
+    private boolean ttlChanged;
 
-    public CommandContext(Session session, ReplyWriter out) {
-        this.session = session;
+    public CommandContext(ServerSession session, ReplyWriter out) {
+        this.session = Objects.requireNonNull(session, "session");
         this.out = Objects.requireNonNull(out, "out");
     }
 
-    /**
-     * Resets the context for object reuse to reduce per-command allocations.
-     */
-    public CommandContext reset(Session session, ReplyWriter out) {
-        this.session = session;
+    public CommandContext reset(ServerSession session, ReplyWriter out) {
+        this.session = Objects.requireNonNull(session, "session");
         this.out = Objects.requireNonNull(out, "out");
+        clearMutationOutcome();
         return this;
     }
 
-    public Session session() {
+    public ServerSession session() {
         return session;
     }
 
@@ -37,36 +35,25 @@ public final class CommandContext {
         return out;
     }
 
-    /**
-     * Best-effort: returns server-side session state when available, otherwise null.
-     */
-    public ServerSession serverSessionOrNull() {
-        Session s = session;
-        if (s instanceof ServerSession ss) {
-            return ss;
-        }
-        return null;
+    public void clearMutationOutcome() {
+        valueChanged = false;
+        ttlChanged = false;
     }
 
-    /**
-     * Best-effort: returns a DB index provider when available, otherwise null.
-     */
-    public DbIndexProvider dbIndexProviderOrNull() {
-        Session s = session;
-        if (s instanceof DbIndexProvider p) {
-            return p;
-        }
-        return null;
+    public void recordMutation(boolean changedValue, boolean changedTtl) {
+        valueChanged |= changedValue;
+        ttlChanged |= changedTtl;
     }
 
-    /**
-     * Best-effort: returns read-only connection stats when available, otherwise null.
-     */
-    public ConnectionStatsView connectionStatsOrNull() {
-        Session s = session;
-        if (s instanceof ConnectionStatsProvider p) {
-            return p.connectionStats();
-        }
-        return null;
+    public boolean valueChanged() {
+        return valueChanged;
+    }
+
+    public boolean ttlChanged() {
+        return ttlChanged;
+    }
+
+    public boolean changedAny() {
+        return valueChanged || ttlChanged;
     }
 }

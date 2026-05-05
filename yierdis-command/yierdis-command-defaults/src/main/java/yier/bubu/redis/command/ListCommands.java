@@ -50,10 +50,11 @@ final class ListCommands implements CommandModule {
         int valuesLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, valuesLen);
         try {
-            long len = left
+            var result = left
                     ? support.dbWrites(ctx).lists().lpush(request.readOnlyByteArray(1), support.slice())
                     : support.dbWrites(ctx).lists().rpush(request.readOnlyByteArray(1), support.slice());
-            out.integer(len);
+            support.recordMutation(ctx, result.mutationOutcome());
+            out.integer(result.value());
         } finally {
             support.clearScratch(valuesLen);
         }
@@ -98,10 +99,11 @@ final class ListCommands implements CommandModule {
             }
         }
 
-        List<byte[]> popped = left
+        var result = left
                 ? support.dbWrites(ctx).lists().lpop(request.readOnlyByteArray(1), count)
                 : support.dbWrites(ctx).lists().rpop(request.readOnlyByteArray(1), count);
-        popResponse(out, popped, hasCount);
+        support.recordMutation(ctx, result.mutationOutcome());
+        popResponse(out, result.value(), hasCount);
     }
 
     private static void popResponse(ReplyWriter out, List<byte[]> popped, boolean hasCount) {

@@ -59,8 +59,9 @@ final class ZSetCommands implements CommandModule {
         ExecutionRequest request = args.request();
         support.sliceResetFromRequest(request, 2, pairsLen);
         try {
-            long added = support.dbWrites(ctx).zsets().zadd(request.readOnlyByteArray(1), support.slice());
-            out.integer(added);
+            var result = support.dbWrites(ctx).zsets().zadd(request.readOnlyByteArray(1), support.slice());
+            support.recordMutation(ctx, result.mutationOutcome());
+            out.integer(result.value());
         } finally {
             support.clearScratch(pairsLen);
         }
@@ -232,7 +233,15 @@ final class ZSetCommands implements CommandModule {
 
         CommandSupport.ScoreBound min = CommandSupport.parseScoreBound(request.readOnlyByteArray(2));
         CommandSupport.ScoreBound max = CommandSupport.parseScoreBound(request.readOnlyByteArray(3));
-        out.integer(support.dbWrites(ctx).zsets().zremrangeByScore(request.readOnlyByteArray(1), min.value, min.exclusive, max.value, max.exclusive));
+        var result = support.dbWrites(ctx).zsets().zremrangeByScore(
+                request.readOnlyByteArray(1),
+                min.value,
+                min.exclusive,
+                max.value,
+                max.exclusive
+        );
+        support.recordMutation(ctx, result.mutationOutcome());
+        out.integer(result.value());
     }
 
     private void zrevrangebyscore(ZRangeByScoreArgs args, CommandContext ctx) {
@@ -263,7 +272,9 @@ final class ZSetCommands implements CommandModule {
         }
         long start = CommandSupport.parseLong(request, 2, "start");
         long stop = CommandSupport.parseLong(request, 3, "stop");
-        out.integer(support.dbWrites(ctx).zsets().zremrangeByRank(request.readOnlyByteArray(1), start, stop));
+        var result = support.dbWrites(ctx).zsets().zremrangeByRank(request.readOnlyByteArray(1), start, stop);
+        support.recordMutation(ctx, result.mutationOutcome());
+        out.integer(result.value());
     }
 
     private void zrem(ExecutionRequest request, CommandContext ctx) {
@@ -275,7 +286,9 @@ final class ZSetCommands implements CommandModule {
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
-            out.integer(support.dbWrites(ctx).zsets().zrem(request.readOnlyByteArray(1), support.slice()));
+            var result = support.dbWrites(ctx).zsets().zrem(request.readOnlyByteArray(1), support.slice());
+            support.recordMutation(ctx, result.mutationOutcome());
+            out.integer(result.value());
         } finally {
             support.clearScratch(membersLen);
         }

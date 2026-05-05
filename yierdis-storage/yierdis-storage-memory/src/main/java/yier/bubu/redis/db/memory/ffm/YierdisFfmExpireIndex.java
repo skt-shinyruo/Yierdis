@@ -36,6 +36,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
     @Override
     public int size() {
+        closeRetiredTables();
         Table t0 = table0;
         if (t0 == null) {
             return 0;

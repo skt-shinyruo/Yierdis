@@ -4,7 +4,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 
@@ -33,7 +32,7 @@ public class YierdisFastCommandProcessorModuleTest {
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of());
 
         CapturingReplyWriter out = new CapturingReplyWriter();
-        processor.execute(request, new CommandContext(null, out));
+        processor.execute(request, TestCommandContexts.context(out));
 
         Assert.assertEquals("LOCAL", out.simpleStringValue);
         Assert.assertNull(out.errorValue);
@@ -53,7 +52,7 @@ public class YierdisFastCommandProcessorModuleTest {
         );
 
         CapturingReplyWriter out = new CapturingReplyWriter();
-        processor.execute(ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()), new CommandContext(null, out));
+        processor.execute(ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()), TestCommandContexts.context(out));
 
         Assert.assertEquals("LOCAL_OK", out.simpleStringValue);
         Assert.assertNull(out.errorValue);
@@ -61,7 +60,7 @@ public class YierdisFastCommandProcessorModuleTest {
 
     private static void assertUnknownCommand(YierdisFastCommandProcessor processor, String commandName) {
         CapturingReplyWriter out = new CapturingReplyWriter();
-        processor.execute(ByteArrayExecutionRequest.fromUtf8(commandName, List.of()), new CommandContext(null, out));
+        processor.execute(ByteArrayExecutionRequest.fromUtf8(commandName, List.of()), TestCommandContexts.context(out));
 
         Assert.assertNull(out.simpleStringValue);
         Assert.assertEquals("ERR unknown command '" + commandName + "'", out.errorValue);

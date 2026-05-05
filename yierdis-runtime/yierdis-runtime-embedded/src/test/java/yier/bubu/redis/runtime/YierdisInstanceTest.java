@@ -75,13 +75,13 @@ public class YierdisInstanceTest {
 
             long db0Before = instance.engine(0).memory().memoryStats().usedBytesForMaxmemory();
 
-            Assert.assertTrue(instance.engine(1).writes().strings().setString(b("remote"), value, SetMode.NORMAL, null));
+            Assert.assertTrue(instance.engine(1).writes().strings().setString(b("remote"), value, SetMode.NORMAL, null).value());
             long db0AfterRemoteWrite = instance.engine(0).memory().memoryStats().usedBytesForMaxmemory();
             Assert.assertEquals("DB1 writes must not consume DB0 maxmemory budget in per-db mode",
                     db0Before,
                     db0AfterRemoteWrite);
 
-            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("local"), value, SetMode.NORMAL, null));
+            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("local"), value, SetMode.NORMAL, null).value());
             long db0AfterLocalWrite = instance.engine(0).memory().memoryStats().usedBytesForMaxmemory();
             Assert.assertTrue("DB0 local writes should increase its own maxmemory usage",
                     db0AfterLocalWrite > db0AfterRemoteWrite);
@@ -102,8 +102,8 @@ public class YierdisInstanceTest {
             byte[] value = new byte[4_000];
             Arrays.fill(value, (byte) 'a');
 
-            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("a"), value, SetMode.NORMAL, null));
-            Assert.assertTrue(instance.engine(1).writes().strings().setString(b("b"), value, SetMode.NORMAL, null));
+            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("a"), value, SetMode.NORMAL, null).value());
+            Assert.assertTrue(instance.engine(1).writes().strings().setString(b("b"), value, SetMode.NORMAL, null).value());
 
             long off0 = instance.engine(0).memory().memoryStats().offHeapUsedBytes();
             long off1 = instance.engine(1).memory().memoryStats().offHeapUsedBytes();
@@ -392,6 +392,11 @@ public class YierdisInstanceTest {
         @Override
         public TransactionState transaction() {
             return tx;
+        }
+
+        @Override
+        public yier.bubu.redis.contract.ConnectionStatsView connectionStats() {
+            return null;
         }
     }
 

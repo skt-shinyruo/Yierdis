@@ -5,7 +5,7 @@ package yier.bubu.redis.ops;
 import java.util.List;
 
 public interface HllWriteOps {
-    int pfadd(byte[] keyBytes, List<byte[]> elements);
+    WriteResult<Integer> pfadd(byte[] keyBytes, List<byte[]> elements);
 
-    void pfmerge(byte[] destKeyBytes, List<byte[]> sourceKeys);
+    WriteResult<Void> pfmerge(byte[] destKeyBytes, List<byte[]> sourceKeys);
 }

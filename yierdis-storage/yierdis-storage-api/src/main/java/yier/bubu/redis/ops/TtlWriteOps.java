@@ -5,13 +5,13 @@ package yier.bubu.redis.ops;
 import yier.bubu.redis.bytes.BytesView;
 
 public interface TtlWriteOps {
-    boolean expire(BytesView keyView, long seconds);
+    WriteResult<Boolean> expire(BytesView keyView, long seconds);
 
-    boolean pexpire(BytesView keyView, long milliseconds);
+    WriteResult<Boolean> pexpire(BytesView keyView, long milliseconds);
 
-    boolean expireAtSeconds(BytesView keyView, long unixSeconds);
+    WriteResult<Boolean> expireAtSeconds(BytesView keyView, long unixSeconds);
 
-    boolean expireAtMillis(BytesView keyView, long unixMillis);
+    WriteResult<Boolean> expireAtMillis(BytesView keyView, long unixMillis);
 
-    boolean persist(BytesView keyView);
+    WriteResult<Boolean> persist(BytesView keyView);
 }

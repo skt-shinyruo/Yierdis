@@ -108,15 +108,15 @@ public class ExpireIndexTest {
         long usedBeforeTtl = db.usedBytesForMaxmemory();
         BytesView keyView = viewOf(key);
 
-        Assert.assertTrue(db.writes().ttl().expire(keyView, 60));
+        Assert.assertTrue(db.writes().ttl().expire(keyView, 60).value());
         long usedAfterTtl = db.usedBytesForMaxmemory();
         Assert.assertTrue(usedAfterTtl >= usedBeforeTtl + DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
 
         // Updating TTL should not add more metadata entries.
-        Assert.assertTrue(db.writes().ttl().expire(keyView, 120));
+        Assert.assertTrue(db.writes().ttl().expire(keyView, 120).value());
         Assert.assertEquals(usedAfterTtl, db.usedBytesForMaxmemory());
 
-        Assert.assertTrue(db.writes().ttl().persist(keyView));
+        Assert.assertTrue(db.writes().ttl().persist(keyView).value());
         long usedAfterPersist = db.usedBytesForMaxmemory();
         Assert.assertEquals(0, db.memory().memoryStats().expireCount());
         Assert.assertTrue(usedAfterPersist >= usedBeforeTtl);

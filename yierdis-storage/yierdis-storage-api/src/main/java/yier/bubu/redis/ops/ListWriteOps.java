@@ -5,11 +5,11 @@ package yier.bubu.redis.ops;
 import java.util.List;
 
 public interface ListWriteOps {
-    long lpush(byte[] keyBytes, List<byte[]> values);
+    WriteResult<Long> lpush(byte[] keyBytes, List<byte[]> values);
 
-    long rpush(byte[] keyBytes, List<byte[]> values);
+    WriteResult<Long> rpush(byte[] keyBytes, List<byte[]> values);
 
-    List<byte[]> lpop(byte[] keyBytes, int count);
+    WriteResult<List<byte[]>> lpop(byte[] keyBytes, int count);
 
-    List<byte[]> rpop(byte[] keyBytes, int count);
+    WriteResult<List<byte[]>> rpop(byte[] keyBytes, int count);
 }

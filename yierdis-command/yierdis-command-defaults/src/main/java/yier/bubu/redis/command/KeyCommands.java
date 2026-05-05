@@ -279,7 +279,9 @@ final class KeyCommands implements CommandModule {
         int len = request.argc() - 1;
         support.sliceResetFromRequest(request, 1, len);
         try {
-            out.integer(support.dbWrites(ctx).keyspace().del(support.slice()));
+            var result = support.dbWrites(ctx).keyspace().del(support.slice());
+            support.recordMutation(ctx, result.mutationOutcome());
+            out.integer(result.value());
         } finally {
             support.clearScratch(len);
         }
@@ -308,7 +310,9 @@ final class KeyCommands implements CommandModule {
             return;
         }
         long seconds = CommandSupport.parseLong(request, 2, "seconds");
-        out.integer(support.dbWrites(ctx).ttl().expire(support.argView(request, 1), seconds) ? 1 : 0);
+        var result = support.dbWrites(ctx).ttl().expire(support.argView(request, 1), seconds);
+        support.recordMutation(ctx, result.mutationOutcome());
+        out.integer(result.value() ? 1 : 0);
     }
 
     private void pexpire(ExecutionRequest request, CommandContext ctx) {
@@ -318,7 +322,9 @@ final class KeyCommands implements CommandModule {
             return;
         }
         long millis = CommandSupport.parseLong(request, 2, "milliseconds");
-        out.integer(support.dbWrites(ctx).ttl().pexpire(support.argView(request, 1), millis) ? 1 : 0);
+        var result = support.dbWrites(ctx).ttl().pexpire(support.argView(request, 1), millis);
+        support.recordMutation(ctx, result.mutationOutcome());
+        out.integer(result.value() ? 1 : 0);
     }
 
     private void expireat(ExecutionRequest request, CommandContext ctx) {
@@ -328,7 +334,9 @@ final class KeyCommands implements CommandModule {
             return;
         }
         long seconds = CommandSupport.parseLong(request, 2, "seconds");
-        out.integer(support.dbWrites(ctx).ttl().expireAtSeconds(support.argView(request, 1), seconds) ? 1 : 0);
+        var result = support.dbWrites(ctx).ttl().expireAtSeconds(support.argView(request, 1), seconds);
+        support.recordMutation(ctx, result.mutationOutcome());
+        out.integer(result.value() ? 1 : 0);
     }
 
     private void pexpireat(ExecutionRequest request, CommandContext ctx) {
@@ -338,7 +346,9 @@ final class KeyCommands implements CommandModule {
             return;
         }
         long millis = CommandSupport.parseLong(request, 2, "milliseconds");
-        out.integer(support.dbWrites(ctx).ttl().expireAtMillis(support.argView(request, 1), millis) ? 1 : 0);
+        var result = support.dbWrites(ctx).ttl().expireAtMillis(support.argView(request, 1), millis);
+        support.recordMutation(ctx, result.mutationOutcome());
+        out.integer(result.value() ? 1 : 0);
     }
 
     private void persist(ExecutionRequest request, CommandContext ctx) {
@@ -347,7 +357,9 @@ final class KeyCommands implements CommandModule {
             CommandSupport.wrongArity(out, "persist");
             return;
         }
-        out.integer(support.dbWrites(ctx).ttl().persist(support.argView(request, 1)) ? 1 : 0);
+        var result = support.dbWrites(ctx).ttl().persist(support.argView(request, 1));
+        support.recordMutation(ctx, result.mutationOutcome());
+        out.integer(result.value() ? 1 : 0);
     }
 
     private void ttl(ExecutionRequest request, CommandContext ctx) {

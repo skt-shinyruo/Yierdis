@@ -7,7 +7,6 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.ops.MaxmemoryErrors;
 import yier.bubu.redis.ops.SetMode;
 import yier.bubu.redis.ops.YierdisCommandException;
-import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 
 import java.nio.charset.StandardCharsets;
 
@@ -40,7 +39,7 @@ public class MutationExecutorReservationTest {
 
             byte[] key = bytes("next");
             byte[] value = bytes("ok");
-            Assert.assertTrue(db.writes().strings().setString(key, value, SetMode.NORMAL, null));
+            Assert.assertTrue(db.writes().strings().setString(key, value, SetMode.NORMAL, null).value());
             Assert.assertArrayEquals(value, db.reads().strings().getStringBytes(key));
             Assert.assertEquals(0L, db.memory().memoryStats().reservedBytes());
         } finally {
@@ -90,20 +89,18 @@ public class MutationExecutorReservationTest {
             byte[] appendKey = bytes("append");
             byte[] bitKey = bytes("bit");
 
-            Assert.assertTrue(db.writes().strings().setString(appendKey, bytes("v"), SetMode.NORMAL, null));
-            Assert.assertEquals(0, db.writes().strings().setBit(bitKey, 0, 1));
+            Assert.assertTrue(db.writes().strings().setString(appendKey, bytes("v"), SetMode.NORMAL, null).value());
+            Assert.assertEquals(0, (int) db.writes().strings().setBit(bitKey, 0, 1).value());
 
-            try (YierdisChangeTracking.Scope ignored = YierdisChangeTracking.beginScope()) {
-                Assert.assertEquals(1, db.writes().strings().append(appendKey, slice(bytes(""))));
-                Assert.assertFalse(YierdisChangeTracking.changedValue());
-                Assert.assertFalse(YierdisChangeTracking.changedAny());
-            }
+            var append = db.writes().strings().append(appendKey, slice(bytes("")));
+            Assert.assertEquals(1L, (long) append.value());
+            Assert.assertFalse(append.mutationOutcome().valueChanged());
+            Assert.assertFalse(append.changedAny());
 
-            try (YierdisChangeTracking.Scope ignored = YierdisChangeTracking.beginScope()) {
-                Assert.assertEquals(1, db.writes().strings().setBit(bitKey, 0, 1));
-                Assert.assertFalse(YierdisChangeTracking.changedValue());
-                Assert.assertFalse(YierdisChangeTracking.changedAny());
-            }
+            var setBit = db.writes().strings().setBit(bitKey, 0, 1);
+            Assert.assertEquals(1, (int) setBit.value());
+            Assert.assertFalse(setBit.mutationOutcome().valueChanged());
+            Assert.assertFalse(setBit.changedAny());
         } finally {
             db.shutdown();
         }

@@ -39,9 +39,6 @@ modules:
       - yier.bubu.redis.offheap.api
       - yier.bubu.redis.protocol
       - yier.bubu.redis.server
-    allowed_spi_imports:
-      yier.bubu.redis.runtime.api.YierdisChangeTracking:
-        - yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command
   yierdis-command-defaults:
     allowed_dependencies:
       - yierdis-command-api
@@ -92,9 +89,6 @@ modules:
       - yier.bubu.redis.server
       - yier.bubu.redis.executor
       - io.netty
-    allowed_spi_imports:
-      yier.bubu.redis.runtime.api.YierdisChangeTracking:
-        - yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db
     source_ownership:
       - concrete_in_memory_storage_only
       - no_command_protocol_or_server_imports

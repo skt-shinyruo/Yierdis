@@ -1,6 +1,6 @@
 package yier.bubu.redis.command;
 
-import yier.bubu.redis.contract.DbIndexProvider;
+import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.ops.DbEngine;
 
 import java.util.Objects;
@@ -48,7 +48,7 @@ public final class DefaultCommandModules {
         DbEngine fixed = Objects.requireNonNull(engine, "engine");
         return new YierdisDbRouter() {
             @Override
-            public DbEngine dbFor(DbIndexProvider dbIndexProvider) {
+            public DbEngine dbFor(ServerSession session) {
                 return fixed;
             }
 

@@ -3,11 +3,12 @@ package yier.bubu.redis.db;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.ops.ListReadOps;
 import yier.bubu.redis.ops.ListWriteOps;
+import yier.bubu.redis.ops.MutationOutcome;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.WrongTypeException;
+import yier.bubu.redis.ops.WriteResult;
 import yier.bubu.redis.ops.result.BulkStringSequence;
 import yier.bubu.redis.ops.result.BulkStringSink;
-import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 
 import java.util.Collections;
 import java.util.List;
@@ -29,14 +30,14 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
     }
 
     @Override
-    public long lpush(byte[] keyBytes, List<byte[]> values) {
+    public WriteResult<Long> lpush(byte[] keyBytes, List<byte[]> values) {
         internals.checkThread();
         long upperBound = estimateListWriteUpperBoundForMutation(keyBytes, values);
         return pushInternal(keyBytes, values, true, upperBound);
     }
 
     @Override
-    public long rpush(byte[] keyBytes, List<byte[]> values) {
+    public WriteResult<Long> rpush(byte[] keyBytes, List<byte[]> values) {
         internals.checkThread();
         long upperBound = estimateListWriteUpperBoundForMutation(keyBytes, values);
         return pushInternal(keyBytes, values, false, upperBound);
@@ -52,27 +53,27 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
     }
 
     @Override
-    public List<byte[]> lpop(byte[] keyBytes, int count) {
+    public WriteResult<List<byte[]>> lpop(byte[] keyBytes, int count) {
         internals.checkThread();
         return popInternal(keyBytes, count, true, 0L);
     }
 
     @Override
-    public List<byte[]> rpop(byte[] keyBytes, int count) {
+    public WriteResult<List<byte[]>> rpop(byte[] keyBytes, int count) {
         internals.checkThread();
         return popInternal(keyBytes, count, false, 0L);
     }
 
-    private int pushInternal(byte[] keyBytes, List<byte[]> values, boolean left, long upperBound) {
+    private WriteResult<Long> pushInternal(byte[] keyBytes, List<byte[]> values, boolean left, long upperBound) {
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 var memoryRuntime = keyLifecycle.memoryRuntime();
                 final int[] len = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
@@ -117,8 +118,10 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
-                YierdisChangeTracking.markValueChanged();
-                return YierdisDbMutationExecutor.MutationResult.of(len[0], deltaBytes[0]);
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of((long) len[0], MutationOutcome.VALUE_CHANGED),
+                        deltaBytes[0]
+                );
             }
         });
     }
@@ -145,22 +148,22 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
         ((ListValue) object.payload).rangeInto(start, stop, out);
     }
 
-    private List<byte[]> popInternal(byte[] keyBytes, int count, boolean left, long upperBound) {
+    private WriteResult<List<byte[]>> popInternal(byte[] keyBytes, int count, boolean left, long upperBound) {
         if (count == 0) {
-            return Collections.emptyList();
+            return WriteResult.unchanged(Collections.emptyList());
         }
         if (count < 0) {
             throw new IllegalArgumentException("count must be >= 0");
         }
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<List<byte[]>>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<List<byte[]>> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<List<byte[]>>> apply() {
                 final List<byte[]>[] popped = new List[]{null};
                 final long[] deltaBytes = new long[]{0};
                 keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
@@ -188,10 +191,10 @@ final class YierdisListOps implements ListReadOps, ListWriteOps {
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
                 });
-                if (popped[0] != null && !popped[0].isEmpty()) {
-                    YierdisChangeTracking.markValueChanged();
-                }
-                return YierdisDbMutationExecutor.MutationResult.of(popped[0], deltaBytes[0]);
+                WriteResult<List<byte[]>> result = popped[0] != null && !popped[0].isEmpty()
+                        ? WriteResult.of(popped[0], MutationOutcome.VALUE_CHANGED)
+                        : WriteResult.unchanged(popped[0]);
+                return YierdisDbMutationExecutor.MutationResult.of(result, deltaBytes[0]);
             }
         });
     }

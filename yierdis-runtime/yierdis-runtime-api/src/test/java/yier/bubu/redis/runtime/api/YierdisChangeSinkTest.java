@@ -46,35 +46,6 @@ public class YierdisChangeSinkTest {
     }
 
     @Test
-    public void changeTrackingMarksOnlyActiveScopeAndIsolatesNestedScopes() {
-        YierdisChangeTracking.markValueChanged();
-        Assert.assertFalse(YierdisChangeTracking.changedAny());
-
-        try (YierdisChangeTracking.Scope ignored = YierdisChangeTracking.beginScope()) {
-            Assert.assertFalse(YierdisChangeTracking.changedAny());
-
-            YierdisChangeTracking.markValueChanged();
-            Assert.assertTrue(YierdisChangeTracking.changedValue());
-            Assert.assertTrue(YierdisChangeTracking.changedAny());
-            Assert.assertFalse(YierdisChangeTracking.changedTtl());
-
-            try (YierdisChangeTracking.Scope nested = YierdisChangeTracking.beginScope()) {
-                Assert.assertFalse(YierdisChangeTracking.changedAny());
-                YierdisChangeTracking.markTtlChanged();
-                Assert.assertFalse(YierdisChangeTracking.changedValue());
-                Assert.assertTrue(YierdisChangeTracking.changedTtl());
-                Assert.assertTrue(YierdisChangeTracking.changedAny());
-            }
-
-            Assert.assertTrue(YierdisChangeTracking.changedValue());
-            Assert.assertFalse(YierdisChangeTracking.changedTtl());
-            Assert.assertTrue(YierdisChangeTracking.changedAny());
-        }
-
-        Assert.assertFalse(YierdisChangeTracking.changedAny());
-    }
-
-    @Test
     public void instanceConfigBuilderNormalizesDefaultsAndValidation() {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(-8)

@@ -35,8 +35,9 @@ final class HashCommands implements CommandModule {
         ExecutionRequest request = args.request();
         support.sliceResetFromRequest(request, 2, pairsLen);
         try {
-            long added = support.dbWrites(ctx).hashes().hset(request.readOnlyByteArray(1), support.slice());
-            out.integer(added);
+            var result = support.dbWrites(ctx).hashes().hset(request.readOnlyByteArray(1), support.slice());
+            support.recordMutation(ctx, result.mutationOutcome());
+            out.integer(result.value());
         } finally {
             support.clearScratch(pairsLen);
         }
@@ -86,7 +87,9 @@ final class HashCommands implements CommandModule {
         int fieldsLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, fieldsLen);
         try {
-            out.integer(support.dbWrites(ctx).hashes().hdel(request.readOnlyByteArray(1), support.slice()));
+            var result = support.dbWrites(ctx).hashes().hdel(request.readOnlyByteArray(1), support.slice());
+            support.recordMutation(ctx, result.mutationOutcome());
+            out.integer(result.value());
         } finally {
             support.clearScratch(fieldsLen);
         }

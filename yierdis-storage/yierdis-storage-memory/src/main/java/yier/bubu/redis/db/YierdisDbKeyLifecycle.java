@@ -55,6 +55,32 @@ final class YierdisDbKeyLifecycle {
         return store.get(keyHandle);
     }
 
+    int keyCount() {
+        return store.size();
+    }
+
+    int expireCount() {
+        return expires.size();
+    }
+
+    KeyHandle randomKeyHandle() {
+        return store.randomKeyHandle();
+    }
+
+    KeyHandle randomExpireKeyHandle() {
+        return expires.randomKeyHandle();
+    }
+
+    void forEachKeyHandle(java.util.function.BiConsumer<KeyHandle, YierdisObject> consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        store.forEachKeyHandle(consumer);
+    }
+
+    Long expireAtMillis(byte[] keyBytes) {
+        KeyHandle handle = keyHandle(keyBytes);
+        return handle == null ? null : expires.get(handle);
+    }
+
     YierdisObject getLiveObject(byte[] keyBytes) {
         KeyHandle handle = keyHandle(keyBytes);
         if (handle == null) {
@@ -111,6 +137,10 @@ final class YierdisDbKeyLifecycle {
 
     Long expireAtMillis(KeyHandle keyHandle) {
         return expires.get(keyHandle);
+    }
+
+    boolean removeObject(KeyHandle keyHandle, YierdisObject object) {
+        return store.remove(keyHandle, object);
     }
 
     boolean removeIfExpired(byte[] keyBytes, YierdisObject object, long nowMillis) {

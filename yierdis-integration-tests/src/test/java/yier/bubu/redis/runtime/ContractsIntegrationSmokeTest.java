@@ -134,6 +134,11 @@ public class ContractsIntegrationSmokeTest {
         public TransactionState transaction() {
             return tx;
         }
+
+        @Override
+        public yier.bubu.redis.contract.ConnectionStatsView connectionStats() {
+            return null;
+        }
     }
 
     private static final class NoopTransactionState implements TransactionState {
