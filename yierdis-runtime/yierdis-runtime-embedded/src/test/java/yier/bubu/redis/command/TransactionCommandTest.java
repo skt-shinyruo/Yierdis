@@ -271,6 +271,11 @@ public class TransactionCommandTest {
             return tx;
         }
 
+        @Override
+        public yier.bubu.redis.contract.ConnectionStatsView connectionStats() {
+            return null;
+        }
+
         private TestTransactionState transactionState() {
             return tx;
         }

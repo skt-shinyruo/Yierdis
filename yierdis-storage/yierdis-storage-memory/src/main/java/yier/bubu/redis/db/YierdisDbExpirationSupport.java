@@ -27,7 +27,7 @@ final class YierdisDbExpirationSupport {
         int loops = 0;
 
         for (; ; ) {
-            int total = db.expires.size();
+            int total = db.keyLifecycle().expireCount();
             if (total == 0) {
                 return;
             }
@@ -55,18 +55,18 @@ final class YierdisDbExpirationSupport {
     private int cleanupSamples(int samples, long nowMillis) {
         int expired = 0;
         for (int i = 0; i < samples; i++) {
-            KeyHandle keyHandle = db.expires.randomKeyHandle();
+            KeyHandle keyHandle = db.keyLifecycle().randomExpireKeyHandle();
             if (keyHandle == null) {
                 break;
             }
 
-            Long expireAtMillis = db.expires.get(keyHandle);
+            Long expireAtMillis = db.keyLifecycle().expireAtMillis(keyHandle);
             if (expireAtMillis == null) {
                 db.removeExpire(keyHandle);
                 continue;
             }
 
-            YierdisObject e = db.store.get(keyHandle);
+            YierdisObject e = db.keyLifecycle().getStoredObject(keyHandle);
             if (e == null) {
                 db.removeExpire(keyHandle);
                 continue;
@@ -82,7 +82,7 @@ final class YierdisDbExpirationSupport {
 
     private void removeExpiredValue(KeyHandle keyHandle, YierdisObject e) {
         db.removeExpire(keyHandle);
-        if (db.store.remove(keyHandle, e)) {
+        if (db.keyLifecycle().removeObject(keyHandle, e)) {
             e.releasePayloadIfAny();
             db.adjustUsedBytes(-e.estimatedBytes);
         }

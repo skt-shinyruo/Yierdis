@@ -1,6 +1,7 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.ops.DbLifecycleOps;
+import yier.bubu.redis.ops.MutationOutcome;
 
 import java.util.Objects;
 
@@ -12,8 +13,7 @@ final class YierdisDbLifecycleOps implements DbLifecycleOps {
     }
 
     @Override
-    public void flushDb() {
-        db.flushDb();
+    public MutationOutcome flushDb() {
+        return db.flushDb();
     }
 }
-

@@ -203,6 +203,11 @@ public class YierdisChangeEmissionTest {
         public TransactionState transaction() {
             return tx;
         }
+
+        @Override
+        public yier.bubu.redis.contract.ConnectionStatsView connectionStats() {
+            return null;
+        }
     }
 
     private static final class TestTransactionState implements TransactionState {

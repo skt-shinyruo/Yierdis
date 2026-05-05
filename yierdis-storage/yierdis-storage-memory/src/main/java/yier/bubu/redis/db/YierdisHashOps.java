@@ -3,11 +3,12 @@ package yier.bubu.redis.db;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.ops.HashReadOps;
 import yier.bubu.redis.ops.HashWriteOps;
+import yier.bubu.redis.ops.MutationOutcome;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.WrongTypeException;
+import yier.bubu.redis.ops.WriteResult;
 import yier.bubu.redis.ops.result.BulkStringMapPairs;
 import yier.bubu.redis.ops.result.BulkStringSink;
-import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 
 import java.util.List;
 import java.util.Objects;
@@ -28,21 +29,21 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
     }
 
     @Override
-    public long hset(byte[] keyBytes, List<byte[]> fieldValuePairs) {
+    public WriteResult<Long> hset(byte[] keyBytes, List<byte[]> fieldValuePairs) {
         internals.checkThread();
         if (fieldValuePairs.size() % 2 != 0) {
             throw new IllegalArgumentException("fieldValuePairs must contain field/value pairs");
         }
         long now = System.currentTimeMillis();
         long upperBound = estimateHashWriteUpperBoundForMutation(keyBytes, fieldValuePairs);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<Integer>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 var memoryRuntime = keyLifecycle.memoryRuntime();
                 final int[] added = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
@@ -75,8 +76,10 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
-                YierdisChangeTracking.markValueChanged();
-                return YierdisDbMutationExecutor.MutationResult.of(added[0], deltaBytes[0]);
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of((long) added[0], MutationOutcome.VALUE_CHANGED),
+                        deltaBytes[0]
+                );
             }
         });
     }
@@ -117,17 +120,17 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
     }
 
     @Override
-    public long hdel(byte[] keyBytes, List<byte[]> fields) {
+    public WriteResult<Long> hdel(byte[] keyBytes, List<byte[]> fields) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<Integer>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return 0;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
                 keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
@@ -155,10 +158,11 @@ final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
                 });
-                if (removed[0] > 0) {
-                    YierdisChangeTracking.markValueChanged();
-                }
-                return YierdisDbMutationExecutor.MutationResult.of(removed[0], deltaBytes[0]);
+                MutationOutcome outcome = removed[0] > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of((long) removed[0], outcome),
+                        deltaBytes[0]
+                );
             }
         });
     }

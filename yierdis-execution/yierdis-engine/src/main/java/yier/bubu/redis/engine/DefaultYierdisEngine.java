@@ -5,6 +5,7 @@ import yier.bubu.redis.command.YierdisFastCommandProcessor;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.Session;
 
 import java.util.Objects;
@@ -30,7 +31,10 @@ public final class DefaultYierdisEngine implements YierdisEngine {
 
     @Override
     public void execute(Session session, ExecutionRequest request, ReplyWriter out) {
-        commandProcessor.execute(request, new CommandContext(session, out));
+        if (!(session instanceof ServerSession serverSession)) {
+            throw new IllegalArgumentException("YierdisEngine requires ServerSession");
+        }
+        commandProcessor.execute(request, new CommandContext(serverSession, out));
     }
 
     @Override

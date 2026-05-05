@@ -4,7 +4,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 
@@ -91,7 +90,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
         );
 
         TestReplyWriter out = new TestReplyWriter();
-        processor.execute(ByteArrayExecutionRequest.fromUtf8("STRICT", List.of()), new CommandContext(null, out));
+        processor.execute(ByteArrayExecutionRequest.fromUtf8("STRICT", List.of()), TestCommandContexts.context(out));
 
         Assert.assertFalse(handlerCalled[0]);
         Assert.assertEquals("ERR wrong number of arguments for 'strict' command", out.error());
@@ -99,7 +98,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
 
     private static String executeSimpleString(YierdisFastCommandProcessor processor, String... argv) {
         TestReplyWriter writer = new TestReplyWriter();
-        processor.execute(new ArrayExecutionRequest(argv), new CommandContext(null, writer));
+        processor.execute(new ArrayExecutionRequest(argv), TestCommandContexts.context(writer));
         if (writer.error() != null) {
             Assert.fail("expected simple string reply, got error: " + writer.error());
         }
@@ -109,14 +108,14 @@ public class YierdisFastCommandProcessorRegistrationTest {
 
     private static String executeError(YierdisFastCommandProcessor processor, String... argv) {
         TestReplyWriter writer = new TestReplyWriter();
-        processor.execute(new ArrayExecutionRequest(argv), new CommandContext(null, writer));
+        processor.execute(new ArrayExecutionRequest(argv), TestCommandContexts.context(writer));
         Assert.assertNotNull("expected error reply", writer.error());
         return writer.error();
     }
 
     private static String executeBulkString(YierdisFastCommandProcessor processor, String command, String arg) {
         TestReplyWriter out = new TestReplyWriter();
-        processor.execute(ByteArrayExecutionRequest.fromUtf8(command, List.of(arg)), new CommandContext(null, out));
+        processor.execute(ByteArrayExecutionRequest.fromUtf8(command, List.of(arg)), TestCommandContexts.context(out));
         Assert.assertNull(out.error());
         return out.bulkString();
     }

@@ -33,7 +33,7 @@ final class YierdisDbMaxmemorySupport {
         }
 
         int attempts = 0;
-        int maxAttempts = Math.max(64, db.store.size() * 2);
+        int maxAttempts = Math.max(64, db.keyLifecycle().keyCount() * 2);
         long nowMillis = System.currentTimeMillis();
         long deadline = System.nanoTime() + evictionTimeLimitNanos;
         while (db.usedBytesForMaxmemory() > limitBytes && attempts++ < maxAttempts) {
@@ -44,7 +44,7 @@ final class YierdisDbMaxmemorySupport {
             if (victim == null) {
                 break;
             }
-            YierdisObject e = db.store.get(victim);
+            YierdisObject e = db.keyLifecycle().getStoredObject(victim);
             if (e == null) {
                 continue;
             }
@@ -52,7 +52,7 @@ final class YierdisDbMaxmemorySupport {
                 continue;
             }
             db.removeExpire(victim);
-            if (db.store.remove(victim, e)) {
+            if (db.keyLifecycle().removeObject(victim, e)) {
                 e.releasePayloadIfAny();
                 db.adjustUsedBytes(-e.estimatedBytes);
             }
@@ -63,15 +63,15 @@ final class YierdisDbMaxmemorySupport {
         if (policy == null || policy == MaxmemoryPolicy.NOEVICTION) {
             return null;
         }
-        if (db.store.size() == 0) {
+        if (db.keyLifecycle().keyCount() == 0) {
             return null;
         }
 
-        KeyHandle keyHandle = db.store.randomKeyHandle();
+        KeyHandle keyHandle = db.keyLifecycle().randomKeyHandle();
         if (keyHandle == null) {
             return null;
         }
-        YierdisObject e = db.store.get(keyHandle);
+        YierdisObject e = db.keyLifecycle().getStoredObject(keyHandle);
         if (e == null) {
             return null;
         }
@@ -87,13 +87,13 @@ final class YierdisDbMaxmemorySupport {
         if (policy != MaxmemoryPolicy.ALLKEYS_LRU) {
             return null;
         }
-        if (db.store.size() == 0) {
+        if (db.keyLifecycle().keyCount() == 0) {
             return null;
         }
 
         final KeyHandle[] bestKeyHandleRef = new KeyHandle[1];
         final long[] bestLruRef = new long[]{Long.MAX_VALUE};
-        db.store.forEachKeyHandle((k, e) -> {
+        db.keyLifecycle().forEachKeyHandle((k, e) -> {
             if (k == null || e == null) {
                 return;
             }
@@ -122,7 +122,7 @@ final class YierdisDbMaxmemorySupport {
         if (!(candidate.keyHandle() instanceof KeyHandle key)) {
             return false;
         }
-        YierdisObject e = db.store.get(key);
+        YierdisObject e = db.keyLifecycle().getStoredObject(key);
         if (e == null) {
             return false;
         }
@@ -130,7 +130,7 @@ final class YierdisDbMaxmemorySupport {
             return true;
         }
         db.removeExpire(key);
-        if (db.store.remove(key, e)) {
+        if (db.keyLifecycle().removeObject(key, e)) {
             e.releasePayloadIfAny();
             db.adjustUsedBytes(-e.estimatedBytes);
             return true;
@@ -139,19 +139,19 @@ final class YierdisDbMaxmemorySupport {
     }
 
     private KeyHandle pickEvictionKey(long nowMillis) {
-        if (db.store.size() == 0) {
+        if (db.keyLifecycle().keyCount() == 0) {
             return null;
         }
 
         if (maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_RANDOM) {
-            return db.store.randomKeyHandle();
+            return db.keyLifecycle().randomKeyHandle();
         }
 
         if (maxmemoryPolicy != MaxmemoryPolicy.ALLKEYS_LRU) {
             return null;
         }
 
-        int total = db.store.size();
+        int total = db.keyLifecycle().keyCount();
         KeyHandle bestKey = null;
         long bestLru = Long.MAX_VALUE;
         int samples = Math.max(1, maxmemorySamples);
@@ -159,7 +159,7 @@ final class YierdisDbMaxmemorySupport {
         if (samples >= total) {
             final KeyHandle[] bestKeyRef = new KeyHandle[1];
             final long[] bestLruRef = new long[]{Long.MAX_VALUE};
-            db.store.forEachKeyHandle((k, e) -> {
+            db.keyLifecycle().forEachKeyHandle((k, e) -> {
                 if (db.isKeyExpired(k, nowMillis)) {
                     return;
                 }
@@ -173,11 +173,11 @@ final class YierdisDbMaxmemorySupport {
         }
 
         for (int i = 0; i < samples; i++) {
-            KeyHandle key = db.store.randomKeyHandle();
+            KeyHandle key = db.keyLifecycle().randomKeyHandle();
             if (key == null) {
                 break;
             }
-            YierdisObject e = db.store.get(key);
+            YierdisObject e = db.keyLifecycle().getStoredObject(key);
             if (e == null) {
                 continue;
             }

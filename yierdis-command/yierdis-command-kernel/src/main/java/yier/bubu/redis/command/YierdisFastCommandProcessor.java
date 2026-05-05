@@ -1,17 +1,14 @@
 package yier.bubu.redis.command;
 
 import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.contract.DbIndexProvider;
 import yier.bubu.redis.contract.ExecutionRecord;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
-import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
 import yier.bubu.redis.ops.WrongTypeException;
 import yier.bubu.redis.ops.YierdisCommandException;
 import yier.bubu.redis.runtime.api.YierdisChangeEvent;
 import yier.bubu.redis.runtime.api.YierdisChangeSink;
-import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -73,12 +70,8 @@ public final class YierdisFastCommandProcessor {
             return;
         }
 
-        TransactionState tx = null;
-        ServerSession s = ctx.serverSessionOrNull();
-        if (s != null) {
-            tx = s.transaction();
-        }
-        if (tx != null && tx.active()) {
+        TransactionState tx = ctx.session().transaction();
+        if (tx.active()) {
             boolean isMulti = asciiEqualsIgnoreCase(request, 0, "MULTI");
             boolean isExec = asciiEqualsIgnoreCase(request, 0, "EXEC");
             boolean isDiscard = asciiEqualsIgnoreCase(request, 0, "DISCARD");
@@ -115,24 +108,14 @@ public final class YierdisFastCommandProcessor {
                 return;
             }
             boolean sinkEnabled = changeSink != YierdisChangeSink.NOOP;
-            boolean changed = false;
-            if (sinkEnabled) {
-                try (YierdisChangeTracking.Scope ignored = YierdisChangeTracking.beginScope()) {
-                    executeSpec(spec, request, ctx);
-                    changed = YierdisChangeTracking.changedAny();
-                }
-            } else {
-                executeSpec(spec, request, ctx);
-            }
+            ctx.clearMutationOutcome();
+            executeSpec(spec, request, ctx);
+            boolean changed = ctx.changedAny();
 
             // 变更事件：仅在命令执行成功后触发；仅当本次命令产生“真实变更”（Keyspace/Value/TTL 元数据）时 emit。
             // 该判定由 DB/ops 层在真实写入点打点，命令层仅按事实 gate emit，避免“写命令名单”漂移。
             if (sinkEnabled && changed) {
-                int dbIndex = 0;
-                DbIndexProvider provider = ctx.dbIndexProviderOrNull();
-                if (provider != null) {
-                    dbIndex = Math.max(0, provider.dbIndex());
-                }
+                int dbIndex = Math.max(0, ctx.session().dbIndex());
                 try {
                     changeSink.onChange(new YierdisChangeEvent(new ExecutionRecord(dbIndex, request)));
                 } catch (Throwable ignored) {

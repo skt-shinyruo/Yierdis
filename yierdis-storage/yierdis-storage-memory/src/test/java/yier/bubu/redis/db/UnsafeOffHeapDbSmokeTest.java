@@ -16,10 +16,10 @@ public class UnsafeOffHeapDbSmokeTest {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
             try {
                 db.bindToCurrentThread();
-                Assert.assertTrue(db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null));
+                Assert.assertTrue(db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null).value());
                 Assert.assertArrayEquals(b("v"), db.reads().strings().getStringBytes(b("s")));
 
-                Assert.assertEquals(3, db.writes().lists().rpush(b("l"), List.of(b("a"), b("b"), b("c"))));
+                Assert.assertEquals(3L, (long) db.writes().lists().rpush(b("l"), List.of(b("a"), b("b"), b("c"))).value());
                 var range = db.reads().lists().lrange(b("l"), 0, -1);
                 Assert.assertEquals(3, range.count());
                 RecordingBulkSequenceOutput rangeOut = new RecordingBulkSequenceOutput();
@@ -29,19 +29,19 @@ public class UnsafeOffHeapDbSmokeTest {
                 Assert.assertArrayEquals(b("b"), rangeOut.values.get(1));
                 Assert.assertArrayEquals(b("c"), rangeOut.values.get(2));
 
-                Assert.assertEquals(2, db.writes().hashes().hset(b("h"), List.of(b("f1"), b("v1"), b("f2"), b("v2"))));
+                Assert.assertEquals(2L, (long) db.writes().hashes().hset(b("h"), List.of(b("f1"), b("v1"), b("f2"), b("v2"))).value());
                 Assert.assertArrayEquals(b("v1"), db.reads().hashes().hget(b("h"), b("f1")));
                 Assert.assertEquals(2, db.reads().hashes().hgetall(b("h")).pairCount());
 
-                Assert.assertEquals(3, db.writes().sets().sadd(b("set"), List.of(b("x"), b("y"), b("z"))));
+                Assert.assertEquals(3L, (long) db.writes().sets().sadd(b("set"), List.of(b("x"), b("y"), b("z"))).value());
                 Assert.assertTrue(db.reads().sets().sismember(b("set"), b("y")));
                 Assert.assertEquals(3, db.reads().sets().scard(b("set")));
 
-                Assert.assertEquals(3, db.writes().zsets().zadd(b("z"), List.of(
+                Assert.assertEquals(3L, (long) db.writes().zsets().zadd(b("z"), List.of(
                         b("1"), b("a"),
                         b("1"), b("b"),
                         b("0"), b("c")
-                )));
+                )).value());
                 var zrange = db.reads().zsets().zrange(b("z"), 0, -1, false);
                 Assert.assertEquals(3, zrange.count());
                 RecordingBulkSequenceOutput zrangeOut = new RecordingBulkSequenceOutput();

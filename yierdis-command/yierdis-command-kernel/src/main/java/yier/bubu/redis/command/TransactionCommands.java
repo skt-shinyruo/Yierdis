@@ -3,7 +3,6 @@ package yier.bubu.redis.command;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
-import yier.bubu.redis.contract.ServerSession;
 import yier.bubu.redis.contract.TransactionState;
 
 import java.util.List;
@@ -13,7 +12,7 @@ import java.util.Objects;
  * Redis 事务命令（最小实现）：MULTI/EXEC/DISCARD。
  * <p>
  * 设计约束：
- * - 连接级状态通过 {@link ServerSession} 暴露，避免 core 依赖 server/Netty
+ * - 连接级状态通过 ServerSession 暴露，避免 core 依赖 server/Netty
  * - MULTI 态下，普通命令由 {@link YierdisFastCommandProcessor} 负责入队并返回 QUEUED
  */
 final class TransactionCommands implements CommandModule {
@@ -37,11 +36,7 @@ final class TransactionCommands implements CommandModule {
             wrongArity(out, "multi");
             return;
         }
-        TransactionState tx = txOrNull(ctx);
-        if (tx == null) {
-            out.error("ERR MULTI is only supported on server connections");
-            return;
-        }
+        TransactionState tx = tx(ctx);
         if (tx.active()) {
             out.error("ERR MULTI calls can not be nested");
             return;
@@ -56,8 +51,8 @@ final class TransactionCommands implements CommandModule {
             wrongArity(out, "discard");
             return;
         }
-        TransactionState tx = txOrNull(ctx);
-        if (tx == null || !tx.active()) {
+        TransactionState tx = tx(ctx);
+        if (!tx.active()) {
             out.error("ERR DISCARD without MULTI");
             return;
         }
@@ -71,8 +66,8 @@ final class TransactionCommands implements CommandModule {
             wrongArity(out, "exec");
             return;
         }
-        TransactionState tx = txOrNull(ctx);
-        if (tx == null || !tx.active()) {
+        TransactionState tx = tx(ctx);
+        if (!tx.active()) {
             out.error("ERR EXEC without MULTI");
             return;
         }
@@ -91,12 +86,8 @@ final class TransactionCommands implements CommandModule {
         }
     }
 
-    private TransactionState txOrNull(CommandContext ctx) {
-        ServerSession s = ctx.serverSessionOrNull();
-        if (s != null) {
-            return s.transaction();
-        }
-        return null;
+    private TransactionState tx(CommandContext ctx) {
+        return ctx.session().transaction();
     }
 
     private static void wrongArity(ReplyWriter out, String cmdLower) {

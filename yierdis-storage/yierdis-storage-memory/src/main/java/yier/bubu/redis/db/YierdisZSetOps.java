@@ -3,11 +3,12 @@ package yier.bubu.redis.db;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.WrongTypeException;
+import yier.bubu.redis.ops.MutationOutcome;
 import yier.bubu.redis.ops.ZSetReadOps;
 import yier.bubu.redis.ops.ZSetWriteOps;
+import yier.bubu.redis.ops.WriteResult;
 import yier.bubu.redis.ops.result.BulkStringSequence;
 import yier.bubu.redis.ops.result.BulkStringSink;
-import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 
 import java.util.List;
 import java.util.Objects;
@@ -26,21 +27,21 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     }
 
     @Override
-    public long zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
+    public WriteResult<Long> zadd(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
         internals.checkThread();
         if (scoreMemberPairs.size() % 2 != 0) {
             throw new IllegalArgumentException("scoreMemberPairs must contain score/member pairs");
         }
         long now = System.currentTimeMillis();
         long upperBound = estimateZSetWriteUpperBoundForMutation(keyBytes, scoreMemberPairs);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<Integer>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 var memoryRuntime = keyLifecycle.memoryRuntime();
                 final int[] added = new int[]{0};
                 final boolean[] changedAny = new boolean[]{false};
@@ -79,10 +80,11 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
-                if (changedAny[0]) {
-                    YierdisChangeTracking.markValueChanged();
-                }
-                return YierdisDbMutationExecutor.MutationResult.of(added[0], deltaBytes[0]);
+                MutationOutcome outcome = changedAny[0] ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of((long) added[0], outcome),
+                        deltaBytes[0]
+                );
             }
         });
     }
@@ -142,17 +144,17 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     }
 
     @Override
-    public long zrem(byte[] keyBytes, List<byte[]> members) {
+    public WriteResult<Long> zrem(byte[] keyBytes, List<byte[]> members) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<Integer>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return 0;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
                 keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
@@ -180,26 +182,27 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
                 });
-                if (removed[0] > 0) {
-                    YierdisChangeTracking.markValueChanged();
-                }
-                return YierdisDbMutationExecutor.MutationResult.of(removed[0], deltaBytes[0]);
+                MutationOutcome outcome = removed[0] > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of((long) removed[0], outcome),
+                        deltaBytes[0]
+                );
             }
         });
     }
 
     @Override
-    public long zremrangeByRank(byte[] keyBytes, long start, long stop) {
+    public WriteResult<Long> zremrangeByRank(byte[] keyBytes, long start, long stop) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<Integer>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return 0;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
                 keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
@@ -227,26 +230,27 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
                 });
-                if (removed[0] > 0) {
-                    YierdisChangeTracking.markValueChanged();
-                }
-                return YierdisDbMutationExecutor.MutationResult.of(removed[0], deltaBytes[0]);
+                MutationOutcome outcome = removed[0] > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of((long) removed[0], outcome),
+                        deltaBytes[0]
+                );
             }
         });
     }
 
     @Override
-    public long zremrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive) {
+    public WriteResult<Long> zremrangeByScore(byte[] keyBytes, double min, boolean minExclusive, double max, boolean maxExclusive) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<Integer>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return 0;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
                 keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
@@ -274,10 +278,11 @@ final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
                 });
-                if (removed[0] > 0) {
-                    YierdisChangeTracking.markValueChanged();
-                }
-                return YierdisDbMutationExecutor.MutationResult.of(removed[0], deltaBytes[0]);
+                MutationOutcome outcome = removed[0] > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of((long) removed[0], outcome),
+                        deltaBytes[0]
+                );
             }
         });
     }

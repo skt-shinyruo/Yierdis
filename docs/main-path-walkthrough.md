@@ -425,7 +425,7 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 这让命令层可以保持 transport-agnostic：
 
-- 想读连接态，看 `ctx.serverSessionOrNull()`
+- 想读连接态，看 `ctx.session()`
 - 想写回包，看 `ctx.out()`
 
 而不需要知道 Netty 的 `ChannelHandlerContext`。

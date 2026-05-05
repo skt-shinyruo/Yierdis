@@ -27,12 +27,41 @@ public class DefaultYierdisEngineTest {
 
         CapturingReplyWriter out = new CapturingReplyWriter();
         engine.execute(
-                null,
+                new EngineSession(16, 1024),
                 ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()),
                 out
         );
 
         Assert.assertEquals("LOCAL_OK", out.simpleStringValue);
+        Assert.assertNull(out.errorValue);
+    }
+
+    @Test
+    public void executeRejectsNonServerSessionBeforeCommandModulesRun() {
+        YierdisEngine engine = new DefaultYierdisEngine(
+                () -> {
+                },
+                registration -> registration.register(
+                        "LOCAL",
+                        CommandDescriptor.of(1, 0, 0, 0),
+                        CommandParsers.exactRequest(1, "local"),
+                        (request, ctx) -> ctx.out().simpleString("LOCAL_OK")
+                )
+        );
+
+        CapturingReplyWriter out = new CapturingReplyWriter();
+        try {
+            engine.execute(
+                    null,
+                    ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()),
+                    out
+            );
+            Assert.fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            Assert.assertEquals("YierdisEngine requires ServerSession", e.getMessage());
+        }
+
+        Assert.assertNull(out.simpleStringValue);
         Assert.assertNull(out.errorValue);
     }
 

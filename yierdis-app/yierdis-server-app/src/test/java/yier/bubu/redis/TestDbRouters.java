@@ -15,11 +15,11 @@ final class TestDbRouters {
         DbEngine[] engines = instance.engines();
         return new YierdisDbRouter() {
             @Override
-            public DbEngine dbFor(yier.bubu.redis.contract.DbIndexProvider dbIndexProvider) {
+            public DbEngine dbFor(yier.bubu.redis.contract.ServerSession session) {
                 if (engines.length == 0) {
                     throw new IllegalStateException("no dbs");
                 }
-                int idx = dbIndexProvider == null ? 0 : dbIndexProvider.dbIndex();
+                int idx = session == null ? 0 : session.dbIndex();
                 if (idx < 0 || idx >= engines.length) {
                     idx = 0;
                 }

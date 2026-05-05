@@ -12,10 +12,9 @@
  *     <li>ReplySink - API. Audience: command/storage value streaming adapters and reply writer implementations.</li>
  *     <li>ReplyWriter - API. Audience: command handlers, engine, protocol adapters, server reply implementations, tests.</li>
  *     <li>ReplyWriterFactory - API. Audience: executor, server/protocol adapter composition, tests.</li>
- *     <li>Session - API. Audience: executor, engine, command handlers, server session implementations, tests.</li>
+ *     <li>Session - API. Audience: executor, engine, server session implementations, tests.</li>
  *     <li>ServerSession - API. Audience: engine/session implementations and command handlers needing server-scoped state.</li>
- *     <li>DbIndexProvider - API. Audience: engine routing, command routing, runtime/test routers.</li>
- *     <li>ConnectionStatsProvider - API. Audience: server session implementations and command/server observability.</li>
+ *     <li>DbIndexProvider - compatibility/deprecated. Audience: legacy embedders only; command routing uses ServerSession.</li>
  *     <li>ConnectionStatsView - API. Audience: server INFO/STATS views, executor/server observability, tests.</li>
  *     <li>TransactionState - API. Audience: command transaction handlers, engine sessions, server sessions, tests.</li>
  *     <li>CommandContext - API. Audience: engine and command handlers; executor/server must not construct it directly.</li>

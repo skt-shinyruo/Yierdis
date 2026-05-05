@@ -3,11 +3,12 @@ package yier.bubu.redis.db;
 import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.ops.SetReadOps;
 import yier.bubu.redis.ops.SetWriteOps;
+import yier.bubu.redis.ops.MutationOutcome;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.WrongTypeException;
+import yier.bubu.redis.ops.WriteResult;
 import yier.bubu.redis.ops.result.BulkStringSequence;
 import yier.bubu.redis.ops.result.BulkStringSink;
-import yier.bubu.redis.runtime.api.YierdisChangeTracking;
 
 import java.util.List;
 import java.util.Objects;
@@ -26,18 +27,18 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
     }
 
     @Override
-    public long sadd(byte[] keyBytes, List<byte[]> members) {
+    public WriteResult<Long> sadd(byte[] keyBytes, List<byte[]> members) {
         internals.checkThread();
         long now = System.currentTimeMillis();
         long upperBound = estimateSetWriteUpperBoundForMutation(keyBytes, members);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<Integer>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 var memoryRuntime = keyLifecycle.memoryRuntime();
                 final int[] added = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
@@ -70,26 +71,27 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
-                if (added[0] > 0) {
-                    YierdisChangeTracking.markValueChanged();
-                }
-                return YierdisDbMutationExecutor.MutationResult.of(added[0], deltaBytes[0]);
+                MutationOutcome outcome = added[0] > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of((long) added[0], outcome),
+                        deltaBytes[0]
+                );
             }
         });
     }
 
     @Override
-    public long srem(byte[] keyBytes, List<byte[]> members) {
+    public WriteResult<Long> srem(byte[] keyBytes, List<byte[]> members) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<Integer>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return 0;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
                 keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
@@ -117,10 +119,11 @@ final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
                     return old;
                 });
-                if (removed[0] > 0) {
-                    YierdisChangeTracking.markValueChanged();
-                }
-                return YierdisDbMutationExecutor.MutationResult.of(removed[0], deltaBytes[0]);
+                MutationOutcome outcome = removed[0] > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of((long) removed[0], outcome),
+                        deltaBytes[0]
+                );
             }
         });
     }

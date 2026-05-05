@@ -14,7 +14,7 @@ public class MemoryStatsAccountingConsistencyTest {
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(b("k"), b("v"), SetMode.NORMAL, null);
-            Assert.assertTrue(db.writes().ttl().pexpire(view(b("k")), 10_000));
+            Assert.assertTrue(db.writes().ttl().pexpire(view(b("k")), 10_000).value());
 
             long enforcement = db.usedBytesForMaxmemory();
             long stats = db.memory().memoryStats().usedBytesForMaxmemory();

@@ -156,7 +156,6 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 - `YierdisInstanceConfig`
 - `YierdisChangeEvent`
 - `YierdisChangeSink`
-- `YierdisChangeTracking`
 
 它的意义是：
 

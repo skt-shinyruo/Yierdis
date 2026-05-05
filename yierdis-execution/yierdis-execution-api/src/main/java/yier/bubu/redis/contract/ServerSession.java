@@ -3,10 +3,10 @@ package yier.bubu.redis.contract;
 /**
  * Server-side per-connection session state exposed to the command layer.
  * <p>
- * This is transport-agnostic and intentionally minimal: it models Redis-like connection state such as SELECTed DB,
- * AUTH state and MULTI transaction queue.
+ * This is transport-agnostic and models Redis-like connection state such as selected DB, client metadata, AUTH state,
+ * MULTI transaction queue, and read-only connection stats.
  */
-public interface ServerSession extends Session, DbIndexProvider {
+public interface ServerSession extends Session {
     int dbIndex();
 
     void setDbIndex(int dbIndex);
@@ -22,5 +22,6 @@ public interface ServerSession extends Session, DbIndexProvider {
     void setAuthenticated(boolean authenticated);
 
     TransactionState transaction();
-}
 
+    ConnectionStatsView connectionStats();
+}

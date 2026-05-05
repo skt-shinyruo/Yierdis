@@ -1,11 +1,12 @@
 package yier.bubu.redis.db;
 
 import yier.bubu.redis.db.key.KeyHandle;
+import yier.bubu.redis.ops.MutationOutcome;
 import yier.bubu.redis.ops.HllReadOps;
 import yier.bubu.redis.ops.HllWriteOps;
 import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.WrongTypeException;
-import yier.bubu.redis.runtime.api.YierdisChangeTracking;
+import yier.bubu.redis.ops.WriteResult;
 
 import java.util.List;
 import java.util.Objects;
@@ -23,18 +24,18 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
     }
 
     @Override
-    public int pfadd(byte[] keyBytes, List<byte[]> elements) {
+    public WriteResult<Integer> pfadd(byte[] keyBytes, List<byte[]> elements) {
         internals.checkThread();
         long now = System.currentTimeMillis();
         long upperBound = estimatePfaddUpperBound(keyBytes, elements);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Integer>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Integer> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Integer>> apply() {
                 final boolean[] changed = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
                 keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
@@ -64,10 +65,11 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     deltaBytes[0] += old.estimatedBytes;
                     return old;
                 });
-                if (changed[0]) {
-                    YierdisChangeTracking.markValueChanged();
-                }
-                return YierdisDbMutationExecutor.MutationResult.of(changed[0] ? 1 : 0, deltaBytes[0]);
+                MutationOutcome outcome = changed[0] ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of(changed[0] ? 1 : 0, outcome),
+                        deltaBytes[0]
+                );
             }
         });
     }
@@ -97,7 +99,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
     }
 
     @Override
-    public void pfmerge(byte[] destKeyBytes, List<byte[]> sourceKeys) {
+    public WriteResult<Void> pfmerge(byte[] destKeyBytes, List<byte[]> sourceKeys) {
         internals.checkThread();
         if (sourceKeys == null || sourceKeys.isEmpty()) {
             throw new IllegalArgumentException("sourceKeys must not be empty");
@@ -121,15 +123,16 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
         byte[] mergedDense = YierdisHyperLogLog.denseBytesFromRegisters(registers);
         long now = System.currentTimeMillis();
         long upperBound = estimatePfmergeUpperBound(destKeyBytes, mergedDense.length);
-        internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<Boolean>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Void>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<Boolean> apply() {
+            public YierdisDbMutationExecutor.MutationResult<WriteResult<Void>> apply() {
                 final long[] deltaBytes = new long[]{0};
+                final boolean[] changed = new boolean[]{false};
                 keyLifecycle.computeWithHandle(destKeyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
                     if (old != null && keyLifecycle.isKeyExpired(k, now)) {
@@ -145,6 +148,7 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                         keyLifecycle.touch(next);
                         refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
+                        changed[0] = true;
                         return next;
                     }
 
@@ -153,11 +157,15 @@ final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     deltaBytes[0] -= oldEstimate;
                     refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes;
+                    changed[0] = true;
                     return old;
                 });
                 keyLifecycle.removeExpire(destKeyBytes);
-                YierdisChangeTracking.markValueChanged();
-                return YierdisDbMutationExecutor.MutationResult.of(true, deltaBytes[0]);
+                MutationOutcome outcome = changed[0] ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                return YierdisDbMutationExecutor.MutationResult.of(
+                        WriteResult.of(null, outcome),
+                        deltaBytes[0]
+                );
             }
         });
     }

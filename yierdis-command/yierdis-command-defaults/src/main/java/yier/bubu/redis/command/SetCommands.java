@@ -33,8 +33,9 @@ final class SetCommands implements CommandModule {
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
-            long added = support.dbWrites(ctx).sets().sadd(request.readOnlyByteArray(1), support.slice());
-            out.integer(added);
+            var result = support.dbWrites(ctx).sets().sadd(request.readOnlyByteArray(1), support.slice());
+            support.recordMutation(ctx, result.mutationOutcome());
+            out.integer(result.value());
         } finally {
             support.clearScratch(membersLen);
         }
@@ -49,7 +50,9 @@ final class SetCommands implements CommandModule {
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
-            out.integer(support.dbWrites(ctx).sets().srem(request.readOnlyByteArray(1), support.slice()));
+            var result = support.dbWrites(ctx).sets().srem(request.readOnlyByteArray(1), support.slice());
+            support.recordMutation(ctx, result.mutationOutcome());
+            out.integer(result.value());
         } finally {
             support.clearScratch(membersLen);
         }

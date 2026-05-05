@@ -38,6 +38,7 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
 
     @Override
     public int size() {
+        closeRetiredTables();
         Table t0 = table0;
         if (t0 == null) {
             return 0;

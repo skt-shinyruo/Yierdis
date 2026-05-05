@@ -106,10 +106,89 @@ public class CoreContractSmokeTest {
             }
         };
 
-        CommandContext ctx = new CommandContext(null, writer);
+        ServerSession session = new ServerSession() {
+            private final TransactionState tx = new TransactionState() {
+                @Override
+                public boolean active() {
+                    return false;
+                }
+
+                @Override
+                public void begin() {
+                }
+
+                @Override
+                public void discard() {
+                }
+
+                @Override
+                public void enqueue(ExecutionRequest request) {
+                }
+
+                @Override
+                public int size() {
+                    return 0;
+                }
+
+                @Override
+                public List<ExecutionRequest> drain() {
+                    return List.of();
+                }
+            };
+
+            @Override
+            public int dbIndex() {
+                return 0;
+            }
+
+            @Override
+            public void setDbIndex(int dbIndex) {
+            }
+
+            @Override
+            public long clientId() {
+                return 1L;
+            }
+
+            @Override
+            public String clientName() {
+                return null;
+            }
+
+            @Override
+            public void setClientName(String clientName) {
+            }
+
+            @Override
+            public boolean authenticated() {
+                return false;
+            }
+
+            @Override
+            public void setAuthenticated(boolean authenticated) {
+            }
+
+            @Override
+            public TransactionState transaction() {
+                return tx;
+            }
+
+            @Override
+            public ConnectionStatsView connectionStats() {
+                return null;
+            }
+        };
+
+        CommandContext ctx = new CommandContext(session, writer);
+        Assert.assertSame(session, ctx.session());
         Assert.assertSame(writer, ctx.out());
+        ctx.recordMutation(true, false);
+        Assert.assertTrue(ctx.valueChanged());
+        Assert.assertFalse(ctx.ttlChanged());
+        Assert.assertTrue(ctx.changedAny());
+        ctx.clearMutationOutcome();
+        Assert.assertFalse(ctx.changedAny());
         writer.requestCloseAfterReply();
         Assert.assertTrue(writer.closeAfterReplyRequested());
     }
 }
-

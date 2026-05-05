@@ -7,13 +7,11 @@ import yier.bubu.redis.db.key.KeyHandle;
 import yier.bubu.redis.db.key.KeyHandleAccess;
 import yier.bubu.redis.ops.SetMode;
 
-import java.lang.reflect.Field;
-
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class ExpireKeySharingTest {
     @Test
-    public void expireStoresTtlUnderSharedFfmKeyRef() throws Exception {
+    public void expireStoresTtlUnderSharedFfmKeyRef() {
         YierdisDb db = new YierdisDb();
         try {
             db.bindToCurrentThread();
@@ -22,13 +20,10 @@ public class ExpireKeySharingTest {
             Assert.assertNotSame(key1, key2);
 
             db.writes().strings().setString(key1, b("v"), SetMode.NORMAL, null);
-            Assert.assertTrue(db.writes().ttl().expire(view(key2), 60));
+            Assert.assertTrue(db.writes().ttl().expire(view(key2), 60).value());
 
-            YierdisKeyspace<?> store = storeKeyspace(db);
-            YierdisExpireIndex expires = expiresIndex(db);
-
-            KeyHandle storeHandle = store.keyHandle(key2);
-            KeyHandle expireHandle = expires.randomKeyHandle();
+            KeyHandle storeHandle = db.keyLifecycle().keyHandle(key2);
+            KeyHandle expireHandle = db.keyLifecycle().randomExpireKeyHandle();
             Assert.assertNotNull(storeHandle);
             Assert.assertNotNull(expireHandle);
             Assert.assertSame(KeyHandleAccess.ffmBytesRef(storeHandle), KeyHandleAccess.ffmBytesRef(expireHandle));
@@ -38,7 +33,7 @@ public class ExpireKeySharingTest {
     }
 
     @Test
-    public void repeatedExpireKeepsSingleSharedFfmKeyRef() throws Exception {
+    public void repeatedExpireKeepsSingleSharedFfmKeyRef() {
         YierdisDb db = new YierdisDb();
         try {
             db.bindToCurrentThread();
@@ -47,27 +42,19 @@ public class ExpireKeySharingTest {
             Assert.assertNotSame(key1, key2);
 
             db.writes().strings().setString(key1, b("v"), SetMode.NORMAL, null);
-            Assert.assertTrue(db.writes().ttl().expire(view(key2), 60));
-            Assert.assertTrue(db.writes().ttl().expire(view(key1), 120));
+            Assert.assertTrue(db.writes().ttl().expire(view(key2), 60).value());
+            Assert.assertTrue(db.writes().ttl().expire(view(key1), 120).value());
 
-            YierdisKeyspace<?> store = storeKeyspace(db);
-            YierdisExpireIndex expires = expiresIndex(db);
-            Assert.assertEquals(1, expires.size());
+            Assert.assertEquals(1, db.memory().memoryStats().expireCount());
 
-            KeyHandle storeHandle = store.keyHandle(key1);
-            KeyHandle expireHandle = expires.randomKeyHandle();
+            KeyHandle storeHandle = db.keyLifecycle().keyHandle(key1);
+            KeyHandle expireHandle = db.keyLifecycle().randomExpireKeyHandle();
             Assert.assertNotNull(storeHandle);
             Assert.assertNotNull(expireHandle);
             Assert.assertSame(KeyHandleAccess.ffmBytesRef(storeHandle), KeyHandleAccess.ffmBytesRef(expireHandle));
         } finally {
             db.shutdown();
         }
-    }
-
-    private static YierdisKeyspace<?> storeKeyspace(YierdisDb db) throws Exception {
-        Field f = YierdisDb.class.getDeclaredField("store");
-        f.setAccessible(true);
-        return (YierdisKeyspace<?>) f.get(db);
     }
 
     private static BytesView view(byte[] bytes) {
@@ -82,11 +69,5 @@ public class ExpireKeySharingTest {
                 return bytes[index];
             }
         };
-    }
-
-    private static YierdisExpireIndex expiresIndex(YierdisDb db) throws Exception {
-        Field f = YierdisDb.class.getDeclaredField("expires");
-        f.setAccessible(true);
-        return (YierdisExpireIndex) f.get(db);
     }
 }

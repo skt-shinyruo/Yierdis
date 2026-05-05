@@ -5,7 +5,7 @@ package yier.bubu.redis.ops;
 import java.util.List;
 
 public interface SetWriteOps {
-    long sadd(byte[] keyBytes, List<byte[]> members);
+    WriteResult<Long> sadd(byte[] keyBytes, List<byte[]> members);
 
-    long srem(byte[] keyBytes, List<byte[]> members);
+    WriteResult<Long> srem(byte[] keyBytes, List<byte[]> members);
 }

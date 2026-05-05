@@ -3,9 +3,6 @@ package yier.bubu.redis.db;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.db.key.KeyHandle;
-import yier.bubu.redis.db.memory.ffm.YierdisFfmBlobStore;
-import yier.bubu.redis.db.memory.ffm.YierdisFfmBytesRef;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.ops.SetMode;
 
@@ -20,18 +17,18 @@ public class OffHeapBytesViewTtlRegressionTest {
             int targetKeyLen = targetKey.length;
             try {
                 db.bindToCurrentThread();
-                db.writes().strings().setString(targetKey, new byte[0], SetMode.NORMAL, null);
+                db.writes().strings().setString(targetKey, new byte[0], SetMode.NORMAL, null).value();
 
                 int dummyTtlEntries = 8_000;
                 long nowMillis = System.currentTimeMillis();
                 byte[] dummyKeyBytes = new byte[targetKeyLen];
                 dummyKeyBytes[0] = (byte) 'x';
-                YierdisFfmBytesRef[] dummyRefs = new YierdisFfmBytesRef[dummyTtlEntries];
                 for (int i = 0; i < dummyTtlEntries; i++) {
                     dummyKeyBytes[targetKeyLen - 2] = (byte) (i >>> 8);
                     dummyKeyBytes[targetKeyLen - 1] = (byte) i;
-                    dummyRefs[i] = YierdisFfmBlobStore.fromBytes(runtime, dummyKeyBytes);
-                    db.expires.setExpireAtMillis(KeyHandle.forFfm(dummyRefs[i], i), nowMillis + 60_000);
+                    byte[] dummyKey = dummyKeyBytes.clone();
+                    db.writes().strings().setString(dummyKey, new byte[0], SetMode.NORMAL, null);
+                    db.setExpireAtMillis(dummyKey, nowMillis + 60_000);
                 }
 
                 final int[] reads = new int[]{0};
@@ -52,7 +49,7 @@ public class OffHeapBytesViewTtlRegressionTest {
                 };
 
                 try {
-                    Assert.assertTrue(db.writes().ttl().pexpire(view, 60_000));
+                    Assert.assertTrue(db.writes().ttl().pexpire(view, 60_000).value());
                 } catch (IllegalStateException e) {
                     Assert.fail(e.getMessage());
                 }
