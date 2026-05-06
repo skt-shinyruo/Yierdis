@@ -12,8 +12,6 @@ import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 
@@ -23,9 +21,7 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 public class ZSetCommandTest {
     @Test
     public void zsetCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
-        String source = Files.readString(Path.of(
-                "..", "..", "yierdis-command", "yierdis-command-defaults", "src", "main", "java", "yier", "bubu", "redis", "command", "ZSetCommands.java"
-        ));
+        String source = CommandSourceFiles.readCommandDefaults("ZSetCommands.java");
 
         Assert.assertFalse(source.contains("eviction().prepareWrite("));
         Assert.assertFalse(source.contains("values().zsets()."));
