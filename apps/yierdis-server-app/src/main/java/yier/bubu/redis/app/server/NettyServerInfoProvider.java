@@ -2,7 +2,7 @@ package yier.bubu.redis.app.server;
 
 // INFO/STATS 提供器：基于 transport-neutral executor 统计与连接态输出可观测性摘要，避免在热路径做额外分配。
 
-import yier.bubu.redis.command.ServerInfoProvider;
+import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.ops.YierdisMemoryStats;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ConnectionStatsView;

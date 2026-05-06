@@ -1,5 +1,6 @@
 package yier.bubu.redis.command;
 
+import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.testutil.FastTestClient;

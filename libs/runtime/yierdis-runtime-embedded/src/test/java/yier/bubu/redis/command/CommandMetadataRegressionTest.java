@@ -1,5 +1,10 @@
 package yier.bubu.redis.command;
 
+import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandModule;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -18,7 +23,7 @@ public class CommandMetadataRegressionTest {
     public void registrationInterfaceExposesUnifiedCommandSpecRegistration() throws Exception {
         Class<?> specType;
         try {
-            specType = Class.forName("yier.bubu.redis.command.CommandSpec");
+            specType = Class.forName("yier.bubu.redis.command.api.CommandSpec");
         } catch (ClassNotFoundException e) {
             Assert.fail("CommandSpec should exist as the unified registration contract");
             return;
@@ -30,8 +35,8 @@ public class CommandMetadataRegressionTest {
             Assert.fail("CommandModule.Registration should expose register(String, CommandSpec)");
         }
 
-        Class<?> parserType = Class.forName("yier.bubu.redis.command.CommandParser");
-        Class<?> handlerType = Class.forName("yier.bubu.redis.command.CommandHandler");
+        Class<?> parserType = Class.forName("yier.bubu.redis.command.api.CommandParser");
+        Class<?> handlerType = Class.forName("yier.bubu.redis.command.api.CommandHandler");
         Assert.assertNotNull(CommandSpec.class.getMethod(
                 "of",
                 CommandDescriptor.class,

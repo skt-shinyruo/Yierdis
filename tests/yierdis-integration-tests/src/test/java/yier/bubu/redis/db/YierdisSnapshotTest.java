@@ -4,7 +4,7 @@ import yier.bubu.redis.ops.ValueType;
 import yier.bubu.redis.ops.ScanCursorV2;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplySimpleString;

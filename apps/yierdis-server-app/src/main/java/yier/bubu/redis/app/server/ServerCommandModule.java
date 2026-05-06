@@ -1,10 +1,10 @@
 package yier.bubu.redis.app.server;
 
-import yier.bubu.redis.command.CommandModule;
-import yier.bubu.redis.command.CommandParsers;
-import yier.bubu.redis.command.CommandDescriptor;
-import yier.bubu.redis.command.CommandSpec;
-import yier.bubu.redis.command.ServerInfoProvider;
+import yier.bubu.redis.command.api.CommandModule;
+import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.contract.CommandContext;
 import yier.bubu.redis.contract.ExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;

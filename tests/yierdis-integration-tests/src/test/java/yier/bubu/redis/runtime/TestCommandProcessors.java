@@ -1,8 +1,8 @@
 package yier.bubu.redis.runtime;
 
-import yier.bubu.redis.command.CommandModule;
-import yier.bubu.redis.command.DefaultCommandModules;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.api.CommandModule;
+import yier.bubu.redis.command.defaults.DefaultCommandModules;
+import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.ops.DbEngine;
 
 import java.util.ArrayList;

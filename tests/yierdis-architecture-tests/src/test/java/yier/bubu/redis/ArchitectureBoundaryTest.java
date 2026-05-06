@@ -82,9 +82,9 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 instanceFile,
                 offenders,
-                "import yier.bubu.redis.command.ServerInfoProvider;",
-                "import yier.bubu.redis.command.SlowCommandGovernor;",
-                "import yier.bubu.redis.command.YierdisFastCommandProcessor;",
+                "import yier.bubu.redis.command.api.ServerInfoProvider;",
+                "import yier.bubu.redis.command.api.SlowCommandGovernor;",
+                "import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;",
                 "new YierdisFastCommandProcessor(",
                 "newCommandProcessor("
         );
@@ -104,14 +104,14 @@ public class ArchitectureBoundaryTest {
 
         List<String> offenders = new ArrayList<>();
         Path serverCommands = repoRoot.resolve(
-                "libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/ServerCommands.java"
+                "libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/defaults/ServerCommands.java"
         );
         if (Files.exists(serverCommands)) {
             offenders.add(relativePath(repoRoot, serverCommands) + " (server-facing commands should live in yierdis-server-app)");
         }
 
         Path processorFile = repoRoot.resolve(
-                "libs/command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java"
+                "libs/command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java"
         ).normalize();
         Assert.assertTrue("缺少 YierdisFastCommandProcessor.java，无法执行 command-kernel 默认装配护栏", Files.isRegularFile(processorFile));
         scanFileForForbiddenText(
@@ -137,7 +137,7 @@ public class ArchitectureBoundaryTest {
                 "register(\"STATS\""
         );
         Path coreConnectionFile = repoRoot.resolve(
-                "libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/CoreConnectionCommands.java"
+                "libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/defaults/connection/CoreConnectionCommands.java"
         ).normalize();
         Assert.assertTrue("缺少 CoreConnectionCommands.java，无法执行 COMMAND metadata 护栏", Files.isRegularFile(coreConnectionFile));
         scanFileForForbiddenText(
@@ -149,7 +149,7 @@ public class ArchitectureBoundaryTest {
                 "case \"STATS\":"
         );
         Path descriptorFile = repoRoot.resolve(
-                "libs/command/yierdis-command-api/src/main/java/yier/bubu/redis/command/CommandDescriptor.java"
+                "libs/command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandDescriptor.java"
         ).normalize();
         Assert.assertTrue("缺少 CommandDescriptor.java，无法执行 COMMAND descriptor 护栏", Files.isRegularFile(descriptorFile));
         scanFileForForbiddenText(
@@ -161,7 +161,7 @@ public class ArchitectureBoundaryTest {
                 "case \"STATS\":"
         );
         Path registryFile = repoRoot.resolve(
-                "libs/command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/CommandRegistry.java"
+                "libs/command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java"
         ).normalize();
         Assert.assertTrue("缺少 CommandRegistry.java，无法执行 COMMAND metadata fallback 护栏", Files.isRegularFile(registryFile));
         scanFileForForbiddenText(
@@ -584,9 +584,9 @@ public class ArchitectureBoundaryTest {
                 serverRoot,
                 offenders,
                 allowedServerFiles,
-                "import yier.bubu.redis.command.CommandParsers;",
-                "import yier.bubu.redis.command.CommandSpec;",
-                "import yier.bubu.redis.command.ArgReader;",
+                "import yier.bubu.redis.command.api.CommandParsers;",
+                "import yier.bubu.redis.command.api.CommandSpec;",
+                "import yier.bubu.redis.command.api.ArgReader;",
                 "CommandParseResult",
                 "wrong number of arguments for"
         );
@@ -602,9 +602,9 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 runtimeEmbeddedMain(repoRoot),
                 offenders,
-                "import yier.bubu.redis.command.CommandParsers;",
-                "import yier.bubu.redis.command.CommandSpec;",
-                "import yier.bubu.redis.command.ArgReader;",
+                "import yier.bubu.redis.command.api.CommandParsers;",
+                "import yier.bubu.redis.command.api.CommandSpec;",
+                "import yier.bubu.redis.command.api.ArgReader;",
                 "CommandParseResult",
                 "wrong number of arguments for"
         );
@@ -712,8 +712,8 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 commandDefaults.resolve("src/main/java").normalize(),
                 offenders,
-                "import yier.bubu.redis.command.YierdisFastCommandProcessor;",
-                "import yier.bubu.redis.command.CommandRegistry;",
+                "import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;",
+                "import yier.bubu.redis.command.kernel.CommandRegistry;",
                 "new CommandRegistry("
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-command-defaults Java 文件", scanned > 0);
@@ -723,6 +723,81 @@ public class ArchitectureBoundaryTest {
                             + String.join("\n", offenders)
             );
         }
+    }
+
+    @Test
+    public void commandProductionPackagesMustRevealModuleOwnership() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanCommandMainForForbiddenText(
+                repoRoot,
+                offenders,
+                "package yier.bubu.redis.command;"
+        );
+        Assert.assertTrue("architecture guard scanned no command production Java files", scanned > 0);
+        Assert.assertTrue(
+                "command production code must not remain in the shared root command package:\n"
+                        + String.join("\n", offenders),
+                offenders.isEmpty()
+        );
+
+        assertPackageDeclaration(
+                repoRoot,
+                commandApiMain(repoRoot).resolve("yier/bubu/redis/command/api/CommandDescriptor.java"),
+                "package yier.bubu.redis.command.api;"
+        );
+        assertPackageDeclaration(
+                repoRoot,
+                commandKernelMain(repoRoot).resolve("yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java"),
+                "package yier.bubu.redis.command.kernel;"
+        );
+        assertPackageDeclaration(
+                repoRoot,
+                commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/DefaultCommandModules.java"),
+                "package yier.bubu.redis.command.defaults;"
+        );
+        assertPackageDeclaration(
+                repoRoot,
+                commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/string/StringCommands.java"),
+                "package yier.bubu.redis.command.defaults.string;"
+        );
+        assertPackageDeclaration(
+                repoRoot,
+                commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/hash/HashCommands.java"),
+                "package yier.bubu.redis.command.defaults.hash;"
+        );
+        assertPackageDeclaration(
+                repoRoot,
+                commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/list/ListCommands.java"),
+                "package yier.bubu.redis.command.defaults.list;"
+        );
+        assertPackageDeclaration(
+                repoRoot,
+                commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/set/SetCommands.java"),
+                "package yier.bubu.redis.command.defaults.set;"
+        );
+        assertPackageDeclaration(
+                repoRoot,
+                commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/zset/ZSetCommands.java"),
+                "package yier.bubu.redis.command.defaults.zset;"
+        );
+        assertPackageDeclaration(
+                repoRoot,
+                commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/hll/HllCommands.java"),
+                "package yier.bubu.redis.command.defaults.hll;"
+        );
+        assertPackageDeclaration(
+                repoRoot,
+                commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/keyspace/KeyCommands.java"),
+                "package yier.bubu.redis.command.defaults.keyspace;"
+        );
+        assertPackageDeclaration(
+                repoRoot,
+                commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/connection/CoreConnectionCommands.java"),
+                "package yier.bubu.redis.command.defaults.connection;"
+        );
     }
 
     @Test
@@ -2340,7 +2415,7 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 bootstrapFile,
                 offenders,
-                "import yier.bubu.redis.command.YierdisFastCommandProcessor;",
+                "import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;",
                 "new YierdisFastCommandProcessor(",
                 "processor::execute",
                 "maintenance.maintenanceTick()"
@@ -2364,7 +2439,7 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 repoRoot.resolve("apps/yierdis-server-app/src/main/java").normalize(),
                 offenders,
-                "import yier.bubu.redis.command.YierdisFastCommandProcessor;",
+                "import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;",
                 "new YierdisFastCommandProcessor(",
                 "new CommandContext(",
                 ".execute(request, new CommandContext"
@@ -2757,6 +2832,15 @@ public class ArchitectureBoundaryTest {
         return scanned;
     }
 
+    private static void assertPackageDeclaration(Path repoRoot, Path file, String expectedDeclaration) throws IOException {
+        Assert.assertTrue("missing expected command package file: " + relativePath(repoRoot, file), Files.isRegularFile(file));
+        String source = Files.readString(file, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                relativePath(repoRoot, file) + " must declare " + expectedDeclaration,
+                source.contains(expectedDeclaration)
+        );
+    }
+
     private static Path commandApiMain(Path repoRoot) {
         return repoRoot.resolve("libs/command/yierdis-command-api/src/main/java").normalize();
     }
@@ -2786,11 +2870,25 @@ public class ArchitectureBoundaryTest {
     }
 
     private static Path commandKernelFile(Path repoRoot, String fileName) {
-        return commandKernelMain(repoRoot).resolve("yier/bubu/redis/command").resolve(fileName).normalize();
+        return switch (fileName) {
+            case "TransactionCommands.java", "CommandRegistry.java", "YierdisFastCommandProcessor.java" ->
+                    commandKernelMain(repoRoot).resolve("yier/bubu/redis/command/kernel").resolve(fileName).normalize();
+            default -> commandKernelMain(repoRoot).resolve("yier/bubu/redis/command").resolve(fileName).normalize();
+        };
     }
 
     private static Path commandDefaultsFile(Path repoRoot, String fileName) {
-        return commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command").resolve(fileName).normalize();
+        return switch (fileName) {
+            case "StringCommands.java" -> commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/string").resolve(fileName).normalize();
+            case "HashCommands.java" -> commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/hash").resolve(fileName).normalize();
+            case "ListCommands.java" -> commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/list").resolve(fileName).normalize();
+            case "SetCommands.java" -> commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/set").resolve(fileName).normalize();
+            case "ZSetCommands.java" -> commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/zset").resolve(fileName).normalize();
+            case "HllCommands.java" -> commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/hll").resolve(fileName).normalize();
+            case "KeyCommands.java" -> commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/keyspace").resolve(fileName).normalize();
+            case "CoreConnectionCommands.java" -> commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults/connection").resolve(fileName).normalize();
+            default -> commandDefaultsMain(repoRoot).resolve("yier/bubu/redis/command/defaults").resolve(fileName).normalize();
+        };
     }
 
     private static void assertRuntimeChangeTrackingSpiDetectorCoversReviewCases() {

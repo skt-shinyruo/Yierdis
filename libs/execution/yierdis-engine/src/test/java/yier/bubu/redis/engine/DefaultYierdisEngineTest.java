@@ -3,8 +3,8 @@ package yier.bubu.redis.engine;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.command.CommandDescriptor;
-import yier.bubu.redis.command.CommandParsers;
+import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.ReplyWriter;
 

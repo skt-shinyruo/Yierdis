@@ -1,10 +1,14 @@
 package yier.bubu.redis.command;
 
+import yier.bubu.redis.command.kernel.CommandRegistry;
+import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandParsers;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.ExecutionRequest;
 
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Locale;
 
@@ -17,13 +21,13 @@ public class CommandRegistryTest {
         registerNoop(registry, "PING", PING);
 
         try (ExecutionRequest c1 = request("PING")) {
-            Assert.assertNotNull(registry.spec(c1));
+            Assert.assertNotNull(spec(registry, c1));
         }
         try (ExecutionRequest c2 = request("ping")) {
-            Assert.assertNotNull(registry.spec(c2));
+            Assert.assertNotNull(spec(registry, c2));
         }
         try (ExecutionRequest c3 = request("PiNg")) {
-            Assert.assertNotNull(registry.spec(c3));
+            Assert.assertNotNull(spec(registry, c3));
         }
     }
 
@@ -33,7 +37,7 @@ public class CommandRegistryTest {
         registerNoop(registry, "PING", PING);
 
         try (ExecutionRequest cmd = request("NOPE")) {
-            Assert.assertNull(registry.spec(cmd));
+            Assert.assertNull(spec(registry, cmd));
         }
     }
 
@@ -85,7 +89,7 @@ public class CommandRegistryTest {
 
         for (String name : names) {
             try (ExecutionRequest cmd = request(name.toLowerCase(Locale.ROOT))) {
-                Assert.assertNotNull("expected spec for " + name, registry.spec(cmd));
+                Assert.assertNotNull("expected spec for " + name, spec(registry, cmd));
             }
         }
     }
@@ -102,5 +106,15 @@ public class CommandRegistryTest {
 
     private static ExecutionRequest request(String commandName) {
         return ByteArrayExecutionRequest.fromUtf8(commandName, List.of());
+    }
+
+    private static Object spec(CommandRegistry registry, ExecutionRequest request) {
+        try {
+            Method method = CommandRegistry.class.getDeclaredMethod("spec", ExecutionRequest.class);
+            method.setAccessible(true);
+            return method.invoke(registry, request);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("unable to access registry spec", e);
+        }
     }
 }

@@ -1,5 +1,9 @@
 package yier.bubu.redis.command;
 
+import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.CommandRegistry;
+import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandParsers;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -107,9 +111,9 @@ public class CommandDescriptorRegistryTest {
                     }
             );
             CommandRegistry registry = registryOf(processor);
-            Assert.assertEquals(-1, registry.specByUpperName("INFO").descriptor().arity());
-            Assert.assertEquals("ERR HELLO is not allowed in MULTI", registry.specByUpperName("HELLO").disallowedInMultiError());
-            Assert.assertNotNull(registry.specByUpperName("SET").descriptor());
+            Assert.assertEquals(-1, specByUpperName(registry, "INFO").descriptor().arity());
+            Assert.assertEquals("ERR HELLO is not allowed in MULTI", specByUpperName(registry, "HELLO").disallowedInMultiError());
+            Assert.assertNotNull(specByUpperName(registry, "SET").descriptor());
         });
     }
 
@@ -144,6 +148,16 @@ public class CommandDescriptorRegistryTest {
             return (CommandRegistry) field.get(processor);
         } catch (ReflectiveOperationException e) {
             throw new AssertionError("unable to access processor registry", e);
+        }
+    }
+
+    private static yier.bubu.redis.command.api.CommandSpec<?> specByUpperName(CommandRegistry registry, String name) {
+        try {
+            Method method = CommandRegistry.class.getDeclaredMethod("specByUpperName", String.class);
+            method.setAccessible(true);
+            return (yier.bubu.redis.command.api.CommandSpec<?>) method.invoke(registry, name);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("unable to access registry specByUpperName", e);
         }
     }
 }
