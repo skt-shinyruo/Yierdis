@@ -13,7 +13,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.util.ReferenceCountUtil;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.YierdisServerBootstrap;
+import yier.bubu.redis.app.server.YierdisServerBootstrap;
 import yier.bubu.redis.protocol.json.JsonArray;
 import yier.bubu.redis.protocol.json.JsonLimits;
 import yier.bubu.redis.protocol.json.JsonLong;
