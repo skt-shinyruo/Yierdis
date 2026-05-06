@@ -2,7 +2,7 @@ package yier.bubu.redis.runtime.api;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.command.TestCommandProcessors;
 import yier.bubu.redis.contract.ByteArrayExecutionRequest;
 import yier.bubu.redis.contract.ExecutionRequest;

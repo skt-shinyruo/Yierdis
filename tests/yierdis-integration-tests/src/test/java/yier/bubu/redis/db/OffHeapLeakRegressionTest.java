@@ -2,7 +2,7 @@ package yier.bubu.redis.db;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.command.YierdisFastCommandProcessor;
+import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.db.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.runtime.TestCommandProcessors;
 import yier.bubu.redis.testutil.FastTestClient;
