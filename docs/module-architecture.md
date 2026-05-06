@@ -36,6 +36,15 @@ bytes-lib
 
 理解这张图时，最重要的判断不是“谁依赖谁”，而是“谁负责线上协议、谁负责执行契约、谁负责 DB、谁负责最后的组装”。
 
+## Package Ownership Migration
+
+The Maven split is stable enough to make Java package names match module
+ownership. New production code should use the target package families documented
+in `docs/superpowers/specs/2026-05-06-package-structure-rearchitecture-design.md`.
+Legacy packages such as `yier.bubu.redis.db`, `yier.bubu.redis.ops`,
+`yier.bubu.redis.contract`, and the server root package are migration-only
+names.
+
 ## 聚合模块
 
 下面几个模块主要是 parent / aggregator，本身不是运行时代码：

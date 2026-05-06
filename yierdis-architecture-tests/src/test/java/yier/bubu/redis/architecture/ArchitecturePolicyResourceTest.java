@@ -32,4 +32,18 @@ public class ArchitecturePolicyResourceTest {
             Assert.assertTrue(policy.contains("no_storage_internal_imports"));
         }
     }
+
+    @Test
+    public void architecturePolicyResourceDocumentsTargetPackageOwnership() throws Exception {
+        try (InputStream in = ArchitecturePolicyResourceTest.class.getResourceAsStream("/architecture-policy.yml")) {
+            Assert.assertNotNull("missing architecture-policy.yml", in);
+            String policy = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            Assert.assertTrue(policy.contains("target_packages:"));
+            Assert.assertTrue(policy.contains("yier.bubu.redis.app.server"));
+            Assert.assertTrue(policy.contains("yier.bubu.redis.execution.api"));
+            Assert.assertTrue(policy.contains("yier.bubu.redis.command.kernel"));
+            Assert.assertTrue(policy.contains("yier.bubu.redis.storage.memory"));
+            Assert.assertTrue(policy.contains("legacy_allowed_during_migration:"));
+        }
+    }
 }
