@@ -26,19 +26,19 @@
     </properties>
 
     <modules>
-        <module>yierdis-memory</module>
-        <module>yierdis-bytes</module>
-        <module>yierdis-execution</module>
-        <module>yierdis-storage</module>
-        <module>yierdis-runtime</module>
-        <module>yierdis-protocol</module>
-        <module>yierdis-command</module>
-        <module>yierdis-executor-core</module>
-        <module>yierdis-client</module>
-        <module>yierdis-app/yierdis-server-app</module>
-        <module>yierdis-bench</module>
-        <module>yierdis-architecture-tests</module>
-        <module>yierdis-integration-tests</module>
+        <module>libs/memory</module>
+        <module>libs/bytes</module>
+        <module>libs/execution</module>
+        <module>libs/storage</module>
+        <module>libs/runtime</module>
+        <module>libs/protocol</module>
+        <module>libs/command</module>
+        <module>libs/executor/yierdis-executor-core</module>
+        <module>apps/yierdis-client</module>
+        <module>apps/yierdis-server-app</module>
+        <module>apps/yierdis-bench</module>
+        <module>tests/yierdis-architecture-tests</module>
+        <module>tests/yierdis-integration-tests</module>
     </modules>
 
     <dependencyManagement>

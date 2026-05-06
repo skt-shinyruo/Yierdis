@@ -132,6 +132,21 @@ allowlisted for SPI use.
 Compatibility is allowed only as a migration tool. Legacy package shims may
 exist temporarily, but new source should use the target package names.
 
+## Implementation Decisions
+
+The migration plan fixes the remaining sequencing and compatibility choices so
+the spec and the implementation checklist stay aligned:
+
+1. Move physical Maven module directories before Java package renames.
+2. Keep Maven artifact IDs stable during the first migration pass.
+3. Use temporary legacy facades for `contract`, `ops`, and `offheap.api`.
+4. Move the server-app package first, then move client and bench after the
+   server-app package is stable.
+5. Keep integration-test fixtures in `tests/yierdis-integration-tests` unless
+   duplication still remains after the app-package move.
+6. Remove compatibility facades only after target imports are verified and the
+   architecture tests enforce the new package names.
+
 ## Considered Approaches
 
 ### Approach A: Package-Only Cleanup
@@ -746,14 +761,8 @@ move/rename commits and keep semantic edits separate.
 - Architecture tests reject `.internal` imports across owner boundaries.
 - Full Maven test suite passes after each completed migration phase.
 
-## Open Decisions Before Implementation
+## Implementation Notes
 
-1. Whether the first implementation phase should move physical Maven directories
-   before Java package renames or rename lower-risk app/executor packages first.
-2. Whether compatibility facades for `contract`, `ops`, and `offheap.api` should
-   be public deprecated classes or package-level transitional source sets.
-3. Whether client and bench should move to `app.client` and `app.bench` in the
-   first app-package phase or after server-app is complete.
-4. Whether integration-test fixtures should stay in
-   `tests/yierdis-integration-tests` or become a small dedicated test-fixtures
-   module.
+No open migration decisions remain for the initial rearchitecture. If any of
+the choices above need to change later, update this spec and the matching plan
+before implementation begins.
