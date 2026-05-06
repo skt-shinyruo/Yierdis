@@ -982,8 +982,8 @@ public class ArchitectureBoundaryTest {
         Path apiPom = workspaceRoot.resolve("libs/memory/yierdis-memory-api/pom.xml").normalize();
         Assert.assertTrue("缺少 libs/memory/pom.xml", Files.isRegularFile(memoryPom));
         String memoryPomText = Files.readString(memoryPom, StandardCharsets.UTF_8);
-        int apiModuleIndex = memoryPomText.indexOf("<module>api</module>");
-        int foreignModuleIndex = memoryPomText.indexOf("<module>foreign</module>");
+        int apiModuleIndex = memoryPomText.indexOf("<module>yierdis-memory-api</module>");
+        int foreignModuleIndex = memoryPomText.indexOf("<module>yierdis-memory-foreign</module>");
         Assert.assertTrue(
                 "yierdis-memory parent must aggregate api before foreign",
                 apiModuleIndex >= 0 && foreignModuleIndex >= 0 && apiModuleIndex < foreignModuleIndex
