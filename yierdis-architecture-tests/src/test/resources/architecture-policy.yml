@@ -402,3 +402,53 @@ modules:
     source_ownership:
       - runtime_lifecycle_only
       - no_whole_repo_architecture_tests
+
+target_packages:
+  app_server:
+    owns:
+      - yier.bubu.redis.app.server
+    legacy_allowed_during_migration:
+      - yier.bubu.redis
+      - yier.bubu.redis.args
+  execution:
+    owns:
+      - yier.bubu.redis.execution.api
+      - yier.bubu.redis.execution.engine
+      - yier.bubu.redis.execution.executor
+    legacy_allowed_during_migration:
+      - yier.bubu.redis.contract
+      - yier.bubu.redis.engine
+      - yier.bubu.redis.executor
+  command:
+    owns:
+      - yier.bubu.redis.command.api
+      - yier.bubu.redis.command.kernel
+      - yier.bubu.redis.command.defaults
+    legacy_allowed_during_migration:
+      - yier.bubu.redis.command
+  storage:
+    owns:
+      - yier.bubu.redis.storage.api
+      - yier.bubu.redis.storage.api.result
+      - yier.bubu.redis.storage.memory
+    legacy_allowed_during_migration:
+      - yier.bubu.redis.ops
+      - yier.bubu.redis.db
+  runtime:
+    owns:
+      - yier.bubu.redis.runtime.api
+      - yier.bubu.redis.runtime.embedded
+    legacy_allowed_during_migration:
+      - yier.bubu.redis.runtime
+  memory:
+    owns:
+      - yier.bubu.redis.memory.api
+      - yier.bubu.redis.memory.foreign
+    legacy_allowed_during_migration:
+      - yier.bubu.redis.offheap.api
+      - yier.bubu.redis.db.memory.foreign
+  protocol:
+    owns:
+      - yier.bubu.redis.protocol.custom.v1
+    legacy_allowed_during_migration:
+      - yier.bubu.redis.protocol
