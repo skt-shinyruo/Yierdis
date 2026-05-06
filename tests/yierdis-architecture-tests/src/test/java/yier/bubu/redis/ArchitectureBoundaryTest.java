@@ -399,7 +399,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java").normalize(),
+                repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java").normalize(),
                 offenders,
                 "SimpleChannelInboundHandler<Command>"
         );
@@ -440,7 +440,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFilesMatchingRegex(
                 repoRoot,
-                repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis").normalize(),
+                repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server").normalize(),
                 offenders,
                 "registration\\.register\\(\\s*\"[A-Z0-9_]+\"\\s*,\\s*this::",
                 "registration\\.registerDisallowedInMulti\\("
@@ -523,7 +523,7 @@ public class ArchitectureBoundaryTest {
         );
 
         Path executorEngineFile = repoRoot.resolve(
-                "libs/executor/yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutionEngine.java"
+                "libs/executor/yierdis-executor-core/src/main/java/yier/bubu/redis/execution/executor/CommandExecutionEngine.java"
         ).normalize();
         Assert.assertTrue("缺少 CommandExecutionEngine.java，无法约束 executor 执行边界", Files.isRegularFile(executorEngineFile));
         String executorEngineSource = Files.readString(executorEngineFile, StandardCharsets.UTF_8);
@@ -574,7 +574,7 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path serverRoot = repoRoot.resolve("apps/yierdis-server-app/src/main/java").normalize();
-        Path serverCommandModule = serverRoot.resolve("yier/bubu/redis/ServerCommandModule.java").normalize();
+        Path serverCommandModule = serverRoot.resolve("yier/bubu/redis/app/server/ServerCommandModule.java").normalize();
         List<Path> allowedServerFiles = List.of(serverCommandModule);
 
         List<String> offenders = new ArrayList<>();
@@ -845,11 +845,11 @@ public class ArchitectureBoundaryTest {
 
         Assert.assertFalse(
                 "server production code must not own JsonLineReplyWriter implementation",
-                Files.isRegularFile(workspaceRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java"))
+                Files.isRegularFile(workspaceRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/protocol/v1/JsonLineReplyWriter.java"))
         );
         Assert.assertFalse(
                 "server production code must not own ProtocolCommandAdapter implementation",
-                Files.isRegularFile(workspaceRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/ProtocolCommandAdapter.java"))
+                Files.isRegularFile(workspaceRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/ProtocolCommandAdapter.java"))
         );
     }
 
@@ -1678,12 +1678,12 @@ public class ArchitectureBoundaryTest {
                 "import yier.bubu.redis.command.",
                 "import yier.bubu.redis.protocol.",
                 "import yier.bubu.redis.server.",
-                "import yier.bubu.redis.executor.",
+                "import yier.bubu.redis.execution.executor.",
                 "import io.netty.",
                 "yier.bubu.redis.command.",
                 "yier.bubu.redis.protocol.",
                 "yier.bubu.redis.server.",
-                "yier.bubu.redis.executor.",
+                "yier.bubu.redis.execution.executor.",
                 "io.netty."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-storage-memory Java 文件", storageMemoryScanned > 0);
@@ -1966,13 +1966,13 @@ public class ArchitectureBoundaryTest {
                 offenders,
                 "import yier.bubu.redis.command.",
                 "import yier.bubu.redis.engine.",
-                "import yier.bubu.redis.executor.",
+                "import yier.bubu.redis.execution.executor.",
                 "import yier.bubu.redis.protocol.",
                 "import yier.bubu.redis.server.",
                 "import io.netty.",
                 "yier.bubu.redis.command.",
                 "yier.bubu.redis.engine.",
-                "yier.bubu.redis.executor.",
+                "yier.bubu.redis.execution.executor.",
                 "yier.bubu.redis.protocol.",
                 "yier.bubu.redis.server.",
                 "io.netty."
@@ -2233,7 +2233,7 @@ public class ArchitectureBoundaryTest {
         );
         Assert.assertTrue("缺少 YierdisInstanceRuntimeAccess.java，无法约束 bootstrap 生命周期边界", Files.isRegularFile(runtimeAccessFile));
 
-        Path bootstrapFile = repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java").normalize();
+        Path bootstrapFile = repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java").normalize();
         Assert.assertTrue("缺少 YierdisServerBootstrap.java", Files.isRegularFile(bootstrapFile));
 
         List<String> offenders = new ArrayList<>();
@@ -2261,7 +2261,7 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
-        Path infoProviderFile = repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/NettyServerInfoProvider.java").normalize();
+        Path infoProviderFile = repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/NettyServerInfoProvider.java").normalize();
         Assert.assertTrue("缺少 NettyServerInfoProvider.java", Files.isRegularFile(infoProviderFile));
 
         List<String> offenders = new ArrayList<>();
@@ -2331,7 +2331,7 @@ public class ArchitectureBoundaryTest {
         );
 
         Path bootstrapFile = repoRoot.resolve(
-                "apps/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java"
+                "apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java"
         ).normalize();
         Assert.assertTrue("缺少 YierdisServerBootstrap.java", Files.isRegularFile(bootstrapFile));
 
@@ -2417,7 +2417,7 @@ public class ArchitectureBoundaryTest {
         );
         Assert.assertTrue(
                 "server-app pom must keep the runnable server main class",
-                serverAppPomText.contains("<mainClass>yier.bubu.redis.YierdisServer</mainClass>")
+                serverAppPomText.contains("<mainClass>yier.bubu.redis.app.server.YierdisServer</mainClass>")
         );
 
         Path clientPom = workspaceRoot.resolve("apps/yierdis-client/pom.xml").normalize();
@@ -2556,8 +2556,8 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
-        Path serverRoot = repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis").normalize();
-        Assert.assertTrue("缺少 apps/yierdis-server-app/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
+        Path serverRoot = repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server").normalize();
+        Assert.assertTrue("缺少 apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server", Files.isDirectory(serverRoot));
 
         List<String> offenders = new ArrayList<>();
         for (String name : List.of(
@@ -2591,8 +2591,8 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
-        Path serverRoot = repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis").normalize();
-        Assert.assertTrue("缺少 apps/yierdis-server-app/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
+        Path serverRoot = repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server").normalize();
+        Assert.assertTrue("缺少 apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server", Files.isDirectory(serverRoot));
 
         Path allowedConnectionOwner = serverRoot.resolve("NettyExecutionConnection.java");
         Path allowedIoOwner = serverRoot.resolve("NettyExecutionIoAdapter.java");
@@ -2637,8 +2637,8 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
-        Path serverRoot = repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis").normalize();
-        Assert.assertTrue("缺少 apps/yierdis-server-app/src/main/java/yier/bubu/redis", Files.isDirectory(serverRoot));
+        Path serverRoot = repoRoot.resolve("apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server").normalize();
+        Assert.assertTrue("缺少 apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server", Files.isDirectory(serverRoot));
 
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(

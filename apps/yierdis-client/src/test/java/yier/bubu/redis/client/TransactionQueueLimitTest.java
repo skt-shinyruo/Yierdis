@@ -4,7 +4,7 @@ package yier.bubu.redis.client;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.YierdisServerBootstrap;
+import yier.bubu.redis.app.server.YierdisServerBootstrap;
 import yier.bubu.redis.protocol.json.JsonArray;
 import yier.bubu.redis.protocol.json.JsonNull;
 import yier.bubu.redis.protocol.json.JsonObject;

@@ -26,7 +26,7 @@ public class ArchitectureDependencyRuleTest {
                         "yier.bubu.redis.protocol.",
                         "yier.bubu.redis.db.",
                         "yier.bubu.redis.offheap.api.",
-                        "yier.bubu.redis.executor.",
+                        "yier.bubu.redis.execution.executor.",
                         "io.netty."
                 )
         );
@@ -40,7 +40,7 @@ public class ArchitectureDependencyRuleTest {
                 List.of(
                         "yier.bubu.redis.command.",
                         "yier.bubu.redis.protocol.",
-                        "yier.bubu.redis.executor.",
+                        "yier.bubu.redis.execution.executor.",
                         "io.netty."
                 )
         );
@@ -50,7 +50,7 @@ public class ArchitectureDependencyRuleTest {
     public void executorCoreDoesNotDependOnCommandStorageRuntimeProtocolOrNetty() {
         assertNoDependencies(
                 "executor-core boundary",
-                name -> name.startsWith("yier.bubu.redis.executor."),
+                name -> name.startsWith("yier.bubu.redis.execution.executor."),
                 List.of(
                         "yier.bubu.redis.command.",
                         "yier.bubu.redis.db.",
