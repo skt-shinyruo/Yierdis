@@ -3,7 +3,7 @@ package yier.bubu.redis.command.kernel;
 import yier.bubu.redis.command.api.CommandDescriptor;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandSpec;
-import yier.bubu.redis.contract.ExecutionRequest;
+import yier.bubu.redis.execution.api.ExecutionRequest;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;

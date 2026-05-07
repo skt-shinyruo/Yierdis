@@ -10,46 +10,46 @@
 ## Heap -> Off-Heap
 
 - 当前 server 的常见写入路径里，请求参数先在 heap。协议适配层会把请求里的命令和参数转成 heap `byte[]`。
-  代表路径：`yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
+  代表路径：`libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
 - `SET`、`APPEND` 等字符串写入命令，在启用 off-heap 后端时，会把这些 heap `byte[]` 或 `BytesSlice` 复制到 native memory。
-  代表路径：`yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisObject.java`
+  代表路径：`libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
 - 如果启用了 off-heap keyspace，第一次插入 key 时，也会把 key 从 heap `byte[]` 复制到 native memory。
-  代表路径：`yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/memory/ffm/YierdisFfmKeyspace.java`
+  代表路径：`libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmKeyspace.java`
 - 但如果 source 本身就是带 memory address 的 `BytesSlice`，则可以直接走 address-to-address copy，不必先落成 heap 临时数组。
-  代表路径：`yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisObject.java`
+  代表路径：`libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
 
 需要注意的是，当前 server 的网络入口通常不是这种“source 已经带 native 地址”的场景，所以线上常见写入仍然主要是 `heap -> off-heap`。
 
 ## Off-Heap -> Heap
 
 - 任何要求返回 `byte[]` 的 API，都会把 off-heap value 拷回 heap。
-  代表路径：`yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisStringOps.java`
+  代表路径：`libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
 - `SET ... GET` 这类“返回旧值”的路径，也会先把旧值 materialize 成 heap `byte[]`。
-  代表路径：`yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisStringOps.java`
+  代表路径：`libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
 - off-heap key 只要走 `randomKey()`、`forEach()` 这种 `byte[]` 语义接口，就会复制回 heap。
   代表路径：
-  - `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/memory/ffm/YierdisFfmKeyspace.java`
-  - `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/memory/ffm/YierdisFfmExpireIndex.java`
+  - `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmKeyspace.java`
+  - `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmExpireIndex.java`
 - 集合类里，凡是返回 `List<byte[]>` 的读取接口，也会把结果 materialize 到 heap。例如 `HGETALL` 的“返回 pairs 列表”路径。
-  代表路径：`yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/HashValue.java`
+  代表路径：`libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/HashValue.java`
 - 即使上游拿到的是 `OffHeapSlice`，如果最终写出的 sink 不是 direct / Netty fast-path，也会退化成“分块拷到 heap scratch buffer 再写出”。
   代表路径：
-  - `yierdis-memory/foreign/src/main/java/yier/bubu/redis/db/memory/foreign/YierdisForeignOffHeapAllocator.java`
-  - `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/memory/ffm/YierdisFfmBytesRefSlice.java`
+  - `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/memory/foreign/YierdisForeignOffHeapAllocator.java`
+  - `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBytesRefSlice.java`
 
 ## Off-Heap -> Off-Heap / Direct -> Direct
 
 - `GET` 这类字符串读路径，如果 value 在 off-heap，当前实现可以直接返回 `BulkStringValue.slice(...)`，不必先变成 heap `byte[]`。
-  代表路径：`yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisStringOps.java`
+  代表路径：`libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
 - reply 写回链路支持 `BytesSlice` 直通；下游可以通过 `DirectBytesSink` / `NettyByteBufSink` 保持协议层抽象不依赖 Netty。当前 FFM slice 实现仍以 scratch buffer 分块写出，后续如在 slice 实现中识别 direct sink，可进一步做 native-to-direct copy。
   代表路径：
-  - `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java`
-  - `yierdis-protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1NdjsonEncoder.java`
-  - `yierdis-bytes/yierdis-bytes-netty/src/main/java/yier/bubu/redis/bytes/netty/NettyByteBufSink.java`
-  - `yierdis-memory/foreign/src/main/java/yier/bubu/redis/db/memory/foreign/YierdisForeignOffHeapAllocator.java`
-  - `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/memory/ffm/YierdisFfmBytesRefSlice.java`
+  - `libs/protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/JsonLineReplyWriter.java`
+  - `libs/protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/CustomProtocolV1NdjsonEncoder.java`
+  - `libs/bytes/yierdis-bytes-netty/src/main/java/yier/bubu/redis/bytes/netty/NettyByteBufSink.java`
+  - `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/memory/foreign/YierdisForeignOffHeapAllocator.java`
+  - `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBytesRefSlice.java`
 - 集合类也有同样分界。例如 `HGETALL` 的流式写回路径，可以把 off-heap field/value 直接按 `BulkStringSink` 输出，而不必先拼成 `List<byte[]>`。
-  代表路径：`yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/HashValue.java`
+  代表路径：`libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/HashValue.java`
 
 ## 同侧复制也不少
 

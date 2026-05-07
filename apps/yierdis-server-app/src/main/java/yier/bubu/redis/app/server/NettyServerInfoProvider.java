@@ -3,14 +3,14 @@ package yier.bubu.redis.app.server;
 // INFO/STATS 提供器：基于 transport-neutral executor 统计与连接态输出可观测性摘要，避免在热路径做额外分配。
 
 import yier.bubu.redis.command.api.ServerInfoProvider;
-import yier.bubu.redis.ops.YierdisMemoryStats;
-import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.contract.ConnectionStatsView;
-import yier.bubu.redis.contract.ExecutionRequest;
-import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.storage.api.YierdisMemoryStats;
+import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.ConnectionStatsView;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyWriter;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.execution.executor.CommandExecutor;
-import yier.bubu.redis.runtime.YierdisInstanceObservability;
+import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;

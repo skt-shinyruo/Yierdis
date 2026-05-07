@@ -36,14 +36,29 @@ bytes-lib
 
 理解这张图时，最重要的判断不是“谁依赖谁”，而是“谁负责线上协议、谁负责执行契约、谁负责 DB、谁负责最后的组装”。
 
-## Package Ownership Migration
+## Package Ownership
 
-The Maven split is stable enough to make Java package names match module
-ownership. New production code should use the target package families documented
-in `docs/superpowers/specs/2026-05-06-package-structure-rearchitecture-design.md`.
-Legacy packages such as `yier.bubu.redis.db`, `yier.bubu.redis.ops`,
-`yier.bubu.redis.contract`, and the server root package are migration-only
-names.
+Java package names now mirror module ownership. Active production package
+families are:
+
+- `yier.bubu.redis.app.server`
+- `yier.bubu.redis.app.client`
+- `yier.bubu.redis.app.bench`
+- `yier.bubu.redis.execution.api`
+- `yier.bubu.redis.execution.engine`
+- `yier.bubu.redis.execution.executor`
+- `yier.bubu.redis.storage.api`
+- `yier.bubu.redis.storage.api.result`
+- `yier.bubu.redis.storage.memory`
+- `yier.bubu.redis.runtime.api`
+- `yier.bubu.redis.runtime.embedded`
+- `yier.bubu.redis.memory.api`
+- `yier.bubu.redis.memory.foreign`
+- `yier.bubu.redis.protocol.custom.v1.wire`
+- `yier.bubu.redis.protocol.custom.v1.json`
+- `yier.bubu.redis.protocol.custom.v1.reply`
+- `yier.bubu.redis.protocol.custom.v1.execution`
+- `yier.bubu.redis.protocol.custom.v1.netty`
 
 ## 聚合模块
 
@@ -90,7 +105,7 @@ protocol 车道只负责“线上协议长什么样”，不负责命令执行�
 
 ### `yierdis-custom-v1-wire`
 
-放 Custom Protocol v1 的 wire-only 内容：
+放 Custom Protocol v1 的 wire-only 内容，主要包名为 `yier.bubu.redis.protocol.custom.v1.wire.*`，并包含协议私有的 `json` / `reply` 子域：
 
 - 协议侧 DTO
 - `ProtocolLimits`
@@ -103,7 +118,7 @@ protocol 车道只负责“线上协议长什么样”，不负责命令执行�
 
 ### `yierdis-custom-v1-execution-adapter`
 
-负责：
+负责 `yier.bubu.redis.protocol.custom.v1.execution.*`：
 
 - Custom Protocol v1 DTO -> `ExecutionRequest`
 - `JsonLineReplyWriter`
@@ -113,7 +128,7 @@ protocol 车道只负责“线上协议长什么样”，不负责命令执行�
 
 ### `yierdis-custom-v1-netty`
 
-负责：
+负责 `yier.bubu.redis.protocol.custom.v1.netty.*`：
 
 - Netty decoder
 - Netty handler glue
@@ -127,7 +142,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 ### `yierdis-execution-api`
 
-这是执行契约层，放的是 transport-agnostic 的命令执行语义对象（包名仍为 `yier.bubu.redis.contract.*` 以保持迁移兼容），例如：
+这是执行契约层，放的是 transport-agnostic 的命令执行语义对象（包名为 `yier.bubu.redis.execution.api.*`），例如：
 
 - `ExecutionRequest`
 - `ExecutionRecord`
@@ -138,7 +153,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 ### `yierdis-storage-api`
 
-这是 command-facing DB 能力边界，包名仍为 `yier.bubu.redis.ops.*` 以保持迁移兼容，放的是：
+这是 command-facing DB 能力边界，包名为 `yier.bubu.redis.storage.api.*` 和 `yier.bubu.redis.storage.api.result.*`，放的是：
 
 - `DbEngine`
 - `DbReads`
@@ -160,7 +175,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 ### `yierdis-runtime-api`
 
-这是 embedded runtime contract 边界，包名仍保持 `yier.bubu.redis.runtime*` 以迁移兼容，放的是：
+这是 embedded runtime contract 边界，包名为 `yier.bubu.redis.runtime.api.*`，放的是：
 
 - `YierdisInstanceConfig`
 - `YierdisChangeEvent`
@@ -169,8 +184,8 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 它的意义是：
 
 - server / embedded users 直接依赖实例配置 API
-- command / storage implementation 通过 legacy package 中的 change-tracking SPI 协作
-- retired API 聚合模块不再重新拥有 runtime API 源码
+- command / storage implementation 通过 `runtime.api` 中的 change-tracking SPI 协作
+- runtime API 源码只由 `yierdis-runtime-api` 拥有
 
 ### `yierdis-storage-memory`
 
@@ -182,11 +197,11 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 - TTL
 - maxmemory
 - memory accounting
-- internal `db.key.KeyHandle`
+- internal `yier.bubu.redis.storage.memory.internal.key.KeyHandle`
 
 这里是数据结构和存储策略最密集的模块。
 
-`storage-memory` 里的 internal `KeyHandle` 实现 API 层的 `ops.KeyHandle`。热点 TTL cleanup 和 maxmemory eviction 走 handle API；heap `byte[]` 主要保留在协议边界、显式 materialization、测试和 client-facing 结果里。
+`storage-memory` 里的 internal `KeyHandle` 实现 API 层的 `storage.api.KeyHandle`。热点 TTL cleanup 和 maxmemory eviction 走 handle API；heap `byte[]` 主要保留在协议边界、显式 materialization、测试和 client-facing 结果里。
 
 ### `yierdis-command-api/kernel/defaults`
 
@@ -216,7 +231,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 ### `yierdis-engine`
 
-这是当前重构引入的 command execution kernel 边界。
+这是 command execution kernel 边界，包名为 `yier.bubu.redis.execution.engine.*`。
 
 它的职责是：
 
@@ -236,7 +251,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 ### `yierdis-runtime-embedded`
 
-负责 runtime 级组装，而不是协议处理。
+负责 runtime 级组装，而不是协议处理，包名为 `yier.bubu.redis.runtime.embedded.*`。
 
 它做的事情包括：
 
@@ -265,13 +280,13 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 - `OffHeapSlice`
 - `OffHeapOutOfMemoryException`
 
-这些类型的包名仍然是 `yier.bubu.redis.offheap.api`，用于迁移兼容；模块边界已经迁到 `yierdis-memory-api`。
+这些类型的包名是 `yier.bubu.redis.memory.api`；模块边界已经迁到 `yierdis-memory-api`。
 
 需要使用这些 off-heap contract 的生产模块应该直接依赖 `yierdis-memory-api`。旧 API 聚合模块不重新导出这组类型，也不作为兼容桥。命令层不直接依赖这个模块；storage / DB 层负责把 off-heap backend 的失败转换成 `yierdis-storage-api` 能表达的命令错误。
 
 ### `yierdis-memory-foreign`
 
-这是 JDK 25 FFM backend。
+这是 JDK 25 FFM backend，包名为 `yier.bubu.redis.memory.foreign.*`。
 
 它为 storage-memory 提供：
 
@@ -281,9 +296,9 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 这里的角色是“内存底座”，不是“命令层的一部分”。
 
-### `yierdis-executor-core`
+### `libs/executor/yierdis-executor-core`
 
-这是 Netty-free 的调度 / 背压算法层。
+这是 Netty-free 的调度 / 背压算法层，包名为 `yier.bubu.redis.execution.executor.*`。
 
 它抽出来的价值在于：
 
@@ -297,7 +312,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 ### `yierdis-server-app`
 
-这是唯一真正把 protocol lane 和 core lane 拼起来的模块。
+这是唯一真正把 protocol lane 和 core lane 拼起来的模块，包名为 `yier.bubu.redis.app.server.*`。
 
 它负责：
 
@@ -323,16 +338,16 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 这也是为什么很多“看起来可以顺手改到 core 里”的事情，其实应该只在 server 做。
 
-### `yierdis-client`
+### `apps/yierdis-client`
 
-client 的生产依赖主要走 protocol 车道，说明它的定位是：
+client 的生产依赖主要走 protocol 车道，包名为 `yier.bubu.redis.app.client.*`，说明它的定位是：
 
 - 会说 Custom Protocol v1 的客户端 / CLI
 - 不是嵌入式 command/core 执行环境
 
-### `yierdis-bench`
+### `apps/yierdis-bench`
 
-bench 主要依赖协议模块，并在本模块内维护 server launch argv 模型，说明它在设计上更像：
+bench 主要依赖协议模块，包名为 `yier.bubu.redis.app.bench.*`，并在本模块内维护 server launch argv 模型，说明它在设计上更像：
 
 - 外部压测工具
 - 而不是直接嵌入 DB 内部的 benchmark harness
@@ -352,7 +367,7 @@ bench 主要依赖协议模块，并在本模块内维护 server launch argv 模
 
 ### 2. `command-api/kernel/defaults` 不能依赖 `storage-memory` 或 memory backend
 
-命令层只能通过 `yierdis-storage-api` 看 `DbEngine` / `DbReads` / `DbWrites`，不能直接看 `YierdisDb`，也不能 import `yier.bubu.redis.offheap.api.*` 或依赖 `yierdis-memory-api`。
+命令层只能通过 `yierdis-storage-api` 看 `DbEngine` / `DbReads` / `DbWrites`，不能直接看 `YierdisDb`，也不能 import `yier.bubu.redis.memory.api.*` 或依赖 `yierdis-memory-api`。
 
 这样做的目的很明确：
 
@@ -410,7 +425,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 
 ### `command-api/kernel/defaults` 硬依赖护栏
 
-`yierdis-command/yierdis-command-defaults/pom.xml` 的边界由
+`libs/command/yierdis-command-defaults/pom.xml` 的边界由
 `architecture-policy.yml` 和 `ArchitectureBoundaryTest` 持续校验，禁止：
 
 - `yierdis-storage-memory`
@@ -427,7 +442,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 这个测试会扫描源码，确保：
 
 - `storage-memory/storage-api/command-api/kernel/defaults` 不 import `yier.bubu.redis.protocol.*`
-- `command-api/kernel/defaults` 不依赖 `yierdis-memory-api`，也不 import `yier.bubu.redis.offheap.api.*`
+- `command-api/kernel/defaults` 不依赖 `yierdis-memory-api`，也不 import `yier.bubu.redis.memory.api.*`
 - `storage-api` 保持中立 contract 模块，不依赖 command、protocol、application/server、Netty、concrete storage implementation 或 memory-foreign
 - `runtime-api` 保持中立 contract 模块，不依赖 command/storage implementation、protocol、application/server、Netty 或 memory-foreign
 - 旧 core 系列 artifact 不再出现在 active Maven 图
@@ -462,12 +477,12 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 
 - `README.md`
 - `pom.xml`
-- `yierdis-command/yierdis-command-defaults/pom.xml`
-- `yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
-- `yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/ReplySsoTGuardTest.java`
-- `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1ExecutionAdapter.java`
-- `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
-- `yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
+- `libs/command/yierdis-command-defaults/pom.xml`
+- `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
+- `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/custom/v1/ReplySsoTGuardTest.java`
+- `libs/protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/CustomProtocolV1ExecutionAdapter.java`
+- `libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
+- `libs/runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
 
 ## 一句话总结
 

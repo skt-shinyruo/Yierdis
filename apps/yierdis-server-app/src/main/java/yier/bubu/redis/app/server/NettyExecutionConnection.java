@@ -3,7 +3,7 @@ package yier.bubu.redis.app.server;
 import io.netty.channel.Channel;
 import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
-import yier.bubu.redis.engine.EngineSession;
+import yier.bubu.redis.execution.engine.EngineSession;
 import yier.bubu.redis.execution.executor.ExecutionConnection;
 import yier.bubu.redis.execution.executor.ExecutionConnectionContext;
 

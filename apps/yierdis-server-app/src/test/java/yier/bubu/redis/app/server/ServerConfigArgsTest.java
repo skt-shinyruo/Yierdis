@@ -4,7 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.args.YierdisCliException;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
-import yier.bubu.redis.ops.MaxmemoryPolicy;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;

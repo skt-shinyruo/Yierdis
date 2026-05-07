@@ -3,8 +3,8 @@ package yier.bubu.redis.command.defaults;
 // BulkStringReplyAdapter：将 core 的 BulkStringSink 适配到协议无关的 ReplyWriter（命令层边界，集中协议依赖）。
 
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.ops.result.BulkStringSink;
-import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.execution.api.ReplyWriter;
 
 import java.util.Objects;
 

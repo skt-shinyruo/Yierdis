@@ -1,7 +1,7 @@
 package yier.bubu.redis.execution.executor;
 
-import yier.bubu.redis.contract.ExecutionRequest;
-import yier.bubu.redis.contract.ReplyWriterFactory;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyWriterFactory;
 
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;

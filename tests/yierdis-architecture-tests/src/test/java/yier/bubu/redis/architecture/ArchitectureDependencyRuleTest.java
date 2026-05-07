@@ -24,8 +24,8 @@ public class ArchitectureDependencyRuleTest {
                 name -> name.startsWith("yier.bubu.redis.command."),
                 List.of(
                         "yier.bubu.redis.protocol.",
-                        "yier.bubu.redis.db.",
-                        "yier.bubu.redis.offheap.api.",
+                        "yier.bubu.redis.storage.memory.",
+                        "yier.bubu.redis.memory.api.",
                         "yier.bubu.redis.execution.executor.",
                         "io.netty."
                 )
@@ -36,7 +36,7 @@ public class ArchitectureDependencyRuleTest {
     public void storageMemoryDoesNotDependOnCommandProtocolExecutorOrNetty() {
         assertNoDependencies(
                 "storage-memory boundary",
-                name -> name.startsWith("yier.bubu.redis.db."),
+                name -> name.startsWith("yier.bubu.redis.storage.memory."),
                 List.of(
                         "yier.bubu.redis.command.",
                         "yier.bubu.redis.protocol.",
@@ -53,7 +53,7 @@ public class ArchitectureDependencyRuleTest {
                 name -> name.startsWith("yier.bubu.redis.execution.executor."),
                 List.of(
                         "yier.bubu.redis.command.",
-                        "yier.bubu.redis.db.",
+                        "yier.bubu.redis.storage.memory.",
                         "yier.bubu.redis.runtime.",
                         "yier.bubu.redis.protocol.",
                         "io.netty."
@@ -65,13 +65,13 @@ public class ArchitectureDependencyRuleTest {
     public void executionApiDoesNotDependOnImplementationLayers() {
         assertNoDependencies(
                 "execution-api boundary",
-                name -> name.startsWith("yier.bubu.redis.contract."),
+                name -> name.startsWith("yier.bubu.redis.execution.api."),
                 List.of(
                         "yier.bubu.redis.command.",
-                        "yier.bubu.redis.db.",
+                        "yier.bubu.redis.storage.memory.",
                         "yier.bubu.redis.runtime.",
                         "yier.bubu.redis.protocol.",
-                        "yier.bubu.redis.ops.",
+                        "yier.bubu.redis.storage.api.",
                         "io.netty."
                 )
         );

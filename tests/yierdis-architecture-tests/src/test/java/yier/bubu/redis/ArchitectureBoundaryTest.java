@@ -29,13 +29,13 @@ public class ArchitectureBoundaryTest {
         int scanned = 0;
         scanned += scanForForbiddenText(
                 repoRoot,
-                storageMemoryMain(repoRoot).resolve("yier/bubu/redis/db"),
+                storageMemoryMain(repoRoot).resolve("yier/bubu/redis/storage/memory"),
                 offenders,
                 "import yier.bubu.redis.protocol."
         );
         scanned += scanForForbiddenText(
                 repoRoot,
-                workspaceRoot.resolve("libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops"),
+                workspaceRoot.resolve("libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/storage/api"),
                 offenders,
                 "import yier.bubu.redis.protocol."
         );
@@ -73,7 +73,7 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path instanceFile = runtimeEmbeddedRoot(repoRoot).resolve(
-                "src/main/java/yier/bubu/redis/runtime/YierdisInstance.java"
+                "src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java"
         );
         Assert.assertTrue("缺少 YierdisInstance.java，无法执行 runtime 边界护栏", Files.isRegularFile(instanceFile));
 
@@ -235,9 +235,9 @@ public class ArchitectureBoundaryTest {
         );
         Assert.assertTrue(
                 "command policies must forbid offheap API imports",
-                apiPolicy.contains("yier.bubu.redis.offheap.api")
-                        && kernelPolicy.contains("yier.bubu.redis.offheap.api")
-                        && defaultsPolicy.contains("yier.bubu.redis.offheap.api")
+                apiPolicy.contains("yier.bubu.redis.memory.api")
+                        && kernelPolicy.contains("yier.bubu.redis.memory.api")
+                        && defaultsPolicy.contains("yier.bubu.redis.memory.api")
         );
 
         for (Path commandPom : List.of(
@@ -257,8 +257,8 @@ public class ArchitectureBoundaryTest {
         int scanned = scanCommandMainForForbiddenText(
                 repoRoot,
                 offenders,
-                "import yier.bubu.redis.offheap.api.",
-                "yier.bubu.redis.offheap.api."
+                "import yier.bubu.redis.memory.api.",
+                "yier.bubu.redis.memory.api."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 command-* Java 文件", scanned > 0);
 
@@ -329,13 +329,13 @@ public class ArchitectureBoundaryTest {
         List<String> offenders = new ArrayList<>();
         scanFileForForbiddenText(
                 repoRoot,
-                storageMemoryMain(repoRoot).resolve("yier/bubu/redis/db/YierdisHashOps.java"),
+                storageMemoryMain(repoRoot).resolve("yier/bubu/redis/storage/memory/YierdisHashOps.java"),
                 offenders,
                 "wrong number of arguments for 'hset' command"
         );
         scanFileForForbiddenText(
                 repoRoot,
-                storageMemoryMain(repoRoot).resolve("yier/bubu/redis/db/YierdisZSetOps.java"),
+                storageMemoryMain(repoRoot).resolve("yier/bubu/redis/storage/memory/YierdisZSetOps.java"),
                 offenders,
                 "wrong number of arguments for 'zadd' command"
         );
@@ -357,7 +357,7 @@ public class ArchitectureBoundaryTest {
                 "byte[][] argv"
         );
         Path transactionStateFile = repoRoot.resolve(
-                "libs/execution/yierdis-execution-api/src/main/java/yier/bubu/redis/contract/TransactionState.java"
+                "libs/execution/yierdis-execution-api/src/main/java/yier/bubu/redis/execution/api/TransactionState.java"
         ).normalize();
         Assert.assertTrue("缺少 execution-api TransactionState.java，无法约束事务回放 surface", Files.isRegularFile(transactionStateFile));
         scanFileForForbiddenText(
@@ -371,7 +371,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
-                engineRoot(repoRoot).resolve("src/main/java/yier/bubu/redis/engine/EngineSession.java"),
+                engineRoot(repoRoot).resolve("src/main/java/yier/bubu/redis/execution/engine/EngineSession.java"),
                 offenders,
                 "ArrayList<byte[][]>",
                 "List<byte[][]>",
@@ -393,7 +393,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java").normalize(),
+                repoRoot.resolve("libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java").normalize(),
                 offenders,
                 "new AdaptedCommand("
         );
@@ -458,15 +458,15 @@ public class ArchitectureBoundaryTest {
         scanCommandMainForForbiddenText(
                 repoRoot,
                 offenders,
-                "import yier.bubu.redis.contract.Command;",
-                "instanceof yier.bubu.redis.contract.Command",
+                "import yier.bubu.redis.execution.api.Command;",
+                "instanceof yier.bubu.redis.execution.api.Command",
                 "execute(Command"
         );
         scanForForbiddenText(
                 repoRoot,
                 repoRoot.resolve("apps/yierdis-server-app/src/main/java").normalize(),
                 offenders,
-                "import yier.bubu.redis.contract.Command;",
+                "import yier.bubu.redis.execution.api.Command;",
                 "SimpleChannelInboundHandler<Command>",
                 "instanceof Command"
         );
@@ -482,19 +482,19 @@ public class ArchitectureBoundaryTest {
         List<String> offenders = new ArrayList<>();
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/MaxmemoryCandidate.java"),
+                repoRoot.resolve("libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/storage/api/MaxmemoryCandidate.java"),
                 offenders,
                 "byte[] key"
         );
         scanFileForForbiddenText(
                 repoRoot,
-                storageMemoryMain(repoRoot).resolve("yier/bubu/redis/db/YierdisDbExpirationSupport.java"),
+                storageMemoryMain(repoRoot).resolve("yier/bubu/redis/storage/memory/internal/expire/YierdisDbExpirationSupport.java"),
                 offenders,
                 ".randomKey()"
         );
         scanFileForForbiddenText(
                 repoRoot,
-                storageMemoryMain(repoRoot).resolve("yier/bubu/redis/db/YierdisDbMaxmemorySupport.java"),
+                storageMemoryMain(repoRoot).resolve("yier/bubu/redis/storage/memory/YierdisDbMaxmemorySupport.java"),
                 offenders,
                 ".randomKey()",
                 ".forEach("
@@ -509,7 +509,7 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path engineFile = repoRoot.resolve(
-                "libs/execution/yierdis-engine/src/main/java/yier/bubu/redis/engine/YierdisEngine.java"
+                "libs/execution/yierdis-engine/src/main/java/yier/bubu/redis/execution/engine/YierdisEngine.java"
         );
         Assert.assertTrue("缺少 YierdisEngine.java，无法约束 engine 执行边界", Files.isRegularFile(engineFile));
         String engineSource = Files.readString(engineFile, StandardCharsets.UTF_8);
@@ -547,10 +547,10 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 repoRoot.resolve("libs/executor/yierdis-executor-core/src/main/java").normalize(),
                 offenders,
-                "import yier.bubu.redis.contract.CommandContext;",
+                "import yier.bubu.redis.execution.api.CommandContext;",
                 "new CommandContext(",
-                "import yier.bubu.redis.contract.ServerSession;",
-                "import yier.bubu.redis.contract.TransactionState;",
+                "import yier.bubu.redis.execution.api.ServerSession;",
+                "import yier.bubu.redis.execution.api.TransactionState;",
                 "DefaultExecutionSession",
                 "DefaultTransactionState",
                 "setDbIndex(",
@@ -862,19 +862,19 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 wireRoot.resolve("src/main/java"),
                 offenders,
-                "import yier.bubu.redis.contract.",
+                "import yier.bubu.redis.execution.api.",
                 "import yier.bubu.redis.command.",
-                "import yier.bubu.redis.ops.",
-                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.storage.api.",
+                "import yier.bubu.redis.storage.memory.",
                 "import yier.bubu.redis.runtime.",
-                "import yier.bubu.redis.server.",
+                "import yier.bubu.redis.app.server.",
                 "import io.netty.",
-                "yier.bubu.redis.contract.",
+                "yier.bubu.redis.execution.api.",
                 "yier.bubu.redis.command.",
-                "yier.bubu.redis.ops.",
-                "yier.bubu.redis.db.",
+                "yier.bubu.redis.storage.api.",
+                "yier.bubu.redis.storage.memory.",
                 "yier.bubu.redis.runtime.",
-                "yier.bubu.redis.server.",
+                "yier.bubu.redis.app.server.",
                 "io.netty."
         );
         scanned += scanForForbiddenText(
@@ -882,16 +882,16 @@ public class ArchitectureBoundaryTest {
                 executionAdapterRoot.resolve("src/main/java"),
                 offenders,
                 "import yier.bubu.redis.command.",
-                "import yier.bubu.redis.ops.",
-                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.storage.api.",
+                "import yier.bubu.redis.storage.memory.",
                 "import yier.bubu.redis.runtime.",
-                "import yier.bubu.redis.server.",
+                "import yier.bubu.redis.app.server.",
                 "import io.netty.",
                 "yier.bubu.redis.command.",
-                "yier.bubu.redis.ops.",
-                "yier.bubu.redis.db.",
+                "yier.bubu.redis.storage.api.",
+                "yier.bubu.redis.storage.memory.",
                 "yier.bubu.redis.runtime.",
-                "yier.bubu.redis.server.",
+                "yier.bubu.redis.app.server.",
                 "io.netty."
         );
         scanned += scanForForbiddenText(
@@ -899,15 +899,15 @@ public class ArchitectureBoundaryTest {
                 nettyRoot.resolve("src/main/java"),
                 offenders,
                 "import yier.bubu.redis.command.",
-                "import yier.bubu.redis.ops.",
-                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.storage.api.",
+                "import yier.bubu.redis.storage.memory.",
                 "import yier.bubu.redis.runtime.",
-                "import yier.bubu.redis.server.",
+                "import yier.bubu.redis.app.server.",
                 "yier.bubu.redis.command.",
-                "yier.bubu.redis.ops.",
-                "yier.bubu.redis.db.",
+                "yier.bubu.redis.storage.api.",
+                "yier.bubu.redis.storage.memory.",
                 "yier.bubu.redis.runtime.",
-                "yier.bubu.redis.server."
+                "yier.bubu.redis.app.server."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 custom-v1 Java 文件", scanned > 0);
 
@@ -961,7 +961,7 @@ public class ArchitectureBoundaryTest {
         );
 
         Path packageInfo = workspaceRoot.resolve(
-                "libs/execution/yierdis-execution-api/src/main/java/yier/bubu/redis/contract/package-info.java"
+                "libs/execution/yierdis-execution-api/src/main/java/yier/bubu/redis/execution/api/package-info.java"
         ).normalize();
         Assert.assertTrue("execution API contracts must document API/SPI audience in package-info.java", Files.isRegularFile(packageInfo));
         String packageInfoText = Files.readString(packageInfo, StandardCharsets.UTF_8);
@@ -1014,15 +1014,15 @@ public class ArchitectureBoundaryTest {
                 offenders,
                 "import yier.bubu.redis.protocol.",
                 "import yier.bubu.redis.command.",
-                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.storage.memory.",
                 "import yier.bubu.redis.runtime.",
-                "import yier.bubu.redis.server.",
+                "import yier.bubu.redis.app.server.",
                 "import io.netty.",
                 "yier.bubu.redis.protocol.",
                 "yier.bubu.redis.command.",
-                "yier.bubu.redis.db.",
+                "yier.bubu.redis.storage.memory.",
                 "yier.bubu.redis.runtime.",
-                "yier.bubu.redis.server.",
+                "yier.bubu.redis.app.server.",
                 "io.netty."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-execution-api Java 文件", scanned > 0);
@@ -1095,12 +1095,12 @@ public class ArchitectureBoundaryTest {
                 "yierdis-bytes-netty",
                 "netty-all",
                 "yier.bubu.redis.command",
-                "yier.bubu.redis.db",
+                "yier.bubu.redis.storage.memory",
                 "yier.bubu.redis.storage",
                 "yier.bubu.redis.runtime",
                 "yier.bubu.redis.protocol",
-                "yier.bubu.redis.server",
-                "yier.bubu.redis.db.memory.foreign",
+                "yier.bubu.redis.app.server",
+                "yier.bubu.redis.memory.foreign",
                 "io.netty"
         )) {
             Assert.assertTrue(
@@ -1146,18 +1146,18 @@ public class ArchitectureBoundaryTest {
                 workspaceRoot.resolve("libs/memory/yierdis-memory-api/src/main/java").normalize(),
                 offenders,
                 "import yier.bubu.redis.command.",
-                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.storage.memory.",
                 "import yier.bubu.redis.storage.",
                 "import yier.bubu.redis.runtime.",
                 "import yier.bubu.redis.protocol.",
-                "import yier.bubu.redis.server.",
+                "import yier.bubu.redis.app.server.",
                 "import io.netty.",
                 "yier.bubu.redis.command.",
-                "yier.bubu.redis.db.",
+                "yier.bubu.redis.storage.memory.",
                 "yier.bubu.redis.storage.",
                 "yier.bubu.redis.runtime.",
                 "yier.bubu.redis.protocol.",
-                "yier.bubu.redis.server.",
+                "yier.bubu.redis.app.server.",
                 "io.netty."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-memory-api Java 文件", scanned > 0);
@@ -1229,12 +1229,12 @@ public class ArchitectureBoundaryTest {
                 "yierdis-bytes-netty",
                 "netty-all",
                 "yier.bubu.redis.command",
-                "yier.bubu.redis.contract",
-                "yier.bubu.redis.db",
+                "yier.bubu.redis.execution.api",
+                "yier.bubu.redis.storage.memory",
                 "yier.bubu.redis.runtime",
                 "yier.bubu.redis.protocol",
-                "yier.bubu.redis.server",
-                "yier.bubu.redis.db.memory.foreign",
+                "yier.bubu.redis.app.server",
+                "yier.bubu.redis.memory.foreign",
                 "io.netty"
         )) {
             Assert.assertTrue(
@@ -1276,37 +1276,37 @@ public class ArchitectureBoundaryTest {
         }
 
         for (Path packageInfo : List.of(
-                workspaceRoot.resolve("libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/package-info.java").normalize(),
-                workspaceRoot.resolve("libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/result/package-info.java").normalize()
+                workspaceRoot.resolve("libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/storage/api/package-info.java").normalize(),
+                workspaceRoot.resolve("libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/storage/api/result/package-info.java").normalize()
         )) {
             Assert.assertTrue("storage API packages must document API/SPI audience in package-info.java: " + packageInfo,
                     Files.isRegularFile(packageInfo));
             String packageInfoText = Files.readString(packageInfo, StandardCharsets.UTF_8);
             Assert.assertTrue(
-                    "storage API package-info must document legacy package migration compatibility",
-                    packageInfoText.contains("legacy package")
+                    "storage API package-info must document yierdis-storage-api ownership",
+                    packageInfoText.contains("Storage")
                             && packageInfoText.contains("yierdis-storage-api")
             );
         }
 
         String opsPackageInfo = Files.readString(
-                workspaceRoot.resolve("libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/package-info.java").normalize(),
+                workspaceRoot.resolve("libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/storage/api/package-info.java").normalize(),
                 StandardCharsets.UTF_8
         );
         for (String requiredClassification : List.of(
                 "DbReads - API",
                 "DbWrites - API",
                 "DbEngine - API",
-                "RuntimeDbEngine - SPI-in-legacy-package",
-                "DbEngineFactory - SPI-in-legacy-package",
-                "MaxmemoryCoordinator - SPI-in-legacy-package",
-                "MaxmemoryParticipant - SPI-in-legacy-package",
-                "MaxmemoryCandidate - SPI-in-legacy-package",
+                "RuntimeDbEngine - SPI",
+                "DbEngineFactory - SPI",
+                "MaxmemoryCoordinator - SPI",
+                "MaxmemoryParticipant - SPI",
+                "MaxmemoryCandidate - SPI",
                 "MaxmemoryPolicy - API",
-                "DbMemoryConstants - SPI-in-legacy-package",
+                "DbMemoryConstants - SPI",
                 "YierdisMemoryStats - compatibility observability API",
                 "ScanCursorV2 - compatibility API",
-                "KeyHandle - SPI-in-legacy-package"
+                "KeyHandle - SPI"
         )) {
             Assert.assertTrue(
                     "storage API package-info must classify " + requiredClassification,
@@ -1315,7 +1315,7 @@ public class ArchitectureBoundaryTest {
         }
 
         String resultPackageInfo = Files.readString(
-                workspaceRoot.resolve("libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/result/package-info.java").normalize(),
+                workspaceRoot.resolve("libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/storage/api/result/package-info.java").normalize(),
                 StandardCharsets.UTF_8
         );
         for (String requiredClassification : List.of(
@@ -1336,18 +1336,18 @@ public class ArchitectureBoundaryTest {
                 workspaceRoot.resolve("libs/storage/yierdis-storage-api/src/main/java").normalize(),
                 offenders,
                 "import yier.bubu.redis.command.",
-                "import yier.bubu.redis.contract.",
-                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.execution.api.",
+                "import yier.bubu.redis.storage.memory.",
                 "import yier.bubu.redis.runtime.",
                 "import yier.bubu.redis.protocol.",
-                "import yier.bubu.redis.server.",
+                "import yier.bubu.redis.app.server.",
                 "import io.netty.",
                 "yier.bubu.redis.command.",
-                "yier.bubu.redis.contract.",
-                "yier.bubu.redis.db.",
+                "yier.bubu.redis.execution.api.",
+                "yier.bubu.redis.storage.memory.",
                 "yier.bubu.redis.runtime.",
                 "yier.bubu.redis.protocol.",
-                "yier.bubu.redis.server.",
+                "yier.bubu.redis.app.server.",
                 "io.netty."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-storage-api Java 文件", scanned > 0);
@@ -1423,10 +1423,10 @@ public class ArchitectureBoundaryTest {
                 "yierdis-bytes-netty",
                 "netty-all",
                 "yier.bubu.redis.command",
-                "yier.bubu.redis.db",
+                "yier.bubu.redis.storage.memory",
                 "yier.bubu.redis.protocol",
-                "yier.bubu.redis.server",
-                "yier.bubu.redis.db.memory.foreign",
+                "yier.bubu.redis.app.server",
+                "yier.bubu.redis.memory.foreign",
                 "io.netty"
         )) {
             Assert.assertTrue(
@@ -1477,6 +1477,7 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("runtime API package must document API/SPI audience in package-info.java", Files.isRegularFile(apiPackageInfo));
         String apiPackageInfoText = Files.readString(apiPackageInfo, StandardCharsets.UTF_8);
         for (String requiredClassification : List.of(
+                "YierdisInstanceConfig - embedded runtime configuration API",
                 "YierdisChangeEvent - API",
                 "YierdisChangeSink - API"
         )) {
@@ -1486,30 +1487,20 @@ public class ArchitectureBoundaryTest {
             );
         }
 
-        Path runtimePackageInfo = workspaceRoot.resolve(
-                "libs/runtime/yierdis-runtime-api/src/main/java/yier/bubu/redis/runtime/package-info.java"
-        ).normalize();
-        Assert.assertTrue("runtime package must document embedded runtime configuration API audience in package-info.java", Files.isRegularFile(runtimePackageInfo));
-        String runtimePackageInfoText = Files.readString(runtimePackageInfo, StandardCharsets.UTF_8);
-        Assert.assertTrue(
-                "runtime package-info.java must classify YierdisInstanceConfig",
-                runtimePackageInfoText.contains("YierdisInstanceConfig - embedded runtime configuration API")
-        );
-
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
                 repoRoot,
                 workspaceRoot.resolve("libs/runtime/yierdis-runtime-api/src/main/java").normalize(),
                 offenders,
                 "import yier.bubu.redis.command.",
-                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.storage.memory.",
                 "import yier.bubu.redis.protocol.",
-                "import yier.bubu.redis.server.",
+                "import yier.bubu.redis.app.server.",
                 "import io.netty.",
                 "yier.bubu.redis.command.",
-                "yier.bubu.redis.db.",
+                "yier.bubu.redis.storage.memory.",
                 "yier.bubu.redis.protocol.",
-                "yier.bubu.redis.server.",
+                "yier.bubu.redis.app.server.",
                 "io.netty."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-runtime-api Java 文件", scanned > 0);
@@ -1669,25 +1660,25 @@ public class ArchitectureBoundaryTest {
         Path storageMemoryMain = workspaceRoot.resolve("libs/storage/yierdis-storage-memory/src/main/java").normalize();
         Assert.assertTrue("缺少 yierdis-storage-memory main source root", Files.isDirectory(storageMemoryMain));
         for (Path requiredStorageClass : List.of(
-                storageMemoryMain.resolve("yier/bubu/redis/db/YierdisDb.java"),
-                storageMemoryMain.resolve("yier/bubu/redis/db/YierdisDbEngineFactory.java"),
-                storageMemoryMain.resolve("yier/bubu/redis/db/YierdisDbExpirationSupport.java"),
-                storageMemoryMain.resolve("yier/bubu/redis/db/YierdisDbMaxmemorySupport.java")
+                storageMemoryMain.resolve("yier/bubu/redis/storage/memory/YierdisDb.java"),
+                storageMemoryMain.resolve("yier/bubu/redis/storage/memory/YierdisDbEngineFactory.java"),
+                storageMemoryMain.resolve("yier/bubu/redis/storage/memory/internal/expire/YierdisDbExpirationSupport.java"),
+                storageMemoryMain.resolve("yier/bubu/redis/storage/memory/YierdisDbMaxmemorySupport.java")
         )) {
             Assert.assertTrue("storage-memory must own concrete storage class " + requiredStorageClass,
                     Files.isRegularFile(requiredStorageClass));
         }
-        Path storageMemoryPackageInfo = storageMemoryMain.resolve("yier/bubu/redis/db/package-info.java");
+        Path storageMemoryPackageInfo = storageMemoryMain.resolve("yier/bubu/redis/storage/memory/package-info.java");
         Assert.assertTrue(
-                "storage-memory legacy DB package must document migration compatibility",
+                "storage-memory package must document concrete storage ownership",
                 Files.isRegularFile(storageMemoryPackageInfo)
         );
         String storageMemoryPackageInfoText = Files.readString(storageMemoryPackageInfo, StandardCharsets.UTF_8);
         Assert.assertTrue(
                 "storage-memory package-info must identify yierdis-storage-memory ownership",
                 storageMemoryPackageInfoText.contains("yierdis-storage-memory")
-                        && storageMemoryPackageInfoText.contains("legacy package")
-                        && storageMemoryPackageInfoText.contains("migration compatibility")
+                        && storageMemoryPackageInfoText.contains("Concrete in-memory storage implementation")
+                        && storageMemoryPackageInfoText.contains("yierdis-storage-api")
         );
 
         Path runtimePom = runtimeEmbeddedRoot(repoRoot).resolve("pom.xml").normalize();
@@ -1736,8 +1727,8 @@ public class ArchitectureBoundaryTest {
                 "netty-all",
                 "yier.bubu.redis.command",
                 "yier.bubu.redis.protocol",
-                "yier.bubu.redis.server",
-                "yier.bubu.redis.executor",
+                "yier.bubu.redis.app.server",
+                "yier.bubu.redis.execution.executor",
                 "io.netty"
         )) {
             Assert.assertTrue(
@@ -1752,12 +1743,12 @@ public class ArchitectureBoundaryTest {
                 storageMemoryOffenders,
                 "import yier.bubu.redis.command.",
                 "import yier.bubu.redis.protocol.",
-                "import yier.bubu.redis.server.",
+                "import yier.bubu.redis.app.server.",
                 "import yier.bubu.redis.execution.executor.",
                 "import io.netty.",
                 "yier.bubu.redis.command.",
                 "yier.bubu.redis.protocol.",
-                "yier.bubu.redis.server.",
+                "yier.bubu.redis.app.server.",
                 "yier.bubu.redis.execution.executor.",
                 "io.netty."
         );
@@ -1785,11 +1776,11 @@ public class ArchitectureBoundaryTest {
                 "yierdis-server-app",
                 "yierdis-memory-foreign",
                 "netty-all",
-                "yier.bubu.redis.db",
+                "yier.bubu.redis.storage.memory",
                 "yier.bubu.redis.command",
                 "yier.bubu.redis.protocol",
-                "yier.bubu.redis.server",
-                "yier.bubu.redis.db.memory.foreign",
+                "yier.bubu.redis.app.server",
+                "yier.bubu.redis.memory.foreign",
                 "io.netty"
         )) {
             Assert.assertTrue(
@@ -1802,17 +1793,17 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 workspaceRoot.resolve("libs/storage/yierdis-storage-testkit/src/main/java").normalize(),
                 storageTestkitOffenders,
-                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.storage.memory.",
                 "import yier.bubu.redis.command.",
                 "import yier.bubu.redis.protocol.",
-                "import yier.bubu.redis.server.",
-                "import yier.bubu.redis.db.memory.foreign.",
+                "import yier.bubu.redis.app.server.",
+                "import yier.bubu.redis.memory.foreign.",
                 "import io.netty.",
-                "yier.bubu.redis.db.",
+                "yier.bubu.redis.storage.memory.",
                 "yier.bubu.redis.command.",
                 "yier.bubu.redis.protocol.",
-                "yier.bubu.redis.server.",
-                "yier.bubu.redis.db.memory.foreign.",
+                "yier.bubu.redis.app.server.",
+                "yier.bubu.redis.memory.foreign.",
                 "io.netty."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-storage-testkit Java 文件", storageTestkitScanned > 0);
@@ -1980,10 +1971,10 @@ public class ArchitectureBoundaryTest {
         );
         for (String forbiddenImport : List.of(
                 "yier.bubu.redis.command",
-                "yier.bubu.redis.engine",
-                "yier.bubu.redis.executor",
+                "yier.bubu.redis.execution.engine",
+                "yier.bubu.redis.execution.executor",
                 "yier.bubu.redis.protocol",
-                "yier.bubu.redis.server",
+                "yier.bubu.redis.app.server",
                 "io.netty"
         )) {
             Assert.assertTrue(
@@ -2040,16 +2031,16 @@ public class ArchitectureBoundaryTest {
                 runtimeEmbeddedMain(repoRoot),
                 offenders,
                 "import yier.bubu.redis.command.",
-                "import yier.bubu.redis.engine.",
+                "import yier.bubu.redis.execution.engine.",
                 "import yier.bubu.redis.execution.executor.",
                 "import yier.bubu.redis.protocol.",
-                "import yier.bubu.redis.server.",
+                "import yier.bubu.redis.app.server.",
                 "import io.netty.",
                 "yier.bubu.redis.command.",
-                "yier.bubu.redis.engine.",
+                "yier.bubu.redis.execution.engine.",
                 "yier.bubu.redis.execution.executor.",
                 "yier.bubu.redis.protocol.",
-                "yier.bubu.redis.server.",
+                "yier.bubu.redis.app.server.",
                 "io.netty."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-runtime-embedded Java 文件", scanned > 0);
@@ -2085,7 +2076,7 @@ public class ArchitectureBoundaryTest {
         );
         Assert.assertTrue(
                 "engine policy must forbid server imports",
-                enginePolicy.contains("yier.bubu.redis.server")
+                enginePolicy.contains("yier.bubu.redis.app.server")
         );
         Assert.assertTrue(
                 "engine policy must forbid Netty imports",
@@ -2132,10 +2123,10 @@ public class ArchitectureBoundaryTest {
                 "yier.bubu.redis.protocol.",
                 "import yier.bubu.redis.runtime.",
                 "yier.bubu.redis.runtime.",
-                "import yier.bubu.redis.server.",
-                "yier.bubu.redis.server.",
-                "import yier.bubu.redis.db.",
-                "yier.bubu.redis.db.",
+                "import yier.bubu.redis.app.server.",
+                "yier.bubu.redis.app.server.",
+                "import yier.bubu.redis.storage.memory.",
+                "yier.bubu.redis.storage.memory.",
                 "import io.netty.",
                 "io.netty."
         );
@@ -2155,7 +2146,7 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path requestFile = repoRoot.resolve(
-                "libs/protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1Request.java"
+                "libs/protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/CustomProtocolV1Request.java"
         );
         Assert.assertTrue("缺少 CustomProtocolV1Request.java", Files.isRegularFile(requestFile));
         String requestSource = Files.readString(requestFile, StandardCharsets.UTF_8);
@@ -2198,7 +2189,7 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
-        Path dbFile = storageMemoryMain(repoRoot).resolve("yier/bubu/redis/db/YierdisDb.java");
+        Path dbFile = storageMemoryMain(repoRoot).resolve("yier/bubu/redis/storage/memory/YierdisDb.java");
         Assert.assertTrue("缺少 YierdisDb.java", Files.exists(dbFile));
 
         String source = Files.readString(dbFile);
@@ -2233,12 +2224,12 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path runtimeAccessFile = runtimeEmbeddedRoot(repoRoot).resolve(
-                "src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java"
+                "src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceRuntimeAccess.java"
         );
         Assert.assertTrue("缺少 YierdisInstanceRuntimeAccess.java，说明 runtime 显式访问 seam 未建立", Files.isRegularFile(runtimeAccessFile));
 
         Path maintenanceFile = runtimeEmbeddedRoot(repoRoot).resolve(
-                "src/main/java/yier/bubu/redis/runtime/YierdisInstanceMaintenance.java"
+                "src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceMaintenance.java"
         );
         Assert.assertTrue("缺少 YierdisInstanceMaintenance.java", Files.isRegularFile(maintenanceFile));
 
@@ -2266,12 +2257,12 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path instanceFile = runtimeEmbeddedRoot(repoRoot).resolve(
-                "src/main/java/yier/bubu/redis/runtime/YierdisInstance.java"
+                "src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java"
         );
         Assert.assertTrue("缺少 YierdisInstance.java", Files.isRegularFile(instanceFile));
 
         Path runtimeAccessFile = runtimeEmbeddedRoot(repoRoot).resolve(
-                "src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java"
+                "src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceRuntimeAccess.java"
         );
         Assert.assertTrue("缺少 YierdisInstanceRuntimeAccess.java", Files.isRegularFile(runtimeAccessFile));
 
@@ -2304,7 +2295,7 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path runtimeAccessFile = runtimeEmbeddedRoot(repoRoot).resolve(
-                "src/main/java/yier/bubu/redis/runtime/YierdisInstanceRuntimeAccess.java"
+                "src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceRuntimeAccess.java"
         );
         Assert.assertTrue("缺少 YierdisInstanceRuntimeAccess.java，无法约束 bootstrap 生命周期边界", Files.isRegularFile(runtimeAccessFile));
 
@@ -2398,7 +2389,7 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 libs/execution/yierdis-storage-memory 模块）", repoRoot);
 
         Path engineFile = engineRoot(repoRoot).resolve(
-                "src/main/java/yier/bubu/redis/engine/YierdisEngine.java"
+                "src/main/java/yier/bubu/redis/execution/engine/YierdisEngine.java"
         );
         Assert.assertTrue(
                 "缺少 YierdisEngine facade，server bootstrap 不应继续直接接线 command processor",
@@ -2512,10 +2503,10 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 workspaceRoot.resolve("apps/yierdis-server-app/src/main/java").normalize(),
                 offenders,
-                "import yier.bubu.redis.db.",
+                "import yier.bubu.redis.storage.memory.",
                 "import yier.bubu.redis.storage.memory.",
                 "import yier.bubu.redis.storage.internal.",
-                "import yier.bubu.redis.db.memory.",
+                "import yier.bubu.redis.storage.memory.memory.",
                 "new YierdisDb("
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server-app Java 文件", scanned > 0);
@@ -2555,7 +2546,7 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 workspaceRoot.resolve("apps/yierdis-server-app/src/main/java").normalize(),
                 storageApiUsers,
-                "import yier.bubu.redis.ops."
+                "import yier.bubu.redis.storage.api."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server-app Java 文件", scanned > 0);
         Assert.assertFalse(
@@ -2593,7 +2584,7 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 workspaceRoot.resolve("apps/yierdis-server-app/src/main/java").normalize(),
                 runtimeApiUsers,
-                "yier.bubu.redis.runtime.YierdisInstanceConfig",
+                "yier.bubu.redis.runtime.api.YierdisInstanceConfig",
                 "import yier.bubu.redis.runtime.*;",
                 "yier.bubu.redis.runtime.api."
         );
@@ -2920,7 +2911,7 @@ public class ArchitectureBoundaryTest {
     private static void assertRuntimeApiDetectorCoversPackageWideReviewCases() {
         Assert.assertTrue(
                 "server runtime-api guard must catch legacy-package runtime API imports",
-                containsRuntimeApiReference("import yier.bubu.redis.runtime.YierdisInstanceConfig;")
+                containsRuntimeApiReference("import yier.bubu.redis.runtime.api.YierdisInstanceConfig;")
         );
         Assert.assertTrue(
                 "server runtime-api guard must catch legacy-package runtime wildcard imports",
@@ -2928,7 +2919,7 @@ public class ArchitectureBoundaryTest {
         );
         Assert.assertTrue(
                 "server runtime-api guard must catch fully-qualified legacy-package runtime API references",
-                containsRuntimeApiReference("yier.bubu.redis.runtime.YierdisInstanceConfig.builder();")
+                containsRuntimeApiReference("yier.bubu.redis.runtime.api.YierdisInstanceConfig.builder();")
         );
         Assert.assertTrue(
                 "server runtime-api guard must catch runtime-api package imports",
@@ -2940,12 +2931,12 @@ public class ArchitectureBoundaryTest {
         );
         Assert.assertFalse(
                 "server runtime-api guard must not catch runtime implementation imports",
-                containsRuntimeApiReference("import yier.bubu.redis.runtime.YierdisInstance;")
+                containsRuntimeApiReference("import yier.bubu.redis.runtime.embedded.YierdisInstance;")
         );
     }
 
     private static boolean containsRuntimeApiReference(String source) {
-        return source.contains("yier.bubu.redis.runtime.YierdisInstanceConfig")
+        return source.contains("yier.bubu.redis.runtime.api.YierdisInstanceConfig")
                 || source.contains("import yier.bubu.redis.runtime.*;")
                 || source.contains("yier.bubu.redis.runtime.api.");
     }

@@ -146,9 +146,9 @@ CustomRequestDecoder
 
 如果你想对照源码看，最关键的文件是：
 
-- `yierdis-protocol/.../CustomRequestDecoder.java`
-- `yierdis-protocol/.../CustomProtocolV1RequestPayloadParser.java`
-- `yierdis-app/yierdis-server-app/.../ProtocolCommandAdapter.java`
+- `libs/protocol/.../CustomRequestDecoder.java`
+- `libs/protocol/.../CustomProtocolV1RequestPayloadParser.java`
+- `apps/yierdis-server-app/.../ProtocolCommandAdapter.java`
 
 ## Reply Format
 

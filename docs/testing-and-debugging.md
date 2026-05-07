@@ -15,10 +15,10 @@
 
 代表测试：
 
-- `yierdis-app/yierdis-server-app/.../args/YierdisServerArgsTest.java`
-- `yierdis-app/yierdis-server-app/.../ServerConfigArgsTest.java`
-- `yierdis-architecture-tests/.../ArchitectureBoundaryTest.java`
-- `yierdis-architecture-tests/.../ReplySsoTGuardTest.java`
+- `apps/yierdis-server-app/.../args/YierdisServerArgsTest.java`
+- `apps/yierdis-server-app/.../ServerConfigArgsTest.java`
+- `tests/yierdis-architecture-tests/.../ArchitectureBoundaryTest.java`
+- `tests/yierdis-architecture-tests/.../ReplySsoTGuardTest.java`
 
 这层很适合抓：
 
@@ -138,22 +138,22 @@
 如果你想单跑某一个模块，最稳妥的方式是进入对应模块目录：
 
 ```bash
-cd yierdis-protocol/yierdis-custom-v1-wire
+cd libs/protocol/yierdis-custom-v1-wire
 mvn -Dtest=CustomProtocolV1RequestEncoderTest,CustomProtocolV1ReplyParserTest test
 ```
 
 ```bash
-cd yierdis-protocol/yierdis-custom-v1-execution-adapter
+cd libs/protocol/yierdis-custom-v1-execution-adapter
 mvn -Dtest=CustomProtocolV1ExecutionAdapterTest,JsonLineReplyWriterTest test
 ```
 
 ```bash
-cd yierdis-protocol/yierdis-custom-v1-netty
+cd libs/protocol/yierdis-custom-v1-netty
 mvn -Dtest=CustomRequestDecoderTest test
 ```
 
 ```bash
-cd yierdis-app/yierdis-server-app
+cd apps/yierdis-server-app
 mvn -Dtest=CustomProtocolResyncIntegrationTest test
 ```
 
@@ -168,7 +168,7 @@ mvn -Dtest=CustomProtocolResyncIntegrationTest test
 例如改 zset：
 
 ```bash
-cd yierdis-runtime/yierdis-runtime-embedded
+cd libs/runtime/yierdis-runtime-embedded
 mvn -Dtest=ZSetCommandTest,CommandErrorTest test
 ```
 
@@ -184,7 +184,7 @@ mvn -Dtest=ZSetCommandTest,CommandErrorTest test
 例如改 string / off-heap：
 
 ```bash
-cd yierdis-runtime/yierdis-runtime-embedded
+cd libs/runtime/yierdis-runtime-embedded
 mvn -Dtest=OffHeapStringStorageTest,MemoryStatsCommandTest,MaxmemoryEvictionTest test
 ```
 
@@ -198,7 +198,7 @@ mvn -Dtest=OffHeapStringStorageTest,MemoryStatsCommandTest,MaxmemoryEvictionTest
 - `CommandExecutorTest`
 
 ```bash
-mvn -pl yierdis-app/yierdis-server-app,yierdis-executor-core -am \
+mvn -pl apps/yierdis-server-app,libs/executor/yierdis-executor-core -am \
   -Dtest=ServerConfigArgsTest,YierdisServerBootstrapCommandWiringTest,CommandExecutorBackpressureTest,CommandExecutorTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```

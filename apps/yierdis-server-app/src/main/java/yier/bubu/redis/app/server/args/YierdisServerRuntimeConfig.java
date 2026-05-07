@@ -1,6 +1,6 @@
 package yier.bubu.redis.app.server.args;
 
-import yier.bubu.redis.ops.MaxmemoryPolicy;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.util.Locale;
 import java.util.Objects;

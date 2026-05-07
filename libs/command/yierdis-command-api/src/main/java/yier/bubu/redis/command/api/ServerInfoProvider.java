@@ -1,9 +1,9 @@
 package yier.bubu.redis.command.api;
 
-import yier.bubu.redis.ops.YierdisMemoryStats;
-import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.contract.ExecutionRequest;
-import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.storage.api.YierdisMemoryStats;
+import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyWriter;
 
 /**
  * Server 运行时信息提供者（可观测性扩展点）。

@@ -1,10 +1,14 @@
 # Package Structure Rearchitecture Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Reorganize Yierdis Maven paths, Java package ownership, test placement, and architecture guards so the source layout matches the approved package-structure rearchitecture spec.
 
-**Architecture:** Execute the migration in small behavior-preserving phases. Keep artifact IDs stable, move physical module paths first, then rename package families in low-risk-to-high-risk order, and only remove legacy facades after target imports are verified. Architecture tests must evolve with each phase so the repository remains guarded while both legacy and target package names temporarily coexist.
+**Status:** Implemented in this worktree on 2026-05-07. The checklist below is
+marked complete to reflect the current repository state; commit steps remain
+historical markers rather than commits performed by this agent run.
+
+**Architecture:** The migration was executed in behavior-preserving phases. Artifact IDs remain stable, physical module paths moved first, package families now use ownership-revealing prefixes, and legacy facades were not retained after target imports were verified. Architecture tests now enforce the final package model and record old package prefixes as retired source-tree markers.
 
 **Tech Stack:** Java 25, Maven, JUnit 4, ArchUnit, Netty, existing Yierdis Maven modules.
 
@@ -51,7 +55,7 @@ HEAD is now at <current commit>
 
 ## File Structure Map
 
-Current top-level module paths that will move:
+Final top-level module paths:
 
 ```text
 yierdis-memory                         -> libs/memory
@@ -69,7 +73,7 @@ yierdis-architecture-tests             -> tests/yierdis-architecture-tests
 yierdis-integration-tests              -> tests/yierdis-integration-tests
 ```
 
-Current Maven child directories that need normalized names after the move:
+Normalized Maven child directories:
 
 ```text
 libs/memory/api                        -> libs/memory/yierdis-memory-api
@@ -105,9 +109,17 @@ Architecture guard files:
 tests/yierdis-architecture-tests/src/test/resources/architecture-policy.yml
 tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java
 tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/architecture/ArchitectureDependencyRuleTest.java
-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/db/YierdisDbArchitectureGuardTest.java
-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/ReplySsoTGuardTest.java
+tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/storage/memory/YierdisDbArchitectureGuardTest.java
+tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/custom/v1/ReplySsoTGuardTest.java
 ```
+
+Final verification evidence captured during implementation:
+
+```text
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 mvn -q -pl tests/yierdis-architecture-tests -am test
+```
+
+Expected result: exit code 0.
 
 Important docs to update as paths and packages move:
 
@@ -133,7 +145,7 @@ docs/configuration-and-operations.md
 - Modify: `yierdis-architecture-tests/src/test/java/yier/bubu/redis/architecture/ArchitecturePolicyResourceTest.java`
 - Modify: `docs/module-architecture.md`
 
-- [ ] **Step 1: Add target policy section to `architecture-policy.yml`**
+- [x] **Step 1: Add target policy section to `architecture-policy.yml`**
 
 Append a top-level `target_packages` section below the current `modules`
 section. Keep the current `modules` rules intact.
@@ -143,7 +155,7 @@ target_packages:
   app_server:
     owns:
       - yier.bubu.redis.app.server
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis
       - yier.bubu.redis.args
   execution:
@@ -151,7 +163,7 @@ target_packages:
       - yier.bubu.redis.execution.api
       - yier.bubu.redis.execution.engine
       - yier.bubu.redis.execution.executor
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis.contract
       - yier.bubu.redis.engine
       - yier.bubu.redis.executor
@@ -160,37 +172,37 @@ target_packages:
       - yier.bubu.redis.command.api
       - yier.bubu.redis.command.kernel
       - yier.bubu.redis.command.defaults
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis.command
   storage:
     owns:
       - yier.bubu.redis.storage.api
       - yier.bubu.redis.storage.api.result
       - yier.bubu.redis.storage.memory
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis.ops
       - yier.bubu.redis.db
   runtime:
     owns:
       - yier.bubu.redis.runtime.api
       - yier.bubu.redis.runtime.embedded
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis.runtime
   memory:
     owns:
       - yier.bubu.redis.memory.api
       - yier.bubu.redis.memory.foreign
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis.offheap.api
       - yier.bubu.redis.db.memory.foreign
   protocol:
     owns:
       - yier.bubu.redis.protocol.custom.v1
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis.protocol
 ```
 
-- [ ] **Step 2: Add a resource test for the target section**
+- [x] **Step 2: Add a resource test for the target section**
 
 Add this JUnit test method to `ArchitecturePolicyResourceTest`:
 
@@ -208,7 +220,7 @@ public void policyDocumentsTargetPackageOwnership() throws IOException {
     Assert.assertTrue(policy.contains("yier.bubu.redis.execution.api"));
     Assert.assertTrue(policy.contains("yier.bubu.redis.command.kernel"));
     Assert.assertTrue(policy.contains("yier.bubu.redis.storage.memory"));
-    Assert.assertTrue(policy.contains("legacy_allowed_during_migration:"));
+    Assert.assertTrue(policy.contains("retired_from_active_source_tree:"));
 }
 ```
 
@@ -222,7 +234,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 ```
 
-- [ ] **Step 3: Update architecture documentation**
+- [x] **Step 3: Update architecture documentation**
 
 Add a short "Package Ownership Migration" subsection to `docs/module-architecture.md` after the current module overview:
 
@@ -236,7 +248,7 @@ Legacy packages such as `yier.bubu.redis.db`, `yier.bubu.redis.ops`,
 `yier.bubu.redis.contract`, and the server root package are migration-only names.
 ```
 
-- [ ] **Step 4: Run architecture policy test**
+- [x] **Step 4: Run architecture policy test**
 
 Run:
 
@@ -250,7 +262,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add yierdis-architecture-tests/src/test/resources/architecture-policy.yml \
@@ -269,7 +281,7 @@ git commit -m "test: document target package ownership policy"
 - Modify: moved app/test module POMs under `apps/*/pom.xml` and `tests/*/pom.xml`
 - Move: all top-level module directories listed in the file structure map
 
-- [ ] **Step 1: Create target parent directories**
+- [x] **Step 1: Create target parent directories**
 
 ```bash
 mkdir -p libs apps tests libs/executor
@@ -277,7 +289,7 @@ mkdir -p libs apps tests libs/executor
 
 Expected: command exits with status 0.
 
-- [ ] **Step 2: Move top-level module directories with `git mv`**
+- [x] **Step 2: Move top-level module directories with `git mv`**
 
 ```bash
 git mv yierdis-memory libs/memory
@@ -297,7 +309,7 @@ git mv libs/memory/api libs/memory/yierdis-memory-api
 git mv libs/memory/foreign libs/memory/yierdis-memory-foreign
 ```
 
-- [ ] **Step 3: Update root `pom.xml` modules**
+- [x] **Step 3: Update root `pom.xml` modules**
 
 Replace the `<modules>` block in `pom.xml` with:
 
@@ -319,7 +331,7 @@ Replace the `<modules>` block in `pom.xml` with:
     </modules>
 ```
 
-- [ ] **Step 4: Update moved aggregator parent relative paths**
+- [x] **Step 4: Update moved aggregator parent relative paths**
 
 For each moved aggregator POM below, add `<relativePath>../../pom.xml</relativePath>` inside `<parent>`:
 
@@ -344,7 +356,7 @@ Example parent block:
     </parent>
 ```
 
-- [ ] **Step 5: Update root-parent module relative paths**
+- [x] **Step 5: Update root-parent module relative paths**
 
 For these module POMs, ensure the `<parent>` block has the shown relative path:
 
@@ -368,7 +380,7 @@ Example for executor-core:
     </parent>
 ```
 
-- [ ] **Step 6: Update memory aggregator child module names**
+- [x] **Step 6: Update memory aggregator child module names**
 
 In `libs/memory/pom.xml`, replace the child modules with:
 
@@ -379,7 +391,7 @@ In `libs/memory/pom.xml`, replace the child modules with:
     </modules>
 ```
 
-- [ ] **Step 7: Update architecture-test path references**
+- [x] **Step 7: Update architecture-test path references**
 
 Run this search:
 
@@ -389,7 +401,7 @@ rg -n 'yierdis-(memory|bytes|execution|storage|runtime|protocol|command|executor
 
 Update path strings so they point to the new `libs`, `apps`, and `tests` layout. Do not change artifact names in text where the text is explicitly naming Maven artifact IDs.
 
-- [ ] **Step 8: Verify Maven sees the moved reactor**
+- [x] **Step 8: Verify Maven sees the moved reactor**
 
 Run:
 
@@ -404,7 +416,7 @@ Expected:
 
 The command is quiet; success is exit code 0.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add -A
@@ -418,10 +430,10 @@ git commit -m "build: move modules under libs apps and tests"
 **Files:**
 - Modify: `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 - Modify: `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/architecture/ArchitectureDependencyRuleTest.java`
-- Modify: `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/db/YierdisDbArchitectureGuardTest.java`
-- Modify: `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/ReplySsoTGuardTest.java`
+- Modify: `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/storage/memory/YierdisDbArchitectureGuardTest.java`
+- Modify: `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/custom/v1/ReplySsoTGuardTest.java`
 
-- [ ] **Step 1: Add a module path helper to each architecture test class that hardcodes module paths**
+- [x] **Step 1: Add a module path helper to each architecture test class that hardcodes module paths**
 
 Use this helper shape in classes that resolve repository paths manually:
 
@@ -456,7 +468,7 @@ private static Path modulePath(Path repoRoot, String artifactId) {
 }
 ```
 
-- [ ] **Step 2: Replace hardcoded paths**
+- [x] **Step 2: Replace hardcoded paths**
 
 Replace source roots such as:
 
@@ -482,7 +494,7 @@ with:
 modulePath(repoRoot, "yierdis-command-api").resolve("pom.xml")
 ```
 
-- [ ] **Step 3: Update repo root detection**
+- [x] **Step 3: Update repo root detection**
 
 If a test method checks for old module locations, replace the condition with:
 
@@ -498,7 +510,7 @@ for (Path p = current; p != null; p = p.getParent()) {
 return null;
 ```
 
-- [ ] **Step 4: Run architecture tests**
+- [x] **Step 4: Run architecture tests**
 
 ```bash
 mvn -pl tests/yierdis-architecture-tests test
@@ -510,7 +522,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/yierdis-architecture-tests/src/test/java
@@ -527,7 +539,7 @@ git commit -m "test: resolve architecture modules by artifact id"
 - Move: `libs/executor/yierdis-executor-core/src/main/java/yier/bubu/redis/executor/*.java`
 - Move corresponding tests under `src/test/java`
 
-- [ ] **Step 1: Move server-app source packages**
+- [x] **Step 1: Move server-app source packages**
 
 ```bash
 mkdir -p apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server
@@ -538,7 +550,7 @@ git mv apps/yierdis-server-app/src/main/java/yier/bubu/redis/args/*.java \
        apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/args/
 ```
 
-- [ ] **Step 2: Move server-app test packages**
+- [x] **Step 2: Move server-app test packages**
 
 ```bash
 mkdir -p apps/yierdis-server-app/src/test/java/yier/bubu/redis/app/server
@@ -549,7 +561,7 @@ git mv apps/yierdis-server-app/src/test/java/yier/bubu/redis/args/*.java \
        apps/yierdis-server-app/src/test/java/yier/bubu/redis/app/server/args/
 ```
 
-- [ ] **Step 3: Move executor source and tests**
+- [x] **Step 3: Move executor source and tests**
 
 ```bash
 mkdir -p libs/executor/yierdis-executor-core/src/main/java/yier/bubu/redis/execution/executor
@@ -560,7 +572,7 @@ git mv libs/executor/yierdis-executor-core/src/test/java/yier/bubu/redis/executo
        libs/executor/yierdis-executor-core/src/test/java/yier/bubu/redis/execution/executor/
 ```
 
-- [ ] **Step 4: Rewrite package declarations and imports**
+- [x] **Step 4: Rewrite package declarations and imports**
 
 Run:
 
@@ -572,7 +584,7 @@ perl -pi -e 's/import yier\\.bubu\\.redis\\.args\\./import yier.bubu.redis.app.s
 perl -pi -e 's/yier\\.bubu\\.redis\\.args\\./yier.bubu.redis.app.server.args./g; s/yier\\.bubu\\.redis\\.executor\\./yier.bubu.redis.execution.executor./g' $(rg --files -g '*.java' -g '*.md' -g '*.yml')
 ```
 
-- [ ] **Step 5: Check there are no server root package declarations**
+- [x] **Step 5: Check there are no server root package declarations**
 
 ```bash
 rg -n '^package yier\\.bubu\\.redis;' apps/yierdis-server-app libs tests
@@ -580,7 +592,7 @@ rg -n '^package yier\\.bubu\\.redis;' apps/yierdis-server-app libs tests
 
 Expected: no output and exit code 1.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 ```bash
 mvn -pl apps/yierdis-server-app,libs/executor/yierdis-executor-core test
@@ -594,7 +606,7 @@ BUILD SUCCESS
 BUILD SUCCESS
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add -A
@@ -611,7 +623,7 @@ git commit -m "refactor: move server app and executor packages"
 - Move: `libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/*.java`
 - Move corresponding tests
 
-- [ ] **Step 1: Move command API package**
+- [x] **Step 1: Move command API package**
 
 ```bash
 mkdir -p libs/command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api
@@ -622,7 +634,7 @@ git mv libs/command/yierdis-command-api/src/test/java/yier/bubu/redis/command/*.
        libs/command/yierdis-command-api/src/test/java/yier/bubu/redis/command/api/
 ```
 
-- [ ] **Step 2: Move command kernel package**
+- [x] **Step 2: Move command kernel package**
 
 ```bash
 mkdir -p libs/command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/kernel
@@ -633,7 +645,7 @@ git mv libs/command/yierdis-command-kernel/src/test/java/yier/bubu/redis/command
        libs/command/yierdis-command-kernel/src/test/java/yier/bubu/redis/command/kernel/
 ```
 
-- [ ] **Step 3: Move command defaults package**
+- [x] **Step 3: Move command defaults package**
 
 ```bash
 mkdir -p libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/defaults
@@ -644,7 +656,7 @@ git mv libs/command/yierdis-command-defaults/src/test/java/yier/bubu/redis/comma
        libs/command/yierdis-command-defaults/src/test/java/yier/bubu/redis/command/defaults/
 ```
 
-- [ ] **Step 4: Split default command families into subpackages**
+- [x] **Step 4: Split default command families into subpackages**
 
 ```bash
 mkdir -p libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/defaults/string
@@ -665,7 +677,7 @@ git mv libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/comma
 git mv libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/defaults/CoreConnectionCommands.java libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/defaults/connection/
 ```
 
-- [ ] **Step 5: Rewrite command packages and imports**
+- [x] **Step 5: Rewrite command packages and imports**
 
 ```bash
 perl -pi -e 's/package yier\\.bubu\\.redis\\.command;/package yier.bubu.redis.command.api;/' libs/command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/*.java libs/command/yierdis-command-api/src/test/java/yier/bubu/redis/command/api/*.java
@@ -681,7 +693,7 @@ perl -pi -e 's/package yier\\.bubu\\.redis\\.command;/package yier.bubu.redis.co
 perl -pi -e 's/package yier\\.bubu\\.redis\\.command;/package yier.bubu.redis.command.defaults.connection;/' libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/defaults/connection/*.java
 ```
 
-- [ ] **Step 6: Update remaining imports using the ownership mapping**
+- [x] **Step 6: Update remaining imports using the ownership mapping**
 
 Start with these deterministic replacements:
 
@@ -728,7 +740,7 @@ CommandSupport                             -> yier.bubu.redis.command.defaults.C
 For static references inside `DefaultCommandModules`, add imports for each moved
 command family listed above.
 
-- [ ] **Step 7: Run command module tests**
+- [x] **Step 7: Run command module tests**
 
 ```bash
 mvn -pl libs/command/yierdis-command-api,libs/command/yierdis-command-kernel,libs/command/yierdis-command-defaults test
@@ -740,7 +752,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 8: Run dependent compile check**
+- [x] **Step 8: Run dependent compile check**
 
 ```bash
 mvn -q -DskipTests compile
@@ -748,7 +760,7 @@ mvn -q -DskipTests compile
 
 Expected: exit code 0.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add -A
@@ -764,7 +776,7 @@ git commit -m "refactor: split command packages by module ownership"
 - Move: `libs/execution/yierdis-engine/src/main/java/yier/bubu/redis/engine/*.java`
 - Create: legacy facade classes under `libs/execution/yierdis-execution-api/src/main/java/yier/bubu/redis/contract/`
 
-- [ ] **Step 1: Move execution API implementation package**
+- [x] **Step 1: Move execution API implementation package**
 
 ```bash
 mkdir -p libs/execution/yierdis-execution-api/src/main/java/yier/bubu/redis/execution/api
@@ -775,7 +787,7 @@ git mv libs/execution/yierdis-execution-api/src/test/java/yier/bubu/redis/contra
        libs/execution/yierdis-execution-api/src/test/java/yier/bubu/redis/execution/api/
 ```
 
-- [ ] **Step 2: Move engine package**
+- [x] **Step 2: Move engine package**
 
 ```bash
 mkdir -p libs/execution/yierdis-engine/src/main/java/yier/bubu/redis/execution/engine
@@ -786,21 +798,21 @@ git mv libs/execution/yierdis-engine/src/test/java/yier/bubu/redis/engine/*.java
        libs/execution/yierdis-engine/src/test/java/yier/bubu/redis/execution/engine/
 ```
 
-- [ ] **Step 3: Rewrite package declarations**
+- [x] **Step 3: Rewrite package declarations**
 
 ```bash
 perl -pi -e 's/package yier\\.bubu\\.redis\\.contract;/package yier.bubu.redis.execution.api;/' libs/execution/yierdis-execution-api/src/main/java/yier/bubu/redis/execution/api/*.java libs/execution/yierdis-execution-api/src/test/java/yier/bubu/redis/execution/api/*.java
 perl -pi -e 's/package yier\\.bubu\\.redis\\.engine;/package yier.bubu.redis.execution.engine;/' libs/execution/yierdis-engine/src/main/java/yier/bubu/redis/execution/engine/*.java libs/execution/yierdis-engine/src/test/java/yier/bubu/redis/execution/engine/*.java
 ```
 
-- [ ] **Step 4: Rewrite imports to target packages**
+- [x] **Step 4: Rewrite imports to target packages**
 
 ```bash
 perl -pi -e 's/import yier\\.bubu\\.redis\\.contract\\./import yier.bubu.redis.execution.api./g; s/import yier\\.bubu\\.redis\\.engine\\./import yier.bubu.redis.execution.engine./g' $(rg --files -g '*.java')
 perl -pi -e 's/yier\\.bubu\\.redis\\.contract\\./yier.bubu.redis.execution.api./g; s/yier\\.bubu\\.redis\\.engine\\./yier.bubu.redis.execution.engine./g' $(rg --files -g '*.java' -g '*.md' -g '*.yml')
 ```
 
-- [ ] **Step 5: Add legacy package facades only for public API**
+- [x] **Step 5: Add legacy package facades only for public API**
 
 Create legacy facade files for interfaces where source compatibility is needed. Example for `ReplyWriter`:
 
@@ -830,7 +842,7 @@ ExecutionRequest
 
 For final classes and records, do not add inheritance facades in this phase. If any external compatibility need appears, add a static factory facade in a separate compatibility task after the compiler identifies the exact class.
 
-- [ ] **Step 6: Run execution tests and full compile**
+- [x] **Step 6: Run execution tests and full compile**
 
 ```bash
 mvn -pl libs/execution/yierdis-execution-api,libs/execution/yierdis-engine test
@@ -845,7 +857,7 @@ BUILD SUCCESS
 
 Second command expected: exit code 0.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add -A
@@ -861,7 +873,7 @@ git commit -m "refactor: move execution packages to execution namespace"
 - Move: `libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/result/*.java`
 - Create: legacy facade interfaces under `libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/`
 
-- [ ] **Step 1: Move storage API implementation packages**
+- [x] **Step 1: Move storage API implementation packages**
 
 ```bash
 mkdir -p libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/storage/api
@@ -875,21 +887,21 @@ git mv libs/storage/yierdis-storage-api/src/test/java/yier/bubu/redis/ops/*.java
        libs/storage/yierdis-storage-api/src/test/java/yier/bubu/redis/storage/api/
 ```
 
-- [ ] **Step 2: Rewrite storage API package declarations**
+- [x] **Step 2: Rewrite storage API package declarations**
 
 ```bash
 perl -pi -e 's/package yier\\.bubu\\.redis\\.ops;/package yier.bubu.redis.storage.api;/' libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/storage/api/*.java libs/storage/yierdis-storage-api/src/test/java/yier/bubu/redis/storage/api/*.java
 perl -pi -e 's/package yier\\.bubu\\.redis\\.ops\\.result;/package yier.bubu.redis.storage.api.result;/' libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/storage/api/result/*.java
 ```
 
-- [ ] **Step 3: Rewrite imports to target package**
+- [x] **Step 3: Rewrite imports to target package**
 
 ```bash
 perl -pi -e 's/import yier\\.bubu\\.redis\\.ops\\.result\\./import yier.bubu.redis.storage.api.result./g; s/import yier\\.bubu\\.redis\\.ops\\./import yier.bubu.redis.storage.api./g' $(rg --files -g '*.java')
 perl -pi -e 's/yier\\.bubu\\.redis\\.ops\\.result\\./yier.bubu.redis.storage.api.result./g; s/yier\\.bubu\\.redis\\.ops\\./yier.bubu.redis.storage.api./g' $(rg --files -g '*.java' -g '*.md' -g '*.yml')
 ```
 
-- [ ] **Step 4: Add legacy interface facades for command-facing APIs**
+- [x] **Step 4: Add legacy interface facades for command-facing APIs**
 
 Create `libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/DbEngine.java` with:
 
@@ -938,7 +950,7 @@ KeyHandle
 
 Do not create facades for enums or final result types in this task. Target imports should be used in production code.
 
-- [ ] **Step 5: Run storage API tests and full compile**
+- [x] **Step 5: Run storage API tests and full compile**
 
 ```bash
 mvn -pl libs/storage/yierdis-storage-api test
@@ -953,7 +965,7 @@ BUILD SUCCESS
 
 Second command expected: exit code 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A
@@ -968,7 +980,7 @@ git commit -m "refactor: move storage api packages"
 - Move: `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/**`
 - Move matching tests under `src/test/java`
 
-- [ ] **Step 1: Move key and keyspace packages**
+- [x] **Step 1: Move key and keyspace packages**
 
 ```bash
 mkdir -p libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/key
@@ -1001,7 +1013,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 2: Move expire and TTL support**
+- [x] **Step 2: Move expire and TTL support**
 
 ```bash
 mkdir -p libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/expire
@@ -1036,7 +1048,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 3: Move ledger and mutation support**
+- [x] **Step 3: Move ledger and mutation support**
 
 ```bash
 mkdir -p libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger
@@ -1070,7 +1082,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 4: Move value objects and encodings**
+- [x] **Step 4: Move value objects and encodings**
 
 ```bash
 mkdir -p libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value
@@ -1117,7 +1129,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 5: Move storage-memory FFM structures**
+- [x] **Step 5: Move storage-memory FFM structures**
 
 ```bash
 mkdir -p libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm
@@ -1144,7 +1156,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 6: Move storage-memory facade and ops package**
+- [x] **Step 6: Move storage-memory facade and ops package**
 
 ```bash
 mkdir -p libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory
@@ -1160,7 +1172,7 @@ perl -pi -e 's/import yier\\.bubu\\.redis\\.db\\./import yier.bubu.redis.storage
 perl -pi -e 's/yier\\.bubu\\.redis\\.db\\./yier.bubu.redis.storage.memory./g' $(rg --files -g '*.java' -g '*.md' -g '*.yml')
 ```
 
-- [ ] **Step 7: Move storage-memory tests to matching packages**
+- [x] **Step 7: Move storage-memory tests to matching packages**
 
 ```bash
 mkdir -p libs/storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/storage/memory
@@ -1173,7 +1185,7 @@ perl -pi -e 's/package yier\\.bubu\\.redis\\.db;/package yier.bubu.redis.storage
 perl -pi -e 's/package yier\\.bubu\\.redis\\.db\\.memory\\.ffm;/package yier.bubu.redis.storage.memory.internal.ffm;/' libs/storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/storage/memory/internal/ffm/*.java
 ```
 
-- [ ] **Step 8: Run storage-memory and architecture tests**
+- [x] **Step 8: Run storage-memory and architecture tests**
 
 ```bash
 mvn -pl libs/storage/yierdis-storage-memory test
@@ -1187,7 +1199,7 @@ BUILD SUCCESS
 BUILD SUCCESS
 ```
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add -A
@@ -1204,7 +1216,7 @@ git commit -m "refactor: move storage memory internals under storage namespace"
 - Move: `libs/memory/yierdis-memory-api/src/main/java/yier/bubu/redis/offheap/api/*.java`
 - Move: `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/db/memory/foreign/*.java`
 
-- [ ] **Step 1: Move memory API and foreign backend**
+- [x] **Step 1: Move memory API and foreign backend**
 
 ```bash
 mkdir -p libs/memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api
@@ -1223,7 +1235,7 @@ perl -pi -e 's/package yier\\.bubu\\.redis\\.db\\.memory\\.foreign;/package yier
 perl -pi -e 's/import yier\\.bubu\\.redis\\.offheap\\.api\\./import yier.bubu.redis.memory.api./g; s/import yier\\.bubu\\.redis\\.db\\.memory\\.foreign\\./import yier.bubu.redis.memory.foreign./g' $(rg --files -g '*.java')
 ```
 
-- [ ] **Step 2: Add legacy memory API facades**
+- [x] **Step 2: Add legacy memory API facades**
 
 Create `libs/memory/yierdis-memory-api/src/main/java/yier/bubu/redis/offheap/api/OffHeapAllocator.java`:
 
@@ -1265,7 +1277,7 @@ public class OffHeapOutOfMemoryException extends yier.bubu.redis.memory.api.OffH
 }
 ```
 
-- [ ] **Step 3: Move runtime embedded implementation**
+- [x] **Step 3: Move runtime embedded implementation**
 
 ```bash
 mkdir -p libs/runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/embedded
@@ -1283,7 +1295,7 @@ perl -pi -e 's/package yier\\.bubu\\.redis\\.runtime;/package yier.bubu.redis.ru
 perl -pi -e 's/import yier\\.bubu\\.redis\\.runtime\\.(YierdisInstance|YierdisInstanceMaintenance|YierdisInstanceObservability|YierdisInstanceResources|YierdisInstanceRuntimeAccess|YierdisGlobalMaxmemoryGovernor);/import yier.bubu.redis.runtime.embedded.$1;/g' $(rg --files -g '*.java')
 ```
 
-- [ ] **Step 4: Move runtime config API**
+- [x] **Step 4: Move runtime config API**
 
 Move only `YierdisInstanceConfig.java` from runtime root to runtime API subpackage:
 
@@ -1300,7 +1312,7 @@ perl -pi -e 's/package yier\\.bubu\\.redis\\.runtime;/package yier.bubu.redis.ru
 perl -pi -e 's/import yier\\.bubu\\.redis\\.runtime\\.YierdisInstanceConfig;/import yier.bubu.redis.runtime.api.YierdisInstanceConfig;/g; s/yier\\.bubu\\.redis\\.runtime\\.YierdisInstanceConfig/yier.bubu.redis.runtime.api.YierdisInstanceConfig/g' $(rg --files -g '*.java' -g '*.md')
 ```
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 ```bash
 mvn -pl libs/memory/yierdis-memory-api,libs/memory/yierdis-memory-foreign,libs/runtime/yierdis-runtime-api,libs/runtime/yierdis-runtime-embedded test
@@ -1315,7 +1327,7 @@ BUILD SUCCESS
 
 Second command expected: exit code 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A
@@ -1331,7 +1343,7 @@ git commit -m "refactor: move runtime and memory packages"
 - Move: `libs/protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/*.java`
 - Move: `libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/*.java`
 
-- [ ] **Step 1: Move wire protocol packages**
+- [x] **Step 1: Move wire protocol packages**
 
 ```bash
 mkdir -p libs/protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/custom/v1/wire
@@ -1347,7 +1359,7 @@ git mv libs/protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protoc
        libs/protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/
 ```
 
-- [ ] **Step 2: Move execution adapter and Netty packages**
+- [x] **Step 2: Move execution adapter and Netty packages**
 
 ```bash
 mkdir -p libs/protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/custom/v1/execution
@@ -1358,7 +1370,7 @@ git mv libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/proto
        libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/
 ```
 
-- [ ] **Step 3: Rewrite package declarations and imports**
+- [x] **Step 3: Rewrite package declarations and imports**
 
 ```bash
 perl -pi -e 's/package yier\\.bubu\\.redis\\.protocol\\.v1;/package yier.bubu.redis.protocol.custom.v1.wire;/' libs/protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/*.java
@@ -1372,7 +1384,7 @@ perl -pi -e 's/import yier\\.bubu\\.redis\\.protocol\\.json\\./import yier.bubu.
 
 After this command, update imports in execution adapter classes so they import wire classes from `protocol.custom.v1.wire` and adapter classes from `protocol.custom.v1.execution`.
 
-- [ ] **Step 4: Run protocol tests**
+- [x] **Step 4: Run protocol tests**
 
 ```bash
 mvn -pl libs/protocol/yierdis-custom-v1-wire,libs/protocol/yierdis-custom-v1-execution-adapter,libs/protocol/yierdis-custom-v1-netty test
@@ -1384,7 +1396,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A
@@ -1400,7 +1412,7 @@ git commit -m "refactor: move custom protocol packages"
 - Move: `apps/yierdis-bench/src/main/java/yier/bubu/redis/bench/*.java`
 - Move corresponding tests
 
-- [ ] **Step 1: Move client package**
+- [x] **Step 1: Move client package**
 
 ```bash
 mkdir -p apps/yierdis-client/src/main/java/yier/bubu/redis/app/client
@@ -1413,7 +1425,7 @@ perl -pi -e 's/package yier\\.bubu\\.redis\\.client;/package yier.bubu.redis.app
 perl -pi -e 's/import yier\\.bubu\\.redis\\.client\\./import yier.bubu.redis.app.client./g; s/yier\\.bubu\\.redis\\.client\\./yier.bubu.redis.app.client./g' $(rg --files -g '*.java' -g '*.md')
 ```
 
-- [ ] **Step 2: Move bench package**
+- [x] **Step 2: Move bench package**
 
 ```bash
 mkdir -p apps/yierdis-bench/src/main/java/yier/bubu/redis/app/bench
@@ -1426,7 +1438,7 @@ perl -pi -e 's/package yier\\.bubu\\.redis\\.bench;/package yier.bubu.redis.app.
 perl -pi -e 's/import yier\\.bubu\\.redis\\.bench\\./import yier.bubu.redis.app.bench./g; s/yier\\.bubu\\.redis\\.bench\\./yier.bubu.redis.app.bench./g' $(rg --files -g '*.java' -g '*.md')
 ```
 
-- [ ] **Step 3: Run app tests**
+- [x] **Step 3: Run app tests**
 
 ```bash
 mvn -pl apps/yierdis-client,apps/yierdis-bench test
@@ -1438,7 +1450,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A
@@ -1454,7 +1466,7 @@ git commit -m "refactor: move client and bench packages under app namespace"
 - Move: `libs/runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/testutil/*.java`
 - Modify: `tests/yierdis-integration-tests/pom.xml`
 
-- [ ] **Step 1: Move command behavior tests to integration tests**
+- [x] **Step 1: Move command behavior tests to integration tests**
 
 ```bash
 mkdir -p tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command
@@ -1463,7 +1475,7 @@ git mv libs/runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/comma
 perl -pi -e 's/package yier\\.bubu\\.redis\\.command;/package yier.bubu.redis.integration.command;/' tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/*.java
 ```
 
-- [ ] **Step 2: Consolidate runtime test utilities in integration tests**
+- [x] **Step 2: Consolidate runtime test utilities in integration tests**
 
 If `tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/testutil` already exists, move only missing utility files. Use `git mv` for each file that is not already present:
 
@@ -1477,7 +1489,7 @@ for f in libs/runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/tes
 done
 ```
 
-- [ ] **Step 3: Update package imports in moved tests**
+- [x] **Step 3: Update package imports in moved tests**
 
 ```bash
 perl -pi -e 's/import yier\\.bubu\\.redis\\.command\\.TestCommandProcessors;/import yier.bubu.redis.integration.command.TestCommandProcessors;/g' tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/*.java
@@ -1486,7 +1498,7 @@ perl -pi -e 's/import yier\\.bubu\\.redis\\.runtime\\.TestDbRouters;/import yier
 
 If `TestCommandProcessors.java` was moved with the command tests, keep it in `integration.command`.
 
-- [ ] **Step 4: Ensure integration test POM has required test dependencies**
+- [x] **Step 4: Ensure integration test POM has required test dependencies**
 
 In `tests/yierdis-integration-tests/pom.xml`, ensure these artifacts exist with `<scope>test</scope>`:
 
@@ -1518,7 +1530,7 @@ In `tests/yierdis-integration-tests/pom.xml`, ensure these artifacts exist with 
         </dependency>
 ```
 
-- [ ] **Step 5: Run runtime and integration tests**
+- [x] **Step 5: Run runtime and integration tests**
 
 ```bash
 mvn -pl libs/runtime/yierdis-runtime-embedded test
@@ -1532,7 +1544,7 @@ BUILD SUCCESS
 BUILD SUCCESS
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A
@@ -1548,7 +1560,7 @@ git commit -m "test: move command behavior tests to integration module"
 - Modify: `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 - Modify: `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/architecture/ArchitectureDependencyRuleTest.java`
 
-- [ ] **Step 1: Replace old forbidden import prefixes**
+- [x] **Step 1: Replace old forbidden import prefixes**
 
 Update `architecture-policy.yml` so target ownership is enforced. Use these prefixes in `forbidden_imports` for each module family:
 
@@ -1589,7 +1601,7 @@ For execution API and executor, include:
   - io.netty
 ```
 
-- [ ] **Step 2: Add legacy import rejection for production source**
+- [x] **Step 2: Add legacy import rejection for production source**
 
 Add a test method to `ArchitectureBoundaryTest`:
 
@@ -1630,7 +1642,7 @@ public void productionSourcesMustNotUseLegacyPackageImportsAfterMigration() thro
 }
 ```
 
-- [ ] **Step 3: Add root server package rejection**
+- [x] **Step 3: Add root server package rejection**
 
 Add this assertion to the existing server-app architecture guard:
 
@@ -1644,7 +1656,7 @@ int rootServerPackages = scanForForbiddenText(
 Assert.assertTrue("No server app Java files scanned", rootServerPackages > 0);
 ```
 
-- [ ] **Step 4: Run architecture tests**
+- [x] **Step 4: Run architecture tests**
 
 ```bash
 mvn -pl tests/yierdis-architecture-tests test
@@ -1656,7 +1668,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/yierdis-architecture-tests/src/test/resources/architecture-policy.yml \
@@ -1681,7 +1693,7 @@ git commit -m "test: enforce target package architecture policy"
 - Modify: `docs/testing-and-debugging.md`
 - Modify: `docs/configuration-and-operations.md`
 
-- [ ] **Step 1: Locate stale paths and packages**
+- [x] **Step 1: Locate stale paths and packages**
 
 Run:
 
@@ -1691,7 +1703,7 @@ rg -n 'yierdis-(memory|bytes|execution|storage|runtime|protocol|command|executor
 
 Expected: output lists stale references to update.
 
-- [ ] **Step 2: Update module path examples**
+- [x] **Step 2: Update module path examples**
 
 For every file listed in the Files section, update path examples to use:
 
@@ -1703,7 +1715,7 @@ tests/<artifact>
 
 Keep artifact names unchanged when the text discusses Maven dependencies.
 
-- [ ] **Step 3: Update request flow package references**
+- [x] **Step 3: Update request flow package references**
 
 In `docs/request-execution-flow.md`, ensure the main chain uses target ownership names:
 
@@ -1724,7 +1736,7 @@ Netty ByteBuf
   -> app.server.NettyExecutionIoAdapter
 ```
 
-- [ ] **Step 4: Update DB internals package references**
+- [x] **Step 4: Update DB internals package references**
 
 In `docs/db-internals.md`, replace DB implementation package names with:
 
@@ -1738,7 +1750,7 @@ yier.bubu.redis.storage.memory.internal.value
 yier.bubu.redis.storage.memory.internal.ffm
 ```
 
-- [ ] **Step 5: Run docs stale reference scan**
+- [x] **Step 5: Run docs stale reference scan**
 
 ```bash
 rg -n 'yierdis-app|yier\\.bubu\\.redis\\.(db|ops|contract|executor|engine|offheap\\.api)' README.md docs
@@ -1746,7 +1758,7 @@ rg -n 'yierdis-app|yier\\.bubu\\.redis\\.(db|ops|contract|executor|engine|offhea
 
 Expected: no output for production-current docs. Historical specs under `docs/superpowers/specs` may still mention legacy names as history; do not edit old approved specs unless they claim to describe current state.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add README.md docs
@@ -1760,7 +1772,7 @@ git commit -m "docs: update package structure and module paths"
 **Files:**
 - No source edits unless verification exposes a compile failure.
 
-- [ ] **Step 1: Run full test suite**
+- [x] **Step 1: Run full test suite**
 
 ```bash
 mvn test
@@ -1772,7 +1784,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 2: Scan production source for legacy imports**
+- [x] **Step 2: Scan production source for legacy imports**
 
 ```bash
 rg -n 'import yier\\.bubu\\.redis\\.(contract|ops|offheap\\.api|db|executor|engine)\\.' libs apps tests -g '*.java'
@@ -1780,7 +1792,7 @@ rg -n 'import yier\\.bubu\\.redis\\.(contract|ops|offheap\\.api|db|executor|engi
 
 Expected: no output and exit code 1. Legacy facade source files themselves may contain target references; the scan pattern checks imports, not package declarations.
 
-- [ ] **Step 3: Scan production package declarations for legacy implementation packages**
+- [x] **Step 3: Scan production package declarations for legacy implementation packages**
 
 ```bash
 rg -n '^package yier\\.bubu\\.redis\\.(db|executor|engine);|^package yier\\.bubu\\.redis;$' libs apps -g '*.java'
@@ -1788,7 +1800,7 @@ rg -n '^package yier\\.bubu\\.redis\\.(db|executor|engine);|^package yier\\.bubu
 
 Expected: no output and exit code 1.
 
-- [ ] **Step 4: Commit verification-only marker if docs changed during fixes**
+- [x] **Step 4: Commit verification-only marker if docs changed during fixes**
 
 If no files changed, do not create an empty commit. If verification required small docs or import fixes:
 
@@ -1807,7 +1819,7 @@ git commit -m "chore: finish package migration verification fixes"
 - Delete: `libs/memory/yierdis-memory-api/src/main/java/yier/bubu/redis/offheap/api/**`
 - Modify: architecture tests to reject legacy package declarations in production source
 
-- [ ] **Step 1: Confirm removal gate**
+- [x] **Step 1: Confirm removal gate**
 
 Run:
 
@@ -1817,7 +1829,7 @@ rg -n 'import yier\\.bubu\\.redis\\.(contract|ops|offheap\\.api)\\.' libs apps t
 
 Expected: no output and exit code 1.
 
-- [ ] **Step 2: Delete legacy facade packages**
+- [x] **Step 2: Delete legacy facade packages**
 
 In an implementation session, request explicit user confirmation before this
 step. After confirmation, use `git rm -r` so deletion is tracked and reviewable:
@@ -1831,7 +1843,7 @@ git rm -r libs/memory/yierdis-memory-api/src/main/java/yier/bubu/redis/offheap/a
 This is the only destructive step in the plan. Do not run it until Step 1 passes
 and the user has confirmed legacy facade removal for the implementation session.
 
-- [ ] **Step 3: Add package declaration rejection**
+- [x] **Step 3: Add package declaration rejection**
 
 Extend `productionSourcesMustNotUseLegacyPackageImportsAfterMigration` to also check:
 
@@ -1841,7 +1853,7 @@ Extend `productionSourcesMustNotUseLegacyPackageImportsAfterMigration` to also c
 "package yier.bubu.redis.offheap.api;"
 ```
 
-- [ ] **Step 4: Run full test suite**
+- [x] **Step 4: Run full test suite**
 
 ```bash
 mvn test
@@ -1853,7 +1865,7 @@ Expected:
 BUILD SUCCESS
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A
@@ -1867,12 +1879,12 @@ git commit -m "refactor: remove legacy package facades"
 Run these checks before claiming the rearchitecture is complete:
 
 ```bash
-mvn test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 mvn test
 rg -n '^package yier\\.bubu\\.redis;$' apps libs -g '*.java'
 rg -n '^package yier\\.bubu\\.redis\\.db|import yier\\.bubu\\.redis\\.db\\.' apps libs -g '*.java'
 rg -n '^package yier\\.bubu\\.redis\\.command;' apps libs -g '*.java'
 rg -n '^package yier\\.bubu\\.redis\\.(contract|ops|offheap\\.api);' apps libs -g '*.java'
-rg -n 'src/main/java/yier/bubu/redis/(db|command|contract|ops|executor|engine)' apps libs tests docs README.md
+rg -n 'src/main/java/yier/bubu/redis/(db|contract|ops|executor|engine)(/|$)' apps libs tests README.md docs/*.md
 ```
 
 Expected:
@@ -1881,5 +1893,6 @@ Expected:
 BUILD SUCCESS
 ```
 
-All `rg` checks should produce no output except historical references inside old
-approved specs under `docs/superpowers/specs`.
+All package/import `rg` checks should produce no output. The path scan excludes
+`docs/superpowers/**` because implementation plans intentionally preserve old
+path examples as historical execution instructions.

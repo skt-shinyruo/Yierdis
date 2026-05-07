@@ -2,11 +2,10 @@ package yier.bubu.redis.runtime.api;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.ExecutionRecord;
-import yier.bubu.redis.contract.ExecutionRequest;
-import yier.bubu.redis.ops.MaxmemoryPolicy;
-import yier.bubu.redis.runtime.YierdisInstanceConfig;
+import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.ExecutionRecord;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;

@@ -15,11 +15,11 @@ modules:
       - yierdis-custom-v1-netty
       - yierdis-server-app
     forbidden_imports:
-      - yier.bubu.redis.db
-      - yier.bubu.redis.offheap.api
-      - yier.bubu.redis.protocol
+      - yier.bubu.redis.storage.memory
+      - yier.bubu.redis.memory.api
+      - yier.bubu.redis.protocol.custom.v1
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.server
+      - yier.bubu.redis.app.server
   yierdis-command-kernel:
     allowed_dependencies:
       - yierdis-command-api
@@ -35,10 +35,10 @@ modules:
       - yierdis-custom-v1-netty
       - yierdis-server-app
     forbidden_imports:
-      - yier.bubu.redis.db
-      - yier.bubu.redis.offheap.api
-      - yier.bubu.redis.protocol
-      - yier.bubu.redis.server
+      - yier.bubu.redis.storage.memory
+      - yier.bubu.redis.memory.api
+      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.app.server
   yierdis-command-defaults:
     allowed_dependencies:
       - yierdis-command-api
@@ -56,11 +56,11 @@ modules:
       - yierdis-custom-v1-netty
       - yierdis-server-app
     forbidden_imports:
-      - yier.bubu.redis.db
-      - yier.bubu.redis.offheap.api
-      - yier.bubu.redis.protocol
+      - yier.bubu.redis.storage.memory
+      - yier.bubu.redis.memory.api
+      - yier.bubu.redis.protocol.custom.v1
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.server
+      - yier.bubu.redis.app.server
   yierdis-storage-memory:
     allowed_dependencies:
       - yierdis-storage-api
@@ -85,9 +85,9 @@ modules:
       - netty-all
     forbidden_imports:
       - yier.bubu.redis.command
-      - yier.bubu.redis.protocol
-      - yier.bubu.redis.server
-      - yier.bubu.redis.executor
+      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.app.server
+      - yier.bubu.redis.execution.executor
       - io.netty
     source_ownership:
       - concrete_in_memory_storage_only
@@ -109,11 +109,11 @@ modules:
       - yierdis-memory-foreign
       - netty-all
     forbidden_imports:
-      - yier.bubu.redis.db
+      - yier.bubu.redis.storage.memory
       - yier.bubu.redis.command
-      - yier.bubu.redis.protocol
-      - yier.bubu.redis.server
-      - yier.bubu.redis.db.memory.foreign
+      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.app.server
+      - yier.bubu.redis.memory.foreign
       - io.netty
     source_ownership:
       - storage_fixtures_only
@@ -133,9 +133,9 @@ modules:
       - yierdis-server-app
     forbidden_imports:
       - yier.bubu.redis.command
-      - yier.bubu.redis.db
+      - yier.bubu.redis.storage.memory
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.protocol
+      - yier.bubu.redis.protocol.custom.v1
       - io.netty
   yierdis-execution-api:
     allowed_dependencies:
@@ -157,10 +157,10 @@ modules:
       - netty-all
     forbidden_imports:
       - yier.bubu.redis.command
-      - yier.bubu.redis.db
+      - yier.bubu.redis.storage.memory
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.protocol
-      - yier.bubu.redis.server
+      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.app.server
       - io.netty
   yierdis-memory-api:
     allowed_dependencies:
@@ -183,12 +183,12 @@ modules:
       - netty-all
     forbidden_imports:
       - yier.bubu.redis.command
-      - yier.bubu.redis.db
+      - yier.bubu.redis.storage.memory
       - yier.bubu.redis.storage
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.protocol
-      - yier.bubu.redis.server
-      - yier.bubu.redis.db.memory.foreign
+      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.app.server
+      - yier.bubu.redis.memory.foreign
       - io.netty
   yierdis-storage-api:
     allowed_dependencies:
@@ -212,12 +212,12 @@ modules:
       - netty-all
     forbidden_imports:
       - yier.bubu.redis.command
-      - yier.bubu.redis.contract
-      - yier.bubu.redis.db
+      - yier.bubu.redis.execution.api
+      - yier.bubu.redis.storage.memory
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.protocol
-      - yier.bubu.redis.server
-      - yier.bubu.redis.db.memory.foreign
+      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.app.server
+      - yier.bubu.redis.memory.foreign
       - io.netty
   yierdis-runtime-api:
     allowed_dependencies:
@@ -242,10 +242,10 @@ modules:
       - netty-all
     forbidden_imports:
       - yier.bubu.redis.command
-      - yier.bubu.redis.db
-      - yier.bubu.redis.protocol
-      - yier.bubu.redis.server
-      - yier.bubu.redis.db.memory.foreign
+      - yier.bubu.redis.storage.memory
+      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.app.server
+      - yier.bubu.redis.memory.foreign
       - io.netty
   yierdis-engine:
     allowed_dependencies:
@@ -270,10 +270,10 @@ modules:
     forbidden_imports:
       - yier.bubu.redis.command.defaults
       - yier.bubu.redis.storage
-      - yier.bubu.redis.protocol
+      - yier.bubu.redis.protocol.custom.v1
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.server
-      - yier.bubu.redis.db
+      - yier.bubu.redis.app.server
+      - yier.bubu.redis.storage.memory
       - io.netty
   yierdis-server-app:
     allowed_dependencies:
@@ -295,7 +295,7 @@ modules:
       - slf4j-api
       - logback-classic
     forbidden_imports:
-      - yier.bubu.redis.protocol.reply
+      - yier.bubu.redis.protocol.custom.v1.reply
     source_ownership:
       - application_composition_root
       - no_command_context_construction
@@ -317,12 +317,12 @@ modules:
       - yierdis-bytes-netty
       - netty-all
     forbidden_imports:
-      - yier.bubu.redis.contract
+      - yier.bubu.redis.execution.api
       - yier.bubu.redis.command
-      - yier.bubu.redis.ops
-      - yier.bubu.redis.db
+      - yier.bubu.redis.storage.api
+      - yier.bubu.redis.storage.memory
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.server
+      - yier.bubu.redis.app.server
       - io.netty
   yierdis-custom-v1-execution-adapter:
     allowed_dependencies:
@@ -341,10 +341,10 @@ modules:
       - netty-all
     forbidden_imports:
       - yier.bubu.redis.command
-      - yier.bubu.redis.ops
-      - yier.bubu.redis.db
+      - yier.bubu.redis.storage.api
+      - yier.bubu.redis.storage.memory
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.server
+      - yier.bubu.redis.app.server
       - io.netty
   yierdis-custom-v1-netty:
     allowed_dependencies:
@@ -362,10 +362,10 @@ modules:
       - yierdis-server-app
     forbidden_imports:
       - yier.bubu.redis.command
-      - yier.bubu.redis.ops
-      - yier.bubu.redis.db
+      - yier.bubu.redis.storage.api
+      - yier.bubu.redis.storage.memory
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.server
+      - yier.bubu.redis.app.server
   yierdis-runtime-embedded:
     allowed_dependencies:
       - yierdis-storage-memory
@@ -394,10 +394,10 @@ modules:
       - netty-all
     forbidden_imports:
       - yier.bubu.redis.command
-      - yier.bubu.redis.engine
-      - yier.bubu.redis.executor
-      - yier.bubu.redis.protocol
-      - yier.bubu.redis.server
+      - yier.bubu.redis.execution.engine
+      - yier.bubu.redis.execution.executor
+      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.app.server
       - io.netty
     source_ownership:
       - runtime_lifecycle_only
@@ -407,15 +407,25 @@ target_packages:
   app_server:
     owns:
       - yier.bubu.redis.app.server
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis
       - yier.bubu.redis.args
+  app_client:
+    owns:
+      - yier.bubu.redis.app.client
+    retired_from_active_source_tree:
+      - yier.bubu.redis.client
+  app_bench:
+    owns:
+      - yier.bubu.redis.app.bench
+    retired_from_active_source_tree:
+      - yier.bubu.redis.bench
   execution:
     owns:
       - yier.bubu.redis.execution.api
       - yier.bubu.redis.execution.engine
       - yier.bubu.redis.execution.executor
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis.contract
       - yier.bubu.redis.engine
       - yier.bubu.redis.executor
@@ -424,31 +434,31 @@ target_packages:
       - yier.bubu.redis.command.api
       - yier.bubu.redis.command.kernel
       - yier.bubu.redis.command.defaults
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis.command
   storage:
     owns:
       - yier.bubu.redis.storage.api
       - yier.bubu.redis.storage.api.result
       - yier.bubu.redis.storage.memory
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis.ops
       - yier.bubu.redis.db
   runtime:
     owns:
       - yier.bubu.redis.runtime.api
       - yier.bubu.redis.runtime.embedded
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis.runtime
   memory:
     owns:
       - yier.bubu.redis.memory.api
       - yier.bubu.redis.memory.foreign
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis.offheap.api
       - yier.bubu.redis.db.memory.foreign
   protocol:
     owns:
       - yier.bubu.redis.protocol.custom.v1
-    legacy_allowed_during_migration:
+    retired_from_active_source_tree:
       - yier.bubu.redis.protocol

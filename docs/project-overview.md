@@ -236,26 +236,26 @@ Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格�
 
 ### 进程和启动入口
 
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServer.java`
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
+- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`
+- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
 
 ### 请求主链路入口
 
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerChannelInitializer.java`
-- `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisFastCommandHandler.java`
+- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
+- `libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
+- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java`
 
 ### 命令处理主入口
 
-- `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
+- `libs/command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
 
 ### DB 主入口
 
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDb.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
 
 ### runtime 主入口
 
-- `yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
+- `libs/runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
 
 ## 已有文档如何配合阅读
 

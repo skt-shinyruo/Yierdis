@@ -1,9 +1,9 @@
 package yier.bubu.redis.app.server;
 
 import yier.bubu.redis.command.defaults.DefaultCommandModules;
-import yier.bubu.redis.engine.DefaultYierdisEngine;
-import yier.bubu.redis.engine.YierdisEngine;
-import yier.bubu.redis.runtime.YierdisInstance;
+import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
+import yier.bubu.redis.execution.engine.YierdisEngine;
+import yier.bubu.redis.runtime.embedded.YierdisInstance;
 
 final class TestYierdisEngines {
     private TestYierdisEngines() {

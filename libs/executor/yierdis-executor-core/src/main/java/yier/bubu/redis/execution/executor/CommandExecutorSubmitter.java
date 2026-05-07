@@ -1,6 +1,6 @@
 package yier.bubu.redis.execution.executor;
 
-import yier.bubu.redis.contract.ExecutionRequest;
+import yier.bubu.redis.execution.api.ExecutionRequest;
 
 import java.util.Objects;
 import java.util.concurrent.atomic.LongAdder;

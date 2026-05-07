@@ -2,12 +2,12 @@ package yier.bubu.redis.testutil;
 
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.contract.ExecutionRequest;
-import yier.bubu.redis.contract.ReplyWriter;
-import yier.bubu.redis.contract.ServerSession;
-import yier.bubu.redis.contract.TransactionState;
+import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.ServerSession;
+import yier.bubu.redis.execution.api.TransactionState;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -367,7 +367,7 @@ public final class FastTestClient implements AutoCloseable {
         }
 
         @Override
-        public yier.bubu.redis.contract.ConnectionStatsView connectionStats() {
+        public yier.bubu.redis.execution.api.ConnectionStatsView connectionStats() {
             return null;
         }
     }

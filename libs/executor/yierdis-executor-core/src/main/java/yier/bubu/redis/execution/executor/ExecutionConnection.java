@@ -1,6 +1,6 @@
 package yier.bubu.redis.execution.executor;
 
-import yier.bubu.redis.contract.Session;
+import yier.bubu.redis.execution.api.Session;
 
 public interface ExecutionConnection {
     String connectionId();
