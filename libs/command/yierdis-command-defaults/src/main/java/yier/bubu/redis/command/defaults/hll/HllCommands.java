@@ -12,9 +12,9 @@ import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
-import yier.bubu.redis.contract.CommandContext;
-import yier.bubu.redis.contract.ExecutionRequest;
-import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyWriter;
 
 import java.util.Objects;
 

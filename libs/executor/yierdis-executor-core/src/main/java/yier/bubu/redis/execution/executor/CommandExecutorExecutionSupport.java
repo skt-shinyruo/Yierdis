@@ -1,7 +1,7 @@
 package yier.bubu.redis.execution.executor;
 
-import yier.bubu.redis.contract.ReplyWriter;
-import yier.bubu.redis.contract.ReplyWriterFactory;
+import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.ReplyWriterFactory;
 
 import java.util.Collection;
 import java.util.Objects;
@@ -179,7 +179,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         }
     }
 
-    private static void closeRequest(yier.bubu.redis.contract.ExecutionRequest request) {
+    private static void closeRequest(yier.bubu.redis.execution.api.ExecutionRequest request) {
         if (request == null) {
             return;
         }

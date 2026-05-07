@@ -5,13 +5,18 @@
 This design defines an aggressive but staged rearchitecture of Yierdis package
 structure, Maven module layout, and test ownership.
 
-The current codebase already has useful architectural boundaries: protocol,
+Implementation status as of 2026-05-07: the target Maven paths, Java package
+families, integration-test placement, and architecture guards have been applied.
+Legacy package names are now treated as retired source-tree markers rather than
+active migration allowances.
+
+The original codebase already had useful architectural boundaries: protocol,
 execution, command, storage, runtime, memory, executor, server, client, bench,
-architecture tests, and integration tests are separate Maven areas. The remaining
-problem is consistency. Many Java packages still use broad legacy names such as
-`yier.bubu.redis.db`, `yier.bubu.redis.command`, `yier.bubu.redis.contract`, and
-the server root package `yier.bubu.redis`. Those names make the implemented
-ownership model harder to see and harder to enforce.
+architecture tests, and integration tests were separate Maven areas. The
+remaining problem was consistency. Many Java packages still used broad legacy
+names such as `yier.bubu.redis.db`, `yier.bubu.redis.command`,
+`yier.bubu.redis.contract`, and the server root package `yier.bubu.redis`. Those
+names made the implemented ownership model harder to see and harder to enforce.
 
 The target is a structure where Maven modules, Java packages, tests, and
 architecture policy all tell the same story:
@@ -31,9 +36,10 @@ This is intentionally a staged design. It should not be implemented as one
 large mechanical move. Each phase must leave the repository buildable and must
 update architecture guards before broad package rewrites proceed.
 
-## Current State
+## Original State
 
-The active Maven graph already includes these top-level areas:
+The original active Maven graph already included these top-level areas before
+they were moved under `libs`, `apps`, and `tests`:
 
 ```text
 yierdis-memory
@@ -146,6 +152,11 @@ the spec and the implementation checklist stay aligned:
    duplication still remains after the app-package move.
 6. Remove compatibility facades only after target imports are verified and the
    architecture tests enforce the new package names.
+
+Final implementation outcome: compatibility facades were not retained in the
+completed source tree. Production imports and package declarations use target
+packages, and architecture policy records old package prefixes under
+`retired_from_active_source_tree`.
 
 ## Considered Approaches
 
@@ -760,6 +771,14 @@ move/rename commits and keep semantic edits separate.
 - Architecture policy is expressed in target package names and artifact names.
 - Architecture tests reject `.internal` imports across owner boundaries.
 - Full Maven test suite passes after each completed migration phase.
+
+Completion evidence captured during implementation:
+
+```text
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 mvn -q -pl tests/yierdis-architecture-tests -am test
+```
+
+Expected result: exit code 0.
 
 ## Implementation Notes
 

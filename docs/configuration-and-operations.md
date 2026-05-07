@@ -31,7 +31,7 @@ CLI args
 - `YierdisServerBootstrap`
   负责真正把 runtime config 装配进 server
 
-bench 不再复用 server runtime config；它在 `yierdis-bench` 内维护自己的 server launch argv 模型，只负责生成子进程启动参数。
+bench 不再复用 server runtime config；它在 `apps/yierdis-bench` 内维护自己的 server launch argv 模型，只负责生成子进程启动参数。
 
 ## 参数分组
 

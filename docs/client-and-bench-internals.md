@@ -2,8 +2,8 @@
 
 本文解释两个经常被当成“配套工具”的模块：
 
-- `yierdis-client`
-- `yierdis-bench`
+- `apps/yierdis-client`
+- `apps/yierdis-bench`
 
 它们看起来像外围工具，但实际上很重要，因为它们直接体现了：
 
@@ -20,7 +20,7 @@ client 和 bench 不是直接嵌进 DB 内部的调试入口，而是：
 
 这让它们更接近“真实外部使用者”，而不是“进程内私有测试钩子”。
 
-## `yierdis-client` 在做什么
+## `apps/yierdis-client` 在做什么
 
 client 模块主要有四个角色：
 
@@ -129,7 +129,7 @@ client 模块主要有四个角色：
 - `CustomProtocolV1ReplyParser` 负责底层解析
 - `CustomProtocolV1Replies` 负责上层使用便利性
 
-## `yierdis-bench` 在做什么
+## `apps/yierdis-bench` 在做什么
 
 bench 模块不是 JMH，也不是进程内 microbenchmark。
 
@@ -277,8 +277,8 @@ bench 可以开启：
 所以脚本层不是另起一套实现，而是把：
 
 - `yierdis-server-app`
-- `yierdis-client`
-- `yierdis-bench`
+- `apps/yierdis-client`
+- `apps/yierdis-bench`
 
 三者拼成一条可复用的工作流。
 

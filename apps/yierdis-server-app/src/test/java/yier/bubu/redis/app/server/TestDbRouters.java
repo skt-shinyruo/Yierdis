@@ -1,8 +1,8 @@
 package yier.bubu.redis.app.server;
 
 import yier.bubu.redis.command.api.YierdisDbRouter;
-import yier.bubu.redis.ops.DbEngine;
-import yier.bubu.redis.runtime.YierdisInstance;
+import yier.bubu.redis.storage.api.DbEngine;
+import yier.bubu.redis.runtime.embedded.YierdisInstance;
 
 final class TestDbRouters {
     private TestDbRouters() {
@@ -15,7 +15,7 @@ final class TestDbRouters {
         DbEngine[] engines = instance.engines();
         return new YierdisDbRouter() {
             @Override
-            public DbEngine dbFor(yier.bubu.redis.contract.ServerSession session) {
+            public DbEngine dbFor(yier.bubu.redis.execution.api.ServerSession session) {
                 if (engines.length == 0) {
                     throw new IllegalStateException("no dbs");
                 }

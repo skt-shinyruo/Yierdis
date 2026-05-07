@@ -1,7 +1,7 @@
 package yier.bubu.redis.execution.executor;
 
-import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.ExecutionRequest;
+import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.ExecutionRequest;
 
 import java.util.Arrays;
 

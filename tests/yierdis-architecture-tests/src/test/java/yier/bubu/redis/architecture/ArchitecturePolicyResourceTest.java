@@ -27,7 +27,7 @@ public class ArchitecturePolicyResourceTest {
             Assert.assertTrue(policy.contains("yierdis-custom-v1-execution-adapter:"));
             Assert.assertTrue(policy.contains("yierdis-custom-v1-netty:"));
             Assert.assertTrue(policy.contains("forbidden_imports:"));
-            Assert.assertTrue(policy.contains("yier.bubu.redis.protocol.reply"));
+            Assert.assertTrue(policy.contains("yier.bubu.redis.protocol.custom.v1.reply"));
             Assert.assertTrue(policy.contains("application_composition_root"));
             Assert.assertTrue(policy.contains("no_storage_internal_imports"));
         }
@@ -43,7 +43,8 @@ public class ArchitecturePolicyResourceTest {
             Assert.assertTrue(policy.contains("yier.bubu.redis.execution.api"));
             Assert.assertTrue(policy.contains("yier.bubu.redis.command.kernel"));
             Assert.assertTrue(policy.contains("yier.bubu.redis.storage.memory"));
-            Assert.assertTrue(policy.contains("legacy_allowed_during_migration:"));
+            Assert.assertTrue(policy.contains("retired_from_active_source_tree:"));
+            Assert.assertFalse(policy.contains("legacy_allowed_during_migration:"));
         }
     }
 }

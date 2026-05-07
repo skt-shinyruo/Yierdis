@@ -33,12 +33,12 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 先看哪里
 
-- `yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/StringCommands.java`
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisStringOps.java`
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbKeyLifecycle.java`
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbMutationExecutor.java`
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbMemoryLedger.java`
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisObject.java`
+- `libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMemoryLedger.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
 
 ### 如果只是加一个 `SET` 选项
 
@@ -76,9 +76,9 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 建议先看的测试
 
-- `yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/CommandProcessorTest.java`
-- `yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/Milestone1CompatTest.java`
-- `yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/CommandErrorTest.java`
+- `tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandProcessorTest.java`
+- `tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/Milestone1CompatTest.java`
+- `tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandErrorTest.java`
 
 读测试时推荐的顺序是：
 
@@ -108,9 +108,9 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 新增 transport-agnostic 命令的常见入口
 
-- `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
+- `libs/command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
 - 对应的 `*Commands.java`
-- `yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/CommandSupport.java`
+- `libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java`
 
 对初学者来说，一个“简单命令”的最小逻辑通常只有三步：
 
@@ -120,8 +120,8 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 新增 server-facing 命令的常见入口
 
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/ServerCommandModule.java`
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyServerInfoProvider.java`
+- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/ServerCommandModule.java`
+- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/NettyServerInfoProvider.java`
 
 如果你拿不准命令该放哪层，可以先问自己：
 
@@ -136,9 +136,9 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 最常用入口：
 
-- `yierdis-storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/DbReads.java`
-- `yierdis-storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/KeyspaceReadOps.java`
-- `yierdis-storage/yierdis-storage-api/src/main/java/yier/bubu/redis/ops/MemoryOps.java`
+- `libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/storage/api/DbReads.java`
+- `libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/storage/api/KeyspaceReadOps.java`
+- `libs/storage/yierdis-storage-api/src/main/java/yier/bubu/redis/storage/api/MemoryOps.java`
 
 如果接口已经有能力，就直接从命令层通过 `support.dbReads(ctx)` 调。
 
@@ -161,9 +161,9 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 建议先看的测试
 
-- `yierdis-command/yierdis-command-kernel/src/test/java/yier/bubu/redis/command/YierdisFastCommandProcessorModuleTest.java`
-- `yierdis-command/yierdis-command-kernel/src/test/java/yier/bubu/redis/command/YierdisFastCommandProcessorRegistrationTest.java`
-- `yierdis-app/yierdis-server-app/src/test/java/yier/bubu/redis/YierdisServerBootstrapCommandWiringTest.java`
+- `libs/command/yierdis-command-kernel/src/test/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessorModuleTest.java`
+- `libs/command/yierdis-command-kernel/src/test/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessorRegistrationTest.java`
+- `apps/yierdis-server-app/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java`
 
 ## 任务 3：改协议
 
@@ -171,15 +171,15 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 先看：
 
-- `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/CustomRequestDecoder.java`
-- `yierdis-protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1RequestEncoder.java`
+- `libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/CustomRequestDecoder.java`
+- `libs/protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/CustomProtocolV1RequestEncoder.java`
 
 ### protocol -> execution bridge
 
 只看：
 
-- `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1ExecutionAdapter.java`
-- `yierdis-protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/netty/ProtocolCommandAdapter.java`
+- `libs/protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/CustomProtocolV1ExecutionAdapter.java`
+- `libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
 
 这里是 protocol DTO 转成 `ExecutionRequest` 的唯一桥；Netty handler 只负责调用纯 adapter。
 
@@ -187,8 +187,8 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 先看：
 
-- `yierdis-protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/v1/JsonLineReplyWriter.java`
-- `yierdis-protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/v1/CustomProtocolV1ReplyParser.java`
+- `libs/protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/JsonLineReplyWriter.java`
+- `libs/protocol/yierdis-custom-v1-wire/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/CustomProtocolV1ReplyParser.java`
 
 ### 需要特别注意
 
@@ -197,27 +197,27 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 相关护栏测试：
 
-- `yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/ReplySsoTGuardTest.java`
+- `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/custom/v1/ReplySsoTGuardTest.java`
 
 ## 任务 4：改多 DB、连接态或事务
 
 ### 会话状态入口
 
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyExecutionConnection.java`
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/EngineSession.java`
-- `yierdis-execution/yierdis-execution-api/src/main/java/yier/bubu/redis/contract/CommandContext.java`
+- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/NettyExecutionConnection.java`
+- `libs/execution/yierdis-engine/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java`
+- `libs/execution/yierdis-execution-api/src/main/java/yier/bubu/redis/execution/api/CommandContext.java`
 
 新的执行契约源码都在 `yierdis-execution-api`，旧 `core-contract` artifact 已退休。
 
 ### 路由入口
 
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
-- `yierdis-command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/CommandSupport.java`
-- `yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisInstance.java`
+- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
+- `libs/command/yierdis-command-defaults/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java`
+- `libs/runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
 
 ### 事务判定入口
 
-- `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
+- `libs/command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
 
 如果你要改的是：
 
@@ -245,61 +245,61 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### TTL / 生命周期
 
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbKeyLifecycle.java`
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbExpirationManager.java`
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisTtlOps.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/expire/YierdisDbExpirationManager.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/expire/YierdisTtlOps.java`
 
 ### memory accounting / eviction
 
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbMemoryLedger.java`
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDbMaxmemorySupport.java`
-- `yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisGlobalMaxmemoryGovernor.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMemoryLedger.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMaxmemorySupport.java`
+- `libs/runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/embedded/YierdisGlobalMaxmemoryGovernor.java`
 
 ### off-heap / FFM
 
-- `yierdis-memory/api/src/main/java/yier/bubu/redis/offheap/api/OffHeapAllocator.java`
-- `yierdis-memory/api/src/main/java/yier/bubu/redis/offheap/api/OffHeapBuf.java`
-- `yierdis-memory/api/src/main/java/yier/bubu/redis/offheap/api/OffHeapSlice.java`
-- `yierdis-memory/foreign/src/main/java/yier/bubu/redis/db/memory/foreign/YierdisFfmMemoryRuntime.java`
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/memory/ffm/YierdisFfmKeyspace.java`
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/memory/ffm/YierdisFfmExpireIndex.java`
+- `libs/memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/OffHeapAllocator.java`
+- `libs/memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/OffHeapBuf.java`
+- `libs/memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/OffHeapSlice.java`
+- `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmMemoryRuntime.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmKeyspace.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmExpireIndex.java`
 - `docs/ffm-usage.md`
 - `docs/offheap-copy-behavior.md`
 
-`yierdis-memory-api` 是 off-heap contract 的模块兼容面；包名仍然是 `yier.bubu.redis.offheap.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`。`command-defaults` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
+`yierdis-memory-api` 是 off-heap contract 的模块兼容面；包名是 `yier.bubu.redis.memory.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`。`command-defaults` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
 
 ### 建议先看的测试
 
-- `yierdis-memory/api/src/test/java/yier/bubu/redis/offheap/api/OffHeapContractsSmokeTest.java`
-- `yierdis-storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/db/OffHeapStringStorageTest.java`
-- `yierdis-storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/db/UnsafeOffHeapDbSmokeTest.java`
-- `yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/runtime/GlobalMaxmemoryLruAcrossDbsTest.java`
-- `yierdis-runtime/yierdis-runtime-embedded/src/test/java/yier/bubu/redis/command/TtlMaxmemoryTest.java`
+- `libs/memory/yierdis-memory-api/src/test/java/yier/bubu/redis/memory/api/OffHeapContractsSmokeTest.java`
+- `libs/storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapStringStorageTest.java`
+- `libs/storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/storage/memory/UnsafeOffHeapDbSmokeTest.java`
+- `tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/runtime/GlobalMaxmemoryLruAcrossDbsTest.java`
+- `tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TtlMaxmemoryTest.java`
 
 ## 任务 6：改执行器、队列、背压
 
 ### 总入口
 
-- `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutor.java`
+- `libs/executor/yierdis-executor-core/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
 
 ### 提交路径
 
-- `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorSubmitter.java`
+- `libs/executor/yierdis-executor-core/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorSubmitter.java`
 
 ### drain 路径
 
-- `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorDrainLoop.java`
-- `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/CommandExecutorExecutionSupport.java`
+- `libs/executor/yierdis-executor-core/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorDrainLoop.java`
+- `libs/executor/yierdis-executor-core/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java`
 
 ### 通用背压算法
 
-- `yierdis-executor-core/src/main/java/yier/bubu/redis/executor/ExecutorBackpressureController.java`
+- `libs/executor/yierdis-executor-core/src/main/java/yier/bubu/redis/execution/executor/ExecutorBackpressureController.java`
 
 ### 建议先看的测试
 
-- `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorTest.java`
-- `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorBackpressureTest.java`
-- `yierdis-executor-core/src/test/java/yier/bubu/redis/executor/CommandExecutorFairSchedulingTest.java`
+- `libs/executor/yierdis-executor-core/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorTest.java`
+- `libs/executor/yierdis-executor-core/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorBackpressureTest.java`
+- `libs/executor/yierdis-executor-core/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorFairSchedulingTest.java`
 
 ### 初学者理解背压的最短路径
 
@@ -322,12 +322,12 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### server-facing 命令入口
 
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/ServerCommandModule.java`
+- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/ServerCommandModule.java`
 
 ### 数据汇总和输出
 
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/NettyServerInfoProvider.java`
-- `yierdis-runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/YierdisInstanceObservability.java`
+- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/NettyServerInfoProvider.java`
+- `libs/runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceObservability.java`
 
 如果你改的是：
 
@@ -365,9 +365,9 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 - `README.md`
 - `docs/request-execution-flow.md`
 - `docs/module-architecture.md`
-- `yierdis-app/yierdis-server-app/src/main/java/yier/bubu/redis/YierdisServerBootstrap.java`
-- `yierdis-command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/YierdisFastCommandProcessor.java`
-- `yierdis-storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/db/YierdisDb.java`
-- `yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
+- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
+- `libs/command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
+- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
+- `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 
 如果你能对这几个文件建立稳定地图，后续改需求就不会再靠猜。

@@ -1,6 +1,6 @@
 package yier.bubu.redis.execution.executor;
 
-import yier.bubu.redis.contract.ConnectionStatsView;
+import yier.bubu.redis.execution.api.ConnectionStatsView;
 
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;

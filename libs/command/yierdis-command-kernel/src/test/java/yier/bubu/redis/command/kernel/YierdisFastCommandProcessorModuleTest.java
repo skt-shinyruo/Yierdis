@@ -6,9 +6,9 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.command.api.CommandDescriptor;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
-import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.ExecutionRequest;
-import yier.bubu.redis.contract.ReplyWriter;
+import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyWriter;
 
 import java.util.List;
 

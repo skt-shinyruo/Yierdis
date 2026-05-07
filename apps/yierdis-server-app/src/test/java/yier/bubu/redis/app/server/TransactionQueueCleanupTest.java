@@ -5,8 +5,8 @@ package yier.bubu.redis.app.server;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.TransactionState;
+import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.TransactionState;
 
 import java.util.Arrays;
 

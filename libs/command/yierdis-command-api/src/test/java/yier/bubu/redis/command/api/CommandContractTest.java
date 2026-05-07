@@ -2,8 +2,8 @@ package yier.bubu.redis.command.api;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.contract.ByteArrayExecutionRequest;
-import yier.bubu.redis.contract.ExecutionRequest;
+import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.ExecutionRequest;
 
 import java.util.Arrays;
 

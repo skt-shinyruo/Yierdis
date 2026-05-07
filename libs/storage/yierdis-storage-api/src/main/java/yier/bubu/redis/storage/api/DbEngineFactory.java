@@ -1,0 +1,17 @@
+package yier.bubu.redis.storage.api;
+
+/**
+ * SPI for creating DB engines for an instance.
+ * <p>
+ * The runtime layer uses this abstraction to avoid hard-coding a concrete storage implementation.
+ */
+public interface DbEngineFactory {
+    RuntimeDbEngine create(
+            int dbIndex,
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis
+    );
+}

@@ -2,8 +2,8 @@ package yier.bubu.redis.runtime.api;
 
 // YierdisChangeEvent：用于 AOF/RDB/replication 等能力的“变更事件”载体（按 ExecutionRecord 记录，可重放）。
 
-import yier.bubu.redis.contract.ExecutionRecord;
-import yier.bubu.redis.contract.ExecutionRequest;
+import yier.bubu.redis.execution.api.ExecutionRecord;
+import yier.bubu.redis.execution.api.ExecutionRequest;
 
 import java.util.Objects;
 

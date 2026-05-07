@@ -1,6 +1,6 @@
 package yier.bubu.redis.execution.executor;
 
-import yier.bubu.redis.contract.ExecutionRequest;
+import yier.bubu.redis.execution.api.ExecutionRequest;
 
 final class CommandExecutorTask<C extends ExecutionConnection> {
     final C connection;

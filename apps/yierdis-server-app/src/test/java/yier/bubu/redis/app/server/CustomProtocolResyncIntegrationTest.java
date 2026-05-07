@@ -7,21 +7,21 @@ import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.engine.YierdisEngine;
+import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
-import yier.bubu.redis.protocol.json.JsonLimits;
-import yier.bubu.redis.protocol.json.JsonObject;
-import yier.bubu.redis.protocol.json.JsonParser;
-import yier.bubu.redis.protocol.json.JsonString;
-import yier.bubu.redis.protocol.json.JsonValue;
-import yier.bubu.redis.protocol.netty.CustomRequestDecoder;
-import yier.bubu.redis.protocol.netty.ProtocolCommandAdapter;
-import yier.bubu.redis.protocol.netty.ProtocolErrorReplyHandler;
-import yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory;
-import yier.bubu.redis.runtime.YierdisInstance;
-import yier.bubu.redis.runtime.YierdisInstanceConfig;
+import yier.bubu.redis.protocol.custom.v1.json.JsonLimits;
+import yier.bubu.redis.protocol.custom.v1.json.JsonObject;
+import yier.bubu.redis.protocol.custom.v1.json.JsonParser;
+import yier.bubu.redis.protocol.custom.v1.json.JsonString;
+import yier.bubu.redis.protocol.custom.v1.json.JsonValue;
+import yier.bubu.redis.protocol.custom.v1.netty.CustomRequestDecoder;
+import yier.bubu.redis.protocol.custom.v1.netty.ProtocolCommandAdapter;
+import yier.bubu.redis.protocol.custom.v1.netty.ProtocolErrorReplyHandler;
+import yier.bubu.redis.protocol.custom.v1.execution.JsonLineReplyWriterFactory;
+import yier.bubu.redis.runtime.embedded.YierdisInstance;
+import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -171,7 +171,7 @@ public class CustomProtocolResyncIntegrationTest {
         Map<String, JsonValue> map = obj.values();
         JsonValue v = map.get(key);
         Assert.assertNotNull("missing field: " + key, v);
-        if (v instanceof yier.bubu.redis.protocol.json.JsonBoolean b) {
+        if (v instanceof yier.bubu.redis.protocol.custom.v1.json.JsonBoolean b) {
             return b.value();
         }
         Assert.fail("expected boolean field: " + key);

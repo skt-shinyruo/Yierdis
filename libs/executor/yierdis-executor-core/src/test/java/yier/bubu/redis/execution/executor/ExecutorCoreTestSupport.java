@@ -2,10 +2,10 @@ package yier.bubu.redis.execution.executor;
 
 import org.junit.Assert;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.contract.ExecutionRequest;
-import yier.bubu.redis.contract.ReplyWriter;
-import yier.bubu.redis.contract.ReplyWriterFactory;
-import yier.bubu.redis.contract.Session;
+import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.ReplyWriterFactory;
+import yier.bubu.redis.execution.api.Session;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;

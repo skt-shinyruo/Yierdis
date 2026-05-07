@@ -4,19 +4,19 @@ import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.engine.YierdisEngine;
+import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
-import yier.bubu.redis.ops.DbEngineFactory;
-import yier.bubu.redis.ops.DbLifecycleOps;
-import yier.bubu.redis.ops.DbReads;
-import yier.bubu.redis.ops.DbWrites;
-import yier.bubu.redis.ops.ExpirationManager;
-import yier.bubu.redis.ops.MemoryOps;
-import yier.bubu.redis.ops.RuntimeDbEngine;
-import yier.bubu.redis.runtime.YierdisInstance;
-import yier.bubu.redis.runtime.YierdisInstanceConfig;
+import yier.bubu.redis.storage.api.DbEngineFactory;
+import yier.bubu.redis.storage.api.DbLifecycleOps;
+import yier.bubu.redis.storage.api.DbReads;
+import yier.bubu.redis.storage.api.DbWrites;
+import yier.bubu.redis.storage.api.ExpirationManager;
+import yier.bubu.redis.storage.api.MemoryOps;
+import yier.bubu.redis.storage.api.RuntimeDbEngine;
+import yier.bubu.redis.runtime.embedded.YierdisInstance;
+import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -100,7 +100,7 @@ public class YierdisServerBootstrapCloseTest {
                     instance::bindToCurrentThread,
                     engine::execute,
                     commandGroup.next(),
-                    new yier.bubu.redis.protocol.v1.JsonLineReplyWriterFactory(),
+                    new yier.bubu.redis.protocol.custom.v1.execution.JsonLineReplyWriterFactory(),
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
             );
