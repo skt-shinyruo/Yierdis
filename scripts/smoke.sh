@@ -11,6 +11,7 @@ SKIP_BUILD="${SKIP_BUILD:-0}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-16379}"
 SERVER_LOG="${SERVER_LOG:-$ROOT_DIR/.tmp-smoke-server.log}"
+READY_TIMEOUT_SEC="${READY_TIMEOUT_SEC:-30}"
 
 # Bench smoke (keep tiny; correctness only)
 KEYSPACE="${KEYSPACE:-10}"
@@ -46,7 +47,7 @@ pick_jar() {
 
 wait_ready() {
   local client_jar="$1"
-  local deadline_sec=30
+  local deadline_sec="$READY_TIMEOUT_SEC"
   local start_ts
   start_ts="$(date +%s)"
 
@@ -88,7 +89,7 @@ main() {
   server_pid="$!"
 
   if ! wait_ready "$client_jar"; then
-    die "server 未在 10s 内就绪，请检查日志：$SERVER_LOG"
+    die "server 未在 ${READY_TIMEOUT_SEC}s 内就绪，请检查日志：$SERVER_LOG"
   fi
   printf "[smoke] server 就绪\n"
 

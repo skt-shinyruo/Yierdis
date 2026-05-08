@@ -1,6 +1,6 @@
 # Off-Heap Copy Behavior
 
-本文说明 Yierdis 在启用 off-heap 后端时，哪些场景会触发 heap / off-heap 之间的拷贝，以及哪些路径可以保持在堆外或 direct buffer 之间流转。
+本文说明 Yierdis 当前统一使用 JDK 25 FFM native-memory 路径时，哪些场景会触发 heap / off-heap 之间的拷贝，以及哪些路径可以保持在堆外或 direct buffer 之间流转。
 
 一个实用判断是：
 
@@ -11,9 +11,9 @@
 
 - 当前 server 的常见写入路径里，请求参数先在 heap。协议适配层会把请求里的命令和参数转成 heap `byte[]`。
   代表路径：`yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
-- `SET`、`APPEND` 等字符串写入命令，在启用 off-heap 后端时，会把这些 heap `byte[]` 或 `BytesSlice` 复制到 native memory。
+- `SET`、`APPEND` 等字符串写入命令，会把这些 heap `byte[]` 或 `BytesSlice` 复制到 native memory。
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
-- 如果启用了 off-heap keyspace，第一次插入 key 时，也会把 key 从 heap `byte[]` 复制到 native memory。
+- 当前 keyspace 使用 FFM 存储时，第一次插入 key 也会把 key 从 heap `byte[]` 复制到 native memory。
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmKeyspace.java`
 - 但如果 source 本身就是带 memory address 的 `BytesSlice`，则可以直接走 address-to-address copy，不必先落成 heap 临时数组。
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`

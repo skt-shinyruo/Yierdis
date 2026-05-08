@@ -21,7 +21,7 @@
 
 ### 3. 改协议，只走 protocol 车道和 server 适配层
 
-如果问题是 request / reply 格式、编解码、decoder 行为，不要去改 `command-defaults` 或 `storage-memory`。
+如果问题是 request / reply 格式、编解码、decoder 行为，不要去改 `yierdis-command-builtin` 或 `yierdis-db-memory`。
 
 ### 4. 先找最接近的测试，再改实现
 
@@ -90,7 +90,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 先判断命令属于哪一层
 
-如果命令是 transport-agnostic 的，通常放 `command-defaults`。
+如果命令是 transport-agnostic 的，通常放 `yierdis-command-builtin`。
 
 例如：
 
@@ -127,7 +127,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 - 这个命令离开 Netty server / runtime observability 还能成立吗？
 
-如果答案是“能”，通常优先放 `command-defaults`。
+如果答案是“能”，通常优先放 `yierdis-command-builtin`。
 如果答案是“不能”，通常放 `server`。
 
 ### 如果命令需要读 DB
@@ -145,10 +145,10 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 如果没有，就按下面顺序加：
 
 1. 先加 `yierdis-db-api` 接口
-2. 再加 `storage-memory` 实现
+2. 再加 `yierdis-db-memory` 实现
 3. 再回到命令层调用
 
-不要在 `command-defaults` 里直接 import `YierdisDb`。
+不要在 `yierdis-command-builtin` 里直接 import `YierdisDb`。
 
 初学者这里最容易犯的错是：
 
@@ -266,7 +266,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 - `docs/ffm-usage.md`
 - `docs/offheap-copy-behavior.md`
 
-`yierdis-memory-api` 是 off-heap contract 的模块兼容面；包名是 `yier.bubu.redis.memory.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`。`command-defaults` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
+`yierdis-memory-api` 是 off-heap contract 的模块兼容面；包名是 `yier.bubu.redis.memory.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`。`yierdis-command-builtin` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
 
 ### 建议先看的测试
 

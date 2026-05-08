@@ -33,29 +33,30 @@ ExecutionRequest
 
 ## 命令是怎么注册进去的
 
-`YierdisFastCommandProcessor` 构造时会创建一个 `CommandRegistry`，然后依次注册各个模块：
+`YierdisFastCommandProcessor` 构造时会创建一个 `CommandRegistry`，并先注册 `TransactionCommands`。生产启动时，应用组合根会再注入 `DefaultCommandModules` 和 server 侧的 `ServerCommandModule`；其中 `DefaultCommandModules` 依次注册：
 
-1. `TransactionCommands`
-2. `CoreConnectionCommands`
-3. `KeyCommands`
-4. `StringCommands`
-5. `HllCommands`
-6. `ListCommands`
-7. `HashCommands`
-8. `SetCommands`
-9. `ZSetCommands`
-10. 额外模块，例如 server 侧的 `ServerCommandModule`
+1. `CoreConnectionCommands`
+2. `KeyCommands`
+3. `StringCommands`
+4. `HllCommands`
+5. `ListCommands`
+6. `HashCommands`
+7. `SetCommands`
+8. `ZSetCommands`
 
 这意味着：
 
-- core 模块负责“传输无关”的默认命令
-- server 模块只补充那些依赖 runtime / build info / observability 的命令
+- `yierdis-command-core` 负责 registry / processor / transaction replay
+- `yierdis-command-builtin` 负责“传输无关”的默认命令
+- `yierdis-server-main` 只补充那些依赖 runtime / build info / observability 的命令
 
 初学者最值得直接打开的文件是：
 
-- `yierdis-core/.../YierdisFastCommandProcessor.java`
-- `yierdis-core/.../*Commands.java`
-- `yierdis-server/yierdis-server-main/.../ServerCommandModule.java`
+- `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
+- `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/DefaultCommandModules.java`
+- `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
+- `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/keyspace/KeyCommands.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerCommandModule.java`
 
 ## `CommandDescriptor` 是什么
 
@@ -190,7 +191,7 @@ HLL 在逻辑上是一组独立命令，但在存储上并不是独立 `ValueTyp
 - `INFO`
 - `STATS`
 
-这一组命令故意不放在 command-defaults，因为它们依赖 server runtime 里的真实统计和 build info。
+这一组命令故意不放在 `yierdis-command-builtin`，因为它们依赖 server runtime 里的真实统计和 build info。
 
 ## 从命令层到 DB 能力边界
 

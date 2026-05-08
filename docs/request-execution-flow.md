@@ -20,7 +20,7 @@ Netty ByteBuf
   -> CommandSpec<T>.parse(...)
   -> typed command handler
   -> DbEngine / DbReads / DbWrites
-  -> storage-memory storage
+  -> yierdis-db-memory storage
   -> ReplyWriter
   -> NettyExecutionIoAdapter
   -> transport flush
@@ -30,7 +30,7 @@ Netty ByteBuf
 
 - protocol 只负责把网络数据解成协议 DTO；
 - server 只负责连接、协议适配和 I/O glue；
-- executor-core 只负责排队、背压、closing 和 owner-thread 调度；
+- `yierdis-server-executor` 只负责排队、背压、closing 和 owner-thread 调度；
 - engine 是命令执行入口；
 - command 层负责 `CommandSpec<T>` 查找、解析、事务判定和 typed handler 分发；
 - DB/storage 负责真实数据结构、TTL、maxmemory 和内存生命周期。
@@ -108,7 +108,7 @@ Netty ByteBuf
 
 ## Executor
 
-`CommandExecutor` 及其协作者位于 `yierdis-server/yierdis-server-executor`，不依赖 Netty，也不依赖 `command-defaults`。
+`CommandExecutor` 及其协作者位于 `yierdis-server/yierdis-server-executor`，不依赖 Netty，也不依赖 `yierdis-command-builtin`。
 
 提交阶段由 `CommandExecutorSubmitter` 和 `ExecutorBacklogBudget` 负责：
 

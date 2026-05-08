@@ -7,31 +7,30 @@
 可以先把项目看成“两条平行车道 + 一层最外组装”：
 
 ```text
-bytes-lib
-├─ memory-api ──> memory-foreign
+yierdis-common-bytes
+├─ yierdis-memory-api ──> yierdis-memory-ffm
 │
-├─ storage-api ──> command-api/kernel/defaults ──> engine
-│        ├───────> storage-memory ──> runtime-embedded
-│        │              ^  ^
-│        │              │  └─ memory-foreign
-│        │              └──── memory-api
-│        └───────> runtime-api ──> command-api/kernel/defaults + storage-memory + runtime-embedded
+├─ yierdis-db-api ──> yierdis-db-memory
+│        ├──────────────> yierdis-server-runtime-api
+│        ├──────────────> yierdis-memory-api
+│        └──────────────> yierdis-memory-ffm
 │
-├─ execution-api
-│        ├─────────> runtime-api
-│        └─────────> engine
+├─ yierdis-server-api ──> yierdis-server-core
+│        └──────────────> yierdis-server-executor
 │
-├─ custom-v1-wire ──> custom-v1-execution-adapter ──> custom-v1-netty
-│        └───────────────────────────────────────────────^
+├─ yierdis-command-api ──> yierdis-command-core
+│        └──────────────> yierdis-command-builtin
 │
-├─ bytes-netty
-├─ executor-core
+├─ yierdis-networking-custom-v1
+│        └──────────────> yierdis-networking-custom-v1-execution
+│                         └──> yierdis-networking-netty
 │
-├─ client  -> custom-v1-wire + custom-v1-netty
-├─ bench   -> custom-v1-wire + custom-v1-netty + bench-local server launch argv model
-└─ server  -> execution-api + storage-api + runtime-api + engine + command-api/kernel/defaults + runtime-embedded
-             + custom-v1-execution-adapter + custom-v1-netty + bytes-netty
-             + executor-core + server-local args + memory-foreign
+├─ yierdis-cli        -> yierdis-networking-custom-v1 + yierdis-networking-netty
+├─ yierdis-benchmark  -> yierdis-networking-custom-v1 + yierdis-networking-netty
+└─ yierdis-server-main -> server-api + db-api + command-api/core/builtin + server-core
+                         + server-runtime/api + server-executor
+                         + yierdis-networking-custom-v1-execution
+                         + yierdis-networking-netty + yierdis-memory-ffm
 ```
 
 理解这张图时，最重要的判断不是“谁依赖谁”，而是“谁负责线上协议、谁负责执行契约、谁负责 DB、谁负责最后的组装”。
@@ -65,13 +64,12 @@ families are:
 下面几个模块主要是 parent / aggregator，本身不是运行时代码：
 
 - `yierdis-parent`
-- `yierdis-protocol`
-- `yierdis-bytes`
+- `yierdis-common`
 - `yierdis-memory`
-- `yierdis-storage`
-- `yierdis-runtime`
-- `yierdis-execution`
+- `yierdis-networking`
+- `yierdis-server`
 - `yierdis-command`
+- `yierdis-db`
 
 它们的作用主要是：
 
@@ -170,8 +168,8 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 对初学者来说，可以把它理解成：
 
-- `storage-api` 定义“命令层可以向 DB 提什么要求”
-- `storage-memory` 决定“这些要求具体怎么完成”
+- `yierdis-db-api` 定义“命令层可以向 DB 提什么要求”
+- `yierdis-db-memory` 决定“这些要求具体怎么完成”
 
 ### `yierdis-server-runtime-api`
 
@@ -201,9 +199,9 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 这里是数据结构和存储策略最密集的模块。
 
-`storage-memory` 里的 internal `KeyHandle` 实现 API 层的 `storage.api.KeyHandle`。热点 TTL cleanup 和 maxmemory eviction 走 handle API；heap `byte[]` 主要保留在协议边界、显式 materialization、测试和 client-facing 结果里。
+`yierdis-db-memory` 里的 internal `KeyHandle` 实现 API 层的 `storage.api.KeyHandle`。热点 TTL cleanup 和 maxmemory eviction 走 handle API；heap `byte[]` 主要保留在协议边界、显式 materialization、测试和 client-facing 结果里。
 
-### `yierdis-command-api/kernel/defaults`
+### `yierdis-command-api` / `yierdis-command-core` / `yierdis-command-builtin`
 
 这是传输无关的命令层。
 
@@ -216,14 +214,14 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 这个模块是整个架构里最刻意做“依赖倒置”的地方。
 
-从代码逻辑上看，`command-api/kernel/defaults` 的职责可以再具体化成：
+从代码逻辑上看，这三层的职责可以再具体化成：
 
 - `YierdisFastCommandProcessor`
-  负责命令注册、`CommandSpec<T>` 查找、事务前置判定、错误转换和最终分发
+  位于 `yierdis-command-core`，负责命令注册、`CommandSpec<T>` 查找、事务前置判定、错误转换和最终分发
 - `CommandSupport`
-  负责把 `CommandContext` 里的会话态、DB 路由和参数解析 helper 收敛到一起
+  位于 `yierdis-command-builtin`，负责把 `CommandContext` 里的会话态、DB 路由和参数解析 helper 收敛到一起
 - 各个 `*Commands`
-  负责具体命令的 typed parser、参数语义和回包语义
+  位于 `yierdis-command-builtin`，负责具体命令的 typed parser、参数语义和回包语义
 
 也就是说，命令层更像“翻译层”，而不是“存储实现层”。
 
@@ -264,8 +262,8 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 初学者如果只记一句话，可以记成：
 
-- `runtime-embedded` 负责“实例怎么活”
-- `command-api/kernel/defaults` 负责“命令怎么解释”
+- `yierdis-server-runtime` 负责“实例怎么活”
+- `yierdis-command-api` / `yierdis-command-core` / `yierdis-command-builtin` 负责“命令怎么解释”
 
 这两个模块在职责上是并排关系，不是上下级关系。
 
@@ -288,7 +286,7 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 
 这是 JDK 25 FFM backend，包名为 `yier.bubu.redis.memory.foreign.*`。
 
-它为 storage-memory 提供：
+它为 `yierdis-db-memory` 提供：
 
 - native memory runtime
 - FFM allocator
@@ -358,14 +356,14 @@ bench 主要依赖协议模块，包名为 `yier.bubu.redis.app.bench.*`，并�
 
 ### 1. protocol 不等于 command contract
 
-`ExecutionRequest` / `ReplyWriter` 由 `yierdis-server-api` 拥有，不在 `custom-v1-wire`。旧 `core-contract` artifact 已从 active Maven 图中退休。
+`ExecutionRequest` / `ReplyWriter` 由 `yierdis-server-api` 拥有，不在 `yierdis-networking-custom-v1`。旧 `core-contract` artifact 已从 active Maven 图中退休。
 
 这意味着：
 
 - protocol DTO 不是命令层的事实来源
 - server 最终写回语义仍以 `ReplyWriter` 为准
 
-### 2. `command-api/kernel/defaults` 不能依赖 `storage-memory` 或 memory backend
+### 2. `yierdis-command-api` / `yierdis-command-core` / `yierdis-command-builtin` 不能依赖 `yierdis-db-memory` 或 memory backend
 
 命令层只能通过 `yierdis-db-api` 看 `DbEngine` / `DbReads` / `DbWrites`，不能直接看 `YierdisDb`，也不能 import `yier.bubu.redis.memory.api.*` 或依赖 `yierdis-memory-api`。
 
@@ -394,27 +392,27 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 - command processor 的注册、事务、错误转换等细节不继续散落到 bootstrap
 - maintenance 也通过同一个 engine 入口回到 runtime/storage
 - `EngineSession` 承接 selected DB、transaction 和 client metadata
-- executor-core 只调度 `Session + ExecutionRequest + ReplyWriter`，不创建 `CommandContext`
+- `yierdis-server-executor` 只调度 `Session + ExecutionRequest + ReplyWriter`，不创建 `CommandContext`
 
 如果把一次请求跨模块的过程写成最短路径，大致是：
 
-1. `custom-v1-netty`
+1. `yierdis-networking-netty`
    把网络输入交给 decoder
-2. `custom-v1-execution-adapter`
+2. `yierdis-networking-custom-v1-execution`
    把协议请求适配为 `ExecutionRequest`
-3. `server`
+3. `yierdis-server-main`
    创建 `NettyExecutionConnection` 并提交执行请求
-4. `executor-core`
+4. `yierdis-server-executor`
    做排队、背压和 owner-thread 调度
 5. `yierdis-server-core`
    接收 `Session + ExecutionRequest + ReplyWriter`，创建 command context
-6. `command-api/kernel/defaults`
+6. `yierdis-command-api` / `yierdis-command-core` / `yierdis-command-builtin`
    通过 `CommandSpec<T>` parse 后分发到 typed handler
-7. `storage-api`
+7. `yierdis-db-api`
    通过 `DbReads/DbWrites` 暴露能力边界
-8. `storage-memory`
+8. `yierdis-db-memory`
    执行实际读写
-9. `custom-v1-execution-adapter`
+9. `yierdis-networking-custom-v1-execution`
    通过 `JsonLineReplyWriter` 把结果编码回协议
 
 初学者如果能把这 9 步记住，读整个仓库时就不容易迷路。
@@ -423,14 +421,14 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 
 这些边界不只是文档约定，仓库里有明确的护栏。
 
-### `command-api/kernel/defaults` 硬依赖护栏
+### `yierdis-command-builtin` 硬依赖护栏
 
 `yierdis-command/yierdis-command-builtin/pom.xml` 的边界由
 `architecture-policy.yml` 和 `ArchitectureBoundaryTest` 持续校验，禁止：
 
 - `yierdis-db-memory`
 - `yierdis-memory-api`
-- legacy `yierdis-protocol-model`
+- legacy networking/protocol model artifacts（例如 architecture policy 里的 yierdis-networking-model）
 - `yierdis-networking-custom-v1`
 - `yierdis-networking-custom-v1-execution`
 - `yierdis-networking-netty`
@@ -441,20 +439,20 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 
 这个测试会扫描源码，确保：
 
-- `storage-memory/storage-api/command-api/kernel/defaults` 不 import `yier.bubu.redis.protocol.*`
-- `command-api/kernel/defaults` 不依赖 `yierdis-memory-api`，也不 import `yier.bubu.redis.memory.api.*`
-- `storage-api` 保持中立 contract 模块，不依赖 command、protocol、application/server、Netty、concrete storage implementation 或 memory-foreign
-- `runtime-api` 保持中立 contract 模块，不依赖 command/storage implementation、protocol、application/server、Netty 或 memory-foreign
+- `yierdis-db-memory` / `yierdis-db-api` / `yierdis-command-*` 不 import `yier.bubu.redis.protocol.*`
+- `yierdis-command-api` / `yierdis-command-core` / `yierdis-command-builtin` 不依赖 `yierdis-memory-api`，也不 import `yier.bubu.redis.memory.api.*`
+- `yierdis-db-api` 保持中立 contract 模块，不依赖 command、protocol、application/server、Netty、concrete storage implementation 或 `yierdis-memory-ffm`
+- `yierdis-server-runtime-api` 保持中立 contract 模块，不依赖 command/storage implementation、protocol、application/server、Netty 或 `yierdis-memory-ffm`
 - 旧 core 系列 artifact 不再出现在 active Maven 图
-- `memory-api` 保持中立 contract 模块，不依赖 command、storage implementation、protocol、runtime implementation、server/app、Netty 或 memory-foreign
-- `custom-v1-wire` 不依赖 execution、command、storage、runtime、server/app 或 Netty
-- `custom-v1-execution-adapter` 不依赖 command、storage、runtime、server/app 或 Netty
-- `custom-v1-netty` 不依赖 command、storage、runtime 或 server/app
+- `yierdis-memory-api` 保持中立 contract 模块，不依赖 command、storage implementation、protocol、runtime implementation、server/app、Netty 或 `yierdis-memory-ffm`
+- `yierdis-networking-custom-v1` 不依赖 execution、command、storage、runtime、server/app 或 Netty
+- `yierdis-networking-custom-v1-execution` 不依赖 command、storage、runtime、server/app 或 Netty
+- `yierdis-networking-netty` 不依赖 command、storage、runtime 或 server/app
 - bootstrap 不重新内联 owner-thread 生命周期逻辑
 - request DTO 和 `ExecutionRequest` 的边界不被重新打穿
 - server bootstrap 不绕过 `YierdisEngine` 直接接线 command processor 或 maintenance
 - `YierdisEngine` 和 executor seam 继续暴露 `Session + ExecutionRequest + ReplyWriter`
-- executor-core 不重新拥有 `CommandContext`、selected DB 或 transaction state
+- `yierdis-server-executor` 不重新拥有 `CommandContext`、selected DB 或 transaction state
 - command parsing 不泄漏到 server/executor/runtime/protocol/storage
 - TTL/maxmemory pressure path 继续使用 `KeyHandle`
 
@@ -489,12 +487,12 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 Yierdis 的模块设计重点，不是“按包名分目录”，而是：
 
 - protocol 负责线上协议
-- execution-api / storage-api / runtime-api 负责执行契约、DB 能力边界和 embedded runtime contract
-- memory-api 负责 off-heap contract 兼容面
+- `yierdis-server-api` / `yierdis-db-api` / `yierdis-server-runtime-api` 负责执行契约、DB 能力边界和 embedded runtime contract
+- `yierdis-memory-api` 负责 off-heap contract 兼容面
 - engine 负责统一命令执行入口
-- storage-memory 负责真实存储
-- runtime-embedded 负责实例生命周期
-- server 负责最后的组装
+- `yierdis-db-memory` 负责真实存储
+- `yierdis-server-runtime` 负责实例生命周期
+- `yierdis-server-main` 负责最后的组装
 
 如果你准备真正动手改功能，读完本文后建议继续看 [`development-navigation.md`](./development-navigation.md)。
 
@@ -508,7 +506,7 @@ Yierdis 的模块设计重点，不是“按包名分目录”，而是：
    先知道项目怎么启动、怎么收请求
 2. `yierdis-server-core`
    再知道 server 最终把请求交给哪个执行入口
-3. `yierdis-command-api/kernel/defaults`
+3. `yierdis-command-api` / `yierdis-command-core` / `yierdis-command-builtin`
    再知道命令是怎么被解释和分发的
 4. `yierdis-db-api`
    再知道命令层到底能向 DB 要什么能力
@@ -516,7 +514,7 @@ Yierdis 的模块设计重点，不是“按包名分目录”，而是：
    最后再进入实际存储实现
 6. `yierdis-server-runtime`
    回过头理解多 DB、owner thread 和实例级生命周期
-7. `yierdis-protocol-*`
+7. `yierdis-networking-custom-v1` / `yierdis-networking-custom-v1-execution` / `yierdis-networking-netty`
    最后补协议细节和外部工具链
 
 这样读会更符合“先看主路径，再看细节分层”的学习顺序。

@@ -56,7 +56,7 @@ Yierdis 的协议不是 RESP，而是一种“长度前缀 + 单行 JSON”的�
 一个 `SET a 1` 请求则是：
 
 ```text
-29:{"cmd":"SET","args":["a","1"]}\n
+30:{"cmd":"SET","args":["a","1"]}\n
 ```
 
 ### 为什么 payload 必须是单行
@@ -146,9 +146,9 @@ CustomRequestDecoder
 
 如果你想对照源码看，最关键的文件是：
 
-- `yierdis-networking/.../CustomRequestDecoder.java`
-- `yierdis-networking/.../CustomProtocolV1RequestPayloadParser.java`
-- `yierdis-server/yierdis-server-main/.../ProtocolCommandAdapter.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/CustomRequestDecoder.java`
+- `yierdis-networking/yierdis-networking-custom-v1/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/CustomProtocolV1RequestPayloadParser.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
 
 ## Reply Format
 

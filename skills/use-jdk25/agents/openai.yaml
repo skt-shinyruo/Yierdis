@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use JDK 25"
+  short_description: "Run Yierdis commands with local JDK 25"
+  default_prompt: "Use $use-jdk25 to run Maven with JDK 25."

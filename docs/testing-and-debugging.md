@@ -15,10 +15,10 @@
 
 代表测试：
 
-- `yierdis-server/yierdis-server-main/.../args/YierdisServerArgsTest.java`
-- `yierdis-server/yierdis-server-main/.../ServerConfigArgsTest.java`
-- `yierdis-tests/yierdis-architecture-tests/.../ArchitectureBoundaryTest.java`
-- `yierdis-tests/yierdis-architecture-tests/.../ReplySsoTGuardTest.java`
+- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/args/YierdisServerArgsTest.java`
+- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/ServerConfigArgsTest.java`
+- `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
+- `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/custom/v1/ReplySsoTGuardTest.java`
 
 这层很适合抓：
 
@@ -211,7 +211,7 @@ mvn -pl yierdis-server/yierdis-server-main,yierdis-server/yierdis-server-executo
 mvn test
 ```
 
-仓库要求 JDK 25。如果你本机默认不是 JDK 25，优先按 `README.md` 里的方式切换后再跑。
+仓库要求 JDK 25。如果你本机默认不是 JDK 25，先切到 JDK 25 后再跑；本机 Codex 用法见 `skills/use-jdk25/SKILL.md`。
 
 ## 最实用的两个脚本
 
@@ -242,6 +242,13 @@ mvn test
 SKIP_BUILD=1 ./scripts/smoke.sh
 ```
 
+常见调参项：
+
+- `HOST` / `PORT`
+- `SERVER_LOG`
+- `READY_TIMEOUT_SEC`
+- `REQUESTS` / `CLIENTS` / `PIPELINE`
+
 ### `scripts/bench.sh`
 
 这个脚本适合做“可重复压测”或 request-path 回归对比。
@@ -259,9 +266,16 @@ SKIP_BUILD=1 ./scripts/smoke.sh
 - `PIPELINE`
 - `DATA_SIZE`
 - `KEYSPACE`
+- `LATENCY_REQUESTS`
+- `LATENCY_CLIENTS`
+- `XMS` / `XMX` / `MAX_DIRECT_MEMORY`
 - `SKIP_PREFILL`
 - `SKIP_LATENCY`
 - `MAXMEMORY_BYTES`
+- `MAXMEMORY_POLICY`
+- `MAXMEMORY_SAMPLES`
+- `SERVER_ARGS_EXTRA`
+- `BENCH_ARGS_EXTRA`
 
 例如：
 

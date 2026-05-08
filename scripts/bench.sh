@@ -10,7 +10,6 @@ SKIP_BUILD="${SKIP_BUILD:-0}"
 # Bench config overrides (keep empty to use yierdis-benchmark built-in defaults)
 HOST="${HOST:-}"
 PORT_BASE="${PORT_BASE:-}"
-BACKENDS="${BACKENDS:-}"
 
 KEYSPACE="${KEYSPACE:-}"
 DATA_SIZE="${DATA_SIZE:-}"
@@ -76,7 +75,6 @@ main() {
   args+=(--serverJar "$server_jar")
   [[ -n "$HOST" ]] && args+=(--host "$HOST")
   [[ -n "$PORT_BASE" ]] && args+=(--portBase "$PORT_BASE")
-  [[ -n "$BACKENDS" ]] && args+=(--backends "$BACKENDS")
 
   [[ -n "$KEYSPACE" ]] && args+=(--keyspace "$KEYSPACE")
   [[ -n "$DATA_SIZE" ]] && args+=(--dataSize "$DATA_SIZE")

@@ -18,17 +18,11 @@ Yierdis 的目标是：用 Java 参考 Redis 的思路实现一个类似的项�
 - JDK 25
 - Maven 3.x
 
-构建和测试必须使用 JDK 25：
+构建和测试必须在 JDK 25 环境下运行：
 
 ```bash
-jdk25 mvn test
-jdk25 mvn -DskipTests package
-```
-
-如果当前 shell 里还没有 `jdk25`，等价的原始写法是：
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn test
+mvn test
+mvn -DskipTests package
 ```
 
 ## 初学者导读
@@ -37,22 +31,21 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 推荐阅读顺序：
 
-1. `docs/codebase-guide.md`
-2. `docs/project-introduction.md`
-3. `docs/project-overview.md`
-4. `docs/request-execution-flow.md`
-5. `docs/main-path-walkthrough.md`
-6. `docs/protocol-reference.md`
-7. `docs/commands-and-data-model.md`
-8. `docs/db-internals.md`
-9. `docs/executor-and-backpressure.md`
-10. `docs/bytes-and-fast-paths.md`
-11. `docs/configuration-and-operations.md`
-12. `docs/client-and-bench-internals.md`
-13. `docs/testing-and-debugging.md`
-14. `docs/glossary.md`
-15. `docs/module-architecture.md`
-16. `docs/development-navigation.md`
+1. `docs/project-introduction.md`
+2. `docs/project-overview.md`
+3. `docs/request-execution-flow.md`
+4. `docs/main-path-walkthrough.md`
+5. `docs/protocol-reference.md`
+6. `docs/commands-and-data-model.md`
+7. `docs/db-internals.md`
+8. `docs/executor-and-backpressure.md`
+9. `docs/bytes-and-fast-paths.md`
+10. `docs/configuration-and-operations.md`
+11. `docs/client-and-bench-internals.md`
+12. `docs/testing-and-debugging.md`
+13. `docs/glossary.md`
+14. `docs/module-architecture.md`
+15. `docs/development-navigation.md`
 
 这组文档分别覆盖：
 
@@ -80,7 +73,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 ## 开发者：模块边界（契约 / 组装）
 
-本项目内部模块做过一次“边界收敛”，目的是让依赖方向更清晰（执行契约在 execution-api，协议模型专注协议，组装在 server）：
+本项目内部模块做过一次“边界收敛”，目的是让依赖方向更清晰（执行契约在 `yierdis-server-api`，协议模型专注协议，组装在 `yierdis-server-main`）：
 
 - **执行契约（`ExecutionRequest` / `ExecutionRecord` / `ReplyWriter` / session contracts）**：统一由 `yierdis-server-api` 拥有（包名为 `yier.bubu.redis.execution.api.*`），不放在 Custom Protocol v1 wire 模块；旧的 `Command` 仅保留为兼容/废弃类型。
 - **存储能力契约（`DbEngine` / `DbReads` / `DbWrites` / `MemoryOps` / maxmemory hooks）**：统一由 `yierdis-db-api` 拥有；包名为 `yier.bubu.redis.storage.api.*` 和 `yier.bubu.redis.storage.api.result.*`。需要这些 storage contract 的模块应直接依赖 `yierdis-db-api`。
@@ -88,7 +81,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - **协议模型（limits/reply tooling/client/parser model）**：位于 `yierdis-networking-custom-v1`（包名为 `yier.bubu.redis.protocol.custom.v1.wire.*`）；其中 `ReplyValue` 仅用于协议侧客户端/工具/解析器与编码辅助，server 命令写回语义仍以 `ReplyWriter` 为单一事实来源，server command execution write-back still uses ReplyWriter.
 - **协议请求适配**：`CustomProtocolV1Request` 由 `yierdis-networking-custom-v1-execution` 适配为 `ExecutionRequest`；Netty handler glue 位于 `yierdis-networking-netty`；`yierdis-server-main` 只做应用组装。
 - **事务回放 / 变更事件**：连接级事务重放与 `YierdisChangeEvent` 都应复用 `ExecutionRecord` 快照，而不是重新引入新的 argv 容器或 server-local `Command` 包装。
-- **command-api/kernel/defaults 默认装配**：`yierdis-command-api` 暴露命令 SPI，`yierdis-command-core` 持有 registry/processor/transaction replay，`yierdis-command-builtin` 提供传输无关默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server-main`，而 `PING/ECHO/COMMAND/SELECT/QUIT/FLUSHDB` 这类传输无关或 DB 生命周期命令由 defaults 模块提供并在应用组合根注入。
+- **command-api/core/builtin 默认装配**：`yierdis-command-api` 暴露命令 SPI，`yierdis-command-core` 持有 registry/processor/transaction replay，`yierdis-command-builtin` 提供传输无关默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server-main`，而 `PING/ECHO/COMMAND/SELECT/QUIT/FLUSHDB` 这类传输无关或 DB 生命周期命令由 defaults 模块提供并在应用组合根注入。
 - **CLI 输入解析**：`InlineCommandParser` 位于 `yierdis-cli`（`yier.bubu.redis.app.client.InlineCommandParser`）。
 - **instance 暴露面**：`YierdisInstance` 仅负责 DB 生命周期、资源 ownership 与 `DbEngine` 能力视图（`engine(int)` / `engines()` 防御性拷贝），避免上层依赖 `YierdisDb` 具体实现，也不再承担 command processor 组装。
 - **runtime owner-thread seam**：server 不应再通过公开 `DbEngine` 视图做 `RuntimeDbEngine` 向下转型，也不应在 bootstrap 中内联 `bindToCurrentThread()/close()` 细节；owner-thread 维护、maintenance、关闭应通过 `yierdis-server-runtime` 提供的 runtime-local seam 协作。
@@ -163,18 +156,29 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 - `ECHO <message>`
 - `HELLO [ignored]`（信息型命令：返回 server/version/proto/mode/role；不进行协议协商）
 - `COMMAND`（最小子集：`COMMAND`/`COMMAND COUNT`/`COMMAND INFO <name ...>`）
+- `INFO [section]`
+- `STATS`
 - `SELECT <index>`（默认支持 `0..15`；可通过 `--databases` 调整）
 - `QUIT`
 
 ### Key/TTL
 
-- `SET key value [EX seconds|PX milliseconds] [NX|XX]`
+- `SET key value [NX|XX] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]`
 - `GET key`
 - `DEL key [key ...]`
 - `EXISTS key [key ...]`
 - `EXPIRE key seconds`
+- `PEXPIRE key milliseconds`
+- `EXPIREAT key unix-time-seconds`
+- `PEXPIREAT key unix-time-milliseconds`
+- `PERSIST key`
 - `TTL key`
+- `PTTL key`
 - `KEYS pattern`（支持 Redis 风格最小 glob 子集：`*`/`?`/`[]` 范围与否定/反斜杠转义；按 byte 匹配）
+- `SCAN cursor [MATCH pattern] [COUNT count]`
+- `MEMORY USAGE key`
+- `MEMORY STATS`
+- `OBJECT ENCODING key`
 - `TYPE key`
 - `FLUSHDB`
 
@@ -216,6 +220,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 ### Set
 
 - `SADD key member [member ...]`
+- `SREM key member [member ...]`
 - `SMEMBERS key`
 - `SISMEMBER key member`
 - `SCARD key`
@@ -345,11 +350,11 @@ REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 
 常用可调参数（环境变量）：
 
-- `PORT_BASE`：起始端口（默认 `16378`，每个后端 +1）
+- `PORT_BASE`：benchmark 使用的端口（默认 `16378`）
 - `REQUESTS` / `CLIENTS` / `PIPELINE`：吞吐压测参数（每种命令单独跑一次）
 - `DATA_SIZE` / `KEYSPACE`：value 大小与 keyspace
 - `XMS` / `XMX` / `MAX_DIRECT_MEMORY`：JVM 内存与 Direct Memory 上限
-- `MAXMEMORY_BYTES` / `MAX_DIRECT_MEMORY`：server 预算参数（容器环境建议保守）
+- `MAXMEMORY_BYTES` / `MAXMEMORY_POLICY` / `MAXMEMORY_SAMPLES`：server maxmemory 预算和淘汰参数
 - `SKIP_PREFILL=1`：跳过预置数据（可能导致 GET 大量 miss，影响可比性）
 - `SKIP_LATENCY=1`：跳过延迟压测
 

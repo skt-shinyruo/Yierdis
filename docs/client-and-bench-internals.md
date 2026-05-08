@@ -264,6 +264,7 @@ bench 可以开启：
 - server jar / client jar / bench jar 是否都能正常工作
 - server 启动后 CLI 是否能连
 - bench strictReplies correctness smoke 是否通过
+- 通过 `READY_TIMEOUT_SEC` 调整 server readiness 等待时间
 
 ### `scripts/bench.sh`
 
@@ -272,6 +273,7 @@ bench 可以开启：
 - 一键启动 benchmark
 - 透传 JVM 参数
 - 透传 server 参数
+- 透传 bench 额外参数
 - 复现实验环境
 
 所以脚本层不是另起一套实现，而是把：

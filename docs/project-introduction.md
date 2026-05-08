@@ -151,7 +151,7 @@ Yierdis 明确区分了：
 
 这个项目不只是“文档里说分层”，还通过模块拆分和测试把边界守住，例如：
 
-- `command-defaults` 不直接依赖 `storage-memory`
+- `yierdis-command-builtin` 不直接依赖 `yierdis-db-memory`
 - `protocol` 车道不变成命令语义的真相源
 - `server` 只负责组装，不重新拿回所有责任
 
@@ -185,9 +185,9 @@ db + runtime + memory
 
 代表文件：
 
-- `yierdis-networking/.../CustomProtocolV1RequestEncoder.java`
-- `yierdis-networking/.../CustomRequestDecoder.java`
-- `yierdis-networking/yierdis-networking-custom-v1-execution/.../JsonLineReplyWriter.java`
+- `yierdis-networking/yierdis-networking-custom-v1/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/CustomProtocolV1RequestEncoder.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/CustomRequestDecoder.java`
+- `yierdis-networking/yierdis-networking-custom-v1-execution/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/JsonLineReplyWriter.java`
 
 ### 2. command lane
 
@@ -200,9 +200,9 @@ db + runtime + memory
 
 代表文件：
 
-- `yierdis-core/.../YierdisFastCommandProcessor.java`
-- `yierdis-core/.../StringCommands.java`
-- `yierdis-core/.../KeyCommands.java`
+- `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
+- `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
+- `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/keyspace/KeyCommands.java`
 
 ### 3. db lane
 
@@ -217,10 +217,10 @@ db + runtime + memory
 
 代表文件：
 
-- `yierdis-core/.../YierdisDb.java`
-- `yierdis-core/.../YierdisStringOps.java`
-- `yierdis-core/.../HashValue.java`
-- `yierdis-core/.../ListValue.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/HashValue.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ListValue.java`
 
 ### 4. runtime / executor / memory
 
@@ -234,9 +234,9 @@ db + runtime + memory
 
 代表文件：
 
-- `yierdis-core/.../runtime/YierdisInstance.java`
-- `yierdis-server/yierdis-server-executor/.../CommandExecutor.java`
-- `yierdis-server/yierdis-server-executor/.../ExecutorBackpressureController.java`
+- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
+- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
+- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorBackpressureController.java`
 
 ### 5. server wiring
 
@@ -249,10 +249,10 @@ db + runtime + memory
 
 代表文件：
 
-- `yierdis-server/yierdis-server-main/.../YierdisServer.java`
-- `yierdis-server/yierdis-server-main/.../YierdisServerBootstrap.java`
-- `yierdis-server/yierdis-server-main/.../YierdisServerChannelInitializer.java`
-- `yierdis-server/yierdis-server-main/.../ProtocolCommandAdapter.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
 
 ## 启动时到底发生了什么
 
