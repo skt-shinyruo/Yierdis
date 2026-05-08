@@ -185,9 +185,9 @@ db + runtime + memory
 
 代表文件：
 
-- `libs/protocol/.../CustomProtocolV1RequestEncoder.java`
-- `libs/protocol/.../CustomRequestDecoder.java`
-- `libs/protocol/yierdis-custom-v1-execution-adapter/.../JsonLineReplyWriter.java`
+- `yierdis-networking/.../CustomProtocolV1RequestEncoder.java`
+- `yierdis-networking/.../CustomRequestDecoder.java`
+- `yierdis-networking/yierdis-networking-custom-v1-execution/.../JsonLineReplyWriter.java`
 
 ### 2. command lane
 
@@ -235,8 +235,8 @@ db + runtime + memory
 代表文件：
 
 - `yierdis-core/.../runtime/YierdisInstance.java`
-- `libs/executor/yierdis-executor-core/.../CommandExecutor.java`
-- `libs/executor/yierdis-executor-core/.../ExecutorBackpressureController.java`
+- `yierdis-server/yierdis-server-executor/.../CommandExecutor.java`
+- `yierdis-server/yierdis-server-executor/.../ExecutorBackpressureController.java`
 
 ### 5. server wiring
 
@@ -249,10 +249,10 @@ db + runtime + memory
 
 代表文件：
 
-- `apps/yierdis-server-app/.../YierdisServer.java`
-- `apps/yierdis-server-app/.../YierdisServerBootstrap.java`
-- `apps/yierdis-server-app/.../YierdisServerChannelInitializer.java`
-- `apps/yierdis-server-app/.../ProtocolCommandAdapter.java`
+- `yierdis-server/yierdis-server-main/.../YierdisServer.java`
+- `yierdis-server/yierdis-server-main/.../YierdisServerBootstrap.java`
+- `yierdis-server/yierdis-server-main/.../YierdisServerChannelInitializer.java`
+- `yierdis-server/yierdis-server-main/.../ProtocolCommandAdapter.java`
 
 ## 启动时到底发生了什么
 
@@ -375,40 +375,40 @@ socket bytes
 
 ### 进程和启动
 
-- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`
-- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
 
 ### 连接和协议入口
 
-- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
-- `libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/CustomRequestDecoder.java`
-- `libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/CustomRequestDecoder.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
 
 ### 执行器和回包
 
-- `libs/executor/yierdis-executor-core/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
-- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java`
-- `libs/protocol/yierdis-custom-v1-execution-adapter/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/JsonLineReplyWriter.java`
+- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java`
+- `yierdis-networking/yierdis-networking-custom-v1-execution/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/JsonLineReplyWriter.java`
 
 ### 命令与 DB
 
-- `libs/command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
-- `libs/runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
+- `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
+- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
 
 ## 哪些测试最能帮助你建立信心
 
 如果你不想一上来就啃实现类，建议先看这些测试：
 
-- `apps/yierdis-server-app/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java`
+- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java`
   看 server 是不是真的把命令、协议和 observability 接通了
-- `apps/yierdis-server-app/src/test/java/yier/bubu/redis/app/server/CustomProtocolResyncIntegrationTest.java`
+- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/CustomProtocolResyncIntegrationTest.java`
   看协议错误后如何恢复到下一帧
-- `libs/executor/yierdis-executor-core/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorBackpressureTest.java`
+- `yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorBackpressureTest.java`
   看背压和 `ERR busy ...` 的行为
-- `tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandProcessorTest.java`
+- `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandProcessorTest.java`
   看命令处理主流程
-- `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
+- `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
   看边界并不只是文档约定，而是有测试护栏
 
 ## 推荐阅读顺序
