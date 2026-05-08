@@ -108,7 +108,7 @@ Netty ByteBuf
 
 ## Executor
 
-`CommandExecutor` 及其协作者位于 `libs/executor/yierdis-executor-core`，不依赖 Netty，也不依赖 `command-defaults`。
+`CommandExecutor` 及其协作者位于 `yierdis-server/yierdis-server-executor`，不依赖 Netty，也不依赖 `command-defaults`。
 
 提交阶段由 `CommandExecutorSubmitter` 和 `ExecutorBacklogBudget` 负责：
 
@@ -257,29 +257,29 @@ heap `byte[]` 仍允许出现在协议边界、显式 materialization、测试�
 
 ## 建议先看的测试
 
-- `libs/execution/yierdis-engine/src/test/java/yier/bubu/redis/execution/engine/DefaultYierdisEngineTest.java`
-- `libs/execution/yierdis-engine/src/test/java/yier/bubu/redis/execution/engine/EngineSessionTest.java`
-- `libs/executor/yierdis-executor-core/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorTest.java`
-- `libs/executor/yierdis-executor-core/src/test/java/yier/bubu/redis/execution/executor/ExecutionConnectionContextTest.java`
-- `apps/yierdis-server-app/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java`
-- `apps/yierdis-server-app/src/test/java/yier/bubu/redis/app/server/TransactionQueueCleanupTest.java`
-- `tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TransactionCommandTest.java`
-- `tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
+- `yierdis-server/yierdis-server-core/src/test/java/yier/bubu/redis/execution/engine/DefaultYierdisEngineTest.java`
+- `yierdis-server/yierdis-server-core/src/test/java/yier/bubu/redis/execution/engine/EngineSessionTest.java`
+- `yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorTest.java`
+- `yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/ExecutionConnectionContextTest.java`
+- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java`
+- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/TransactionQueueCleanupTest.java`
+- `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TransactionCommandTest.java`
+- `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
 
 ## 推荐打开的文件
 
-- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
-- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
-- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/NettyExecutionConnection.java`
-- `libs/protocol/yierdis-custom-v1-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
-- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java`
-- `libs/executor/yierdis-executor-core/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
-- `libs/executor/yierdis-executor-core/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java`
-- `libs/execution/yierdis-engine/src/main/java/yier/bubu/redis/execution/engine/YierdisEngine.java`
-- `libs/execution/yierdis-engine/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java`
-- `libs/command/yierdis-command-kernel/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
-- `libs/command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMaxmemorySupport.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/expire/YierdisDbExpirationSupport.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionConnection.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java`
+- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
+- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java`
+- `yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/YierdisEngine.java`
+- `yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java`
+- `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
+- `yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMaxmemorySupport.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/expire/YierdisDbExpirationSupport.java`
 
 如果你想继续理解模块边界，接着看 [`module-architecture.md`](./module-architecture.md)。

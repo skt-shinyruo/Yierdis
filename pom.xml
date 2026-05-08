@@ -26,19 +26,16 @@
     </properties>
 
     <modules>
-        <module>libs/memory</module>
-        <module>libs/bytes</module>
-        <module>libs/execution</module>
-        <module>libs/storage</module>
-        <module>libs/runtime</module>
-        <module>libs/protocol</module>
-        <module>libs/command</module>
-        <module>libs/executor/yierdis-executor-core</module>
-        <module>apps/yierdis-client</module>
-        <module>apps/yierdis-server-app</module>
-        <module>apps/yierdis-bench</module>
-        <module>tests/yierdis-architecture-tests</module>
-        <module>tests/yierdis-integration-tests</module>
+        <module>yierdis-common</module>
+        <module>yierdis-memory</module>
+        <module>yierdis-networking</module>
+        <module>yierdis-server</module>
+        <module>yierdis-command</module>
+        <module>yierdis-db</module>
+        <module>yierdis-cli</module>
+        <module>yierdis-benchmark</module>
+        <module>yierdis-tests/yierdis-architecture-tests</module>
+        <module>yierdis-tests/yierdis-integration-tests</module>
     </modules>
 
     <dependencyManagement>
@@ -76,54 +73,48 @@
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-custom-v1-wire</artifactId>
+                <artifactId>yierdis-networking-custom-v1</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-custom-v1-execution-adapter</artifactId>
+                <artifactId>yierdis-networking-custom-v1-execution</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-custom-v1-netty</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-bytes-lib</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-bytes-netty</artifactId>
+                <artifactId>yierdis-networking-netty</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-execution-api</artifactId>
+                <artifactId>yierdis-common-bytes</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-storage-api</artifactId>
+                <artifactId>yierdis-server-api</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-storage-testkit</artifactId>
+                <artifactId>yierdis-db-api</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-storage-memory</artifactId>
+                <artifactId>yierdis-db-testkit</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-runtime-api</artifactId>
+                <artifactId>yierdis-db-memory</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-server-runtime-api</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -133,28 +124,28 @@
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-command-kernel</artifactId>
+                <artifactId>yierdis-command-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-command-defaults</artifactId>
+                <artifactId>yierdis-command-builtin</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-engine</artifactId>
+                <artifactId>yierdis-server-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-runtime-embedded</artifactId>
+                <artifactId>yierdis-server-runtime</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-memory-foreign</artifactId>
+                <artifactId>yierdis-memory-ffm</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -165,12 +156,12 @@
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-executor-core</artifactId>
+                <artifactId>yierdis-server-executor</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-server-app</artifactId>
+                <artifactId>yierdis-server-main</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>

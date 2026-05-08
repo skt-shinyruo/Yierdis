@@ -14,9 +14,9 @@ Yierdis 里的 FFM 主要被当作统一的 native-memory substrate 来用，而
 
 代表路径：
 
-- `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmMemoryRuntime.java`
-- `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmRegion.java`
-- `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmAccess.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmMemoryRuntime.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmRegion.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmAccess.java`
 
 ## 启动和组装
 
@@ -24,7 +24,7 @@ server 启动时，会先检查当前 JVM 是否支持 `java.lang.foreign`。如
 
 代表路径：
 
-- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/ForeignMemoryAutoModules.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ForeignMemoryAutoModules.java`
 
 真正的组装链路是：
 
@@ -37,10 +37,10 @@ server 启动时，会先检查当前 JVM 是否支持 `java.lang.foreign`。如
 
 代表路径：
 
-- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
-- `libs/runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbEngineFactory.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
+- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbEngineFactory.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
 
 ## FFM 基础层：Runtime / Region / Span / Access
 
@@ -65,7 +65,7 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 对应路径：
 
-- `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmMemoryRuntime.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmMemoryRuntime.java`
 
 ### `YierdisFfmRegion`
 
@@ -80,7 +80,7 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 对应路径：
 
-- `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmRegion.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmRegion.java`
 
 ### `YierdisFfmSpan`
 
@@ -88,7 +88,7 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 对应路径：
 
-- `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmSpan.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmSpan.java`
 
 ### `YierdisFfmAccess`
 
@@ -104,7 +104,7 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 对应路径：
 
-- `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmAccess.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmAccess.java`
 
 ## 两条上层接入路径
 
@@ -129,7 +129,7 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 代表路径：
 
-- `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/memory/foreign/YierdisForeignOffHeapAllocator.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisForeignOffHeapAllocator.java`
 
 ### 路径二：`YierdisFfmBlobStore` / `YierdisFfmBytesRef`
 
@@ -146,8 +146,8 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBlobStore.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBytesRef.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBlobStore.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBytesRef.java`
 
 ## 字符串路径：FFM 如何进入 `SET` / `GET`
 
@@ -163,8 +163,8 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
 
 ### 覆盖和扩容
 
@@ -181,7 +181,7 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
 
 ### 读取
 
@@ -194,7 +194,7 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
 
 ### HLL
 
@@ -207,8 +207,8 @@ HLL 并没有单独设计一套 native payload 类型，而是复用了 string �
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisHllOps.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisHyperLogLog.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisHllOps.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisHyperLogLog.java`
 
 ## Keyspace 路径：key 如何放进 FFM
 
@@ -225,8 +225,8 @@ keyspace 是 FFM 使用最核心的部分之一。
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmKeyspace.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/key/KeyHandle.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmKeyspace.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/key/KeyHandle.java`
 
 ## Expire 路径：TTL 如何复用同一份 off-heap key
 
@@ -244,8 +244,8 @@ keyspace 是 FFM 使用最核心的部分之一。
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmExpireIndex.java`
-- `libs/storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/storage/memory/ExpireKeySharingTest.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmExpireIndex.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/ExpireKeySharingTest.java`
 
 ## 复合结构：Hash / List / Set / ZSet
 
@@ -265,7 +265,7 @@ keyspace 是 FFM 使用最核心的部分之一。
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/HashValue.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/HashValue.java`
 
 ### List
 
@@ -278,8 +278,8 @@ keyspace 是 FFM 使用最核心的部分之一。
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ListValue.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmListpack.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ListValue.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmListpack.java`
 
 ### Set
 
@@ -292,9 +292,9 @@ keyspace 是 FFM 使用最核心的部分之一。
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/SetValue.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmIntSet.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmByteMap.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/SetValue.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmIntSet.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmByteMap.java`
 
 ### ZSet
 
@@ -304,8 +304,8 @@ keyspace 是 FFM 使用最核心的部分之一。
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ZSetValue.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmZSet.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ZSetValue.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmZSet.java`
 
 ## “FFM-backed” 不等于“所有东西都在 native memory”
 
@@ -338,10 +338,10 @@ server 启动时，`CommandExecutor` 会先调用 `runtimeAccess::bindToCurrentT
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/DbThreadGuard.java`
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
-- `libs/runtime/yierdis-runtime-embedded/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceRuntimeAccess.java`
-- `apps/yierdis-server-app/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/DbThreadGuard.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
+- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceRuntimeAccess.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
 
 ## 内存统计、maxmemory 和泄漏检查
 
@@ -364,7 +364,7 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java`
 
 ### 关闭和泄漏检测
 
@@ -381,8 +381,8 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbOwnedResources.java`
-- `libs/memory/yierdis-memory-foreign/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmMemoryRuntime.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbOwnedResources.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmMemoryRuntime.java`
 
 ## 相关测试可以说明什么
 
@@ -403,12 +403,12 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
 
 代表路径：
 
-- `libs/storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapKeysToggleTest.java`
-- `libs/storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapStringStorageTest.java`
-- `libs/storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/storage/memory/UnsafeOffHeapKeyspaceTest.java`
-- `libs/storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/storage/memory/UnsafeOffHeapDbSmokeTest.java`
-- `libs/storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/storage/memory/ExpireKeySharingTest.java`
-- `libs/storage/yierdis-storage-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapCollectionReadStreamingTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapKeysToggleTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapStringStorageTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/UnsafeOffHeapKeyspaceTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/UnsafeOffHeapDbSmokeTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/ExpireKeySharingTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapCollectionReadStreamingTest.java`
 
 ## 最后再压缩成一句话
 
