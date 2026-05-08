@@ -65,9 +65,9 @@ main() {
   build_if_needed
 
   local server_jar bench_jar client_jar
-  server_jar="$(pick_jar "$ROOT_DIR/yierdis-app/yierdis-server-app/target/yierdis-server-app-*.jar" "original-")"
-  bench_jar="$(pick_jar "$ROOT_DIR/yierdis-bench/target/yierdis-bench-*.jar" "original-")"
-  client_jar="$(pick_jar "$ROOT_DIR/yierdis-client/target/yierdis-client-*.jar" "original-")"
+  server_jar="$(pick_jar "$ROOT_DIR/yierdis-server/yierdis-server-main/target/yierdis-server-main-*.jar" "original-")"
+  bench_jar="$(pick_jar "$ROOT_DIR/yierdis-benchmark/target/yierdis-benchmark-*.jar" "original-")"
+  client_jar="$(pick_jar "$ROOT_DIR/yierdis-cli/target/yierdis-cli-*.jar" "original-")"
 
   printf "[smoke] serverJar: %s\n" "$server_jar"
   printf "[smoke] benchJar : %s\n" "$bench_jar"

@@ -7,7 +7,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MVN_ARGS="${MVN_ARGS:--q -DskipTests package}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 
-# Bench config overrides (keep empty to use yierdis-bench built-in defaults)
+# Bench config overrides (keep empty to use yierdis-benchmark built-in defaults)
 HOST="${HOST:-}"
 PORT_BASE="${PORT_BASE:-}"
 BACKENDS="${BACKENDS:-}"
@@ -27,7 +27,7 @@ XMS="${XMS:-}"
 XMX="${XMX:-}"
 MAX_DIRECT_MEMORY="${MAX_DIRECT_MEMORY:-}"
 
-# Server args overrides (keep empty to use yierdis-server-app defaults in yierdis-args)
+# Server args overrides (keep empty to use yierdis-server-main defaults in yierdis-args)
 MAXMEMORY_BYTES="${MAXMEMORY_BYTES:-}"
 MAXMEMORY_POLICY="${MAXMEMORY_POLICY:-}"
 MAXMEMORY_SAMPLES="${MAXMEMORY_SAMPLES:-}"
@@ -69,8 +69,8 @@ main() {
   build_if_needed
 
   local server_jar bench_jar
-  server_jar="$(pick_jar "$ROOT_DIR/yierdis-app/yierdis-server-app/target/yierdis-server-app-*.jar" "original-")"
-  bench_jar="$(pick_jar "$ROOT_DIR/yierdis-bench/target/yierdis-bench-*.jar" "original-")"
+  server_jar="$(pick_jar "$ROOT_DIR/yierdis-server/yierdis-server-main/target/yierdis-server-main-*.jar" "original-")"
+  bench_jar="$(pick_jar "$ROOT_DIR/yierdis-benchmark/target/yierdis-benchmark-*.jar" "original-")"
 
   local args=()
   args+=(--serverJar "$server_jar")

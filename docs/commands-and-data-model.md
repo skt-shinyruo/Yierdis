@@ -55,7 +55,7 @@ ExecutionRequest
 
 - `yierdis-core/.../YierdisFastCommandProcessor.java`
 - `yierdis-core/.../*Commands.java`
-- `apps/yierdis-server-app/.../ServerCommandModule.java`
+- `yierdis-server/yierdis-server-main/.../ServerCommandModule.java`
 
 ## `CommandDescriptor` 是什么
 
