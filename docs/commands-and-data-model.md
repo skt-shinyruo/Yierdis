@@ -18,6 +18,7 @@
 
 ```text
 ExecutionRequest
+  -> YierdisEngine / DefaultYierdisEngine
   -> YierdisFastCommandProcessor
   -> CommandRegistry / CommandModule
   -> CommandSupport
@@ -85,7 +86,7 @@ ExecutionRequest
 - `COMMAND`
 - `SELECT`
 - `QUIT`
-- `FLUSHDB`
+- `FLUSHDB [SYNC|ASYNC]`
 - `MULTI`
 - `EXEC`
 - `DISCARD`

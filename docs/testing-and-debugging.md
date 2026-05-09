@@ -168,8 +168,9 @@ mvn -Dtest=CustomProtocolResyncIntegrationTest test
 例如改 zset：
 
 ```bash
-cd yierdis-server/yierdis-server-runtime
-mvn -Dtest=ZSetCommandTest,CommandErrorTest test
+mvn -pl yierdis-tests/yierdis-integration-tests -am \
+  -Dtest=ZSetCommandTest,CommandErrorTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 ### 改内部编码或内存逻辑
@@ -184,8 +185,9 @@ mvn -Dtest=ZSetCommandTest,CommandErrorTest test
 例如改 string / off-heap：
 
 ```bash
-cd yierdis-server/yierdis-server-runtime
-mvn -Dtest=OffHeapStringStorageTest,MemoryStatsCommandTest,MaxmemoryEvictionTest test
+mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-integration-tests -am \
+  -Dtest=OffHeapStringStorageTest,MemoryStatsCommandTest,MaxmemoryEvictionTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 ### 改启动参数、背压、pipeline

@@ -2,38 +2,21 @@
 
 本文说明 Yierdis 的 Maven 模块是怎么拆的、依赖方向是什么、以及代码层和测试层如何一起守住这些边界。
 
-## 一眼看懂的依赖图
+## 一眼看懂的依赖关系
 
-可以先把项目看成“两条平行车道 + 一层最外组装”：
+可以先把项目看成几组核心关系：
 
-```text
-yierdis-common-bytes
-├─ yierdis-memory-api ──> yierdis-memory-ffm
-│
-├─ yierdis-db-api ──> yierdis-db-memory
-│        ├──────────────> yierdis-server-runtime-api
-│        ├──────────────> yierdis-memory-api
-│        └──────────────> yierdis-memory-ffm
-│
-├─ yierdis-server-api ──> yierdis-server-core
-│        └──────────────> yierdis-server-executor
-│
-├─ yierdis-command-api ──> yierdis-command-core
-│        └──────────────> yierdis-command-builtin
-│
-├─ yierdis-networking-custom-v1
-│        └──────────────> yierdis-networking-custom-v1-execution
-│                         └──> yierdis-networking-netty
-│
-├─ yierdis-cli        -> yierdis-networking-custom-v1 + yierdis-networking-netty
-├─ yierdis-benchmark  -> yierdis-networking-custom-v1 + yierdis-networking-netty
-└─ yierdis-server-main -> server-api + db-api + command-api/core/builtin + server-core
-                         + server-runtime/api + server-executor
-                         + yierdis-networking-custom-v1-execution
-                         + yierdis-networking-netty + yierdis-memory-ffm
-```
+- `yierdis-common-bytes` 是公共 bytes 抽象，被 memory、db、execution 和 protocol 复用
+- `yierdis-memory-api` 提供 off-heap contract，`yierdis-memory-ffm` 是它的 JDK 25 FFM backend
+- `yierdis-db-api` 定义 DB 能力边界，`yierdis-db-memory` 提供具体存储实现
+- `yierdis-server-api` 定义执行契约，`yierdis-server-core` 和 `yierdis-server-executor` 依赖它
+- `yierdis-command-api` 定义命令注册契约，`yierdis-command-core` 和 `yierdis-command-builtin` 依赖它
+- `yierdis-networking-custom-v1` 负责 wire model，`yierdis-networking-custom-v1-execution` 负责协议到 execution 的适配
+- `yierdis-networking-netty` 负责 Netty 适配，同时承载 `yier.bubu.redis.bytes.netty.*` 和 `yier.bubu.redis.protocol.custom.v1.netty.*`
+- `yierdis-server-main` 是最外层组装模块，把 server / command / db / networking / runtime 拼起来
+- `yierdis-cli` 和 `yierdis-benchmark` 主要依赖 protocol 和 networking 层，而不是 server 内核
 
-理解这张图时，最重要的判断不是“谁依赖谁”，而是“谁负责线上协议、谁负责执行契约、谁负责 DB、谁负责最后的组装”。
+理解这些关系时，最重要的判断不是“谁依赖谁”本身，而是“谁负责线上协议、谁负责执行契约、谁负责 DB、谁负责最后的组装”。
 
 ## Package Ownership
 
@@ -46,9 +29,14 @@ families are:
 - `yier.bubu.redis.execution.api`
 - `yier.bubu.redis.execution.engine`
 - `yier.bubu.redis.execution.executor`
+- `yier.bubu.redis.bytes`
+- `yier.bubu.redis.bytes.netty`
 - `yier.bubu.redis.storage.api`
 - `yier.bubu.redis.storage.api.result`
 - `yier.bubu.redis.storage.memory`
+- `yier.bubu.redis.command.api`
+- `yier.bubu.redis.command.kernel`
+- `yier.bubu.redis.command.defaults`
 - `yier.bubu.redis.runtime.api`
 - `yier.bubu.redis.runtime.embedded`
 - `yier.bubu.redis.memory.api`
@@ -90,7 +78,7 @@ families are:
 
 ### `yierdis-networking-netty`
 
-只负责把中立的 bytes 抽象接到 Netty。
+负责把中立的 bytes 抽象接到 Netty，同时承载 `yier.bubu.redis.bytes.netty.*` 和 `yier.bubu.redis.protocol.custom.v1.netty.*`。
 
 它存在的意义是：
 
@@ -405,7 +393,7 @@ server 不再直接构造 `YierdisFastCommandProcessor`，而是构造 `YierdisE
 4. `yierdis-server-executor`
    做排队、背压和 owner-thread 调度
 5. `yierdis-server-core`
-   接收 `Session + ExecutionRequest + ReplyWriter`，创建 command context
+   接收 `Session + ExecutionRequest + ReplyWriter`，并在引擎内部创建 command context
 6. `yierdis-command-api` / `yierdis-command-core` / `yierdis-command-builtin`
    通过 `CommandSpec<T>` parse 后分发到 typed handler
 7. `yierdis-db-api`

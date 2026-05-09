@@ -31,7 +31,7 @@
 - [`request-execution-flow.md`](./request-execution-flow.md)
   说明从 Netty 收包到命令执行、DB 读写、回包写出的主链路，并用 `PING` 和 `SET` 做例子。
 - [`main-path-walkthrough.md`](./main-path-walkthrough.md)
-  按源码阅读顺序，把 `YierdisServerBootstrap -> CommandExecutor -> YierdisFastCommandProcessor -> YierdisStringOps` 这条主链逐段串起来。
+  按源码阅读顺序，把 `YierdisServerBootstrap -> CommandExecutor -> YierdisEngine -> YierdisFastCommandProcessor -> YierdisStringOps` 这条主链逐段串起来。
 - [`db-internals.md`](./db-internals.md)
   专门展开 `YierdisDb`、key lifecycle、mutation executor、memory ledger、TTL 和 maxmemory 在单 DB 内核里是如何协作的。
 - [`executor-and-backpressure.md`](./executor-and-backpressure.md)

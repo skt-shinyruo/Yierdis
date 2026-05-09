@@ -189,10 +189,11 @@ db + runtime + memory
 - `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/CustomRequestDecoder.java`
 - `yierdis-networking/yierdis-networking-custom-v1-execution/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/JsonLineReplyWriter.java`
 
-### 2. command lane
+### 2. execution / command lane
 
-负责“命令怎么被注册、分发、校验和回包”：
+负责“执行入口在哪里，以及命令怎么被注册、分发、校验和回包”：
 
+- `YierdisEngine` / `DefaultYierdisEngine`
 - `ExecutionRequest`
 - `ReplyWriter`
 - `YierdisFastCommandProcessor`
@@ -200,6 +201,7 @@ db + runtime + memory
 
 代表文件：
 
+- `yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java`
 - `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
 - `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
 - `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/keyspace/KeyCommands.java`
@@ -286,6 +288,7 @@ socket bytes
   -> YierdisFastCommandHandler
   -> CommandExecutor
   -> CommandExecutorDrainLoop
+  -> YierdisEngine
   -> YierdisFastCommandProcessor
   -> *Commands
   -> DbReads / DbWrites
@@ -392,6 +395,7 @@ socket bytes
 
 ### 命令与 DB
 
+- `yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java`
 - `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
 - `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`

@@ -180,7 +180,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 - `MEMORY STATS`
 - `OBJECT ENCODING key`
 - `TYPE key`
-- `FLUSHDB`
+- `FLUSHDB [SYNC|ASYNC]`
 
 ### String
 

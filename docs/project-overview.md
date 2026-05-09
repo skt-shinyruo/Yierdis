@@ -247,6 +247,7 @@ Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格�
 
 ### 命令处理主入口
 
+- `yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java`
 - `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
 
 ### DB 主入口

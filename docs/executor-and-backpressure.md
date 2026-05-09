@@ -22,7 +22,7 @@ Yierdis 不是“收到请求就立刻执行”的 server。
 
 ## 主角有哪些
 
-这条链上的核心对象有 7 个：
+这条链上的核心对象有 8 个：
 
 ```text
 YierdisFastCommandHandler
@@ -70,7 +70,7 @@ YierdisFastCommandHandler
 
 这层只做一件事：
 
-- 把 `ExecutionRequest` 交给 `CommandExecutor.trySubmitWithReason(...)`
+- 把 `ExecutionRequest` 交给 `CommandExecutor.trySubmit(...)`
 
 如果提交失败，handler 立刻回：
 
@@ -83,7 +83,7 @@ YierdisFastCommandHandler
 
 ## `CommandExecutorSubmitter` 真正在做什么
 
-提交逻辑主要在 `CommandExecutorSubmitter.trySubmitWithReason(...)`。
+提交逻辑主要在 `CommandExecutorSubmitter.trySubmit(...)`。
 
 这条路径可以记成：
 
@@ -210,7 +210,7 @@ YierdisFastCommandHandler
 1. 检查 channel 是否 active / closing
 2. 为这条命令分配 output buffer
 3. 创建 `ReplyWriter`
-4. 调用 `executionSupport.executeCommand(...)`
+4. 调用 `executionSupport.execute(...)`
 5. 把 reply 写入 channel
 6. 如果需要 `close-after-reply`，flush 后关连接
 7. 最终释放 request 并归还预算
@@ -226,7 +226,7 @@ drain loop 使用了 `NettyReplyFlushBatch` 做 flush coalescing：
 
 ## `CommandExecutorExecutionSupport` 为什么存在
 
-这个类的职责是把“执行器视角”和“命令处理器视角”接起来。
+这个类的职责是把“执行器视角”和“engine / command 层视角”接起来。
 
 它负责：
 

@@ -108,14 +108,14 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 ### 新增 transport-agnostic 命令的常见入口
 
-- `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
 - 对应的 `*Commands.java`
+- `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/DefaultCommandModules.java`
 - `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java`
 
 对初学者来说，一个“简单命令”的最小逻辑通常只有三步：
 
-1. 在对应 `*Commands.java` 的 `register(...)` 里注册命令名和 descriptor
-2. 写一个 handler，参数从 `ExecutionRequest` 里读
+1. 在对应 `*Commands.java` 的 `register(...)` 里注册 `CommandSpec<T>` 需要的 descriptor、parser 和 handler
+2. 写一个 typed handler，参数来自 parser 结果；简单命令也可以直接用 `ExecutionRequest`
 3. 用 `ctx.out()` 回包
 
 ### 新增 server-facing 命令的常见入口
@@ -356,7 +356,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 - `SET`：真正改状态的第一个点是 `YierdisStringOps.set(...)`
 - 协议长度头：真正改状态的第一个点是 `CustomRequestDecoder.tryReadLengthHeader(...)`
-- 事务排队：真正改状态的第一个点是 `ConnectionTransactionState.tryEnqueue(...)`
+- 事务排队：真正改状态的第一个点是 `connection.session().transaction().tryEnqueue(...)`
 
 这会强迫你先找到正确入口，再开始改。
 

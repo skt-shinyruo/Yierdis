@@ -64,7 +64,7 @@ server 命令写回的单一语义出口。命令处理器和命令模块不会�
 
 ### `CommandRegistry`
 
-命令名到 `CommandSpec` 的注册表。`YierdisFastCommandProcessor` 在构造阶段把各个命令模块全部注册到这里。
+命令名到 `CommandSpec` 的注册表。`YierdisFastCommandProcessor` 在构造阶段先注册 `TransactionCommands`，再把注入的命令模块注册到这里；生产默认命令来自 `DefaultCommandModules`。
 
 ### `CommandDescriptor`
 

@@ -40,6 +40,7 @@ YierdisServer
      -> CommandExecutorSubmitter
      -> CommandExecutorDrainLoop
      -> CommandExecutorExecutionSupport
+  -> YierdisEngine / DefaultYierdisEngine
   -> YierdisFastCommandProcessor
   -> StringCommands / CoreConnectionCommands / ...
   -> CommandSupport
@@ -135,7 +136,7 @@ YierdisServer
 
 #### 1. DB 先于 Netty 就绪
 
-bootstrap 先把 instance、command processor、executor 都组好，最后才真正 `bind`。
+bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`。
 
 这意味着：
 
@@ -307,11 +308,12 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 这个 handler 也很克制。它不会自己执行命令，而是：
 
-1. 调用 `nettyExecutor.trySubmitWithReason(ctx, msg)`
-2. 如果成功：
+1. 从 channel 里取出 `NettyExecutionConnection`
+2. 调用 `executor.trySubmit(connection, msg)`
+3. 如果成功：
    - executor 接管请求对象生命周期
    - handler 直接返回
-3. 如果失败：
+4. 如果失败：
    - 构造一个 `ERR busy ...`
    - 立即写回
    - 自己负责关闭 /回收当前请求对象
@@ -384,7 +386,7 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 2. 检查 channel 是否 active 或 closing
 3. 为本次执行分配出站 buffer
 4. 创建 `ReplyWriter`
-5. 调用 `executionSupport.executeCommand(...)`
+5. 调用 `executionSupport.execute(...)`
 6. 根据 `closeAfterReplyRequested()` 决定正常 flush 还是 flush 后 close
 7. 最后释放请求对象和 backlog 预算
 
@@ -410,11 +412,13 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 ### 它做了哪几件关键事
 
-1. 从 channel 上拿到 `EngineSession`
-2. 创建或复用 `CommandContext`
+1. 从 connection 上拿到 `EngineSession`
+2. 创建 `ReplyWriter`
 3. 调 `YierdisEngine.execute(session, request, writer)`
 4. 命令执行结束后释放 slot 和 bytes 预算
 5. 在条件满足时恢复 `autoRead`
+
+`CommandContext` 的创建发生在 `DefaultYierdisEngine` 内部，不在 executor 层。
 
 ### 为什么 `CommandContext` 很关键
 
@@ -438,9 +442,10 @@ bootstrap 先把 instance、command processor、executor 都组好，最后才�
 
 ### 构造时它做了什么
 
-构造阶段，它会把默认命令模块注册进 `CommandRegistry`，包括：
+构造阶段，`YierdisFastCommandProcessor` 会先把事务命令注册进 `CommandRegistry`，再注册外部注入的命令模块。生产启动时，`DefaultYierdisEngine` 会把 `DefaultCommandModules` 和 `ServerCommandModule` 传给 processor。
 
-- `TransactionCommands`
+其中 `DefaultCommandModules` 会注册：
+
 - `CoreConnectionCommands`
 - `KeyCommands`
 - `StringCommands`

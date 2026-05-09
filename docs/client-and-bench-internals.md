@@ -295,7 +295,7 @@ bench 可以开启：
 - `CustomCommandWriterTest`
   看 bench request writer 如何复用共享 encoder，并关注分配成本
 - `BenchServerArgsReuseTest`
-  看 bench 如何复用 server args SSOT
+  看 bench 的 server launch argv 复制和归一化如何保持与 server 参数对齐
 - `YierdisBenchSummaryFormatTest`
   看 bench 输出格式是否稳定
 
