@@ -29,6 +29,22 @@ public class RespExecutionAdapterTest {
     }
 
     @Test
+    public void adaptsWrappedReadOnlyRequestWithoutCopyingInnerBytes() {
+        byte[] command = bytes("SET");
+        byte[] key = bytes("key");
+        RespCommandRequest request = RespCommandRequest.wrapReadOnly(
+                new byte[][]{command, key},
+                command.length + key.length
+        );
+
+        ExecutionRequest out = RespExecutionAdapter.DEFAULT.toExecutionRequest(request);
+
+        Assert.assertSame(command, out.readOnlyByteArray(0));
+        Assert.assertSame(key, out.readOnlyByteArray(1));
+        Assert.assertEquals(command.length + key.length, out.retainedBytes());
+    }
+
+    @Test
     public void rejectsNullArgvElement() {
         Assert.assertThrows(IllegalArgumentException.class, () ->
                 RespCommandRequest.copyOf(java.util.Arrays.asList(bytes("GET"), null))
