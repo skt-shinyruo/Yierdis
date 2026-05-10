@@ -22,11 +22,19 @@ public final class RespCommandRequest {
                 throw new IllegalArgumentException("RESP command argv must not contain null bulk strings");
             }
             argv[i] = arg.clone();
-            retainedBytes += arg.length;
+            retainedBytes = saturatedRetainedBytes(retainedBytes, arg.length);
         }
         return new RespCommandRequest(argv, retainedBytes);
     }
 
+    static int saturatedRetainedBytes(int retainedBytes, int argLength) {
+        long next = (long) Math.max(0, retainedBytes) + Math.max(0, argLength);
+        return next >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) next;
+    }
+
+    /**
+     * Wraps already-owned argument bytes. Callers must treat inner arrays as immutable after passing them here.
+     */
     public static RespCommandRequest wrapReadOnly(byte[][] argv, int retainedBytes) {
         Objects.requireNonNull(argv, "argv");
         byte[][] owned = new byte[argv.length][];
@@ -43,6 +51,9 @@ public final class RespCommandRequest {
         return argv.length;
     }
 
+    /**
+     * Returns the stored argument bytes by read-only convention; callers must not mutate the returned array.
+     */
     public byte[] readOnlyArg(int index) {
         return argv[index];
     }
