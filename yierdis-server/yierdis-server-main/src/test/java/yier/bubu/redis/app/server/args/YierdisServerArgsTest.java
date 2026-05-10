@@ -124,6 +124,19 @@ public class YierdisServerArgsTest {
     }
 
     @Test
+    public void clientTimeoutAndOutputBufferArgsAreParsed() {
+        YierdisServerArgs args = parse(
+                "--client-idle-timeout-millis", "1000",
+                "--client-output-buffer-limit-bytes", "2048",
+                "--client-output-buffer-over-limit-millis", "3000"
+        );
+        YierdisServerRuntimeConfig config = args.toRuntimeConfig();
+        Assert.assertEquals(1000, config.clientIdleTimeoutMillis());
+        Assert.assertEquals(2048, config.clientOutputBufferLimitBytes());
+        Assert.assertEquals(3000, config.clientOutputBufferOverLimitMillis());
+    }
+
+    @Test
     public void invalidPortIsRejected() {
         YierdisServerArgs args = parse("--port", "-1");
         assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
