@@ -151,10 +151,12 @@ Create `yierdis-networking/yierdis-networking-resp/pom.xml`:
 
 - [ ] **Step 4: Update Maven aggregators**
 
-In `yierdis-networking/pom.xml`, replace the custom module list with:
+In `yierdis-networking/pom.xml`, add `yierdis-networking-resp` before `yierdis-networking-netty` while keeping the custom modules until Task 12 removes their modules and consumers:
 
 ```xml
 <modules>
+    <module>yierdis-networking-custom-v1</module>
+    <module>yierdis-networking-custom-v1-execution</module>
     <module>yierdis-networking-resp</module>
     <module>yierdis-networking-netty</module>
 </modules>
@@ -170,7 +172,7 @@ In root `pom.xml`, add dependency management for `yierdis-networking-resp` next 
 </dependency>
 ```
 
-Leave the custom dependency management entries in place until Task 10 removes their modules and consumers.
+Leave the custom dependency management entries in place until Task 12 removes their modules and consumers.
 
 - [ ] **Step 5: Add version and limit classes**
 
