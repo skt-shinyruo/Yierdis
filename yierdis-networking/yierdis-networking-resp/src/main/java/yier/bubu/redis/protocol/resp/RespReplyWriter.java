@@ -7,16 +7,23 @@ import yier.bubu.redis.execution.api.ReplyWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.IntSupplier;
 
 public final class RespReplyWriter implements ReplyWriter {
     private static final byte[] CRLF = new byte[]{'\r', '\n'};
     private final BytesSink out;
-    private final RespProtocolVersion version;
+    private final IntSupplier versionSupplier;
     private boolean closeAfterReplyRequested;
 
     public RespReplyWriter(BytesSink out, RespProtocolVersion version) {
         this.out = Objects.requireNonNull(out, "out");
-        this.version = version == null ? RespProtocolVersion.RESP2 : version;
+        RespProtocolVersion fixed = version == null ? RespProtocolVersion.RESP2 : version;
+        this.versionSupplier = fixed::wireValue;
+    }
+
+    RespReplyWriter(BytesSink out, IntSupplier versionSupplier) {
+        this.out = Objects.requireNonNull(out, "out");
+        this.versionSupplier = Objects.requireNonNull(versionSupplier, "versionSupplier");
     }
 
     @Override
@@ -57,7 +64,7 @@ public final class RespReplyWriter implements ReplyWriter {
 
     @Override
     public void booleanValue(boolean value) {
-        if (version == RespProtocolVersion.RESP3) {
+        if (version() == RespProtocolVersion.RESP3) {
             writeAscii(value ? "#t\r\n" : "#f\r\n");
         } else {
             integer(value ? 1L : 0L);
@@ -66,7 +73,7 @@ public final class RespReplyWriter implements ReplyWriter {
 
     @Override
     public void doubleValue(double value) {
-        if (version == RespProtocolVersion.RESP3) {
+        if (version() == RespProtocolVersion.RESP3) {
             if (Double.isNaN(value)) {
                 writeAscii(",nan\r\n");
                 return;
@@ -100,7 +107,7 @@ public final class RespReplyWriter implements ReplyWriter {
     @Override
     public void bigNumberAscii(String value) {
         String normalized = sanitizeSimple(value == null ? "" : value.trim());
-        if (version == RespProtocolVersion.RESP3) {
+        if (version() == RespProtocolVersion.RESP3) {
             writeAsciiLine('(', normalized);
         } else {
             bulkString(normalized.getBytes(StandardCharsets.US_ASCII));
@@ -110,7 +117,7 @@ public final class RespReplyWriter implements ReplyWriter {
     @Override
     public void verbatimString(String format, byte[] data) {
         byte[] body = data == null ? new byte[0] : data;
-        if (version == RespProtocolVersion.RESP3) {
+        if (version() == RespProtocolVersion.RESP3) {
             String f = sanitizeVerbatimFormat(format);
             writeAscii("=" + (f.length() + 1 + body.length) + "\r\n" + f + ":");
             out.writeBytes(body, 0, body.length);
@@ -123,7 +130,7 @@ public final class RespReplyWriter implements ReplyWriter {
     @Override
     public void blobError(String message) {
         String normalized = normalizeError(message);
-        if (version == RespProtocolVersion.RESP3) {
+        if (version() == RespProtocolVersion.RESP3) {
             byte[] bytes = normalized.getBytes(StandardCharsets.UTF_8);
             writeAscii("!" + bytes.length + "\r\n");
             out.writeBytes(bytes, 0, bytes.length);
@@ -176,7 +183,7 @@ public final class RespReplyWriter implements ReplyWriter {
 
     @Override
     public void nullValue() {
-        if (version == RespProtocolVersion.RESP3) {
+        if (version() == RespProtocolVersion.RESP3) {
             writeAscii("_\r\n");
         } else {
             writeAscii("$-1\r\n");
@@ -185,7 +192,7 @@ public final class RespReplyWriter implements ReplyWriter {
 
     @Override
     public void nullArray() {
-        if (version == RespProtocolVersion.RESP3) {
+        if (version() == RespProtocolVersion.RESP3) {
             writeAscii("_\r\n");
         } else {
             writeAscii("*-1\r\n");
@@ -216,7 +223,7 @@ public final class RespReplyWriter implements ReplyWriter {
 
     @Override
     public void mapHeader(int pairs) {
-        if (version == RespProtocolVersion.RESP3) {
+        if (version() == RespProtocolVersion.RESP3) {
             writeAsciiLine('%', Integer.toString(Math.max(0, pairs)));
         } else {
             writeAsciiLine('*', Integer.toString(Math.max(0, pairs) * 2));
@@ -225,7 +232,7 @@ public final class RespReplyWriter implements ReplyWriter {
 
     @Override
     public void setHeader(int count) {
-        if (version == RespProtocolVersion.RESP3) {
+        if (version() == RespProtocolVersion.RESP3) {
             writeAsciiLine('~', Integer.toString(Math.max(0, count)));
         } else {
             arrayHeader(count);
@@ -234,7 +241,7 @@ public final class RespReplyWriter implements ReplyWriter {
 
     @Override
     public void pushHeader(int count) {
-        if (version == RespProtocolVersion.RESP3) {
+        if (version() == RespProtocolVersion.RESP3) {
             writeAsciiLine('>', Integer.toString(Math.max(0, count)));
         } else {
             arrayHeader(count);
@@ -243,11 +250,15 @@ public final class RespReplyWriter implements ReplyWriter {
 
     @Override
     public void attributeHeader(int pairs) {
-        if (version == RespProtocolVersion.RESP3) {
+        if (version() == RespProtocolVersion.RESP3) {
             writeAsciiLine('|', Integer.toString(Math.max(0, pairs)));
         } else {
             mapHeader(pairs);
         }
+    }
+
+    private RespProtocolVersion version() {
+        return RespProtocolVersion.fromWireValue(versionSupplier.getAsInt());
     }
 
     private void writeAsciiLine(char prefix, String value) {

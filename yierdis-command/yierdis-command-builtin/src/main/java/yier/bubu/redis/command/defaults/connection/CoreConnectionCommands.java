@@ -44,6 +44,8 @@ public final class CoreConnectionCommands {
         );
         registration.register("SELECT", CommandDescriptor.of(2, 0, 0, 0), CommandParsers.exactRequest(2, "select"), this::select);
         registration.register("QUIT", CommandDescriptor.of(1, 0, 0, 0), CommandParsers.exactRequest(1, "quit"), this::quit);
+        registration.register("CLIENT", CommandDescriptor.of(-2, 0, 0, 0), CommandParsers.minRequest(2, "client"), this::client);
+        registration.register("AUTH", CommandDescriptor.of(-2, 0, 0, 0), CommandParsers.minRequest(1, "auth"), this::auth);
         registration.register("FLUSHDB", CommandDescriptor.of(-1, 0, 0, 0), CommandParsers.oneOfRequest("flushdb", 1, 2), this::flushdb);
     }
 
@@ -109,6 +111,41 @@ public final class CoreConnectionCommands {
         }
         out.simpleString("OK");
         out.requestCloseAfterReply();
+    }
+
+    private void client(ExecutionRequest request, CommandContext ctx) {
+        ReplyWriter out = ctx.out();
+        if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "SETINFO")) {
+            out.simpleString("OK");
+            return;
+        }
+        if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "SETNAME")) {
+            if (request.argc() != 3) {
+                CommandSupport.wrongArity(out, "client|setname");
+                return;
+            }
+            ctx.session().setClientName(CommandSupport.utf8(request, 2));
+            out.simpleString("OK");
+            return;
+        }
+        if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "GETNAME")) {
+            if (request.argc() != 2) {
+                CommandSupport.wrongArity(out, "client|getname");
+                return;
+            }
+            String name = ctx.session().clientName();
+            if (name == null) {
+                out.nullValue();
+            } else {
+                out.bulkString(name.getBytes(StandardCharsets.UTF_8));
+            }
+            return;
+        }
+        out.error("ERR unknown subcommand '" + CommandSupport.utf8(request, 1) + "'. Try CLIENT HELP.");
+    }
+
+    private void auth(ExecutionRequest request, CommandContext ctx) {
+        ctx.out().error("ERR AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?");
     }
 
     private void flushdb(ExecutionRequest request, CommandContext ctx) {

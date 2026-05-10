@@ -22,6 +22,40 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class CommandProcessorTest {
     @Test
+    public void clientMetadataCommandsAreAccepted() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                ReplySimpleString setinfo = (ReplySimpleString) client.execute(cmd("CLIENT", "SETINFO", "LIB-NAME", "go-redis"));
+                Assert.assertEquals("OK", setinfo.value());
+
+                Assert.assertTrue(client.execute(cmd("CLIENT", "GETNAME")) instanceof ReplyNull);
+
+                ReplySimpleString setname = (ReplySimpleString) client.execute(cmd("CLIENT", "SETNAME", "test"));
+                Assert.assertEquals("OK", setname.value());
+
+                ReplyBulkString getname = (ReplyBulkString) client.execute(cmd("CLIENT", "GETNAME"));
+                Assert.assertEquals("test", getname.asString());
+            }
+        });
+    }
+
+    @Test
+    public void authReportsNoPasswordConfigured() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                ReplyError auth = (ReplyError) client.execute(cmd("AUTH", "secret"));
+
+                Assert.assertEquals(
+                        "ERR AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?",
+                        auth.message()
+                );
+            }
+        });
+    }
+
+    @Test
     public void stringIsBinarySafe() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);

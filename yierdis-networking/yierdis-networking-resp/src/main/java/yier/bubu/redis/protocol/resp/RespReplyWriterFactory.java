@@ -15,9 +15,9 @@ public final class RespReplyWriterFactory implements ReplyWriterFactory {
 
     @Override
     public ReplyWriter newWriter(ServerSession session, BytesSink out) {
-        RespProtocolVersion version = session == null
-                ? RespProtocolVersion.RESP2
-                : RespProtocolVersion.fromWireValue(session.respVersion());
-        return new RespReplyWriter(Objects.requireNonNull(out, "out"), version);
+        if (session == null) {
+            return new RespReplyWriter(Objects.requireNonNull(out, "out"), RespProtocolVersion.RESP2);
+        }
+        return new RespReplyWriter(Objects.requireNonNull(out, "out"), session::respVersion);
     }
 }
