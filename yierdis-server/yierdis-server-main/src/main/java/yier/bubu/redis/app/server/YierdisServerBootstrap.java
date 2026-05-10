@@ -18,12 +18,13 @@ import yier.bubu.redis.command.defaults.DefaultCommandModules;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.ReplyWriterFactory;
 import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
 import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.storage.api.DbEngine;
-import yier.bubu.redis.protocol.custom.v1.execution.JsonLineReplyWriterFactory;
+import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceMaintenance;
@@ -148,7 +149,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         );
         engine = commandEngine;
         commandGroup = new DefaultEventExecutorGroup(1);
-        JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
+        ReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutorConfig executorConfig = CommandExecutorConfigs.from(runtimeConfig);
         executor = new CommandExecutor<>(
                 runtimeAccess::bindToCurrentThread,

@@ -39,7 +39,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
 
         ByteBuf out = ctx.alloc().buffer();
         try {
-            ReplyWriter writer = replyWriterFactory.newWriter(new NettyByteBufSink(out));
+            ReplyWriter writer = replyWriterFactory.newWriter(connection.session(), new NettyByteBufSink(out));
             writer.error("ERR busy " + reject.code());
             ctx.writeAndFlush(out);
             out = null;
@@ -101,7 +101,10 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
     }
 
     private ReplyWriter newReplyWriter(ByteBuf out, ChannelHandlerContext ctx) {
-        return replyWriterFactory.newWriter(new NettyByteBufSink(out));
+        NettyExecutionConnection connection = ctx == null ? null : NettyExecutionConnection.get(ctx.channel());
+        return connection == null
+                ? replyWriterFactory.newWriter(new NettyByteBufSink(out))
+                : replyWriterFactory.newWriter(connection.session(), new NettyByteBufSink(out));
     }
 
     private static NettyExecutionConnection requireConnection(ChannelHandlerContext ctx) {

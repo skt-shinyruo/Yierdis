@@ -5,23 +5,23 @@ package yier.bubu.redis.app.server;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
+import yier.bubu.redis.execution.api.ReplyWriterFactory;
 import yier.bubu.redis.execution.executor.CommandExecutor;
-import yier.bubu.redis.protocol.custom.v1.netty.CustomRequestDecoder;
-import yier.bubu.redis.protocol.custom.v1.netty.ProtocolCommandAdapter;
-import yier.bubu.redis.protocol.custom.v1.netty.ProtocolErrorReplyHandler;
-import yier.bubu.redis.protocol.custom.v1.execution.JsonLineReplyWriterFactory;
+import yier.bubu.redis.protocol.resp.netty.RespCommandAdapter;
+import yier.bubu.redis.protocol.resp.netty.RespProtocolErrorReplyHandler;
+import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
 
 import java.util.Objects;
 
 final class YierdisServerChannelInitializer extends ChannelInitializer<SocketChannel> {
     private final YierdisServerRuntimeConfig config;
     private final CommandExecutor<NettyExecutionConnection> executor;
-    private final JsonLineReplyWriterFactory replyWriterFactory;
+    private final ReplyWriterFactory replyWriterFactory;
 
     YierdisServerChannelInitializer(
             YierdisServerRuntimeConfig config,
             CommandExecutor<NettyExecutionConnection> executor,
-            JsonLineReplyWriterFactory replyWriterFactory
+            ReplyWriterFactory replyWriterFactory
     ) {
         this.config = Objects.requireNonNull(config, "config");
         this.executor = Objects.requireNonNull(executor, "executor");
@@ -38,13 +38,13 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
 
         ch.pipeline()
                 .addLast("writeBufferBackpressure", new WriteBufferBackpressureHandler(executor))
-                .addLast("customRequestDecoder", new CustomRequestDecoder(
+                .addLast("respRequestDecoder", new RespRequestDecoder(
                         config.protocolMaxBulkBytes(),
                         config.protocolMaxArgs(),
                         config.protocolMaxLineBytes()
                 ))
-                .addLast("protocolCommandAdapter", new ProtocolCommandAdapter())
-                .addLast("protocolErrorReply", new ProtocolErrorReplyHandler(replyWriterFactory))
+                .addLast("respCommandAdapter", new RespCommandAdapter())
+                .addLast("respProtocolErrorReply", new RespProtocolErrorReplyHandler(replyWriterFactory))
                 .addLast("commandHandler", new YierdisFastCommandHandler(executor, replyWriterFactory));
     }
 
