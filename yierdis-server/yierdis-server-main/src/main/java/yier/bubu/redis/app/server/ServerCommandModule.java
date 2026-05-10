@@ -5,6 +5,7 @@ import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandDescriptor;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.command.api.ServerInfoProvider;
+import yier.bubu.redis.command.defaults.CommandSupport;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReplyWriter;
@@ -36,7 +37,7 @@ final class ServerCommandModule implements CommandModule {
                 "HELLO",
                 CommandSpec.disallowedInMulti(
                         CommandDescriptor.of(-1, 0, 0, 0),
-                        CommandParsers.oneOfRequest("hello", 1, 2),
+                        CommandParsers.minRequest(1, "hello"),
                         this::hello,
                         "ERR HELLO is not allowed in MULTI"
                 )
@@ -60,17 +61,42 @@ final class ServerCommandModule implements CommandModule {
 
     private void hello(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        if (request.argc() != 1 && request.argc() != 2) {
-            out.error("ERR wrong number of arguments for 'hello' command");
+        int requested = ctx.session().respVersion();
+        int i = 1;
+        if (request.argc() >= 2) {
+            String version = CommandSupport.utf8(request, 1);
+            if ("2".equals(version)) {
+                requested = 2;
+                i = 2;
+            } else if ("3".equals(version)) {
+                requested = 3;
+                i = 2;
+            } else {
+                out.error("NOPROTO unsupported protocol version");
+                return;
+            }
+        }
+        while (i < request.argc()) {
+            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "SETNAME") && i + 1 < request.argc()) {
+                ctx.session().setClientName(CommandSupport.utf8(request, i + 1));
+                i += 2;
+                continue;
+            }
+            if (CommandSupport.asciiEqualsIgnoreCase(request, i, "AUTH")) {
+                out.error("ERR AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?");
+                return;
+            }
+            out.error("ERR syntax error");
             return;
         }
+        ctx.session().setRespVersion(requested);
         out.mapHeader(5);
         out.bulkString(HELLO_SERVER_KEY);
         out.bulkString(HELLO_SERVER_VALUE);
         out.bulkString(HELLO_VERSION_KEY);
         out.bulkString(HELLO_VERSION_VALUE);
         out.bulkString(HELLO_PROTO_KEY);
-        out.integer(1);
+        out.integer(ctx.session().respVersion());
         out.bulkString(HELLO_MODE_KEY);
         out.bulkString(HELLO_MODE_VALUE);
         out.bulkString(HELLO_ROLE_KEY);

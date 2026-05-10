@@ -26,6 +26,21 @@ public class RespReplyWriterFactoryTest {
     }
 
     @Test
+    public void sessionBackedWriterObservesProtocolChangesBeforeReplyIsWritten() {
+        ByteArraySink sink = new ByteArraySink();
+        RespReplyWriterFactory factory = new RespReplyWriterFactory();
+        MutableSession session = new MutableSession(2);
+
+        ReplyWriter writer = factory.newWriter(session, sink);
+        session.setRespVersion(3);
+        writer.mapHeader(1);
+        writer.bulkString("proto".getBytes(StandardCharsets.US_ASCII));
+        writer.integer(3);
+
+        Assert.assertEquals("%1\r\n$5\r\nproto\r\n:3\r\n", sink.utf8());
+    }
+
+    @Test
     public void fallsBackToResp2WhenSessionIsMissing() {
         ByteArraySink sink = new ByteArraySink();
         RespReplyWriterFactory factory = new RespReplyWriterFactory();
@@ -37,7 +52,16 @@ public class RespReplyWriterFactoryTest {
     }
 
     private static ServerSession serverSession(int respVersion) {
-        return new ServerSession() {
+        return new MutableSession(respVersion);
+    }
+
+    private static final class MutableSession implements ServerSession {
+        private int respVersion;
+
+        private MutableSession(int respVersion) {
+            this.respVersion = respVersion;
+        }
+
             private final TransactionState transaction = new TransactionState() {
                 @Override
                 public boolean active() {
@@ -173,8 +197,8 @@ public class RespReplyWriterFactoryTest {
 
             @Override
             public void setRespVersion(int respVersion) {
+                this.respVersion = respVersion;
             }
-        };
     }
 
     private static final class ByteArraySink implements BytesSink {
