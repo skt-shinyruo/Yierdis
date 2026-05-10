@@ -35,8 +35,8 @@ Create:
 
 Modify:
 
-- `pom.xml`: replace custom networking dependencies in dependency management with `yierdis-networking-resp`.
-- `yierdis-networking/pom.xml`: replace custom modules with `yierdis-networking-resp`.
+- `pom.xml`: add `yierdis-networking-resp` to dependency management; keep custom networking entries until Task 12 removes their modules and consumers.
+- `yierdis-networking/pom.xml`: add `yierdis-networking-resp` before Netty; keep custom modules until Task 12 removes their modules and consumers.
 - `yierdis-networking/yierdis-networking-netty/pom.xml`: depend on `yierdis-networking-resp` and remove custom dependencies.
 - `yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ServerSession.java`: add RESP protocol accessors.
 - `yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ReplyWriterFactory.java`: add session-aware default method.
@@ -97,6 +97,7 @@ public class RespProtocolLimitsTest {
         Assert.assertTrue(RespProtocolLimits.DEFAULT_MAX_ARGS > 0);
         Assert.assertTrue(RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES > 0);
         Assert.assertEquals(512 * 1024 * 1024, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        Assert.assertEquals(1024 * 1024, RespProtocolLimits.DEFAULT_MAX_ARGS);
         Assert.assertEquals(1024 * 1024, RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES);
     }
 }
