@@ -118,13 +118,13 @@ ERR busy not_running
 - `--protocolMaxArgs`
 - `--protocolMaxLineBytes`
 
-这组参数会被 `YierdisServerChannelInitializer` 直接传给 `CustomRequestDecoder`。
+这组参数会被 `YierdisServerChannelInitializer` 直接传给 `RespRequestDecoder`。
 
 它们主要负责：
 
-- 限制单条请求 payload 大小
+- 限制 RESP bulk string 大小
 - 限制 argv 元素数量
-- 限制 length header 长度
+- 限制 inline command 长度
 
 如果你把 Yierdis 暴露到公网或弱隔离环境，首先应该收紧这一组参数，而不是先去调整更深层的内存细节。
 

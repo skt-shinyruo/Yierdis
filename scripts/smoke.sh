@@ -45,6 +45,10 @@ pick_jar() {
   printf "%s" "$jar"
 }
 
+redis_cli_available() {
+  command -v redis-cli >/dev/null 2>&1
+}
+
 wait_ready() {
   local client_jar="$1"
   local deadline_sec="$READY_TIMEOUT_SEC"
@@ -52,7 +56,11 @@ wait_ready() {
   start_ts="$(date +%s)"
 
   while true; do
-    if timeout 7s java -jar "$client_jar" --host "$HOST" --port "$PORT" PING >/dev/null 2>&1; then
+    if redis_cli_available; then
+      if timeout 7s redis-cli -h "$HOST" -p "$PORT" PING >/dev/null 2>&1; then
+        return 0
+      fi
+    elif timeout 7s java -jar "$client_jar" --host "$HOST" --port "$PORT" PING >/dev/null 2>&1; then
       return 0
     fi
     if (( "$(date +%s)" - start_ts >= deadline_sec )); then
@@ -93,8 +101,21 @@ main() {
   fi
   printf "[smoke] server 就绪\n"
 
-  printf "[smoke] CLI: PING\n"
-  timeout 10s java -jar "$client_jar" --host "$HOST" --port "$PORT" PING
+  if redis_cli_available; then
+    printf "[smoke] redis-cli: PING/SET/GET\n"
+    timeout 10s redis-cli -h "$HOST" -p "$PORT" PING
+    timeout 10s redis-cli -h "$HOST" -p "$PORT" SET smoke:key smoke:value
+    local value
+    value="$(timeout 10s redis-cli -h "$HOST" -p "$PORT" GET smoke:key)"
+    [[ "$value" == "smoke:value" ]] || die "redis-cli GET smoke:key 返回异常：$value"
+  else
+    printf "[smoke] Java CLI fallback: PING/SET/GET\n"
+    timeout 10s java -jar "$client_jar" --host "$HOST" --port "$PORT" PING
+    timeout 10s java -jar "$client_jar" --host "$HOST" --port "$PORT" SET smoke:key smoke:value
+    local value
+    value="$(timeout 10s java -jar "$client_jar" --host "$HOST" --port "$PORT" GET smoke:key)"
+    [[ "$value" == "smoke:value" ]] || die "Java CLI GET smoke:key 返回异常：$value"
+  fi
 
   printf "[smoke] bench（connect-only + strictReplies）\n"
   java -jar "$bench_jar" \

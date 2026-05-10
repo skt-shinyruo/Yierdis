@@ -10,14 +10,14 @@ Yierdis 是一个使用 Java 25 + Netty + JDK FFM 实现的单机内存 KV 服�
 
 更准确地说，它同时在做四件事：
 
-- 实现一个自定义协议的 TCP 服务端
+- 实现一个 Redis RESP TCP 服务端入口
 - 实现一套 Redis 风格但刻意简化的命令层
 - 实现一个支持多逻辑 DB、TTL、maxmemory、近似淘汰的数据引擎
 - 用 JDK 25 `java.lang.foreign` FFM API 承载默认的 native-memory 路径
 
 ## 它不是什么
 
-Yierdis 明确不打算成为 Redis 原生协议兼容服务，也不打算覆盖 Redis 的完整能力面。代码和 `README.md` 都清楚地把很多复杂能力排除在范围之外。
+Yierdis 已经把 Redis RESP 作为公开 TCP 协议，但不打算覆盖 Redis 的完整能力面。代码和 `README.md` 都清楚地把很多复杂能力排除在范围之外。
 
 当前明确不做的内容包括：
 
@@ -37,18 +37,15 @@ Yierdis 明确不打算成为 Redis 原生协议兼容服务，也不打算覆�
 
 项目当前最重要的技术特征有四个：
 
-### 1. 自定义协议，而不是 RESP
+### 1. Redis RESP public protocol
 
-对外协议是 `Custom Protocol v1`：
-
-- request：`<len>:<json>\n`
-- reply：NDJSON
+Yierdis exposes Redis RESP as its public TCP protocol. RESP2 is the default compatibility target for redis-cli, Jedis, Lettuce, and go-redis. RESP3 is available for basic negotiated replies through HELLO 3.
 
 这意味着：
 
 - 服务端协议层和命令层是解耦的
-- 内置 CLI、bench、测试工具都围绕这套协议工作
-- 不能直接拿 Redis 客户端来连
+- 内置 CLI、bench、测试工具都围绕 RESP 工作
+- 可以用 Redis 客户端做基础连接和命令烟测，但命令语义仍是项目实现的最小子集
 
 ### 2. 命令执行保持单线程语义
 
@@ -93,9 +90,9 @@ Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格�
 
 负责“线上长什么样”：
 
-- Custom Protocol v1 的 DTO
-- JSON codec
-- Netty decoder
+- RESP request model
+- RESP client codec / reply writer
+- Netty decoder / adapter / protocol-error handler
 
 ### 2. core lane
 
@@ -242,7 +239,7 @@ Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格�
 ### 请求主链路入口
 
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java`
 
 ### 命令处理主入口

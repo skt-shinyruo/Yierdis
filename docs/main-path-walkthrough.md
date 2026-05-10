@@ -33,8 +33,8 @@ YierdisServer
   -> YierdisServerBootstrap
   -> YierdisInstance
   -> YierdisServerChannelInitializer
-  -> CustomRequestDecoder
-  -> ProtocolCommandAdapter
+  -> RespRequestDecoder
+  -> RespCommandAdapter
   -> YierdisFastCommandHandler
   -> CommandExecutor
      -> CommandExecutorSubmitter
@@ -50,7 +50,7 @@ YierdisServer
   -> YierdisDbKeyLifecycle
   -> YierdisObject
   -> ReplyWriter
-  -> JsonLineReplyWriter
+  -> RespReplyWriter
 ```
 
 先不要被类名吓到。真正读的时候，可以把它们分成 6 个阶段。
@@ -252,8 +252,8 @@ bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`
 `initChannel(...)` 里的顺序是：
 
 1. `writeBufferBackpressure`
-2. `customRequestDecoder`
-3. `protocolCommandAdapter`
+2. `respRequestDecoder`
+3. `respCommandAdapter`
 4. `protocolErrorReply`
 5. `commandHandler`
 
@@ -271,7 +271,7 @@ bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`
 
 桥接类是：
 
-- [`yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`](../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java)
+- [`yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`](../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java)
 
 ### 它做的事非常专一
 
@@ -281,7 +281,7 @@ bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`
 
 如果输入是：
 
-- `CustomProtocolV1ArgvRequest`
+- `RespCommandRequest`
 
 它就把每个参数取出来，转成 `byte[][] argv`，再包成 `ExecutionRequest`。
 
@@ -623,13 +623,13 @@ server 额外命令则通过 `extraModules` 注入，例如：
 回包最终通过：
 
 - `ReplyWriter`
-- `JsonLineReplyWriter`
+- `RespReplyWriter`
 
-落成 NDJSON。
+落成 RESP2 或协商后的 RESP3。
 
 这里的关键理解是：
 
-- 命令层不关心具体协议 JSON 怎么拼
+- 命令层不关心具体 RESP 字节怎么拼
 - 命令层只调用 `out.simpleString(...)`、`out.integer(...)`、`out.bulkString(...)` 这类 API
 - server 侧的 writer 再把这些语义编码成协议格式
 

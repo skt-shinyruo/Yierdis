@@ -54,7 +54,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         // Best-effort: return an error reply.
-        // Protocol errors should keep the connection alive (decoder will resync when possible).
+        // RESP protocol errors close after the error reply because request/reply pairing cannot be resynchronized safely.
         // Internal errors may close the connection to avoid side effects from already-queued commands.
         if (ctx == null) {
             return;

@@ -179,15 +179,15 @@ db + runtime + memory
 
 负责“线上字节长什么样”：
 
-- `Custom Protocol v1` request/reply
-- JSON codec
-- Netty decoder
+- RESP request/reply
+- RESP client codec / reply writer
+- Netty decoder / protocol adapter
 
 代表文件：
 
-- `yierdis-networking/yierdis-networking-custom-v1/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/CustomProtocolV1RequestEncoder.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/CustomRequestDecoder.java`
-- `yierdis-networking/yierdis-networking-custom-v1-execution/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/JsonLineReplyWriter.java`
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespClientCodec.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java`
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java`
 
 ### 2. execution / command lane
 
@@ -254,7 +254,7 @@ db + runtime + memory
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`
 
 ## 启动时到底发生了什么
 
@@ -283,8 +283,8 @@ db + runtime + memory
 
 ```text
 socket bytes
-  -> CustomRequestDecoder
-  -> ProtocolCommandAdapter
+  -> RespRequestDecoder
+  -> RespCommandAdapter
   -> YierdisFastCommandHandler
   -> CommandExecutor
   -> CommandExecutorDrainLoop
@@ -294,7 +294,7 @@ socket bytes
   -> DbReads / DbWrites
   -> Yierdis*Ops
   -> ReplyWriter
-  -> JsonLineReplyWriter
+  -> RespReplyWriter
 ```
 
 这条路径体现了本项目几个最核心的思想：
@@ -384,14 +384,14 @@ socket bytes
 ### 连接和协议入口
 
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/CustomRequestDecoder.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`
 
 ### 执行器和回包
 
 - `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java`
-- `yierdis-networking/yierdis-networking-custom-v1-execution/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/JsonLineReplyWriter.java`
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java`
 
 ### 命令与 DB
 
@@ -406,8 +406,8 @@ socket bytes
 
 - `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java`
   看 server 是不是真的把命令、协议和 observability 接通了
-- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/CustomProtocolResyncIntegrationTest.java`
-  看协议错误后如何恢复到下一帧
+- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/RespProtocolErrorIntegrationTest.java`
+  看 RESP 协议错误如何返回错误并关闭连接
 - `yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorBackpressureTest.java`
   看背压和 `ERR busy ...` 的行为
 - `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandProcessorTest.java`

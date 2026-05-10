@@ -9,8 +9,8 @@
 
 ## Heap -> Off-Heap
 
-- 当前 server 的常见写入路径里，请求参数先在 heap。协议适配层会把请求里的命令和参数转成 heap `byte[]`。
-  代表路径：`yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
+- 当前 server 的常见写入路径里，请求参数先在 heap。RESP 适配层会把请求里的命令和参数转成 heap `byte[]`。
+  代表路径：`yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`
 - `SET`、`APPEND` 等字符串写入命令，会把这些 heap `byte[]` 或 `BytesSlice` 复制到 native memory。
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
 - 当前 keyspace 使用 FFM 存储时，第一次插入 key 也会把 key 从 heap `byte[]` 复制到 native memory。
@@ -43,8 +43,7 @@
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
 - reply 写回链路支持 `BytesSlice` 直通；下游可以通过 `DirectBytesSink` / `NettyByteBufSink` 保持协议层抽象不依赖 Netty。当前 FFM slice 实现仍以 scratch buffer 分块写出，后续如在 slice 实现中识别 direct sink，可进一步做 native-to-direct copy。
   代表路径：
-  - `yierdis-networking/yierdis-networking-custom-v1-execution/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/JsonLineReplyWriter.java`
-  - `yierdis-networking/yierdis-networking-custom-v1/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/CustomProtocolV1NdjsonEncoder.java`
+  - `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java`
   - `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/bytes/netty/NettyByteBufSink.java`
   - `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisForeignOffHeapAllocator.java`
   - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBytesRefSlice.java`

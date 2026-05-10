@@ -143,12 +143,11 @@ Yierdis 选择的是中间路线：
 
 ### 4. protocol codec
 
-`CustomProtocolV1NdjsonEncoder.writeBytesValue(BytesSlice slice)` 和 `JsonLineReplyWriter.bulkString(BytesSlice slice)` 会利用这套抽象做：
+`RespReplyWriter.bulkString(BytesSlice slice)` 会利用这套抽象做：
 
-- UTF-8 检测
-- escape 路径
-- 非 UTF-8 回退到 `$b64`
-- 在无需 escape 时尽量直通 `slice.writeTo(out)`
+- RESP bulk string 长度 header
+- `BytesSlice.writeTo(out)` 流式写出
+- 通过 `DirectBytesSink` / `NettyByteBufSink` 保持 fast-path
 
 所以 bytes 抽象不仅存在于 DB，也直接参与协议编码。
 
@@ -239,16 +238,13 @@ Yierdis 选择的是中间路线：
 
 - `YierdisDbKeyLifecycle`
 - `YierdisStringOps`
-- `CustomProtocolV1NdjsonEncoder`
-- `JsonLineReplyWriter`
+- `RespReplyWriter`
 - `NettyExecutionIoAdapter`
 
 ## 最值得看的测试
 
-- `JsonLineReplyWriterTest`
+- `RespReplyWriterTest`
   看 `BytesSlice` 在 reply 写回里的 chunked/fast-path 行为
-- `CustomProtocolV1NdjsonEncoderTest`
-  看协议侧 `BytesSlice` 编码行为
 - `OffHeapContractsSmokeTest`
   看 `OffHeapSlice` 如何建立在中立 `BytesSlice` 之上
 - `OffHeapBytesViewTtlRegressionTest`

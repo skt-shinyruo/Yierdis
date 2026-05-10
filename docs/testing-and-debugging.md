@@ -15,35 +15,38 @@
 
 代表测试：
 
-- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/args/YierdisServerArgsTest.java`
-- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/ServerConfigArgsTest.java`
-- `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
-- `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/custom/v1/ReplySsoTGuardTest.java`
+- `YierdisServerArgsTest`
+- `ServerConfigArgsTest`
+- `ArchitectureBoundaryTest`
+- `ArchitecturePolicyResourceTest`
+- `RespBoundaryGuardTest`
 
 这层很适合抓：
 
 - 参数名变更
 - README / 文档契约漂移
 - 模块边界被偷偷破坏
+- retired protocol 依赖回到 production source
 
 ### 2. 协议 codec / parser 层
 
-目标是保证 request/reply 的编码、解析和 tagged value 语义稳定。
+目标是保证 RESP request/reply 的编码、解析和协议上限稳定。
 
 代表测试：
 
-- `CustomProtocolV1RequestEncoderTest`
-- `CustomProtocolV1RequestPayloadParserTest`
-- `CustomProtocolV1ReplyParserTest`
-- `JsonLineReplyWriterTest`
-- `CustomRequestDecoderTest`
+- `RespClientCodecTest`
+- `RespRequestDecoderTest`
+- `RespReplyWriterTest`
+- `RespReplyWriterFactoryTest`
+- `RespProtocolVersionTest`
+- `RespProtocolLimitsTest`
 
 如果你改的是：
 
-- request frame
-- NDJSON reply
-- tagged value
-- decoder 恢复策略
+- RESP request frame
+- inline command 解析
+- RESP2 / RESP3 reply
+- decoder 错误和断连策略
 
 这层是第一站。
 
@@ -95,7 +98,9 @@
 代表测试：
 
 - `YierdisServerBootstrapCommandWiringTest`
-- `CustomProtocolResyncIntegrationTest`
+- `RespProtocolIntegrationTest`
+- `RespHandshakeIntegrationTest`
+- `RespProtocolErrorIntegrationTest`
 - `CommandExecutorTest`
 - `CommandExecutorBackpressureTest`
 - `CommandExecutorFairSchedulingTest`
@@ -119,7 +124,9 @@
 - `YierdisClientTest`
 - `TransactionQueueLimitTest`
 - `BenchServerArgsReuseTest`
-- `CustomCommandWriterTest`
+- `RespCommandWriterTest`
+- `SmokeScriptContractTest`
+- `BenchScriptContractTest`
 
 这层经常被忽略，但如果你改了协议或参数，工具层其实很容易先坏。
 
@@ -129,32 +136,18 @@
 
 至少看这些：
 
-- `CustomProtocolV1RequestEncoderTest`
-- `CustomRequestDecoderTest`
-- `JsonLineReplyWriterTest`
-- `CustomProtocolV1ReplyParserTest`
-- `CustomProtocolResyncIntegrationTest`
+- `RespClientCodecTest`
+- `RespRequestDecoderTest`
+- `RespReplyWriterTest`
+- `RespHandshakeIntegrationTest`
+- `RespProtocolErrorIntegrationTest`
 
-如果你想单跑某一个模块，最稳妥的方式是进入对应模块目录：
-
-```bash
-cd yierdis-networking/yierdis-networking-custom-v1
-mvn -Dtest=CustomProtocolV1RequestEncoderTest,CustomProtocolV1ReplyParserTest test
-```
+常用命令：
 
 ```bash
-cd yierdis-networking/yierdis-networking-custom-v1-execution
-mvn -Dtest=CustomProtocolV1ExecutionAdapterTest,JsonLineReplyWriterTest test
-```
-
-```bash
-cd yierdis-networking/yierdis-networking-netty
-mvn -Dtest=CustomRequestDecoderTest test
-```
-
-```bash
-cd yierdis-server/yierdis-server-main
-mvn -Dtest=CustomProtocolResyncIntegrationTest test
+mvn -pl yierdis-networking/yierdis-networking-resp,yierdis-networking/yierdis-networking-netty,yierdis-server/yierdis-server-main -am \
+  -Dtest=RespClientCodecTest,RespRequestDecoderTest,RespReplyWriterTest,RespHandshakeIntegrationTest,RespProtocolErrorIntegrationTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 ### 改某个命令家族
@@ -213,7 +206,20 @@ mvn -pl yierdis-server/yierdis-server-main,yierdis-server/yierdis-server-executo
 mvn test
 ```
 
-仓库要求 JDK 25。如果你本机默认不是 JDK 25，先切到 JDK 25 后再跑；本机 Codex 用法见 `skills/use-jdk25/SKILL.md`。
+仓库要求 JDK 25。
+
+## 外部客户端兼容 smoke
+
+Yierdis 的公开协议是 RESP，所以可以用常见 Redis 客户端做基础 smoke：
+
+```bash
+redis-cli -p 6378 PING
+redis-cli -p 6378 SET smoke:key smoke:value
+redis-cli -p 6378 GET smoke:key
+redis-cli -p 6378 HELLO 3
+```
+
+也可以用 Jedis、Lettuce、go-redis 做最小连接检查，重点放在基础 RESP2 命令和 `HELLO 3` 协商上。这个项目不是 Redis drop-in replacement，因此 smoke 应聚焦已实现命令，不应把完整 Redis 客户端测试套件当作必须通过的目标。
 
 ## 最实用的两个脚本
 
@@ -223,8 +229,9 @@ mvn test
 
 1. 构建 server / client / bench jar
 2. 拉起一个真实 server
-3. 用 CLI 发一个 `PING`
-4. 再用 bench 工具做一个很小的 correctness smoke
+3. 优先用 `redis-cli` 发 `PING` / `SET` / `GET`
+4. 如果本机没有 `redis-cli`，回退到 Java CLI
+5. 再用 bench 工具做一个很小的 correctness smoke
 
 默认日志会写到：
 
@@ -287,20 +294,21 @@ REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 
 ## 排障时应该先看哪里
 
-### 症状 1：收到 `kind=protocol` 错误
+### 症状 1：收到 `-ERR Protocol error`
 
 先看：
 
-- `CustomRequestDecoder`
-- `CustomProtocolV1RequestPayloadParser`
-- `ProtocolErrorReplyHandler`
-- `CustomProtocolResyncIntegrationTest`
+- `RespRequestDecoder`
+- `RespProtocolErrorReplyHandler`
+- `RespProtocolErrorIntegrationTest`
+- `RespRequestDecoderTest`
 
 重点确认：
 
-- `len` 是否按 UTF-8 字节数计算
-- payload 是否包含原始换行
-- JSON schema 是否只包含 `cmd/args`
+- RESP array / bulk length 是否正确
+- inline command 是否超过上限
+- bulk string 是否完整带 `\r\n`
+- 错误后连接是否按预期关闭
 
 ### 症状 2：收到 `ERR busy queue_full` 或 `ERR busy bytes_budget`
 
@@ -360,33 +368,3 @@ REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 - `OBJECT ENCODING key`
 - `MEMORY USAGE key`
 - `MEMORY STATS`
-
-### 症状 6：server 启动阶段直接失败
-
-先看：
-
-- `YierdisServer`
-- `ServerConfig`
-- `ForeignMemoryAutoModules.ensureFfmAvailable()`
-- `YierdisServerBootstrap`
-
-最常见原因是：
-
-- 参数非法
-- 当前 JVM 不是 JDK 25
-- 端口不可绑定
-
-## 代码阅读顺序建议
-
-如果你准备一边排障一边读代码，建议顺序是：
-
-1. 先确认问题属于 protocol、command、db 还是 server runtime
-2. 先看对应测试，明确“项目期望的行为是什么”
-3. 再看实现类
-4. 最后再跑 smoke 或 bench 验证整体路径
-
-这样通常比一上来从实现类里瞎翻更快。
-
-## 一句话总结
-
-这个仓库最有效的调试方式不是“先打很多日志”，而是“先定位所在层，再跑那一层最有代表性的测试和脚本”。
