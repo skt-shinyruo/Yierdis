@@ -8,6 +8,7 @@ import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
+import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
 import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
@@ -100,7 +101,7 @@ public class YierdisServerBootstrapCloseTest {
                     instance::bindToCurrentThread,
                     engine::execute,
                     commandGroup.next(),
-                    new yier.bubu.redis.protocol.custom.v1.execution.JsonLineReplyWriterFactory(),
+                    new RespReplyWriterFactory(),
                     new NettyExecutionIoAdapter(),
                     new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
             );

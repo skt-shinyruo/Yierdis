@@ -393,7 +393,7 @@ public class ArchitectureBoundaryTest {
         );
         scanFileForForbiddenText(
                 repoRoot,
-                repoRoot.resolve("yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java").normalize(),
+                repoRoot.resolve("yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java").normalize(),
                 offenders,
                 "new AdaptedCommand("
         );
@@ -609,8 +609,7 @@ public class ArchitectureBoundaryTest {
                 "wrong number of arguments for"
         );
         for (Path protocolMain : List.of(
-                repoRoot.resolve("yierdis-networking/yierdis-networking-custom-v1/src/main/java").normalize(),
-                repoRoot.resolve("yierdis-networking/yierdis-networking-custom-v1-execution/src/main/java").normalize(),
+                repoRoot.resolve("yierdis-networking/yierdis-networking-resp/src/main/java").normalize(),
                 repoRoot.resolve("yierdis-networking/yierdis-networking-netty/src/main/java").normalize()
         )) {
             scanned += scanForForbiddenText(
@@ -801,21 +800,19 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void customV1AdapterModulesMustKeepTheirBoundaries() throws IOException {
+    public void respProtocolModulesMustKeepTheirBoundaries() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
         Path workspaceRoot = repoRoot;
 
-        Path wireRoot = workspaceRoot.resolve("yierdis-networking/yierdis-networking-custom-v1").normalize();
-        Path executionAdapterRoot = workspaceRoot.resolve("yierdis-networking/yierdis-networking-custom-v1-execution").normalize();
+        Path respRoot = workspaceRoot.resolve("yierdis-networking/yierdis-networking-resp").normalize();
         Path nettyRoot = workspaceRoot.resolve("yierdis-networking/yierdis-networking-netty").normalize();
-        Assert.assertTrue("缺少 yierdis-networking-custom-v1/pom.xml", Files.isRegularFile(wireRoot.resolve("pom.xml")));
-        Assert.assertTrue("缺少 yierdis-networking-custom-v1-execution/pom.xml", Files.isRegularFile(executionAdapterRoot.resolve("pom.xml")));
+        Assert.assertTrue("缺少 yierdis-networking-resp/pom.xml", Files.isRegularFile(respRoot.resolve("pom.xml")));
         Assert.assertTrue("缺少 yierdis-networking-netty/pom.xml", Files.isRegularFile(nettyRoot.resolve("pom.xml")));
 
-        String wirePom = Files.readString(wireRoot.resolve("pom.xml"), StandardCharsets.UTF_8);
+        String respPom = Files.readString(respRoot.resolve("pom.xml"), StandardCharsets.UTF_8);
+        Assert.assertTrue("resp module must depend on server-api for ReplyWriter integration", respPom.contains("<artifactId>yierdis-server-api</artifactId>"));
         for (String forbiddenDependency : List.of(
-                "<artifactId>yierdis-server-api</artifactId>",
                 "<artifactId>yierdis-core-contract</artifactId>",
                 "<artifactId>yierdis-core-command</artifactId>",
                 "<artifactId>yierdis-core-db</artifactId>",
@@ -827,23 +824,10 @@ public class ArchitectureBoundaryTest {
                 "<artifactId>yierdis-networking-netty</artifactId>",
                 "<artifactId>netty-all</artifactId>"
         )) {
-            Assert.assertFalse("custom-v1-wire must not depend on " + forbiddenDependency, wirePom.contains(forbiddenDependency));
-        }
-        String executionAdapterPom = Files.readString(executionAdapterRoot.resolve("pom.xml"), StandardCharsets.UTF_8);
-        for (String forbiddenDependency : List.of(
-                "<artifactId>yierdis-core-command</artifactId>",
-                "<artifactId>yierdis-core-db</artifactId>",
-                "<artifactId>yierdis-db-memory</artifactId>",
-                "<artifactId>yierdis-core-runtime</artifactId>",
-                "<artifactId>yierdis-server-runtime-api</artifactId>",
-                "<artifactId>yierdis-db-api</artifactId>",
-                "<artifactId>yierdis-server-main</artifactId>",
-                "<artifactId>yierdis-networking-netty</artifactId>",
-                "<artifactId>netty-all</artifactId>"
-        )) {
-            Assert.assertFalse("custom-v1-execution-adapter must not depend on " + forbiddenDependency, executionAdapterPom.contains(forbiddenDependency));
+            Assert.assertFalse("resp module must not depend on " + forbiddenDependency, respPom.contains(forbiddenDependency));
         }
         String nettyPom = Files.readString(nettyRoot.resolve("pom.xml"), StandardCharsets.UTF_8);
+        Assert.assertTrue("resp-netty must depend on resp module", nettyPom.contains("<artifactId>yierdis-networking-resp</artifactId>"));
         for (String forbiddenDependency : List.of(
                 "<artifactId>yierdis-core-command</artifactId>",
                 "<artifactId>yierdis-core-db</artifactId>",
@@ -853,33 +837,14 @@ public class ArchitectureBoundaryTest {
                 "<artifactId>yierdis-db-api</artifactId>",
                 "<artifactId>yierdis-server-main</artifactId>"
         )) {
-            Assert.assertFalse("custom-v1-netty must not depend on " + forbiddenDependency, nettyPom.contains(forbiddenDependency));
+            Assert.assertFalse("resp-netty must not depend on " + forbiddenDependency, nettyPom.contains(forbiddenDependency));
         }
 
         List<String> offenders = new ArrayList<>();
         int scanned = 0;
         scanned += scanForForbiddenText(
                 repoRoot,
-                wireRoot.resolve("src/main/java"),
-                offenders,
-                "import yier.bubu.redis.execution.api.",
-                "import yier.bubu.redis.command.",
-                "import yier.bubu.redis.storage.api.",
-                "import yier.bubu.redis.storage.memory.",
-                "import yier.bubu.redis.runtime.",
-                "import yier.bubu.redis.app.server.",
-                "import io.netty.",
-                "yier.bubu.redis.execution.api.",
-                "yier.bubu.redis.command.",
-                "yier.bubu.redis.storage.api.",
-                "yier.bubu.redis.storage.memory.",
-                "yier.bubu.redis.runtime.",
-                "yier.bubu.redis.app.server.",
-                "io.netty."
-        );
-        scanned += scanForForbiddenText(
-                repoRoot,
-                executionAdapterRoot.resolve("src/main/java"),
+                respRoot.resolve("src/main/java"),
                 offenders,
                 "import yier.bubu.redis.command.",
                 "import yier.bubu.redis.storage.api.",
@@ -909,22 +874,22 @@ public class ArchitectureBoundaryTest {
                 "yier.bubu.redis.runtime.",
                 "yier.bubu.redis.app.server."
         );
-        Assert.assertTrue("架构护栏扫描未扫描到任何 custom-v1 Java 文件", scanned > 0);
+        Assert.assertTrue("架构护栏扫描未扫描到任何 resp Java 文件", scanned > 0);
 
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 Custom Protocol v1 wire/execution/netty 模块边界违规：\n"
+                    "检测到 RESP wire/execution/netty 模块边界违规：\n"
                             + String.join("\n", offenders)
             );
         }
 
         Assert.assertFalse(
-                "server production code must not own JsonLineReplyWriter implementation",
-                Files.isRegularFile(workspaceRoot.resolve("yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/protocol/v1/JsonLineReplyWriter.java"))
+                "server production code must not own RespReplyWriter implementation",
+                Files.isRegularFile(workspaceRoot.resolve("yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/protocol/resp/RespReplyWriter.java"))
         );
         Assert.assertFalse(
-                "server production code must not own ProtocolCommandAdapter implementation",
-                Files.isRegularFile(workspaceRoot.resolve("yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ProtocolCommandAdapter.java"))
+                "server production code must not own RespCommandAdapter implementation",
+                Files.isRegularFile(workspaceRoot.resolve("yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/RespCommandAdapter.java"))
         );
     }
 
@@ -1618,8 +1583,8 @@ public class ArchitectureBoundaryTest {
                 "yierdis-networking-model",
                 "yierdis-networking-codec",
                 "yierdis-networking-netty",
-                "yierdis-networking-custom-v1",
-                "yierdis-networking-custom-v1-execution",
+                "yierdis-networking-resp",
+                "yierdis-networking-resp",
                 "yierdis-networking-netty",
                 "yierdis-server-main",
                 "yierdis-server-executor",
@@ -1718,8 +1683,8 @@ public class ArchitectureBoundaryTest {
                 "yierdis-networking-model",
                 "yierdis-networking-codec",
                 "yierdis-networking-netty",
-                "yierdis-networking-custom-v1",
-                "yierdis-networking-custom-v1-execution",
+                "yierdis-networking-resp",
+                "yierdis-networking-resp",
                 "yierdis-networking-netty",
                 "yierdis-server-main",
                 "yierdis-server-executor",
@@ -1953,8 +1918,8 @@ public class ArchitectureBoundaryTest {
                 "yierdis-networking-model",
                 "yierdis-networking-codec",
                 "yierdis-networking-netty",
-                "yierdis-networking-custom-v1",
-                "yierdis-networking-custom-v1-execution",
+                "yierdis-networking-resp",
+                "yierdis-networking-resp",
                 "yierdis-networking-netty",
                 "yierdis-server-main",
                 "yierdis-networking-netty",
@@ -2012,8 +1977,8 @@ public class ArchitectureBoundaryTest {
                 "yierdis-networking-model",
                 "yierdis-networking-codec",
                 "yierdis-networking-netty",
-                "yierdis-networking-custom-v1",
-                "yierdis-networking-custom-v1-execution",
+                "yierdis-networking-resp",
+                "yierdis-networking-resp",
                 "yierdis-networking-netty",
                 "yierdis-server-main",
                 "yierdis-networking-netty",
@@ -2146,11 +2111,12 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
 
         Path requestFile = repoRoot.resolve(
-                "yierdis-networking/yierdis-networking-custom-v1/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/CustomProtocolV1Request.java"
+                "yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespCommandRequest.java"
         );
-        Assert.assertTrue("缺少 CustomProtocolV1Request.java", Files.isRegularFile(requestFile));
+        Assert.assertTrue("缺少 RespCommandRequest.java", Files.isRegularFile(requestFile));
         String requestSource = Files.readString(requestFile, StandardCharsets.UTF_8);
-        Assert.assertTrue("request model 必须声明 protocol DTO 边界", requestSource.contains("This is a protocol-layer DTO only"));
+        Assert.assertTrue("request model must stay in RESP protocol package", requestSource.contains("package yier.bubu.redis.protocol.resp;"));
+        Assert.assertTrue("request model must expose retained byte accounting", requestSource.contains("retainedBytes()"));
 
         Path readmeFile = repoRoot.resolve("README.md");
         Assert.assertTrue("缺少 README.md", Files.isRegularFile(readmeFile));

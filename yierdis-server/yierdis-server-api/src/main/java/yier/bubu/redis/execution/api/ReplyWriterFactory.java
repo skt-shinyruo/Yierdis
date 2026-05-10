@@ -13,7 +13,7 @@ import java.util.Objects;
 public interface ReplyWriterFactory {
     ReplyWriter newWriter(BytesSink out);
 
-    default ReplyWriter newWriter(ServerSession session, BytesSink out) {
+    default ReplyWriter newWriter(Session session, BytesSink out) {
         return newWriter(Objects.requireNonNull(out, "out"));
     }
 }

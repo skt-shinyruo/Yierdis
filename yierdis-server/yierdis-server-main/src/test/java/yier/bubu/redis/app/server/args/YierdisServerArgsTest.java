@@ -3,8 +3,8 @@ package yier.bubu.redis.app.server.args;
 import org.junit.Assert;
 import org.junit.Test;
 import picocli.CommandLine;
+import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.protocol.custom.v1.wire.ProtocolLimits;
 
 import java.lang.reflect.RecordComponent;
 import java.util.HashMap;
@@ -187,9 +187,9 @@ public class YierdisServerArgsTest {
     @Test
     public void protocolDefaultsMatchProtocolLimitsSsot() {
         YierdisServerArgs args = new YierdisServerArgs();
-        Assert.assertEquals(ProtocolLimits.DEFAULT_MAX_REQUEST_PAYLOAD_BYTES, args.protocolMaxBulkBytes);
-        Assert.assertEquals(ProtocolLimits.DEFAULT_MAX_ARGS, args.protocolMaxArgs);
-        Assert.assertEquals(ProtocolLimits.DEFAULT_MAX_HEADER_BYTES, args.protocolMaxLineBytes);
+        Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_BULK_BYTES, args.protocolMaxBulkBytes);
+        Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_ARGS, args.protocolMaxArgs);
+        Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES, args.protocolMaxLineBytes);
     }
 
     private static YierdisServerArgs parse(String... argv) {

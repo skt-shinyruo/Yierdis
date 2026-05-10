@@ -12,14 +12,13 @@ import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.ExecutionConnectionContext;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
-import yier.bubu.redis.protocol.custom.v1.netty.ProtocolCommandAdapter;
-import yier.bubu.redis.protocol.custom.v1.wire.CustomProtocolV1Request;
-import yier.bubu.redis.protocol.custom.v1.execution.JsonLineReplyWriterFactory;
+import yier.bubu.redis.protocol.resp.RespCommandRequest;
+import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
+import yier.bubu.redis.protocol.resp.netty.RespCommandAdapter;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -31,7 +30,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         YierdisEngine engine = TestYierdisEngines.forInstance(instance);
-        JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
+        RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 engine::execute,
@@ -52,7 +51,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor, replyWriterFactory));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandAdapter(), new YierdisFastCommandHandler(executor, replyWriterFactory));
         try {
             NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 16, 1024);
             // Enqueue commands while executor is blocked (no replies yet).
@@ -66,7 +65,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
             // Trigger an internal error: handler should mark closing and close the channel after replying.
             ch.pipeline().fireExceptionCaught(new RuntimeException("boom"));
             Assert.assertArrayEquals(
-                    ascii("{\"ok\":false,\"error\":{\"kind\":\"internal\",\"message\":\"ERR internal error\"}}\n"),
+                    ascii("-ERR internal error\r\n"),
                     awaitOutbound(ch, 1000)
             );
             Assert.assertTrue("expected runtime closing flag to be set", context.statsSnapshot().closing());
@@ -93,7 +92,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         YierdisEngine engine = TestYierdisEngines.forInstance(instance);
-        JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
+        RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 engine::execute,
@@ -114,7 +113,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new ProtocolCommandAdapter(), new YierdisFastCommandHandler(executor, replyWriterFactory));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandAdapter(), new YierdisFastCommandHandler(executor, replyWriterFactory));
         try {
             NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 16, 1024);
             // Enqueue commands while executor is blocked (no replies yet).
@@ -130,7 +129,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
             unblock.countDown();
 
             Assert.assertArrayEquals(
-                    ascii("{\"ok\":false,\"error\":{\"kind\":\"internal\",\"message\":\"ERR internal error\"}}\n"),
+                    ascii("-ERR internal error\r\n"),
                     awaitOutbound(ch, 1000)
             );
             Assert.assertTrue("expected runtime closing flag to be set", context.statsSnapshot().closing());
@@ -243,7 +242,15 @@ public class ClosingSkipSideEffectsIntegrationTest {
         return s.getBytes(StandardCharsets.US_ASCII);
     }
 
-    private static CustomProtocolV1Request request(String cmd, String... args) {
-        return new CustomProtocolV1Request(cmd, Arrays.asList(args));
+    private static RespCommandRequest request(String cmd, String... args) {
+        byte[][] argv = new byte[args.length + 1][];
+        int retainedBytes = 0;
+        argv[0] = ascii(cmd);
+        retainedBytes += argv[0].length;
+        for (int i = 0; i < args.length; i++) {
+            argv[i + 1] = ascii(args[i]);
+            retainedBytes += argv[i + 1].length;
+        }
+        return RespCommandRequest.wrapReadOnly(argv, retainedBytes);
     }
 }

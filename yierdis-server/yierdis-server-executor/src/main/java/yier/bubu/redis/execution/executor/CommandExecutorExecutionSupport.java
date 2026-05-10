@@ -2,7 +2,6 @@ package yier.bubu.redis.execution.executor;
 
 import yier.bubu.redis.execution.api.ReplyWriter;
 import yier.bubu.redis.execution.api.ReplyWriterFactory;
-import yier.bubu.redis.execution.api.ServerSession;
 
 import java.util.Collection;
 import java.util.Objects;
@@ -68,7 +67,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
 
         boolean executed = false;
         try {
-            ReplyWriter writer = replyWriterFactory.newWriter(serverSession(connection), ioAdapter.newReplySink(connection));
+            ReplyWriter writer = replyWriterFactory.newWriter(connection.session(), ioAdapter.newReplySink(connection));
             commandProcessor.execute(connection.session(), task.request, writer);
             if (writer.closeAfterReplyRequested()) {
                 context.recordCloseAfterReply();
@@ -168,7 +167,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         }
 
         try {
-            ReplyWriter writer = replyWriterFactory.newWriter(serverSession(connection), ioAdapter.newReplySink(connection));
+            ReplyWriter writer = replyWriterFactory.newWriter(connection.session(), ioAdapter.newReplySink(connection));
             writer.internalError("ERR internal error");
             writer.requestCloseAfterReply();
             context.recordCloseAfterReply();
@@ -191,8 +190,4 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         }
     }
 
-    private static ServerSession serverSession(ExecutionConnection connection) {
-        var session = connection == null ? null : connection.session();
-        return session instanceof ServerSession serverSession ? serverSession : null;
-    }
 }

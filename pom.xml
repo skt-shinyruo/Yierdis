@@ -73,16 +73,6 @@
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-networking-custom-v1</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
-                <artifactId>yierdis-networking-custom-v1-execution</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-networking-netty</artifactId>
                 <version>${project.version}</version>
             </dependency>

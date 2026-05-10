@@ -10,14 +10,14 @@ modules:
       - yierdis-db-memory
       - yierdis-memory-api
       - yierdis-networking-model
-      - yierdis-networking-custom-v1
-      - yierdis-networking-custom-v1-execution
+      - yierdis-networking-resp
+      - yierdis-networking-resp
       - yierdis-networking-netty
       - yierdis-server-main
     forbidden_imports:
       - yier.bubu.redis.storage.memory
       - yier.bubu.redis.memory.api
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.runtime
       - yier.bubu.redis.app.server
   yierdis-command-core:
@@ -30,14 +30,14 @@ modules:
       - yierdis-db-memory
       - yierdis-memory-api
       - yierdis-networking-model
-      - yierdis-networking-custom-v1
-      - yierdis-networking-custom-v1-execution
+      - yierdis-networking-resp
+      - yierdis-networking-resp
       - yierdis-networking-netty
       - yierdis-server-main
     forbidden_imports:
       - yier.bubu.redis.storage.memory
       - yier.bubu.redis.memory.api
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.app.server
   yierdis-command-builtin:
     allowed_dependencies:
@@ -51,14 +51,14 @@ modules:
       - yierdis-db-memory
       - yierdis-memory-api
       - yierdis-networking-model
-      - yierdis-networking-custom-v1
-      - yierdis-networking-custom-v1-execution
+      - yierdis-networking-resp
+      - yierdis-networking-resp
       - yierdis-networking-netty
       - yierdis-server-main
     forbidden_imports:
       - yier.bubu.redis.storage.memory
       - yier.bubu.redis.memory.api
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.runtime
       - yier.bubu.redis.app.server
   yierdis-db-memory:
@@ -76,8 +76,8 @@ modules:
       - yierdis-networking-model
       - yierdis-networking-codec
       - yierdis-networking-netty
-      - yierdis-networking-custom-v1
-      - yierdis-networking-custom-v1-execution
+      - yierdis-networking-resp
+      - yierdis-networking-resp
       - yierdis-networking-netty
       - yierdis-server-main
       - yierdis-server-executor
@@ -85,7 +85,7 @@ modules:
       - netty-all
     forbidden_imports:
       - yier.bubu.redis.command
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.app.server
       - yier.bubu.redis.execution.executor
       - io.netty
@@ -111,7 +111,7 @@ modules:
     forbidden_imports:
       - yier.bubu.redis.storage.memory
       - yier.bubu.redis.command
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.app.server
       - yier.bubu.redis.memory.foreign
       - io.netty
@@ -126,8 +126,8 @@ modules:
       - yierdis-db-memory
       - yierdis-core-runtime
       - yierdis-networking-model
-      - yierdis-networking-custom-v1
-      - yierdis-networking-custom-v1-execution
+      - yierdis-networking-resp
+      - yierdis-networking-resp
       - yierdis-networking-netty
       - yierdis-networking-netty
       - yierdis-server-main
@@ -135,7 +135,7 @@ modules:
       - yier.bubu.redis.command
       - yier.bubu.redis.storage.memory
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
       - io.netty
   yierdis-server-api:
     allowed_dependencies:
@@ -148,8 +148,8 @@ modules:
       - yierdis-networking-model
       - yierdis-networking-codec
       - yierdis-networking-netty
-      - yierdis-networking-custom-v1
-      - yierdis-networking-custom-v1-execution
+      - yierdis-networking-resp
+      - yierdis-networking-resp
       - yierdis-networking-netty
       - yierdis-server-main
       - yierdis-memory-ffm
@@ -159,7 +159,7 @@ modules:
       - yier.bubu.redis.command
       - yier.bubu.redis.storage.memory
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.app.server
       - io.netty
   yierdis-memory-api:
@@ -174,8 +174,8 @@ modules:
       - yierdis-networking-model
       - yierdis-networking-codec
       - yierdis-networking-netty
-      - yierdis-networking-custom-v1
-      - yierdis-networking-custom-v1-execution
+      - yierdis-networking-resp
+      - yierdis-networking-resp
       - yierdis-networking-netty
       - yierdis-server-main
       - yierdis-memory-ffm
@@ -186,7 +186,7 @@ modules:
       - yier.bubu.redis.storage.memory
       - yier.bubu.redis.storage
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.app.server
       - yier.bubu.redis.memory.foreign
       - io.netty
@@ -203,8 +203,8 @@ modules:
       - yierdis-networking-model
       - yierdis-networking-codec
       - yierdis-networking-netty
-      - yierdis-networking-custom-v1
-      - yierdis-networking-custom-v1-execution
+      - yierdis-networking-resp
+      - yierdis-networking-resp
       - yierdis-networking-netty
       - yierdis-server-main
       - yierdis-memory-ffm
@@ -215,7 +215,7 @@ modules:
       - yier.bubu.redis.execution.api
       - yier.bubu.redis.storage.memory
       - yier.bubu.redis.runtime
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.app.server
       - yier.bubu.redis.memory.foreign
       - io.netty
@@ -233,8 +233,8 @@ modules:
       - yierdis-networking-model
       - yierdis-networking-codec
       - yierdis-networking-netty
-      - yierdis-networking-custom-v1
-      - yierdis-networking-custom-v1-execution
+      - yierdis-networking-resp
+      - yierdis-networking-resp
       - yierdis-networking-netty
       - yierdis-server-main
       - yierdis-memory-ffm
@@ -243,7 +243,7 @@ modules:
     forbidden_imports:
       - yier.bubu.redis.command
       - yier.bubu.redis.storage.memory
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.app.server
       - yier.bubu.redis.memory.foreign
       - io.netty
@@ -257,8 +257,8 @@ modules:
       - yierdis-networking-model
       - yierdis-networking-codec
       - yierdis-networking-netty
-      - yierdis-networking-custom-v1
-      - yierdis-networking-custom-v1-execution
+      - yierdis-networking-resp
+      - yierdis-networking-resp
       - yierdis-networking-netty
       - yierdis-core-db
       - yierdis-db-memory
@@ -270,7 +270,7 @@ modules:
     forbidden_imports:
       - yier.bubu.redis.command.defaults
       - yier.bubu.redis.storage
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.runtime
       - yier.bubu.redis.app.server
       - yier.bubu.redis.storage.memory
@@ -283,8 +283,7 @@ modules:
       - yierdis-command-core
       - yierdis-command-builtin
       - yierdis-server-core
-      - yierdis-networking-custom-v1-execution
-      - yierdis-networking-netty
+      - yierdis-networking-resp
       - yierdis-networking-netty
       - yierdis-server-runtime
       - yierdis-server-runtime-api
@@ -295,17 +294,17 @@ modules:
       - slf4j-api
       - logback-classic
     forbidden_imports:
-      - yier.bubu.redis.protocol.custom.v1.reply
+      - yier.bubu.redis.protocol.resp.RespReplyWriter
     source_ownership:
       - application_composition_root
       - no_command_context_construction
       - no_protocol_reply_model_authority
       - no_storage_internal_imports
-  yierdis-networking-custom-v1:
+  yierdis-networking-resp:
     allowed_dependencies:
       - yierdis-common-bytes
-    forbidden_dependencies:
       - yierdis-server-api
+    forbidden_dependencies:
       - yierdis-core-contract
       - yierdis-core-command
       - yierdis-core-db
@@ -317,40 +316,17 @@ modules:
       - yierdis-networking-netty
       - netty-all
     forbidden_imports:
-      - yier.bubu.redis.execution.api
       - yier.bubu.redis.command
       - yier.bubu.redis.storage.api
       - yier.bubu.redis.storage.memory
       - yier.bubu.redis.runtime
       - yier.bubu.redis.app.server
       - io.netty
-  yierdis-networking-custom-v1-execution:
-    allowed_dependencies:
-      - yierdis-networking-custom-v1
-      - yierdis-server-api
-      - yierdis-common-bytes
-    forbidden_dependencies:
-      - yierdis-core-command
-      - yierdis-core-db
-      - yierdis-db-memory
-      - yierdis-core-runtime
-      - yierdis-server-runtime-api
-      - yierdis-db-api
-      - yierdis-server-main
-      - yierdis-networking-netty
-      - netty-all
-    forbidden_imports:
-      - yier.bubu.redis.command
-      - yier.bubu.redis.storage.api
-      - yier.bubu.redis.storage.memory
-      - yier.bubu.redis.runtime
-      - yier.bubu.redis.app.server
-      - io.netty
+    owned_packages:
+      - yier.bubu.redis.protocol.resp
   yierdis-networking-netty:
     allowed_dependencies:
-      - yierdis-networking-custom-v1
-      - yierdis-networking-custom-v1-execution
-      - yierdis-networking-netty
+      - yierdis-networking-resp
       - netty-all
     forbidden_dependencies:
       - yierdis-core-command
@@ -386,8 +362,8 @@ modules:
       - yierdis-networking-model
       - yierdis-networking-codec
       - yierdis-networking-netty
-      - yierdis-networking-custom-v1
-      - yierdis-networking-custom-v1-execution
+      - yierdis-networking-resp
+      - yierdis-networking-resp
       - yierdis-networking-netty
       - yierdis-server-main
       - yierdis-networking-netty
@@ -396,7 +372,7 @@ modules:
       - yier.bubu.redis.command
       - yier.bubu.redis.execution.engine
       - yier.bubu.redis.execution.executor
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.app.server
       - io.netty
     source_ownership:
@@ -459,6 +435,6 @@ target_packages:
       - yier.bubu.redis.db.memory.foreign
   protocol:
     owns:
-      - yier.bubu.redis.protocol.custom.v1
+      - yier.bubu.redis.protocol.resp
     retired_from_active_source_tree:
       - yier.bubu.redis.protocol

@@ -23,13 +23,15 @@ public class ArchitecturePolicyResourceTest {
             Assert.assertTrue(policy.contains("yierdis-server-core:"));
             Assert.assertTrue(policy.contains("yierdis-server-runtime:"));
             Assert.assertTrue(policy.contains("yierdis-server-main:"));
-            Assert.assertTrue(policy.contains("yierdis-networking-custom-v1:"));
-            Assert.assertTrue(policy.contains("yierdis-networking-custom-v1-execution:"));
+            Assert.assertTrue(policy.contains("yierdis-networking-resp:"));
             Assert.assertTrue(policy.contains("yierdis-networking-netty:"));
             Assert.assertTrue(policy.contains("forbidden_imports:"));
-            Assert.assertTrue(policy.contains("yier.bubu.redis.protocol.custom.v1.reply"));
+            Assert.assertTrue(policy.contains("yier.bubu.redis.protocol.resp"));
             Assert.assertTrue(policy.contains("application_composition_root"));
             Assert.assertTrue(policy.contains("no_storage_internal_imports"));
+            Assert.assertFalse(policy.contains("yierdis-networking-" + "custom-v1"));
+            Assert.assertFalse(policy.contains("yierdis-networking-" + "custom-v1-execution"));
+            Assert.assertFalse(policy.contains("protocol." + "custom." + "v1"));
         }
     }
 
