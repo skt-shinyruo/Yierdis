@@ -28,6 +28,11 @@
         </dependency>
 
         <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-networking-resp</artifactId>
+        </dependency>
+
+        <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-all</artifactId>
         </dependency>
