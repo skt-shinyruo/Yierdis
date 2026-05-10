@@ -15,11 +15,9 @@
     <packaging>pom</packaging>
 
     <name>yierdis-networking</name>
-    <description>Parent and aggregator for Custom Protocol v1 wire, execution adapter, and Netty modules.</description>
+    <description>Parent and aggregator for RESP wire and Netty modules.</description>
 
     <modules>
-        <module>yierdis-networking-custom-v1</module>
-        <module>yierdis-networking-custom-v1-execution</module>
         <module>yierdis-networking-resp</module>
         <module>yierdis-networking-netty</module>
     </modules>

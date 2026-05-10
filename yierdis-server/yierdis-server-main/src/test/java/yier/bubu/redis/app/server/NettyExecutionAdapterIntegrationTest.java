@@ -13,14 +13,13 @@ import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.ExecutionConnectionContext;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
-import yier.bubu.redis.protocol.custom.v1.netty.ProtocolCommandAdapter;
-import yier.bubu.redis.protocol.custom.v1.wire.CustomProtocolV1Request;
-import yier.bubu.redis.protocol.custom.v1.execution.JsonLineReplyWriterFactory;
+import yier.bubu.redis.protocol.resp.RespCommandRequest;
+import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
+import yier.bubu.redis.protocol.resp.netty.RespCommandAdapter;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -36,21 +35,21 @@ public class NettyExecutionAdapterIntegrationTest {
                     instance::bindToCurrentThread,
                     engine::execute,
                     Runnable::run,
-                    new JsonLineReplyWriterFactory(),
+                    new RespReplyWriterFactory(),
                     ioAdapter,
                     new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
             );
             executor.start();
 
             EmbeddedChannel channel = new EmbeddedChannel(
-                    new YierdisFastCommandHandler(executor, new JsonLineReplyWriterFactory())
+                    new YierdisFastCommandHandler(executor, new RespReplyWriterFactory())
             );
             try {
                 NettyExecutionConnection.getOrCreate(channel, 16, 1024);
                 channel.writeInbound(ByteArrayExecutionRequest.fromUtf8("PING", List.of()));
 
                 Assert.assertArrayEquals(
-                        "{\"ok\":true,\"result\":\"PONG\"}\n".getBytes(StandardCharsets.UTF_8),
+                        "+PONG\r\n".getBytes(StandardCharsets.UTF_8),
                         readOutbound(channel)
                 );
             } finally {
@@ -67,7 +66,7 @@ public class NettyExecutionAdapterIntegrationTest {
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         YierdisEngine engine = TestYierdisEngines.forInstance(instance);
-        JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
+        RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 engine::execute,
@@ -102,7 +101,7 @@ public class NettyExecutionAdapterIntegrationTest {
             Assert.assertEquals(1L, context.statsSnapshot().commandsRejected());
             Assert.assertEquals(1, rejected.closeCalls());
             Assert.assertArrayEquals(
-                    "{\"ok\":false,\"error\":{\"kind\":\"command\",\"message\":\"ERR busy queue_full\"}}\n"
+                    "-ERR busy queue_full\r\n"
                             .getBytes(StandardCharsets.UTF_8),
                     readOutbound(channel)
             );
@@ -122,7 +121,7 @@ public class NettyExecutionAdapterIntegrationTest {
 
         YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
         YierdisEngine engine = TestYierdisEngines.forInstance(instance);
-        JsonLineReplyWriterFactory replyWriterFactory = new JsonLineReplyWriterFactory();
+        RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
                 instance::bindToCurrentThread,
                 engine::execute,
@@ -143,7 +142,7 @@ public class NettyExecutionAdapterIntegrationTest {
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
         EmbeddedChannel channel = new EmbeddedChannel(
-                new ProtocolCommandAdapter(),
+                new RespCommandAdapter(),
                 new YierdisFastCommandHandler(executor, replyWriterFactory)
         );
         try {
@@ -155,7 +154,7 @@ public class NettyExecutionAdapterIntegrationTest {
             unblock.countDown();
 
             Assert.assertArrayEquals(
-                    "{\"ok\":true,\"result\":\"OK\"}\n".getBytes(StandardCharsets.UTF_8),
+                    "+OK\r\n".getBytes(StandardCharsets.UTF_8),
                     awaitOutbound(channel, 1000)
             );
             Assert.assertNull("follow-up command should be skipped after close-after-reply", channel.readOutbound());
@@ -210,8 +209,16 @@ public class NettyExecutionAdapterIntegrationTest {
         }
     }
 
-    private static CustomProtocolV1Request request(String cmd, String... args) {
-        return new CustomProtocolV1Request(cmd, Arrays.asList(args));
+    private static RespCommandRequest request(String cmd, String... args) {
+        byte[][] argv = new byte[args.length + 1][];
+        int retainedBytes = 0;
+        argv[0] = utf8(cmd);
+        retainedBytes += argv[0].length;
+        for (int i = 0; i < args.length; i++) {
+            argv[i + 1] = utf8(args[i]);
+            retainedBytes += argv[i + 1].length;
+        }
+        return RespCommandRequest.wrapReadOnly(argv, retainedBytes);
     }
 
     private static final class TrackingExecutionRequest implements ExecutionRequest {
@@ -285,5 +292,9 @@ public class NettyExecutionAdapterIntegrationTest {
         private static byte[] utf8(String value) {
             return value.getBytes(StandardCharsets.UTF_8);
         }
+    }
+
+    private static byte[] utf8(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
     }
 }

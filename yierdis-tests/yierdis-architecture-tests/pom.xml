@@ -74,7 +74,7 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-networking-custom-v1</artifactId>
+            <artifactId>yierdis-networking-resp</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

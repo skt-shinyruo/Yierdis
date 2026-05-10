@@ -21,7 +21,7 @@ public final class YierdisServer {
         try {
             ForeignMemoryAutoModules.ensureFfmAvailable();
             try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config)) {
-                log.info("yierdis started on 0.0.0.0:{} (Custom Protocol v1)", server.port());
+                log.info("yierdis started on 0.0.0.0:{} (RESP)", server.port());
                 server.awaitClose();
             }
         } catch (YierdisCliException e) {

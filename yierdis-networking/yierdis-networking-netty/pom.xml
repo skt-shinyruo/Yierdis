@@ -14,19 +14,9 @@
     <packaging>jar</packaging>
 
     <name>yierdis-networking-netty</name>
-    <description>Netty codecs and handlers for Custom Protocol v1.</description>
+    <description>Netty codecs and handlers for RESP.</description>
 
     <dependencies>
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-networking-custom-v1</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-networking-custom-v1-execution</artifactId>
-        </dependency>
-
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-networking-resp</artifactId>
