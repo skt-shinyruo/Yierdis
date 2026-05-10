@@ -478,11 +478,6 @@ public class RespReplyWriterTest {
         private final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
 
         @Override
-        public void writeByte(int value) {
-            out.write(value);
-        }
-
-        @Override
         public void writeBytes(byte[] src, int off, int len) {
             out.write(src, off, len);
         }
@@ -569,7 +564,6 @@ package yier.bubu.redis.protocol.resp;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.ReplyWriter;
 import yier.bubu.redis.execution.api.ReplyWriterFactory;
-import yier.bubu.redis.execution.api.ServerSession;
 
 import java.util.Objects;
 
@@ -577,14 +571,6 @@ public final class RespReplyWriterFactory implements ReplyWriterFactory {
     @Override
     public ReplyWriter newWriter(BytesSink out) {
         return new RespReplyWriter(Objects.requireNonNull(out, "out"), RespProtocolVersion.RESP2);
-    }
-
-    @Override
-    public ReplyWriter newWriter(ServerSession session, BytesSink out) {
-        RespProtocolVersion version = session == null
-                ? RespProtocolVersion.RESP2
-                : RespProtocolVersion.fromWireValue(session.respVersion());
-        return new RespReplyWriter(Objects.requireNonNull(out, "out"), version);
     }
 }
 ```
@@ -612,6 +598,7 @@ git commit -m "feat: encode replies as resp"
 - Modify: `yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ReplyWriterFactory.java`
 - Modify: `yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java`
 - Modify: `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java`
+- Modify: `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriterFactory.java`
 - Test: `yierdis-server/yierdis-server-core/src/test/java/yier/bubu/redis/execution/engine/EngineSessionTest.java`
 - Test: `yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorTest.java`
 
@@ -688,7 +675,21 @@ public interface ReplyWriterFactory {
 }
 ```
 
-- [ ] **Step 6: Use session-aware writer creation in executor**
+- [ ] **Step 6: Make RESP writer factory session-aware**
+
+In `RespReplyWriterFactory`, add:
+
+```java
+@Override
+public ReplyWriter newWriter(ServerSession session, BytesSink out) {
+    RespProtocolVersion version = session == null
+            ? RespProtocolVersion.RESP2
+            : RespProtocolVersion.fromWireValue(session.respVersion());
+    return new RespReplyWriter(Objects.requireNonNull(out, "out"), version);
+}
+```
+
+- [ ] **Step 7: Use session-aware writer creation in executor**
 
 In `CommandExecutorExecutionSupport.execute`, replace:
 
@@ -704,7 +705,7 @@ ReplyWriter writer = replyWriterFactory.newWriter(connection.session(), ioAdapte
 
 In `handleExecutionFailure`, make the same replacement.
 
-- [ ] **Step 7: Run focused tests**
+- [ ] **Step 8: Run focused tests**
 
 Run:
 
@@ -715,10 +716,10 @@ mvn -pl yierdis-server/yierdis-server-executor test -Dtest=CommandExecutorTest
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add yierdis-server/yierdis-server-api yierdis-server/yierdis-server-core yierdis-server/yierdis-server-executor
+git add yierdis-server/yierdis-server-api yierdis-server/yierdis-server-core yierdis-server/yierdis-server-executor yierdis-networking/yierdis-networking-resp
 git commit -m "feat: track resp protocol version per session"
 ```
 
