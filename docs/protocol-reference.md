@@ -1,347 +1,183 @@
 # Protocol Reference
 
-本文专门解释 Yierdis 对外的 `Custom Protocol v1`。如果你已经看过：
+本文解释 Yierdis 对外 TCP 协议。Yierdis exposes Redis RESP as its public TCP protocol. RESP2 is the default compatibility target for redis-cli, Jedis, Lettuce, and go-redis. RESP3 is available for basic negotiated replies through HELLO 3.
+
+如果你已经看过：
 
 - [`project-overview.md`](./project-overview.md)
 - [`request-execution-flow.md`](./request-execution-flow.md)
 
-那么这篇文档的目标就是回答两个更细的问题：
+那么这篇文档重点回答：
 
-- 客户端到底该发什么格式的字节流？
-- 服务端收到错误帧以后，为什么大多数时候还能继续处理后续请求？
+- 客户端应该发送什么 RESP 字节？
+- 服务端如何把 RESP 请求转成命令执行？
+- RESP2 / RESP3 回包和协议错误分别怎么处理？
 
 ## 一句话心智模型
 
-Yierdis 的协议不是 RESP，而是一种“长度前缀 + 单行 JSON”的自定义协议：
+Yierdis 的线上协议是 Redis RESP：
 
-- request：`<len>:<json>\n`
-- reply：NDJSON，也就是“一条 reply 对应一行 JSON”
+- request：RESP array/multibulk，例如 `*2\r\n$3\r\nGET\r\n$1\r\na\r\n`
+- reply：RESP2 默认回包，例如 `+OK\r\n`、`$-1\r\n`、`*2\r\n...`
+- negotiated reply：同一连接发送 `HELLO 3` 后，支持基础 RESP3 map/null/bool/double 等回包
 
-这套协议的设计重点不是追求和 Redis 生态兼容，而是：
-
-- 保持 framing 简单
-- 保持命令参数是 argv 风格
-- 在 JSON 可读性和二进制安全之间做折中
-- 在协议错误时尽量可恢复
+服务端仍然把命令内部建模成 argv 风格的 `ExecutionRequest`。协议层只负责解析 RESP 和编码 reply，命令层不直接拼协议字节。
 
 ## Request Framing
 
-### 线上的字节格式
+### RESP array 请求
 
-每一条请求都是：
+Redis 客户端通常发送 RESP array。每个数组元素是一个 bulk string，argv[0] 是命令名，后续元素是参数。
 
-```text
-<len>:<json-payload>\n
-```
-
-其中：
-
-- `len` 是十进制 ASCII 数字
-- `len` 表示 `json-payload` 的 UTF-8 字节长度
-- `:` 是 header 和 payload 的分隔符
-- 最后必须有一个 `\n` 作为整帧终止符
-
-例如，一个 `PING` 请求长这样：
+`GET a` 的请求字节是：
 
 ```text
-24:{"cmd":"PING","args":[]}
+*2\r\n$3\r\nGET\r\n$1\r\na\r\n
 ```
 
-写成真正发送到 socket 的形式是：
+`SET a 1` 的请求字节是：
 
 ```text
-24:{"cmd":"PING","args":[]}\n
+*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n
 ```
 
-一个 `SET a 1` 请求则是：
+常见客户端不需要手写这些字节，直接使用 Redis 客户端库或 `redis-cli` 即可：
+
+```bash
+redis-cli -p 6378 SET a 1
+redis-cli -p 6378 GET a
+```
+
+### Inline commands
+
+Yierdis 也接受 Redis inline command，主要用于 `redis-cli` 兼容和手工调试：
 
 ```text
-30:{"cmd":"SET","args":["a","1"]}\n
+PING\r\n
+SET a 1\r\n
 ```
 
-### 为什么 payload 必须是单行
-
-`CustomRequestDecoder` 明确拒绝 payload 里的原始 `CR/LF` 字节。原因很直接：
-
-- 如果 payload 可以跨多行，出错后就更难判断“下一帧从哪里开始”
-- 单行约束让 decoder 可以在出错时更容易 resync 到下一个 `\n`
-
-注意这里说的是“原始换行字节”。如果参数里需要换行，应该放在 JSON string 里，以 `\n` 转义后的形式出现。
-
-## Request Payload Schema
-
-### 逻辑结构
-
-request payload 是一个严格 JSON object。服务端真正接受的字段只有两个：
-
-- `cmd`
-- `args`
-
-最常见的形态是：
-
-```json
-{"cmd":"PING","args":[]}
-```
-
-或：
-
-```json
-{"cmd":"SET","args":["user:1","alice"]}
-```
-
-### `cmd` 的规则
-
-- 必须存在
-- 必须是 string
-- 去掉首尾 ASCII 空白后不能为空
-- 服务端内部会把它当作 argv[0]
-
-这也是为什么 encoder 和 parser 都会对命令名做首尾空白裁剪。
-
-### `args` 的规则
-
-- 可以省略
-- 可以是 `null`
-- 更常见的是一个数组
-- 数组元素只能是 `string` 或 `null`
-
-也就是说，下面这些都能表达“无参数”：
-
-```json
-{"cmd":"PING"}
-{"cmd":"PING","args":null}
-{"cmd":"PING","args":[]}
-```
-
-但项目内置 client/bench/encoder 统一会发第三种，也就是始终带 `args` 数组。
-
-### 什么会被判定为 schema 错误
-
-这些情况会被 `CustomProtocolV1RequestPayloadParser` 拒绝：
-
-- `cmd` 缺失
-- `cmd` 不是 string
-- `cmd` 去空白后为空
-- `args` 不是 `null` 或数组
-- `args` 数组里出现非 `string|null` 元素
-- 出现未知字段
-- 出现重复字段
-
-## 从 Protocol DTO 到执行层 argv
-
-协议层不会直接把 JSON DTO 交给命令执行器。中间还有一层桥接：
-
-```text
-CustomRequestDecoder
-  -> CustomProtocolV1ArgvRequest
-  -> ProtocolCommandAdapter
-  -> ByteArrayExecutionRequest
-```
-
-这条桥的作用是：
-
-- 协议层只负责“解析协议”
-- 执行层只负责“处理 argv 风格命令”
-- 两层通过 `ExecutionRequest` 契约解耦
-
-如果你想对照源码看，最关键的文件是：
-
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/CustomRequestDecoder.java`
-- `yierdis-networking/yierdis-networking-custom-v1/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/CustomProtocolV1RequestPayloadParser.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
-
-## Reply Format
-
-### 成功回包
-
-成功回包统一包在下面这个 envelope 里：
-
-```json
-{"ok":true,"result":...}
-```
-
-并且每条 reply 结尾都有一个换行：
-
-```text
-{"ok":true,"result":"PONG"}\n
-```
-
-常见例子：
-
-```json
-{"ok":true,"result":"OK"}
-{"ok":true,"result":1}
-{"ok":true,"result":null}
-{"ok":true,"result":["a","b","c"]}
-```
-
-### 错误回包
-
-错误回包统一是：
-
-```json
-{"ok":false,"error":{"kind":"...","message":"..."}}
-```
-
-`kind` 目前主要有三类：
-
-- `command`
-- `protocol`
-- `internal`
-
-例如：
-
-```json
-{"ok":false,"error":{"kind":"command","message":"ERR wrong number of arguments for 'get' command"}}
-{"ok":false,"error":{"kind":"protocol","message":"Protocol error: invalid JSON"}}
-{"ok":false,"error":{"kind":"internal","message":"ERR internal error"}}
-```
-
-## Tagged Values
-
-JSON 本身不擅长表达“二进制 bytes”“嵌套错误”“非普通对象 map”这类值，所以 Yierdis 的 reply 里有几种 tagged value。
-
-### 1. map
-
-协议不会把 map 直接编码成普通 JSON object，而是编码成：
-
-```json
-{"$map":[["server","yierdis"],["proto",1]]}
-```
-
-因此 `HELLO`、`INFO yierdis`、`STATS`、`MEMORY STATS` 这类结构化命令，最终都长成：
-
-```json
-{"ok":true,"result":{"$map":[["server","yierdis"],["proto",1]]}}
-```
-
-### 2. 非 UTF-8 bytes
-
-如果 bulk string 不是合法 UTF-8，reply writer 会退化成 base64 tagged value：
-
-```json
-{"$b64":"wyg="}
-```
-
-这样既不会丢失原始字节，也不会强行用错误编码把内容变成乱码。
-
-### 3. 嵌套 error
-
-如果错误值出现在数组或 map 内部，而不是整条 reply 的顶层 envelope，编码会使用：
-
-```json
-{"$error":{"kind":"command","message":"ERR nope"}}
-```
-
-例如：
-
-```json
-{"ok":true,"result":[1,{"$error":{"kind":"command","message":"ERR nope"}},null]}
-```
-
-## Error Handling And Resync
-
-### 协议错误不一定断连
-
-这个协议有一个很重要的设计取向：协议错误尽量可恢复。
-
-最典型的流程是：
-
-1. decoder 发现坏帧
-2. 输出一个 `ProtocolError` 事件
-3. `ProtocolErrorReplyHandler` 把它写成 `kind=protocol` 的错误回包
-4. decoder 尝试恢复到下一帧边界
-5. 后续合法帧仍然可以继续执行
-
-这也是为什么 `CustomProtocolResyncIntegrationTest` 会验证：
-
-- 先发一条坏帧
-- 再发一条合法 `PING`
-- 最终依然能收到 protocol error 之后的 `PONG`
-
-### 什么时候进入 discard-to-LF
-
-对 decoder 来说，大致有两类错误：
-
-第一类：边界已经不可信。
-
-例如：
-
-- 非法 length header
-- header 过长
-- payload 超上限
-- 丢失 frame terminator
-
-这时 decoder 会进入 `DISCARD_TO_LF` 状态，持续丢弃直到下一个 `\n`。
-
-第二类：边界仍然可信，只是 payload 内容不合法。
-
-例如：
-
-- JSON 非法
-- request schema 非法
-- payload 内出现原始 CR/LF，但 decoder 已经完整吃掉该帧和结尾换行
-
-这时它会返回 protocol error，然后直接继续读下一帧。
-
-### 什么时候会断连
-
-并不是所有错误都能无限恢复。为了避免恶意输入让 server 一直丢弃垃圾字节，decoder 有一个内部 discard budget：
-
-- 如果长期找不到下一个 `\n`
-- 且累计丢弃字节超过预算
-
-连接会被直接关闭。
-
-这个 budget 不是单独的 CLI 参数，而是由协议上限间接约束出来的。
-
-### internal error 和 protocol error 的区别
-
-协议错误通常被视为“客户端输入问题”，所以连接一般保持打开。
-
-但如果已经进入 `YierdisFastCommandHandler.exceptionCaught(...)` 的 internal error 路径，处理逻辑会更保守：
-
-- 先返回 `kind=internal`
-- 再把连接标记为 closing
-- 然后关闭连接，避免队列里已经入队的命令继续产生副作用
+inline 解析只适合命令行式输入；需要二进制安全参数时应使用 RESP array。
 
 ## Protocol Limits
 
-默认上限定义在 `ProtocolLimits`：
+协议上限由 `RespProtocolLimits` 定义：
 
-- `DEFAULT_MAX_REQUEST_PAYLOAD_BYTES = 64 MiB`
-- `DEFAULT_MAX_ARGS = 1024`
-- `DEFAULT_MAX_HEADER_BYTES = 64 KiB`
+- bulk string 默认最大 512 MiB
+- 单条请求默认最多 1048576 个参数
+- inline command 默认最大 1 MiB
 
-服务端启动时可以通过这些参数覆盖：
+超过上限属于协议错误。服务端会写一个 RESP error reply，然后关闭连接。
 
-- `--protocolMaxBulkBytes`
-- `--protocolMaxArgs`
-- `--protocolMaxLineBytes`
+## From RESP To Execution
 
-对于开放网络或压测场景，最值得先调整的是 `--protocolMaxBulkBytes`，因为它直接决定了单条请求可能占用的解析和排队内存规模。
+请求进入 server 的主链路是：
 
-更完整的运行时说明见：
+```text
+RespRequestDecoder
+  -> RespCommandRequest
+  -> RespCommandAdapter
+  -> RespExecutionAdapter
+  -> ByteArrayExecutionRequest
+```
 
-- [`configuration-and-operations.md`](./configuration-and-operations.md)
+这条桥的作用是保持边界：
 
-## 初学者最值得对照的测试
+- `RespRequestDecoder` 只理解 RESP 字节和协议上限
+- `RespExecutionAdapter` 只把 RESP argv 转成 `ExecutionRequest`
+- 命令执行层只看 `ExecutionRequest` / `ReplyWriter`
 
-如果你想通过测试来理解协议，而不是一上来读实现，推荐按这个顺序看：
+对应源码：
 
-1. `CustomProtocolV1RequestEncoderTest`
-   看 request frame 怎么被编码出来
-2. `CustomRequestDecoderTest`
-   看 decoder 如何分帧、报错和恢复
-3. `JsonLineReplyWriterTest`
-   看 success/error envelope 和 tagged value 的具体样子
-4. `CustomProtocolV1ReplyParserTest`
-   看 client 侧如何把 reply line 还原成结构化对象
-5. `CustomProtocolResyncIntegrationTest`
-   看“坏帧之后还能继续跑”的完整链路
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespExecutionAdapter.java`
+
+## RESP2 Replies
+
+RESP2 是默认回包版本。常见 reply 示例：
+
+```text
++OK\r\n
+:1\r\n
+$5\r\nhello\r\n
+$-1\r\n
+*2\r\n$1\r\na\r\n$1\r\nb\r\n
+-ERR wrong number of arguments for 'get' command\r\n
+```
+
+语义对应关系：
+
+- `ReplyWriter.simpleString("OK")` -> `+OK`
+- `ReplyWriter.integer(1)` -> `:1`
+- `ReplyWriter.bulkString(...)` -> bulk string
+- null bulk -> `$-1`
+- array -> `*<n>`
+- map -> RESP2 下编码为 flat key/value array
+- error -> `-ERR ...`
+
+## RESP3 Negotiation
+
+`HELLO [2|3] [SETNAME name]` 用于同一连接的协议版本协商：
+
+```bash
+redis-cli -p 6378 HELLO 3
+```
+
+`HELLO 3` 成功后，连接的 `ServerSession.respVersion()` 会切到 3，后续 `RespReplyWriter` 可以写 RESP3 的基础类型，例如：
+
+- map：`%<pairs>`
+- null：`_`
+- bool：`#t` / `#f`
+- double：`,`
+- set：`~`
+- push：`>`
+
+RESP3 只表示回包版本协商，不意味着 Yierdis 覆盖 Redis 的完整命令语义或所有 RESP3 客户端特性。
+
+## Protocol Errors
+
+malformed RESP 不具备可靠的重同步点。Yierdis 的策略是：
+
+1. 尽量写出一个 RESP error reply
+2. 标记 close-after-reply
+3. flush 后关闭连接
+
+这样可以避免坏请求之后的字节被错误配对到后续 reply。
+
+常见协议错误包括：
+
+- unknown RESP type byte
+- bulk length 非法或超过上限
+- array 参数数量超过上限
+- inline command 超过上限
+- frame 未完整结束
+
+## Client Helpers
+
+仓库内置 CLI 和 benchmark 共用 RESP helper：
+
+- `RespClientCodec.writeCommand(...)`
+- `RespClientCodec.encodeCommand(...)`
+- `RespClientCodec.readReply(...)`
+
+CLI 仍保持一问一答模型。发生 timeout 或 parse failure 时会关闭连接，避免 FIFO reply 错配。
+
+## 最值得看的测试
+
+1. `RespClientCodecTest`
+   看 client 侧 RESP command 编码和 reply 解析。
+2. `RespRequestDecoderTest`
+   看 server 侧 array、inline、协议上限和错误处理。
+3. `RespReplyWriterTest`
+   看 RESP2/RESP3 reply 编码。
+4. `RespHandshakeIntegrationTest`
+   看 `HELLO 3` 如何切换连接级 RESP version。
+5. `RespProtocolErrorIntegrationTest`
+   看 malformed RESP 如何写错误并关闭连接。
 
 ## 一句话总结
 
-把 `Custom Protocol v1` 记成下面这句话，基本就不会迷路：
+把 Yierdis 的协议记成下面这句话，基本就不会迷路：
 
-“客户端发 `len + 单行 JSON argv`，服务端回 `一行一个 JSON envelope`；出错时尽量 resync，而不是立刻把连接打死。”
+“客户端发 Redis RESP，服务端默认回 RESP2；`HELLO 3` 后同一连接可拿到基础 RESP3 回包；坏 RESP 会收到错误并断连。”

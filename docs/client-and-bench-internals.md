@@ -7,7 +7,7 @@
 
 它们看起来像外围工具，但实际上很重要，因为它们直接体现了：
 
-- 自定义协议是如何被消费的
+- RESP 是如何被消费的
 - 仓库作者自己是如何验证 server 行为和请求路径的
 
 ## 先记住一句话
@@ -15,8 +15,8 @@
 client 和 bench 不是直接嵌进 DB 内部的调试入口，而是：
 
 - 走真实 TCP
-- 走真实 Custom Protocol v1
-- 尽量复用协议编码/解析组件
+- 走真实 RESP
+- 尽量复用 `yierdis-networking-resp` 的编码/解析组件
 
 这让它们更接近“真实外部使用者”，而不是“进程内私有测试钩子”。
 
@@ -29,9 +29,7 @@ client 模块主要有四个角色：
 - `YierdisClient`
 - `InlineCommandParser`
 
-外加一个小型 reply helper：
-
-- `CustomProtocolV1Replies`
+协议读写由 `RespClientCodec` 完成。
 
 ## CLI 的主链
 
@@ -46,7 +44,7 @@ client 模块主要有四个角色：
 3. 如果是单次命令执行，则直接把命令编码后发出
 4. 如果没有位置参数，则进入 REPL
 5. REPL 中每一行通过 `InlineCommandParser` 解析成 argv
-6. reply 直接打印为 NDJSON 文本，或在 `--hex` 下打印原始 line 的 hex
+6. reply 按 Redis 风格打印；`--hex` 只影响非 UTF-8 bulk string 的展示
 
 这说明 CLI 本身非常薄：
 
@@ -69,34 +67,21 @@ client 模块主要有四个角色：
 
 ## `YierdisClient` 的内部模型
 
-`YierdisClient` 是一个基于 Netty 的客户端，但它故意保持了非常简单的请求模型：
+`YierdisClient` 是一个基于 blocking socket 的客户端，并且故意保持了非常简单的请求模型：
 
 - 1-at-a-time request/response
 - 不做 pipelining
-
-### 连接建立
-
-`connect(host, port)` 会：
-
-1. 创建一个 `NioEventLoopGroup(1)`
-2. 用 Netty `Bootstrap` 建立连接
-3. pipeline 中加入：
-   - `JsonLineDecoder`
-   - `ClientHandler`
-
-这意味着 client 侧接收的 framing 不是 request decoder，而是 reply line decoder。
 
 ### 执行请求
 
 `execute(List<byte[]> args, timeoutMillis)` 的逻辑很有代表性：
 
-1. 检查 client 是否已关闭或已出现 terminal error
+1. 检查 client 是否已关闭
 2. 在 `requestLock` 下保证一次只发一条请求
-3. 先清掉任何意外残留 response
-4. 使用 `CustomProtocolV1RequestEncoder.encodeRequestFrame(args)` 生成 request frame
-5. 写入 channel 并等待一个 response event
-6. 超时则主动关闭连接，避免 response pairing 失步
-7. 收到 line 后，再用 `CustomProtocolV1ReplyParser.parse(...)` 解析 reply
+3. 使用 `RespClientCodec.writeCommand(...)` 生成 RESP request
+4. 写入 socket output stream
+5. 用 `RespClientCodec.readReply(...)` 读取一个 response
+6. 超时或解析失败则主动关闭连接，避免 response pairing 失步
 
 ### 为什么超时后要关连接
 
@@ -108,26 +93,9 @@ client 模块主要有四个角色：
 
 所以 client 明确选择：
 
-- 发生 timeout 就关闭连接，防止 desync
+- 发生 timeout 或 parse failure 就关闭连接，防止 desync
 
 这是一种很保守但很清晰的协议消费策略。
-
-## `CustomProtocolV1Replies` 的角色
-
-这个类不是底层 parser，而是 client/CLI 视角的辅助函数集合。
-
-它封装了最常见的 reply 访问模式：
-
-- 判断 `ok`
-- 取 `result`
-- 取 `error`
-- 解码 `$map`
-- 解码 `$b64`
-
-也就是说：
-
-- `CustomProtocolV1ReplyParser` 负责底层解析
-- `CustomProtocolV1Replies` 负责上层使用便利性
 
 ## `yierdis-benchmark` 在做什么
 
@@ -135,7 +103,7 @@ bench 模块不是 JMH，也不是进程内 microbenchmark。
 
 它的定位更接近：
 
-- 通过真实 TCP 和自定义协议跑一组可重复的 workload
+- 通过真实 TCP 和 RESP 跑一组可重复的 workload
 - 输出吞吐和延迟结果
 
 这点非常重要，因为它说明 benchmark 的关注点是：
@@ -156,7 +124,7 @@ YierdisBenchArgs
   -> BenchConfig
   -> optional ServerProcess
   -> ThroughputWorker / LatencyWorker
-  -> CustomCommandWriter + JsonReplyReader
+  -> RespCommandWriter + RespClientCodec
   -> summary output
 ```
 
@@ -224,7 +192,7 @@ bench 会区分两类 worker：
 - 一次写一条，一次收一条
 - 记录单次请求往返耗时
 
-### `CustomCommandWriter`
+### `RespCommandWriter`
 
 这是 bench 最值得注意的内部组件之一。
 
@@ -233,7 +201,7 @@ bench 会区分两类 worker：
 - 预置 `PING/GET/SET` 命令字节
 - 复用 `MutableRequestArgs`
 - 复用 `intBuf`
-- 通过 `CustomProtocolV1RequestEncoder.writeRequestFrame(...)` 写 frame
+- 通过 `RespClientCodec.writeCommand(...)` 写 RESP frame
 
 这说明 bench 很关心：
 
@@ -248,8 +216,8 @@ bench 可以开启：
 这时它不仅看“有没有回包”，还会做最小语义校验，例如：
 
 - `GET` reply 是否真的匹配预期大小
-- reply 是否是合法 envelope
-- UTF-8 和 `$b64` 路径是否都可接受
+- `PING` / `SET` reply 是否是合法 RESP simple string
+- null bulk 和 bulk string 是否按 workload 预期出现
 
 这让 bench 不只是性能工具，也兼带一层 correctness smoke。
 
@@ -262,7 +230,7 @@ bench 可以开启：
 适合做：
 
 - server jar / client jar / bench jar 是否都能正常工作
-- server 启动后 CLI 是否能连
+- server 启动后 `redis-cli` 是否能连；如果本机没有 `redis-cli`，回退到 Java CLI
 - bench strictReplies correctness smoke 是否通过
 - 通过 `READY_TIMEOUT_SEC` 调整 server readiness 等待时间
 
@@ -270,7 +238,7 @@ bench 可以开启：
 
 适合做：
 
-- 一键启动 benchmark
+- 一键启动 RESP benchmark
 - 透传 JVM 参数
 - 透传 server 参数
 - 透传 bench 额外参数
@@ -287,24 +255,26 @@ bench 可以开启：
 ## 最值得看的测试
 
 - `YierdisClientTest`
-  看 client 的连接、超时、desync 防护和协议使用方式
+  看 client 的连接、超时、desync 防护和 RESP 使用方式。
+- `RespClientCodecTest`
+  看 RESP request 编码和 reply 解析。
 - `TransactionQueueLimitTest`
-  看 client 视角下事务队列限制如何体现
+  看 client 视角下事务队列限制如何体现。
 - `MaxmemoryScopeTest`
-  看 client 视角下全局/per-db 预算行为
-- `CustomCommandWriterTest`
-  看 bench request writer 如何复用共享 encoder，并关注分配成本
+  看 client 视角下全局/per-db 预算行为。
+- `RespCommandWriterTest`
+  看 bench request writer 如何复用 RESP codec，并关注分配成本。
 - `BenchServerArgsReuseTest`
-  看 bench 的 server launch argv 复制和归一化如何保持与 server 参数对齐
+  看 bench 的 server launch argv 复制和归一化如何保持与 server 参数对齐。
 - `YierdisBenchSummaryFormatTest`
-  看 bench 输出格式是否稳定
+  看 bench 输出格式是否稳定。
 
 ## 对照源码时推荐看的顺序
 
 1. `YierdisCli`
 2. `InlineCommandParser`
 3. `YierdisClient`
-4. `CustomProtocolV1Replies`
+4. `RespClientCodec`
 5. `YierdisBenchArgs`
 6. `YierdisBench`
 7. `scripts/smoke.sh`
@@ -314,7 +284,7 @@ bench 可以开启：
 
 client 和 bench 看起来是外围工具，但它们其实是：
 
-- 自定义协议的第一批消费者
+- RESP 的第一批消费者
 - request-path 和运维脚本的真实验证者
 
 如果你想知道“作者自己是怎么和这个 server 交互、验证和压测的”，这两个模块就是最直接的答案。

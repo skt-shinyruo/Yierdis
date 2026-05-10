@@ -171,15 +171,15 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 先看：
 
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/CustomRequestDecoder.java`
-- `yierdis-networking/yierdis-networking-custom-v1/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/CustomProtocolV1RequestEncoder.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java`
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespClientCodec.java`
 
 ### protocol -> execution bridge
 
 只看：
 
-- `yierdis-networking/yierdis-networking-custom-v1-execution/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/CustomProtocolV1ExecutionAdapter.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespExecutionAdapter.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`
 
 这里是 protocol DTO 转成 `ExecutionRequest` 的唯一桥；Netty handler 只负责调用纯 adapter。
 
@@ -187,8 +187,8 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 先看：
 
-- `yierdis-networking/yierdis-networking-custom-v1-execution/src/main/java/yier/bubu/redis/protocol/custom/v1/execution/JsonLineReplyWriter.java`
-- `yierdis-networking/yierdis-networking-custom-v1/src/main/java/yier/bubu/redis/protocol/custom/v1/wire/CustomProtocolV1ReplyParser.java`
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java`
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespClientCodec.java`
 
 ### 需要特别注意
 
@@ -197,7 +197,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 
 相关护栏测试：
 
-- `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/custom/v1/ReplySsoTGuardTest.java`
+- `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/resp/RespBoundaryGuardTest.java`
 
 ## 任务 4：改多 DB、连接态或事务
 
@@ -355,7 +355,7 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 例如：
 
 - `SET`：真正改状态的第一个点是 `YierdisStringOps.set(...)`
-- 协议长度头：真正改状态的第一个点是 `CustomRequestDecoder.tryReadLengthHeader(...)`
+- RESP bulk frame：真正改状态的第一个点是 `RespRequestDecoder.decode(...)`
 - 事务排队：真正改状态的第一个点是 `connection.session().transaction().tryEnqueue(...)`
 
 这会强迫你先找到正确入口，再开始改。

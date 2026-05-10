@@ -7,7 +7,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MVN_ARGS="${MVN_ARGS:--q -DskipTests package}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 
-# Bench config overrides (keep empty to use yierdis-benchmark built-in defaults)
+# RESP bench config overrides (keep empty to use yierdis-benchmark built-in defaults)
 HOST="${HOST:-}"
 PORT_BASE="${PORT_BASE:-}"
 

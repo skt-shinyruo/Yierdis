@@ -42,9 +42,9 @@ public class RespBoundaryGuardTest {
         return new String[]{
                 "protocol." + "custom." + "v1",
                 "Custom" + "ProtocolV1",
-                "JsonLine" + "ReplyWriter",
-                "yierdis-networking-" + "custom-v1",
-                "yierdis-networking-" + "custom-v1-execution"
+                "Json" + "Line" + "ReplyWriter",
+                "yierdis-networking-" + "custom" + "-v1",
+                "yierdis-networking-" + "custom" + "-v1" + "-execution"
         };
     }
 

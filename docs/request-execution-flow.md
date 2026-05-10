@@ -8,9 +8,9 @@
 
 ```text
 Netty ByteBuf
-  -> CustomRequestDecoder
-  -> protocol request DTO
-  -> ProtocolCommandAdapter
+  -> RespRequestDecoder
+  -> RespCommandRequest
+  -> RespCommandAdapter
   -> ExecutionRequest
   -> YierdisFastCommandHandler
   -> CommandExecutor.trySubmit(connection, request)
@@ -87,12 +87,12 @@ Netty ByteBuf
 连接上的 pipeline 顺序是：
 
 1. `writeBufferBackpressure`
-2. `customRequestDecoder`
-3. `protocolCommandAdapter`
+2. `respRequestDecoder`
+3. `respCommandAdapter`
 4. `protocolErrorReply`
 5. `commandHandler`
 
-`CustomRequestDecoder` 只产出协议请求或协议错误事件。`ProtocolCommandAdapter` 把协议请求转换成 `ExecutionRequest`。`YierdisFastCommandHandler` 不执行命令，只调用 `CommandExecutor.trySubmit(...)`。
+`RespRequestDecoder` 只产出协议请求或协议错误事件。`RespCommandAdapter` 把协议请求转换成 `ExecutionRequest`。`YierdisFastCommandHandler` 不执行命令，只调用 `CommandExecutor.trySubmit(...)`。
 
 ## ExecutionRequest
 
@@ -171,8 +171,8 @@ server-local 命令也一样使用 typed spec；普通 server handler、executor
 
 `PING` 是最短路径：
 
-1. `CustomRequestDecoder`
-2. `ProtocolCommandAdapter`
+1. `RespRequestDecoder`
+2. `RespCommandAdapter`
 3. `YierdisFastCommandHandler`
 4. `CommandExecutor`
 5. `YierdisEngine`
@@ -271,7 +271,7 @@ heap `byte[]` 仍允许出现在协议边界、显式 materialization、测试�
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionConnection.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/custom/v1/netty/ProtocolCommandAdapter.java`
+- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java`
 - `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
 - `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java`

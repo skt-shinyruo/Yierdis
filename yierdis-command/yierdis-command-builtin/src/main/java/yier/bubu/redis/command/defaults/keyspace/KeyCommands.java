@@ -121,7 +121,7 @@ public final class KeyCommands implements CommandModule {
             if (s == null) {
                 s = support.db(ctx).memory().memoryStats();
             }
-            // Flat key/value pairs are more naturally represented as a JSON object in the custom protocol.
+            // Flat key/value pairs map naturally to RESP3 maps and RESP2 key/value arrays.
             out.mapHeader(20);
 
             out.bulkString(MEMORY_STATS_MAXMEMORY_BYTES);

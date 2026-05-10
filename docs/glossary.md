@@ -12,7 +12,7 @@
 - 某个参数是不是 `null`
 - 某个参数的长度和字节内容
 
-它不是协议 DTO。协议层必须先经过 `ProtocolCommandAdapter` 才会变成 `ExecutionRequest`。
+它不是协议 DTO。协议层必须先经过 `RespCommandAdapter` / `RespExecutionAdapter` 才会变成 `ExecutionRequest`。
 
 ### `ExecutionRecord`
 
@@ -20,7 +20,7 @@
 
 ### `ReplyWriter`
 
-server 命令写回的单一语义出口。命令处理器和命令模块不会自己拼 NDJSON，而是统一调用：
+server 命令写回的单一语义出口。命令处理器和命令模块不会自己拼 RESP 字节，而是统一调用：
 
 - `simpleString`
 - `bulkString`
@@ -31,24 +31,20 @@ server 命令写回的单一语义出口。命令处理器和命令模块不会�
 
 然后由具体协议实现把这些语义编码成线上格式。
 
-### `JsonLineReplyWriter`
+### `RespReplyWriter`
 
-`ReplyWriter` 在 `Custom Protocol v1` 下的具体实现。它负责把 reply 变成：
+`ReplyWriter` 在 RESP 下的具体实现。它负责把 reply 变成：
 
-- 成功 envelope：`{"ok":true,"result":...}\n`
-- 错误 envelope：`{"ok":false,"error":...}\n`
+- RESP2 默认回包，例如 `+OK`、bulk string、array、error
+- `HELLO 3` 后的基础 RESP3 回包，例如 map、null、bool、double
 
 ### protocol DTO
 
-指协议层专用的数据对象，例如 `CustomProtocolV1Request`。它只描述“协议长什么样”，不直接参与命令执行。
+指协议层专用的数据对象，例如 `RespCommandRequest`。它只描述“协议长什么样”，不直接参与命令执行。
 
-### tagged value
+### RESP3 negotiated reply
 
-指 reply 里为了表达 JSON 不擅长表示的值而引入的包装格式，例如：
-
-- `{"$map":[...]}`
-- `{"$b64":"..."}`
-- `{"$error":{...}}`
+指连接执行 `HELLO 3` 后启用的基础 RESP3 回包形态，例如 map、null、bool、double。命令层仍只调用 `ReplyWriter` 语义 API。
 
 ## Command Layer
 

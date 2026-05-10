@@ -44,7 +44,7 @@
 ### 协议与数据
 
 - [`protocol-reference.md`](./protocol-reference.md)
-  说明 `Custom Protocol v1` 的 request/reply 线格式、tagged value、错误恢复和协议上限。
+  说明 RESP request/reply、inline command、`HELLO 3`、协议错误断连和协议上限。
 - [`commands-and-data-model.md`](./commands-and-data-model.md)
   说明命令模块怎么注册、命令家族怎么分、逻辑类型和内部编码怎么对应，以及 HLL 为什么复用 string。
 - [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)

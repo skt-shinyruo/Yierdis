@@ -29,8 +29,8 @@ public class ArchitecturePolicyResourceTest {
             Assert.assertTrue(policy.contains("yier.bubu.redis.protocol.resp"));
             Assert.assertTrue(policy.contains("application_composition_root"));
             Assert.assertTrue(policy.contains("no_storage_internal_imports"));
-            Assert.assertFalse(policy.contains("yierdis-networking-" + "custom-v1"));
-            Assert.assertFalse(policy.contains("yierdis-networking-" + "custom-v1-execution"));
+            Assert.assertFalse(policy.contains("yierdis-networking-" + "custom" + "-v1"));
+            Assert.assertFalse(policy.contains("yierdis-networking-" + "custom" + "-v1" + "-execution"));
             Assert.assertFalse(policy.contains("protocol." + "custom." + "v1"));
         }
     }

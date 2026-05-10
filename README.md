@@ -2,7 +2,7 @@
 
 一个使用 Java + Netty 实现的单机内存 KV 服务端，目标是参考 Redis 的设计与实现方式做一个类似的项目。
 
-对外协议使用自定义协议 **Custom Protocol v1**（不兼容 Redis 原生协议）。
+对外 TCP 协议使用 Redis RESP。RESP2 是默认兼容目标，`HELLO 3` 可协商基础 RESP3 回包；项目仍然不是 Redis 的 drop-in replacement。
 
 ## 定位与兼容性边界（重要）
 
@@ -10,7 +10,7 @@ Yierdis 的目标是：用 Java 参考 Redis 的思路实现一个类似的项�
 
 但它不是 Redis 的 drop-in replacement（README 明确将不少能力定义为 out-of-scope），并且即便是已实现命令，也有不少“刻意简化/最小子集”的语义差异（例如 TTL 清理、`KEYS` glob 覆盖范围、事务边界行为等）。
 
-- **包含（In scope）**：单机内存版数据结构、基础命令子集、TTL（惰性删除 + 轻量后台清理）、maxmemory（简化的估算 + 近似淘汰）、最小事务子集（`MULTI/EXEC/DISCARD`）、自定义协议（Custom Protocol v1：length-prefixed request + NDJSON reply；协议错误尽量可恢复）、`INFO/STATS/MEMORY STATS` 可观测性
+- **包含（In scope）**：单机内存版数据结构、基础命令子集、TTL（惰性删除 + 轻量后台清理）、maxmemory（简化的估算 + 近似淘汰）、最小事务子集（`MULTI/EXEC/DISCARD`）、Redis RESP 兼容协议入口（RESP2 默认，`HELLO 3` 基础 RESP3 协商）、`INFO/STATS/MEMORY STATS` 可观测性
 - **不包含（Out of scope）**：AOF/RDB 持久化、复制/集群、Lua、ACL/TLS、PubSub/订阅模式、完整的模块化运维能力
 
 ## 环境
@@ -53,7 +53,7 @@ mvn -DskipTests package
 - 项目定位：这个项目想解决什么问题，不想解决什么问题
 - 请求执行链：一条请求从 Netty 收包到 DB 读写、回包写出是怎么流动的
 - 主链源码导读：把启动、协议适配、执行器、命令分发和 `SET` 写路径按类和方法串起来
-- 协议细节：`Custom Protocol v1` 的 frame、request schema、reply envelope、tagged value 和 resync 逻辑
+- 协议细节：RESP 请求/回包、inline command、`HELLO 3` 协商、协议上限和错误断连策略
 - 命令与数据模型：命令家族怎么注册、逻辑类型和内部编码怎么对应、HLL 为什么复用 string
 - DB 内核：`YierdisDb`、key lifecycle、mutation executor、memory ledger、TTL、maxmemory 在单 DB 内部如何协作
 - 执行器与背压：入队、预算、GLOBAL/FAIR 调度、drain loop、autoRead 控制和 global recovery 怎么配合
@@ -75,11 +75,11 @@ mvn -DskipTests package
 
 本项目内部模块做过一次“边界收敛”，目的是让依赖方向更清晰（执行契约在 `yierdis-server-api`，协议模型专注协议，组装在 `yierdis-server-main`）：
 
-- **执行契约（`ExecutionRequest` / `ExecutionRecord` / `ReplyWriter` / session contracts）**：统一由 `yierdis-server-api` 拥有（包名为 `yier.bubu.redis.execution.api.*`），不放在 Custom Protocol v1 wire 模块；旧的 `Command` 仅保留为兼容/废弃类型。
+- **执行契约（`ExecutionRequest` / `ExecutionRecord` / `ReplyWriter` / session contracts）**：统一由 `yierdis-server-api` 拥有（包名为 `yier.bubu.redis.execution.api.*`），不放在协议模块；旧的 `Command` 仅保留为兼容/废弃类型。
 - **存储能力契约（`DbEngine` / `DbReads` / `DbWrites` / `MemoryOps` / maxmemory hooks）**：统一由 `yierdis-db-api` 拥有；包名为 `yier.bubu.redis.storage.api.*` 和 `yier.bubu.redis.storage.api.result.*`。需要这些 storage contract 的模块应直接依赖 `yierdis-db-api`。
 - **运行时契约（`YierdisInstanceConfig` / `YierdisChangeEvent` / `YierdisChangeSink`）**：统一由 `yierdis-server-runtime-api` 拥有；包名为 `yier.bubu.redis.runtime.api.*`。需要这些 runtime contract 的模块应直接依赖 `yierdis-server-runtime-api`。
-- **协议模型（limits/reply tooling/client/parser model）**：位于 `yierdis-networking-custom-v1`（包名为 `yier.bubu.redis.protocol.custom.v1.wire.*`）；其中 `ReplyValue` 仅用于协议侧客户端/工具/解析器与编码辅助，server 命令写回语义仍以 `ReplyWriter` 为单一事实来源，server command execution write-back still uses ReplyWriter.
-- **协议请求适配**：`CustomProtocolV1Request` 由 `yierdis-networking-custom-v1-execution` 适配为 `ExecutionRequest`；Netty handler glue 位于 `yierdis-networking-netty`；`yierdis-server-main` 只做应用组装。
+- **协议模型（limits/reply tooling/client/parser model）**：位于 `yierdis-networking-resp`（包名为 `yier.bubu.redis.protocol.resp.*`）；client codec 与 reply writer 都在这个 Netty-free 模块中，server 命令写回语义仍以 `ReplyWriter` 为单一事实来源。
+- **协议请求适配**：`RespExecutionAdapter` 把 `RespCommandRequest` 适配为 `ExecutionRequest`；`RespRequestDecoder` / `RespCommandAdapter` / `RespProtocolErrorReplyHandler` 位于 `yierdis-networking-netty`；`yierdis-server-main` 只做应用组装。
 - **事务回放 / 变更事件**：连接级事务重放与 `YierdisChangeEvent` 都应复用 `ExecutionRecord` 快照，而不是重新引入新的 argv 容器或 server-local `Command` 包装。
 - **command-api/core/builtin 默认装配**：`yierdis-command-api` 暴露命令 SPI，`yierdis-command-core` 持有 registry/processor/transaction replay，`yierdis-command-builtin` 提供传输无关默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server-main`，而 `PING/ECHO/COMMAND/SELECT/QUIT/FLUSHDB` 这类传输无关或 DB 生命周期命令由 defaults 模块提供并在应用组合根注入。
 - **CLI 输入解析**：`InlineCommandParser` 位于 `yierdis-cli`（`yier.bubu.redis.app.client.InlineCommandParser`）。
@@ -96,7 +96,16 @@ mvn -q -DskipTests package
 java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 6378
 ```
 
-然后使用项目内置 CLI 连接（默认 `127.0.0.1:6378`）：
+然后可以直接用 `redis-cli` 连接：
+
+```bash
+redis-cli -p 6378 PING
+redis-cli -p 6378 SET a 1
+redis-cli -p 6378 GET a
+redis-cli -p 6378 HELLO 3
+```
+
+也可以使用项目内置 CLI（默认 `127.0.0.1:6378`）：
 
 ```bash
 java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar PING
@@ -107,17 +116,17 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar INFO yierdis
 java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar STATS
 ```
 
-也可以用 `nc` 直接发送一帧（示例：PING）：
+也可以用 `nc` 直接发送 RESP frame（示例：`GET a`）：
 
 ```bash
-printf '24:{"cmd":"PING","args":[]}\n' | nc 127.0.0.1 6378
+printf '*2\r\n$3\r\nGET\r\n$1\r\na\r\n' | nc 127.0.0.1 6378
 ```
 
 说明：
 
-- `len` 是 JSON payload 的 UTF-8 字节长度；其他命令需要按 payload 实际字节数计算。
-- 服务端返回 NDJSON：每个 reply 一行 JSON（以 `\n` 结尾）。
-- 对外仅支持 Custom Protocol v1（不兼容 Redis 原生协议与其生态客户端）。
+- RESP2 是默认返回格式；`HELLO 3` 后同一连接会切到 RESP3 基础回包。
+- malformed RESP 会先写协议错误，再关闭连接，避免请求/回包错位。
+- 命令语义是 Redis 风格最小子集，并不承诺完整 Redis 生态兼容。
 
 ## 客户端（CLI）
 
@@ -138,14 +147,12 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 - `--host <host>`
 - `--port <port>`
 - `--timeoutMillis <ms>`
-- `--hex`（raw JSON reply line 以 hex 输出）
+- `--hex`（bulk string 中非 UTF-8 bytes 以 hex 输出）
 
 说明：
 
-- client/CLI 使用 Custom Protocol v1：
-  - request：`<len>:<json>\n`，payload 形如 `{"cmd":"PING","args":["a","1"]}`
-  - reply：NDJSON（一行一个 JSON 对象）
-- CLI 默认打印服务端返回的 JSON 单行文本；`--hex` 仅改变展示方式（不改变协议）。
+- client/CLI 使用 RESP；单次执行和 REPL 都走真实 TCP。
+- CLI 默认按 Redis 风格打印响应；`--hex` 仅改变 bulk string 中非 UTF-8 bytes 的展示方式（不改变协议）。
 - REPL 输入解析规则保持 sdssplitargs 风格（支持单/双引号、反斜杠转义、`\\xHH` 十六进制转义）。
 
 ## 已实现命令（简化版）
@@ -154,7 +161,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 
 - `PING [message]`
 - `ECHO <message>`
-- `HELLO [ignored]`（信息型命令：返回 server/version/proto/mode/role；不进行协议协商）
+- `HELLO [2|3] [SETNAME name]`（返回 server/version/proto/mode/role；协商当前连接的 RESP version）
 - `COMMAND`（最小子集：`COMMAND`/`COMMAND COUNT`/`COMMAND INFO <name ...>`）
 - `INFO [section]`
 - `STATS`
@@ -253,7 +260,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 
 - 这是一个 **单机内存版** 实现：不包含 AOF/RDB 持久化、复制、集群、Lua、ACL、TLS 等复杂功能。
 - 事务仅支持最小子集：`MULTI/EXEC/DISCARD`（不包含 WATCH 等）。
-- 协议层为 Custom Protocol v1（length-prefixed JSON request + NDJSON reply）；协议错误尽量可恢复（返回 error 并尝试读取下一帧；在安全上限触达时可能断连）。
+- 协议层为 Redis RESP；RESP2 是默认目标，RESP3 可通过 `HELLO 3` 基础协商。协议错误会返回错误并关闭连接。
 - TTL 采用“访问时惰性删除”，并带一个轻量级后台清理任务（可关）。
 
 ## 内存管理（maxmemory / 淘汰，简化实现）
