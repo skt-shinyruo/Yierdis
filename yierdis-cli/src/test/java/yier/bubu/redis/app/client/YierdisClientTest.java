@@ -14,23 +14,18 @@ import io.netty.util.ReferenceCountUtil;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
-import yier.bubu.redis.protocol.custom.v1.json.JsonArray;
-import yier.bubu.redis.protocol.custom.v1.json.JsonLimits;
-import yier.bubu.redis.protocol.custom.v1.json.JsonLong;
-import yier.bubu.redis.protocol.custom.v1.json.JsonNull;
-import yier.bubu.redis.protocol.custom.v1.json.JsonObject;
-import yier.bubu.redis.protocol.custom.v1.json.JsonParser;
-import yier.bubu.redis.protocol.custom.v1.json.JsonString;
-import yier.bubu.redis.protocol.custom.v1.json.JsonValue;
 
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -38,136 +33,111 @@ import java.util.concurrent.TimeUnit;
 
 public class YierdisClientTest {
     @Test
-    public void pingWorks() throws Exception {
-        try (TestServer server = TestServer.start()) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                YierdisClient.JsonReply reply = client.execute(Arrays.asList(b("PING")), 1000);
-                Assert.assertTrue(ok(reply.envelope()));
-                Assert.assertEquals("PONG", stringResult(reply.envelope()));
-            }
+    public void pingReturnsSimpleStringPongOverResp() throws Exception {
+        try (TestServer server = TestServer.start();
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            YierdisClient.RespReply reply = client.executeUtf8(List.of("PING"), 1000);
+            Assert.assertEquals(YierdisClient.RespReply.Kind.SIMPLE_STRING, reply.kind());
+            Assert.assertEquals("PONG", reply.text());
         }
     }
 
     @Test
-    public void helloReturnsObjectAndNullIsDecoded() throws Exception {
-        try (TestServer server = TestServer.start()) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                YierdisClient.JsonReply reply = client.execute(Arrays.asList(b("HELLO"), b("3")), 1000);
-                Assert.assertTrue(ok(reply.envelope()));
-                JsonObject result = objectResult(reply.envelope());
-                Assert.assertEquals("yierdis", stringField(result, "server"));
-                Assert.assertNotNull(stringField(result, "version"));
-                Assert.assertEquals(1L, longField(result, "proto"));
-                Assert.assertEquals("standalone", stringField(result, "mode"));
-                Assert.assertEquals("master", stringField(result, "role"));
+    public void helloReturnsMapAndNullIsDecoded() throws Exception {
+        try (TestServer server = TestServer.start();
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            Map<String, YierdisClient.RespReply> hello = replyMap(client.execute(Arrays.asList(b("HELLO")), 1000));
+            Assert.assertEquals("yierdis", stringField(hello, "server"));
+            Assert.assertNotNull(stringField(hello, "version"));
+            Assert.assertEquals(2L, longField(hello, "proto"));
+            Assert.assertEquals("standalone", stringField(hello, "mode"));
+            Assert.assertEquals("master", stringField(hello, "role"));
 
-                YierdisClient.JsonReply missing = client.execute(Arrays.asList(b("GET"), b("missing")), 1000);
-                Assert.assertTrue(ok(missing.envelope()));
-                JsonValue v = resultValue(missing.envelope());
-                Assert.assertTrue(v == null || v instanceof JsonNull);
-            }
+            YierdisClient.RespReply missing = client.execute(Arrays.asList(b("GET"), b("missing")), 1000);
+            Assert.assertTrue(missing.isNull());
         }
     }
 
     @Test
     public void infoAndStatsCommandsExposeServerObservabilityOverTcp() throws Exception {
-        try (TestServer server = TestServer.start()) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                YierdisClient.JsonReply info = client.execute(Arrays.asList(b("INFO")), 1000);
-                Assert.assertTrue(ok(info.envelope()));
-                String infoText = stringResult(info.envelope());
-                Assert.assertTrue(infoText.contains("# Server\r\n"));
-                Assert.assertTrue(infoText.contains("redis_version:"));
-                Assert.assertTrue(infoText.contains("# Stats\r\n"));
-                Assert.assertTrue(infoText.contains("yierdis_queued_tasks:"));
+        try (TestServer server = TestServer.start();
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            String infoText = stringResult(client.execute(Arrays.asList(b("INFO")), 1000));
+            Assert.assertTrue(infoText.contains("# Server\r\n"));
+            Assert.assertTrue(infoText.contains("redis_version:"));
+            Assert.assertTrue(infoText.contains("# Stats\r\n"));
+            Assert.assertTrue(infoText.contains("yierdis_queued_tasks:"));
 
-                YierdisClient.JsonReply stats = client.execute(Arrays.asList(b("STATS")), 1000);
-                Assert.assertTrue(ok(stats.envelope()));
-                JsonObject statsObject = objectResult(stats.envelope());
-                Assert.assertTrue(longField(statsObject, "queued_tasks") >= 0);
-                Assert.assertTrue(longField(statsObject, "commands_executed_total") >= 0);
-                Assert.assertTrue(longField(statsObject, "conn_commands_enqueued") >= 0);
-                Assert.assertTrue(longField(statsObject, "conn_commands_executed") >= 0);
-            }
+            Map<String, YierdisClient.RespReply> stats = replyMap(client.execute(Arrays.asList(b("STATS")), 1000));
+            Assert.assertTrue(longField(stats, "queued_tasks") >= 0);
+            Assert.assertTrue(longField(stats, "commands_executed_total") >= 0);
+            Assert.assertTrue(longField(stats, "conn_commands_enqueued") >= 0);
+            Assert.assertTrue(longField(stats, "conn_commands_executed") >= 0);
         }
     }
 
     @Test
     public void setGetWorkOverTcpUsingUtf8Strings() throws Exception {
-        try (TestServer server = TestServer.start()) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                YierdisClient.JsonReply set = client.execute(Arrays.asList(b("SET"), b("k"), b("v")), 1000);
-                Assert.assertTrue(ok(set.envelope()));
-                Assert.assertEquals("OK", stringResult(set.envelope()));
-
-                YierdisClient.JsonReply get = client.execute(Arrays.asList(b("GET"), b("k")), 1000);
-                Assert.assertTrue(ok(get.envelope()));
-                Assert.assertEquals("v", stringResult(get.envelope()));
-            }
+        try (TestServer server = TestServer.start();
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            Assert.assertEquals("OK", stringResult(client.execute(Arrays.asList(b("SET"), b("k"), b("v")), 1000)));
+            Assert.assertEquals("v", stringResult(client.execute(Arrays.asList(b("GET"), b("k")), 1000)));
         }
     }
 
     @Test
-    public void rawByteExecuteNormalizesMalformedUtf8ArgsBeforeSending() throws Exception {
-        try (TestServer server = TestServer.start()) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                YierdisClient.JsonReply reply = client.execute(Arrays.asList(b("ECHO"), new byte[]{(byte) 0xFF}), 1000);
+    public void rawByteExecutePreservesBinaryArgsOverResp() throws Exception {
+        try (TestServer server = TestServer.start();
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            YierdisClient.RespReply reply = client.execute(Arrays.asList(b("ECHO"), new byte[]{(byte) 0xFF}), 1000);
 
-                Assert.assertTrue(ok(reply.envelope()));
-                Assert.assertEquals("\uFFFD", stringResult(reply.envelope()));
-            }
+            Assert.assertArrayEquals(new byte[]{(byte) 0xFF}, bulkBytes(reply));
         }
     }
 
     @Test
-    public void unknownCommandReturnsCommandErrorEnvelope() throws Exception {
-        try (TestServer server = TestServer.start()) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                YierdisClient.JsonReply reply = client.execute(Arrays.asList(b("NOPE")), 1000);
-                Assert.assertFalse(ok(reply.envelope()));
-                JsonObject err = errorObject(reply.envelope());
-                Assert.assertEquals("command", stringField(err, "kind"));
-                Assert.assertTrue(stringField(err, "message").startsWith("ERR unknown command"));
-            }
+    public void unknownCommandReturnsCommandErrorReply() throws Exception {
+        try (TestServer server = TestServer.start();
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            YierdisClient.RespReply reply = client.execute(Arrays.asList(b("NOPE")), 1000);
+
+            Assert.assertEquals(YierdisClient.RespReply.Kind.ERROR, reply.kind());
+            Assert.assertTrue(reply.text().startsWith("ERR unknown command"));
         }
     }
 
     @Test
     public void memoryStatsHasStableKeySet() throws Exception {
-        try (TestServer server = TestServer.start()) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                YierdisClient.JsonReply reply = client.execute(Arrays.asList(b("MEMORY"), b("STATS")), 1000);
-                Assert.assertTrue(ok(reply.envelope()));
-                JsonObject stats = objectResult(reply.envelope());
+        try (TestServer server = TestServer.start();
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            Map<String, YierdisClient.RespReply> stats = replyMap(client.execute(Arrays.asList(b("MEMORY"), b("STATS")), 1000));
 
-                HashSet<String> keys = new HashSet<>(stats.values().keySet());
-                Assert.assertTrue(keys.contains("maxmemory_bytes"));
-                Assert.assertTrue(keys.contains("used_bytes_for_maxmemory"));
-                Assert.assertTrue(keys.contains("effective_used_bytes_for_maxmemory"));
-                Assert.assertTrue(keys.contains("ledger_used_bytes"));
-                Assert.assertTrue(keys.contains("ledger_reserved_bytes"));
-                Assert.assertTrue(keys.contains("offheap_used_bytes"));
-                Assert.assertTrue(keys.contains("offheap_included_in_maxmemory"));
-                Assert.assertTrue(keys.contains("total_estimated_bytes"));
-                Assert.assertTrue(keys.contains("keyspace_rehashing"));
-                Assert.assertTrue(keys.contains("keyspace_table0_capacity"));
-                Assert.assertTrue(keys.contains("expire_rehashing"));
-                Assert.assertTrue(keys.contains("key_count"));
-                Assert.assertTrue(keys.contains("expire_count"));
-            }
+            HashSet<String> keys = new HashSet<>(stats.keySet());
+            Assert.assertTrue(keys.contains("maxmemory_bytes"));
+            Assert.assertTrue(keys.contains("used_bytes_for_maxmemory"));
+            Assert.assertTrue(keys.contains("effective_used_bytes_for_maxmemory"));
+            Assert.assertTrue(keys.contains("ledger_used_bytes"));
+            Assert.assertTrue(keys.contains("ledger_reserved_bytes"));
+            Assert.assertTrue(keys.contains("offheap_used_bytes"));
+            Assert.assertTrue(keys.contains("offheap_included_in_maxmemory"));
+            Assert.assertTrue(keys.contains("total_estimated_bytes"));
+            Assert.assertTrue(keys.contains("keyspace_rehashing"));
+            Assert.assertTrue(keys.contains("keyspace_table0_capacity"));
+            Assert.assertTrue(keys.contains("expire_rehashing"));
+            Assert.assertTrue(keys.contains("key_count"));
+            Assert.assertTrue(keys.contains("expire_count"));
         }
     }
 
     @Test
     public void executeRejectsNonPositiveTimeout() throws Exception {
-        try (TestServer server = TestServer.start()) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                try {
-                    client.execute(Arrays.asList(b("PING")), 0);
-                    Assert.fail("Expected IllegalArgumentException");
-                } catch (IllegalArgumentException e) {
-                    Assert.assertTrue(e.getMessage().contains("timeoutMillis"));
-                }
+        try (TestServer server = TestServer.start();
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            try {
+                client.execute(Arrays.asList(b("PING")), 0);
+                Assert.fail("Expected IllegalArgumentException");
+            } catch (IllegalArgumentException e) {
+                Assert.assertTrue(e.getMessage().contains("timeoutMillis"));
             }
         }
     }
@@ -188,161 +158,128 @@ public class YierdisClientTest {
 
     @Test
     public void timeoutClosesConnectionToPreventResponseDesync() throws Exception {
-        try (BlackholeServer server = BlackholeServer.start()) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                try {
-                    client.execute(Arrays.asList(b("PING")), 100);
-                    Assert.fail("Expected IllegalStateException");
-                } catch (IllegalStateException e) {
-                    Assert.assertTrue(e.getMessage().contains("Timeout waiting for response"));
-                }
+        try (BlackholeServer server = BlackholeServer.start();
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            try {
+                client.execute(Arrays.asList(b("PING")), 100);
+                Assert.fail("Expected IllegalStateException");
+            } catch (IllegalStateException e) {
+                Assert.assertTrue(e.getMessage().contains("Timeout waiting for response"));
+            }
 
-                try {
-                    client.execute(Arrays.asList(b("PING")), 1000);
-                    Assert.fail("Expected IllegalStateException");
-                } catch (IllegalStateException e) {
-                    Assert.assertTrue(e.getMessage().toLowerCase().contains("closed"));
-                }
+            try {
+                client.execute(Arrays.asList(b("PING")), 1000);
+                Assert.fail("Expected IllegalStateException");
+            } catch (IllegalStateException e) {
+                Assert.assertTrue(e.getMessage().toLowerCase().contains("closed"));
             }
         }
     }
 
     @Test
     public void serverCloseWakesExecuteWithoutTimeout() throws Exception {
-        try (CloseOnReadServer server = CloseOnReadServer.start()) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                try {
-                    client.execute(Arrays.asList(b("PING")), 5000);
-                    Assert.fail("Expected IllegalStateException");
-                } catch (IllegalStateException e) {
-                    String msg = String.valueOf(e.getMessage());
-                    Assert.assertFalse(msg.contains("Timeout waiting for response"));
-                    Assert.assertTrue(msg.toLowerCase().contains("closed")
-                            || (e.getCause() != null && String.valueOf(e.getCause().getMessage()).toLowerCase().contains("closed")));
-                }
+        try (CloseOnReadServer server = CloseOnReadServer.start();
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            try {
+                client.execute(Arrays.asList(b("PING")), 5000);
+                Assert.fail("Expected IllegalStateException");
+            } catch (IllegalStateException e) {
+                String msg = String.valueOf(e.getMessage());
+                Assert.assertFalse(msg.contains("Timeout waiting for response"));
+                Assert.assertTrue(msg.toLowerCase().contains("closed")
+                        || (e.getCause() != null && String.valueOf(e.getCause().getMessage()).toLowerCase().contains("closed")));
             }
         }
     }
 
     @Test
-    public void responseQueueOverflowClosesConnection() throws Exception {
-        try (FloodingServer server = FloodingServer.start(256)) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                Assert.assertTrue(server.awaitFlood(1_000));
-                // Give the client a moment to decode/enqueue a few lines.
-                Thread.sleep(50);
+    public void invalidRespReplyClosesConnection() throws Exception {
+        try (FloodingServer server = FloodingServer.start(1);
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            Assert.assertTrue(server.awaitFlood(1_000));
 
-                try {
-                    client.execute(Arrays.asList(b("PING")), 1000);
-                    Assert.fail("Expected IllegalStateException");
-                } catch (IllegalStateException e) {
-                    String m1 = String.valueOf(e.getMessage()).toLowerCase();
-                    String m2 = e.getCause() == null ? "" : String.valueOf(e.getCause().getMessage()).toLowerCase();
-                    Assert.assertTrue(m1.contains("overflow") || m2.contains("overflow"));
-                }
+            try {
+                client.execute(Arrays.asList(b("PING")), 1000);
+                Assert.fail("Expected IllegalStateException");
+            } catch (IllegalStateException e) {
+                Assert.assertTrue(e.getMessage().contains("Invalid RESP reply"));
+            }
+
+            try {
+                client.execute(Arrays.asList(b("PING")), 1000);
+                Assert.fail("Expected IllegalStateException");
+            } catch (IllegalStateException e) {
+                Assert.assertTrue(e.getMessage().toLowerCase().contains("closed"));
             }
         }
     }
 
     @Test
-    public void jsonReplyLineAccessorReturnsDefensiveCopy() throws Exception {
-        try (TestServer server = TestServer.start()) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                YierdisClient.JsonReply reply = client.execute(Arrays.asList(b("PING")), 1000);
-                String original = reply.lineUtf8();
+    public void respReplyBulkBytesAccessorReturnsDefensiveCopy() throws Exception {
+        try (TestServer server = TestServer.start();
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            YierdisClient.RespReply reply = client.execute(Arrays.asList(b("ECHO"), b("original")), 1000);
 
-                byte[] line = reply.line();
-                line[0] = 'x';
+            byte[] bytes = reply.bytes();
+            bytes[0] = 'x';
 
-                Assert.assertEquals(original, reply.lineUtf8());
-            }
+            Assert.assertEquals("original", stringResult(reply));
         }
     }
 
     @Test
-    public void decodeResultMapStringKeysReturnsLivePlainObjectValuesForClientCompatibility() {
-        byte[] line = "{\"ok\":true,\"result\":{\"outer\":{\"x\":1}}}".getBytes(StandardCharsets.UTF_8);
-        JsonValue envelope = JsonParser.parseStrictUtf8(line, 0, line.length, JsonLimits.DEFAULT);
+    public void respReplyPublicConstructorDefensivelyCopiesBytesAndValues() {
+        byte[] bytes = b("scalar");
+        YierdisClient.RespReply bulk = new YierdisClient.RespReply(
+                YierdisClient.RespReply.Kind.BULK_STRING, null, bytes, null, null
+        );
+        bytes[0] = 'x';
+        Assert.assertEquals("scalar", stringResult(bulk));
 
-        Map<String, JsonValue> result = CustomProtocolV1Replies.decodeResultMapStringKeys(envelope);
-        JsonObject resultObject = (JsonObject) CustomProtocolV1Replies.resultValue(envelope);
-
-        Assert.assertSame(resultObject.values(), result);
-        result.put("evil", new JsonLong(2));
-        ((JsonObject) result.get("outer")).values().put("y", new JsonLong(2));
-
-        Assert.assertEquals(new JsonLong(2), resultObject.values().get("evil"));
-        Assert.assertEquals(new JsonLong(2), ((JsonObject) resultObject.values().get("outer")).values().get("y"));
+        ArrayList<YierdisClient.RespReply> values = new ArrayList<>();
+        values.add(new YierdisClient.RespReply(YierdisClient.RespReply.Kind.INTEGER, null, null, 1L, null));
+        YierdisClient.RespReply array = new YierdisClient.RespReply(
+                YierdisClient.RespReply.Kind.ARRAY, null, null, null, values
+        );
+        values.clear();
+        Assert.assertEquals(1, array.values().size());
     }
 
-    @Test
-    public void decodeResultMapStringKeysReturnsMutableDecodedTaggedMapValuesForClientCompatibility() {
-        byte[] line = "{\"ok\":true,\"result\":{\"$map\":[[\"outer\",{\"items\":[1]}]]}}".getBytes(StandardCharsets.UTF_8);
-        JsonValue envelope = JsonParser.parseStrictUtf8(line, 0, line.length, JsonLimits.DEFAULT);
-
-        Map<String, JsonValue> result = CustomProtocolV1Replies.decodeResultMapStringKeys(envelope);
-        JsonObject outer = (JsonObject) result.get("outer");
-        JsonArray items = (JsonArray) outer.values().get("items");
-
-        result.put("evil", new JsonLong(2));
-        items.values().add(new JsonLong(2));
-
-        Assert.assertEquals(new JsonLong(2), result.get("evil"));
-        Assert.assertEquals(2, items.values().size());
-        Assert.assertEquals(new JsonLong(2), items.values().get(1));
+    private static Map<String, YierdisClient.RespReply> replyMap(YierdisClient.RespReply reply) {
+        Assert.assertEquals(YierdisClient.RespReply.Kind.ARRAY, reply.kind());
+        List<YierdisClient.RespReply> values = reply.values();
+        Assert.assertNotNull(values);
+        Assert.assertEquals("expected even RESP2 map array length", 0, values.size() % 2);
+        Map<String, YierdisClient.RespReply> map = new LinkedHashMap<>();
+        for (int i = 0; i < values.size(); i += 2) {
+            map.put(stringResult(values.get(i)), values.get(i + 1));
+        }
+        return map;
     }
 
-    @Test
-    public void jsonReplyPublicConstructorAcceptsNonObjectEnvelopeForCompatibility() {
-        byte[] line = "scalar".getBytes(StandardCharsets.UTF_8);
-        JsonValue envelope = new JsonString("not-an-object");
-
-        YierdisClient.JsonReply reply = new YierdisClient.JsonReply(line, envelope);
-
-        Assert.assertSame(envelope, reply.envelope());
-        Assert.assertEquals("scalar", reply.lineUtf8());
+    private static String stringField(Map<String, YierdisClient.RespReply> map, String key) {
+        return stringResult(map.get(key));
     }
 
-    private static boolean ok(JsonValue envelope) {
-        return CustomProtocolV1Replies.isOkEnvelope(envelope);
+    private static long longField(Map<String, YierdisClient.RespReply> map, String key) {
+        YierdisClient.RespReply value = map.get(key);
+        Assert.assertNotNull("expected integer field: " + key, value);
+        Assert.assertEquals("expected integer field: " + key, YierdisClient.RespReply.Kind.INTEGER, value.kind());
+        return value.integer();
     }
 
-    private static JsonValue resultValue(JsonValue envelope) {
-        return CustomProtocolV1Replies.resultValue(envelope);
+    private static String stringResult(YierdisClient.RespReply reply) {
+        Assert.assertNotNull(reply);
+        if (reply.kind() == YierdisClient.RespReply.Kind.SIMPLE_STRING) {
+            return reply.text();
+        }
+        return new String(bulkBytes(reply), StandardCharsets.UTF_8);
     }
 
-    private static String stringResult(JsonValue envelope) {
-        JsonValue v = resultValue(envelope);
-        Assert.assertTrue(v instanceof JsonString);
-        return ((JsonString) v).value();
-    }
-
-    private static JsonObject objectResult(JsonValue envelope) {
-        return new JsonObject(CustomProtocolV1Replies.decodeResultMapStringKeys(envelope));
-    }
-
-    private static JsonObject errorObject(JsonValue envelope) {
-        return CustomProtocolV1Replies.errorObject(envelope);
-    }
-
-    private static JsonObject envelopeObject(JsonValue envelope) {
-        return CustomProtocolV1Replies.envelopeObject(envelope);
-    }
-
-    private static String stringField(JsonObject obj, String key) {
-        Assert.assertNotNull(obj);
-        Map<String, JsonValue> map = obj.values();
-        JsonValue v = map.get(key);
-        Assert.assertTrue("expected string field: " + key, v instanceof JsonString);
-        return ((JsonString) v).value();
-    }
-
-    private static long longField(JsonObject obj, String key) {
-        Assert.assertNotNull(obj);
-        Map<String, JsonValue> map = obj.values();
-        JsonValue v = map.get(key);
-        Assert.assertTrue("expected long field: " + key, v instanceof JsonLong);
-        return ((JsonLong) v).value();
+    private static byte[] bulkBytes(YierdisClient.RespReply reply) {
+        Assert.assertNotNull(reply);
+        Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, reply.kind());
+        return reply.bytes();
     }
 
     private static byte[] b(String s) {
@@ -545,7 +482,7 @@ public class YierdisClientTest {
     }
 
     /**
-     * A server that floods JSON reply lines on connect, used to trigger client response queue overflow.
+     * A server that sends invalid RESP on connect, used to verify malformed replies close the client.
      */
     private static final class FloodingServer implements AutoCloseable {
         private final EventLoopGroup boss;
@@ -574,9 +511,9 @@ public class YierdisClientTest {
                             ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
                                 @Override
                                 public void channelActive(ChannelHandlerContext ctx) {
-                                    byte[] ok = "{\"ok\":true,\"result\":\"OK\"}\n".getBytes(StandardCharsets.US_ASCII);
+                                    byte[] invalid = "{not-resp}\n".getBytes(StandardCharsets.US_ASCII);
                                     for (int i = 0; i < lines; i++) {
-                                        ctx.write(Unpooled.copiedBuffer(ok));
+                                        ctx.write(Unpooled.copiedBuffer(invalid));
                                     }
                                     ctx.flush();
                                     flooded.countDown();

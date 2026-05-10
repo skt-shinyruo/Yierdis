@@ -9,7 +9,7 @@ import java.util.List;
 
 @Command(
         name = "yierdis-cli",
-        description = "Netty-based client and CLI for Yierdis.",
+        description = "RESP client and CLI for Yierdis.",
         sortOptions = false,
         usageHelpAutoWidth = true
 )
@@ -26,7 +26,7 @@ final class YierdisCliArgs {
     @Option(names = "--timeoutMillis", defaultValue = "5000", description = "Command timeout in milliseconds.")
     long timeoutMillis = 5000;
 
-    @Option(names = "--hex", description = "Print the raw JSON reply line as hex bytes.")
+    @Option(names = "--hex", description = "Print bulk string bytes as hex when they are not valid UTF-8.")
     boolean hex;
 
     @Parameters(

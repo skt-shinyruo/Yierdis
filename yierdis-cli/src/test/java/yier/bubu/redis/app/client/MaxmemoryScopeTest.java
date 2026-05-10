@@ -6,14 +6,12 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
-import yier.bubu.redis.protocol.custom.v1.json.JsonLong;
-import yier.bubu.redis.protocol.custom.v1.json.JsonNull;
-import yier.bubu.redis.protocol.custom.v1.json.JsonString;
-import yier.bubu.redis.protocol.custom.v1.json.JsonValue;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public class MaxmemoryScopeTest {
@@ -26,28 +24,27 @@ public class MaxmemoryScopeTest {
                 "--maxmemoryScope", "global",
                 "--maxmemoryPolicy", "allkeys-lru",
                 "--maxmemorySamples", "1000"
-        )) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                ok(client, b("SELECT"), b("1"));
-                ok(client, b("SET"), b("b"), value);
+        );
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            ok(client, b("SELECT"), b("1"));
+            ok(client, b("SET"), b("b"), value);
 
-                ok(client, b("SELECT"), b("0"));
-                ok(client, b("SET"), b("a"), value);
+            ok(client, b("SELECT"), b("0"));
+            ok(client, b("SET"), b("a"), value);
 
-                // 触发全局淘汰：应淘汰最旧的 key（DB1:b），而不是局限于当前 DB。
-                ok(client, b("SET"), b("c"), value);
+            // 触发全局淘汰：应淘汰最旧的 key（DB1:b），而不是局限于当前 DB。
+            ok(client, b("SET"), b("c"), value);
 
-                ok(client, b("SELECT"), b("1"));
-                JsonValue bVal = resultValue(execute(client, b("GET"), b("b")));
+            ok(client, b("SELECT"), b("1"));
+            YierdisClient.RespReply bVal = execute(client, b("GET"), b("b"));
 
-                ok(client, b("SELECT"), b("0"));
-                JsonValue aVal = resultValue(execute(client, b("GET"), b("a")));
-                JsonValue cVal = resultValue(execute(client, b("GET"), b("c")));
+            ok(client, b("SELECT"), b("0"));
+            YierdisClient.RespReply aVal = execute(client, b("GET"), b("a"));
+            YierdisClient.RespReply cVal = execute(client, b("GET"), b("c"));
 
-                Assert.assertTrue(bVal == null || bVal instanceof JsonNull);
-                Assert.assertTrue(aVal instanceof JsonString);
-                Assert.assertTrue(cVal instanceof JsonString);
-            }
+            Assert.assertTrue(bVal.isNull());
+            Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, aVal.kind());
+            Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, cVal.kind());
         }
     }
 
@@ -60,27 +57,26 @@ public class MaxmemoryScopeTest {
                 "--maxmemoryScope", "per-db",
                 "--maxmemoryPolicy", "allkeys-lru",
                 "--maxmemorySamples", "1000"
-        )) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                ok(client, b("SELECT"), b("1"));
-                ok(client, b("SET"), b("b"), value);
+        );
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            ok(client, b("SELECT"), b("1"));
+            ok(client, b("SET"), b("b"), value);
 
-                ok(client, b("SELECT"), b("0"));
-                ok(client, b("SET"), b("a"), value);
+            ok(client, b("SELECT"), b("0"));
+            ok(client, b("SET"), b("a"), value);
 
-                // per-db 模式下，DB0 写入触发淘汰只会影响 DB0，本例应淘汰 a，保留 DB1:b。
-                ok(client, b("SET"), b("c"), value);
+            // per-db 模式下，DB0 写入触发淘汰只会影响 DB0，本例应淘汰 a，保留 DB1:b。
+            ok(client, b("SET"), b("c"), value);
 
-                ok(client, b("SELECT"), b("1"));
-                JsonValue bVal = resultValue(execute(client, b("GET"), b("b")));
-                Assert.assertTrue(bVal instanceof JsonString);
+            ok(client, b("SELECT"), b("1"));
+            YierdisClient.RespReply bVal = execute(client, b("GET"), b("b"));
+            Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, bVal.kind());
 
-                ok(client, b("SELECT"), b("0"));
-                JsonValue aVal = resultValue(execute(client, b("GET"), b("a")));
-                Assert.assertTrue(aVal == null || aVal instanceof JsonNull);
-                JsonValue cVal = resultValue(execute(client, b("GET"), b("c")));
-                Assert.assertTrue(cVal instanceof JsonString);
-            }
+            ok(client, b("SELECT"), b("0"));
+            YierdisClient.RespReply aVal = execute(client, b("GET"), b("a"));
+            Assert.assertTrue(aVal.isNull());
+            YierdisClient.RespReply cVal = execute(client, b("GET"), b("c"));
+            Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, cVal.kind());
         }
     }
 
@@ -114,16 +110,15 @@ public class MaxmemoryScopeTest {
                 "--maxmemoryScope", "global",
                 "--maxmemoryPolicy", "allkeys-lru",
                 "--maxmemorySamples", "1000"
-        )) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                ok(client, b("SELECT"), b("1"));
-                ok(client, b("SET"), b("b"), value);
-                if (includeSecondKey) {
-                    ok(client, b("SELECT"), b("0"));
-                    ok(client, b("SET"), b("a"), value);
-                }
-                return globalUsedBytesForMaxmemory(client);
+        );
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            ok(client, b("SELECT"), b("1"));
+            ok(client, b("SET"), b("b"), value);
+            if (includeSecondKey) {
+                ok(client, b("SELECT"), b("0"));
+                ok(client, b("SET"), b("a"), value);
             }
+            return globalUsedBytesForMaxmemory(client);
         }
     }
 
@@ -134,16 +129,15 @@ public class MaxmemoryScopeTest {
                 "--maxmemoryScope", "per-db",
                 "--maxmemoryPolicy", "allkeys-lru",
                 "--maxmemorySamples", "1000"
-        )) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                ok(client, b("SELECT"), b("1"));
-                ok(client, b("SET"), b("b"), value);
-                if (includeLocalKey) {
-                    ok(client, b("SELECT"), b("0"));
-                    ok(client, b("SET"), b("a"), value);
-                }
-                return memoryStats(client, 0).getOrDefault("used_bytes_for_maxmemory", -1L);
+        );
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            ok(client, b("SELECT"), b("1"));
+            ok(client, b("SET"), b("b"), value);
+            if (includeLocalKey) {
+                ok(client, b("SELECT"), b("0"));
+                ok(client, b("SET"), b("a"), value);
             }
+            return memoryStats(client, 0).getOrDefault("used_bytes_for_maxmemory", -1L);
         }
     }
 
@@ -164,22 +158,21 @@ public class MaxmemoryScopeTest {
                 "--databases", "2",
                 "--maxmemoryScope", "global",
                 "--maxmemoryBytes", "0"
-        )) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                ok(client, b("SELECT"), b("0"));
-                ok(client, b("SET"), b("k"), bytesOfLen(1024, (byte) 'x'));
+        );
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            ok(client, b("SELECT"), b("0"));
+            ok(client, b("SET"), b("k"), bytesOfLen(1024, (byte) 'x'));
 
-                HashMap<String, Long> stats = parseMemoryStats(execute(client, b("MEMORY"), b("STATS")));
-                long used = stats.getOrDefault("used_bytes_for_maxmemory", -1L);
-                long ledgerUsed = stats.getOrDefault("ledger_used_bytes", -1L);
-                long offHeap = stats.getOrDefault("offheap_used_bytes", -1L);
-                long offHeapIncluded = stats.getOrDefault("offheap_included_in_maxmemory", -1L);
+            HashMap<String, Long> stats = parseMemoryStats(execute(client, b("MEMORY"), b("STATS")));
+            long used = stats.getOrDefault("used_bytes_for_maxmemory", -1L);
+            long ledgerUsed = stats.getOrDefault("ledger_used_bytes", -1L);
+            long offHeap = stats.getOrDefault("offheap_used_bytes", -1L);
+            long offHeapIncluded = stats.getOrDefault("offheap_included_in_maxmemory", -1L);
 
-                Assert.assertTrue("offheap_used_bytes should be > 0 under the default FFM memory model", offHeap > 0);
-                Assert.assertEquals("offheap_included_in_maxmemory should be 1 in global mode", 1L, offHeapIncluded);
-                Assert.assertEquals("used_bytes_for_maxmemory should equal ledger_used_bytes + offheap_used_bytes when included",
-                        ledgerUsed + offHeap, used);
-            }
+            Assert.assertTrue("offheap_used_bytes should be > 0 under the default FFM memory model", offHeap > 0);
+            Assert.assertEquals("offheap_included_in_maxmemory should be 1 in global mode", 1L, offHeapIncluded);
+            Assert.assertEquals("used_bytes_for_maxmemory should equal ledger_used_bytes + offheap_used_bytes when included",
+                    ledgerUsed + offHeap, used);
         }
     }
 
@@ -188,42 +181,45 @@ public class MaxmemoryScopeTest {
         return parseMemoryStats(execute(client, b("MEMORY"), b("STATS")));
     }
 
-    private static HashMap<String, Long> parseMemoryStats(JsonValue envelope) {
-        Assert.assertTrue(okEnvelope(envelope));
-        Map<String, JsonValue> values = CustomProtocolV1Replies.decodeResultMapStringKeys(envelope);
-
+    private static HashMap<String, Long> parseMemoryStats(YierdisClient.RespReply reply) {
+        Map<String, YierdisClient.RespReply> values = replyMap(reply);
         HashMap<String, Long> out = new HashMap<>();
-        for (Map.Entry<String, JsonValue> e : values.entrySet()) {
-            JsonValue v = e.getValue();
-            if (v instanceof JsonLong l) {
-                out.put(e.getKey(), l.value());
+        for (Map.Entry<String, YierdisClient.RespReply> e : values.entrySet()) {
+            YierdisClient.RespReply v = e.getValue();
+            if (v.kind() == YierdisClient.RespReply.Kind.INTEGER) {
+                out.put(e.getKey(), v.integer());
             }
         }
         return out;
     }
 
-    private static JsonValue execute(YierdisClient client, byte[]... args) throws Exception {
-        return client.execute(Arrays.asList(args), 2000).envelope();
+    private static YierdisClient.RespReply execute(YierdisClient client, byte[]... args) throws Exception {
+        return client.execute(Arrays.asList(args), 2000);
     }
 
     private static void ok(YierdisClient client, byte[]... args) throws Exception {
-        JsonValue env = execute(client, args);
-        Assert.assertTrue(okEnvelope(env));
-        Assert.assertEquals("OK", stringResult(env));
+        Assert.assertEquals("OK", stringResult(execute(client, args)));
     }
 
-    private static boolean okEnvelope(JsonValue envelope) {
-        return CustomProtocolV1Replies.isOkEnvelope(envelope);
+    private static Map<String, YierdisClient.RespReply> replyMap(YierdisClient.RespReply reply) {
+        Assert.assertEquals(YierdisClient.RespReply.Kind.ARRAY, reply.kind());
+        List<YierdisClient.RespReply> values = reply.values();
+        Assert.assertNotNull(values);
+        Assert.assertEquals(0, values.size() % 2);
+        Map<String, YierdisClient.RespReply> map = new LinkedHashMap<>();
+        for (int i = 0; i < values.size(); i += 2) {
+            map.put(stringResult(values.get(i)), values.get(i + 1));
+        }
+        return map;
     }
 
-    private static JsonValue resultValue(JsonValue envelope) {
-        return CustomProtocolV1Replies.resultValue(envelope);
-    }
-
-    private static String stringResult(JsonValue envelope) {
-        JsonValue v = resultValue(envelope);
-        Assert.assertTrue(v instanceof JsonString);
-        return ((JsonString) v).value();
+    private static String stringResult(YierdisClient.RespReply reply) {
+        Assert.assertNotNull(reply);
+        if (reply.kind() == YierdisClient.RespReply.Kind.SIMPLE_STRING) {
+            return reply.text();
+        }
+        Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, reply.kind());
+        return new String(reply.bytes(), StandardCharsets.UTF_8);
     }
 
     private static byte[] bytesOfLen(int len, byte fill) {

@@ -1,19 +1,18 @@
 package yier.bubu.redis.app.client;
 
-// CLI：提供简易的交互与单次执行，基于自定义协议 v1（request: <len>:<json>\n, reply: NDJSON）。
+// CLI：提供简易的交互与单次执行，使用 Redis RESP 协议。
 
 import picocli.CommandLine;
-import yier.bubu.redis.protocol.custom.v1.wire.ProtocolLimits;
-import yier.bubu.redis.protocol.custom.v1.json.JsonBoolean;
-import yier.bubu.redis.protocol.custom.v1.json.JsonObject;
-import yier.bubu.redis.protocol.custom.v1.json.JsonValue;
+import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 public final class YierdisCli {
     public static void main(String[] args) {
@@ -43,9 +42,9 @@ public final class YierdisCli {
                         .map(s -> s == null ? null : s.getBytes(StandardCharsets.UTF_8))
                         .toList();
 
-                YierdisClient.JsonReply reply = client.execute(commandArgs, parsed.timeoutMillis);
+                YierdisClient.RespReply reply = client.execute(commandArgs, parsed.timeoutMillis);
                 printReply(reply, parsed.hex);
-                return isOk(reply.envelope()) ? 0 : 1;
+                return isSuccess(reply) ? 0 : 1;
             }
 
             return runRepl(client, parsed);
@@ -90,7 +89,7 @@ public final class YierdisCli {
             }
 
             try {
-                YierdisClient.JsonReply reply = client.execute(cmd, config.timeoutMillis);
+                YierdisClient.RespReply reply = client.execute(cmd, config.timeoutMillis);
                 printReply(reply, config.hex);
             } catch (Exception e) {
                 System.err.println("(error) " + e.getMessage());
@@ -98,25 +97,62 @@ public final class YierdisCli {
         }
     }
 
-    private static void printReply(YierdisClient.JsonReply reply, boolean hex) {
-        if (reply == null) {
-            System.out.println("(nil)");
-            return;
-        }
-        if (hex) {
-            System.out.println(toHex(reply.line()));
-            return;
-        }
-        System.out.println(reply.lineUtf8());
+    private static void printReply(YierdisClient.RespReply reply, boolean hex) {
+        printReply(reply, hex, "");
     }
 
-    private static boolean isOk(JsonValue envelope) {
-        if (!(envelope instanceof JsonObject obj)) {
-            return false;
+    private static void printReply(YierdisClient.RespReply reply, boolean hex, String prefix) {
+        if (reply == null || reply.isNull()) {
+            System.out.println(prefix + "(nil)");
+            return;
         }
-        Map<String, JsonValue> map = obj.values();
-        JsonValue ok = map.get("ok");
-        return ok instanceof JsonBoolean b && b.value();
+
+        switch (reply.kind()) {
+            case SIMPLE_STRING -> System.out.println(prefix + reply.text());
+            case ERROR -> System.out.println(prefix + "(error) " + reply.text());
+            case INTEGER -> System.out.println(prefix + reply.integer());
+            case BULK_STRING -> System.out.println(prefix + formatBulk(reply.bytes(), hex));
+            case ARRAY -> printArray(reply, hex, prefix);
+            case NULL -> System.out.println(prefix + "(nil)");
+        }
+    }
+
+    private static void printArray(YierdisClient.RespReply reply, boolean hex, String prefix) {
+        List<YierdisClient.RespReply> values = reply.values();
+        if (values == null) {
+            System.out.println(prefix + "(nil)");
+            return;
+        }
+        for (int i = 0; i < values.size(); i++) {
+            printReply(values.get(i), hex, prefix + (i + 1) + ") ");
+        }
+    }
+
+    private static boolean isSuccess(YierdisClient.RespReply reply) {
+        return reply != null && reply.kind() != YierdisClient.RespReply.Kind.ERROR;
+    }
+
+    private static String formatBulk(byte[] bytes, boolean hex) {
+        if (bytes == null) {
+            return "(nil)";
+        }
+        String utf8 = decodeUtf8(bytes);
+        if (utf8 != null) {
+            return utf8;
+        }
+        return hex ? toHex(bytes) : new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    private static String decodeUtf8(byte[] bytes) {
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes))
+                    .toString();
+        } catch (CharacterCodingException e) {
+            return null;
+        }
     }
 
     private static String toHex(byte[] data) {
@@ -138,7 +174,7 @@ public final class YierdisCli {
 
     private static List<byte[]> parseArgsToUtf8Bytes(String line) {
         // 保持与旧 CLI 一致的解析规则（sdssplitargs 风格）。
-        return InlineCommandParser.splitUtf8(line, ProtocolLimits.DEFAULT_MAX_ARGS);
+        return InlineCommandParser.splitUtf8(line, RespProtocolLimits.DEFAULT_MAX_ARGS);
     }
 
     private YierdisCli() {
