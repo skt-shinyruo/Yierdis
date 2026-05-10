@@ -86,6 +86,11 @@
                 <artifactId>yierdis-networking-netty</artifactId>
                 <version>${project.version}</version>
             </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-networking-resp</artifactId>
+                <version>${project.version}</version>
+            </dependency>
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
