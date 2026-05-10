@@ -5,16 +5,10 @@ package yier.bubu.redis.app.client;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
-import yier.bubu.redis.protocol.custom.v1.json.JsonArray;
-import yier.bubu.redis.protocol.custom.v1.json.JsonNull;
-import yier.bubu.redis.protocol.custom.v1.json.JsonObject;
-import yier.bubu.redis.protocol.custom.v1.json.JsonString;
-import yier.bubu.redis.protocol.custom.v1.json.JsonValue;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 public class TransactionQueueLimitTest {
     @Test
@@ -22,39 +16,37 @@ public class TransactionQueueLimitTest {
         try (TestServer server = TestServer.startWithArgs(
                 "--transactionQueueMaxCommands", "1",
                 "--transactionQueueMaxBytes", "0"
-        )) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                Assert.assertEquals("OK", stringResult(execute(client, b("MULTI"))));
-                Assert.assertEquals("QUEUED", stringResult(execute(client, b("SET"), b("k"), b("v"))));
+        );
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            Assert.assertEquals("OK", stringResult(execute(client, b("MULTI"))));
+            Assert.assertEquals("QUEUED", stringResult(execute(client, b("SET"), b("k"), b("v"))));
 
-                JsonObject queueFull = errorObject(execute(client, b("GET"), b("k")));
-                Assert.assertEquals("ERR Transaction queue is full", stringField(queueFull, "message"));
+            YierdisClient.RespReply queueFull = execute(client, b("GET"), b("k"));
+            Assert.assertEquals("ERR Transaction queue is full", errorText(queueFull));
 
-                JsonObject execAbort = errorObject(execute(client, b("EXEC")));
-                Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", stringField(execAbort, "message"));
+            YierdisClient.RespReply execAbort = execute(client, b("EXEC"));
+            Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", errorText(execAbort));
 
-                JsonValue missing = resultValue(execute(client, b("GET"), b("k")));
-                Assert.assertTrue(missing == null || missing instanceof JsonNull);
+            YierdisClient.RespReply missing = execute(client, b("GET"), b("k"));
+            Assert.assertTrue(missing.isNull());
 
-                // DISCARD 复位路径：超限后 DISCARD 应回到可用状态。
-                Assert.assertEquals("OK", stringResult(execute(client, b("MULTI"))));
-                Assert.assertEquals("QUEUED", stringResult(execute(client, b("SET"), b("x"), b("1"))));
-                JsonObject queueFull2 = errorObject(execute(client, b("GET"), b("x")));
-                Assert.assertEquals("ERR Transaction queue is full", stringField(queueFull2, "message"));
-                Assert.assertEquals("OK", stringResult(execute(client, b("DISCARD"))));
+            // DISCARD 复位路径：超限后 DISCARD 应回到可用状态。
+            Assert.assertEquals("OK", stringResult(execute(client, b("MULTI"))));
+            Assert.assertEquals("QUEUED", stringResult(execute(client, b("SET"), b("x"), b("1"))));
+            YierdisClient.RespReply queueFull2 = execute(client, b("GET"), b("x"));
+            Assert.assertEquals("ERR Transaction queue is full", errorText(queueFull2));
+            Assert.assertEquals("OK", stringResult(execute(client, b("DISCARD"))));
 
-                Assert.assertEquals("OK", stringResult(execute(client, b("MULTI"))));
-                Assert.assertEquals("QUEUED", stringResult(execute(client, b("SET"), b("k"), b("v"))));
-                JsonValue execResult = resultValue(execute(client, b("EXEC")));
-                Assert.assertTrue(execResult instanceof JsonArray);
-                List<JsonValue> values = ((JsonArray) execResult).values();
-                Assert.assertNotNull(values);
-                Assert.assertEquals(1, values.size());
-                Assert.assertTrue(values.get(0) instanceof JsonString);
-                Assert.assertEquals("OK", ((JsonString) values.get(0)).value());
+            Assert.assertEquals("OK", stringResult(execute(client, b("MULTI"))));
+            Assert.assertEquals("QUEUED", stringResult(execute(client, b("SET"), b("k"), b("v"))));
+            YierdisClient.RespReply execResult = execute(client, b("EXEC"));
+            Assert.assertEquals(YierdisClient.RespReply.Kind.ARRAY, execResult.kind());
+            List<YierdisClient.RespReply> values = execResult.values();
+            Assert.assertNotNull(values);
+            Assert.assertEquals(1, values.size());
+            Assert.assertEquals("OK", stringResult(values.get(0)));
 
-                Assert.assertEquals("v", stringResult(execute(client, b("GET"), b("k"))));
-            }
+            Assert.assertEquals("v", stringResult(execute(client, b("GET"), b("k"))));
         }
     }
 
@@ -63,51 +55,37 @@ public class TransactionQueueLimitTest {
         try (TestServer server = TestServer.startWithArgs(
                 "--transactionQueueMaxCommands", "0",
                 "--transactionQueueMaxBytes", "16"
-        )) {
-            try (YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
-                Assert.assertEquals("OK", stringResult(execute(client, b("MULTI"))));
-                byte[] big = new byte[64];
-                Arrays.fill(big, (byte) 'a');
+        );
+             YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
+            Assert.assertEquals("OK", stringResult(execute(client, b("MULTI"))));
+            byte[] big = new byte[64];
+            Arrays.fill(big, (byte) 'a');
 
-                JsonObject queueFull = errorObject(execute(client, b("SET"), b("k"), big));
-                Assert.assertEquals("ERR Transaction queue is full", stringField(queueFull, "message"));
+            YierdisClient.RespReply queueFull = execute(client, b("SET"), b("k"), big);
+            Assert.assertEquals("ERR Transaction queue is full", errorText(queueFull));
 
-                JsonObject execAbort = errorObject(execute(client, b("EXEC")));
-                Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", stringField(execAbort, "message"));
-            }
+            YierdisClient.RespReply execAbort = execute(client, b("EXEC"));
+            Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", errorText(execAbort));
         }
     }
 
-    private static JsonValue execute(YierdisClient client, byte[]... args) throws Exception {
-        return client.execute(Arrays.asList(args), 2000).envelope();
+    private static YierdisClient.RespReply execute(YierdisClient client, byte[]... args) throws Exception {
+        return client.execute(Arrays.asList(args), 2000);
     }
 
-    private static boolean okEnvelope(JsonValue envelope) {
-        return CustomProtocolV1Replies.isOkEnvelope(envelope);
+    private static String stringResult(YierdisClient.RespReply reply) {
+        Assert.assertNotNull(reply);
+        if (reply.kind() == YierdisClient.RespReply.Kind.SIMPLE_STRING) {
+            return reply.text();
+        }
+        Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, reply.kind());
+        return new String(reply.bytes(), StandardCharsets.UTF_8);
     }
 
-    private static JsonValue resultValue(JsonValue envelope) {
-        return CustomProtocolV1Replies.resultValue(envelope);
-    }
-
-    private static String stringResult(JsonValue envelope) {
-        Assert.assertTrue(okEnvelope(envelope));
-        JsonValue v = resultValue(envelope);
-        Assert.assertTrue(v instanceof JsonString);
-        return ((JsonString) v).value();
-    }
-
-    private static JsonObject errorObject(JsonValue envelope) {
-        Assert.assertFalse(okEnvelope(envelope));
-        return CustomProtocolV1Replies.errorObject(envelope);
-    }
-
-    private static String stringField(JsonObject obj, String key) {
-        Assert.assertNotNull(obj);
-        Map<String, JsonValue> map = obj.values();
-        JsonValue v = map.get(key);
-        Assert.assertTrue(v instanceof JsonString);
-        return ((JsonString) v).value();
+    private static String errorText(YierdisClient.RespReply reply) {
+        Assert.assertNotNull(reply);
+        Assert.assertEquals(YierdisClient.RespReply.Kind.ERROR, reply.kind());
+        return reply.text();
     }
 
     private static byte[] b(String s) {

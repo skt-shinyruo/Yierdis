@@ -15,17 +15,12 @@
     <packaging>jar</packaging>
 
     <name>yierdis-cli</name>
-    <description>Netty-based client and CLI for Yierdis.</description>
+    <description>RESP client and CLI for Yierdis.</description>
 
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-networking-custom-v1</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-networking-netty</artifactId>
+            <artifactId>yierdis-networking-resp</artifactId>
         </dependency>
 
         <dependency>
@@ -43,6 +38,7 @@
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-all</artifactId>
+            <scope>test</scope>
         </dependency>
 
         <dependency>
