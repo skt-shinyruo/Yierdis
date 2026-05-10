@@ -41,6 +41,18 @@ public class EngineSessionTest {
     }
 
     @Test
+    public void engineSessionTracksRespProtocolVersion() {
+        EngineSession session = new EngineSession(1, 16);
+
+        Assert.assertEquals(2, session.respVersion());
+
+        session.setRespVersion(3);
+        Assert.assertEquals(3, session.respVersion());
+
+        Assert.assertThrows(IllegalArgumentException.class, () -> session.setRespVersion(4));
+    }
+
+    @Test
     public void transactionRejectsCommandsThatOverflowQueuedBytes() {
         EngineSession session = new EngineSession(4, 5);
         session.transaction().begin();

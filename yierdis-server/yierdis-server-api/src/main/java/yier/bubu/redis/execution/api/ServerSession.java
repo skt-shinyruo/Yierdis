@@ -24,4 +24,12 @@ public interface ServerSession extends Session {
     TransactionState transaction();
 
     ConnectionStatsView connectionStats();
+
+    default int respVersion() {
+        return 2;
+    }
+
+    default void setRespVersion(int respVersion) {
+        // no-op
+    }
 }

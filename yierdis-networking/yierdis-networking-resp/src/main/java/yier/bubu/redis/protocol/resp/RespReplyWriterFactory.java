@@ -3,12 +3,21 @@ package yier.bubu.redis.protocol.resp;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.ReplyWriter;
 import yier.bubu.redis.execution.api.ReplyWriterFactory;
+import yier.bubu.redis.execution.api.ServerSession;
 
 import java.util.Objects;
 
 public final class RespReplyWriterFactory implements ReplyWriterFactory {
     @Override
     public ReplyWriter newWriter(BytesSink out) {
-        return new RespReplyWriter(Objects.requireNonNull(out, "out"), RespProtocolVersion.RESP2);
+        return newWriter(null, out);
+    }
+
+    @Override
+    public ReplyWriter newWriter(ServerSession session, BytesSink out) {
+        RespProtocolVersion version = session == null
+                ? RespProtocolVersion.RESP2
+                : RespProtocolVersion.fromWireValue(session.respVersion());
+        return new RespReplyWriter(Objects.requireNonNull(out, "out"), version);
     }
 }
