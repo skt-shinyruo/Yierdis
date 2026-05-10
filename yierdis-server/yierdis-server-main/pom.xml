@@ -14,7 +14,7 @@
     <packaging>jar</packaging>
 
     <name>yierdis-server-main</name>
-    <description>Yierdis server application composition root (Custom Protocol v1, Netty).</description>
+    <description>Yierdis server application composition root (RESP, Netty).</description>
 
     <dependencies>
         <dependency>
@@ -49,7 +49,7 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-networking-custom-v1-execution</artifactId>
+            <artifactId>yierdis-networking-resp</artifactId>
         </dependency>
 
         <dependency>

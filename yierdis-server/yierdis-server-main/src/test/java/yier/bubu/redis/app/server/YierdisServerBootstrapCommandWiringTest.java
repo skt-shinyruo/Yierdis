@@ -6,25 +6,18 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyWriterFactory;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.execution.executor.SchedulingPolicy;
-import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.protocol.custom.v1.netty.CustomRequestDecoder;
-import yier.bubu.redis.protocol.custom.v1.netty.ProtocolCommandAdapter;
-import yier.bubu.redis.protocol.custom.v1.json.JsonArray;
-import yier.bubu.redis.protocol.custom.v1.json.JsonBoolean;
-import yier.bubu.redis.protocol.custom.v1.json.JsonLimits;
-import yier.bubu.redis.protocol.custom.v1.json.JsonLong;
-import yier.bubu.redis.protocol.custom.v1.json.JsonObject;
-import yier.bubu.redis.protocol.custom.v1.json.JsonParser;
-import yier.bubu.redis.protocol.custom.v1.json.JsonString;
-import yier.bubu.redis.protocol.custom.v1.json.JsonValue;
-import yier.bubu.redis.protocol.custom.v1.execution.JsonLineReplyWriterFactory;
-import yier.bubu.redis.runtime.embedded.YierdisInstance;
+import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
+import yier.bubu.redis.protocol.resp.netty.RespCommandAdapter;
+import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
+import yier.bubu.redis.runtime.embedded.YierdisInstance;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -34,7 +27,9 @@ import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -59,65 +54,42 @@ public class YierdisServerBootstrapCommandWiringTest {
                 OutputStream out = socket.getOutputStream();
                 InputStream in = socket.getInputStream();
 
-                JsonObject hello = roundTrip(out, in, "{\"cmd\":\"HELLO\",\"args\":[]}");
-                Assert.assertTrue(booleanField(hello, "ok"));
-                JsonObject helloResult = objectField(hello, "result");
-                Assert.assertEquals("yierdis", stringValue(mapValue(helloResult, "server")));
-                Assert.assertEquals(1L, longValue(mapValue(helloResult, "proto")));
+                Map<String, Object> hello = respMap(roundTrip(out, in, "HELLO"));
+                Assert.assertEquals("yierdis", asString(hello.get("server")));
+                Assert.assertTrue(hello.containsKey("proto"));
 
-                JsonObject info = roundTrip(out, in, "{\"cmd\":\"INFO\",\"args\":[\"yierdis\"]}");
-                Assert.assertTrue(booleanField(info, "ok"));
-                JsonObject infoResult = objectField(info, "result");
-                Assert.assertEquals("yierdis", stringValue(mapValue(infoResult, "server")));
-                Assert.assertTrue("expected structured INFO fields", mapContainsKey(infoResult, "executor_policy"));
+                Map<String, Object> info = respMap(roundTrip(out, in, "INFO", "yierdis"));
+                Assert.assertEquals("yierdis", asString(info.get("server")));
+                Assert.assertTrue("expected structured INFO fields", info.containsKey("executor_policy"));
 
-                JsonObject stats = roundTrip(out, in, "{\"cmd\":\"STATS\",\"args\":[]}");
-                Assert.assertTrue(booleanField(stats, "ok"));
-                JsonObject statsResult = objectField(stats, "result");
-                Assert.assertTrue(mapContainsKey(statsResult, "queued_tasks"));
-                Assert.assertTrue(mapContainsKey(statsResult, "commands_executed_total"));
-                Assert.assertTrue(mapContainsKey(statsResult, "conn_commands_enqueued"));
-                Assert.assertTrue(mapContainsKey(statsResult, "conn_commands_executed"));
-                Assert.assertTrue(longValue(mapValue(statsResult, "conn_commands_enqueued")) > 0L);
-                Assert.assertTrue(longValue(mapValue(statsResult, "conn_commands_executed")) > 0L);
+                Map<String, Object> stats = respMap(roundTrip(out, in, "STATS"));
+                Assert.assertTrue(stats.containsKey("queued_tasks"));
+                Assert.assertTrue(stats.containsKey("commands_executed_total"));
+                Assert.assertTrue(stats.containsKey("conn_commands_enqueued"));
+                Assert.assertTrue(stats.containsKey("conn_commands_executed"));
+                Assert.assertTrue(asLong(stats.get("conn_commands_enqueued")) > 0L);
+                Assert.assertTrue(asLong(stats.get("conn_commands_executed")) > 0L);
                 Assert.assertTrue(
                         "expected STATS to expose non-zero submit totals after accepted commands",
-                        longValue(mapValue(statsResult, "submit_accepted_total")) > 0L
+                        asLong(stats.get("submit_accepted_total")) > 0L
                 );
 
-                JsonObject command = roundTrip(out, in, "{\"cmd\":\"COMMAND\",\"args\":[\"INFO\",\"HELLO\",\"INFO\",\"STATS\"]}");
-                Assert.assertTrue(booleanField(command, "ok"));
-                JsonArray commandResult = arrayField(command, "result");
-                Assert.assertEquals(3, commandResult.values().size());
-                assertCommandInfo(commandResult.values().get(0), "hello", -1L, 0L, 0L, 0L);
-                assertCommandInfo(commandResult.values().get(1), "info", -1L, 0L, 0L, 0L);
-                assertCommandInfo(commandResult.values().get(2), "stats", 1L, 0L, 0L, 0L);
+                List<Object> command = respArray(roundTrip(out, in, "COMMAND", "INFO", "HELLO", "INFO", "STATS"));
+                Assert.assertEquals(3, command.size());
+                assertCommandInfo(command.get(0), "hello", -1L, 0L, 0L, 0L);
+                assertCommandInfo(command.get(1), "info", -1L, 0L, 0L, 0L);
+                assertCommandInfo(command.get(2), "stats", 1L, 0L, 0L, 0L);
 
-                JsonObject select = roundTrip(out, in, "{\"cmd\":\"SELECT\",\"args\":[\"1\"]}");
-                Assert.assertTrue(booleanField(select, "ok"));
-                Assert.assertEquals("OK", stringField(select, "result"));
+                Assert.assertEquals("OK", asString(roundTrip(out, in, "SELECT", "1")));
+                Assert.assertEquals("OK", asString(roundTrip(out, in, "SET", "k1", "v1")));
 
-                JsonObject setDb1 = roundTrip(out, in, "{\"cmd\":\"SET\",\"args\":[\"k1\",\"v1\"]}");
-                Assert.assertTrue(booleanField(setDb1, "ok"));
-                Assert.assertEquals("OK", stringField(setDb1, "result"));
+                Assert.assertEquals("OK", asString(roundTrip(out, in, "SELECT", "0")));
+                Assert.assertEquals("OK", asString(roundTrip(out, in, "SET", "k0", "v0")));
+                Assert.assertEquals(1L, asLong(roundTrip(out, in, "EXPIRE", "k0", "60")));
 
-                JsonObject selectDb0 = roundTrip(out, in, "{\"cmd\":\"SELECT\",\"args\":[\"0\"]}");
-                Assert.assertTrue(booleanField(selectDb0, "ok"));
-                Assert.assertEquals("OK", stringField(selectDb0, "result"));
-
-                JsonObject setDb0 = roundTrip(out, in, "{\"cmd\":\"SET\",\"args\":[\"k0\",\"v0\"]}");
-                Assert.assertTrue(booleanField(setDb0, "ok"));
-                Assert.assertEquals("OK", stringField(setDb0, "result"));
-
-                JsonObject expireDb0 = roundTrip(out, in, "{\"cmd\":\"EXPIRE\",\"args\":[\"k0\",\"60\"]}");
-                Assert.assertTrue(booleanField(expireDb0, "ok"));
-                Assert.assertEquals(1L, longField(expireDb0, "result"));
-
-                JsonObject keyspace = roundTrip(out, in, "{\"cmd\":\"INFO\",\"args\":[\"keyspace\"]}");
-                Assert.assertTrue(booleanField(keyspace, "ok"));
-                String keyspaceSection = stringField(keyspace, "result");
-                Assert.assertTrue(keyspaceSection.contains("db0:keys=1,expires=1\r\n"));
-                Assert.assertTrue(keyspaceSection.contains("db1:keys=1,expires=0\r\n"));
+                String keyspace = asString(roundTrip(out, in, "INFO", "keyspace"));
+                Assert.assertTrue(keyspace.contains("db0:keys=1,expires=1\r\n"));
+                Assert.assertTrue(keyspace.contains("db1:keys=1,expires=0\r\n"));
             }
         }
     }
@@ -132,21 +104,12 @@ public class YierdisServerBootstrapCommandWiringTest {
                 OutputStream out = socket.getOutputStream();
                 InputStream in = socket.getInputStream();
 
-                JsonObject hello = roundTrip(out, in, "{\"cmd\":\"HELLO\",\"args\":[]}");
-                Assert.assertTrue(booleanField(hello, "ok"));
+                Assert.assertTrue(respMap(roundTrip(out, in, "HELLO")).containsKey("server"));
+                Assert.assertTrue(respMap(roundTrip(out, in, "INFO", "yierdis")).containsKey("executor_policy"));
+                Assert.assertTrue(respMap(roundTrip(out, in, "STATS")).containsKey("queued_tasks"));
 
-                JsonObject info = roundTrip(out, in, "{\"cmd\":\"INFO\",\"args\":[\"yierdis\"]}");
-                Assert.assertTrue(booleanField(info, "ok"));
-
-                JsonObject stats = roundTrip(out, in, "{\"cmd\":\"STATS\",\"args\":[]}");
-                Assert.assertTrue(booleanField(stats, "ok"));
-
-                JsonObject set = roundTrip(out, in, "{\"cmd\":\"SET\",\"args\":[\"k\",\"v\"]}");
-                Assert.assertTrue(booleanField(set, "ok"));
-
-                JsonObject get = roundTrip(out, in, "{\"cmd\":\"GET\",\"args\":[\"k\"]}");
-                Assert.assertTrue(booleanField(get, "ok"));
-                Assert.assertEquals("v", stringField(get, "result"));
+                Assert.assertEquals("OK", asString(roundTrip(out, in, "SET", "k", "v")));
+                Assert.assertEquals("v", asString(roundTrip(out, in, "GET", "k")));
             }
         }
     }
@@ -169,15 +132,11 @@ public class YierdisServerBootstrapCommandWiringTest {
                 OutputStream out = socket.getOutputStream();
                 InputStream in = socket.getInputStream();
 
-                JsonObject info = roundTrip(out, in, "{\"cmd\":\"INFO\",\"args\":[\"yierdis\"]}");
-                Assert.assertTrue(booleanField(info, "ok"));
-                JsonObject infoResult = objectField(info, "result");
-                Assert.assertEquals(2L, longValue(mapValue(infoResult, "io_threads")));
-                Assert.assertEquals("GLOBAL", stringValue(mapValue(infoResult, "executor_policy")));
+                Map<String, Object> info = respMap(roundTrip(out, in, "INFO", "yierdis"));
+                Assert.assertEquals(2L, asLong(info.get("io_threads")));
+                Assert.assertEquals("GLOBAL", asString(info.get("executor_policy")));
 
-                JsonObject memory = roundTrip(out, in, "{\"cmd\":\"INFO\",\"args\":[\"memory\"]}");
-                Assert.assertTrue(booleanField(memory, "ok"));
-                String memorySection = stringField(memory, "result");
+                String memorySection = asString(roundTrip(out, in, "INFO", "memory"));
                 Assert.assertTrue(memorySection.contains("maxmemory_policy:allkeys-lru\r\n"));
                 Assert.assertTrue(memorySection.contains("yierdis_maxmemory_scope:per-db\r\n"));
             }
@@ -214,152 +173,156 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertNull(tx.tryEnqueue(request("GET", "k")));
                 Assert.assertEquals("ERR Transaction queue is full", tx.tryEnqueue(request("SET", "x", "y")));
 
-                CustomRequestDecoder decoder = byteLimitedChannel.pipeline().get(CustomRequestDecoder.class);
+                RespRequestDecoder decoder = byteLimitedChannel.pipeline().get(RespRequestDecoder.class);
                 Assert.assertNotNull(decoder);
-                Assert.assertNotNull(byteLimitedChannel.pipeline().get(ProtocolCommandAdapter.class));
+                Assert.assertNotNull(byteLimitedChannel.pipeline().get(RespCommandAdapter.class));
                 List<String> pipelineNames = byteLimitedChannel.pipeline().names();
                 int backpressureIndex = pipelineNames.indexOf("writeBufferBackpressure");
-                int decoderIndex = pipelineNames.indexOf("customRequestDecoder");
-                int adapterIndex = pipelineNames.indexOf("protocolCommandAdapter");
-                int protocolErrorIndex = pipelineNames.indexOf("protocolErrorReply");
+                int decoderIndex = pipelineNames.indexOf("respRequestDecoder");
+                int adapterIndex = pipelineNames.indexOf("respCommandAdapter");
+                int protocolErrorIndex = pipelineNames.indexOf("respProtocolErrorReply");
                 int commandHandlerIndex = pipelineNames.indexOf("commandHandler");
                 Assert.assertTrue(backpressureIndex >= 0);
                 Assert.assertTrue(decoderIndex > backpressureIndex);
                 Assert.assertTrue(adapterIndex > decoderIndex);
                 Assert.assertTrue(protocolErrorIndex > adapterIndex);
                 Assert.assertTrue(commandHandlerIndex > protocolErrorIndex);
-                Assert.assertEquals(3, intField(decoder, "maxPayloadBytes"));
+                Assert.assertEquals(3, intField(decoder, "maxBulkBytes"));
                 Assert.assertEquals(2, intField(decoder, "maxArgs"));
-                Assert.assertEquals(4, intField(decoder, "maxHeaderBytes"));
+                Assert.assertEquals(4, intField(decoder, "maxInlineBytes"));
             } finally {
                 byteLimitedChannel.unsafe().closeForcibly();
             }
         }
     }
 
-    private static JsonObject roundTrip(OutputStream out, InputStream in, String json) throws IOException {
-        writeFrame(out, json);
-        return parseJsonObject(readReplyLine(in));
+    private static Object roundTrip(OutputStream out, InputStream in, String... args) throws IOException {
+        writeCommand(out, args);
+        return readResp(in);
     }
 
-    private static void writeFrame(OutputStream out, String json) throws IOException {
-        byte[] payload = json.getBytes(StandardCharsets.UTF_8);
-        byte[] head = (Integer.toString(payload.length) + ":").getBytes(StandardCharsets.US_ASCII);
-        out.write(head);
-        out.write(payload);
-        out.write('\n');
+    private static void writeCommand(OutputStream out, String... args) throws IOException {
+        out.write(('*' + Integer.toString(args.length) + "\r\n").getBytes(StandardCharsets.US_ASCII));
+        for (String arg : args) {
+            byte[] bytes = arg.getBytes(StandardCharsets.UTF_8);
+            out.write(('$' + Integer.toString(bytes.length) + "\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.write(bytes);
+            out.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+        }
         out.flush();
     }
 
-    private static byte[] readReplyLine(InputStream in) throws IOException {
+    private static Object readResp(InputStream in) throws IOException {
+        int type = in.read();
+        if (type < 0) {
+            return null;
+        }
+        return switch (type) {
+            case '+' -> readLine(in);
+            case '-' -> new RespError(readLine(in));
+            case ':' -> Long.parseLong(readLine(in));
+            case '$' -> readBulk(in);
+            case '*' -> readArray(in);
+            case '_' -> {
+                expectLineEnd(in);
+                yield null;
+            }
+            default -> throw new IOException("unexpected RESP type: " + (char) type);
+        };
+    }
+
+    private static String readBulk(InputStream in) throws IOException {
+        int len = Integer.parseInt(readLine(in));
+        if (len < 0) {
+            return null;
+        }
+        byte[] bytes = in.readNBytes(len);
+        if (bytes.length != len) {
+            throw new IOException("unexpected EOF in bulk string");
+        }
+        expectLineEnd(in);
+        return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    private static List<Object> readArray(InputStream in) throws IOException {
+        int len = Integer.parseInt(readLine(in));
+        if (len < 0) {
+            return null;
+        }
+        List<Object> values = new ArrayList<>(len);
+        for (int i = 0; i < len; i++) {
+            values.add(readResp(in));
+        }
+        return values;
+    }
+
+    private static String readLine(InputStream in) throws IOException {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        int prev = -1;
         while (true) {
             int b = in.read();
             if (b < 0) {
-                if (buf.size() == 0) {
-                    return null;
-                }
-                throw new IOException("unexpected EOF before reply newline");
+                throw new IOException("unexpected EOF before CRLF");
             }
-            if (b == '\n') {
-                return buf.toByteArray();
+            if (prev == '\r' && b == '\n') {
+                byte[] bytes = buf.toByteArray();
+                return new String(bytes, 0, bytes.length - 1, StandardCharsets.UTF_8);
             }
             buf.write(b);
+            prev = b;
         }
     }
 
-    private static JsonObject parseJsonObject(byte[] bytes) {
-        Assert.assertNotNull("expected JSON reply", bytes);
-        JsonValue v = JsonParser.parseStrictUtf8(bytes, 0, bytes.length, JsonLimits.DEFAULT);
-        Assert.assertTrue("expected JSON object", v instanceof JsonObject);
-        return (JsonObject) v;
-    }
-
-    private static boolean booleanField(JsonObject obj, String key) {
-        JsonValue v = requiredField(obj, key);
-        Assert.assertTrue("expected boolean field: " + key, v instanceof JsonBoolean);
-        return ((JsonBoolean) v).value();
-    }
-
-    private static JsonObject objectField(JsonObject obj, String key) {
-        JsonValue v = requiredField(obj, key);
-        Assert.assertTrue("expected object field: " + key, v instanceof JsonObject);
-        return (JsonObject) v;
-    }
-
-    private static JsonArray arrayField(JsonObject obj, String key) {
-        JsonValue v = requiredField(obj, key);
-        Assert.assertTrue("expected array field: " + key, v instanceof JsonArray);
-        return (JsonArray) v;
-    }
-
-    private static String stringField(JsonObject obj, String key) {
-        return stringValue(requiredField(obj, key));
-    }
-
-    private static String stringValue(JsonValue v) {
-        Assert.assertTrue("expected string value", v instanceof JsonString);
-        return ((JsonString) v).value();
-    }
-
-    private static long longField(JsonObject obj, String key) {
-        JsonValue v = requiredField(obj, key);
-        return longValue(v);
-    }
-
-    private static long longValue(JsonValue v) {
-        Assert.assertTrue("expected integer value", v instanceof JsonLong);
-        return ((JsonLong) v).value();
-    }
-
-    private static boolean mapContainsKey(JsonObject mapObject, String key) {
-        try {
-            mapValue(mapObject, key);
-            return true;
-        } catch (AssertionError e) {
-            return false;
+    private static void expectLineEnd(InputStream in) throws IOException {
+        int cr = in.read();
+        int lf = in.read();
+        if (cr != '\r' || lf != '\n') {
+            throw new IOException("expected CRLF");
         }
     }
 
-    private static JsonValue mapValue(JsonObject mapObject, String key) {
-        JsonArray entries = arrayField(mapObject, "$map");
-        for (JsonValue entryValue : entries.values()) {
-            Assert.assertTrue("expected map entry array", entryValue instanceof JsonArray);
-            JsonArray entry = (JsonArray) entryValue;
-            Assert.assertEquals("expected [key, value] entry", 2, entry.values().size());
-            if (key.equals(stringValue(entry.values().get(0)))) {
-                return entry.values().get(1);
-            }
+    private static Map<String, Object> respMap(Object value) {
+        List<Object> values = respArray(value);
+        Assert.assertEquals("expected even RESP2 map array length", 0, values.size() % 2);
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i < values.size(); i += 2) {
+            map.put(asString(values.get(i)), values.get(i + 1));
         }
-        Assert.fail("missing map entry: " + key);
-        return null;
+        return map;
     }
 
-    private static JsonValue requiredField(JsonObject obj, String key) {
-        Assert.assertNotNull(obj);
-        Map<String, JsonValue> map = obj.values();
-        JsonValue v = map.get(key);
-        Assert.assertNotNull("missing field: " + key, v);
-        return v;
+    @SuppressWarnings("unchecked")
+    private static List<Object> respArray(Object value) {
+        Assert.assertTrue("expected RESP array", value instanceof List<?>);
+        return (List<Object>) value;
+    }
+
+    private static String asString(Object value) {
+        Assert.assertTrue("expected string, got " + value, value == null || value instanceof String);
+        return (String) value;
+    }
+
+    private static long asLong(Object value) {
+        Assert.assertTrue("expected integer, got " + value, value instanceof Long);
+        return (Long) value;
     }
 
     private static void assertCommandInfo(
-            JsonValue value,
+            Object value,
             String expectedName,
             long expectedArity,
             long expectedFirstKey,
             long expectedLastKey,
             long expectedStep
     ) {
-        Assert.assertTrue("expected command info array", value instanceof JsonArray);
-        JsonArray info = (JsonArray) value;
-        Assert.assertEquals(6, info.values().size());
-        Assert.assertEquals(expectedName, stringValue(info.values().get(0)));
-        Assert.assertEquals(expectedArity, longValue(info.values().get(1)));
-        Assert.assertTrue("expected flags array", info.values().get(2) instanceof JsonArray);
-        Assert.assertEquals(expectedFirstKey, longValue(info.values().get(3)));
-        Assert.assertEquals(expectedLastKey, longValue(info.values().get(4)));
-        Assert.assertEquals(expectedStep, longValue(info.values().get(5)));
+        List<Object> info = respArray(value);
+        Assert.assertEquals(6, info.size());
+        Assert.assertEquals(expectedName, asString(info.get(0)));
+        Assert.assertEquals(expectedArity, asLong(info.get(1)));
+        Assert.assertTrue("expected flags array", info.get(2) instanceof List<?>);
+        Assert.assertEquals(expectedFirstKey, asLong(info.get(3)));
+        Assert.assertEquals(expectedLastKey, asLong(info.get(4)));
+        Assert.assertEquals(expectedStep, asLong(info.get(5)));
     }
 
     private static YierdisServerRuntimeConfig runtimeConfig(
@@ -409,15 +372,18 @@ public class YierdisServerBootstrapCommandWiringTest {
         return field.getInt(target);
     }
 
+    private record RespError(String message) {
+    }
+
     private static final class InitializerTestEnv implements AutoCloseable {
         private final YierdisInstance instance;
-        private final JsonLineReplyWriterFactory replyWriterFactory;
+        private final ReplyWriterFactory replyWriterFactory;
         private final CommandExecutor<NettyExecutionConnection> executor;
 
         private InitializerTestEnv() {
             this.instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
             YierdisEngine engine = TestYierdisEngines.forInstance(instance);
-            this.replyWriterFactory = new JsonLineReplyWriterFactory();
+            this.replyWriterFactory = new RespReplyWriterFactory();
             this.executor = new CommandExecutor<>(
                     instance::bindToCurrentThread,
                     engine::execute,

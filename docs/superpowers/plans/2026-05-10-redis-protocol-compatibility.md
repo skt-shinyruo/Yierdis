@@ -898,7 +898,7 @@ git commit -m "feat: decode resp requests with netty"
 - Test: `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java`
 - Test: `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/RespProtocolIntegrationTest.java`
 
-- [ ] **Step 1: Write failing server integration test**
+- [x] **Step 1: Write failing server integration test**
 
 Create `RespProtocolIntegrationTest.java`:
 
@@ -944,13 +944,13 @@ public class RespProtocolIntegrationTest {
 }
 ```
 
-- [ ] **Step 2: Run failing integration test**
+- [x] **Step 2: Run failing integration test**
 
 Run: `mvn -pl yierdis-server/yierdis-server-main test -Dtest=RespProtocolIntegrationTest`
 
 Expected: FAIL because server still wires Custom Protocol v1.
 
-- [ ] **Step 3: Update server main POM**
+- [x] **Step 3: Update server main POM**
 
 Remove:
 
@@ -967,7 +967,7 @@ Add:
 </dependency>
 ```
 
-- [ ] **Step 4: Use `RespReplyWriterFactory` in bootstrap**
+- [x] **Step 4: Use `RespReplyWriterFactory` in bootstrap**
 
 In `YierdisServerBootstrap`, replace `JsonLineReplyWriterFactory` construction and imports with:
 
@@ -977,7 +977,7 @@ RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
 
 Keep the variable typed as `ReplyWriterFactory` if that reduces imports in adjacent constructors.
 
-- [ ] **Step 5: Implement protocol error reply handler**
+- [x] **Step 5: Implement protocol error reply handler**
 
 Create `RespProtocolErrorReplyHandler.java`:
 
@@ -1026,7 +1026,7 @@ public final class RespProtocolErrorReplyHandler extends ChannelInboundHandlerAd
 }
 ```
 
-- [ ] **Step 6: Rewrite channel initializer pipeline**
+- [x] **Step 6: Rewrite channel initializer pipeline**
 
 Replace imports and pipeline entries in `YierdisServerChannelInitializer` with:
 
@@ -1044,7 +1044,7 @@ Replace imports and pipeline entries in `YierdisServerChannelInitializer` with:
 
 Change the field and constructor parameter type from `JsonLineReplyWriterFactory` to `ReplyWriterFactory`.
 
-- [ ] **Step 7: Make direct reject replies session-aware**
+- [x] **Step 7: Make direct reject replies session-aware**
 
 In `YierdisFastCommandHandler.channelRead0`, replace:
 
@@ -1060,7 +1060,7 @@ ReplyWriter writer = replyWriterFactory.newWriter(connection.session(), new Nett
 
 In `newReplyWriter(ByteBuf out, ChannelHandlerContext ctx)`, also pass the session if a `NettyExecutionConnection` exists.
 
-- [ ] **Step 8: Run integration tests**
+- [x] **Step 8: Run integration tests**
 
 Run:
 
@@ -1071,7 +1071,7 @@ mvn -pl yierdis-server/yierdis-server-main test -Dtest=RespProtocolIntegrationTe
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add yierdis-networking/yierdis-networking-netty yierdis-server/yierdis-server-main
