@@ -58,6 +58,13 @@ public class RespReplyWriterTest {
     }
 
     @Test
+    public void bareRedisErrorPrefixesPassThroughUnchanged() {
+        Assert.assertEquals("-ERR\r\n", write2(w -> w.error("ERR")));
+        Assert.assertEquals("-NOAUTH\r\n", write2(w -> w.error("NOAUTH")));
+        Assert.assertEquals("-WRONGTYPE\r\n", write2(w -> w.error("WRONGTYPE")));
+    }
+
+    @Test
     public void protocolErrorRequestsCloseAfterReply() {
         ByteArraySink sink = new ByteArraySink();
         RespReplyWriter writer = new RespReplyWriter(sink, RespProtocolVersion.RESP2);

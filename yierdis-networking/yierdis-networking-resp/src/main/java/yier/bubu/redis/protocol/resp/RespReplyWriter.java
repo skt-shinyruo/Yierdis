@@ -10,6 +10,26 @@ import java.util.Objects;
 
 public final class RespReplyWriter implements ReplyWriter {
     private static final byte[] CRLF = new byte[]{'\r', '\n'};
+    private static final String[] REDIS_ERROR_PREFIXES = {
+            "ERR",
+            "WRONGTYPE",
+            "NOPROTO",
+            "NOAUTH",
+            "BUSY",
+            "OOM",
+            "EXECABORT",
+            "LOADING",
+            "NOSCRIPT",
+            "READONLY",
+            "MOVED",
+            "ASK",
+            "TRYAGAIN",
+            "CLUSTERDOWN",
+            "MASTERDOWN",
+            "WRONGPASS",
+            "NOREPLICAS",
+            "DENIED"
+    };
     private final BytesSink out;
     private final RespProtocolVersion version;
     private boolean closeAfterReplyRequested;
@@ -272,13 +292,7 @@ public final class RespReplyWriter implements ReplyWriter {
 
     private static String normalizeError(String message) {
         String value = sanitizeSimple(message == null ? "ERR error" : message);
-        if (!value.startsWith("ERR ") && !value.contains(" ")) {
-            value = "ERR " + value;
-        } else if (!value.startsWith("ERR ") && !value.startsWith("WRONGTYPE ")
-                && !value.startsWith("NOPROTO ") && !value.startsWith("NOAUTH ")
-                && !value.startsWith("BUSY ") && !value.startsWith("OOM ")
-                && !value.startsWith("EXECABORT ") && !value.startsWith("LOADING ")
-                && !value.startsWith("NOSCRIPT ")) {
+        if (!hasRedisErrorPrefix(value)) {
             value = "ERR " + value;
         }
 
@@ -312,6 +326,24 @@ public final class RespReplyWriter implements ReplyWriter {
             return 3;
         }
         return 4;
+    }
+
+    private static boolean hasRedisErrorPrefix(String value) {
+        if (value == null || value.isEmpty()) {
+            return false;
+        }
+        for (String prefix : REDIS_ERROR_PREFIXES) {
+            if (value.equals(prefix)) {
+                return true;
+            }
+            if (value.startsWith(prefix) && value.length() > prefix.length()) {
+                char separator = value.charAt(prefix.length());
+                if (Character.isWhitespace(separator)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static String sanitizeVerbatimFormat(String format) {
