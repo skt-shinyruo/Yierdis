@@ -271,7 +271,7 @@ public class RespExecutionAdapterTest {
         Assert.assertArrayEquals(bytes("SET"), out.readOnlyByteArray(0));
         Assert.assertArrayEquals(bytes("k"), out.readOnlyByteArray(1));
         Assert.assertArrayEquals(new byte[]{0, 1, 2}, out.readOnlyByteArray(2));
-        Assert.assertEquals(6, out.retainedBytes());
+        Assert.assertEquals(7, out.retainedBytes());
     }
 
     @Test
