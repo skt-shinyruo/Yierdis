@@ -10,26 +10,6 @@ import java.util.Objects;
 
 public final class RespReplyWriter implements ReplyWriter {
     private static final byte[] CRLF = new byte[]{'\r', '\n'};
-    private static final String[] REDIS_ERROR_PREFIXES = {
-            "ERR",
-            "WRONGTYPE",
-            "NOPROTO",
-            "NOAUTH",
-            "BUSY",
-            "OOM",
-            "EXECABORT",
-            "LOADING",
-            "NOSCRIPT",
-            "READONLY",
-            "MOVED",
-            "ASK",
-            "TRYAGAIN",
-            "CLUSTERDOWN",
-            "MASTERDOWN",
-            "WRONGPASS",
-            "NOREPLICAS",
-            "DENIED"
-    };
     private final BytesSink out;
     private final RespProtocolVersion version;
     private boolean closeAfterReplyRequested;
@@ -332,18 +312,18 @@ public final class RespReplyWriter implements ReplyWriter {
         if (value == null || value.isEmpty()) {
             return false;
         }
-        for (String prefix : REDIS_ERROR_PREFIXES) {
-            if (value.equals(prefix)) {
-                return true;
+        int end = 0;
+        while (end < value.length()) {
+            char ch = value.charAt(end);
+            if (Character.isWhitespace(ch)) {
+                break;
             }
-            if (value.startsWith(prefix) && value.length() > prefix.length()) {
-                char separator = value.charAt(prefix.length());
-                if (Character.isWhitespace(separator)) {
-                    return true;
-                }
+            if (!(ch == '-' || ch == '_' || Character.isDigit(ch) || Character.isUpperCase(ch))) {
+                return false;
             }
+            end++;
         }
-        return false;
+        return end > 0 && (end == value.length() || Character.isWhitespace(value.charAt(end)));
     }
 
     private static String sanitizeVerbatimFormat(String format) {
