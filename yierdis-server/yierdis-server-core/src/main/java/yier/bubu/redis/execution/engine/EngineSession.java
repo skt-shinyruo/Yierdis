@@ -23,6 +23,7 @@ public final class EngineSession implements ServerSession {
     private int dbIndex;
     private String clientName;
     private boolean authenticated;
+    private volatile int respVersion = 2;
 
     public EngineSession(int maxQueuedCommands, long maxQueuedBytes) {
         this.transaction = new DefaultTransactionState(maxQueuedCommands, maxQueuedBytes);
@@ -85,6 +86,19 @@ public final class EngineSession implements ServerSession {
     @Override
     public void setAuthenticated(boolean authenticated) {
         this.authenticated = authenticated;
+    }
+
+    @Override
+    public int respVersion() {
+        return respVersion;
+    }
+
+    @Override
+    public void setRespVersion(int respVersion) {
+        if (respVersion != 2 && respVersion != 3) {
+            throw new IllegalArgumentException("NOPROTO unsupported protocol version");
+        }
+        this.respVersion = respVersion;
     }
 
     @Override
