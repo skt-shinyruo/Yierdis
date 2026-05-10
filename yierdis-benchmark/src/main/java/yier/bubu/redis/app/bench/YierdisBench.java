@@ -2,16 +2,14 @@ package yier.bubu.redis.app.bench;
 
 import picocli.CommandLine;
 import picocli.CommandLine.ParameterException;
-import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.protocol.custom.v1.wire.CustomProtocolV1ReplyInspector;
-import yier.bubu.redis.protocol.custom.v1.wire.CustomProtocolV1RequestEncoder;
+import yier.bubu.redis.protocol.resp.RespClientCodec;
+import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -40,7 +38,7 @@ import java.util.concurrent.TimeUnit;
  * <p>
  * 设计原则：
  * - 不依赖 redis-benchmark 等系统工具
- * - 使用本地 TCP + 自定义协议 v1，避免“进程内直连”偏离真实网络路径
+ * - 使用本地 TCP + Redis RESP，避免“进程内直连”偏离真实网络路径
  * - 以固定请求数为主，输出 QPS 与简单的延迟分位数
  */
 public final class YierdisBench {
@@ -297,12 +295,11 @@ public final class YierdisBench {
                 s.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
                 try (BufferedOutputStream out = new BufferedOutputStream(s.getOutputStream());
                      BufferedInputStream in = new BufferedInputStream(s.getInputStream())) {
-                    try (CustomCommandWriter w = new CustomCommandWriter(out);
-                         JsonReplyReader reader = new JsonReplyReader(in)) {
+                    try (RespCommandWriter w = new RespCommandWriter(out)) {
                         w.writePing();
                         out.flush();
-                        JsonReplyReader.Line line = reader.readLine();
-                        return line != null && line.len() > 0 && startsWith(line.bytes(), line.len(), OK_PREFIX);
+                        return RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES)
+                                .isSimpleString("PONG");
                     }
                 }
             } catch (Exception ignored) {
@@ -516,53 +513,42 @@ public final class YierdisBench {
         System.out.println(s);
     }
 
-    private static final byte[] OK_PREFIX = "{\"ok\":true,\"result\":".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] ERR_PREFIX = "{\"ok\":false,\"error\":".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] PONG = "PONG".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] OK = "OK".getBytes(StandardCharsets.US_ASCII);
+    static boolean validateStrictReply(Workload workload, InputStream in, int expectedDataSize) throws IOException {
+        if (workload == null || in == null) {
+            return false;
+        }
+        RespClientCodec.RespReply reply = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        return validateStrictReply(workload, reply, expectedDataSize);
+    }
 
-    static boolean validateStrictReply(Workload workload, byte[] line, int lineLen, int expectedDataSize) {
-        if (workload == null || line == null || lineLen <= 0) {
+    private static boolean validateStrictReply(Workload workload, RespClientCodec.RespReply reply, int expectedDataSize) {
+        if (workload == null || reply == null) {
             return false;
         }
         switch (workload) {
             case PING:
-                return CustomProtocolV1ReplyInspector.matchesOkAsciiStringResult(line, 0, lineLen, PONG);
+                return reply.isSimpleString("PONG");
             case SET_RANDOM:
             case SET_SEQUENTIAL:
-                return CustomProtocolV1ReplyInspector.matchesOkAsciiStringResult(line, 0, lineLen, OK);
-            case GET_RANDOM: {
-                int decodedLen = CustomProtocolV1ReplyInspector.decodedOkResultByteLength(line, 0, lineLen);
-                if (decodedLen == CustomProtocolV1ReplyInspector.INVALID_RESULT) {
-                    return false;
-                }
-                if (decodedLen == CustomProtocolV1ReplyInspector.NULL_RESULT) {
+                return reply.isSimpleString("OK");
+            case GET_RANDOM:
+                if (reply.isNull()) {
                     return true;
                 }
-                return expectedDataSize < 0 || decodedLen == expectedDataSize;
-            }
+                if (reply.kind() != RespClientCodec.RespReply.Kind.BULK_STRING) {
+                    return false;
+                }
+                return expectedDataSize < 0 || reply.bulkLength() == expectedDataSize;
             default:
                 return true;
         }
     }
 
-    private static boolean isErrorLine(byte[] line, int lineLen) {
-        return startsWith(line, lineLen, ERR_PREFIX);
-    }
-
-    private static boolean startsWith(byte[] line, int lineLen, byte[] prefix) {
-        if (line == null || prefix == null) {
+    private static boolean isErrorReply(RespClientCodec.RespReply reply) {
+        if (reply == null) {
             return false;
         }
-        if (lineLen < prefix.length) {
-            return false;
-        }
-        for (int i = 0; i < prefix.length; i++) {
-            if (line[i] != prefix[i]) {
-                return false;
-            }
-        }
-        return true;
+        return reply.kind() == RespClientCodec.RespReply.Kind.ERROR;
     }
 
     enum Workload {
@@ -798,8 +784,7 @@ public final class YierdisBench {
                 socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
                 try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                      BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
-                    try (CustomCommandWriter writer = new CustomCommandWriter(out);
-                         JsonReplyReader reader = new JsonReplyReader(in)) {
+                    try (RespCommandWriter writer = new RespCommandWriter(out)) {
                         byte[] keyBuf = new byte[9]; // "k" + 8 digits
 
                         int remaining = requests;
@@ -830,10 +815,10 @@ public final class YierdisBench {
                             out.flush();
 
                             for (int i = 0; i < batch; i++) {
-                                JsonReplyReader.Line reply = reader.readLine();
-                                if (isErrorLine(reply.bytes(), reply.len())) {
+                                RespClientCodec.RespReply reply = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+                                if (isErrorReply(reply)) {
                                     errors++;
-                                } else if (strictReplies && !validateStrictReply(workload, reply.bytes(), reply.len(), value.length)) {
+                                } else if (strictReplies && !validateStrictReply(workload, reply, value.length)) {
                                     errors++;
                                 }
                             }
@@ -888,8 +873,7 @@ public final class YierdisBench {
                 socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
                 try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                      BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
-                    try (CustomCommandWriter writer = new CustomCommandWriter(out);
-                         JsonReplyReader reader = new JsonReplyReader(in)) {
+                    try (RespCommandWriter writer = new RespCommandWriter(out)) {
                         for (int i = 0; i < requests; i++) {
                             int keyIndex = rnd.nextInt(keyspace);
                             writeKey(keyBuf, keyIndex);
@@ -909,10 +893,10 @@ public final class YierdisBench {
                                     throw new IllegalStateException("unexpected workload: " + workload);
                             }
                             out.flush();
-                            JsonReplyReader.Line reply = reader.readLine();
-                            if (isErrorLine(reply.bytes(), reply.len())) {
+                            RespClientCodec.RespReply reply = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+                            if (isErrorReply(reply)) {
                                 errors++;
-                            } else if (strictReplies && !validateStrictReply(workload, reply.bytes(), reply.len(), value.length)) {
+                            } else if (strictReplies && !validateStrictReply(workload, reply, value.length)) {
                                 errors++;
                             }
                             long t1 = System.nanoTime();
@@ -930,26 +914,17 @@ public final class YierdisBench {
         }
     }
 
-    static final class CustomCommandWriter implements AutoCloseable {
+    static final class RespCommandWriter implements AutoCloseable {
         private static final byte[] CMD_PING = "PING".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] CMD_GET = "GET".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] CMD_SET = "SET".getBytes(StandardCharsets.US_ASCII);
-        private static final byte[] FRAME_PING = CustomProtocolV1RequestEncoder.encodeRequestFrame(List.of(CMD_PING));
+        private static final byte[] FRAME_PING = RespClientCodec.encodeCommand(List.of(CMD_PING));
 
         private final OutputStream out;
-        private final BytesSink sink;
-        private final byte[] intBuf = new byte[16];
         private final MutableRequestArgs requestArgs = new MutableRequestArgs();
 
-        CustomCommandWriter(OutputStream out) {
+        RespCommandWriter(OutputStream out) {
             this.out = Objects.requireNonNull(out, "out");
-            this.sink = (src, srcIndex, len) -> {
-                try {
-                    this.out.write(src, srcIndex, len);
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            };
         }
 
         void writePing() throws IOException {
@@ -965,11 +940,7 @@ public final class YierdisBench {
         }
 
         private void writeFrame(List<byte[]> args) throws IOException {
-            try {
-                CustomProtocolV1RequestEncoder.writeRequestFrame(sink, args, intBuf);
-            } catch (UncheckedIOException e) {
-                throw e.getCause();
-            }
+            RespClientCodec.writeCommand(out, args);
         }
 
         @Override
@@ -1020,87 +991,6 @@ public final class YierdisBench {
             @Override
             public int size() {
                 return size;
-            }
-        }
-    }
-
-    static final class JsonReplyReader implements AutoCloseable {
-        private static final int READ_BUF_BYTES = 8 * 1024;
-        private static final int DEFAULT_MAX_LINE_BYTES = 1024 * 1024; // 1 MiB
-
-        private final InputStream in;
-        private final byte[] readBuf = new byte[READ_BUF_BYTES];
-        private int readPos;
-        private int readLimit;
-
-        private final int maxLineBytes;
-        private final Line line = new Line();
-
-        JsonReplyReader(InputStream in) {
-            this(in, DEFAULT_MAX_LINE_BYTES);
-        }
-
-        JsonReplyReader(InputStream in, int maxLineBytes) {
-            this.in = Objects.requireNonNull(in, "in");
-            this.maxLineBytes = Math.max(0, maxLineBytes);
-        }
-
-        Line readLine() throws IOException {
-            line.len = 0;
-            for (; ; ) {
-                if (readPos >= readLimit) {
-                    int n = in.read(readBuf);
-                    if (n < 0) {
-                        throw new IOException("EOF");
-                    }
-                    if (n == 0) {
-                        continue;
-                    }
-                    readPos = 0;
-                    readLimit = n;
-                }
-
-                byte b = readBuf[readPos++];
-                if (b == '\n') {
-                    return line;
-                }
-                if (b == '\r') {
-                    continue;
-                }
-                if (maxLineBytes > 0 && line.len + 1 > maxLineBytes) {
-                    throw new IOException("line too long");
-                }
-                line.ensureCapacity(line.len + 1);
-                line.bytes[line.len++] = b;
-            }
-        }
-
-        @Override
-        public void close() {
-            // no-op
-        }
-
-        static final class Line {
-            private byte[] bytes = new byte[256];
-            private int len;
-
-            byte[] bytes() {
-                return bytes;
-            }
-
-            int len() {
-                return len;
-            }
-
-            private void ensureCapacity(int desired) {
-                if (bytes.length >= desired) {
-                    return;
-                }
-                int next = bytes.length;
-                while (next < desired) {
-                    next = next <= 0 ? 256 : Math.min(Integer.MAX_VALUE / 2, next * 2);
-                }
-                bytes = Arrays.copyOf(bytes, next);
             }
         }
     }
