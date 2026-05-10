@@ -4,8 +4,9 @@ import com.sun.management.ThreadMXBean;
 import org.junit.Assert;
 import org.junit.Assume;
 import org.junit.Test;
-import yier.bubu.redis.protocol.custom.v1.wire.CustomProtocolV1RequestEncoder;
+import yier.bubu.redis.protocol.resp.RespClientCodec;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -13,22 +14,32 @@ import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
-public class CustomCommandWriterTest {
+public class RespCommandWriterTest {
     @Test
-    public void writePingMatchesSharedEncoderBytes() throws Exception {
+    public void writesRespArrayBulkCommand() throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        RespClientCodec.writeCommand(out, List.of(utf8("SET"), utf8("a"), utf8("1")));
+
+        Assert.assertEquals("*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n",
+                out.toString(StandardCharsets.US_ASCII));
+    }
+
+    @Test
+    public void writePingMatchesSharedRespEncoderBytes() throws Exception {
         Assert.assertArrayEquals(
-                CustomProtocolV1RequestEncoder.encodeRequestFrame(List.of(utf8("PING"))),
-                writeFrame(YierdisBench.CustomCommandWriter::writePing)
+                RespClientCodec.encodeCommand(List.of(utf8("PING"))),
+                writeFrame(YierdisBench.RespCommandWriter::writePing)
         );
     }
 
     @Test
-    public void writeSetMatchesSharedEncoderBytesForEscapedUtf8Payload() throws Exception {
+    public void writeSetMatchesSharedRespEncoderBytesForEscapedUtf8Payload() throws Exception {
         byte[] key = utf8("bench\"key");
         byte[] value = utf8("line1\\line2\n中文");
 
         Assert.assertArrayEquals(
-                CustomProtocolV1RequestEncoder.encodeRequestFrame(List.of(utf8("SET"), key, value)),
+                RespClientCodec.encodeCommand(List.of(utf8("SET"), key, value)),
                 writeFrame(writer -> writer.writeSet(key, value))
         );
     }
@@ -39,7 +50,7 @@ public class CustomCommandWriterTest {
         byte[] value = utf8("line1\\line2\n中文");
 
         Assert.assertArrayEquals(
-                CustomProtocolV1RequestEncoder.encodeRequestFrame(List.of(utf8("SET"), key, value)),
+                RespClientCodec.encodeCommand(List.of(utf8("SET"), key, value)),
                 writeFrame(writer -> writer.writeSet(key, value))
         );
     }
@@ -51,8 +62,8 @@ public class CustomCommandWriterTest {
         byte[] value = utf8("line1\\line2\n中文");
 
         ByteArrayOutputStream expected = new ByteArrayOutputStream();
-        expected.writeBytes(CustomProtocolV1RequestEncoder.encodeRequestFrame(List.of(utf8("SET"), setKey, value)));
-        expected.writeBytes(CustomProtocolV1RequestEncoder.encodeRequestFrame(List.of(utf8("GET"), getKey)));
+        expected.writeBytes(RespClientCodec.encodeCommand(List.of(utf8("SET"), setKey, value)));
+        expected.writeBytes(RespClientCodec.encodeCommand(List.of(utf8("GET"), getKey)));
 
         Assert.assertArrayEquals(
                 expected.toByteArray(),
@@ -76,7 +87,7 @@ public class CustomCommandWriterTest {
         byte[] getKey = utf8("next-key");
         byte[] value = utf8("line1\\line2\n中文");
 
-        try (YierdisBench.CustomCommandWriter writer = new YierdisBench.CustomCommandWriter(OutputStream.nullOutputStream())) {
+        try (YierdisBench.RespCommandWriter writer = new YierdisBench.RespCommandWriter(OutputStream.nullOutputStream())) {
             for (int i = 0; i < 20_000; i++) {
                 writer.writeSet(setKey, value);
                 writer.writeGet(getKey);
@@ -95,18 +106,26 @@ public class CustomCommandWriterTest {
     }
 
     @Test
-    public void strictGetReplyValidationAcceptsEscapedUtf8ResultEnvelope() throws Exception {
-        String value = "line1\\line2\n中文";
-        byte[] line = utf8("{\"ok\":true,\"result\":\"line1\\\\line2\\n中文\"}");
-
-        Assert.assertTrue(validateStrictReply(YierdisBench.Workload.GET_RANDOM, line, utf8(value).length));
+    public void strictPingReplyValidationAcceptsSimpleStringPong() throws Exception {
+        Assert.assertTrue(validateStrictReply(YierdisBench.Workload.PING, "+PONG\r\n", 0));
     }
 
     @Test
-    public void strictGetReplyValidationAcceptsTaggedB64ResultEnvelope() throws Exception {
-        byte[] line = utf8("{\"ok\":true,\"result\":{\"$b64\":\"wyg=\"}}");
+    public void strictSetReplyValidationAcceptsSimpleStringOk() throws Exception {
+        Assert.assertTrue(validateStrictReply(YierdisBench.Workload.SET_RANDOM, "+OK\r\n", 0));
+    }
 
-        Assert.assertTrue(validateStrictReply(YierdisBench.Workload.GET_RANDOM, line, 2));
+    @Test
+    public void strictGetReplyValidationAcceptsBulkResultWithExpectedSize() throws Exception {
+        String value = "line1\\line2\n中文";
+
+        Assert.assertTrue(validateStrictReply(YierdisBench.Workload.GET_RANDOM,
+                "$" + utf8(value).length + "\r\n" + value + "\r\n", utf8(value).length));
+    }
+
+    @Test
+    public void strictGetReplyValidationAcceptsNullBulkResult() throws Exception {
+        Assert.assertTrue(validateStrictReply(YierdisBench.Workload.GET_RANDOM, "$-1\r\n", 2));
     }
 
     @Test
@@ -119,16 +138,21 @@ public class CustomCommandWriterTest {
         }
 
         String value = "line1\\line2\n中文";
-        byte[] line = utf8("{\"ok\":true,\"result\":\"line1\\\\line2\\n中文\"}");
+        int expectedDataSize = utf8(value).length;
+        ReusableByteArrayInputStream reply = new ReusableByteArrayInputStream(
+                ("$" + expectedDataSize + "\r\n" + value + "\r\n").getBytes(StandardCharsets.UTF_8)
+        );
 
         for (int i = 0; i < 20_000; i++) {
-            Assert.assertTrue(validateStrictReply(YierdisBench.Workload.GET_RANDOM, line, utf8(value).length));
+            reply.reset();
+            Assert.assertTrue(YierdisBench.validateStrictReply(YierdisBench.Workload.GET_RANDOM, reply, expectedDataSize));
         }
 
         long threadId = Thread.currentThread().getId();
         long before = threadMxBean.getThreadAllocatedBytes(threadId);
         for (int i = 0; i < 2_000; i++) {
-            Assert.assertTrue(validateStrictReply(YierdisBench.Workload.GET_RANDOM, line, utf8(value).length));
+            reply.reset();
+            Assert.assertTrue(YierdisBench.validateStrictReply(YierdisBench.Workload.GET_RANDOM, reply, expectedDataSize));
         }
         long allocated = threadMxBean.getThreadAllocatedBytes(threadId) - before;
 
@@ -141,7 +165,7 @@ public class CustomCommandWriterTest {
 
     private static byte[] writeFrames(WriterAction action) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        try (YierdisBench.CustomCommandWriter writer = new YierdisBench.CustomCommandWriter(out)) {
+        try (YierdisBench.RespCommandWriter writer = new YierdisBench.RespCommandWriter(out)) {
             action.write(writer);
         }
         return out.toByteArray();
@@ -151,8 +175,9 @@ public class CustomCommandWriterTest {
         return value.getBytes(StandardCharsets.UTF_8);
     }
 
-    private static boolean validateStrictReply(YierdisBench.Workload workload, byte[] line, int expectedDataSize) {
-        return YierdisBench.validateStrictReply(workload, line, line.length, expectedDataSize);
+    private static boolean validateStrictReply(YierdisBench.Workload workload, String reply, int expectedDataSize) throws IOException {
+        return YierdisBench.validateStrictReply(workload,
+                new ByteArrayInputStream(reply.getBytes(StandardCharsets.UTF_8)), expectedDataSize);
     }
 
     private static ThreadMXBean threadMxBeanOrNull() {
@@ -167,6 +192,17 @@ public class CustomCommandWriterTest {
 
     @FunctionalInterface
     private interface WriterAction {
-        void write(YierdisBench.CustomCommandWriter writer) throws IOException;
+        void write(YierdisBench.RespCommandWriter writer) throws IOException;
+    }
+
+    private static final class ReusableByteArrayInputStream extends ByteArrayInputStream {
+        private ReusableByteArrayInputStream(byte[] bytes) {
+            super(bytes);
+        }
+
+        @Override
+        public synchronized void reset() {
+            pos = 0;
+        }
     }
 }

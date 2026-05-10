@@ -2,8 +2,8 @@ package yier.bubu.redis.app.bench;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
+import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.protocol.custom.v1.wire.ProtocolLimits;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,9 +16,9 @@ import java.util.Locale;
         usageHelpAutoWidth = true
 )
 public final class YierdisBenchServerArgs {
-    private static final int DEFAULT_PROTOCOL_MAX_BULK_BYTES = ProtocolLimits.DEFAULT_MAX_REQUEST_PAYLOAD_BYTES;
-    private static final int DEFAULT_PROTOCOL_MAX_ARGS = ProtocolLimits.DEFAULT_MAX_ARGS;
-    private static final int DEFAULT_PROTOCOL_MAX_LINE_BYTES = ProtocolLimits.DEFAULT_MAX_HEADER_BYTES;
+    private static final int DEFAULT_PROTOCOL_MAX_BULK_BYTES = RespProtocolLimits.DEFAULT_MAX_BULK_BYTES;
+    private static final int DEFAULT_PROTOCOL_MAX_ARGS = RespProtocolLimits.DEFAULT_MAX_ARGS;
+    private static final int DEFAULT_PROTOCOL_MAX_LINE_BYTES = RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES;
 
     private static final long DEFAULT_EXECUTOR_QUEUE_MAX_BYTES = 64L * 1024 * 1024;
     private static final int DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS = 1024;

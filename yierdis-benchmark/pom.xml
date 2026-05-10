@@ -20,17 +20,12 @@
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-networking-custom-v1</artifactId>
+            <artifactId>yierdis-networking-resp</artifactId>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-db-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-networking-netty</artifactId>
         </dependency>
 
         <dependency>

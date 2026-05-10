@@ -10,7 +10,7 @@ import java.util.List;
 
 @Command(
         name = "yierdis-benchmark",
-        description = "Pure Java benchmark tool for Yierdis (Custom Protocol v1 over TCP).",
+        description = "Pure Java benchmark tool for Yierdis (RESP over TCP).",
         sortOptions = false,
         usageHelpAutoWidth = true
 )

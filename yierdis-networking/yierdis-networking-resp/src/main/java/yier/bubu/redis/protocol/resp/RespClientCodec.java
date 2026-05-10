@@ -12,6 +12,7 @@ import java.util.Objects;
 public final class RespClientCodec {
     private static final byte[] CRLF = new byte[]{'\r', '\n'};
     private static final byte[] EMPTY_BYTES = new byte[0];
+    private static final ThreadLocal<byte[]> INT_BUF = ThreadLocal.withInitial(() -> new byte[20]);
 
     private RespClientCodec() {
     }
@@ -29,10 +30,15 @@ public final class RespClientCodec {
     public static void writeCommand(OutputStream out, List<byte[]> args) throws IOException {
         Objects.requireNonNull(out, "out");
         Objects.requireNonNull(args, "args");
-        writeAscii(out, "*" + args.size() + "\r\n");
-        for (byte[] arg : args) {
+        out.write('*');
+        writeNonNegativeInt(out, args.size());
+        out.write(CRLF);
+        for (int i = 0; i < args.size(); i++) {
+            byte[] arg = args.get(i);
             byte[] value = arg == null ? EMPTY_BYTES : arg;
-            writeAscii(out, "$" + value.length + "\r\n");
+            out.write('$');
+            writeNonNegativeInt(out, value.length);
+            out.write(CRLF);
             out.write(value);
             out.write(CRLF);
         }
@@ -48,9 +54,9 @@ public final class RespClientCodec {
             throw new IOException("unexpected EOF before RESP reply");
         }
         return switch (type) {
-            case '+' -> new RespReply(RespReply.Kind.SIMPLE_STRING, readLine(in), null, null, null);
-            case '-' -> new RespReply(RespReply.Kind.ERROR, readLine(in), null, null, null);
-            case ':' -> new RespReply(RespReply.Kind.INTEGER, null, null, Long.parseLong(readLine(in)), null);
+            case '+' -> new RespReply(RespReply.Kind.SIMPLE_STRING, readStringLine(in), null, null, null);
+            case '-' -> new RespReply(RespReply.Kind.ERROR, readStringLine(in), null, null, null);
+            case ':' -> new RespReply(RespReply.Kind.INTEGER, null, null, readLongLine(in, "integer"), null);
             case '$' -> readBulkString(in, maxBulkBytes);
             case '*' -> readArray(in, maxBulkBytes);
             case '_' -> {
@@ -62,7 +68,7 @@ public final class RespClientCodec {
     }
 
     private static RespReply readBulkString(InputStream in, int maxBulkBytes) throws IOException {
-        int len = parseLength(readLine(in), "bulk string");
+        int len = readLengthLine(in, "bulk string");
         if (len < 0) {
             return new RespReply(RespReply.Kind.NULL, null, null, null, null);
         }
@@ -78,7 +84,7 @@ public final class RespClientCodec {
     }
 
     private static RespReply readArray(InputStream in, int maxBulkBytes) throws IOException {
-        int count = parseLength(readLine(in), "array");
+        int count = readLengthLine(in, "array");
         if (count < 0) {
             return new RespReply(RespReply.Kind.NULL, null, null, null, null);
         }
@@ -89,15 +95,15 @@ public final class RespClientCodec {
         return new RespReply(RespReply.Kind.ARRAY, null, null, null, values);
     }
 
-    private static int parseLength(String text, String type) throws IOException {
-        try {
-            return Integer.parseInt(text);
-        } catch (NumberFormatException e) {
-            throw new IOException("invalid RESP " + type + " length: " + text, e);
+    private static int readLengthLine(InputStream in, String type) throws IOException {
+        long value = readLongLine(in, type + " length");
+        if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
+            throw new IOException("invalid RESP " + type + " length: " + value);
         }
+        return (int) value;
     }
 
-    private static String readLine(InputStream in) throws IOException {
+    private static String readStringLine(InputStream in) throws IOException {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         int prev = -1;
         while (true) {
@@ -114,6 +120,49 @@ public final class RespClientCodec {
         }
     }
 
+    private static long readLongLine(InputStream in, String type) throws IOException {
+        int b = in.read();
+        if (b < 0) {
+            throw new IOException("unexpected EOF before RESP " + type);
+        }
+
+        boolean negative = false;
+        if (b == '-') {
+            negative = true;
+            b = in.read();
+            if (b < 0) {
+                throw new IOException("unexpected EOF before RESP " + type);
+            }
+        }
+
+        if (b < '0' || b > '9') {
+            throw new IOException("invalid RESP " + type);
+        }
+
+        long value = 0;
+        while (true) {
+            value = value * 10 + (b - '0');
+            if (value < 0) {
+                throw new IOException("invalid RESP " + type);
+            }
+
+            b = in.read();
+            if (b < 0) {
+                throw new IOException("unexpected EOF before RESP line terminator");
+            }
+            if (b == '\r') {
+                int lf = in.read();
+                if (lf != '\n') {
+                    throw new IOException("expected RESP CRLF");
+                }
+                return negative ? -value : value;
+            }
+            if (b < '0' || b > '9') {
+                throw new IOException("invalid RESP " + type);
+            }
+        }
+    }
+
     private static void expectEmptyLine(InputStream in) throws IOException {
         expectCrlf(in);
     }
@@ -126,8 +175,23 @@ public final class RespClientCodec {
         }
     }
 
-    private static void writeAscii(OutputStream out, String value) throws IOException {
-        out.write(value.getBytes(StandardCharsets.US_ASCII));
+    private static void writeNonNegativeInt(OutputStream out, int value) throws IOException {
+        if (value < 0) {
+            throw new IllegalArgumentException("value must be >= 0");
+        }
+        if (value == 0) {
+            out.write('0');
+            return;
+        }
+
+        byte[] buf = INT_BUF.get();
+        int pos = buf.length;
+        int v = value;
+        while (v > 0) {
+            buf[--pos] = (byte) ('0' + (v % 10));
+            v /= 10;
+        }
+        out.write(buf, pos, buf.length - pos);
     }
 
     public record RespReply(Kind kind, String text, byte[] bytes, Long integer, List<RespReply> values) {
@@ -147,6 +211,10 @@ public final class RespClientCodec {
 
         public boolean isSimpleString(String expected) {
             return kind == Kind.SIMPLE_STRING && Objects.equals(text, expected);
+        }
+
+        public int bulkLength() {
+            return bytes == null ? -1 : bytes.length;
         }
 
         public byte[] bytes() {
