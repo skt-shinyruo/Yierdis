@@ -133,6 +133,27 @@ public final class YierdisServerArgs {
     )
     public int protocolMaxLineBytes = DEFAULT_PROTOCOL_MAX_LINE_BYTES;
 
+    @Option(
+            names = YierdisServerArgNames.CLIENT_IDLE_TIMEOUT_MILLIS,
+            defaultValue = "300000",
+            description = "Close clients idle for this many milliseconds (0 disables)."
+    )
+    public long clientIdleTimeoutMillis = 300000;
+
+    @Option(
+            names = YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_LIMIT_BYTES,
+            defaultValue = "67108864",
+            description = "Close slow clients above this outbound buffer size (0 disables)."
+    )
+    public long clientOutputBufferLimitBytes = 67108864;
+
+    @Option(
+            names = YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_OVER_LIMIT_MILLIS,
+            defaultValue = "10000",
+            description = "Slow-client grace period above output buffer limit in milliseconds."
+    )
+    public long clientOutputBufferOverLimitMillis = 10000;
+
     @Option(names = YierdisServerArgNames.MAXMEMORY_BYTES, defaultValue = "0", description = "Maxmemory in bytes (0 disables eviction).")
     public long maxmemoryBytes = 0;
 
@@ -238,6 +259,18 @@ public final class YierdisServerArgs {
         if (protocolMaxLineBytes <= 0) {
             throw new IllegalArgumentException("protocolMaxLineBytes must be > 0");
         }
+        if (clientIdleTimeoutMillis < 0) {
+            throw new IllegalArgumentException("clientIdleTimeoutMillis must be >= 0");
+        }
+        if (clientOutputBufferLimitBytes < 0) {
+            throw new IllegalArgumentException("clientOutputBufferLimitBytes must be >= 0");
+        }
+        if (clientOutputBufferOverLimitMillis < 0) {
+            throw new IllegalArgumentException("clientOutputBufferOverLimitMillis must be >= 0");
+        }
+        if (clientOutputBufferLimitBytes > 0 && clientOutputBufferOverLimitMillis <= 0) {
+            throw new IllegalArgumentException("clientOutputBufferOverLimitMillis must be > 0 when clientOutputBufferLimitBytes is enabled");
+        }
         if (maxmemoryBytes < 0) {
             throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
         }
@@ -282,6 +315,9 @@ public final class YierdisServerArgs {
         out.protocolMaxBulkBytes = protocolMaxBulkBytes;
         out.protocolMaxArgs = protocolMaxArgs;
         out.protocolMaxLineBytes = protocolMaxLineBytes;
+        out.clientIdleTimeoutMillis = clientIdleTimeoutMillis;
+        out.clientOutputBufferLimitBytes = clientOutputBufferLimitBytes;
+        out.clientOutputBufferOverLimitMillis = clientOutputBufferOverLimitMillis;
         out.maxmemoryBytes = maxmemoryBytes;
         out.maxmemoryScope = maxmemoryScope;
         out.maxmemoryPolicy = maxmemoryPolicy;
@@ -318,6 +354,9 @@ public final class YierdisServerArgs {
                 protocolMaxBulkBytes,
                 protocolMaxArgs,
                 protocolMaxLineBytes,
+                clientIdleTimeoutMillis,
+                clientOutputBufferLimitBytes,
+                clientOutputBufferOverLimitMillis,
                 maxmemoryBytes,
                 YierdisServerRuntimeConfig.MaxmemoryScope.fromArgvValue(maxmemoryScope),
                 MaxmemoryPolicy.parse(maxmemoryPolicy),
@@ -387,6 +426,13 @@ public final class YierdisServerArgs {
         out.add(Integer.toString(protocolMaxArgs));
         out.add(YierdisServerArgNames.PROTOCOL_MAX_LINE_BYTES);
         out.add(Integer.toString(protocolMaxLineBytes));
+
+        out.add(YierdisServerArgNames.CLIENT_IDLE_TIMEOUT_MILLIS);
+        out.add(Long.toString(clientIdleTimeoutMillis));
+        out.add(YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_LIMIT_BYTES);
+        out.add(Long.toString(clientOutputBufferLimitBytes));
+        out.add(YierdisServerArgNames.CLIENT_OUTPUT_BUFFER_OVER_LIMIT_MILLIS);
+        out.add(Long.toString(clientOutputBufferOverLimitMillis));
 
         out.add(YierdisServerArgNames.MAXMEMORY_BYTES);
         out.add(Long.toString(maxmemoryBytes));

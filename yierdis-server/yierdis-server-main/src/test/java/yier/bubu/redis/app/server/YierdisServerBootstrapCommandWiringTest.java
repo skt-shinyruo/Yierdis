@@ -1,5 +1,6 @@
 package yier.bubu.redis.app.server;
 
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
@@ -177,19 +178,30 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertNotNull(decoder);
                 Assert.assertNotNull(byteLimitedChannel.pipeline().get(RespCommandAdapter.class));
                 List<String> pipelineNames = byteLimitedChannel.pipeline().names();
+                Object backpressureHandler = byteLimitedChannel.pipeline().get("writeBufferBackpressure");
                 int backpressureIndex = pipelineNames.indexOf("writeBufferBackpressure");
+                int idleTimeoutIndex = pipelineNames.indexOf("idleTimeout");
+                int idleTimeoutCloserIndex = pipelineNames.indexOf("idleTimeoutCloser");
                 int decoderIndex = pipelineNames.indexOf("respRequestDecoder");
                 int adapterIndex = pipelineNames.indexOf("respCommandAdapter");
                 int protocolErrorIndex = pipelineNames.indexOf("respProtocolErrorReply");
                 int commandHandlerIndex = pipelineNames.indexOf("commandHandler");
+                Assert.assertNotNull(backpressureHandler);
                 Assert.assertTrue(backpressureIndex >= 0);
+                Assert.assertTrue(idleTimeoutIndex > backpressureIndex);
+                Assert.assertTrue(idleTimeoutCloserIndex > idleTimeoutIndex);
                 Assert.assertTrue(decoderIndex > backpressureIndex);
+                Assert.assertTrue(decoderIndex > idleTimeoutCloserIndex);
                 Assert.assertTrue(adapterIndex > decoderIndex);
                 Assert.assertTrue(protocolErrorIndex > adapterIndex);
                 Assert.assertTrue(commandHandlerIndex > protocolErrorIndex);
                 Assert.assertEquals(3, intField(decoder, "maxBulkBytes"));
                 Assert.assertEquals(2, intField(decoder, "maxArgs"));
                 Assert.assertEquals(4, intField(decoder, "maxInlineBytes"));
+                Assert.assertEquals(10000L, longField(backpressureHandler, "outputBufferOverLimitMillis"));
+                WriteBufferWaterMark waterMark = byteLimitedChannel.config().getWriteBufferWaterMark();
+                Assert.assertEquals(33554432, waterMark.low());
+                Assert.assertEquals(67108864, waterMark.high());
             } finally {
                 byteLimitedChannel.unsafe().closeForcibly();
             }
@@ -351,6 +363,9 @@ public class YierdisServerBootstrapCommandWiringTest {
                 protocolMaxBulkBytes,
                 protocolMaxArgs,
                 protocolMaxLineBytes,
+                300000,
+                67108864,
+                10000,
                 0,
                 YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL,
                 MaxmemoryPolicy.NOEVICTION,
@@ -370,6 +385,12 @@ public class YierdisServerBootstrapCommandWiringTest {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         return field.getInt(target);
+    }
+
+    private static long longField(Object target, String fieldName) throws Exception {
+        Field field = target.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return field.getLong(target);
     }
 
     private record RespError(String message) {
