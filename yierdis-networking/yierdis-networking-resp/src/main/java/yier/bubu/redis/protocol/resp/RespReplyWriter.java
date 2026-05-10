@@ -47,7 +47,7 @@ public final class RespReplyWriter implements ReplyWriter {
 
     @Override
     public void internalError(String message) {
-        error("ERR " + sanitizeSimple(message == null ? "internal error" : message));
+        error(message == null ? "ERR internal error" : message);
     }
 
     @Override
@@ -66,12 +66,33 @@ public final class RespReplyWriter implements ReplyWriter {
 
     @Override
     public void doubleValue(double value) {
-        if (Double.isNaN(value) || Double.isInfinite(value)) {
-            throw new IllegalArgumentException("double must be finite");
-        }
         if (version == RespProtocolVersion.RESP3) {
+            if (Double.isNaN(value)) {
+                writeAscii(",nan\r\n");
+                return;
+            }
+            if (value == Double.POSITIVE_INFINITY) {
+                writeAscii(",inf\r\n");
+                return;
+            }
+            if (value == Double.NEGATIVE_INFINITY) {
+                writeAscii(",-inf\r\n");
+                return;
+            }
             writeAsciiLine(',', Double.toString(value));
         } else {
+            if (Double.isNaN(value)) {
+                bulkString("nan".getBytes(StandardCharsets.US_ASCII));
+                return;
+            }
+            if (value == Double.POSITIVE_INFINITY) {
+                bulkString("inf".getBytes(StandardCharsets.US_ASCII));
+                return;
+            }
+            if (value == Double.NEGATIVE_INFINITY) {
+                bulkString("-inf".getBytes(StandardCharsets.US_ASCII));
+                return;
+            }
             bulkString(Double.toString(value).getBytes(StandardCharsets.US_ASCII));
         }
     }
@@ -139,7 +160,10 @@ public final class RespReplyWriter implements ReplyWriter {
             nullValue();
             return;
         }
-        int len = Math.max(0, slice.length());
+        int len = slice.length();
+        if (len < 0) {
+            throw new IllegalArgumentException("slice length must be >= 0");
+        }
         writeAscii("$" + len + "\r\n");
         slice.writeTo(out);
         writeCrlf();
@@ -161,7 +185,11 @@ public final class RespReplyWriter implements ReplyWriter {
 
     @Override
     public void nullArray() {
-        writeAscii("*-1\r\n");
+        if (version == RespProtocolVersion.RESP3) {
+            writeAscii("_\r\n");
+        } else {
+            writeAscii("*-1\r\n");
+        }
     }
 
     @Override
