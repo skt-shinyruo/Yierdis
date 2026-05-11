@@ -89,10 +89,11 @@ public final class YierdisDbExpirationSupport {
     }
 
     private void removeExpiredValue(KeyHandle keyHandle, YierdisObject e) {
+        long removalBytes = db.keyLifecycle().estimatedBytesForRemoval(keyHandle, e);
         db.removeExpire(keyHandle);
         if (db.keyLifecycle().removeObject(keyHandle, e)) {
             e.releasePayloadIfAny();
-            db.adjustUsedBytes(-e.estimatedBytes);
+            db.adjustUsedBytes(-removalBytes);
         }
     }
 }

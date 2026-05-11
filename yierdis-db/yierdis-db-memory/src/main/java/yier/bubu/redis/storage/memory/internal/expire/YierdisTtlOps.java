@@ -255,10 +255,11 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
                 long deltaBytes = 0;
+                long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, e);
                 keyLifecycle.removeExpire(handle);
                 if (keyLifecycle.remove(handle, e)) {
                     e.releasePayloadIfAny();
-                    deltaBytes -= e.estimatedBytes;
+                    deltaBytes -= removalBytes;
                 }
                 return YierdisDbMutationExecutor.MutationResult.of(
                         WriteResult.of(Boolean.TRUE, MutationOutcome.VALUE_CHANGED),
