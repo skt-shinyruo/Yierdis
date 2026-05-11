@@ -3,9 +3,7 @@ package yier.bubu.redis.storage.memory;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
-import yier.bubu.redis.storage.memory.internal.value.YierdisObject;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.ScanCursorV2;
@@ -55,7 +53,7 @@ public class YierdisDbArchitectureGuardTest {
         Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "offHeapAllocator"));
         Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "memoryRuntime"));
         Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "adjustUsedBytes"));
-        Assert.assertNull(findDeclaredMethod(YierdisDbInternals.class, "refreshEstimatedBytes", KeyHandle.class, YierdisObject.class));
+        Assert.assertNull(findDeclaredMethodByName(YierdisDbInternals.class, "refreshEstimatedBytes"));
     }
 
     @Test
@@ -197,12 +195,37 @@ public class YierdisDbArchitectureGuardTest {
         );
     }
 
+    @Test
+    public void dbMemoryProductionMustNotReferenceYierdisObject() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("unable to resolve repository root", repoRoot);
+
+        Path mainRoot = storageMemoryMain(repoRoot);
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(repoRoot, mainRoot, offenders, "YierdisObject");
+
+        Assert.assertTrue("expected to scan yierdis-db-memory production sources", scanned > 0);
+        if (!offenders.isEmpty()) {
+            Assert.fail("yierdis-db-memory production sources must not reference YierdisObject:\n"
+                    + String.join("\n", offenders));
+        }
+    }
+
     private static Method findDeclaredMethod(Class<?> type, String name, Class<?>... parameterTypes) {
         try {
             return type.getDeclaredMethod(name, parameterTypes);
         } catch (NoSuchMethodException ignored) {
             return null;
         }
+    }
+
+    private static Method findDeclaredMethodByName(Class<?> type, String name) {
+        for (Method method : type.getDeclaredMethods()) {
+            if (method.getName().equals(name)) {
+                return method;
+            }
+        }
+        return null;
     }
 
     private static Class<?> findDeclaredClass(Class<?> type, String simpleName) {
@@ -255,6 +278,35 @@ public class YierdisDbArchitectureGuardTest {
         for (String forbiddenText : forbiddenTexts) {
             if (forbiddenText != null && !forbiddenText.isBlank() && content.contains(forbiddenText)) {
                 offenders.add(rel + " contains forbidden text: " + forbiddenText);
+            }
+        }
+    }
+
+    private static int scanForForbiddenText(Path workspaceRoot, Path root, List<String> offenders, String forbiddenText)
+            throws IOException {
+        if (!Files.isDirectory(root)) {
+            offenders.add(relativePath(workspaceRoot, root) + " (missing directory)");
+            return 0;
+        }
+        List<Path> javaFiles;
+        try (java.util.stream.Stream<Path> files = Files.walk(root)) {
+            javaFiles = files
+                    .filter(Files::isRegularFile)
+                    .filter(path -> path.toString().endsWith(".java"))
+                    .toList();
+        }
+        for (Path javaFile : javaFiles) {
+            scanJavaFileForForbiddenText(workspaceRoot, javaFile, offenders, forbiddenText);
+        }
+        return javaFiles.size();
+    }
+
+    private static void scanJavaFileForForbiddenText(Path workspaceRoot, Path file, List<String> offenders, String forbiddenText)
+            throws IOException {
+        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).contains(forbiddenText)) {
+                offenders.add(relativePath(workspaceRoot, file) + ":" + (i + 1));
             }
         }
     }
