@@ -63,6 +63,215 @@ Operation:
 
 The matrix should identify the test file and method for each checked behavior, not only mark a boolean. Missing cells stay explicit as `missing`, so coverage gaps are visible and reviewable.
 
+### Matrix Status Values
+
+Every matrix cell must use one of these status values:
+
+- `covered`: the behavior has a named test file and method.
+- `covered-by-shared-test`: the behavior is covered by a broader cross-command or cross-structure test; the matrix must name that test.
+- `missing`: the behavior should be covered but does not have a test yet.
+- `not-applicable`: the behavior does not apply to this operation; the matrix must state the reason briefly.
+
+Avoid blank cells. A blank cell means the matrix itself is incomplete.
+
+### Initial Command Inventory
+
+The matrix must include every command registered by the kernel, default command bundle, and server command module.
+
+Kernel transaction commands:
+
+- `MULTI`
+- `DISCARD`
+- `EXEC`
+
+Connection and server commands:
+
+- `PING`
+- `ECHO`
+- `COMMAND`
+- `SELECT`
+- `QUIT`
+- `CLIENT`
+- `AUTH`
+- `FLUSHDB`
+- `HELLO`
+- `INFO`
+- `STATS`
+
+Keyspace, TTL, memory, and object commands:
+
+- `TYPE`
+- `MEMORY`
+- `OBJECT`
+- `KEYS`
+- `SCAN`
+- `DEL`
+- `EXISTS`
+- `EXPIRE`
+- `PEXPIRE`
+- `EXPIREAT`
+- `PEXPIREAT`
+- `PERSIST`
+- `TTL`
+- `PTTL`
+
+String and bitmap commands:
+
+- `SET`
+- `GET`
+- `STRLEN`
+- `APPEND`
+- `SETBIT`
+- `GETBIT`
+- `BITCOUNT`
+- `INCR`
+- `DECR`
+
+List commands:
+
+- `LPUSH`
+- `RPUSH`
+- `LRANGE`
+- `LPOP`
+- `RPOP`
+
+Hash commands:
+
+- `HSET`
+- `HGET`
+- `HGETALL`
+- `HLEN`
+- `HDEL`
+
+Set commands:
+
+- `SADD`
+- `SREM`
+- `SMEMBERS`
+- `SISMEMBER`
+- `SCARD`
+
+Sorted-set commands:
+
+- `ZADD`
+- `ZRANGE`
+- `ZREVRANGE`
+- `ZRANGEBYSCORE`
+- `ZREVRANGEBYSCORE`
+- `ZREMRANGEBYSCORE`
+- `ZREMRANGEBYRANK`
+- `ZREM`
+
+HyperLogLog commands:
+
+- `PFADD`
+- `PFCOUNT`
+- `PFMERGE`
+
+### Subcommand And Option Inventory
+
+The matrix must represent behavior-changing subcommands and options explicitly. They can be nested under their parent command, but they cannot be hidden behind a generic “options covered” note.
+
+Required initial entries:
+
+- `COMMAND`: base command, `COUNT`, `INFO`.
+- `CLIENT`: `SETINFO`, `SETNAME`, `GETNAME`, unknown subcommand error.
+- `HELLO`: RESP2, RESP3, `SETNAME`, unsupported protocol version, `AUTH` error, disallowed in `MULTI`.
+- `INFO`: no section, named section.
+- `MEMORY`: `STATS`, `USAGE`, invalid subcommand.
+- `OBJECT`: `ENCODING`, invalid subcommand.
+- `SCAN`: cursor parsing, `MATCH`, `COUNT`, duplicate or invalid option syntax.
+- `SET`: `NX`, `XX`, `GET`, `EX`, `PX`, `EXAT`, `PXAT`, `KEEPTTL`, conflicting options.
+- `BITCOUNT`: full string and byte-range variants.
+- `LPOP` / `RPOP`: single-element and count variants.
+- `ZRANGE`: `WITHSCORES`, `REV`, and range bounds.
+- `ZREVRANGE`: optional `WITHSCORES`.
+- `ZRANGEBYSCORE` / `ZREVRANGEBYSCORE`: inclusive/exclusive bounds, infinities, `WITHSCORES`, `LIMIT`, invalid option syntax.
+- `FLUSHDB`: default mode and accepted optional mode tokens.
+
+### DB API Inventory
+
+The matrix must enumerate public DB API methods, not only API groups.
+
+Read API:
+
+- `StringReadOps`: `getStringBytes`, `getStringValue`, `strlen`, `getBit`, `bitcount`, ranged `bitcount`.
+- `HashReadOps`: `hget`, `hgetall`, `hlen`.
+- `ListReadOps`: `lrange`.
+- `SetReadOps`: `smembers`, `sismember`, `scard`.
+- `ZSetReadOps`: `zrange`, `zrevrange`, `zrangeByScore`, `zrevrangeByScore`.
+- `HllReadOps`: `pfcount`.
+- `KeyspaceReadOps`: `typeOf`, `existsKey`, `keys`, `scan`.
+- `TtlReadOps`: `ttlSeconds`, `ttlMillis`.
+
+Write API:
+
+- `StringWriteOps`: `set`, both `setString` overloads, `append`, `setBit`, `incrBy`.
+- `HashWriteOps`: `hset`, `hdel`.
+- `ListWriteOps`: `lpush`, `rpush`, `lpop`, `rpop`.
+- `SetWriteOps`: `sadd`, `srem`.
+- `ZSetWriteOps`: `zadd`, `zremrangeByScore`, `zremrangeByRank`, `zrem`.
+- `HllWriteOps`: `pfadd`, `pfmerge`.
+- `KeyspaceWriteOps`: `del`.
+- `TtlWriteOps`: `expire`, `pexpire`, `expireAtSeconds`, `expireAtMillis`, `persist`.
+- `DbLifecycleOps`: `flushDb`.
+
+Runtime and observability API:
+
+- `MemoryOps`: `memoryUsage`, `memoryStats`, `objectEncoding`.
+- `ExpirationManager`: cleanup and maintenance behavior exposed through the DB engine.
+- `DbEngine`: `reads`, `writes`, `expiration`, `memory`, `lifecycle`.
+
+### Native/Internal Inventory
+
+The native/internal matrix must cover structures by responsibility, not only by class name.
+
+Entry and handle model:
+
+- `EntryRecord`
+- `EntryTable`
+- `EntryHandle`
+- `ValueHandle`
+- `KeyHandle`
+- `HeapKeyHandle`
+- `FfmKeyHandle`
+
+Key directory and key bytes:
+
+- `NativeKeyDirectory`
+- `YierdisFfmBlobStore`
+- `YierdisFfmKeyspace`
+- `ByteArrayKeyspace`
+- key lookup, insertion, replacement, removal, scan, random sampling, tombstone handling, and rehash/growth.
+
+Type roots and value encodings:
+
+- `StringRoot`
+- `ListRoot`
+- `HashRoot`
+- `SetRoot`
+- `ZSetRoot`
+- `ListValue`
+- `HashValue`
+- `SetValue`
+- `ZSetValue`
+- `YierdisHyperLogLog`
+- HLL storage through `StringRoot` with `ValueType.STRING` / `ValueEncoding.STRING_RAW`, because the current HLL path does not have a separate `HllRoot`.
+
+Expiration, memory, and mutation accounting:
+
+- `YierdisExpireIndex`
+- `YierdisHeapExpireIndex`
+- `YierdisFfmExpireIndex`
+- `YierdisDbMemoryLedger`
+- `MemoryLedger`
+- `InMemoryLedger`
+- `YierdisDbMutationExecutor`
+- `YierdisDbMemoryEstimator`
+- `YierdisDbMemoryReporter`
+- `YierdisDbIntrospection`
+- maxmemory candidate sampling, reserve/commit/rollback behavior, and cleanup after failed mutation plans.
+
 ## Matrix Artifact
 
 Add a maintained document:
@@ -81,23 +290,23 @@ Example shape:
 ### SET
 
 Command coverage:
-- happy path: CommandProcessorTest#setGetIncrExpireTtl
-- binary-safe value: CommandProcessorTest#stringIsBinarySafe
-- NX no-op: CommandProcessorTest#setNxReturnsNilWhenKeyExists
-- EX / KEEPTTL / GET: CommandProcessorTest#setGetAndKeepTtlSemanticsRemainIntact
-- syntax errors: CommandErrorTest#arityAndSyntaxErrorsMatchExpectedMessages
-- wrong type: CommandProcessorTest#setGetOnNonStringKeyReturnsWrongType
+- happy path: covered - CommandProcessorTest#setGetIncrExpireTtl
+- binary-safe value: covered - CommandProcessorTest#stringIsBinarySafe
+- NX no-op: covered - CommandProcessorTest#setNxReturnsNilWhenKeyExists
+- EX / KEEPTTL / GET: covered - CommandProcessorTest#setGetAndKeepTtlSemanticsRemainIntact
+- syntax errors: covered - CommandErrorTest#arityAndSyntaxErrorsMatchExpectedMessages
+- wrong type: covered - CommandProcessorTest#setGetOnNonStringKeyReturnsWrongType
 
 DB API coverage:
-- setString happy path: OffHeapStringStorageTest#setGetUsesFfmSliceAndDelFrees
-- overwrite reuse: OffHeapStringStorageTest#overwriteReusesFfmBufferUnderHardCap
-- oversized value rejection: OffHeapStringStorageTest#ffmMaxBytesRejectsOversizedSet
-- missing: mutation outcome no-op matrix for NX / XX
+- setString happy path: covered - OffHeapStringStorageTest#setGetUsesFfmSliceAndDelFrees
+- overwrite reuse: covered - OffHeapStringStorageTest#overwriteReusesFfmBufferUnderHardCap
+- oversized value rejection: covered - OffHeapStringStorageTest#ffmMaxBytesRejectsOversizedSet
+- mutation outcome no-op matrix for NX / XX: missing
 
 Native coverage:
-- StringRoot store / overwrite / slice: StringRootTest#stringRootOverwritesWithoutReintroducingHeapPayloads
-- EntryTable allocate / replace / release: EntryTableContractTest
-- NativeKeyDirectory lookup / scan / rehash: NativeKeyDirectoryTest
+- StringRoot store / overwrite / slice: covered - StringRootTest#stringRootOverwritesWithoutReintroducingHeapPayloads
+- EntryTable allocate / replace / release: covered-by-shared-test - EntryTableContractTest
+- NativeKeyDirectory lookup / scan / rehash: covered-by-shared-test - NativeKeyDirectoryTest
 ```
 
 ## Test Infrastructure
@@ -163,11 +372,17 @@ Add a lightweight guard test that prevents command coverage from silently drifti
 yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/OperationCoverageMatrixTest.java
 ```
 
-The guard should compare the command names reported by the registered command metadata with entries listed in the matrix document. The first implementation can be conservative:
+The guard should compare command names reported by registered command metadata with entries listed in the matrix document. It must build two inventories:
 
-- verify every command from `COMMAND` / registry appears at least once in the matrix
+- default processor inventory: kernel transaction commands plus `DefaultCommandModules`
+- server processor inventory: default processor inventory plus `ServerCommandModule`
+
+The first implementation can be conservative:
+
+- verify every command from both inventories appears at least once in the matrix
+- verify every matrix cell uses one of the allowed status values
 - do not require every cell to be complete
-- fail with a message naming missing command entries
+- fail with a message naming missing command entries or unknown status values
 
 This turns the matrix into a living artifact without making it a brittle coverage percentage tool.
 
@@ -179,7 +394,8 @@ This turns the matrix into a living artifact without making it a brittle coverag
 - Add command reply assertion helpers.
 - Add DB/native lifecycle assertion helpers only where existing tests repeat enough code.
 - Add `OperationCoverageMatrixTest` to detect command entries missing from the matrix.
-- Populate the matrix with existing coverage for all known commands at a coarse level.
+- Populate the matrix with existing coverage for every command in the initial command inventory at a coarse level.
+- Populate DB API and native/internal inventories with `covered`, `covered-by-shared-test`, `missing`, or `not-applicable`.
 
 ### Phase 2 - String and Bitmap Template
 
@@ -205,10 +421,13 @@ This turns the matrix into a living artifact without making it a brittle coverag
 ## Success Criteria
 
 - Every registered command has a matrix entry.
-- Every matrix entry links to at least one command-level behavior test or is explicitly marked `missing`.
-- Every DB API group has direct tests for happy path, no-op or missing-key behavior, wrong type where applicable, TTL interaction where applicable, and memory/OOM behavior where applicable.
-- Every native structure has direct tests for allocation, lookup, replacement, release, and at least one growth or iteration path when the structure supports it.
+- Every behavior-changing subcommand and option listed in the subcommand inventory has its own matrix row or nested entry.
+- Every matrix cell uses `covered`, `covered-by-shared-test`, `missing`, or `not-applicable`.
+- Every `covered` and `covered-by-shared-test` cell links to at least one test file and method.
+- Every DB API method listed in the DB API inventory has direct tests for happy path, no-op or missing-key behavior, wrong type where applicable, TTL interaction where applicable, and memory/OOM behavior where applicable.
+- Every native/internal responsibility listed in the native inventory has direct tests for allocation, lookup, replacement, release, and at least one growth or iteration path when the structure supports it.
 - New commands require updating the matrix, enforced by `OperationCoverageMatrixTest`.
+- New public DB API methods and new native storage structures require updating the matrix, enforced by review and, where practical, guard tests.
 - The test suite remains understandable: behavior tests should still show actual commands and expected replies.
 
 ## Risks
