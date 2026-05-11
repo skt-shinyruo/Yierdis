@@ -16,6 +16,7 @@ import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 
 import java.util.function.BooleanSupplier;
@@ -149,6 +150,14 @@ public final class YierdisDbMemoryReporter {
             }
             return extra;
         }
+        if (type == ValueType.LIST && object.hasListRoot()) {
+            ValueHandle handle = record == null ? object.valueHandle() : record.valueHandle();
+            ListRoot listRoot = keyLifecycle.listRoot();
+            if (handle != null && listRoot != null) {
+                extra += listRoot.estimatedBytes(handle);
+            }
+            return extra;
+        }
         if (type == ValueType.STRING && object.payload instanceof OffHeapBuf buf) {
             extra += buf.capacity();
         }
@@ -195,6 +204,10 @@ public final class YierdisDbMemoryReporter {
         NativeKeyDirectory keyDirectory = keyLifecycle.keyDirectory();
         if (keyDirectory != null) {
             total = addSaturating(total, keyDirectory.nativeBytes());
+        }
+        ListRoot listRoot = keyLifecycle.listRoot();
+        if (listRoot != null) {
+            total = addSaturating(total, listRoot.nativeBytes());
         }
         return total;
     }
