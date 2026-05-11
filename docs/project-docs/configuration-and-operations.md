@@ -31,7 +31,7 @@ CLI args
 - `YierdisServerBootstrap`
   负责真正把 runtime config 装配进 server
 
-bench 不再复用 server runtime config；它在 `yierdis-benchmark` 内维护自己的 server launch argv 模型，只负责生成子进程启动参数。
+bench 不再复用 server runtime config；它在 `yierdis-benchmark` 内维护自己的 server launch argv 模型，只负责生成子进程启动参数。这个模型覆盖常用启动/压测参数，但不是 server 参数全集；例如 client idle/output-buffer 慢客户端保护仍是 server-main 专属参数。
 
 ## 参数分组
 
@@ -128,7 +128,25 @@ ERR busy not_running
 
 如果你把 Yierdis 暴露到公网或弱隔离环境，首先应该收紧这一组参数，而不是先去调整更深层的内存细节。
 
-### 6. maxmemory 和淘汰
+### 6. 连接空闲和输出缓冲保护
+
+- `--client-idle-timeout-millis`
+- `--client-output-buffer-limit-bytes`
+- `--client-output-buffer-over-limit-millis`
+
+这组参数控制慢客户端和闲置连接：
+
+- idle timeout 默认 `300000` ms；设置为 `0` 时不安装读空闲关闭逻辑
+- output buffer limit 默认 `67108864` bytes；设置为 `0` 时不设置 Netty write buffer watermark，也不启用慢客户端宽限关闭
+- over-limit grace 默认 `10000` ms；当 channel 持续不可写超过这段时间，server 会关闭连接
+
+实现入口在 `YierdisServerChannelInitializer`：
+
+- 根据 `clientOutputBufferLimitBytes` 设置 `WriteBufferWaterMark`
+- `WriteBufferBackpressureHandler` 在 channel 不可写时关闭 `autoRead`，恢复可写时交回 executor 判断是否恢复
+- `IdleStateHandler` 在读空闲超时后关闭连接
+
+### 7. maxmemory 和淘汰
 
 - `--maxmemoryBytes`
 - `--maxmemoryScope`
@@ -140,8 +158,8 @@ ERR busy not_running
 
 当前 scope 有两种：
 
-- `global`
-- `per-db`
+- `global`：默认值；默认 factory 下所有 DB 共享一个实例级 `YierdisFfmMemoryRuntime`，并由 `YierdisGlobalMaxmemoryGovernor` 跨 DB 协调淘汰
+- `per-db`：兼容模式；`YierdisInstance` 会把 `maxmemoryBytes` 按 DB 数量分摊给每个 DB，默认 factory 下每个 DB 各自持有 runtime
 
 policy 有三种：
 
@@ -150,6 +168,8 @@ policy 有三种：
 - `allkeys-lru`
 
 如果预算为 `0`，表示不限制。
+
+`per-db` 的分摊是整数除法加余数补齐：总预算先除以 DB 数量，余数按 DB 创建顺序每个 DB 多给 1 byte。`global` 不分摊预算；它用一个全局 governor 观察所有 DB，并把共享 FFM runtime 的 used bytes 按实例口径计入。
 
 项目当前没有独立的 `--offheapBackend` 或 `--offheapMaxBytes`。native memory 路径默认统一走 JDK 25 FFM，真正的预算入口就是 `maxmemory`。
 
@@ -165,7 +185,7 @@ policy 有三种：
 6. 创建 `CommandExecutor`
 7. 启动 executor，并在 owner thread 绑定 runtime
 8. 如果开启清理任务，则调度 maintenance tick
-9. 装配 Netty pipeline
+9. 装配 Netty pipeline，包括 RESP decoder、输出缓冲背压和可选 idle timeout
 10. `bind(port)`
 
 这里最容易误解的一点是：
@@ -289,8 +309,9 @@ policy 有三种：
 
 1. 先收紧 `--protocolMaxBulkBytes`
 2. 再收紧 `--protocolMaxArgs` 和 `--protocolMaxLineBytes`
-3. 根据负载调小 `--executorQueueCapacity` 和 `--executorQueueMaxBytes`
-4. 通过 `STATS` 验证是否开始出现过量 reject
+3. 设置 `--client-idle-timeout-millis` 和输出缓冲上限，避免闲置或慢读连接长期占住资源
+4. 根据负载调小 `--executorQueueCapacity` 和 `--executorQueueMaxBytes`
+5. 通过 `STATS` 验证是否开始出现过量 reject
 
 ### 大 keyspace 或慢扫描场景
 

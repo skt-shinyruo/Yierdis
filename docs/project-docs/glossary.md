@@ -154,7 +154,7 @@ server 侧真正执行命令的处理器。它负责：
 
 ### keyspace
 
-主索引，也就是“key 到 value object”的映射。读写一个 key 时，绝大多数路径都会先碰到它。
+主索引现在由 `NativeKeyDirectory` 承担，也就是“key 到 `EntryHandle`”的映射。`EntryHandle` 再进入 `EntryTable` 取得 `EntryRecord`，读写一个 key 时，绝大多数路径都会先碰到这组结构。
 
 ### expire index
 
@@ -168,7 +168,7 @@ DB 内部对 key 的句柄化表示。它用于把 key 的生命周期、内存�
 
 围绕 key 生命周期的协作者。它负责处理：
 
-- 取 live object
+- 取仍未过期的 `EntryRecord`
 - 判断和删除过期 key
 - 更新 expire 元数据
 - 触摸访问时间

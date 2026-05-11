@@ -59,7 +59,7 @@ YierdisServer
 
 入口文件是：
 
-- [`yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`](../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java)
+- [`yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java)
 
 这个类很小，但它决定了启动的最外层行为。
 
@@ -90,7 +90,7 @@ YierdisServer
 
 组装中心在：
 
-- [`yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`](../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java)
+- [`yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java)
 
 这是整个主链里最重要的类之一。
 
@@ -170,7 +170,7 @@ bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`
 
 实例装配中心在：
 
-- [`yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`](../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java)
+- [`yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java)
 
 ### 这个类不要误解成什么
 
@@ -196,11 +196,14 @@ bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`
 1. 读配置里的 `databases`
 2. 判断 `maxmemoryScope` 是 `GLOBAL` 还是 `PER_DB`
 3. 创建实例级 `YierdisFfmMemoryRuntime`
-4. 决定使用哪个 `DbEngineFactory`
-5. 为每个 DB 创建一个 `RuntimeDbEngine`
-6. 如果是全局 maxmemory，再创建 `YierdisGlobalMaxmemoryGovernor`
-7. 把 governor attach 到每个 DB
-8. 最后把 DB 数组、memory runtime 和 ownership 信息装进 `YierdisInstanceResources`
+4. 如果是 `PER_DB`，把 `maxmemoryBytes` 按 DB 数量分摊给每个 DB
+5. 决定使用哪个 `DbEngineFactory`
+6. 为每个 DB 创建一个 `RuntimeDbEngine`
+7. 如果是全局 maxmemory，再创建 `YierdisGlobalMaxmemoryGovernor`
+8. 把 governor attach 到每个 DB
+9. 最后把 DB 数组、memory runtime 和 ownership 信息装进 `YierdisInstanceResources`
+
+默认 factory 的资源归属也在这里定下来：`GLOBAL` 会把同一个 shared FFM runtime 传给 DB factory，global governor 额外把 shared runtime 的 `usedBytes()` 计入一次；`PER_DB` 则让每个 DB 拥有自己的 FFM runtime 和本地预算。
 
 ### 为什么这里要返回 `DbEngine[]`
 
@@ -218,7 +221,7 @@ bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`
 
 入口在：
 
-- [`yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`](../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java)
+- [`yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java)
 
 ### `initChannel(...)` 先做什么
 
@@ -271,7 +274,7 @@ bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`
 
 桥接类是：
 
-- [`yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`](../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java)
+- [`yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java)
 
 ### 它做的事非常专一
 
@@ -302,7 +305,7 @@ bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`
 
 命令提交入口在：
 
-- [`yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java`](../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java)
+- [`yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java)
 
 ### `channelRead0(...)` 在做什么
 
@@ -333,10 +336,10 @@ bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`
 
 这部分的核心类有 4 个：
 
-- [`CommandExecutor`](../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java)
-- [`CommandExecutorSubmitter`](../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorSubmitter.java)
-- [`CommandExecutorDrainLoop`](../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorDrainLoop.java)
-- [`ExecutorBackpressureController`](../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorBackpressureController.java)
+- [`CommandExecutor`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java)
+- [`CommandExecutorSubmitter`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorSubmitter.java)
+- [`CommandExecutorDrainLoop`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorDrainLoop.java)
+- [`ExecutorBackpressureController`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorBackpressureController.java)
 
 ### 先看 `CommandExecutor`
 
@@ -408,7 +411,7 @@ bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`
 
 这一层的桥梁是：
 
-- [`CommandExecutorExecutionSupport`](../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java)
+- [`CommandExecutorExecutionSupport`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java)
 
 ### 它做了哪几件关键事
 
@@ -438,7 +441,7 @@ bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`
 
 命令分发中心在：
 
-- [`yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`](../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java)
+- [`yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java)
 
 ### 构造时它做了什么
 
@@ -489,7 +492,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 文件：
 
-- [`yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`](../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java)
+- [`yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java)
 
 它负责：
 
@@ -507,7 +510,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 文件：
 
-- [`yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java`](../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
+- [`yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
 
 这里最关键的一句是：
 
@@ -525,7 +528,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 文件：
 
-- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`](../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java)
+- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java)
 
 这是“真正开始把 `SET` 落成 mutation”的地方。
 
@@ -544,7 +547,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 文件：
 
-- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java`](../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java)
+- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java)
 
 它的核心模板是：
 
@@ -565,7 +568,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 文件：
 
-- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java`](../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java)
+- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java)
 
 它是 key 生命周期的统一入口。
 
@@ -587,8 +590,8 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 文件：
 
-- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java`](../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java)
-- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/TypeRoot.java`](../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/TypeRoot.java)
+- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java)
+- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/TypeRoot.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/TypeRoot.java)
 
 最终字符串并不是简单的 `byte[]`，而是由两部分组成：
 
@@ -616,7 +619,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 - `*Ops` 负责把语义落成 mutation
 - mutation executor 负责预算和回滚
 - key lifecycle 负责 key / TTL / payload 生命周期
-- value object 负责内部编码和真正数据表示
+- `EntryRecord` 负责记录逻辑类型、编码和 `ValueHandle`，各 `TypeRoot` 负责真正 payload
 
 你一旦把 `SET` 这条链看明白了，再看别的写命令就会轻松很多。
 
@@ -645,7 +648,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 ### 1. 启动和整体接线
 
-- [`yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java`](../yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java)
+- [`yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java`](../../yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java)
 
 看点：
 
@@ -654,7 +657,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 ### 2. 执行器行为
 
-- [`yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorTest.java`](../yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorTest.java)
+- [`yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorTest.java`](../../yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorTest.java)
 
 看点：
 
@@ -665,7 +668,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 ### 3. `SET` 和基础命令行为
 
-- [`yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandProcessorTest.java`](../yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandProcessorTest.java)
+- [`yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandProcessorTest.java`](../../yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandProcessorTest.java)
 
 看点：
 
@@ -676,7 +679,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 ### 4. 事务路径
 
-- [`yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TransactionCommandTest.java`](../yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TransactionCommandTest.java)
+- [`yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TransactionCommandTest.java`](../../yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TransactionCommandTest.java)
 
 看点：
 
@@ -686,7 +689,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 ### 5. off-heap 字符串路径
 
-- [`yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapStringStorageTest.java`](../yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapStringStorageTest.java)
+- [`yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapStringStorageTest.java`](../../yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapStringStorageTest.java)
 
 看点：
 

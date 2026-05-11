@@ -240,9 +240,11 @@ bench 可以开启：
 
 - 一键启动 RESP benchmark
 - 透传 JVM 参数
-- 透传 server 参数
+- 透传 bench server launch argv 模型支持的 server 参数
 - 透传 bench 额外参数
 - 复现实验环境
+
+这里的“server 参数”不是直接无限制转发给 `yierdis-server-main`。`SERVER_ARGS_EXTRA` 会先进入 `YierdisBenchServerArgs` 的 picocli parser，再由 `toArgv()` 生成子进程 argv；因此它只支持 bench launch 模型里声明过的参数。当前 bench 模型覆盖 port、DB 数量、cleanup、executor/backpressure、transaction queue、protocol limits、maxmemory、KEYS budget 等参数，但不包含 server-only 的 client idle/output-buffer 慢客户端保护参数。需要验证这类 server-only 参数时，应直接启动 server 或先扩展 bench launch argv 模型。
 
 所以脚本层不是另起一套实现，而是把：
 

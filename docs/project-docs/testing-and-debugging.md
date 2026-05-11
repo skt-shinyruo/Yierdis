@@ -66,10 +66,13 @@
 
 ### 4. DB / 数据结构层
 
-目标是验证值对象、TTL、maxmemory 和内存估算。
+目标是验证 native entry/root、类型 payload adapter、TTL、maxmemory 和内存估算。
 
 代表测试：
 
+- `NativeKeyDirectoryTest`
+- `EntryTableContractTest`
+- `StringRootTest`
 - `SetCommandTest`
 - `HashCommandTest`
 - `ListCommandTest`
@@ -286,6 +289,8 @@ SKIP_BUILD=1 ./scripts/smoke.sh
 - `SERVER_ARGS_EXTRA`
 - `BENCH_ARGS_EXTRA`
 
+`SERVER_ARGS_EXTRA` 先经过 `YierdisBenchServerArgs` 解析，只能使用 bench launch 模型已声明的 server 参数；client idle/output-buffer 慢客户端保护这类 server-only 参数需要直接启动 server 验证。
+
 例如：
 
 ```bash
@@ -361,6 +366,7 @@ REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 - `EntryRecord`
 - `StringRoot` / `HashRoot` / `ListRoot` / `SetRoot` / `ZSetRoot`
 - `HashValue` / `ListValue` / `SetValue` / `ZSetValue`
+- `NativeKeyDirectoryTest` / `EntryTableContractTest` / `StringRootTest`
 - `MemoryStatsCommandTest`
 - 对应值类测试
 

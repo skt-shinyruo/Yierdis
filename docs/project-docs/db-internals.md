@@ -111,7 +111,7 @@ YierdisInstance
 - `YierdisDbMaxmemorySupport`
   负责采样候选、淘汰和 LRU 相关策略
 - `YierdisDbKeyLifecycle`
-  负责 key handle、live object、惰性过期删除和 TTL 元数据更新
+  负责 key handle、live `EntryRecord`、惰性过期删除和 TTL 元数据更新
 
 ### 4. 类型化操作对象
 
@@ -336,9 +336,9 @@ command
 
 ## TTL 和 expire index 是怎么协作的
 
-TTL 不是存在对象里的一个裸字段，而是被拆成：
+TTL 不是只存在 payload 里的一个裸字段，而是被拆成：
 
-- object 本身
+- `EntryRecord.expireAtMillis`
 - expire index 里的时间元数据
 
 ### 为什么要分开
@@ -347,7 +347,7 @@ TTL 不是存在对象里的一个裸字段，而是被拆成：
 
 - 不是所有 key 都有 TTL
 - TTL 逻辑需要独立扫描和清理
-- `persist`、`expire`、惰性删除、后台 cleanup` 都要围绕这份索引工作
+- `persist`、`expire`、惰性删除、后台 cleanup 都要围绕这份索引工作
 
 ### `YierdisDbKeyLifecycle` 管什么
 
@@ -386,18 +386,23 @@ TTL 不是存在对象里的一个裸字段，而是被拆成：
 
 第一种：per-db scope
 
+- `YierdisInstance` 把 `maxmemoryBytes` 按 DB 数量分摊给各 DB
+- 默认 `YierdisDbEngineFactory` 会为每个 DB 创建独立 FFM runtime
 - 每个 DB 有自己的本地预算
 - ledger 本地处理 cleanup/evict/noeviction
 
 第二种：global scope
 
+- 默认 `YierdisDbEngineFactory` 让所有 DB 复用实例级 shared runtime
 - instance 级 governor 作为 `MaxmemoryCoordinator`
 - 各 DB attach 到同一个全局协调器
+- governor 汇总各 DB participant，并把 shared runtime 的 `usedBytes()` 作为共享 usage source 计入一次
 
 所以：
 
 - 单 DB 里看到的是 ledger + support
 - 多 DB 里真正的跨库协调来自 instance/runtime 层
+- `MEMORY STATS` 在 global scope 下返回实例聚合视角，off-heap shared runtime 不按 DB 重复相加
 
 ## native entry/root 在 DB 内核里处于什么位置
 
@@ -438,7 +443,7 @@ TTL 不是存在对象里的一个裸字段，而是被拆成：
 
 root 负责 `ValueHandle` 的创建、读取、变更、估算和释放。集合类型原来的
 `HashValue`、`ListValue`、`SetValue`、`ZSetValue` 是 root 内部的 payload
-结构；DB hot path 不再通过单独的兼容 value object 访问 key state。
+结构；DB hot path 不再通过单独的兼容对象容器访问 key state。
 
 更细的编码说明请配合：
 
@@ -470,7 +475,7 @@ root 负责 `ValueHandle` 的创建、读取、变更、估算和释放。集合
 2. `YierdisDb`
    看对象图是如何拼起来的
 3. `YierdisDbKeyLifecycle`
-   看 key handle、live object、TTL 元数据
+   看 key handle、live `EntryRecord`、TTL 元数据
 4. `YierdisDbMutationExecutor`
    看受控 mutation 协议
 5. `YierdisDbMemoryLedger`

@@ -135,6 +135,17 @@ redis-cli -p 6378 HELLO 3
 
 RESP3 只表示回包版本协商，不意味着 Yierdis 覆盖 Redis 的完整命令语义或所有 RESP3 客户端特性。
 
+## Redis Client Handshake Helpers
+
+为了让 `redis-cli`、Jedis、Lettuce、go-redis 这类客户端更容易完成基础连接握手，Yierdis 也接受几个很小的兼容命令：
+
+- `CLIENT SETINFO ...`：直接返回 `OK`
+- `CLIENT SETNAME name`：记录当前连接名
+- `CLIENT GETNAME`：返回当前连接名，未设置时返回 null
+- `AUTH ...`：没有认证配置面，固定返回 Redis 风格的 no-password-configured 错误
+
+这些命令只解决连接握手和最小客户端兼容，不表示项目支持 Redis ACL、用户管理或完整 `CLIENT` 子命令集合。
+
 ## Protocol Errors
 
 malformed RESP 不具备可靠的重同步点。Yierdis 的策略是：
@@ -172,7 +183,7 @@ CLI 仍保持一问一答模型。发生 timeout 或 parse failure 时会关闭�
 3. `RespReplyWriterTest`
    看 RESP2/RESP3 reply 编码。
 4. `RespHandshakeIntegrationTest`
-   看 `HELLO 3` 如何切换连接级 RESP version。
+   看 `HELLO 3` 如何切换连接级 RESP version，以及 `CLIENT SETINFO/SETNAME/GETNAME` 握手兼容。
 5. `RespProtocolErrorIntegrationTest`
    看 malformed RESP 如何写错误并关闭连接。
 

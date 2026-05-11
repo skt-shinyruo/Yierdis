@@ -35,7 +35,7 @@
 - [`db-internals.md`](./db-internals.md)
   专门展开 `YierdisDb`、key lifecycle、mutation executor、memory ledger、TTL 和 maxmemory 在单 DB 内核里是如何协作的。
 - [`executor-and-backpressure.md`](./executor-and-backpressure.md)
-  专门展开执行器、队列预算、GLOBAL/FAIR 调度、连接级背压和 global recovery 的内部机制。
+  专门展开执行器、队列预算、GLOBAL/FAIR 调度、连接级背压、输出缓冲背压和 global recovery 的内部机制。
 - [`module-architecture.md`](./module-architecture.md)
   说明 Maven 模块的职责、依赖方向和架构护栏，回答“哪些模块能依赖哪些模块”。
 - [`development-navigation.md`](./development-navigation.md)
@@ -55,7 +55,7 @@
 ### 运行与贡献
 
 - [`configuration-and-operations.md`](./configuration-and-operations.md)
-  说明启动参数如何流入 runtime config，以及背压、淘汰、maintenance、观测命令在运行时是怎么工作的。
+  说明启动参数如何流入 runtime config，以及背压、慢客户端保护、淘汰、maintenance、观测命令在运行时是怎么工作的。
 - [`client-and-bench-internals.md`](./client-and-bench-internals.md)
   说明 CLI、Netty client、bench、smoke/bench 脚本是如何沿着真实协议路径工作和验证 server 的。
 - [`testing-and-debugging.md`](./testing-and-debugging.md)

@@ -67,7 +67,10 @@ Netty I/O 线程只负责收包和入队，真正访问 DB 的是单独的 comma
 如果你已经看过 `docs/project-docs/ffm-usage.md`，会发现这里的核心关键词是：
 
 - `YierdisFfmMemoryRuntime`
-- `YierdisFfmKeyspace`
+- `NativeKeyDirectory`
+- `EntryTable`
+- `EntryRecord`
+- `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot`
 - `YierdisFfmExpireIndex`
 
 ### 4. 不只是实现命令，还在复刻 Redis 风格内部编码
@@ -157,6 +160,7 @@ Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格�
 - 决定逻辑 DB 数量
 - 创建实例级的 `YierdisFfmMemoryRuntime`
 - 根据 `maxmemoryScope` 决定 DB 是共享一个 runtime，还是每个 DB 各自持有 runtime
+- `per-db` scope 下把 `maxmemoryBytes` 按 DB 数量分摊，`global` scope 下保留实例级总预算
 - 为每个 DB 创建 `RuntimeDbEngine`
 - 在需要时创建全局 `YierdisGlobalMaxmemoryGovernor`
 - 给各个 DB 挂上 `MaxmemoryCoordinator`
@@ -175,7 +179,7 @@ Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格�
 
 在构造阶段，`YierdisDb` 会把下面这些东西拼起来：
 
-- keyspace：负责 key -> object 的主索引
+- `NativeKeyDirectory` / `EntryTable`：负责 key -> `EntryHandle` -> `EntryRecord` 的主索引
 - expires：负责 key -> expireAt 的过期索引
 - `YierdisStringOps`
 - `YierdisHashOps`

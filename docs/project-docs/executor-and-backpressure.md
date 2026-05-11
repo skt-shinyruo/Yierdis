@@ -8,7 +8,7 @@
 - [`main-path-walkthrough.md`](./main-path-walkthrough.md)
 - [`configuration-and-operations.md`](./configuration-and-operations.md)
 
-那么这篇文档会把“请求如何入队、如何被调度、什么时候拒绝、什么时候关闭 `autoRead`、什么时候恢复”这条内部机制讲细。
+那么这篇文档会把“请求如何入队、如何被调度、什么时候拒绝、什么时候关闭 `autoRead`、什么时候恢复，以及慢客户端输出缓冲怎么触发传输层背压”这条内部机制讲细。
 
 ## 先记住一句话
 
@@ -19,20 +19,22 @@ Yierdis 不是“收到请求就立刻执行”的 server。
 - I/O 线程负责收包和提交
 - command executor 线程负责串行执行
 - backlog budget 和 backpressure 负责防止系统无界积压
+- Netty outbound buffer 也会参与背压，防止慢读客户端无限堆积待写数据
 
 ## 主角有哪些
 
-这条链上的核心对象有 8 个：
+这条机制里的核心对象有 9 个：
 
 ```text
+YierdisServerChannelInitializer.WriteBufferBackpressureHandler
 YierdisFastCommandHandler
-  -> CommandExecutor
-     -> CommandExecutorSubmitter
-     -> ExecutorBacklogBudget
-     -> ExecutorTaskQueue
-     -> CommandExecutorDrainLoop
-     -> CommandExecutorExecutionSupport
-     -> ExecutorBackpressureController
+CommandExecutor
+  -> CommandExecutorSubmitter
+  -> ExecutorBacklogBudget
+  -> ExecutorTaskQueue
+  -> CommandExecutorDrainLoop
+  -> CommandExecutorExecutionSupport
+  -> ExecutorBackpressureController
 ```
 
 另外还有一个经常被忽略但很关键的连接态根对象：
@@ -243,7 +245,7 @@ drain loop 使用了 `NettyReplyFlushBatch` 做 flush coalescing：
 
 ## 背压是怎么工作的
 
-Yierdis 的背压不是只有一种，而是三类因素一起作用。
+Yierdis 的背压不是只有一种，而是四类因素一起作用。
 
 ### 1. 单连接 pending 条数
 
@@ -276,6 +278,16 @@ Yierdis 的背压不是只有一种，而是三类因素一起作用。
 - 全局 queued tasks 或 queued bytes 已经达到高水位
 
 也会触发更广义的 backpressure，并在预算恢复后做 global recovery。
+
+### 4. Netty 输出缓冲不可写
+
+如果 `--client-output-buffer-limit-bytes` 大于 `0`，`YierdisServerChannelInitializer` 会设置 Netty `WriteBufferWaterMark`。当 channel 变成不可写时：
+
+- `WriteBufferBackpressureHandler` 调用 `executor.onTransportUnwritable(...)`
+- 连接会进入传输层背压，避免继续读入更多请求
+- 如果 channel 持续不可写超过 `--client-output-buffer-over-limit-millis`，server 会关闭这个慢客户端
+
+当 channel 恢复可写时，handler 会取消慢客户端关闭任务，并交给 executor 重新评估是否可以恢复 `autoRead`。这条路径和 executor pending/backlog 背压共享恢复判断，不绕开连接本地状态。
 
 ## `ExecutorBackpressureController` 负责什么
 
@@ -368,7 +380,9 @@ Yierdis 的背压不是只有一种，而是三类因素一起作用。
    看命令执行和预算释放
 7. `ExecutorBackpressureController`
    看 autoRead enter/exit/global recovery
-8. `NettyExecutionConnection`
+8. `YierdisServerChannelInitializer`
+   看 Netty write buffer watermark、慢客户端关闭和 idle timeout
+9. `NettyExecutionConnection`
    看连接级统计和调度状态
 
 ## 最值得看的测试
@@ -380,7 +394,7 @@ Yierdis 的背压不是只有一种，而是三类因素一起作用。
 - `CommandExecutorFairSchedulingTest`
   看 fair scheduling 行为
 - `YierdisServerBootstrapCommandWiringTest`
-  看 runtime config 如何把这些机制接进 server
+  看 runtime config 如何把这些机制接进 server，包括 output buffer watermark 和 idle timeout
 
 ## 一句话总结
 

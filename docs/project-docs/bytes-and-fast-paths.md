@@ -249,8 +249,8 @@ Yierdis 选择的是中间路线：
   看 `OffHeapSlice` 如何建立在中立 `BytesSlice` 之上
 - `OffHeapBytesViewTtlRegressionTest`
   看 `BytesView` 在 TTL 路径里的实际意义
-- `ByteArrayKeyspaceTest`
-  看 `BytesView` lookup 如何参与 keyspace 比较
+- `NativeKeyDirectoryTest`
+  看 native key bytes、`KeyHandle` 和 `EntryHandle` 如何参与当前主索引路径
 
 ## 一句话总结
 

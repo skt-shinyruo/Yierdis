@@ -86,12 +86,16 @@ ExecutionRequest
 - `COMMAND`
 - `SELECT`
 - `QUIT`
+- `CLIENT SETINFO ...`
+- `CLIENT SETNAME name`
+- `CLIENT GETNAME`
+- `AUTH`
 - `FLUSHDB [SYNC|ASYNC]`
 - `MULTI`
 - `EXEC`
 - `DISCARD`
 
-这些命令更多是在操作“连接态”和“执行框架”，而不是复杂数据结构。
+这些命令更多是在操作“连接态”、客户端握手兼容和“执行框架”，而不是复杂数据结构。当前 `AUTH` 没有真正的认证配置面；它只是返回 Redis 风格的 no-password-configured 错误，避免常见 Redis 客户端握手时出现未知命令。
 
 ### 2. Key / TTL / Introspection
 

@@ -11,7 +11,7 @@
 
 ## 一句话先说清楚
 
-Yierdis 是一个用 Java 25、Netty 和 JDK FFM 实现的单机内存 KV 服务端。它参考 Redis 的设计思路，但不追求 Redis 原生协议兼容，也不追求做一个生产级 Redis 替代品。
+Yierdis 是一个用 Java 25、Netty 和 JDK FFM 实现的单机内存 KV 服务端。它参考 Redis 的设计思路，对外 TCP 协议使用 Redis RESP（RESP2 默认，`HELLO 3` 可协商基础 RESP3 回包），但不追求完整 Redis 命令语义或客户端生态兼容，也不追求做一个生产级 Redis 替代品。
 
 更准确地说，它是一个“Redis 风格系统”的教学样本、实验平台和工程化实现：
 
@@ -221,6 +221,9 @@ db + runtime + memory
 
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryTable.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/HashValue.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ListValue.java`
 
@@ -341,6 +344,7 @@ socket bytes
 - queue capacity
 - queued-bytes budget
 - 连接级 autoRead 控制
+- 输出缓冲慢客户端保护
 
 来保护自己。
 

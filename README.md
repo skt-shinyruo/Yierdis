@@ -58,7 +58,7 @@ mvn -DskipTests package
 - DB 内核：`YierdisDb`、key lifecycle、mutation executor、memory ledger、TTL、maxmemory 在单 DB 内部如何协作
 - 执行器与背压：入队、预算、GLOBAL/FAIR 调度、drain loop、autoRead 控制和 global recovery 怎么配合
 - bytes 抽象与 fast-path：`BytesView/BytesSlice/BytesSink` 为什么存在，以及它们如何连接协议、写回和 off-heap
-- 配置与运维：启动参数怎么进入 runtime、背压和淘汰怎么工作、`INFO/STATS/MEMORY STATS` 看什么
+- 配置与运维：启动参数怎么进入 runtime、背压、慢客户端保护和淘汰怎么工作，`INFO/STATS/MEMORY STATS` 看什么
 - client/bench 内部实现：CLI、Netty client、bench 和脚本如何沿真实协议路径验证和压测 server
 - 测试与调试：测试如何按层组织、脚本怎么用、遇到协议/背压/事务/内存问题先看哪里
 - 术语表：把 `ExecutionRequest`、`ReplyWriter`、owner thread、keyspace、`maxmemory` 等高频概念集中解释
@@ -81,7 +81,7 @@ mvn -DskipTests package
 - **协议模型（limits/reply tooling/client/parser model）**：位于 `yierdis-networking-resp`（包名为 `yier.bubu.redis.protocol.resp.*`）；client codec 与 reply writer 都在这个 Netty-free 模块中，server 命令写回语义仍以 `ReplyWriter` 为单一事实来源（server command execution write-back remains centralized through `ReplyWriter`）。
 - **协议请求适配**：`RespExecutionAdapter` 把 `RespCommandRequest` 适配为 `ExecutionRequest`；`RespRequestDecoder` / `RespCommandAdapter` / `RespProtocolErrorReplyHandler` 位于 `yierdis-networking-netty`；`yierdis-server-main` 只做应用组装。
 - **事务回放 / 变更事件**：连接级事务重放与 `YierdisChangeEvent` 都应复用 `ExecutionRecord` 快照，而不是重新引入新的 argv 容器或 server-local `Command` 包装。
-- **command-api/core/builtin 默认装配**：`yierdis-command-api` 暴露命令 SPI，`yierdis-command-core` 持有 registry/processor/transaction replay，`yierdis-command-builtin` 提供传输无关默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server-main`，而 `PING/ECHO/COMMAND/SELECT/QUIT/FLUSHDB` 这类传输无关或 DB 生命周期命令由 defaults 模块提供并在应用组合根注入。
+- **command-api/core/builtin 默认装配**：`yierdis-command-api` 暴露命令 SPI，`yierdis-command-core` 持有 registry/processor/transaction replay，`yierdis-command-builtin` 提供传输无关默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server-main`，而 `PING/ECHO/COMMAND/SELECT/QUIT/CLIENT/AUTH/FLUSHDB` 这类传输无关、客户端握手兼容或 DB 生命周期命令由 defaults 模块提供并在应用组合根注入。
 - **CLI 输入解析**：`InlineCommandParser` 位于 `yierdis-cli`（`yier.bubu.redis.app.client.InlineCommandParser`）。
 - **instance 暴露面**：`YierdisInstance` 仅负责 DB 生命周期、资源 ownership 与 `DbEngine` 能力视图（`engine(int)` / `engines()` 防御性拷贝），避免上层依赖 `YierdisDb` 具体实现，也不再承担 command processor 组装。
 - **runtime owner-thread seam**：server 不应再通过公开 `DbEngine` 视图做 `RuntimeDbEngine` 向下转型，也不应在 bootstrap 中内联 `bindToCurrentThread()/close()` 细节；owner-thread 维护、maintenance、关闭应通过 `yierdis-server-runtime` 提供的 runtime-local seam 协作。
@@ -167,6 +167,8 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 - `INFO [section]`
 - `STATS`
 - `SELECT <index>`（默认支持 `0..15`；可通过 `--databases` 调整）
+- `CLIENT SETINFO ...` / `CLIENT SETNAME <name>` / `CLIENT GETNAME`（客户端握手/连接名最小兼容）
+- `AUTH ...`（未配置密码时固定返回 Redis 风格 no-password-configured 错误）
 - `QUIT`
 
 ### Key/TTL
@@ -303,6 +305,9 @@ java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SN
 - `--executorQueueMaxBytes <bytes>`：全局执行队列 bytes 上限（`0` 表示禁用）
 - `--backpressureHigh/--backpressureLow`：连接级条数背压水位线（滞回）
 - `--backpressureBytesHigh/--backpressureBytesLow`：连接级 bytes 背压水位线（滞回；`0` 表示禁用）
+- `--client-idle-timeout-millis <ms>`：读空闲连接关闭时间（默认 `300000`；`0` 表示禁用）
+- `--client-output-buffer-limit-bytes <bytes>`：慢客户端输出缓冲上限（默认 `67108864`；`0` 表示禁用）
+- `--client-output-buffer-over-limit-millis <ms>`：输出缓冲超过上限后的宽限期（默认 `10000`）
 
 开放网络环境建议（重要）：
 
@@ -326,6 +331,7 @@ Yierdis 现在要求使用 JDK 25，并且始终使用 `java.lang.foreign` FFM A
 - 没有 `--offheapMaxBytes`
 - keyspace、expires、string/hash/list/set/zset 内部结构默认都走 FFM
 - `maxmemory` 是唯一的 native-memory 预算入口
+- `global` scope 下 DB 共享实例级 FFM runtime，off-heap usage 按实例口径计入；`per-db` scope 下默认每个 DB 各自持有 runtime 和分摊后的预算
 
 构建和运行方式保持简单：
 

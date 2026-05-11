@@ -836,4 +836,4 @@ FFM 可以理解成：
 
 1. 自己把本文 6 个示例重新敲一遍
 2. 再去看 `docs/project-docs/ffm-usage.md`
-3. 最后回到 Yierdis 代码里对照 `YierdisFfmMemoryRuntime`、`YierdisFfmRegion`、`YierdisForeignOffHeapAllocator`、`YierdisFfmKeyspace` 去读实现
+3. 最后回到 Yierdis 代码里对照 `YierdisFfmMemoryRuntime`、`YierdisFfmRegion`、`YierdisForeignOffHeapAllocator`、`NativeKeyDirectory`、`EntryTable` 和各类型 `*Root` 去读实现

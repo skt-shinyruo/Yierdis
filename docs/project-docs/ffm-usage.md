@@ -253,6 +253,8 @@ mutation 由 `YierdisDbKeyLifecycle.computeWithHandle(...)` 收口：
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryTable.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java`
 
+`YierdisFfmKeyspace<V>` 仍然保留在 `internal/ffm` 包里，但它不是当前生产 DB 的主索引。生产路径使用 `NativeKeyDirectory + EntryTable + EntryRecord`；`YierdisFfmKeyspace<V>` 更像一个低层 FFM keyspace primitive，当前主要由 rehash consistency 测试覆盖。
+
 ## Expire 路径：TTL 如何复用同一份 off-heap key
 
 `YierdisFfmExpireIndex` 并不会为了 TTL 再复制一份 key bytes。
@@ -361,7 +363,6 @@ adapter，但 key 的 canonical metadata 在 `EntryTable`，value identity 是
 
 - `EntryTable` 的 entry slots 来自 slab allocator，但 `EntryHandle` 本身是 Java record
 - `NativeKeyDirectory` 的 key bytes 在 native blob store，table 数组仍在 heap
-- `YierdisFfmKeyspace` 的 `states` / `hashes` 在 native memory，但 `refs[]` / `values[]` 仍是 Java 数组
 - `YierdisFfmExpireIndex` 的 `states` / `hashes` / `expireAt` 在 native memory，但 `refs[]` 仍在 heap
 - `StringRoot` 管理 off-heap buffer，但 handle -> slot map 仍在 heap
 - `HashRoot` / `ListRoot` / `SetRoot` / `ZSetRoot` 的 handle table 仍在 heap，payload 通过各 value adapter 进入 FFM-backed 结构
@@ -410,7 +411,7 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
 
 - off-heap bytes 会影响 maxmemory
 - keyspace / expires / entry table / native key directory / type root 的 native bytes 不会被忽略
-- delete、expire 和 eviction 释放记账优先读 `EntryRecord`，避免依赖兼容 object 的旧估算值
+- delete、expire 和 eviction 释放记账优先读 `EntryRecord`，避免依赖旧对象容器里的估算值
 
 代表路径：
 
@@ -421,13 +422,12 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
 
 `YierdisDbOwnedResources.releaseAll(...)` 的关闭顺序是：
 
-1. 遍历兼容 store，释放 adapter 持有的 root payload
-2. 清空 expires
-3. 清空并关闭 `EntryTable`
-4. 清空并关闭 `NativeKeyDirectory`
-5. 关闭各 `TypeRoot`
-6. 关闭 allocator
-7. 关闭 runtime
+1. 先清空 expires、`EntryTable` 和 `NativeKeyDirectory`
+2. 关闭 `EntryTable`
+3. 关闭 `NativeKeyDirectory`
+4. 依次关闭 `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot`
+5. 关闭 allocator
+6. 如果 DB 拥有 runtime，再关闭 runtime
 
 如果 runtime 关闭时仍然存在 live region，会直接抛出 leak 错误。
 
@@ -458,6 +458,14 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
   说明 string/list/hash/set/zset/HLL 删除后 native accounting 可以回到 0，且删除记账以 entry metadata 为准
 - `MemoryStatsAccountingConsistencyTest`
   说明 memory reporter 和 maxmemory 统计保持一致
+- `NativeKeyDirectoryTest`
+  说明生产 key directory 的 key -> `EntryHandle` 路径、删除和 clear 行为
+- `EntryTableContractTest`
+  说明 `EntryRecord` slot 的 allocate/get/replace/release 行为
+- `StringRootTest`
+  说明 string payload 的 `ValueHandle`、覆盖和释放行为
+- `YierdisFfmRehashConsistencyTest`
+  说明保留的低层 `YierdisFfmKeyspace<V>` primitive 在 rehash 时保持一致
 
 代表路径：
 
@@ -469,6 +477,10 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
 - `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapCollectionReadStreamingTest.java`
 - `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/NativeStorageRegressionTest.java`
 - `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/MemoryStatsAccountingConsistencyTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectoryTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/EntryTableContractTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/StringRootTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmRehashConsistencyTest.java`
 
 ## 最后再压缩成一句话
 
