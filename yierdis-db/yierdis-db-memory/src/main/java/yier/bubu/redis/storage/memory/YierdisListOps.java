@@ -8,6 +8,9 @@ import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.api.ListReadOps;
 import yier.bubu.redis.storage.api.ListWriteOps;
@@ -29,11 +32,13 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final ListRoot listRoot;
     private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
     YierdisListOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
+        this.listRoot = Objects.requireNonNull(keyLifecycle.listRoot(), "listRoot");
         this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
@@ -82,7 +87,6 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
-                var memoryRuntime = keyLifecycle.memoryRuntime();
                 final int[] len = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
                 keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
@@ -95,31 +99,55 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                         oldEstimate = 0;
                     }
                     if (old == null) {
-                        ListValue lv = new ListValue(memoryRuntime);
+                        YierdisObject next = YierdisObject.newList(listRoot);
+                        boolean ok = false;
+                        try {
+                            ValueHandle handle = next.valueHandle();
+                            if (left) {
+                                listRoot.lpush(handle, values);
+                            } else {
+                                listRoot.rpush(handle, values);
+                            }
+                            len[0] = listRoot.size(handle);
+                            next.useListHandle(listRoot, handle);
+                            keyLifecycle.touch(next);
+                            refreshEstimatedBytes(k, next);
+                            deltaBytes[0] += next.estimatedBytes;
+                            ok = true;
+                            return next;
+                        } finally {
+                            if (!ok) {
+                                next.releasePayloadIfAny();
+                            }
+                        }
+                    }
+
+                    if (old.type != ValueType.LIST) {
+                        throw new WrongTypeException();
+                    }
+                    ValueHandle handle = listHandle(old, k);
+                    if (handle == null && old.payload instanceof ListValue) {
+                        old.moveListToRoot(listRoot);
+                        handle = old.valueHandle();
+                    }
+                    if (handle != null) {
+                        if (left) {
+                            listRoot.lpush(handle, values);
+                        } else {
+                            listRoot.rpush(handle, values);
+                        }
+                        len[0] = listRoot.size(handle);
+                        old.useListHandle(listRoot, handle);
+                    } else {
+                        ListValue lv = (ListValue) old.payload;
                         if (left) {
                             lv.lpushAll(values);
                         } else {
                             lv.rpushAll(values);
                         }
                         len[0] = lv.size();
-                        YierdisObject next = YierdisObject.newList(lv);
-                        keyLifecycle.touch(next);
-                        refreshEstimatedBytes(k, next);
-                        deltaBytes[0] += next.estimatedBytes;
-                        return next;
+                        old.refreshCompositeEncodingFromPayload();
                     }
-
-                    if (old.type != ValueType.LIST) {
-                        throw new WrongTypeException();
-                    }
-                    ListValue lv = (ListValue) old.payload;
-                    if (left) {
-                        lv.lpushAll(values);
-                    } else {
-                        lv.rpushAll(values);
-                    }
-                    len[0] = lv.size();
-                    old.refreshCompositeEncodingFromPayload();
                     keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
                     refreshEstimatedBytes(k, old);
@@ -142,6 +170,11 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
         if (object.type != ValueType.LIST) {
             throw new WrongTypeException();
         }
+        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
+        ValueHandle handle = readableListHandle(object, record);
+        if (handle != null) {
+            return listRoot.rangeCount(handle, start, stop);
+        }
         return ((ListValue) object.payload).rangeCount(start, stop);
     }
 
@@ -152,6 +185,12 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
         }
         if (object.type != ValueType.LIST) {
             throw new WrongTypeException();
+        }
+        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
+        ValueHandle handle = readableListHandle(object, record);
+        if (handle != null) {
+            listRoot.rangeInto(handle, start, stop, out);
+            return;
         }
         ((ListValue) object.payload).rangeInto(start, stop, out);
     }
@@ -185,15 +224,29 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                     if (old.type != ValueType.LIST) {
                         throw new WrongTypeException();
                     }
-                    ListValue lv = (ListValue) old.payload;
-                    popped[0] = left ? lv.lpop(count) : lv.rpop(count);
-                    if (lv.size() == 0) {
+                    ValueHandle handle = listHandle(old, k);
+                    if (handle == null && old.payload instanceof ListValue) {
+                        old.moveListToRoot(listRoot);
+                        handle = old.valueHandle();
+                    }
+                    if (handle != null) {
+                        popped[0] = left ? listRoot.lpop(handle, count) : listRoot.rpop(handle, count);
+                    } else {
+                        ListValue lv = (ListValue) old.payload;
+                        popped[0] = left ? lv.lpop(count) : lv.rpop(count);
+                    }
+                    int size = handle != null ? listRoot.size(handle) : ((ListValue) old.payload).size();
+                    if (size == 0) {
                         old.releasePayloadIfAny();
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
-                    old.refreshCompositeEncodingFromPayload();
+                    if (handle != null) {
+                        old.useListHandle(listRoot, handle);
+                    } else {
+                        old.refreshCompositeEncodingFromPayload();
+                    }
                     keyLifecycle.touch(old);
                     refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
@@ -223,6 +276,31 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             return;
         }
         object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
+    }
+
+    private ValueHandle listHandle(YierdisObject object, KeyHandle keyHandle) {
+        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
+        return readableListHandle(object, record);
+    }
+
+    private ValueHandle readableListHandle(YierdisObject object, EntryRecord record) {
+        if (canReadFromRoot(object, record)) {
+            return record.valueHandle();
+        }
+        if (object != null && object.hasListRoot()) {
+            return object.valueHandle();
+        }
+        return null;
+    }
+
+    private boolean canReadFromRoot(YierdisObject object, EntryRecord record) {
+        return object != null
+                && object.hasListRoot()
+                && record != null
+                && record.type() == ValueType.LIST
+                && record.valueHandle() != null
+                && object.valueHandle() != null
+                && record.valueHandle().raw() == object.valueHandle().raw();
     }
 
     private static long estimateListWriteUpperBound(int keyLength, List<byte[]> values) {

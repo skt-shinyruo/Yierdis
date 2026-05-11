@@ -67,7 +67,7 @@ public final class ListValue implements YierdisValue {
 
     public long estimatedBytes() {
         if (memoryRuntime != null) {
-            return 0;
+            return ffmBlobStore.liveBytes();
         }
         return allocatedBytes;
     }

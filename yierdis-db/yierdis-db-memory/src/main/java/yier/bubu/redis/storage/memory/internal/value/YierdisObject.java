@@ -14,6 +14,7 @@ import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.memory.api.OffHeapSlice;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 
@@ -40,6 +41,7 @@ public final class YierdisObject {
     public ValueEncoding encoding;
     public Object payload;
     public StringRoot stringRoot;
+    public ListRoot listRoot;
     public ValueHandle valueHandle;
 
     public int rawLen;
@@ -158,6 +160,15 @@ public final class YierdisObject {
 
     public static YierdisObject newList(ListValue lv) {
         return new YierdisObject(ValueType.LIST, lv.encoding(), lv);
+    }
+
+    public static YierdisObject newList(ListRoot root) {
+        Objects.requireNonNull(root, "root");
+        ValueHandle handle = root.create();
+        YierdisObject o = new YierdisObject(ValueType.LIST, root.encoding(handle), root);
+        o.listRoot = root;
+        o.valueHandle = handle;
+        return o;
     }
 
     public static YierdisObject newSet(SetValue sv) {
@@ -316,7 +327,7 @@ public final class YierdisObject {
 
         // Fallback: allocate a new payload and replace.
         if (len <= 0) {
-            releaseStringPayloadIfAny();
+            releasePayloadIfAny();
             this.type = ValueType.STRING;
             this.encoding = ValueEncoding.STRING_EMBSTR;
             this.payload = new byte[0];
@@ -329,7 +340,7 @@ public final class YierdisObject {
 
         Long parsed = tryParseLongForIntEncoding(value);
         if (parsed != null) {
-            releaseStringPayloadIfAny();
+            releasePayloadIfAny();
             this.type = ValueType.STRING;
             this.encoding = ValueEncoding.STRING_INT;
             this.payload = null;
@@ -360,7 +371,7 @@ public final class YierdisObject {
             nextPayload = raw;
         }
 
-        releaseStringPayloadIfAny();
+        releasePayloadIfAny();
         this.type = ValueType.STRING;
         this.encoding = nextEnc;
         this.payload = nextPayload;
@@ -375,13 +386,14 @@ public final class YierdisObject {
         if (stringRoot == root && valueHandle != null) {
             root.overwrite(valueHandle, valueBytes);
         } else {
-            releaseStringPayloadIfAny();
+            releasePayloadIfAny();
             valueHandle = root.store(valueBytes);
         }
         this.type = ValueType.STRING;
         this.encoding = ValueEncoding.STRING_RAW;
         this.payload = root;
         this.stringRoot = root;
+        this.listRoot = null;
         this.rawLen = root.length(valueHandle);
         this.intValue = 0L;
         this.intBytesCache = null;
@@ -393,13 +405,14 @@ public final class YierdisObject {
         if (stringRoot == root && valueHandle != null) {
             root.overwrite(valueHandle, value);
         } else {
-            releaseStringPayloadIfAny();
+            releasePayloadIfAny();
             valueHandle = root.store(value);
         }
         this.type = ValueType.STRING;
         this.encoding = ValueEncoding.STRING_RAW;
         this.payload = root;
         this.stringRoot = root;
+        this.listRoot = null;
         this.rawLen = root.length(valueHandle);
         this.intValue = 0L;
         this.intBytesCache = null;
@@ -414,6 +427,10 @@ public final class YierdisObject {
         return stringRoot != null && valueHandle != null;
     }
 
+    public boolean hasListRoot() {
+        return listRoot != null && valueHandle != null;
+    }
+
     public void useStringHandle(StringRoot root, ValueHandle handle) {
         Objects.requireNonNull(root, "root");
         Objects.requireNonNull(handle, "handle");
@@ -423,16 +440,70 @@ public final class YierdisObject {
             this.encoding = ValueEncoding.STRING_RAW;
             return;
         }
-        releaseStringPayloadIfAny();
+        releasePayloadIfAny();
         this.type = ValueType.STRING;
         this.encoding = ValueEncoding.STRING_RAW;
         this.payload = root;
         this.stringRoot = root;
+        this.listRoot = null;
         this.valueHandle = handle;
         this.rawLen = root.length(handle);
         this.intValue = 0L;
         this.intBytesCache = null;
         this.intBytesCacheFor = 0L;
+    }
+
+    public void useListHandle(ListRoot root, ValueHandle handle) {
+        Objects.requireNonNull(root, "root");
+        Objects.requireNonNull(handle, "handle");
+        if (listRoot == root && valueHandle != null && valueHandle.raw() == handle.raw()) {
+            this.payload = root;
+            this.encoding = root.encoding(handle);
+            return;
+        }
+        releasePayloadIfAny();
+        this.type = ValueType.LIST;
+        this.encoding = root.encoding(handle);
+        this.payload = root;
+        this.stringRoot = null;
+        this.listRoot = root;
+        this.valueHandle = handle;
+        this.rawLen = 0;
+        this.intValue = 0L;
+        this.intBytesCache = null;
+        this.intBytesCacheFor = 0L;
+    }
+
+    public void moveListToRoot(ListRoot root) {
+        Objects.requireNonNull(root, "root");
+        if (listRoot == root && valueHandle != null) {
+            payload = root;
+            encoding = root.encoding(valueHandle);
+            return;
+        }
+        if (!(payload instanceof ListValue listValue)) {
+            throw new IllegalStateException("unexpected list payload: " + payload);
+        }
+        ValueHandle handle = root.store(listValue);
+        boolean installed = false;
+        try {
+            releasePayloadIfAny();
+            this.type = ValueType.LIST;
+            this.encoding = root.encoding(handle);
+            this.payload = root;
+            this.stringRoot = null;
+            this.listRoot = root;
+            this.valueHandle = handle;
+            this.rawLen = 0;
+            this.intValue = 0L;
+            this.intBytesCache = null;
+            this.intBytesCacheFor = 0L;
+            installed = true;
+        } finally {
+            if (!installed) {
+                root.release(handle);
+            }
+        }
     }
 
     public int stringByteLength() {
@@ -942,8 +1013,10 @@ public final class YierdisObject {
     }
 
     public void releaseStringPayloadIfAny() {
-        if (stringRoot != null && valueHandle != null) {
-            stringRoot.release(valueHandle);
+        if (stringRoot != null) {
+            if (valueHandle != null) {
+                stringRoot.release(valueHandle);
+            }
             stringRoot = null;
             valueHandle = null;
             payload = null;
@@ -951,15 +1024,28 @@ public final class YierdisObject {
         }
         if (payload instanceof OffHeapBuf buf) {
             buf.close();
+            payload = null;
         }
         stringRoot = null;
-        valueHandle = null;
+    }
+
+    public void releaseListPayloadIfAny() {
+        if (listRoot != null) {
+            if (valueHandle != null) {
+                listRoot.release(valueHandle);
+            }
+            listRoot = null;
+            valueHandle = null;
+            payload = null;
+        }
     }
 
     public void releasePayloadIfAny() {
+        releaseListPayloadIfAny();
         releaseStringPayloadIfAny();
         if (payload instanceof YierdisValue v) {
             v.close();
+            payload = null;
         }
     }
 

@@ -29,6 +29,7 @@ public final class YierdisDbKeyLifecycle {
     private final EntryTable entryTable;
     private final NativeKeyDirectory keyDirectory;
     private final StringRoot stringRoot;
+    private final ListRoot listRoot;
     private final Consumer<YierdisObject> touchCallback;
     private final LongConsumer adjustUsedBytesCallback;
 
@@ -48,6 +49,7 @@ public final class YierdisDbKeyLifecycle {
                 null,
                 null,
                 null,
+                null,
                 touchCallback,
                 adjustUsedBytesCallback
         );
@@ -61,6 +63,7 @@ public final class YierdisDbKeyLifecycle {
             EntryTable entryTable,
             NativeKeyDirectory keyDirectory,
             StringRoot stringRoot,
+            ListRoot listRoot,
             Consumer<YierdisObject> touchCallback,
             LongConsumer adjustUsedBytesCallback
     ) {
@@ -71,6 +74,7 @@ public final class YierdisDbKeyLifecycle {
         this.entryTable = entryTable;
         this.keyDirectory = keyDirectory;
         this.stringRoot = stringRoot;
+        this.listRoot = listRoot;
         this.touchCallback = Objects.requireNonNull(touchCallback, "touchCallback");
         this.adjustUsedBytesCallback = Objects.requireNonNull(adjustUsedBytesCallback, "adjustUsedBytesCallback");
     }
@@ -93,6 +97,10 @@ public final class YierdisDbKeyLifecycle {
 
     public StringRoot stringRoot() {
         return stringRoot;
+    }
+
+    public ListRoot listRoot() {
+        return listRoot;
     }
 
     public KeyHandle keyHandle(byte[] keyBytes) {

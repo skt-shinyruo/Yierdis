@@ -70,6 +70,9 @@ public final class YierdisDbMemoryEstimator {
         if (object.payload instanceof HashValue hv) {
             return hv.estimatedBytes();
         }
+        if (object.type == ValueType.LIST && object.hasListRoot()) {
+            return 0;
+        }
         if (object.payload instanceof ListValue lv) {
             return lv.estimatedBytes();
         }
