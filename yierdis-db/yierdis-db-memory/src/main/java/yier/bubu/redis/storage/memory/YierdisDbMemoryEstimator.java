@@ -13,6 +13,7 @@ import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.ValueType;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 
 import java.util.List;
 
@@ -35,6 +36,18 @@ public final class YierdisDbMemoryEstimator {
         int keyLen = Math.max(0, keyHandle.len());
         int keyBytesCost = keysStoredOffHeap ? 0 : keyLen;
         return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + keyBytesCost + estimateValueBytes(object);
+    }
+
+    long estimateEntryBytes(KeyHandle keyHandle, EntryRecord record) {
+        if (keyHandle == null || record == null) {
+            return 0;
+        }
+        if (record.version() > 0) {
+            return record.version();
+        }
+        int keyLen = Math.max(0, keyHandle.len());
+        int keyBytesCost = keysStoredOffHeap ? 0 : keyLen;
+        return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + keyBytesCost;
     }
 
     private long estimateValueBytes(YierdisObject object) {

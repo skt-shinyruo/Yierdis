@@ -50,7 +50,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                 var memoryRuntime = keyLifecycle.memoryRuntime();
                 final int[] added = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
                     if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
@@ -102,7 +102,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeObjectIfPresentWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old.estimatedBytes;
                     if (keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();

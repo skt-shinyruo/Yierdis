@@ -3,6 +3,7 @@ package yier.bubu.redis.storage.memory;
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
 import yier.bubu.redis.storage.memory.internal.ffm.*;
+import yier.bubu.redis.storage.memory.internal.entry.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -12,6 +13,7 @@ import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBlobStore;
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmKeyspace;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.foreign.YierdisFfmSlabAllocator;
 import yier.bubu.redis.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 
@@ -21,6 +23,8 @@ public final class YierdisDbStorageComponents {
     final YierdisDbOwnedResources resources;
     final YierdisKeyspace<YierdisObject> store;
     final YierdisExpireIndex expires;
+    final EntryTable entries;
+    final NativeKeyDirectory keyDirectory;
     final boolean keysStoredOffHeap;
 
     private YierdisDbStorageComponents(
@@ -29,6 +33,8 @@ public final class YierdisDbStorageComponents {
             YierdisDbOwnedResources resources,
             YierdisKeyspace<YierdisObject> store,
             YierdisExpireIndex expires,
+            EntryTable entries,
+            NativeKeyDirectory keyDirectory,
             boolean keysStoredOffHeap
     ) {
         this.memoryRuntime = memoryRuntime;
@@ -36,6 +42,8 @@ public final class YierdisDbStorageComponents {
         this.resources = resources;
         this.store = store;
         this.expires = expires;
+        this.entries = entries;
+        this.keyDirectory = keyDirectory;
         this.keysStoredOffHeap = keysStoredOffHeap;
     }
 
@@ -73,6 +81,8 @@ public final class YierdisDbStorageComponents {
                 resolvedOwnsRuntime,
                 resolvedOwnsAllocator
         );
+        EntryTable entries = new EntryTable(resolvedRuntime, new YierdisFfmSlabAllocator(resolvedRuntime), 64);
+        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(entries);
         YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(resolvedRuntime, "ffm-key");
         return new YierdisDbStorageComponents(
                 resolvedRuntime,
@@ -80,6 +90,8 @@ public final class YierdisDbStorageComponents {
                 resources,
                 new YierdisFfmKeyspace<>(blobStore),
                 new YierdisFfmExpireIndex(blobStore),
+                entries,
+                keyDirectory,
                 true
         );
     }

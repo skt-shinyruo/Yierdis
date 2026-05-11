@@ -46,7 +46,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Integer>> apply() {
                 final boolean[] changed = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
                     if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
@@ -141,7 +141,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Void>> apply() {
                 final long[] deltaBytes = new long[]{0};
                 final boolean[] changed = new boolean[]{false};
-                keyLifecycle.computeWithHandle(destKeyBytes, (k, old) -> {
+                keyLifecycle.computeObjectWithHandle(destKeyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
                     if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();

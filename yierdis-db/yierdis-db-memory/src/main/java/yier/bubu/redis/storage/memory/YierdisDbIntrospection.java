@@ -11,6 +11,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 
 import java.util.List;
 import java.util.Objects;
@@ -26,11 +27,12 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
 
     String objectEncoding(BytesView keyView) {
         threadChecker.run();
+        EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
         YierdisObject object = keyLifecycle.getLiveObject(keyView);
         if (object == null) {
             return null;
         }
-        return encodingName(object.encoding);
+        return encodingName(record == null ? object.encoding : record.encoding());
     }
 
     String objectEncoding(byte[] keyBytes) {
@@ -38,11 +40,12 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
         if (keyBytes == null) {
             return null;
         }
+        EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
         YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return null;
         }
-        return encodingName(object.encoding);
+        return encodingName(record == null ? object.encoding : record.encoding());
     }
 
     @Override
@@ -66,13 +69,16 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
             }
 
             byte[] keyBytes = YierdisDb.toByteArray(k);
-            ValueType type = e.type;
+            EntryRecord record = keyLifecycle.entryRecord(k);
+            ValueType type = record == null ? e.type : record.type();
             byte[] stringValue = null;
             if (type == ValueType.STRING) {
                 byte[] view = e.stringBytesView();
                 stringValue = view == null ? null : java.util.Arrays.copyOf(view, view.length);
             }
-            Long expireAtMillis = keyLifecycle.expireAtMillis(k);
+            Long expireAtMillis = record == null || record.expireAtMillis() < 0
+                    ? keyLifecycle.expireAtMillis(k)
+                    : record.expireAtMillis();
             out.add(new YierdisSnapshotEntry(keyBytes, type, stringValue, expireAtMillis));
 
             remaining[0]--;
