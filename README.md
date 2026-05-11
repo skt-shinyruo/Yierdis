@@ -126,6 +126,7 @@ printf '*2\r\n$3\r\nGET\r\n$1\r\na\r\n' | nc 127.0.0.1 6378
 
 - RESP2 是默认返回格式；`HELLO 3` 后同一连接会切到 RESP3 基础回包。
 - malformed RESP 会先写协议错误，再关闭连接，避免请求/回包错位。
+- server command execution write-back still uses ReplyWriter 作为语义 authority；RESP 实现只负责把这些语义写回编码成线上 bytes。
 - 命令语义是 Redis 风格最小子集，并不承诺完整 Redis 生态兼容。
 
 ## 客户端（CLI）

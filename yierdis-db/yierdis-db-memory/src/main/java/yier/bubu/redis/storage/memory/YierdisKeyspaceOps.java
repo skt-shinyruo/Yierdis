@@ -58,10 +58,11 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                     if (keyLifecycle.removeIfExpired(handle, e, now)) {
                         continue;
                     }
+                    long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, e);
                     keyLifecycle.removeExpire(handle);
                     if (keyLifecycle.remove(handle, e)) {
                         e.releasePayloadIfAny();
-                        deltaBytes -= e.estimatedBytes;
+                        deltaBytes -= removalBytes;
                         removed++;
                     }
                 }
@@ -157,10 +158,12 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
 
         for (int i = 0; i < expiredKeys.size(); i++) {
             byte[] key = expiredKeys.get(i);
+            KeyHandle handle = keyLifecycle.keyHandle(key);
+            long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, expiredValues.get(i));
             keyLifecycle.removeExpire(key);
             if (keyLifecycle.remove(key, expiredValues.get(i))) {
                 expiredValues.get(i).releasePayloadIfAny();
-                internals.ledger().commit(null, -expiredValues.get(i).estimatedBytes);
+                internals.ledger().commit(null, -removalBytes);
             }
         }
         return out;
@@ -201,10 +204,12 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
 
         for (int i = 0; i < expiredKeys.size(); i++) {
             byte[] key = expiredKeys.get(i);
+            KeyHandle handle = keyLifecycle.keyHandle(key);
+            long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, expiredValues.get(i));
             keyLifecycle.removeExpire(key);
             if (keyLifecycle.remove(key, expiredValues.get(i))) {
                 expiredValues.get(i).releasePayloadIfAny();
-                internals.ledger().commit(null, -expiredValues.get(i).estimatedBytes);
+                internals.ledger().commit(null, -removalBytes);
             }
         }
         return next;

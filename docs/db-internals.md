@@ -12,7 +12,7 @@
 
 - `YierdisDb` 到底拥有哪一批核心状态和协作者
 - 一次读操作和写操作分别如何穿过 DB 内核
-- TTL、内存记账、maxmemory 和 value 对象是如何协作的
+- TTL、内存记账、maxmemory 和 entry/root value state 是如何协作的
 
 ## 先记住一句话
 
@@ -56,21 +56,31 @@ YierdisInstance
 `YierdisDbStorageComponents`、`YierdisDbComponents` 和
 `YierdisDbComponentFactory` 收敛。
 
-### 1. 主存储和过期索引
+### 1. 主存储、native entry 和过期索引
 
+当前 DB 存储图已经拆成几层：
+
+- `EntryTable`
+- `NativeKeyDirectory`
+- `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot`
 - `store`
 - `expires`
 
 默认实现分别是：
 
-- `YierdisFfmKeyspace<YierdisObject>`
+- `EntryTable` 使用 slab allocator 保存 entry 元数据
+- `NativeKeyDirectory` 保存 key bytes 并映射到 `EntryHandle`
+- 各 `TypeRoot` 用 `ValueHandle` 管理具体 payload
+- `YierdisFfmKeyspace<YierdisObject>` 保留为迁移期兼容索引
 - `YierdisFfmExpireIndex`
 
 这说明：
 
-- keyspace 和 expire index 是两份不同职责的数据结构
-- `store` 负责 key -> object
-- `expires` 负责 key -> expireAt
+- `NativeKeyDirectory` 负责 key -> entry handle
+- `EntryRecord` 负责 type、encoding、value handle、expire、estimate 和 LRU 元数据
+- `TypeRoot` 负责 value handle -> payload
+- `store` 里的 `YierdisObject` 现在是兼容视图，不是新的 canonical payload 宿主
+- `expires` 负责 key -> expireAt，并同步回 entry 元数据
 
 ### 2. 线程与资源底座
 
@@ -166,7 +176,10 @@ YierdisInstance
 ```text
 YierdisDb
   -> components/config/factory assemble object graph
-  -> store(key -> YierdisObject)
+  -> EntryTable(entry handle -> EntryRecord)
+  -> NativeKeyDirectory(key -> entry handle)
+  -> TypeRoot(value handle -> payload)
+  -> compatibility store(key -> YierdisObject adapter)
   -> expires(key -> expireAt)
   -> threadGuard
   -> memoryRuntime / offHeapAllocator
@@ -195,6 +208,8 @@ YierdisDb
 这条路径的中心基本都在 `YierdisDbKeyLifecycle`：
 
 - `keyHandle(...)`
+- `entryRecord(...)`
+- `liveEntryRecord(...)`
 - `getStoredObject(...)`
 - `getLiveObject(...)`
 - `removeIfExpired(...)`
@@ -202,10 +217,15 @@ YierdisDb
 
 `getLiveObject(...)` 的语义很重要：
 
-- 不是简单返回 object
+- 不是简单返回 object adapter
 - 它会先做惰性过期删除
-- 然后 touch 对象
-- 最后才返回仍然有效的 object
+- 然后 touch 兼容对象
+- 最后才返回仍然有效的兼容视图
+
+新路径需要 entry 元数据时会先走 `liveEntryRecord(...)` 或
+`entryRecord(...)`，再用 `EntryRecord.valueHandle()` 交给对应
+`TypeRoot`。`YierdisObject` 只负责把还没迁完的 helper 代码桥接到这些
+root handle。
 
 这意味着很多读路径天然就带有：
 
@@ -222,11 +242,14 @@ YierdisDb
 command
   -> DbReads.strings()
   -> YierdisStringOps.getStringValue(...)
-  -> keyLifecycle.getLiveObject(...)
-  -> YierdisObject / payload
+  -> keyLifecycle.liveEntryRecord(...) / getLiveObject(...)
+  -> EntryRecord.valueHandle()
+  -> StringRoot
 ```
 
-如果你在追 `TTL`、`TYPE`、`MEMORY USAGE`，最终也会走到类似的 `BytesView -> keyHandle -> live object` 路径。
+如果你在追 `TTL`、`TYPE`、`MEMORY USAGE`，最终也会走到类似的
+`BytesView -> keyHandle -> EntryRecord -> TypeRoot` 路径；只有旧 helper
+还需要 `YierdisObject` adapter。
 
 ## 写路径是怎么走的
 
@@ -385,39 +408,58 @@ TTL 不是存在对象里的一个裸字段，而是被拆成：
 - 单 DB 里看到的是 ledger + support
 - 多 DB 里真正的跨库协调来自 instance/runtime 层
 
-## value 对象在 DB 内核里处于什么位置
+## native entry/root 在 DB 内核里处于什么位置
 
-命令层通常只关心 string/list/hash 之类的逻辑类型，但 DB 内核真正处理的是：
+命令层通常只关心 string/list/hash 之类的逻辑类型，但 DB 内核现在真正处理的是：
 
-- `YierdisObject`
-- `HashValue`
-- `ListValue`
-- `SetValue`
-- `ZSetValue`
+- `EntryRecord`
+- `ValueHandle`
+- `StringRoot`
+- `ListRoot`
+- `HashRoot`
+- `SetRoot`
+- `ZSetRoot`
+- 兼容用的 `YierdisObject`
 
-### `YierdisObject`
+### `EntryRecord`
 
-它是 string/HLL 等对象的基础包装器，持有：
+它是每个 key 的元数据记录，持有：
 
+- key handle identity
+- value handle
 - `ValueType`
 - `ValueEncoding`
-- payload
+- expireAt
 - 估算字节数
 - LRU 相关字段
 
-### 复杂集合值
+删除、过期清理、maxmemory 淘汰和 memory reporter 都优先从 entry
+元数据计算，不再假设 `YierdisObject.estimatedBytes` 是权威来源。
 
-复杂结构则由单独 value 类管理：
+### `TypeRoot`
 
-- `HashValue`
-- `ListValue`
-- `SetValue`
-- `ZSetValue`
+各类型的 payload 由 root 管理：
 
-这些对象内部会再决定：
+- `StringRoot`
+- `ListRoot`
+- `HashRoot`
+- `SetRoot`
+- `ZSetRoot`
 
-- packed 还是 large encoding
-- heap 还是 FFM 路径
+root 负责 `ValueHandle` 的创建、读取、变更、估算和释放。集合类型原来的
+`HashValue`、`ListValue`、`SetValue`、`ZSetValue` 仍可作为兼容 adapter
+出现，但 hot path 会优先通过 root 访问 native-backed payload。
+
+### `YierdisObject`
+
+`YierdisObject` 仍然存在，但角色已经降级为兼容层：
+
+- 桥接旧 helper 到 `EntryRecord` 和 `TypeRoot`
+- 保存命令路径还需要的类型、encoding 和 LRU 视图
+- 持有当前 `ValueHandle`，用于把旧 value API 转发到 root
+
+它不应该再被当成 canonical storage state。新代码如果需要真实类型、
+encoding、estimate 或释放信息，应优先读 entry metadata 和 root state。
 
 更细的编码说明请配合：
 
@@ -477,6 +519,6 @@ Yierdis 的 DB 内核不是“Map + 一些命令辅助方法”，而是：
 - 用 key lifecycle 管活 key
 - 用 mutation executor 管写路径
 - 用 memory ledger 管预算
-- 用 value 对象管真实编码
+- 用 entry/root 管真实编码和 payload handle
 
 这四层协作起来，才组成了一个真正像数据库内核的单 DB 实现。

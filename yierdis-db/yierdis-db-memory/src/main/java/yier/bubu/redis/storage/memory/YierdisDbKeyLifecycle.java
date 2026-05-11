@@ -405,6 +405,14 @@ public final class YierdisDbKeyLifecycle {
         return removed;
     }
 
+    public long estimatedBytesForRemoval(KeyHandle keyHandle, YierdisObject object) {
+        EntryRecord record = entryRecord(keyHandle);
+        if (record != null && record.version() > 0) {
+            return record.version();
+        }
+        return object == null ? 0L : object.estimatedBytes;
+    }
+
     public ScanCursorV2 scan(ScanCursorV2 cursor, int maxSteps, YierdisKeyspace.ScanConsumer<YierdisObject> consumer) {
         return store.scan(cursor, maxSteps, consumer);
     }
@@ -430,10 +438,11 @@ public final class YierdisDbKeyLifecycle {
         if (expireAtMillis == null || expireAtMillis > nowMillis) {
             return false;
         }
+        long removalBytes = estimatedBytesForRemoval(keyHandle, object);
         removeExpire(keyHandle);
         if (remove(keyHandle, object)) {
             object.releasePayloadIfAny();
-            adjustUsedBytesCallback.accept(-object.estimatedBytes);
+            adjustUsedBytesCallback.accept(-removalBytes);
             return true;
         }
         return false;

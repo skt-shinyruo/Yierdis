@@ -59,10 +59,11 @@ public final class YierdisDbMaxmemorySupport {
             if (db.removeIfExpired(victim, e, nowMillis)) {
                 continue;
             }
+            long removalBytes = db.keyLifecycle().estimatedBytesForRemoval(victim, e);
             db.removeExpire(victim);
             if (db.keyLifecycle().removeObject(victim, e)) {
                 e.releasePayloadIfAny();
-                db.adjustUsedBytes(-e.estimatedBytes);
+                db.adjustUsedBytes(-removalBytes);
             }
         }
     }
@@ -137,10 +138,11 @@ public final class YierdisDbMaxmemorySupport {
         if (db.removeIfExpired(key, e, nowMillis)) {
             return true;
         }
+        long removalBytes = db.keyLifecycle().estimatedBytesForRemoval(key, e);
         db.removeExpire(key);
         if (db.keyLifecycle().removeObject(key, e)) {
             e.releasePayloadIfAny();
-            db.adjustUsedBytes(-e.estimatedBytes);
+            db.adjustUsedBytes(-removalBytes);
             return true;
         }
         return false;
