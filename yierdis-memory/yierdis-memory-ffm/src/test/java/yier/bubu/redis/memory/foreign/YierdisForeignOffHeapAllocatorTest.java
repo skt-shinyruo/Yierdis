@@ -27,6 +27,25 @@ public class YierdisForeignOffHeapAllocatorTest {
     }
 
     @Test
+    public void foreignAllocatorReleasesIdleSlabsAndCanAllocateAgain() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("idle-release")) {
+            try (YierdisForeignOffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(runtime, 0)) {
+                OffHeapBuf first = allocator.allocate(16);
+                Assert.assertTrue(runtime.usedBytes() > 0L);
+                first.close();
+                Assert.assertEquals(0L, allocator.usedBytes());
+                Assert.assertEquals(0L, runtime.usedBytes());
+
+                OffHeapBuf second = allocator.allocate(8);
+                Assert.assertTrue(runtime.usedBytes() > 0L);
+                second.close();
+                Assert.assertEquals(0L, runtime.usedBytes());
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
+    @Test
     public void maxBytesLimitRejectsAllocationOverCap() {
         try (YierdisForeignOffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(4)) {
             try {
