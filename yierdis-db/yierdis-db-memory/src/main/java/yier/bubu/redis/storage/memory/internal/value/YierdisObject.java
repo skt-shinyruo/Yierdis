@@ -14,9 +14,12 @@ import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.memory.api.OffHeapSlice;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
+import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
+import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -42,6 +45,9 @@ public final class YierdisObject {
     public Object payload;
     public StringRoot stringRoot;
     public ListRoot listRoot;
+    public HashRoot hashRoot;
+    public SetRoot setRoot;
+    public ZSetRoot zsetRoot;
     public ValueHandle valueHandle;
 
     public int rawLen;
@@ -158,6 +164,15 @@ public final class YierdisObject {
         return new YierdisObject(ValueType.HASH, hv.encoding(), hv);
     }
 
+    public static YierdisObject newHash(HashRoot root) {
+        Objects.requireNonNull(root, "root");
+        ValueHandle handle = root.create();
+        YierdisObject o = new YierdisObject(ValueType.HASH, root.encoding(handle), root);
+        o.hashRoot = root;
+        o.valueHandle = handle;
+        return o;
+    }
+
     public static YierdisObject newList(ListValue lv) {
         return new YierdisObject(ValueType.LIST, lv.encoding(), lv);
     }
@@ -175,8 +190,26 @@ public final class YierdisObject {
         return new YierdisObject(ValueType.SET, sv.encoding(), sv);
     }
 
+    public static YierdisObject newSet(SetRoot root) {
+        Objects.requireNonNull(root, "root");
+        ValueHandle handle = root.create();
+        YierdisObject o = new YierdisObject(ValueType.SET, root.encoding(handle), root);
+        o.setRoot = root;
+        o.valueHandle = handle;
+        return o;
+    }
+
     public static YierdisObject newZSet(ZSetValue zv) {
         return new YierdisObject(ValueType.ZSET, zv.encoding(), zv);
+    }
+
+    public static YierdisObject newZSet(ZSetRoot root) {
+        Objects.requireNonNull(root, "root");
+        ValueHandle handle = root.create();
+        YierdisObject o = new YierdisObject(ValueType.ZSET, root.encoding(handle), root);
+        o.zsetRoot = root;
+        o.valueHandle = handle;
+        return o;
     }
 
     public void overwriteWithString(byte[] valueBytes) {
@@ -394,6 +427,9 @@ public final class YierdisObject {
         this.payload = root;
         this.stringRoot = root;
         this.listRoot = null;
+        this.hashRoot = null;
+        this.setRoot = null;
+        this.zsetRoot = null;
         this.rawLen = root.length(valueHandle);
         this.intValue = 0L;
         this.intBytesCache = null;
@@ -413,6 +449,9 @@ public final class YierdisObject {
         this.payload = root;
         this.stringRoot = root;
         this.listRoot = null;
+        this.hashRoot = null;
+        this.setRoot = null;
+        this.zsetRoot = null;
         this.rawLen = root.length(valueHandle);
         this.intValue = 0L;
         this.intBytesCache = null;
@@ -431,6 +470,18 @@ public final class YierdisObject {
         return listRoot != null && valueHandle != null;
     }
 
+    public boolean hasHashRoot() {
+        return hashRoot != null && valueHandle != null;
+    }
+
+    public boolean hasSetRoot() {
+        return setRoot != null && valueHandle != null;
+    }
+
+    public boolean hasZSetRoot() {
+        return zsetRoot != null && valueHandle != null;
+    }
+
     public void useStringHandle(StringRoot root, ValueHandle handle) {
         Objects.requireNonNull(root, "root");
         Objects.requireNonNull(handle, "handle");
@@ -446,6 +497,9 @@ public final class YierdisObject {
         this.payload = root;
         this.stringRoot = root;
         this.listRoot = null;
+        this.hashRoot = null;
+        this.setRoot = null;
+        this.zsetRoot = null;
         this.valueHandle = handle;
         this.rawLen = root.length(handle);
         this.intValue = 0L;
@@ -467,6 +521,9 @@ public final class YierdisObject {
         this.payload = root;
         this.stringRoot = null;
         this.listRoot = root;
+        this.hashRoot = null;
+        this.setRoot = null;
+        this.zsetRoot = null;
         this.valueHandle = handle;
         this.rawLen = 0;
         this.intValue = 0L;
@@ -493,6 +550,186 @@ public final class YierdisObject {
             this.payload = root;
             this.stringRoot = null;
             this.listRoot = root;
+            this.hashRoot = null;
+            this.setRoot = null;
+            this.zsetRoot = null;
+            this.valueHandle = handle;
+            this.rawLen = 0;
+            this.intValue = 0L;
+            this.intBytesCache = null;
+            this.intBytesCacheFor = 0L;
+            installed = true;
+        } finally {
+            if (!installed) {
+                root.release(handle);
+            }
+        }
+    }
+
+    public void useHashHandle(HashRoot root, ValueHandle handle) {
+        Objects.requireNonNull(root, "root");
+        Objects.requireNonNull(handle, "handle");
+        if (hashRoot == root && valueHandle != null && valueHandle.raw() == handle.raw()) {
+            this.payload = root;
+            this.encoding = root.encoding(handle);
+            return;
+        }
+        releasePayloadIfAny();
+        this.type = ValueType.HASH;
+        this.encoding = root.encoding(handle);
+        this.payload = root;
+        this.stringRoot = null;
+        this.listRoot = null;
+        this.hashRoot = root;
+        this.setRoot = null;
+        this.zsetRoot = null;
+        this.valueHandle = handle;
+        this.rawLen = 0;
+        this.intValue = 0L;
+        this.intBytesCache = null;
+        this.intBytesCacheFor = 0L;
+    }
+
+    public void useSetHandle(SetRoot root, ValueHandle handle) {
+        Objects.requireNonNull(root, "root");
+        Objects.requireNonNull(handle, "handle");
+        if (setRoot == root && valueHandle != null && valueHandle.raw() == handle.raw()) {
+            this.payload = root;
+            this.encoding = root.encoding(handle);
+            return;
+        }
+        releasePayloadIfAny();
+        this.type = ValueType.SET;
+        this.encoding = root.encoding(handle);
+        this.payload = root;
+        this.stringRoot = null;
+        this.listRoot = null;
+        this.hashRoot = null;
+        this.setRoot = root;
+        this.zsetRoot = null;
+        this.valueHandle = handle;
+        this.rawLen = 0;
+        this.intValue = 0L;
+        this.intBytesCache = null;
+        this.intBytesCacheFor = 0L;
+    }
+
+    public void useZSetHandle(ZSetRoot root, ValueHandle handle) {
+        Objects.requireNonNull(root, "root");
+        Objects.requireNonNull(handle, "handle");
+        if (zsetRoot == root && valueHandle != null && valueHandle.raw() == handle.raw()) {
+            this.payload = root;
+            this.encoding = root.encoding(handle);
+            return;
+        }
+        releasePayloadIfAny();
+        this.type = ValueType.ZSET;
+        this.encoding = root.encoding(handle);
+        this.payload = root;
+        this.stringRoot = null;
+        this.listRoot = null;
+        this.hashRoot = null;
+        this.setRoot = null;
+        this.zsetRoot = root;
+        this.valueHandle = handle;
+        this.rawLen = 0;
+        this.intValue = 0L;
+        this.intBytesCache = null;
+        this.intBytesCacheFor = 0L;
+    }
+
+    public void moveHashToRoot(HashRoot root) {
+        Objects.requireNonNull(root, "root");
+        if (hashRoot == root && valueHandle != null) {
+            payload = root;
+            encoding = root.encoding(valueHandle);
+            return;
+        }
+        if (!(payload instanceof HashValue hashValue)) {
+            throw new IllegalStateException("unexpected hash payload: " + payload);
+        }
+        ValueHandle handle = root.store(hashValue);
+        boolean installed = false;
+        try {
+            releasePayloadIfAny();
+            this.type = ValueType.HASH;
+            this.encoding = root.encoding(handle);
+            this.payload = root;
+            this.stringRoot = null;
+            this.listRoot = null;
+            this.hashRoot = root;
+            this.setRoot = null;
+            this.zsetRoot = null;
+            this.valueHandle = handle;
+            this.rawLen = 0;
+            this.intValue = 0L;
+            this.intBytesCache = null;
+            this.intBytesCacheFor = 0L;
+            installed = true;
+        } finally {
+            if (!installed) {
+                root.release(handle);
+            }
+        }
+    }
+
+    public void moveSetToRoot(SetRoot root) {
+        Objects.requireNonNull(root, "root");
+        if (setRoot == root && valueHandle != null) {
+            payload = root;
+            encoding = root.encoding(valueHandle);
+            return;
+        }
+        if (!(payload instanceof SetValue setValue)) {
+            throw new IllegalStateException("unexpected set payload: " + payload);
+        }
+        ValueHandle handle = root.store(setValue);
+        boolean installed = false;
+        try {
+            releasePayloadIfAny();
+            this.type = ValueType.SET;
+            this.encoding = root.encoding(handle);
+            this.payload = root;
+            this.stringRoot = null;
+            this.listRoot = null;
+            this.hashRoot = null;
+            this.setRoot = root;
+            this.zsetRoot = null;
+            this.valueHandle = handle;
+            this.rawLen = 0;
+            this.intValue = 0L;
+            this.intBytesCache = null;
+            this.intBytesCacheFor = 0L;
+            installed = true;
+        } finally {
+            if (!installed) {
+                root.release(handle);
+            }
+        }
+    }
+
+    public void moveZSetToRoot(ZSetRoot root) {
+        Objects.requireNonNull(root, "root");
+        if (zsetRoot == root && valueHandle != null) {
+            payload = root;
+            encoding = root.encoding(valueHandle);
+            return;
+        }
+        if (!(payload instanceof ZSetValue zsetValue)) {
+            throw new IllegalStateException("unexpected zset payload: " + payload);
+        }
+        ValueHandle handle = root.store(zsetValue);
+        boolean installed = false;
+        try {
+            releasePayloadIfAny();
+            this.type = ValueType.ZSET;
+            this.encoding = root.encoding(handle);
+            this.payload = root;
+            this.stringRoot = null;
+            this.listRoot = null;
+            this.hashRoot = null;
+            this.setRoot = null;
+            this.zsetRoot = root;
             this.valueHandle = handle;
             this.rawLen = 0;
             this.intValue = 0L;
@@ -837,6 +1074,10 @@ public final class YierdisObject {
         releaseStringPayloadIfAny();
         valueHandle = root.store(raw);
         stringRoot = root;
+        listRoot = null;
+        hashRoot = null;
+        setRoot = null;
+        zsetRoot = null;
         payload = root;
         rawLen = raw.length;
         intValue = 0L;
@@ -1017,8 +1258,7 @@ public final class YierdisObject {
             if (valueHandle != null) {
                 stringRoot.release(valueHandle);
             }
-            stringRoot = null;
-            valueHandle = null;
+            clearRootReferences();
             payload = null;
             return;
         }
@@ -1034,19 +1274,60 @@ public final class YierdisObject {
             if (valueHandle != null) {
                 listRoot.release(valueHandle);
             }
-            listRoot = null;
-            valueHandle = null;
+            clearRootReferences();
+            payload = null;
+        }
+    }
+
+    public void releaseHashPayloadIfAny() {
+        if (hashRoot != null) {
+            if (valueHandle != null) {
+                hashRoot.release(valueHandle);
+            }
+            clearRootReferences();
+            payload = null;
+        }
+    }
+
+    public void releaseSetPayloadIfAny() {
+        if (setRoot != null) {
+            if (valueHandle != null) {
+                setRoot.release(valueHandle);
+            }
+            clearRootReferences();
+            payload = null;
+        }
+    }
+
+    public void releaseZSetPayloadIfAny() {
+        if (zsetRoot != null) {
+            if (valueHandle != null) {
+                zsetRoot.release(valueHandle);
+            }
+            clearRootReferences();
             payload = null;
         }
     }
 
     public void releasePayloadIfAny() {
+        releaseHashPayloadIfAny();
+        releaseSetPayloadIfAny();
+        releaseZSetPayloadIfAny();
         releaseListPayloadIfAny();
         releaseStringPayloadIfAny();
         if (payload instanceof YierdisValue v) {
             v.close();
             payload = null;
         }
+    }
+
+    private void clearRootReferences() {
+        stringRoot = null;
+        listRoot = null;
+        hashRoot = null;
+        setRoot = null;
+        zsetRoot = null;
+        valueHandle = null;
     }
 
     private static int nextCapacity(int current, int required) {

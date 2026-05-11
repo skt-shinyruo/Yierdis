@@ -371,7 +371,7 @@ public final class HashValue implements YierdisValue {
 
     public long estimatedBytes() {
         if (memoryRuntime != null) {
-            return 0;
+            return ffmBlobStore.liveBytes();
         }
         if (map != null) {
             return rawBytes + map.estimatedBytes();

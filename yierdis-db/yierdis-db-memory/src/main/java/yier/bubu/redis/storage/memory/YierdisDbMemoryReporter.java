@@ -16,8 +16,11 @@ import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
+import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
+import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 
 import java.util.function.BooleanSupplier;
 
@@ -158,6 +161,30 @@ public final class YierdisDbMemoryReporter {
             }
             return extra;
         }
+        if (type == ValueType.HASH && object.hasHashRoot()) {
+            ValueHandle handle = record == null ? object.valueHandle() : record.valueHandle();
+            HashRoot hashRoot = keyLifecycle.hashRoot();
+            if (handle != null && hashRoot != null) {
+                extra += hashRoot.estimatedBytes(handle);
+            }
+            return extra;
+        }
+        if (type == ValueType.SET && object.hasSetRoot()) {
+            ValueHandle handle = record == null ? object.valueHandle() : record.valueHandle();
+            SetRoot setRoot = keyLifecycle.setRoot();
+            if (handle != null && setRoot != null) {
+                extra += setRoot.estimatedBytes(handle);
+            }
+            return extra;
+        }
+        if (type == ValueType.ZSET && object.hasZSetRoot()) {
+            ValueHandle handle = record == null ? object.valueHandle() : record.valueHandle();
+            ZSetRoot zsetRoot = keyLifecycle.zsetRoot();
+            if (handle != null && zsetRoot != null) {
+                extra += zsetRoot.estimatedBytes(handle);
+            }
+            return extra;
+        }
         if (type == ValueType.STRING && object.payload instanceof OffHeapBuf buf) {
             extra += buf.capacity();
         }
@@ -208,6 +235,18 @@ public final class YierdisDbMemoryReporter {
         ListRoot listRoot = keyLifecycle.listRoot();
         if (listRoot != null) {
             total = addSaturating(total, listRoot.nativeBytes());
+        }
+        HashRoot hashRoot = keyLifecycle.hashRoot();
+        if (hashRoot != null) {
+            total = addSaturating(total, hashRoot.nativeBytes());
+        }
+        SetRoot setRoot = keyLifecycle.setRoot();
+        if (setRoot != null) {
+            total = addSaturating(total, setRoot.nativeBytes());
+        }
+        ZSetRoot zsetRoot = keyLifecycle.zsetRoot();
+        if (zsetRoot != null) {
+            total = addSaturating(total, zsetRoot.nativeBytes());
         }
         return total;
     }

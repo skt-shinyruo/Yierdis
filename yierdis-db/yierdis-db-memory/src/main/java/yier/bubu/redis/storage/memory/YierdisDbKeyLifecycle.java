@@ -30,6 +30,9 @@ public final class YierdisDbKeyLifecycle {
     private final NativeKeyDirectory keyDirectory;
     private final StringRoot stringRoot;
     private final ListRoot listRoot;
+    private final HashRoot hashRoot;
+    private final SetRoot setRoot;
+    private final ZSetRoot zsetRoot;
     private final Consumer<YierdisObject> touchCallback;
     private final LongConsumer adjustUsedBytesCallback;
 
@@ -50,6 +53,9 @@ public final class YierdisDbKeyLifecycle {
                 null,
                 null,
                 null,
+                null,
+                null,
+                null,
                 touchCallback,
                 adjustUsedBytesCallback
         );
@@ -64,6 +70,9 @@ public final class YierdisDbKeyLifecycle {
             NativeKeyDirectory keyDirectory,
             StringRoot stringRoot,
             ListRoot listRoot,
+            HashRoot hashRoot,
+            SetRoot setRoot,
+            ZSetRoot zsetRoot,
             Consumer<YierdisObject> touchCallback,
             LongConsumer adjustUsedBytesCallback
     ) {
@@ -75,6 +84,9 @@ public final class YierdisDbKeyLifecycle {
         this.keyDirectory = keyDirectory;
         this.stringRoot = stringRoot;
         this.listRoot = listRoot;
+        this.hashRoot = hashRoot;
+        this.setRoot = setRoot;
+        this.zsetRoot = zsetRoot;
         this.touchCallback = Objects.requireNonNull(touchCallback, "touchCallback");
         this.adjustUsedBytesCallback = Objects.requireNonNull(adjustUsedBytesCallback, "adjustUsedBytesCallback");
     }
@@ -101,6 +113,18 @@ public final class YierdisDbKeyLifecycle {
 
     public ListRoot listRoot() {
         return listRoot;
+    }
+
+    public HashRoot hashRoot() {
+        return hashRoot;
+    }
+
+    public SetRoot setRoot() {
+        return setRoot;
+    }
+
+    public ZSetRoot zsetRoot() {
+        return zsetRoot;
     }
 
     public KeyHandle keyHandle(byte[] keyBytes) {

@@ -193,6 +193,10 @@ public final class YierdisFfmZSet implements AutoCloseable {
         return rangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count, true);
     }
 
+    public long nativeBytes() {
+        return blobStore.liveBytes();
+    }
+
     public void zrevrangeByScoreWriteTo(
             double min,
             boolean minExclusive,

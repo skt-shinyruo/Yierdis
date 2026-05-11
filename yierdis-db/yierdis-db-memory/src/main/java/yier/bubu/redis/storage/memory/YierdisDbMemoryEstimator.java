@@ -67,6 +67,9 @@ public final class YierdisDbMemoryEstimator {
             return object.rawLen;
         }
 
+        if (object.type == ValueType.HASH && object.hasHashRoot()) {
+            return 0;
+        }
         if (object.payload instanceof HashValue hv) {
             return hv.estimatedBytes();
         }
@@ -76,8 +79,14 @@ public final class YierdisDbMemoryEstimator {
         if (object.payload instanceof ListValue lv) {
             return lv.estimatedBytes();
         }
+        if (object.type == ValueType.SET && object.hasSetRoot()) {
+            return 0;
+        }
         if (object.payload instanceof SetValue sv) {
             return sv.estimatedBytes();
+        }
+        if (object.type == ValueType.ZSET && object.hasZSetRoot()) {
+            return 0;
         }
         if (object.payload instanceof ZSetValue zv) {
             return zv.estimatedBytes();

@@ -72,7 +72,7 @@ public final class ZSetValue implements YierdisValue {
 
     public long estimatedBytes() {
         if (memoryRuntime != null) {
-            return 0;
+            return ffm.nativeBytes();
         }
         if (listpack != null) {
             return listpack.estimatedBytes();
