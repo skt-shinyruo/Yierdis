@@ -70,6 +70,10 @@ public final class YierdisFfmIntSet implements AutoCloseable {
         return getLong(index);
     }
 
+    public long nativeBytes() {
+        return region == null ? 0L : region.size();
+    }
+
     @Override
     public void close() {
         if (region != null) {

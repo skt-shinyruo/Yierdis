@@ -81,7 +81,8 @@ public final class SetValue implements YierdisValue {
 
     public long estimatedBytes() {
         if (memoryRuntime != null) {
-            return 0;
+            long intsetBytes = intsetFfm == null ? 0L : intsetFfm.nativeBytes();
+            return addSaturating(ffmBlobStore.liveBytes(), intsetBytes);
         }
         if (hashset != null) {
             return rawBytes + hashset.estimatedBytes();
@@ -576,6 +577,13 @@ public final class SetValue implements YierdisValue {
             digits++;
         }
         return v < 0 ? digits + 1 : digits;
+    }
+
+    private static long addSaturating(long left, long right) {
+        if (left < 0 || right < 0 || Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     /**

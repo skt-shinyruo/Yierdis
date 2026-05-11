@@ -8,6 +8,9 @@ import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.api.HashReadOps;
 import yier.bubu.redis.storage.api.HashWriteOps;
@@ -28,11 +31,13 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final HashRoot hashRoot;
     private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
     YierdisHashOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
+        this.hashRoot = Objects.requireNonNull(keyLifecycle.hashRoot(), "hashRoot");
         this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
@@ -52,7 +57,6 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
-                var memoryRuntime = keyLifecycle.memoryRuntime();
                 final int[] added = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
                 keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
@@ -65,19 +69,38 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                         oldEstimate = 0;
                     }
                     if (old == null) {
-                        HashValue hv = new HashValue(memoryRuntime);
-                        added[0] = hv.hsetMany(fieldValuePairs);
-                        YierdisObject next = YierdisObject.newHash(hv);
-                        keyLifecycle.touch(next);
-                        refreshEstimatedBytes(k, next);
-                        deltaBytes[0] += next.estimatedBytes;
-                        return next;
+                        YierdisObject next = YierdisObject.newHash(hashRoot);
+                        boolean ok = false;
+                        try {
+                            ValueHandle handle = next.valueHandle();
+                            added[0] = hashRoot.hsetMany(handle, fieldValuePairs);
+                            next.useHashHandle(hashRoot, handle);
+                            keyLifecycle.touch(next);
+                            refreshEstimatedBytes(k, next);
+                            deltaBytes[0] += next.estimatedBytes;
+                            ok = true;
+                            return next;
+                        } finally {
+                            if (!ok) {
+                                next.releasePayloadIfAny();
+                            }
+                        }
                     }
                     if (old.type != ValueType.HASH) {
                         throw new WrongTypeException();
                     }
-                    added[0] = ((HashValue) old.payload).hsetMany(fieldValuePairs);
-                    old.refreshCompositeEncodingFromPayload();
+                    ValueHandle handle = hashHandle(old, k);
+                    if (handle == null && old.payload instanceof HashValue) {
+                        old.moveHashToRoot(hashRoot);
+                        handle = old.valueHandle();
+                    }
+                    if (handle != null) {
+                        added[0] = hashRoot.hsetMany(handle, fieldValuePairs);
+                        old.useHashHandle(hashRoot, handle);
+                    } else {
+                        added[0] = ((HashValue) old.payload).hsetMany(fieldValuePairs);
+                        old.refreshCompositeEncodingFromPayload();
+                    }
                     keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
                     refreshEstimatedBytes(k, old);
@@ -102,6 +125,11 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         if (object.type != ValueType.HASH) {
             throw new WrongTypeException();
         }
+        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
+        ValueHandle handle = readableHashHandle(object, record);
+        if (handle != null) {
+            return hashRoot.hget(handle, fieldBytes);
+        }
         return ((HashValue) object.payload).hget(fieldBytes);
     }
 
@@ -123,6 +151,11 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         }
         if (object.type != ValueType.HASH) {
             throw new WrongTypeException();
+        }
+        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
+        ValueHandle handle = readableHashHandle(object, record);
+        if (handle != null) {
+            return hashRoot.size(handle);
         }
         return ((HashValue) object.payload).size();
     }
@@ -152,15 +185,31 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     if (old.type != ValueType.HASH) {
                         throw new WrongTypeException();
                     }
-                    HashValue hv = (HashValue) old.payload;
-                    removed[0] = hv.hdel(fields);
-                    if (hv.size() == 0) {
+                    ValueHandle handle = hashHandle(old, k);
+                    if (handle == null && old.payload instanceof HashValue) {
+                        old.moveHashToRoot(hashRoot);
+                        handle = old.valueHandle();
+                    }
+                    int size;
+                    if (handle != null) {
+                        removed[0] = hashRoot.hdel(handle, fields);
+                        size = hashRoot.size(handle);
+                    } else {
+                        HashValue hv = (HashValue) old.payload;
+                        removed[0] = hv.hdel(fields);
+                        size = hv.size();
+                    }
+                    if (size == 0) {
                         old.releasePayloadIfAny();
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
-                    old.refreshCompositeEncodingFromPayload();
+                    if (handle != null) {
+                        old.useHashHandle(hashRoot, handle);
+                    } else {
+                        old.refreshCompositeEncodingFromPayload();
+                    }
                     keyLifecycle.touch(old);
                     refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
@@ -183,6 +232,11 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         if (object.type != ValueType.HASH) {
             throw new WrongTypeException();
         }
+        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
+        ValueHandle handle = readableHashHandle(object, record);
+        if (handle != null) {
+            return hashRoot.hgetallCount(handle);
+        }
         return ((HashValue) object.payload).hgetallCount();
     }
 
@@ -193,6 +247,12 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         }
         if (object.type != ValueType.HASH) {
             throw new WrongTypeException();
+        }
+        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
+        ValueHandle handle = readableHashHandle(object, record);
+        if (handle != null) {
+            hashRoot.hgetallPairsInto(handle, out);
+            return;
         }
         ((HashValue) object.payload).hgetallPairsInto(out);
     }
@@ -213,6 +273,31 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
             return;
         }
         object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
+    }
+
+    private ValueHandle hashHandle(YierdisObject object, KeyHandle keyHandle) {
+        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
+        return readableHashHandle(object, record);
+    }
+
+    private ValueHandle readableHashHandle(YierdisObject object, EntryRecord record) {
+        if (canReadFromRoot(object, record)) {
+            return record.valueHandle();
+        }
+        if (object != null && object.hasHashRoot()) {
+            return object.valueHandle();
+        }
+        return null;
+    }
+
+    private boolean canReadFromRoot(YierdisObject object, EntryRecord record) {
+        return object != null
+                && object.hasHashRoot()
+                && record != null
+                && record.type() == ValueType.HASH
+                && record.valueHandle() != null
+                && object.valueHandle() != null
+                && record.valueHandle().raw() == object.valueHandle().raw();
     }
 
     private static long estimateHashWriteUpperBound(int keyLength, List<byte[]> fieldValuePairs) {

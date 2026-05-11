@@ -1,0 +1,255 @@
+package yier.bubu.redis.storage.memory.internal.entry;
+
+import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.api.ValueType;
+import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
+import yier.bubu.redis.storage.memory.internal.value.ZSetValue;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+public final class ZSetRoot implements TypeRoot {
+    private final YierdisFfmMemoryRuntime runtime;
+    private final Map<Long, ZSetValue> zsets = new HashMap<>();
+    private long nextHandle = 1L;
+    private boolean closed;
+
+    public ZSetRoot(YierdisFfmMemoryRuntime runtime) {
+        this.runtime = Objects.requireNonNull(runtime, "runtime");
+    }
+
+    @Override
+    public ValueType type() {
+        return ValueType.ZSET;
+    }
+
+    @Override
+    public ValueEncoding encoding() {
+        return ValueEncoding.ZSET_PACKED;
+    }
+
+    public synchronized ValueEncoding encoding(ValueHandle handle) {
+        return requireZSet(handle).encoding();
+    }
+
+    public synchronized ValueHandle create() {
+        ensureOpen();
+        ValueHandle handle = new ValueHandle(nextHandle++);
+        zsets.put(handle.raw(), new ZSetValue(runtime));
+        return handle;
+    }
+
+    public synchronized ValueHandle store(ZSetValue value) {
+        ensureOpen();
+        Objects.requireNonNull(value, "value");
+        ValueHandle handle = create();
+        boolean ok = false;
+        try {
+            requireZSet(handle).zaddMany(memberScorePairsToScoreMemberPairs(value.zrange(0, -1, true)));
+            ok = true;
+            return handle;
+        } finally {
+            if (!ok) {
+                release(handle);
+            }
+        }
+    }
+
+    public synchronized int zadd(ValueHandle handle, List<byte[]> scoreMemberPairs, boolean[] changedRef) {
+        ensureOpen();
+        return requireZSet(handle).zaddMany(scoreMemberPairs, changedRef);
+    }
+
+    public synchronized int zadd(ValueHandle handle, List<byte[]> scoreMemberPairs) {
+        ensureOpen();
+        return requireZSet(handle).zaddMany(scoreMemberPairs);
+    }
+
+    public synchronized int zrem(ValueHandle handle, List<byte[]> members) {
+        ensureOpen();
+        return requireZSet(handle).zrem(members);
+    }
+
+    public synchronized int zremrangeByRank(ValueHandle handle, long start, long stop) {
+        ensureOpen();
+        return requireZSet(handle).zremrangeByRank(start, stop);
+    }
+
+    public synchronized int zremrangeByScore(
+            ValueHandle handle,
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive
+    ) {
+        ensureOpen();
+        return requireZSet(handle).zremrangeByScore(min, minExclusive, max, maxExclusive);
+    }
+
+    public synchronized int zrangeCount(ValueHandle handle, long start, long stop, boolean withScores) {
+        ensureOpen();
+        return requireZSet(handle).zrangeCount(start, stop, withScores);
+    }
+
+    public synchronized void zrangeWriteTo(ValueHandle handle, long start, long stop, boolean withScores, BulkStringSink out) {
+        ensureOpen();
+        requireZSet(handle).zrangeWriteTo(start, stop, withScores, out);
+    }
+
+    public synchronized int zrevrangeCount(ValueHandle handle, long start, long stop, boolean withScores) {
+        ensureOpen();
+        return requireZSet(handle).zrevrangeCount(start, stop, withScores);
+    }
+
+    public synchronized void zrevrangeWriteTo(ValueHandle handle, long start, long stop, boolean withScores, BulkStringSink out) {
+        ensureOpen();
+        requireZSet(handle).zrevrangeWriteTo(start, stop, withScores, out);
+    }
+
+    public synchronized int zrangeByScoreCount(
+            ValueHandle handle,
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive,
+            boolean withScores,
+            long offset,
+            long count
+    ) {
+        ensureOpen();
+        return requireZSet(handle).zrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+    }
+
+    public synchronized void zrangeByScoreWriteTo(
+            ValueHandle handle,
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive,
+            boolean withScores,
+            long offset,
+            long count,
+            BulkStringSink out
+    ) {
+        ensureOpen();
+        requireZSet(handle).zrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+    }
+
+    public synchronized int zrevrangeByScoreCount(
+            ValueHandle handle,
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive,
+            boolean withScores,
+            long offset,
+            long count
+    ) {
+        ensureOpen();
+        return requireZSet(handle).zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
+    }
+
+    public synchronized void zrevrangeByScoreWriteTo(
+            ValueHandle handle,
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive,
+            boolean withScores,
+            long offset,
+            long count,
+            BulkStringSink out
+    ) {
+        ensureOpen();
+        requireZSet(handle).zrevrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
+    }
+
+    public synchronized int size(ValueHandle handle) {
+        ensureOpen();
+        return requireZSet(handle).size();
+    }
+
+    @Override
+    public synchronized long estimatedBytes(ValueHandle handle) {
+        ensureOpen();
+        return requireZSet(handle).estimatedBytes();
+    }
+
+    public synchronized long nativeBytes() {
+        long total = 0L;
+        for (ZSetValue zset : zsets.values()) {
+            total = addSaturating(total, zset.estimatedBytes());
+        }
+        return total;
+    }
+
+    @Override
+    public synchronized void release(ValueHandle handle) {
+        if (handle == null) {
+            return;
+        }
+        ZSetValue removed = zsets.remove(handle.raw());
+        if (removed != null) {
+            removed.close();
+        }
+    }
+
+    @Override
+    public synchronized void close() {
+        if (closed) {
+            return;
+        }
+        RuntimeException failure = null;
+        for (ZSetValue zset : zsets.values()) {
+            try {
+                zset.close();
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        zsets.clear();
+        closed = true;
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    private ZSetValue requireZSet(ValueHandle handle) {
+        Objects.requireNonNull(handle, "handle");
+        ZSetValue zset = zsets.get(handle.raw());
+        if (zset == null) {
+            throw new IllegalArgumentException("unknown zset value handle: " + handle.raw());
+        }
+        return zset;
+    }
+
+    private void ensureOpen() {
+        if (closed) {
+            throw new IllegalStateException("zset root is closed");
+        }
+    }
+
+    private static List<byte[]> memberScorePairsToScoreMemberPairs(List<byte[]> memberScorePairs) {
+        ArrayList<byte[]> out = new ArrayList<>(memberScorePairs.size());
+        for (int i = 0; i + 1 < memberScorePairs.size(); i += 2) {
+            out.add(memberScorePairs.get(i + 1));
+            out.add(memberScorePairs.get(i));
+        }
+        return out;
+    }
+
+    private static long addSaturating(long left, long right) {
+        if (left < 0 || right < 0 || Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
+    }
+}

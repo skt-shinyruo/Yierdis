@@ -48,6 +48,9 @@ public final class YierdisDb implements RuntimeDbEngine {
     private final NativeKeyDirectory keyDirectory;
     private final StringRoot stringRoot;
     private final ListRoot listRoot;
+    private final HashRoot hashRoot;
+    private final SetRoot setRoot;
+    private final ZSetRoot zsetRoot;
     private final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
     private final YierdisDbOwnedResources resources;
@@ -280,6 +283,9 @@ public final class YierdisDb implements RuntimeDbEngine {
         this.keyDirectory = components.storage.keyDirectory;
         this.stringRoot = components.storage.stringRoot;
         this.listRoot = components.storage.listRoot;
+        this.hashRoot = components.storage.hashRoot;
+        this.setRoot = components.storage.setRoot;
+        this.zsetRoot = components.storage.zsetRoot;
         this.keysStoredOffHeap = components.storage.keysStoredOffHeap;
         this.maxmemoryBytes = components.config.maxmemoryBytes;
         this.maxmemoryPolicy = components.config.maxmemoryPolicy;
@@ -474,7 +480,7 @@ public final class YierdisDb implements RuntimeDbEngine {
             return;
         }
         ledger.resetUsage();
-        resources.releaseAll(store, expires, entries, keyDirectory, stringRoot, listRoot);
+        resources.releaseAll(store, expires, entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
     }
 
     public yier.bubu.redis.storage.api.MutationOutcome flushDb() {

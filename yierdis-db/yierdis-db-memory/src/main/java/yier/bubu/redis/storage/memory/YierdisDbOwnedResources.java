@@ -118,7 +118,7 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
             NativeKeyDirectory keyDirectory,
             StringRoot stringRoot
     ) {
-        releaseAll(store, expires, entries, keyDirectory, stringRoot, null);
+        releaseAll(store, expires, entries, keyDirectory, stringRoot, null, null, null, null);
     }
 
     void releaseAll(
@@ -128,6 +128,20 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
             NativeKeyDirectory keyDirectory,
             StringRoot stringRoot,
             ListRoot listRoot
+    ) {
+        releaseAll(store, expires, entries, keyDirectory, stringRoot, listRoot, null, null, null);
+    }
+
+    void releaseAll(
+            YierdisKeyspace<YierdisObject> store,
+            YierdisExpireIndex expires,
+            EntryTable entries,
+            NativeKeyDirectory keyDirectory,
+            StringRoot stringRoot,
+            ListRoot listRoot,
+            HashRoot hashRoot,
+            SetRoot setRoot,
+            ZSetRoot zsetRoot
     ) {
         Throwable failure = null;
         try {
@@ -159,6 +173,27 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
         if (listRoot != null) {
             try {
                 listRoot.close();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+        }
+        if (hashRoot != null) {
+            try {
+                hashRoot.close();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+        }
+        if (setRoot != null) {
+            try {
+                setRoot.close();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+        }
+        if (zsetRoot != null) {
+            try {
+                zsetRoot.close();
             } catch (Throwable t) {
                 failure = recordFailure(failure, t);
             }

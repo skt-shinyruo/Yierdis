@@ -8,6 +8,9 @@ import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.api.SetReadOps;
 import yier.bubu.redis.storage.api.SetWriteOps;
@@ -26,11 +29,13 @@ import java.util.function.ToLongBiFunction;
 public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final SetRoot setRoot;
     private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
     YierdisSetOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
+        this.setRoot = Objects.requireNonNull(keyLifecycle.setRoot(), "setRoot");
         this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
@@ -47,7 +52,6 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
-                var memoryRuntime = keyLifecycle.memoryRuntime();
                 final int[] added = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
                 keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
@@ -60,19 +64,38 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                         oldEstimate = 0;
                     }
                     if (old == null) {
-                        SetValue sv = new SetValue(memoryRuntime);
-                        added[0] = sv.addAll(members);
-                        YierdisObject next = YierdisObject.newSet(sv);
-                        keyLifecycle.touch(next);
-                        refreshEstimatedBytes(k, next);
-                        deltaBytes[0] += next.estimatedBytes;
-                        return next;
+                        YierdisObject next = YierdisObject.newSet(setRoot);
+                        boolean ok = false;
+                        try {
+                            ValueHandle handle = next.valueHandle();
+                            added[0] = setRoot.sadd(handle, members);
+                            next.useSetHandle(setRoot, handle);
+                            keyLifecycle.touch(next);
+                            refreshEstimatedBytes(k, next);
+                            deltaBytes[0] += next.estimatedBytes;
+                            ok = true;
+                            return next;
+                        } finally {
+                            if (!ok) {
+                                next.releasePayloadIfAny();
+                            }
+                        }
                     }
                     if (old.type != ValueType.SET) {
                         throw new WrongTypeException();
                     }
-                    added[0] = ((SetValue) old.payload).addAll(members);
-                    old.refreshCompositeEncodingFromPayload();
+                    ValueHandle handle = setHandle(old, k);
+                    if (handle == null && old.payload instanceof SetValue) {
+                        old.moveSetToRoot(setRoot);
+                        handle = old.valueHandle();
+                    }
+                    if (handle != null) {
+                        added[0] = setRoot.sadd(handle, members);
+                        old.useSetHandle(setRoot, handle);
+                    } else {
+                        added[0] = ((SetValue) old.payload).addAll(members);
+                        old.refreshCompositeEncodingFromPayload();
+                    }
                     keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
                     refreshEstimatedBytes(k, old);
@@ -113,15 +136,31 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                     if (old.type != ValueType.SET) {
                         throw new WrongTypeException();
                     }
-                    SetValue sv = (SetValue) old.payload;
-                    removed[0] = sv.removeAll(members);
-                    if (sv.size() == 0) {
+                    ValueHandle handle = setHandle(old, k);
+                    if (handle == null && old.payload instanceof SetValue) {
+                        old.moveSetToRoot(setRoot);
+                        handle = old.valueHandle();
+                    }
+                    int size;
+                    if (handle != null) {
+                        removed[0] = setRoot.srem(handle, members);
+                        size = setRoot.size(handle);
+                    } else {
+                        SetValue sv = (SetValue) old.payload;
+                        removed[0] = sv.removeAll(members);
+                        size = sv.size();
+                    }
+                    if (size == 0) {
                         old.releasePayloadIfAny();
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
-                    old.refreshCompositeEncodingFromPayload();
+                    if (handle != null) {
+                        old.useSetHandle(setRoot, handle);
+                    } else {
+                        old.refreshCompositeEncodingFromPayload();
+                    }
                     keyLifecycle.touch(old);
                     refreshEstimatedBytes(k, old);
                     deltaBytes[0] += old.estimatedBytes - oldEstimate;
@@ -155,6 +194,11 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
         if (object.type != ValueType.SET) {
             throw new WrongTypeException();
         }
+        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
+        ValueHandle handle = readableSetHandle(object, record);
+        if (handle != null) {
+            return setRoot.contains(handle, member);
+        }
         return ((SetValue) object.payload).contains(member);
     }
 
@@ -168,6 +212,11 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
         if (object.type != ValueType.SET) {
             throw new WrongTypeException();
         }
+        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
+        ValueHandle handle = readableSetHandle(object, record);
+        if (handle != null) {
+            return setRoot.size(handle);
+        }
         return ((SetValue) object.payload).size();
     }
 
@@ -179,6 +228,11 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
         if (object.type != ValueType.SET) {
             throw new WrongTypeException();
         }
+        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
+        ValueHandle handle = readableSetHandle(object, record);
+        if (handle != null) {
+            return setRoot.size(handle);
+        }
         return ((SetValue) object.payload).size();
     }
 
@@ -189,6 +243,12 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
         }
         if (object.type != ValueType.SET) {
             throw new WrongTypeException();
+        }
+        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
+        ValueHandle handle = readableSetHandle(object, record);
+        if (handle != null) {
+            setRoot.membersInto(handle, out);
+            return;
         }
         ((SetValue) object.payload).membersInto(out);
     }
@@ -209,6 +269,31 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
             return;
         }
         object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
+    }
+
+    private ValueHandle setHandle(YierdisObject object, KeyHandle keyHandle) {
+        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
+        return readableSetHandle(object, record);
+    }
+
+    private ValueHandle readableSetHandle(YierdisObject object, EntryRecord record) {
+        if (canReadFromRoot(object, record)) {
+            return record.valueHandle();
+        }
+        if (object != null && object.hasSetRoot()) {
+            return object.valueHandle();
+        }
+        return null;
+    }
+
+    private boolean canReadFromRoot(YierdisObject object, EntryRecord record) {
+        return object != null
+                && object.hasSetRoot()
+                && record != null
+                && record.type() == ValueType.SET
+                && record.valueHandle() != null
+                && object.valueHandle() != null
+                && record.valueHandle().raw() == object.valueHandle().raw();
     }
 
     private static BulkStringSequence sequenceOf(IntSupplier countSupplier, BulkEmitter emitter) {

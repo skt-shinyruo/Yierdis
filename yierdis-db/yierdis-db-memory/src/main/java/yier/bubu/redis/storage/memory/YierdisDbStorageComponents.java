@@ -27,6 +27,9 @@ public final class YierdisDbStorageComponents {
     final NativeKeyDirectory keyDirectory;
     final StringRoot stringRoot;
     final ListRoot listRoot;
+    final HashRoot hashRoot;
+    final SetRoot setRoot;
+    final ZSetRoot zsetRoot;
     final boolean keysStoredOffHeap;
 
     private YierdisDbStorageComponents(
@@ -39,6 +42,9 @@ public final class YierdisDbStorageComponents {
             NativeKeyDirectory keyDirectory,
             StringRoot stringRoot,
             ListRoot listRoot,
+            HashRoot hashRoot,
+            SetRoot setRoot,
+            ZSetRoot zsetRoot,
             boolean keysStoredOffHeap
     ) {
         this.memoryRuntime = memoryRuntime;
@@ -50,6 +56,9 @@ public final class YierdisDbStorageComponents {
         this.keyDirectory = keyDirectory;
         this.stringRoot = stringRoot;
         this.listRoot = listRoot;
+        this.hashRoot = hashRoot;
+        this.setRoot = setRoot;
+        this.zsetRoot = zsetRoot;
         this.keysStoredOffHeap = keysStoredOffHeap;
     }
 
@@ -91,6 +100,9 @@ public final class YierdisDbStorageComponents {
         NativeKeyDirectory keyDirectory = new NativeKeyDirectory(entries);
         StringRoot stringRoot = new StringRoot(resolvedAllocator);
         ListRoot listRoot = new ListRoot(resolvedRuntime);
+        HashRoot hashRoot = new HashRoot(resolvedRuntime);
+        SetRoot setRoot = new SetRoot(resolvedRuntime);
+        ZSetRoot zsetRoot = new ZSetRoot(resolvedRuntime);
         YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(resolvedRuntime, "ffm-key");
         return new YierdisDbStorageComponents(
                 resolvedRuntime,
@@ -102,6 +114,9 @@ public final class YierdisDbStorageComponents {
                 keyDirectory,
                 stringRoot,
                 listRoot,
+                hashRoot,
+                setRoot,
+                zsetRoot,
                 true
         );
     }
