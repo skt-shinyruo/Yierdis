@@ -83,4 +83,20 @@ public class YierdisForeignOffHeapAllocatorTest {
             }
         }
     }
+
+    @Test
+    public void cappedAllocatorDoesNotOvercommitNativeSlabBytes() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("capped-native")) {
+            YierdisForeignOffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(runtime, 4);
+            OffHeapBuf buf = allocator.allocate(4);
+            try {
+                Assert.assertTrue(runtime.usedBytes() <= 4L);
+                Assert.assertEquals(4L, allocator.usedBytes());
+            } finally {
+                buf.close();
+                allocator.close();
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
 }

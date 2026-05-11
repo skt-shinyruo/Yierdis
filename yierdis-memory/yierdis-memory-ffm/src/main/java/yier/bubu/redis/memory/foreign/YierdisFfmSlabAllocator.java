@@ -16,21 +16,35 @@ public final class YierdisFfmSlabAllocator implements OffHeapAllocator {
 
     private final YierdisFfmMemoryRuntime runtime;
     private final int defaultSlabBytes;
+    private final long maxBytes;
     private final ArrayList<YierdisFfmSlab> slabs = new ArrayList<>();
 
     private boolean closed;
     private long usedBytes;
+    private long reservedBytes;
 
     public YierdisFfmSlabAllocator(YierdisFfmMemoryRuntime runtime) {
-        this(runtime, DEFAULT_SLAB_BYTES);
+        this(runtime, DEFAULT_SLAB_BYTES, 0);
     }
 
     public YierdisFfmSlabAllocator(YierdisFfmMemoryRuntime runtime, int defaultSlabBytes) {
+        this(runtime, defaultSlabBytes, 0);
+    }
+
+    public YierdisFfmSlabAllocator(YierdisFfmMemoryRuntime runtime, long maxBytes) {
+        this(runtime, DEFAULT_SLAB_BYTES, maxBytes);
+    }
+
+    private YierdisFfmSlabAllocator(YierdisFfmMemoryRuntime runtime, int defaultSlabBytes, long maxBytes) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         if (defaultSlabBytes <= 0) {
             throw new IllegalArgumentException("defaultSlabBytes must be > 0");
         }
+        if (maxBytes < 0) {
+            throw new IllegalArgumentException("maxBytes must be >= 0");
+        }
         this.defaultSlabBytes = defaultSlabBytes;
+        this.maxBytes = maxBytes;
     }
 
     @Override
@@ -43,7 +57,7 @@ public final class YierdisFfmSlabAllocator implements OffHeapAllocator {
         }
 
         long next = usedBytes + capacity;
-        if (next < 0 || (maxBytes() > 0 && next > maxBytes())) {
+        if (next < 0 || (maxBytes > 0 && next > maxBytes)) {
             throw new OffHeapOutOfMemoryException("off-heap memory limit exceeded");
         }
 
@@ -61,6 +75,7 @@ public final class YierdisFfmSlabAllocator implements OffHeapAllocator {
         if (allocation == null) {
             slab = new YierdisFfmSlab(runtime, slabBytesForNewSlab(capacity));
             slabs.add(slab);
+            reservedBytes += slab.size();
             allocation = slab.allocate(capacity);
         }
 
@@ -75,7 +90,7 @@ public final class YierdisFfmSlabAllocator implements OffHeapAllocator {
 
     @Override
     public long maxBytes() {
-        return 0;
+        return maxBytes;
     }
 
     @Override
@@ -88,6 +103,7 @@ public final class YierdisFfmSlabAllocator implements OffHeapAllocator {
             slabs.get(i).close();
         }
         slabs.clear();
+        reservedBytes = 0;
     }
 
     void onFree(int capacity) {
@@ -107,15 +123,15 @@ public final class YierdisFfmSlabAllocator implements OffHeapAllocator {
             throw new IllegalArgumentException("capacity must be > 0");
         }
         long remaining = Long.MAX_VALUE;
-        if (maxBytes() > 0) {
-            remaining = maxBytes() - usedBytes;
+        if (maxBytes > 0) {
+            remaining = maxBytes - reservedBytes;
             if (remaining < capacity) {
                 throw new OffHeapOutOfMemoryException("off-heap memory limit exceeded");
             }
         }
 
         long preferred = Math.max(capacity, defaultSlabBytes);
-        if (maxBytes() > 0) {
+        if (maxBytes > 0) {
             preferred = Math.min(preferred, remaining);
         }
         return Math.toIntExact(preferred);
