@@ -31,7 +31,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
         this.runtime = runtime;
         this.maxBytes = maxBytes;
         this.ownsRuntime = ownsRuntime;
-        this.slabAllocator = new YierdisFfmSlabAllocator(runtime);
+        this.slabAllocator = new YierdisFfmSlabAllocator(runtime, maxBytes);
     }
 
     @Override
