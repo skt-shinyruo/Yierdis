@@ -117,6 +117,11 @@ public final class EntryTable implements AutoCloseable {
         return entries.size();
     }
 
+    public synchronized long nativeBytes() {
+        ensureOpen();
+        return (long) entries.size() * RECORD_BYTES;
+    }
+
     public synchronized void clear() {
         ensureOpen();
         RuntimeException failure = null;

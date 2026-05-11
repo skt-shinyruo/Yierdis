@@ -13,6 +13,9 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
+import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 
 import java.util.List;
 
@@ -75,6 +78,13 @@ public final class YierdisHyperLogLog {
         return (o.stringByteAt(HEADER_ENCODING_OFFSET) & 0xFF) == ENCODING_DENSE;
     }
 
+    public static boolean isDense(StringRoot root, ValueHandle handle) {
+        if (!isHllString(root, handle)) {
+            return false;
+        }
+        return (root.byteAt(handle, HEADER_ENCODING_OFFSET) & 0xFF) == ENCODING_DENSE;
+    }
+
     public static boolean isHllString(YierdisObject o) {
         if (o == null) {
             return false;
@@ -98,6 +108,20 @@ public final class YierdisHyperLogLog {
         return p == P && ver == VERSION;
     }
 
+    public static boolean isHllString(StringRoot root, ValueHandle handle) {
+        if (root == null || handle == null || root.length(handle) < HEADER_BYTES) {
+            return false;
+        }
+        for (int i = 0; i < MAGIC.length; i++) {
+            if (root.byteAt(handle, i) != MAGIC[i]) {
+                return false;
+            }
+        }
+        int p = root.byteAt(handle, HEADER_P_OFFSET) & 0xFF;
+        int ver = root.byteAt(handle, HEADER_VERSION_OFFSET) & 0xFF;
+        return p == P && ver == VERSION;
+    }
+
     public static boolean pfAdd(YierdisObject o,
                          OffHeapAllocator offHeapAllocator,
                          List<byte[]> elements) {
@@ -117,6 +141,27 @@ public final class YierdisHyperLogLog {
         }
         if (enc == ENCODING_SPARSE) {
             return pfAddSparseRewrite(o, offHeapAllocator, elements);
+        }
+        throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+    }
+
+    public static boolean pfAdd(StringRoot root, ValueHandle handle, List<byte[]> elements) {
+        if (root == null || handle == null) {
+            throw new IllegalArgumentException("root and handle must not be null");
+        }
+        if (!isHllString(root, handle)) {
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
+        if (elements == null || elements.isEmpty()) {
+            return false;
+        }
+
+        int enc = root.byteAt(handle, HEADER_ENCODING_OFFSET) & 0xFF;
+        if (enc == ENCODING_DENSE) {
+            return pfAddDenseInPlace(root, handle, elements);
+        }
+        if (enc == ENCODING_SPARSE) {
+            return pfAddSparseRewrite(root, handle, elements);
         }
         throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
@@ -146,6 +191,43 @@ public final class YierdisHyperLogLog {
             for (int pos = HEADER_BYTES; pos < raw.length; pos += SPARSE_ENTRY_BYTES) {
                 int idx = ((raw[pos] & 0xFF) << 8) | (raw[pos + 1] & 0xFF);
                 int v = raw[pos + 2] & 0xFF;
+                if (idx >= REGISTERS || v < 0 || v > MAX_REGISTER) {
+                    throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                }
+                if (v > registers[idx]) {
+                    registers[idx] = v;
+                }
+            }
+            return;
+        }
+        throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+    }
+
+    public static void mergeHllIntoRegisters(BytesSlice raw, int[] registers) {
+        if (!isValidHllBytes(raw)) {
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
+        int enc = raw.getByte(HEADER_ENCODING_OFFSET) & 0xFF;
+        if (enc == ENCODING_DENSE) {
+            if (raw.length() != HEADER_BYTES + DENSE_DATA_BYTES) {
+                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            }
+            for (int i = 0; i < REGISTERS; i++) {
+                int v = denseGetRegister(raw, i);
+                if (v > registers[i]) {
+                    registers[i] = v;
+                }
+            }
+            return;
+        }
+        if (enc == ENCODING_SPARSE) {
+            int dataLen = raw.length() - HEADER_BYTES;
+            if (dataLen < 0 || (dataLen % SPARSE_ENTRY_BYTES) != 0) {
+                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            }
+            for (int pos = HEADER_BYTES; pos < raw.length(); pos += SPARSE_ENTRY_BYTES) {
+                int idx = ((raw.getByte(pos) & 0xFF) << 8) | (raw.getByte(pos + 1) & 0xFF);
+                int v = raw.getByte(pos + 2) & 0xFF;
                 if (idx >= REGISTERS || v < 0 || v > MAX_REGISTER) {
                     throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
                 }
@@ -226,6 +308,21 @@ public final class YierdisHyperLogLog {
         }
         int p = raw[HEADER_P_OFFSET] & 0xFF;
         int ver = raw[HEADER_VERSION_OFFSET] & 0xFF;
+        return p == P && ver == VERSION;
+    }
+
+    private static boolean isValidHllBytes(BytesSlice raw) {
+        if (raw == null || raw.length() < HEADER_BYTES) {
+            return false;
+        }
+        if (raw.getByte(0) != MAGIC[0]
+                || raw.getByte(1) != MAGIC[1]
+                || raw.getByte(2) != MAGIC[2]
+                || raw.getByte(3) != MAGIC[3]) {
+            return false;
+        }
+        int p = raw.getByte(HEADER_P_OFFSET) & 0xFF;
+        int ver = raw.getByte(HEADER_VERSION_OFFSET) & 0xFF;
         return p == P && ver == VERSION;
     }
 
@@ -344,6 +441,118 @@ public final class YierdisHyperLogLog {
         return true;
     }
 
+    private static boolean pfAddDenseInPlace(StringRoot root, ValueHandle handle, List<byte[]> elements) {
+        if (root.length(handle) != HEADER_BYTES + DENSE_DATA_BYTES) {
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
+
+        boolean changed = false;
+        for (byte[] element : elements) {
+            if (element == null || element.length == 0) {
+                continue;
+            }
+            long h = murmurHash3_x64_128_h1(element);
+            int regIndex = (int) (h & (REGISTERS - 1));
+            long w = h >>> P;
+            int rank = (Long.numberOfLeadingZeros(w) + 1) - P;
+            if (rank < 1) {
+                rank = 1;
+            } else if (rank > MAX_REGISTER) {
+                rank = MAX_REGISTER;
+            }
+
+            int current = denseGetRegister(root, handle, regIndex);
+            if (rank > current) {
+                denseSetRegister(root, handle, regIndex, rank);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private static boolean pfAddSparseRewrite(StringRoot root, ValueHandle handle, List<byte[]> elements) {
+        byte[] raw = root.copy(handle);
+        if (!isValidHllBytes(raw)) {
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
+        int enc = raw[HEADER_ENCODING_OFFSET] & 0xFF;
+        if (enc != ENCODING_SPARSE) {
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
+        int dataLen = raw.length - HEADER_BYTES;
+        if (dataLen < 0 || (dataLen % SPARSE_ENTRY_BYTES) != 0) {
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
+
+        int[] registers = new int[REGISTERS];
+        int entries = 0;
+        for (int pos = HEADER_BYTES; pos < raw.length; pos += SPARSE_ENTRY_BYTES) {
+            int idx = ((raw[pos] & 0xFF) << 8) | (raw[pos + 1] & 0xFF);
+            int v = raw[pos + 2] & 0xFF;
+            if (idx >= REGISTERS || v < 0 || v > MAX_REGISTER) {
+                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            }
+            if (registers[idx] == 0) {
+                entries++;
+            }
+            if (v > registers[idx]) {
+                registers[idx] = v;
+            }
+        }
+
+        boolean changed = false;
+        for (byte[] element : elements) {
+            if (element == null || element.length == 0) {
+                continue;
+            }
+            long h = murmurHash3_x64_128_h1(element);
+            int regIndex = (int) (h & (REGISTERS - 1));
+            long w = h >>> P;
+            int rank = (Long.numberOfLeadingZeros(w) + 1) - P;
+            if (rank < 1) {
+                rank = 1;
+            } else if (rank > MAX_REGISTER) {
+                rank = MAX_REGISTER;
+            }
+
+            int current = registers[regIndex];
+            if (rank > current) {
+                if (current == 0) {
+                    entries++;
+                }
+                registers[regIndex] = rank;
+                changed = true;
+            }
+        }
+
+        if (!changed) {
+            return false;
+        }
+
+        int sparseLen = HEADER_BYTES + entries * SPARSE_ENTRY_BYTES;
+        int denseLen = HEADER_BYTES + DENSE_DATA_BYTES;
+        if (sparseLen >= denseLen) {
+            root.overwrite(handle, denseBytesFromRegisters(registers));
+            return true;
+        }
+
+        byte[] next = new byte[sparseLen];
+        writeHeader(next, ENCODING_SPARSE);
+        int pos = HEADER_BYTES;
+        for (int idx = 0; idx < REGISTERS; idx++) {
+            int v = registers[idx];
+            if (v <= 0) {
+                continue;
+            }
+            next[pos] = (byte) (idx >>> 8);
+            next[pos + 1] = (byte) idx;
+            next[pos + 2] = (byte) v;
+            pos += SPARSE_ENTRY_BYTES;
+        }
+        root.overwrite(handle, next);
+        return true;
+    }
+
     private static int denseGetRegister(byte[] raw, int regIndex) {
         int bitPos = regIndex * DENSE_REGISTER_BITS;
         int byteIndex = bitPos >>> 3;
@@ -354,6 +563,22 @@ public final class YierdisHyperLogLog {
             return (b0 >>> bitOffset) & 0x3F;
         }
         int b1 = raw[base + 1] & 0xFF;
+        int bitsInFirst = 8 - bitOffset;
+        int part0 = (b0 >>> bitOffset) & ((1 << bitsInFirst) - 1);
+        int part1 = (b1 & ((1 << (DENSE_REGISTER_BITS - bitsInFirst)) - 1)) << bitsInFirst;
+        return part0 | part1;
+    }
+
+    private static int denseGetRegister(BytesSlice raw, int regIndex) {
+        int bitPos = regIndex * DENSE_REGISTER_BITS;
+        int byteIndex = bitPos >>> 3;
+        int bitOffset = bitPos & 7;
+        int base = HEADER_BYTES + byteIndex;
+        int b0 = raw.getByte(base) & 0xFF;
+        if (bitOffset <= 2) {
+            return (b0 >>> bitOffset) & 0x3F;
+        }
+        int b1 = raw.getByte(base + 1) & 0xFF;
         int bitsInFirst = 8 - bitOffset;
         int part0 = (b0 >>> bitOffset) & ((1 << bitsInFirst) - 1);
         int part1 = (b1 & ((1 << (DENSE_REGISTER_BITS - bitsInFirst)) - 1)) << bitsInFirst;
@@ -424,6 +649,47 @@ public final class YierdisHyperLogLog {
         int nextB1 = (b1 & ~hiMask) | ((v >>> bitsInFirst) & hiMask);
         o.stringSetByteAt(base, (byte) nextB0);
         o.stringSetByteAt(base + 1, (byte) nextB1);
+    }
+
+    private static int denseGetRegister(StringRoot root, ValueHandle handle, int regIndex) {
+        int bitPos = regIndex * DENSE_REGISTER_BITS;
+        int byteIndex = bitPos >>> 3;
+        int bitOffset = bitPos & 7;
+        int base = HEADER_BYTES + byteIndex;
+        int b0 = root.byteAt(handle, base) & 0xFF;
+        if (bitOffset <= 2) {
+            return (b0 >>> bitOffset) & 0x3F;
+        }
+        int b1 = root.byteAt(handle, base + 1) & 0xFF;
+        int bitsInFirst = 8 - bitOffset;
+        int part0 = (b0 >>> bitOffset) & ((1 << bitsInFirst) - 1);
+        int part1 = (b1 & ((1 << (DENSE_REGISTER_BITS - bitsInFirst)) - 1)) << bitsInFirst;
+        return part0 | part1;
+    }
+
+    private static void denseSetRegister(StringRoot root, ValueHandle handle, int regIndex, int value) {
+        int v = value & 0x3F;
+        int bitPos = regIndex * DENSE_REGISTER_BITS;
+        int byteIndex = bitPos >>> 3;
+        int bitOffset = bitPos & 7;
+        int base = HEADER_BYTES + byteIndex;
+        int b0 = root.byteAt(handle, base) & 0xFF;
+        if (bitOffset <= 2) {
+            int mask = 0x3F << bitOffset;
+            root.setByteAt(handle, base, (byte) ((b0 & ~mask) | (v << bitOffset)));
+            return;
+        }
+        int b1 = root.byteAt(handle, base + 1) & 0xFF;
+        int bitsInFirst = 8 - bitOffset;
+        int loMask = (1 << bitsInFirst) - 1;
+        int hiBits = DENSE_REGISTER_BITS - bitsInFirst;
+        int hiMask = (1 << hiBits) - 1;
+
+        int part0Mask = loMask << bitOffset;
+        int nextB0 = (b0 & ~part0Mask) | ((v & loMask) << bitOffset);
+        int nextB1 = (b1 & ~hiMask) | ((v >>> bitsInFirst) & hiMask);
+        root.setByteAt(handle, base, (byte) nextB0);
+        root.setByteAt(handle, base + 1, (byte) nextB1);
     }
 
     // MurmurHash3 x64 128-bit 的 h1（返回 64-bit），用于 HLL 的 index/rank 计算。

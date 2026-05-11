@@ -11,8 +11,9 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.memory.api.OffHeapSlice;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.ExpireOption;
@@ -34,11 +35,13 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
+    private final StringRoot stringRoot;
     private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
     YierdisStringOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
+        this.stringRoot = Objects.requireNonNull(keyLifecycle.stringRoot(), "stringRoot");
         this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
@@ -96,13 +99,13 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     }
                     if (old == null) {
                         didSet[0] = true;
-                        YierdisObject next = YierdisObject.newString(keyLifecycle.offHeapAllocator(), value);
+                        YierdisObject next = YierdisObject.newString(stringRoot, value);
                         keyLifecycle.touch(next);
                         refreshEstimatedBytes(k, next);
                         deltaBytes[0] += next.estimatedBytes;
                         return next;
                     }
-                    old.overwriteWithString(keyLifecycle.offHeapAllocator(), value);
+                    old.overwriteWithString(stringRoot, value);
                     keyLifecycle.touch(old);
                     deltaBytes[0] -= oldEstimate;
                     refreshEstimatedBytes(k, old);
@@ -181,7 +184,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                         oldEstimate = 0;
                     }
                     if (old == null) {
-                        YierdisObject created = YierdisObject.newString(keyLifecycle.offHeapAllocator(), value);
+                        YierdisObject created = YierdisObject.newString(stringRoot, value);
                         newLen[0] = created.stringByteLength();
                         changed[0] = true;
                         keyLifecycle.touch(created);
@@ -195,7 +198,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     }
                     keyLifecycle.touch(old);
                     int beforeLen = old.stringByteLength();
-                    newLen[0] = old.stringAppend(keyLifecycle.offHeapAllocator(), value);
+                    newLen[0] = old.stringAppend(stringRoot, value);
                     if (newLen[0] != beforeLen) {
                         changed[0] = true;
                     }
@@ -248,7 +251,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                     }
 
                     if (old == null) {
-                        old = YierdisObject.newString(keyLifecycle.offHeapAllocator(), (byte[]) null);
+                        old = YierdisObject.newString(stringRoot, (byte[]) null);
                         keyLifecycle.touch(old);
                     } else {
                         if (old.type != ValueType.STRING) {
@@ -259,7 +262,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
                     int beforeLen = old.stringByteLength();
                     boolean existed = oldEstimate > 0;
-                    oldBit[0] = old.stringSetBit(keyLifecycle.offHeapAllocator(), offset, value);
+                    oldBit[0] = old.stringSetBit(stringRoot, offset, value);
                     int afterLen = old.stringByteLength();
                     if (!existed || oldBit[0] != value || afterLen != beforeLen) {
                         changed[0] = true;
@@ -353,6 +356,10 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         if (object.type != ValueType.STRING) {
             throw new WrongTypeException();
         }
+        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
+        if (canReadFromRoot(object, record)) {
+            return stringRoot.copy(record.valueHandle());
+        }
         return object.stringBytesView();
     }
 
@@ -369,11 +376,15 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         if (object.encoding == ValueEncoding.STRING_INT) {
             return BulkStringValue.longAscii(object.intValue);
         }
+        EntryRecord record = keyLifecycle.entryRecord(keyView);
+        if (canReadFromRoot(object, record)) {
+            return BulkStringValue.slice(stringRoot.slice(record.valueHandle()));
+        }
         OffHeapSlice slice = object.stringOffHeapSlice();
         if (slice != null) {
             return BulkStringValue.slice(slice);
         }
-        return BulkStringValue.bytes((byte[]) object.payload, 0, object.rawLen);
+        return BulkStringValue.bytes(object.stringBytesView(), 0, object.stringByteLength());
     }
 
     @Override
@@ -461,6 +472,10 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         if (object.type != ValueType.STRING) {
             throw new WrongTypeException();
         }
+        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
+        if (canReadFromRoot(object, record)) {
+            return stringRoot.length(record.valueHandle());
+        }
         return object.stringByteLength();
     }
 
@@ -472,6 +487,10 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         }
         if (object.type != ValueType.STRING) {
             throw new WrongTypeException();
+        }
+        EntryRecord record = keyLifecycle.entryRecord(keyView);
+        if (canReadFromRoot(object, record)) {
+            return stringRoot.length(record.valueHandle());
         }
         return object.stringByteLength();
     }
@@ -490,21 +509,21 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
             return count;
         }
 
-        if (object.payload instanceof byte[] buf) {
-            int to = Math.min(end, object.rawLen - 1);
-            for (int i = start; i <= to; i++) {
-                count += Integer.bitCount(buf[i] & 0xFF);
-            }
-            return count;
+        int to = Math.min(end, object.stringByteLength() - 1);
+        for (int i = start; i <= to; i++) {
+            count += Integer.bitCount(object.stringByteAt(i) & 0xFF);
         }
-        if (object.payload instanceof OffHeapBuf buf) {
-            int to = Math.min(end, object.rawLen - 1);
-            for (int i = start; i <= to; i++) {
-                count += Integer.bitCount(buf.getByte(i) & 0xFF);
-            }
-            return count;
-        }
-        return 0L;
+        return count;
+    }
+
+    private boolean canReadFromRoot(YierdisObject object, EntryRecord record) {
+        return object != null
+                && object.hasStringRoot()
+                && record != null
+                && record.type() == ValueType.STRING
+                && record.valueHandle() != null
+                && object.valueHandle() != null
+                && record.valueHandle().raw() == object.valueHandle().raw();
     }
 
     private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {

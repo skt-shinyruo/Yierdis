@@ -73,6 +73,7 @@ public final class YierdisDbComponentFactory {
                 storage.memoryRuntime,
                 storage.entries,
                 storage.keyDirectory,
+                storage.stringRoot,
                 owner::touch,
                 owner::adjustUsedBytes
         );

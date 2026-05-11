@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 
@@ -21,7 +22,7 @@ public class YierdisDbMemoryEstimatorTest {
     public void estimatesHeapStringEntryBytesIncludingHeapKey() {
         YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator(false, null);
         KeyHandle key = KeyHandle.forHeap(b("abc"), 1);
-        YierdisObject object = YierdisObject.newString(null, b("hello"));
+        YierdisObject object = YierdisObject.newString((OffHeapAllocator) null, b("hello"));
 
         long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 3L + 5L;
 
@@ -32,7 +33,7 @@ public class YierdisDbMemoryEstimatorTest {
     public void estimatesHeapStringEntryBytesExcludingOffHeapKey() {
         YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator(true, null);
         KeyHandle key = KeyHandle.forHeap(b("abc"), 1);
-        YierdisObject object = YierdisObject.newString(null, b("hello"));
+        YierdisObject object = YierdisObject.newString((OffHeapAllocator) null, b("hello"));
 
         long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 5L;
 

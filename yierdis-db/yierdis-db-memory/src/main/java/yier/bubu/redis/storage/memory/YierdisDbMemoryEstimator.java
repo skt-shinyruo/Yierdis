@@ -58,6 +58,9 @@ public final class YierdisDbMemoryEstimator {
             if (object.encoding == ValueEncoding.STRING_INT) {
                 return Long.BYTES;
             }
+            if (object.hasStringRoot()) {
+                return 0;
+            }
             if (offHeapAllocator != null && object.payload instanceof OffHeapBuf) {
                 return 0;
             }
