@@ -2,7 +2,7 @@
 
 本文面向从未接触过 FFM 的读者，目标不是讲全，而是帮你尽快建立正确心智模型，并能自己写出最基本的 FFM 代码。
 
-如果你想看 FFM 在 Yierdis 里的具体落点，请继续阅读 `docs/ffm-usage.md`。本文只讲 JDK FFM 本身的入门。
+如果你想看 FFM 在 Yierdis 里的具体落点，请继续阅读 `docs/project-docs/ffm-usage.md`。本文只讲 JDK FFM 本身的入门。
 
 ## FFM 是什么
 
@@ -835,5 +835,5 @@ FFM 可以理解成：
 如果你看完本文还想继续走下一步，最自然的顺序就是：
 
 1. 自己把本文 6 个示例重新敲一遍
-2. 再去看 `docs/ffm-usage.md`
+2. 再去看 `docs/project-docs/ffm-usage.md`
 3. 最后回到 Yierdis 代码里对照 `YierdisFfmMemoryRuntime`、`YierdisFfmRegion`、`YierdisForeignOffHeapAllocator`、`YierdisFfmKeyspace` 去读实现

@@ -2,7 +2,7 @@
 
 本文整理 Yierdis 当前是如何使用 JDK 25 `java.lang.foreign` FFM API 的。
 
-如果只关心“哪些路径会发生 heap / off-heap 拷贝”，请优先看 `docs/offheap-copy-behavior.md`。本文关注的是更上层的问题：FFM 在项目里扮演什么角色、从启动到 DB 内部是怎么接起来的、哪些数据真的放进了 native memory、以及生命周期和泄漏检查是如何工作的。
+如果只关心“哪些路径会发生 heap / off-heap 拷贝”，请优先看 `docs/project-docs/offheap-copy-behavior.md`。本文关注的是更上层的问题：FFM 在项目里扮演什么角色、从启动到 DB 内部是怎么接起来的、哪些数据真的放进了 native memory、以及生命周期和泄漏检查是如何工作的。
 
 ## 先说结论
 

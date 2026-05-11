@@ -31,21 +31,21 @@ mvn -DskipTests package
 
 推荐阅读顺序：
 
-1. `docs/project-introduction.md`
-2. `docs/project-overview.md`
-3. `docs/request-execution-flow.md`
-4. `docs/main-path-walkthrough.md`
-5. `docs/protocol-reference.md`
-6. `docs/commands-and-data-model.md`
-7. `docs/db-internals.md`
-8. `docs/executor-and-backpressure.md`
-9. `docs/bytes-and-fast-paths.md`
-10. `docs/configuration-and-operations.md`
-11. `docs/client-and-bench-internals.md`
-12. `docs/testing-and-debugging.md`
-13. `docs/glossary.md`
-14. `docs/module-architecture.md`
-15. `docs/development-navigation.md`
+1. `docs/project-docs/project-introduction.md`
+2. `docs/project-docs/project-overview.md`
+3. `docs/project-docs/request-execution-flow.md`
+4. `docs/project-docs/main-path-walkthrough.md`
+5. `docs/project-docs/protocol-reference.md`
+6. `docs/project-docs/commands-and-data-model.md`
+7. `docs/project-docs/db-internals.md`
+8. `docs/project-docs/executor-and-backpressure.md`
+9. `docs/project-docs/bytes-and-fast-paths.md`
+10. `docs/project-docs/configuration-and-operations.md`
+11. `docs/project-docs/client-and-bench-internals.md`
+12. `docs/project-docs/testing-and-debugging.md`
+13. `docs/project-docs/glossary.md`
+14. `docs/project-docs/module-architecture.md`
+15. `docs/project-docs/development-navigation.md`
 
 这组文档分别覆盖：
 
@@ -67,9 +67,9 @@ mvn -DskipTests package
 
 如果你对 FFM / off-heap 本身还不熟，建议再配合阅读：
 
-- `docs/ffm-beginner-guide.md`
-- `docs/ffm-usage.md`
-- `docs/offheap-copy-behavior.md`
+- `docs/project-docs/ffm-beginner-guide.md`
+- `docs/project-docs/ffm-usage.md`
+- `docs/project-docs/offheap-copy-behavior.md`
 
 ## 开发者：模块边界（契约 / 组装）
 

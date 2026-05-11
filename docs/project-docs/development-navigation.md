@@ -264,8 +264,8 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 - `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmMemoryRuntime.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmKeyspace.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmExpireIndex.java`
-- `docs/ffm-usage.md`
-- `docs/offheap-copy-behavior.md`
+- `docs/project-docs/ffm-usage.md`
+- `docs/project-docs/offheap-copy-behavior.md`
 
 `yierdis-memory-api` 是 off-heap contract 的模块兼容面；包名是 `yier.bubu.redis.memory.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`。`yierdis-command-builtin` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
 
@@ -364,8 +364,8 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 ## 新人最值得先收藏的文件
 
 - `README.md`
-- `docs/request-execution-flow.md`
-- `docs/module-architecture.md`
+- `docs/project-docs/request-execution-flow.md`
+- `docs/project-docs/module-architecture.md`
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
 - `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`

@@ -64,7 +64,7 @@ Netty I/O 线程只负责收包和入队，真正访问 DB 的是单独的 comma
 - expires
 - string / hash / list / set / zset / HLL 的部分内部结构
 
-如果你已经看过 `docs/ffm-usage.md`，会发现这里的核心关键词是：
+如果你已经看过 `docs/project-docs/ffm-usage.md`，会发现这里的核心关键词是：
 
 - `YierdisFfmMemoryRuntime`
 - `YierdisFfmKeyspace`
@@ -266,21 +266,21 @@ Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格�
 - 想知道该跑哪些测试、怎么排障，看 [`testing-and-debugging.md`](./testing-and-debugging.md)。
 - 想理解模块边界和依赖方向，看 [`module-architecture.md`](./module-architecture.md)。
 - 想知道改需求时该从哪几个文件下手，看 [`development-navigation.md`](./development-navigation.md)。
-- 想理解 FFM / off-heap 的底层路径，看现有的 `docs/ffm-usage.md` 与 `docs/offheap-copy-behavior.md`。
+- 想理解 FFM / off-heap 的底层路径，看现有的 `docs/project-docs/ffm-usage.md` 与 `docs/project-docs/offheap-copy-behavior.md`。
 
 ## 建议的第一轮阅读顺序
 
 1. `README.md`
-2. `docs/project-introduction.md`
-3. `docs/project-overview.md`
-4. `docs/request-execution-flow.md`
-5. `docs/main-path-walkthrough.md`
-6. `docs/protocol-reference.md`
-7. `docs/commands-and-data-model.md`
-8. `docs/configuration-and-operations.md`
-9. `docs/testing-and-debugging.md`
-10. `docs/glossary.md`
-11. `docs/module-architecture.md`
-12. `docs/development-navigation.md`
+2. `docs/project-docs/project-introduction.md`
+3. `docs/project-docs/project-overview.md`
+4. `docs/project-docs/request-execution-flow.md`
+5. `docs/project-docs/main-path-walkthrough.md`
+6. `docs/project-docs/protocol-reference.md`
+7. `docs/project-docs/commands-and-data-model.md`
+8. `docs/project-docs/configuration-and-operations.md`
+9. `docs/project-docs/testing-and-debugging.md`
+10. `docs/project-docs/glossary.md`
+11. `docs/project-docs/module-architecture.md`
+12. `docs/project-docs/development-navigation.md`
 
 如果只是想快速知道“这个仓库值不值得继续深入”，读完本文通常已经够了。
