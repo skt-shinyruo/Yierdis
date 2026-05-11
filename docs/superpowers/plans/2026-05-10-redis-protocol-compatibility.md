@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status:** Complete as of 2026-05-11. Implementation is committed through `a818abd`, and the focused RESP/server/CLI/benchmark/architecture suite plus full `mvn test` passed on JDK 25. The optional `redis-cli` smoke test is present and skips automatically when `redis-cli` is not installed; local manual shaded-jar `redis-cli` smoke was not run because `redis-cli` is absent on this machine.
+
 **Goal:** Replace Custom Protocol v1 with Redis RESP as the only public server protocol, with RESP2 as the primary compatibility target and negotiated RESP3 basics through `HELLO 3`.
 
 **Architecture:** Add a Netty-free RESP module that owns request frames, reply encoding, and client-side parser helpers. Keep command execution protocol-agnostic by continuing to route through `ExecutionRequest` and `ReplyWriter`, while extending `ReplyWriterFactory` so writers can read per-connection `ServerSession.respVersion()` as an integer and map it inside the RESP module. Replace the server pipeline with RESP handlers, then rewrite CLI/benchmark clients and remove Custom Protocol v1 modules.
