@@ -1,5 +1,8 @@
 package yier.bubu.redis.storage.memory;
 
+import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.bytes.BytesSlice;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.storage.api.ScanCursorV2;
@@ -64,7 +67,6 @@ public class NativeStorageRegressionTest {
             long before = db.usedBytesForMaxmemory();
             Assert.assertTrue(before > 0);
 
-            db.keyLifecycle().getLiveObject(b("set")).estimatedBytes = 0L;
             Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(b("set"))).value());
 
             Assert.assertEquals(0, db.size());
@@ -103,9 +105,9 @@ public class NativeStorageRegressionTest {
             Assert.assertArrayEquals(key, copy(lifecycle.randomKeyHandle()));
 
             List<String> scanned = new ArrayList<>();
-            ScanCursorV2 cursor = lifecycle.scan(ScanCursorV2.start(), 16, (keyHandle, object) -> {
+            ScanCursorV2 cursor = lifecycle.scan(ScanCursorV2.start(), 16, (keyHandle, scannedRecord) -> {
                 scanned.add(new String(copy(keyHandle), StandardCharsets.UTF_8));
-                Assert.assertNull(object);
+                Assert.assertNotNull(scannedRecord);
                 return true;
             });
 
@@ -116,10 +118,104 @@ public class NativeStorageRegressionTest {
         }
     }
 
+    @Test
+    public void stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries() {
+        YierdisDb db = new YierdisDb();
+        try {
+            db.bindToCurrentThread();
+            byte[] stringKey = b("native-string");
+            byte[] counterKey = b("native-counter");
+
+            Assert.assertTrue(db.writes().strings().setString(stringKey, b("hello"), SetMode.NORMAL, null).value());
+            assertNativeStringOnly(db, stringKey, b("hello"));
+            Assert.assertTrue(db.reads().keyspace().existsKey(view(stringKey)));
+            Assert.assertEquals(ValueType.STRING, db.reads().keyspace().typeOf(view(stringKey)));
+            Assert.assertEquals(List.of("native-string"), strings(db.reads().keyspace().keys(b("native-*"), 16, 0)));
+
+            List<byte[]> scanned = new ArrayList<>();
+            ScanCursorV2 cursor = db.reads().keyspace().scan(ScanCursorV2.start(), b("native-*"), 16, scanned);
+            Assert.assertEquals(0L, cursor.value());
+            Assert.assertEquals(List.of("native-string"), strings(scanned));
+
+            Assert.assertEquals(Long.valueOf(11L), db.writes().strings().append(stringKey, sliceOf(b(" world"))).value());
+            assertNativeStringOnly(db, stringKey, b("hello world"));
+
+            Assert.assertEquals(Integer.valueOf(0), db.writes().strings().setBit(stringKey, 0, 1).value());
+            Assert.assertEquals(1, db.reads().strings().getBit(view(stringKey), 0));
+            assertNativeStringOnly(db, stringKey, db.reads().strings().getStringBytes(stringKey));
+
+            Assert.assertTrue(db.writes().strings().setString(counterKey, b("41"), SetMode.NORMAL, null).value());
+            Assert.assertEquals(Long.valueOf(42L), db.writes().strings().incrBy(counterKey, 1L).value());
+            assertNativeStringOnly(db, counterKey, b("42"));
+
+            EntryRecord counterRecord = db.keyLifecycle().liveEntryRecord(counterKey);
+            Assert.assertEquals(ValueEncoding.STRING_INT, counterRecord.encoding());
+
+            Assert.assertEquals(Long.valueOf(2L), db.writes().keyspace().del(List.of(stringKey, counterKey)).value());
+            Assert.assertEquals(0, db.size());
+            Assert.assertEquals(0L, db.usedBytesForMaxmemory());
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    private static void assertNativeStringOnly(YierdisDb db, byte[] key, byte[] expectedBytes) {
+        YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
+        KeyHandle keyHandle = lifecycle.keyHandle(key);
+        Assert.assertNotNull(keyHandle);
+        EntryRecord record = lifecycle.liveEntryRecord(key);
+        Assert.assertNotNull(record);
+        Assert.assertEquals(ValueType.STRING, record.type());
+        Assert.assertArrayEquals(expectedBytes, lifecycle.stringRoot().copy(record.valueHandle()));
+        Assert.assertArrayEquals(expectedBytes, db.reads().strings().getStringBytes(key));
+        Assert.assertEquals(expectedBytes.length, db.reads().strings().strlen(view(key)));
+    }
+
     private static byte[] copy(KeyHandle keyHandle) {
         byte[] out = new byte[keyHandle.len()];
         for (int i = 0; i < out.length; i++) {
             out[i] = keyHandle.byteAt(i);
+        }
+        return out;
+    }
+
+    private static BytesView view(byte[] data) {
+        return new BytesView() {
+            @Override
+            public int length() {
+                return data.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                return data[index];
+            }
+        };
+    }
+
+    private static BytesSlice sliceOf(byte[] data) {
+        return new BytesSlice() {
+            @Override
+            public void writeTo(BytesSink out) {
+                out.writeBytes(data, 0, data.length);
+            }
+
+            @Override
+            public int length() {
+                return data.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                return data[index];
+            }
+        };
+    }
+
+    private static List<String> strings(List<byte[]> values) {
+        List<String> out = new ArrayList<>(values.size());
+        for (byte[] value : values) {
+            out.add(new String(value, StandardCharsets.UTF_8));
         }
         return out;
     }

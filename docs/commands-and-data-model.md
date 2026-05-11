@@ -24,7 +24,7 @@ ExecutionRequest
   -> CommandSupport
   -> DbReads / DbWrites / DbEngine
   -> Yierdis*Ops
-  -> YierdisObject / HashValue / ListValue / SetValue / ZSetValue
+  -> EntryRecord / ValueHandle / TypeRoot
 ```
 
 也就是说：
@@ -257,7 +257,8 @@ HLL 在逻辑上是一组独立命令，但在存储上并不是独立 `ValueTyp
 
 ## String：为什么会有 `int / embstr / raw`
 
-string 由 `YierdisObject` 持有。
+string 由 `EntryRecord` 记录类型和 encoding，由 `StringRoot` 通过
+`ValueHandle` 持有真实 bytes。
 
 大致规则是：
 

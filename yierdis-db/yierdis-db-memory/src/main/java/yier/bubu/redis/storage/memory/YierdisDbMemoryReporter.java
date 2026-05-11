@@ -27,7 +27,6 @@ import java.util.function.BooleanSupplier;
 public final class YierdisDbMemoryReporter {
     private final Runnable threadChecker;
     private final YierdisDbKeyLifecycle keyLifecycle;
-    private final YierdisKeyspace<YierdisObject> store;
     private final YierdisExpireIndex expires;
     private final long maxmemoryBytes;
     private final boolean keysStoredOffHeap;
@@ -38,7 +37,6 @@ public final class YierdisDbMemoryReporter {
     YierdisDbMemoryReporter(
             Runnable threadChecker,
             YierdisDbKeyLifecycle keyLifecycle,
-            YierdisKeyspace<YierdisObject> store,
             YierdisExpireIndex expires,
             long maxmemoryBytes,
             boolean keysStoredOffHeap,
@@ -48,7 +46,6 @@ public final class YierdisDbMemoryReporter {
     ) {
         this.threadChecker = java.util.Objects.requireNonNull(threadChecker, "threadChecker");
         this.keyLifecycle = java.util.Objects.requireNonNull(keyLifecycle, "keyLifecycle");
-        this.store = java.util.Objects.requireNonNull(store, "store");
         this.expires = java.util.Objects.requireNonNull(expires, "expires");
         this.maxmemoryBytes = maxmemoryBytes;
         this.keysStoredOffHeap = keysStoredOffHeap;
@@ -63,13 +60,12 @@ public final class YierdisDbMemoryReporter {
     long memoryUsage(BytesView keyView) {
         threadChecker.run();
         EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
-        YierdisObject object = keyLifecycle.getLiveObject(keyView);
-        if (object == null) {
+        if (record == null) {
             return -1;
         }
         long keyLen = keyView == null ? 0 : Math.max(0L, (long) keyView.len());
         var keyHandle = keyLifecycle.keyHandle(keyView);
-        return metadataEstimatedBytes(keyHandle, record, object) + estimateOffHeapBytesForMemoryUsage(keyLen, record, object);
+        return metadataEstimatedBytes(keyHandle, record) + estimateOffHeapBytesForMemoryUsage(keyLen, record);
     }
 
     long memoryUsage(byte[] keyBytes) {
@@ -78,12 +74,11 @@ public final class YierdisDbMemoryReporter {
             return -1;
         }
         EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
-        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-        if (object == null) {
+        if (record == null) {
             return -1;
         }
         var keyHandle = keyLifecycle.keyHandle(keyBytes);
-        return metadataEstimatedBytes(keyHandle, record, object) + estimateOffHeapBytesForMemoryUsage(keyBytes.length, record, object);
+        return metadataEstimatedBytes(keyHandle, record) + estimateOffHeapBytesForMemoryUsage(keyBytes.length, record);
     }
 
     YierdisMemoryStats memoryStats() {
@@ -94,7 +89,7 @@ public final class YierdisDbMemoryReporter {
                 ledger.reservedBytes(),
                 keyLifecycle.offHeapAllocator(),
                 directNativeBytes(),
-                store,
+                keyLifecycle.keyCount(),
                 expires,
                 keysStoredOffHeap,
                 offHeapIncludedInMaxmemorySupplier.getAsBoolean()
@@ -123,70 +118,67 @@ public final class YierdisDbMemoryReporter {
         threadChecker.run();
         int size;
         try {
-            size = store.size();
+            size = keyLifecycle.keyCount();
         } catch (Throwable ignored) {
             size = 0;
         }
         return Math.max(0, size);
     }
 
-    private long metadataEstimatedBytes(KeyHandle keyHandle, EntryRecord record, YierdisObject object) {
+    private long metadataEstimatedBytes(KeyHandle keyHandle, EntryRecord record) {
         if (record != null && keyHandle != null) {
             return memoryEstimator.estimateEntryBytes(keyHandle, record);
         }
-        return object == null ? 0L : object.estimatedBytes;
+        return 0L;
     }
 
-    private long estimateOffHeapBytesForMemoryUsage(long keyLen, EntryRecord record, YierdisObject object) {
-        if (keyLifecycle.offHeapAllocator() == null || object == null) {
+    private long estimateOffHeapBytesForMemoryUsage(long keyLen, EntryRecord record) {
+        if (record == null) {
             return 0;
         }
         long extra = 0;
         if (keysStoredOffHeap && keyLen > 0) {
             extra += keyLen;
         }
-        ValueType type = record == null ? object.type : record.type();
-        if (type == ValueType.STRING && object.hasStringRoot()) {
-            ValueHandle handle = record == null ? object.valueHandle() : record.valueHandle();
+        ValueType type = record.type();
+        if (type == ValueType.STRING) {
+            ValueHandle handle = record.valueHandle();
             if (handle != null) {
                 extra += keyLifecycle.stringRoot().estimatedBytes(handle);
             }
             return extra;
         }
-        if (type == ValueType.LIST && object.hasListRoot()) {
-            ValueHandle handle = record == null ? object.valueHandle() : record.valueHandle();
+        if (type == ValueType.LIST) {
+            ValueHandle handle = record.valueHandle();
             ListRoot listRoot = keyLifecycle.listRoot();
             if (handle != null && listRoot != null) {
                 extra += listRoot.estimatedBytes(handle);
             }
             return extra;
         }
-        if (type == ValueType.HASH && object.hasHashRoot()) {
-            ValueHandle handle = record == null ? object.valueHandle() : record.valueHandle();
+        if (type == ValueType.HASH) {
+            ValueHandle handle = record.valueHandle();
             HashRoot hashRoot = keyLifecycle.hashRoot();
             if (handle != null && hashRoot != null) {
                 extra += hashRoot.estimatedBytes(handle);
             }
             return extra;
         }
-        if (type == ValueType.SET && object.hasSetRoot()) {
-            ValueHandle handle = record == null ? object.valueHandle() : record.valueHandle();
+        if (type == ValueType.SET) {
+            ValueHandle handle = record.valueHandle();
             SetRoot setRoot = keyLifecycle.setRoot();
             if (handle != null && setRoot != null) {
                 extra += setRoot.estimatedBytes(handle);
             }
             return extra;
         }
-        if (type == ValueType.ZSET && object.hasZSetRoot()) {
-            ValueHandle handle = record == null ? object.valueHandle() : record.valueHandle();
+        if (type == ValueType.ZSET) {
+            ValueHandle handle = record.valueHandle();
             ZSetRoot zsetRoot = keyLifecycle.zsetRoot();
             if (handle != null && zsetRoot != null) {
                 extra += zsetRoot.estimatedBytes(handle);
             }
             return extra;
-        }
-        if (type == ValueType.STRING && object.payload instanceof OffHeapBuf buf) {
-            extra += buf.capacity();
         }
         return extra;
     }
@@ -218,9 +210,6 @@ public final class YierdisDbMemoryReporter {
 
     private long directNativeBytes() {
         long total = 0L;
-        if (store instanceof YierdisFfmKeyspace<?> ffmStore) {
-            total = addSaturating(total, ffmStore.nativeBytes());
-        }
         if (expires instanceof YierdisFfmExpireIndex ffmExpires) {
             total = addSaturating(total, ffmExpires.nativeBytes());
         }

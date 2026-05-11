@@ -35,6 +35,11 @@ public final class ListRoot implements TypeRoot {
         return requireList(handle).encoding();
     }
 
+    public synchronized boolean contains(ValueHandle handle) {
+        ensureOpen();
+        return handle != null && lists.containsKey(handle.raw());
+    }
+
     public synchronized ValueHandle create() {
         ensureOpen();
         ValueHandle handle = new ValueHandle(nextHandle++);
@@ -130,10 +135,8 @@ public final class ListRoot implements TypeRoot {
     }
 
     @Override
-    public synchronized void close() {
-        if (closed) {
-            return;
-        }
+    public synchronized void clear() {
+        ensureOpen();
         RuntimeException failure = null;
         for (ListValue list : lists.values()) {
             try {
@@ -147,10 +150,18 @@ public final class ListRoot implements TypeRoot {
             }
         }
         lists.clear();
-        closed = true;
         if (failure != null) {
             throw failure;
         }
+    }
+
+    @Override
+    public synchronized void close() {
+        if (closed) {
+            return;
+        }
+        clear();
+        closed = true;
     }
 
     private ListValue requireList(ValueHandle handle) {

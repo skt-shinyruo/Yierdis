@@ -1,38 +1,33 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
-import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
-import yier.bubu.redis.storage.api.MutationOutcome;
+import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.HllReadOps;
 import yier.bubu.redis.storage.api.HllWriteOps;
+import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
+import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
+import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
+import yier.bubu.redis.storage.memory.internal.value.YierdisHyperLogLog;
 
 import java.util.List;
 import java.util.Objects;
-import java.util.function.ToLongBiFunction;
 
 public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final StringRoot stringRoot;
-    private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
-    YierdisHllOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
+    YierdisHllOps(YierdisDbInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
         this.stringRoot = Objects.requireNonNull(keyLifecycle.stringRoot(), "stringRoot");
-        this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
     @Override
@@ -40,7 +35,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         internals.checkThread();
         long now = System.currentTimeMillis();
         long upperBound = estimatePfaddUpperBound(keyBytes, elements);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Integer>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -50,39 +45,37 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Integer>> apply() {
                 final boolean[] changed = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
-                    long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
-                        old.releasePayloadIfAny();
+                keyLifecycle.computeWithHandle(keyBytes, (k, oldRecord) -> {
+                    EntryRecord current = oldRecord;
+                    long oldEstimate = estimateRecordBytes(k, current);
+                    if (current != null && keyLifecycle.isKeyExpired(k, now)) {
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
-                        old = null;
-                        oldEstimate = 0;
+                        current = null;
+                        oldEstimate = 0L;
                     }
 
-                    if (old == null) {
-                        old = YierdisObject.newString(stringRoot, YierdisHyperLogLog.newSparse());
-                        keyLifecycle.touch(old);
+                    ValueHandle handle;
+                    if (current == null) {
+                        handle = stringRoot.store(YierdisHyperLogLog.newSparse());
                     } else {
-                        if (old.type != ValueType.STRING) {
-                            throw new WrongTypeException();
+                        requireString(current);
+                        handle = requireHllHandle(current);
+                    }
+
+                    boolean ok = false;
+                    try {
+                        changed[0] = YierdisHyperLogLog.pfAdd(stringRoot, handle, elements);
+                        EntryRecord next = hllRecord(k, handle, current == null ? -1L : current.expireAtMillis(), current);
+                        deltaBytes[0] -= oldEstimate;
+                        deltaBytes[0] += estimateRecordBytes(k, next);
+                        ok = true;
+                        return next;
+                    } finally {
+                        if (!ok && current == null) {
+                            stringRoot.release(handle);
                         }
-                        keyLifecycle.touch(old);
                     }
-
-                    EntryRecord record = keyLifecycle.entryRecord(k);
-                    if (canReadFromRoot(old, record)) {
-                        changed[0] = YierdisHyperLogLog.pfAdd(stringRoot, record.valueHandle(), elements);
-                    } else if (old.hasStringRoot()) {
-                        changed[0] = YierdisHyperLogLog.pfAdd(stringRoot, old.valueHandle(), elements);
-                    } else {
-                        changed[0] = YierdisHyperLogLog.pfAdd(old, keyLifecycle.offHeapAllocator(), elements);
-                    }
-
-                    deltaBytes[0] -= oldEstimate;
-                    refreshEstimatedBytes(k, old);
-                    deltaBytes[0] += old.estimatedBytes;
-                    return old;
                 });
                 MutationOutcome outcome = changed[0] ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
                 return YierdisDbMutationExecutor.MutationResult.of(
@@ -102,25 +95,12 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
         int[] registers = new int[YierdisHyperLogLog.REGISTERS];
         for (byte[] keyBytes : keys) {
-            YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-            if (object == null) {
+            EntryRecord record = liveStringRecord(keyBytes);
+            if (record == null) {
                 continue;
             }
-            if (object.type != ValueType.STRING) {
-                throw new WrongTypeException();
-            }
-            EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-            if (canReadFromRoot(object, record)) {
-                if (!YierdisHyperLogLog.isHllString(stringRoot, record.valueHandle())) {
-                    throw new WrongTypeException();
-                }
-                YierdisHyperLogLog.mergeHllIntoRegisters(stringRoot.slice(record.valueHandle()), registers);
-                continue;
-            }
-            if (!YierdisHyperLogLog.isHllString(object)) {
-                throw new WrongTypeException();
-            }
-            YierdisHyperLogLog.mergeHllIntoRegisters(object.stringBytesView(), registers);
+            ValueHandle handle = requireHllHandle(record);
+            YierdisHyperLogLog.mergeHllIntoRegisters(stringRoot.slice(handle), registers);
         }
         return YierdisHyperLogLog.estimateCardinality(registers);
     }
@@ -134,31 +114,18 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
         int[] registers = new int[YierdisHyperLogLog.REGISTERS];
         for (byte[] keyBytes : sourceKeys) {
-            YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-            if (object == null) {
+            EntryRecord record = liveStringRecord(keyBytes);
+            if (record == null) {
                 continue;
             }
-            if (object.type != ValueType.STRING) {
-                throw new WrongTypeException();
-            }
-            EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-            if (canReadFromRoot(object, record)) {
-                if (!YierdisHyperLogLog.isHllString(stringRoot, record.valueHandle())) {
-                    throw new WrongTypeException();
-                }
-                YierdisHyperLogLog.mergeHllIntoRegisters(stringRoot.slice(record.valueHandle()), registers);
-                continue;
-            }
-            if (!YierdisHyperLogLog.isHllString(object)) {
-                throw new WrongTypeException();
-            }
-            YierdisHyperLogLog.mergeHllIntoRegisters(object.stringBytesView(), registers);
+            ValueHandle handle = requireHllHandle(record);
+            YierdisHyperLogLog.mergeHllIntoRegisters(stringRoot.slice(handle), registers);
         }
 
         byte[] mergedDense = YierdisHyperLogLog.denseBytesFromRegisters(registers);
         long now = System.currentTimeMillis();
         long upperBound = estimatePfmergeUpperBound(destKeyBytes, mergedDense.length);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Void>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -168,34 +135,34 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Void>> apply() {
                 final long[] deltaBytes = new long[]{0};
                 final boolean[] changed = new boolean[]{false};
-                keyLifecycle.computeObjectWithHandle(destKeyBytes, (k, old) -> {
-                    long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
-                        old.releasePayloadIfAny();
+                final KeyHandle[] keyHandleRef = new KeyHandle[1];
+                keyLifecycle.computeWithHandle(destKeyBytes, (k, oldRecord) -> {
+                    keyHandleRef[0] = k;
+                    EntryRecord current = oldRecord;
+                    long oldEstimate = estimateRecordBytes(k, current);
+                    if (current != null && keyLifecycle.isKeyExpired(k, now)) {
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
-                        old = null;
-                        oldEstimate = 0;
+                        current = null;
+                        oldEstimate = 0L;
                     }
 
-                    if (old == null) {
-                        YierdisObject next = YierdisObject.newString(stringRoot, mergedDense);
-                        keyLifecycle.touch(next);
-                        refreshEstimatedBytes(k, next);
-                        deltaBytes[0] += next.estimatedBytes;
-                        changed[0] = true;
-                        return next;
+                    ValueHandle handle;
+                    if (current == null) {
+                        handle = stringRoot.store(mergedDense);
+                    } else {
+                        requireString(current);
+                        handle = requireHllHandle(current);
+                        stringRoot.overwrite(handle, mergedDense);
                     }
 
-                    old.overwriteWithString(stringRoot, mergedDense);
-                    keyLifecycle.touch(old);
+                    EntryRecord next = hllRecord(k, handle, -1L, current);
                     deltaBytes[0] -= oldEstimate;
-                    refreshEstimatedBytes(k, old);
-                    deltaBytes[0] += old.estimatedBytes;
+                    deltaBytes[0] += estimateRecordBytes(k, next);
                     changed[0] = true;
-                    return old;
+                    return next;
                 });
-                keyLifecycle.removeExpire(destKeyBytes);
+                keyLifecycle.removeExpire(currentKeyHandle(destKeyBytes, keyHandleRef[0]));
                 MutationOutcome outcome = changed[0] ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
                 return YierdisDbMutationExecutor.MutationResult.of(
                         WriteResult.of(null, outcome),
@@ -206,21 +173,19 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     }
 
     private long estimatePfaddUpperBound(byte[] keyBytes, List<byte[]> elements) {
-        YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
+        EntryRecord existing = keyLifecycle.liveEntryRecord(keyBytes);
         if (existing == null) {
             int upperValueLength = YierdisHyperLogLog.sparseLengthUpperBoundForElements(elements);
             return YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, upperValueLength);
         }
-        if (existing.type != ValueType.STRING || !YierdisHyperLogLog.isHllString(existing)) {
+        if (existing.type() != ValueType.STRING) {
             return 0L;
         }
-        if (YierdisHyperLogLog.isDense(existing)) {
+        ValueHandle handle = requireHllHandle(existing);
+        if (YierdisHyperLogLog.isDense(stringRoot, handle)) {
             return 0L;
         }
-        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-        int existingLen = canReadFromRoot(existing, record)
-                ? stringRoot.length(record.valueHandle())
-                : existing.rawLen;
+        int existingLen = stringRoot.length(handle);
         int sparseUpperBound = YierdisHyperLogLog.sparseLengthUpperBoundForElements(elements);
         int targetLength = Math.min(
                 YierdisHyperLogLog.denseLength(),
@@ -230,34 +195,63 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     }
 
     private long estimatePfmergeUpperBound(byte[] keyBytes, int mergedDenseLength) {
-        YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
+        EntryRecord existing = keyLifecycle.liveEntryRecord(keyBytes);
         if (existing == null) {
             return YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, mergedDenseLength);
         }
-        if (existing.type != ValueType.STRING || !YierdisHyperLogLog.isHllString(existing)) {
+        if (existing.type() != ValueType.STRING) {
             return 0L;
         }
-        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-        int existingLen = canReadFromRoot(existing, record)
-                ? stringRoot.length(record.valueHandle())
-                : existing.rawLen;
+        ValueHandle handle = requireHllHandle(existing);
+        int existingLen = stringRoot.length(handle);
         return Math.max(0L, (long) mergedDenseLength - existingLen);
     }
 
-    private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
-        if (object == null) {
-            return;
+    private EntryRecord liveStringRecord(byte[] keyBytes) {
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
+        if (record == null) {
+            return null;
         }
-        object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
+        requireString(record);
+        return keyLifecycle.touchRecord(keyHandle, record);
     }
 
-    private boolean canReadFromRoot(YierdisObject object, EntryRecord record) {
-        return object != null
-                && object.hasStringRoot()
-                && record != null
-                && record.type() == ValueType.STRING
-                && record.valueHandle() != null
-                && object.valueHandle() != null
-                && record.valueHandle().raw() == object.valueHandle().raw();
+    private EntryRecord hllRecord(KeyHandle keyHandle, ValueHandle handle, long expireAtMillis, EntryRecord previous) {
+        return keyLifecycle.newRecord(
+                keyHandle,
+                handle,
+                ValueType.STRING,
+                ValueEncoding.STRING_RAW,
+                expireAtMillis,
+                DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
+                previous
+        );
+    }
+
+    private ValueHandle requireHllHandle(EntryRecord record) {
+        ValueHandle handle = record.valueHandle();
+        if (!stringRoot.contains(handle)) {
+            throw new IllegalStateException("native hll value handle is not available: " + (handle == null ? "null" : handle.raw()));
+        }
+        if (!YierdisHyperLogLog.isHllString(stringRoot, handle)) {
+            throw new WrongTypeException();
+        }
+        return handle;
+    }
+
+    private static void requireString(EntryRecord record) {
+        if (record.type() != ValueType.STRING) {
+            throw new WrongTypeException();
+        }
+    }
+
+    private long estimateRecordBytes(KeyHandle keyHandle, EntryRecord record) {
+        return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
+    }
+
+    private KeyHandle currentKeyHandle(byte[] keyBytes, KeyHandle fallback) {
+        KeyHandle current = keyLifecycle.keyHandle(keyBytes);
+        return current == null ? fallback : current;
     }
 }

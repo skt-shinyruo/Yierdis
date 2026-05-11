@@ -36,6 +36,11 @@ public final class ZSetRoot implements TypeRoot {
         return requireZSet(handle).encoding();
     }
 
+    public synchronized boolean contains(ValueHandle handle) {
+        ensureOpen();
+        return handle != null && zsets.containsKey(handle.raw());
+    }
+
     public synchronized ValueHandle create() {
         ensureOpen();
         ValueHandle handle = new ValueHandle(nextHandle++);
@@ -199,10 +204,8 @@ public final class ZSetRoot implements TypeRoot {
     }
 
     @Override
-    public synchronized void close() {
-        if (closed) {
-            return;
-        }
+    public synchronized void clear() {
+        ensureOpen();
         RuntimeException failure = null;
         for (ZSetValue zset : zsets.values()) {
             try {
@@ -216,10 +219,18 @@ public final class ZSetRoot implements TypeRoot {
             }
         }
         zsets.clear();
-        closed = true;
         if (failure != null) {
             throw failure;
         }
+    }
+
+    @Override
+    public synchronized void close() {
+        if (closed) {
+            return;
+        }
+        clear();
+        closed = true;
     }
 
     private ZSetValue requireZSet(ValueHandle handle) {

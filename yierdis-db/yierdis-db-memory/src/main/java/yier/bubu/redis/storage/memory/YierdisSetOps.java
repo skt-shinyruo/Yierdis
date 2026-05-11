@@ -1,42 +1,33 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
-import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
-import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.api.DbMemoryConstants;
+import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.SetReadOps;
 import yier.bubu.redis.storage.api.SetWriteOps;
-import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.result.BulkStringSequence;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 import java.util.List;
 import java.util.Objects;
 import java.util.function.IntSupplier;
-import java.util.function.ToLongBiFunction;
 
 public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final SetRoot setRoot;
-    private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
-    YierdisSetOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
+    YierdisSetOps(YierdisDbInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
         this.setRoot = Objects.requireNonNull(keyLifecycle.setRoot(), "setRoot");
-        this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
     @Override
@@ -44,7 +35,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
         internals.checkThread();
         long now = System.currentTimeMillis();
         long upperBound = estimateSetWriteUpperBoundForMutation(keyBytes, members);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -54,53 +45,37 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final int[] added = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
-                    long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
-                        old.releasePayloadIfAny();
+                keyLifecycle.computeWithHandle(keyBytes, (k, oldRecord) -> {
+                    EntryRecord current = oldRecord;
+                    long oldEstimate = estimateRecordBytes(k, current);
+                    if (current != null && keyLifecycle.isKeyExpired(k, now)) {
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
-                        old = null;
-                        oldEstimate = 0;
+                        current = null;
+                        oldEstimate = 0L;
                     }
-                    if (old == null) {
-                        YierdisObject next = YierdisObject.newSet(setRoot);
-                        boolean ok = false;
-                        try {
-                            ValueHandle handle = next.valueHandle();
-                            added[0] = setRoot.sadd(handle, members);
-                            next.useSetHandle(setRoot, handle);
-                            keyLifecycle.touch(next);
-                            refreshEstimatedBytes(k, next);
-                            deltaBytes[0] += next.estimatedBytes;
-                            ok = true;
-                            return next;
-                        } finally {
-                            if (!ok) {
-                                next.releasePayloadIfAny();
-                            }
+
+                    ValueHandle handle;
+                    if (current == null) {
+                        handle = setRoot.create();
+                    } else {
+                        requireSet(current);
+                        handle = requireSetHandle(current);
+                    }
+
+                    boolean ok = false;
+                    try {
+                        added[0] = setRoot.sadd(handle, members);
+                        EntryRecord next = setRecord(k, handle, current == null ? -1L : current.expireAtMillis(), current);
+                        deltaBytes[0] -= oldEstimate;
+                        deltaBytes[0] += estimateRecordBytes(k, next);
+                        ok = true;
+                        return next;
+                    } finally {
+                        if (!ok && current == null) {
+                            setRoot.release(handle);
                         }
                     }
-                    if (old.type != ValueType.SET) {
-                        throw new WrongTypeException();
-                    }
-                    ValueHandle handle = setHandle(old, k);
-                    if (handle == null && old.payload instanceof SetValue) {
-                        old.moveSetToRoot(setRoot);
-                        handle = old.valueHandle();
-                    }
-                    if (handle != null) {
-                        added[0] = setRoot.sadd(handle, members);
-                        old.useSetHandle(setRoot, handle);
-                    } else {
-                        added[0] = ((SetValue) old.payload).addAll(members);
-                        old.refreshCompositeEncodingFromPayload();
-                    }
-                    keyLifecycle.touch(old);
-                    deltaBytes[0] -= oldEstimate;
-                    refreshEstimatedBytes(k, old);
-                    deltaBytes[0] += old.estimatedBytes;
-                    return old;
                 });
                 MutationOutcome outcome = added[0] > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
                 return YierdisDbMutationExecutor.MutationResult.of(
@@ -115,7 +90,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     public WriteResult<Long> srem(byte[] keyBytes, List<byte[]> members) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return 0;
@@ -125,46 +100,26 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeObjectIfPresentWithHandle(keyBytes, (k, old) -> {
-                    long oldEstimate = old.estimatedBytes;
+                keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, oldRecord) -> {
+                    EntryRecord current = oldRecord;
+                    long oldEstimate = estimateRecordBytes(k, current);
                     if (keyLifecycle.isKeyExpired(k, now)) {
-                        old.releasePayloadIfAny();
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
-                    if (old.type != ValueType.SET) {
-                        throw new WrongTypeException();
-                    }
-                    ValueHandle handle = setHandle(old, k);
-                    if (handle == null && old.payload instanceof SetValue) {
-                        old.moveSetToRoot(setRoot);
-                        handle = old.valueHandle();
-                    }
-                    int size;
-                    if (handle != null) {
-                        removed[0] = setRoot.srem(handle, members);
-                        size = setRoot.size(handle);
-                    } else {
-                        SetValue sv = (SetValue) old.payload;
-                        removed[0] = sv.removeAll(members);
-                        size = sv.size();
-                    }
-                    if (size == 0) {
-                        old.releasePayloadIfAny();
+                    requireSet(current);
+                    ValueHandle handle = requireSetHandle(current);
+                    removed[0] = setRoot.srem(handle, members);
+                    if (setRoot.size(handle) == 0) {
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
-                    if (handle != null) {
-                        old.useSetHandle(setRoot, handle);
-                    } else {
-                        old.refreshCompositeEncodingFromPayload();
-                    }
-                    keyLifecycle.touch(old);
-                    refreshEstimatedBytes(k, old);
-                    deltaBytes[0] += old.estimatedBytes - oldEstimate;
-                    return old;
+                    EntryRecord next = setRecord(k, handle, current.expireAtMillis(), current);
+                    deltaBytes[0] -= oldEstimate;
+                    deltaBytes[0] += estimateRecordBytes(k, next);
+                    return next;
                 });
                 MutationOutcome outcome = removed[0] > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
                 return YierdisDbMutationExecutor.MutationResult.of(
@@ -187,113 +142,88 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     @Override
     public boolean sismember(byte[] keyBytes, byte[] member) {
         internals.checkThread();
-        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-        if (object == null) {
+        EntryRecord record = liveSetRecord(keyBytes);
+        if (record == null) {
             return false;
         }
-        if (object.type != ValueType.SET) {
-            throw new WrongTypeException();
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-        ValueHandle handle = readableSetHandle(object, record);
-        if (handle != null) {
-            return setRoot.contains(handle, member);
-        }
-        return ((SetValue) object.payload).contains(member);
+        return setRoot.contains(requireSetHandle(record), member);
     }
 
     @Override
     public long scard(byte[] keyBytes) {
         internals.checkThread();
-        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-        if (object == null) {
+        EntryRecord record = liveSetRecord(keyBytes);
+        if (record == null) {
             return 0;
         }
-        if (object.type != ValueType.SET) {
-            throw new WrongTypeException();
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-        ValueHandle handle = readableSetHandle(object, record);
-        if (handle != null) {
-            return setRoot.size(handle);
-        }
-        return ((SetValue) object.payload).size();
+        return setRoot.size(requireSetHandle(record));
     }
 
     private int smembersCount(byte[] keyBytes) {
-        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-        if (object == null) {
+        EntryRecord record = liveSetRecord(keyBytes);
+        if (record == null) {
             return 0;
         }
-        if (object.type != ValueType.SET) {
-            throw new WrongTypeException();
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-        ValueHandle handle = readableSetHandle(object, record);
-        if (handle != null) {
-            return setRoot.size(handle);
-        }
-        return ((SetValue) object.payload).size();
+        return setRoot.size(requireSetHandle(record));
     }
 
     private void smembersWriteTo(byte[] keyBytes, BulkStringSink out) {
-        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-        if (object == null) {
+        EntryRecord record = liveSetRecord(keyBytes);
+        if (record == null) {
             return;
         }
-        if (object.type != ValueType.SET) {
-            throw new WrongTypeException();
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-        ValueHandle handle = readableSetHandle(object, record);
-        if (handle != null) {
-            setRoot.membersInto(handle, out);
-            return;
-        }
-        ((SetValue) object.payload).membersInto(out);
+        setRoot.membersInto(requireSetHandle(record), out);
     }
 
     private long estimateSetWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> members) {
-        YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
+        EntryRecord existing = keyLifecycle.liveEntryRecord(keyBytes);
         if (existing == null) {
             return YierdisDbMemoryEstimator.estimateSetWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, members);
         }
-        if (existing.type != ValueType.SET) {
+        if (existing.type() != ValueType.SET) {
             return 0L;
         }
         return YierdisDbMemoryEstimator.sumByteLengths(members);
     }
 
-    private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
-        if (object == null) {
-            return;
+    private EntryRecord liveSetRecord(byte[] keyBytes) {
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
+        if (record == null) {
+            return null;
         }
-        object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
+        requireSet(record);
+        return keyLifecycle.touchRecord(keyHandle, record);
     }
 
-    private ValueHandle setHandle(YierdisObject object, KeyHandle keyHandle) {
-        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
-        return readableSetHandle(object, record);
+    private EntryRecord setRecord(KeyHandle keyHandle, ValueHandle handle, long expireAtMillis, EntryRecord previous) {
+        return keyLifecycle.newRecord(
+                keyHandle,
+                handle,
+                ValueType.SET,
+                setRoot.encoding(handle),
+                expireAtMillis,
+                DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
+                previous
+        );
     }
 
-    private ValueHandle readableSetHandle(YierdisObject object, EntryRecord record) {
-        if (canReadFromRoot(object, record)) {
-            return record.valueHandle();
+    private ValueHandle requireSetHandle(EntryRecord record) {
+        ValueHandle handle = record.valueHandle();
+        if (!setRoot.contains(handle)) {
+            throw new IllegalStateException("native set value handle is not available: " + (handle == null ? "null" : handle.raw()));
         }
-        if (object != null && object.hasSetRoot()) {
-            return object.valueHandle();
-        }
-        return null;
+        return handle;
     }
 
-    private boolean canReadFromRoot(YierdisObject object, EntryRecord record) {
-        return object != null
-                && object.hasSetRoot()
-                && record != null
-                && record.type() == ValueType.SET
-                && record.valueHandle() != null
-                && object.valueHandle() != null
-                && record.valueHandle().raw() == object.valueHandle().raw();
+    private static void requireSet(EntryRecord record) {
+        if (record.type() != ValueType.SET) {
+            throw new WrongTypeException();
+        }
+    }
+
+    private long estimateRecordBytes(KeyHandle keyHandle, EntryRecord record) {
+        return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
     private static BulkStringSequence sequenceOf(IntSupplier countSupplier, BulkEmitter emitter) {

@@ -9,6 +9,7 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 
 import java.util.Objects;
 
@@ -74,26 +75,34 @@ public final class YierdisDbExpirationSupport {
                 continue;
             }
 
-            YierdisObject e = db.keyLifecycle().getStoredObject(keyHandle);
-            if (e == null) {
+            EntryRecord record = db.keyLifecycle().entryRecord(keyHandle);
+            if (record == null) {
                 db.removeExpire(keyHandle);
                 continue;
             }
 
             if (expireAtMillis <= nowMillis) {
-                removeExpiredValue(keyHandle, e);
+                removeExpiredRecord(keyHandle, record);
                 expired++;
             }
         }
         return expired;
     }
 
-    private void removeExpiredValue(KeyHandle keyHandle, YierdisObject e) {
-        long removalBytes = db.keyLifecycle().estimatedBytesForRemoval(keyHandle, e);
-        db.removeExpire(keyHandle);
-        if (db.keyLifecycle().removeObject(keyHandle, e)) {
-            e.releasePayloadIfAny();
+    private void removeExpiredRecord(KeyHandle keyHandle, EntryRecord record) {
+        long removalBytes = db.keyLifecycle().estimatedBytesForRemoval(keyHandle, record);
+        byte[] keyBytes = copyKeyBytes(keyHandle);
+        if (db.keyLifecycle().removeEntry(keyHandle, record)) {
+            db.keyLifecycle().removeExpireByKeyBytes(keyBytes);
             db.adjustUsedBytes(-removalBytes);
         }
+    }
+
+    private static byte[] copyKeyBytes(KeyHandle keyHandle) {
+        byte[] out = new byte[keyHandle.len()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = keyHandle.byteAt(i);
+        }
+        return out;
     }
 }

@@ -199,14 +199,18 @@ DB 内部受控写路径的执行器。很多写命令不会直接改状态，�
 
 ## Data Model
 
-### `YierdisObject`
+### `EntryRecord`
 
-最基础的 value 包装器。string 和 HLL 等值会直接落在它上面，它持有：
+DB native key graph 的 entry metadata。它持有：
 
 - `ValueType`
 - `ValueEncoding`
-- payload
-- 一些和长度、估算、缓存相关的字段
+- `ValueHandle`
+- expireAt
+- 估算字节数
+- LRU / LFU 相关字段
+
+真实 payload 由对应的 `TypeRoot` 通过 `ValueHandle` 管理。
 
 ### `ValueType`
 

@@ -12,6 +12,7 @@ import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 
 import java.util.List;
 import java.util.Objects;
@@ -28,11 +29,10 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
     String objectEncoding(BytesView keyView) {
         threadChecker.run();
         EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
-        YierdisObject object = keyLifecycle.getLiveObject(keyView);
-        if (object == null) {
+        if (record == null) {
             return null;
         }
-        return encodingName(record == null ? object.encoding : record.encoding());
+        return encodingName(record.encoding());
     }
 
     String objectEncoding(byte[] keyBytes) {
@@ -41,11 +41,10 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
             return null;
         }
         EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
-        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-        if (object == null) {
+        if (record == null) {
             return null;
         }
-        return encodingName(record == null ? object.encoding : record.encoding());
+        return encodingName(record.encoding());
     }
 
     @Override
@@ -60,8 +59,8 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
         int maxSteps = Math.max(64, count * 10);
         final int[] remaining = new int[]{count};
 
-        return keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, e) -> {
-            if (k == null || e == null) {
+        return keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, record) -> {
+            if (k == null || record == null) {
                 return true;
             }
             if (keyLifecycle.isKeyExpired(k, now)) {
@@ -69,14 +68,13 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
             }
 
             byte[] keyBytes = YierdisDb.toByteArray(k);
-            EntryRecord record = keyLifecycle.entryRecord(k);
-            ValueType type = record == null ? e.type : record.type();
+            ValueType type = record.type();
             byte[] stringValue = null;
             if (type == ValueType.STRING) {
-                byte[] view = e.stringBytesView();
-                stringValue = view == null ? null : java.util.Arrays.copyOf(view, view.length);
+                ValueHandle handle = record.valueHandle();
+                stringValue = handle == null ? null : keyLifecycle.stringRoot().copy(handle);
             }
-            Long expireAtMillis = record == null || record.expireAtMillis() < 0
+            Long expireAtMillis = record.expireAtMillis() < 0
                     ? keyLifecycle.expireAtMillis(k)
                     : record.expireAtMillis();
             out.add(new YierdisSnapshotEntry(keyBytes, type, stringValue, expireAtMillis));

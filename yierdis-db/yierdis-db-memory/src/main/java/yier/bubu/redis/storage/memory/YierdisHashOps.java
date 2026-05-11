@@ -1,17 +1,6 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
-import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
-import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.HashReadOps;
 import yier.bubu.redis.storage.api.HashWriteOps;
 import yier.bubu.redis.storage.api.MutationOutcome;
@@ -20,11 +9,15 @@ import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.result.BulkStringMapPairs;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 import java.util.List;
 import java.util.Objects;
 import java.util.function.IntSupplier;
-import java.util.function.ToLongBiFunction;
 
 public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     private static final long HASH_PAIR_OVERHEAD_BYTES_ESTIMATE = 64L;
@@ -32,13 +25,11 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final HashRoot hashRoot;
-    private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
-    YierdisHashOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
+    YierdisHashOps(YierdisDbInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
         this.hashRoot = Objects.requireNonNull(keyLifecycle.hashRoot(), "hashRoot");
-        this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
     @Override
@@ -49,7 +40,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         }
         long now = System.currentTimeMillis();
         long upperBound = estimateHashWriteUpperBoundForMutation(keyBytes, fieldValuePairs);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -59,53 +50,37 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final int[] added = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
-                    long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
-                        old.releasePayloadIfAny();
+                keyLifecycle.computeWithHandle(keyBytes, (k, oldRecord) -> {
+                    EntryRecord current = oldRecord;
+                    long oldEstimate = estimateRecordBytes(k, current);
+                    if (current != null && keyLifecycle.isKeyExpired(k, now)) {
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
-                        old = null;
-                        oldEstimate = 0;
+                        current = null;
+                        oldEstimate = 0L;
                     }
-                    if (old == null) {
-                        YierdisObject next = YierdisObject.newHash(hashRoot);
-                        boolean ok = false;
-                        try {
-                            ValueHandle handle = next.valueHandle();
-                            added[0] = hashRoot.hsetMany(handle, fieldValuePairs);
-                            next.useHashHandle(hashRoot, handle);
-                            keyLifecycle.touch(next);
-                            refreshEstimatedBytes(k, next);
-                            deltaBytes[0] += next.estimatedBytes;
-                            ok = true;
-                            return next;
-                        } finally {
-                            if (!ok) {
-                                next.releasePayloadIfAny();
-                            }
+
+                    ValueHandle handle;
+                    if (current == null) {
+                        handle = hashRoot.create();
+                    } else {
+                        requireHash(current);
+                        handle = requireHashHandle(current);
+                    }
+
+                    boolean ok = false;
+                    try {
+                        added[0] = hashRoot.hsetMany(handle, fieldValuePairs);
+                        EntryRecord next = hashRecord(k, handle, current == null ? -1L : current.expireAtMillis(), current);
+                        deltaBytes[0] -= oldEstimate;
+                        deltaBytes[0] += estimateRecordBytes(k, next);
+                        ok = true;
+                        return next;
+                    } finally {
+                        if (!ok && current == null) {
+                            hashRoot.release(handle);
                         }
                     }
-                    if (old.type != ValueType.HASH) {
-                        throw new WrongTypeException();
-                    }
-                    ValueHandle handle = hashHandle(old, k);
-                    if (handle == null && old.payload instanceof HashValue) {
-                        old.moveHashToRoot(hashRoot);
-                        handle = old.valueHandle();
-                    }
-                    if (handle != null) {
-                        added[0] = hashRoot.hsetMany(handle, fieldValuePairs);
-                        old.useHashHandle(hashRoot, handle);
-                    } else {
-                        added[0] = ((HashValue) old.payload).hsetMany(fieldValuePairs);
-                        old.refreshCompositeEncodingFromPayload();
-                    }
-                    keyLifecycle.touch(old);
-                    deltaBytes[0] -= oldEstimate;
-                    refreshEstimatedBytes(k, old);
-                    deltaBytes[0] += old.estimatedBytes;
-                    return old;
                 });
                 return YierdisDbMutationExecutor.MutationResult.of(
                         WriteResult.of((long) added[0], MutationOutcome.VALUE_CHANGED),
@@ -118,19 +93,11 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     @Override
     public byte[] hget(byte[] keyBytes, byte[] fieldBytes) {
         internals.checkThread();
-        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-        if (object == null) {
+        EntryRecord record = liveHashRecord(keyBytes);
+        if (record == null) {
             return null;
         }
-        if (object.type != ValueType.HASH) {
-            throw new WrongTypeException();
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-        ValueHandle handle = readableHashHandle(object, record);
-        if (handle != null) {
-            return hashRoot.hget(handle, fieldBytes);
-        }
-        return ((HashValue) object.payload).hget(fieldBytes);
+        return hashRoot.hget(requireHashHandle(record), fieldBytes);
     }
 
     @Override
@@ -145,26 +112,18 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     @Override
     public long hlen(byte[] keyBytes) {
         internals.checkThread();
-        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-        if (object == null) {
+        EntryRecord record = liveHashRecord(keyBytes);
+        if (record == null) {
             return 0;
         }
-        if (object.type != ValueType.HASH) {
-            throw new WrongTypeException();
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-        ValueHandle handle = readableHashHandle(object, record);
-        if (handle != null) {
-            return hashRoot.size(handle);
-        }
-        return ((HashValue) object.payload).size();
+        return hashRoot.size(requireHashHandle(record));
     }
 
     @Override
     public WriteResult<Long> hdel(byte[] keyBytes, List<byte[]> fields) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return 0;
@@ -174,46 +133,26 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final int[] removed = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeObjectIfPresentWithHandle(keyBytes, (k, old) -> {
-                    long oldEstimate = old.estimatedBytes;
+                keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, oldRecord) -> {
+                    EntryRecord current = oldRecord;
+                    long oldEstimate = estimateRecordBytes(k, current);
                     if (keyLifecycle.isKeyExpired(k, now)) {
-                        old.releasePayloadIfAny();
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
-                    if (old.type != ValueType.HASH) {
-                        throw new WrongTypeException();
-                    }
-                    ValueHandle handle = hashHandle(old, k);
-                    if (handle == null && old.payload instanceof HashValue) {
-                        old.moveHashToRoot(hashRoot);
-                        handle = old.valueHandle();
-                    }
-                    int size;
-                    if (handle != null) {
-                        removed[0] = hashRoot.hdel(handle, fields);
-                        size = hashRoot.size(handle);
-                    } else {
-                        HashValue hv = (HashValue) old.payload;
-                        removed[0] = hv.hdel(fields);
-                        size = hv.size();
-                    }
-                    if (size == 0) {
-                        old.releasePayloadIfAny();
+                    requireHash(current);
+                    ValueHandle handle = requireHashHandle(current);
+                    removed[0] = hashRoot.hdel(handle, fields);
+                    if (hashRoot.size(handle) == 0) {
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
-                    if (handle != null) {
-                        old.useHashHandle(hashRoot, handle);
-                    } else {
-                        old.refreshCompositeEncodingFromPayload();
-                    }
-                    keyLifecycle.touch(old);
-                    refreshEstimatedBytes(k, old);
-                    deltaBytes[0] += old.estimatedBytes - oldEstimate;
-                    return old;
+                    EntryRecord next = hashRecord(k, handle, current.expireAtMillis(), current);
+                    deltaBytes[0] -= oldEstimate;
+                    deltaBytes[0] += estimateRecordBytes(k, next);
+                    return next;
                 });
                 MutationOutcome outcome = removed[0] > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
                 return YierdisDbMutationExecutor.MutationResult.of(
@@ -225,79 +164,70 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     }
 
     private int hgetallCount(byte[] keyBytes) {
-        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-        if (object == null) {
+        EntryRecord record = liveHashRecord(keyBytes);
+        if (record == null) {
             return 0;
         }
-        if (object.type != ValueType.HASH) {
-            throw new WrongTypeException();
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-        ValueHandle handle = readableHashHandle(object, record);
-        if (handle != null) {
-            return hashRoot.hgetallCount(handle);
-        }
-        return ((HashValue) object.payload).hgetallCount();
+        return hashRoot.hgetallCount(requireHashHandle(record));
     }
 
     private void hgetallWriteTo(byte[] keyBytes, BulkStringSink out) {
-        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-        if (object == null) {
+        EntryRecord record = liveHashRecord(keyBytes);
+        if (record == null) {
             return;
         }
-        if (object.type != ValueType.HASH) {
-            throw new WrongTypeException();
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-        ValueHandle handle = readableHashHandle(object, record);
-        if (handle != null) {
-            hashRoot.hgetallPairsInto(handle, out);
-            return;
-        }
-        ((HashValue) object.payload).hgetallPairsInto(out);
+        hashRoot.hgetallPairsInto(requireHashHandle(record), out);
     }
 
     private long estimateHashWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> fieldValuePairs) {
-        YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
+        EntryRecord existing = keyLifecycle.liveEntryRecord(keyBytes);
         if (existing == null) {
             return estimateHashWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, fieldValuePairs);
         }
-        if (existing.type != ValueType.HASH) {
+        if (existing.type() != ValueType.HASH) {
             return 0L;
         }
         return YierdisDbMemoryEstimator.sumByteLengths(fieldValuePairs);
     }
 
-    private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
-        if (object == null) {
-            return;
+    private EntryRecord liveHashRecord(byte[] keyBytes) {
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
+        if (record == null) {
+            return null;
         }
-        object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
+        requireHash(record);
+        return keyLifecycle.touchRecord(keyHandle, record);
     }
 
-    private ValueHandle hashHandle(YierdisObject object, KeyHandle keyHandle) {
-        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
-        return readableHashHandle(object, record);
+    private EntryRecord hashRecord(KeyHandle keyHandle, ValueHandle handle, long expireAtMillis, EntryRecord previous) {
+        return keyLifecycle.newRecord(
+                keyHandle,
+                handle,
+                ValueType.HASH,
+                hashRoot.encoding(handle),
+                expireAtMillis,
+                DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
+                previous
+        );
     }
 
-    private ValueHandle readableHashHandle(YierdisObject object, EntryRecord record) {
-        if (canReadFromRoot(object, record)) {
-            return record.valueHandle();
+    private ValueHandle requireHashHandle(EntryRecord record) {
+        ValueHandle handle = record.valueHandle();
+        if (!hashRoot.contains(handle)) {
+            throw new IllegalStateException("native hash value handle is not available: " + (handle == null ? "null" : handle.raw()));
         }
-        if (object != null && object.hasHashRoot()) {
-            return object.valueHandle();
-        }
-        return null;
+        return handle;
     }
 
-    private boolean canReadFromRoot(YierdisObject object, EntryRecord record) {
-        return object != null
-                && object.hasHashRoot()
-                && record != null
-                && record.type() == ValueType.HASH
-                && record.valueHandle() != null
-                && object.valueHandle() != null
-                && record.valueHandle().raw() == object.valueHandle().raw();
+    private static void requireHash(EntryRecord record) {
+        if (record.type() != ValueType.HASH) {
+            throw new WrongTypeException();
+        }
+    }
+
+    private long estimateRecordBytes(KeyHandle keyHandle, EntryRecord record) {
+        return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
     private static long estimateHashWriteUpperBound(int keyLength, List<byte[]> fieldValuePairs) {

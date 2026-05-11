@@ -77,6 +77,11 @@ public final class StringRoot implements TypeRoot {
         return ValueEncoding.STRING_RAW;
     }
 
+    public synchronized boolean contains(ValueHandle handle) {
+        ensureOpen();
+        return handle != null && slots.containsKey(handle.raw());
+    }
+
     public synchronized ValueHandle store(byte[] value) {
         ensureOpen();
         int len = value == null ? 0 : value.length;
@@ -213,10 +218,8 @@ public final class StringRoot implements TypeRoot {
     }
 
     @Override
-    public synchronized void close() {
-        if (closed) {
-            return;
-        }
+    public synchronized void clear() {
+        ensureOpen();
         RuntimeException failure = null;
         for (Slot slot : slots.values()) {
             try {
@@ -230,6 +233,22 @@ public final class StringRoot implements TypeRoot {
             }
         }
         slots.clear();
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    @Override
+    public synchronized void close() {
+        if (closed) {
+            return;
+        }
+        RuntimeException failure = null;
+        try {
+            clear();
+        } catch (RuntimeException e) {
+            failure = e;
+        }
         if (ownsAllocator) {
             try {
                 allocator.close();

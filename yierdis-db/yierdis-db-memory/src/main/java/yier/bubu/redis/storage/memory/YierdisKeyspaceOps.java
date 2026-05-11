@@ -9,6 +9,7 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.api.KeyspaceReadOps;
 import yier.bubu.redis.storage.api.KeyspaceWriteOps;
@@ -51,17 +52,16 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                     if (handle == null) {
                         continue;
                     }
-                    YierdisObject e = keyLifecycle.getStoredObject(handle);
-                    if (e == null) {
+                    EntryRecord record = keyLifecycle.entryRecord(handle);
+                    if (record == null) {
                         continue;
                     }
-                    if (keyLifecycle.removeIfExpired(handle, e, now)) {
+                    if (keyLifecycle.removeIfExpired(handle, record, now)) {
                         continue;
                     }
-                    long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, e);
-                    keyLifecycle.removeExpire(handle);
-                    if (keyLifecycle.remove(handle, e)) {
-                        e.releasePayloadIfAny();
+                    long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, record);
+                    if (keyLifecycle.removeEntry(handle, record)) {
+                        keyLifecycle.removeExpireByKeyBytes(keyBytes);
                         deltaBytes -= removalBytes;
                         removed++;
                     }
@@ -78,14 +78,14 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
     @Override
     public ValueType typeOf(BytesView keyView) {
         internals.checkThread();
-        YierdisObject e = keyLifecycle.getLiveObject(keyView);
-        return e == null ? null : e.type;
+        EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
+        return record == null ? null : record.type();
     }
 
     @Override
     public boolean existsKey(BytesView keyView) {
         internals.checkThread();
-        return keyLifecycle.getLiveObject(keyView) != null;
+        return keyLifecycle.liveEntryRecord(keyView) != null;
     }
 
     @Override
@@ -113,7 +113,6 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         long nowMillis = System.currentTimeMillis();
         List<byte[]> out = new ArrayList<>();
         List<byte[]> expiredKeys = new ArrayList<>();
-        List<YierdisObject> expiredValues = new ArrayList<>();
         final boolean[] timedOut = new boolean[]{false};
 
         ScanCursorV2 cursor = ScanCursorV2.start();
@@ -123,13 +122,15 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                 timedOut[0] = true;
                 break;
             }
-            ScanCursorV2 next = keyLifecycle.scan(cursor, 1024, (k, e) -> {
-                if (k == null || e == null) {
+            ScanCursorV2 next = keyLifecycle.scan(cursor, 1024, (k, record) -> {
+                if (k == null) {
+                    return true;
+                }
+                if (record == null) {
                     return true;
                 }
                 if (keyLifecycle.isKeyExpired(k, nowMillis)) {
                     expiredKeys.add(YierdisDb.toByteArray(k));
-                    expiredValues.add(e);
                     return true;
                 }
                 if (YierdisGlobMatcher.matches(globPattern, k)) {
@@ -159,11 +160,12 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         for (int i = 0; i < expiredKeys.size(); i++) {
             byte[] key = expiredKeys.get(i);
             KeyHandle handle = keyLifecycle.keyHandle(key);
-            long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, expiredValues.get(i));
-            keyLifecycle.removeExpire(key);
-            if (keyLifecycle.remove(key, expiredValues.get(i))) {
-                expiredValues.get(i).releasePayloadIfAny();
-                internals.ledger().commit(null, -removalBytes);
+            if (handle == null) {
+                continue;
+            }
+            EntryRecord record = keyLifecycle.entryRecord(handle);
+            if (record != null) {
+                keyLifecycle.removeIfExpired(handle, record, nowMillis);
             }
         }
         return out;
@@ -179,17 +181,18 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
 
         long now = System.currentTimeMillis();
         List<byte[]> expiredKeys = new ArrayList<>();
-        List<YierdisObject> expiredValues = new ArrayList<>();
         int maxSteps = Math.max(64, count * 10);
         final int[] remaining = new int[]{count};
 
-        ScanCursorV2 next = keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, e) -> {
-            if (k == null || e == null) {
+        ScanCursorV2 next = keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, record) -> {
+            if (k == null) {
+                return true;
+            }
+            if (record == null) {
                 return true;
             }
             if (keyLifecycle.isKeyExpired(k, now)) {
                 expiredKeys.add(YierdisDb.toByteArray(k));
-                expiredValues.add(e);
                 return true;
             }
             if (globPattern == null || YierdisGlobMatcher.matches(globPattern, k)) {
@@ -205,11 +208,12 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         for (int i = 0; i < expiredKeys.size(); i++) {
             byte[] key = expiredKeys.get(i);
             KeyHandle handle = keyLifecycle.keyHandle(key);
-            long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, expiredValues.get(i));
-            keyLifecycle.removeExpire(key);
-            if (keyLifecycle.remove(key, expiredValues.get(i))) {
-                expiredValues.get(i).releasePayloadIfAny();
-                internals.ledger().commit(null, -removalBytes);
+            if (handle == null) {
+                continue;
+            }
+            EntryRecord record = keyLifecycle.entryRecord(handle);
+            if (record != null) {
+                keyLifecycle.removeIfExpired(handle, record, now);
             }
         }
         return next;

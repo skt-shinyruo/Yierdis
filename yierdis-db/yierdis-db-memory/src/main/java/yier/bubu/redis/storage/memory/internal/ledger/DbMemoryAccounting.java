@@ -9,7 +9,6 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmKeyspace;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
@@ -31,7 +30,7 @@ public final class DbMemoryAccounting {
             long reservedBytes,
             OffHeapAllocator offHeapAllocator,
             long directNativeBytes,
-            YierdisKeyspace<?> store,
+            int keyCount,
             YierdisExpireIndex expires,
             boolean keysStoredOffHeap,
             boolean includeOffHeapInMaxmemory
@@ -40,24 +39,12 @@ public final class DbMemoryAccounting {
         long directNativeUsedBytes = Math.max(0L, directNativeBytes);
         long offHeapUsedBytes = allocatorOffHeapUsedBytes + directNativeUsedBytes;
 
-        int keyCount = store == null ? 0 : store.size();
         int expireCount = expires == null ? 0 : expires.size();
 
         boolean keyspaceRehashing = false;
         int keyspaceCap0 = 0;
         int keyspaceCap1 = 0;
         long keyspaceOverhead = 0;
-        if (store instanceof ByteArrayKeyspace<?> ks) {
-            keyspaceRehashing = ks.isRehashing();
-            keyspaceCap0 = ks.table0Capacity();
-            keyspaceCap1 = ks.table1Capacity();
-            keyspaceOverhead = ks.estimatedTableOverheadBytes();
-        } else if (store instanceof YierdisFfmKeyspace<?> ks) {
-            keyspaceRehashing = ks.isRehashing();
-            keyspaceCap0 = ks.table0Capacity();
-            keyspaceCap1 = ks.table1Capacity();
-            keyspaceOverhead = ks.estimatedTableOverheadBytes();
-        }
 
         boolean expireRehashing = false;
         int expireCap0 = 0;
@@ -89,9 +76,6 @@ public final class DbMemoryAccounting {
         }
         long effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + Math.max(0L, reservedBytes);
         long totalEstimatedBytes = heapDataBytesEstimate + allocatorOffHeapUsedBytes + directNativeUsedBytes;
-        if (store instanceof ByteArrayKeyspace<?>) {
-            totalEstimatedBytes += keyspaceOverhead;
-        }
         if (expires instanceof YierdisHeapExpireIndex) {
             totalEstimatedBytes += expireOverhead + expireValueObjects;
         }

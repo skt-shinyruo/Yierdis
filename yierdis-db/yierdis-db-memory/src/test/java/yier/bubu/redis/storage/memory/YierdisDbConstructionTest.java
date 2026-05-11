@@ -80,7 +80,16 @@ public class YierdisDbConstructionTest {
         YierdisDbStorageComponents storage = YierdisDbStorageComponents.create(null, null, false, false);
         Assert.assertNotNull(storage.entries);
         Assert.assertNotNull(storage.keyDirectory);
-        storage.resources.releaseAll(storage.store, storage.expires, storage.entries, storage.keyDirectory);
+        storage.resources.releaseAll(
+                storage.expires,
+                storage.entries,
+                storage.keyDirectory,
+                storage.stringRoot,
+                storage.listRoot,
+                storage.hashRoot,
+                storage.setRoot,
+                storage.zsetRoot
+        );
     }
 
     @Test

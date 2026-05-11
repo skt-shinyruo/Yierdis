@@ -67,7 +67,6 @@ public final class YierdisDbComponentFactory {
                 config.evictionTimeLimitNanos
         );
         YierdisDbKeyLifecycle keyLifecycle = new YierdisDbKeyLifecycle(
-                storage.store,
                 storage.expires,
                 storage.offHeapAllocator,
                 storage.memoryRuntime,
@@ -78,7 +77,7 @@ public final class YierdisDbComponentFactory {
                 storage.hashRoot,
                 storage.setRoot,
                 storage.zsetRoot,
-                owner::touch,
+                owner::nextLruClock,
                 owner::adjustUsedBytes
         );
         YierdisDbInternals internals = new YierdisDbRuntimeInternals(
@@ -87,18 +86,17 @@ public final class YierdisDbComponentFactory {
                 keyLifecycle,
                 ledger
         );
-        YierdisStringOps stringOps = new YierdisStringOps(internals, memoryEstimator::estimateEntryBytes);
-        YierdisHashOps hashOps = new YierdisHashOps(internals, memoryEstimator::estimateEntryBytes);
-        YierdisListOps listOps = new YierdisListOps(internals, memoryEstimator::estimateEntryBytes);
-        YierdisSetOps setOps = new YierdisSetOps(internals, memoryEstimator::estimateEntryBytes);
-        YierdisZSetOps zsetOps = new YierdisZSetOps(internals, memoryEstimator::estimateEntryBytes);
-        YierdisHllOps hllOps = new YierdisHllOps(internals, memoryEstimator::estimateEntryBytes);
+        YierdisStringOps stringOps = new YierdisStringOps(internals);
+        YierdisHashOps hashOps = new YierdisHashOps(internals);
+        YierdisListOps listOps = new YierdisListOps(internals);
+        YierdisSetOps setOps = new YierdisSetOps(internals);
+        YierdisZSetOps zsetOps = new YierdisZSetOps(internals);
+        YierdisHllOps hllOps = new YierdisHllOps(internals);
         YierdisTtlOps ttlOps = new YierdisTtlOps(internals);
         YierdisKeyspaceOps keyspaceOps = new YierdisKeyspaceOps(internals);
         YierdisDbMemoryReporter memoryReporter = new YierdisDbMemoryReporter(
                 owner::checkThread,
                 keyLifecycle,
-                storage.store,
                 storage.expires,
                 config.maxmemoryBytes,
                 storage.keysStoredOffHeap,
@@ -150,7 +148,7 @@ public final class YierdisDbComponentFactory {
 
         MaxmemoryCoordinator maxmemoryCoordinator();
 
-        void touch(YierdisObject object);
+        long nextLruClock();
 
         void adjustUsedBytes(long deltaBytes);
     }
