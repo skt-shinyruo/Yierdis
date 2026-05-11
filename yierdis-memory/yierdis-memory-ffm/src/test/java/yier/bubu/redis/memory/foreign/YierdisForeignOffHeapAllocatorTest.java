@@ -2,6 +2,7 @@ package yier.bubu.redis.memory.foreign;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 
 public class YierdisForeignOffHeapAllocatorTest {
@@ -44,6 +45,42 @@ public class YierdisForeignOffHeapAllocatorTest {
             Assert.fail("legacy allocator discovery should be deleted");
         } catch (ClassNotFoundException expected) {
             Assert.assertTrue(true);
+        }
+    }
+
+    @Test
+    public void allocatorAccountingRecoversAfterLeakCloseAndLateBufferClose() {
+        YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("late-close");
+        YierdisForeignOffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(runtime, 0);
+        OffHeapBuf buf = allocator.allocate(16);
+        try {
+            try {
+                allocator.close();
+                Assert.fail("expected off-heap leak");
+            } catch (IllegalStateException expected) {
+                Assert.assertTrue(expected.getMessage().contains("off-heap leak"));
+            }
+
+            Assert.assertEquals(16L, allocator.usedBytes());
+
+            buf.close();
+            Assert.assertEquals(0L, allocator.usedBytes());
+
+            allocator.close();
+            Assert.assertEquals(0L, runtime.usedBytes());
+        } finally {
+            try {
+                buf.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                allocator.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                runtime.close();
+            } catch (Exception ignored) {
+            }
         }
     }
 }

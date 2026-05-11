@@ -91,9 +91,6 @@ public final class YierdisFfmSlabAllocator implements OffHeapAllocator {
     }
 
     void onFree(int capacity) {
-        if (closed) {
-            return;
-        }
         long next = usedBytes - capacity;
         if (next < 0) {
             throw new IllegalStateException("allocator accounting underflow");
