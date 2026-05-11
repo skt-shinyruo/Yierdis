@@ -1,5 +1,7 @@
 # Redis Protocol Compatibility Design
 
+> **Status:** Implemented and verified on 2026-05-11. See `docs/superpowers/plans/2026-05-10-redis-protocol-compatibility.md` for completion evidence and the remaining local `redis-cli` availability note.
+
 ## Goal
 
 Replace Yierdis Custom Protocol v1 with Redis wire protocol compatibility as the only public server protocol.
