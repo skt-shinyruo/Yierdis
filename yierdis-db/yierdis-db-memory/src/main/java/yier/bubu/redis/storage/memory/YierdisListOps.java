@@ -1,17 +1,6 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
-import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
-import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.ListReadOps;
 import yier.bubu.redis.storage.api.ListWriteOps;
 import yier.bubu.redis.storage.api.MutationOutcome;
@@ -20,12 +9,16 @@ import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.result.BulkStringSequence;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.IntSupplier;
-import java.util.function.ToLongBiFunction;
 
 public final class YierdisListOps implements ListReadOps, ListWriteOps {
     private static final long LIST_ELEMENT_OVERHEAD_BYTES_ESTIMATE = 32L;
@@ -33,13 +26,11 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final ListRoot listRoot;
-    private final ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator;
 
-    YierdisListOps(YierdisDbInternals internals, ToLongBiFunction<KeyHandle, YierdisObject> entryBytesEstimator) {
+    YierdisListOps(YierdisDbInternals internals) {
         this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = internals.keyLifecycle();
         this.listRoot = Objects.requireNonNull(keyLifecycle.listRoot(), "listRoot");
-        this.entryBytesEstimator = Objects.requireNonNull(entryBytesEstimator, "entryBytesEstimator");
     }
 
     @Override
@@ -68,18 +59,18 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
     @Override
     public WriteResult<List<byte[]>> lpop(byte[] keyBytes, int count) {
         internals.checkThread();
-        return popInternal(keyBytes, count, true, 0L);
+        return popInternal(keyBytes, count, true);
     }
 
     @Override
     public WriteResult<List<byte[]>> rpop(byte[] keyBytes, int count) {
         internals.checkThread();
-        return popInternal(keyBytes, count, false, 0L);
+        return popInternal(keyBytes, count, false);
     }
 
     private WriteResult<Long> pushInternal(byte[] keyBytes, List<byte[]> values, boolean left, long upperBound) {
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -89,70 +80,42 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 final int[] len = new int[]{0};
                 final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
-                    long oldEstimate = old == null ? 0 : old.estimatedBytes;
-                    if (old != null && keyLifecycle.isKeyExpired(k, now)) {
-                        old.releasePayloadIfAny();
+                keyLifecycle.computeWithHandle(keyBytes, (k, oldRecord) -> {
+                    EntryRecord current = oldRecord;
+                    long oldEstimate = estimateRecordBytes(k, current);
+                    if (current != null && keyLifecycle.isKeyExpired(k, now)) {
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
-                        old = null;
-                        oldEstimate = 0;
-                    }
-                    if (old == null) {
-                        YierdisObject next = YierdisObject.newList(listRoot);
-                        boolean ok = false;
-                        try {
-                            ValueHandle handle = next.valueHandle();
-                            if (left) {
-                                listRoot.lpush(handle, values);
-                            } else {
-                                listRoot.rpush(handle, values);
-                            }
-                            len[0] = listRoot.size(handle);
-                            next.useListHandle(listRoot, handle);
-                            keyLifecycle.touch(next);
-                            refreshEstimatedBytes(k, next);
-                            deltaBytes[0] += next.estimatedBytes;
-                            ok = true;
-                            return next;
-                        } finally {
-                            if (!ok) {
-                                next.releasePayloadIfAny();
-                            }
-                        }
+                        current = null;
+                        oldEstimate = 0L;
                     }
 
-                    if (old.type != ValueType.LIST) {
-                        throw new WrongTypeException();
+                    ValueHandle handle;
+                    if (current == null) {
+                        handle = listRoot.create();
+                    } else {
+                        requireList(current);
+                        handle = requireListHandle(current);
                     }
-                    ValueHandle handle = listHandle(old, k);
-                    if (handle == null && old.payload instanceof ListValue) {
-                        old.moveListToRoot(listRoot);
-                        handle = old.valueHandle();
-                    }
-                    if (handle != null) {
+
+                    boolean ok = false;
+                    try {
                         if (left) {
                             listRoot.lpush(handle, values);
                         } else {
                             listRoot.rpush(handle, values);
                         }
                         len[0] = listRoot.size(handle);
-                        old.useListHandle(listRoot, handle);
-                    } else {
-                        ListValue lv = (ListValue) old.payload;
-                        if (left) {
-                            lv.lpushAll(values);
-                        } else {
-                            lv.rpushAll(values);
+                        EntryRecord next = listRecord(k, handle, current == null ? -1L : current.expireAtMillis(), current);
+                        deltaBytes[0] -= oldEstimate;
+                        deltaBytes[0] += estimateRecordBytes(k, next);
+                        ok = true;
+                        return next;
+                    } finally {
+                        if (!ok && current == null) {
+                            listRoot.release(handle);
                         }
-                        len[0] = lv.size();
-                        old.refreshCompositeEncodingFromPayload();
                     }
-                    keyLifecycle.touch(old);
-                    deltaBytes[0] -= oldEstimate;
-                    refreshEstimatedBytes(k, old);
-                    deltaBytes[0] += old.estimatedBytes;
-                    return old;
                 });
                 return YierdisDbMutationExecutor.MutationResult.of(
                         WriteResult.of((long) len[0], MutationOutcome.VALUE_CHANGED),
@@ -163,39 +126,22 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
     }
 
     private int lrangeCount(byte[] keyBytes, int start, int stop) {
-        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-        if (object == null) {
+        EntryRecord record = liveListRecord(keyBytes);
+        if (record == null) {
             return 0;
         }
-        if (object.type != ValueType.LIST) {
-            throw new WrongTypeException();
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-        ValueHandle handle = readableListHandle(object, record);
-        if (handle != null) {
-            return listRoot.rangeCount(handle, start, stop);
-        }
-        return ((ListValue) object.payload).rangeCount(start, stop);
+        return listRoot.rangeCount(requireListHandle(record), start, stop);
     }
 
     private void lrangeWriteTo(byte[] keyBytes, int start, int stop, BulkStringSink out) {
-        YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
-        if (object == null) {
+        EntryRecord record = liveListRecord(keyBytes);
+        if (record == null) {
             return;
         }
-        if (object.type != ValueType.LIST) {
-            throw new WrongTypeException();
-        }
-        EntryRecord record = keyLifecycle.entryRecord(keyBytes);
-        ValueHandle handle = readableListHandle(object, record);
-        if (handle != null) {
-            listRoot.rangeInto(handle, start, stop, out);
-            return;
-        }
-        ((ListValue) object.payload).rangeInto(start, stop, out);
+        listRoot.rangeInto(requireListHandle(record), start, stop, out);
     }
 
-    private WriteResult<List<byte[]>> popInternal(byte[] keyBytes, int count, boolean left, long upperBound) {
+    private WriteResult<List<byte[]>> popInternal(byte[] keyBytes, int count, boolean left) {
         if (count == 0) {
             return WriteResult.unchanged(Collections.emptyList());
         }
@@ -203,54 +149,36 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             throw new IllegalArgumentException("count must be >= 0");
         }
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<List<byte[]>>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
-                return upperBound;
+                return 0;
             }
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<List<byte[]>>> apply() {
                 final List<byte[]>[] popped = new List[]{null};
                 final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeObjectIfPresentWithHandle(keyBytes, (k, old) -> {
-                    long oldEstimate = old.estimatedBytes;
+                keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, oldRecord) -> {
+                    EntryRecord current = oldRecord;
+                    long oldEstimate = estimateRecordBytes(k, current);
                     if (keyLifecycle.isKeyExpired(k, now)) {
-                        old.releasePayloadIfAny();
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
-                    if (old.type != ValueType.LIST) {
-                        throw new WrongTypeException();
-                    }
-                    ValueHandle handle = listHandle(old, k);
-                    if (handle == null && old.payload instanceof ListValue) {
-                        old.moveListToRoot(listRoot);
-                        handle = old.valueHandle();
-                    }
-                    if (handle != null) {
-                        popped[0] = left ? listRoot.lpop(handle, count) : listRoot.rpop(handle, count);
-                    } else {
-                        ListValue lv = (ListValue) old.payload;
-                        popped[0] = left ? lv.lpop(count) : lv.rpop(count);
-                    }
-                    int size = handle != null ? listRoot.size(handle) : ((ListValue) old.payload).size();
-                    if (size == 0) {
-                        old.releasePayloadIfAny();
+                    requireList(current);
+                    ValueHandle handle = requireListHandle(current);
+                    popped[0] = left ? listRoot.lpop(handle, count) : listRoot.rpop(handle, count);
+                    if (listRoot.size(handle) == 0) {
                         keyLifecycle.removeExpire(k);
                         deltaBytes[0] -= oldEstimate;
                         return null;
                     }
-                    if (handle != null) {
-                        old.useListHandle(listRoot, handle);
-                    } else {
-                        old.refreshCompositeEncodingFromPayload();
-                    }
-                    keyLifecycle.touch(old);
-                    refreshEstimatedBytes(k, old);
-                    deltaBytes[0] += old.estimatedBytes - oldEstimate;
-                    return old;
+                    EntryRecord next = listRecord(k, handle, current.expireAtMillis(), current);
+                    deltaBytes[0] -= oldEstimate;
+                    deltaBytes[0] += estimateRecordBytes(k, next);
+                    return next;
                 });
                 WriteResult<List<byte[]>> result = popped[0] != null && !popped[0].isEmpty()
                         ? WriteResult.of(popped[0], MutationOutcome.VALUE_CHANGED)
@@ -261,46 +189,54 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
     }
 
     private long estimateListWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> values) {
-        YierdisObject existing = keyLifecycle.getLiveObject(keyBytes);
+        EntryRecord existing = keyLifecycle.liveEntryRecord(keyBytes);
         if (existing == null) {
             return estimateListWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, values);
         }
-        if (existing.type != ValueType.LIST) {
+        if (existing.type() != ValueType.LIST) {
             return 0L;
         }
         return YierdisDbMemoryEstimator.sumByteLengths(values);
     }
 
-    private void refreshEstimatedBytes(KeyHandle keyHandle, YierdisObject object) {
-        if (object == null) {
-            return;
+    private EntryRecord liveListRecord(byte[] keyBytes) {
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
+        if (record == null) {
+            return null;
         }
-        object.estimatedBytes = entryBytesEstimator.applyAsLong(keyHandle, object);
+        requireList(record);
+        return keyLifecycle.touchRecord(keyHandle, record);
     }
 
-    private ValueHandle listHandle(YierdisObject object, KeyHandle keyHandle) {
-        EntryRecord record = keyLifecycle.entryRecord(keyHandle);
-        return readableListHandle(object, record);
+    private EntryRecord listRecord(KeyHandle keyHandle, ValueHandle handle, long expireAtMillis, EntryRecord previous) {
+        return keyLifecycle.newRecord(
+                keyHandle,
+                handle,
+                ValueType.LIST,
+                listRoot.encoding(handle),
+                expireAtMillis,
+                DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE,
+                previous
+        );
     }
 
-    private ValueHandle readableListHandle(YierdisObject object, EntryRecord record) {
-        if (canReadFromRoot(object, record)) {
-            return record.valueHandle();
+    private ValueHandle requireListHandle(EntryRecord record) {
+        ValueHandle handle = record.valueHandle();
+        if (!listRoot.contains(handle)) {
+            throw new IllegalStateException("native list value handle is not available: " + (handle == null ? "null" : handle.raw()));
         }
-        if (object != null && object.hasListRoot()) {
-            return object.valueHandle();
-        }
-        return null;
+        return handle;
     }
 
-    private boolean canReadFromRoot(YierdisObject object, EntryRecord record) {
-        return object != null
-                && object.hasListRoot()
-                && record != null
-                && record.type() == ValueType.LIST
-                && record.valueHandle() != null
-                && object.valueHandle() != null
-                && record.valueHandle().raw() == object.valueHandle().raw();
+    private static void requireList(EntryRecord record) {
+        if (record.type() != ValueType.LIST) {
+            throw new WrongTypeException();
+        }
+    }
+
+    private long estimateRecordBytes(KeyHandle keyHandle, EntryRecord record) {
+        return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
     private static long estimateListWriteUpperBound(int keyLength, List<byte[]> values) {

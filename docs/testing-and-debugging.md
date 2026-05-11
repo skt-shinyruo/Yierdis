@@ -358,7 +358,8 @@ REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 先看：
 
 - `YierdisDbIntrospection`
-- `YierdisObject`
+- `EntryRecord`
+- `StringRoot` / `HashRoot` / `ListRoot` / `SetRoot` / `ZSetRoot`
 - `HashValue` / `ListValue` / `SetValue` / `ZSetValue`
 - `MemoryStatsCommandTest`
 - 对应值类测试

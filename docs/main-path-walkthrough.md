@@ -48,7 +48,7 @@ YierdisServer
   -> YierdisStringOps / YierdisKeyspaceOps / ...
   -> YierdisDbMutationExecutor
   -> YierdisDbKeyLifecycle
-  -> YierdisObject
+  -> EntryRecord / ValueHandle / TypeRoot
   -> ReplyWriter
   -> RespReplyWriter
 ```
@@ -571,31 +571,33 @@ server 额外命令则通过 `extraModules` 注入，例如：
 
 在 `SET` 路径里，它会负责：
 
-- 在 keyspace 上 `computeWithHandle(...)`
+- 在 `NativeKeyDirectory` / `EntryTable` 上 `computeWithHandle(...)`
 - 判断旧 key 是否已经过期
 - 删除旧 TTL
 - 设置新 TTL
 - 释放旧 payload
 - 调整 used bytes
-- touch 对象做 LRU/last-access 更新
+- touch entry metadata 做 LRU/last-access 更新
 
 可以把它理解成：
 
 - “所有和 key 生命周期有关的事情，都尽量在这里集中”
 
-### 第 6 层：`YierdisObject`
+### 第 6 层：`EntryRecord` / `TypeRoot`
 
 文件：
 
-- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`](../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java)
+- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java`](../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java)
+- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/TypeRoot.java`](../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/TypeRoot.java)
 
-最终字符串并不是简单的 `byte[]`，而是一个：
+最终字符串并不是简单的 `byte[]`，而是由两部分组成：
 
 - 有逻辑类型
 - 有内部编码
 - 有 payload 生命周期
 
-的对象。
+`EntryRecord` 保存 type、encoding、TTL、估算字节数和当前 `ValueHandle`。
+对应的 `TypeRoot` 再通过这个 handle 访问真实 payload。
 
 对字符串来说，常见编码有：
 
@@ -603,7 +605,7 @@ server 额外命令则通过 `extraModules` 注入，例如：
 - `STRING_EMBSTR`
 - `STRING_RAW`
 
-如果启用了 off-heap allocator，payload 还可能被存进 `OffHeapBuf`。
+字符串 payload 由 `StringRoot` 存进 `OffHeapBuf`。
 
 ### 为什么这条路径值得初学者反复看
 

@@ -193,7 +193,7 @@ server-local 命令也一样使用 typed spec；普通 server handler、executor
 3. `YierdisStringOps.set(...)` 估算写入上界并构造 mutation。
 4. `YierdisDbMutationExecutor.execute(...)` 先 reserve memory，再执行 mutation，最后 commit 或 rollback。
 5. `YierdisDbKeyLifecycle.computeWithHandle(...)` 处理 keyspace、旧值释放、TTL、LRU touch 和内存记账。
-6. `YierdisObject` 根据内容选择内部编码，必要时使用 off-heap payload。
+6. `YierdisStringOps` 写入 `StringRoot`，再用 `EntryRecord` 记录 encoding、`ValueHandle`、TTL 和估算字节数。
 
 命令层只看到 `DbReads/DbWrites` 能力接口，不直接改 `YierdisDb` 内部结构。
 

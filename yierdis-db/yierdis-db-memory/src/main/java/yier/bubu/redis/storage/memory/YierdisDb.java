@@ -42,7 +42,6 @@ import java.util.Collections;
 public final class YierdisDb implements RuntimeDbEngine {
     private static final long TTL_ENTRY_BYTES_ESTIMATE = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
 
-    private final YierdisKeyspace<YierdisObject> store;
     private final YierdisExpireIndex expires;
     private final EntryTable entries;
     private final NativeKeyDirectory keyDirectory;
@@ -254,8 +253,8 @@ public final class YierdisDb implements RuntimeDbEngine {
                     }
 
                     @Override
-                    public void touch(YierdisObject object) {
-                        YierdisDb.this.touch(object);
+                    public long nextLruClock() {
+                        return YierdisDb.this.nextLruClock();
                     }
 
                     @Override
@@ -277,7 +276,6 @@ public final class YierdisDb implements RuntimeDbEngine {
         this.memoryRuntime = components.storage.memoryRuntime;
         this.offHeapAllocator = components.storage.offHeapAllocator;
         this.resources = components.storage.resources;
-        this.store = components.storage.store;
         this.expires = components.storage.expires;
         this.entries = components.storage.entries;
         this.keyDirectory = components.storage.keyDirectory;
@@ -412,10 +410,6 @@ public final class YierdisDb implements RuntimeDbEngine {
         return out;
     }
 
-    YierdisObject getObjectIfNotExpired(BytesView keyView) {
-        return keyLifecycle.getLiveObject(keyView);
-    }
-
     @Override
     public long usedBytesForMaxmemory() {
         return memoryReporter.usedBytesForMaxmemory();
@@ -450,16 +444,15 @@ public final class YierdisDb implements RuntimeDbEngine {
         return maxmemorySupport.evict(candidate, nowMillis);
     }
 
-    void touch(YierdisObject e) {
-        if (!lruEnabled || e == null) {
-            return;
+    long nextLruClock() {
+        if (!lruEnabled) {
+            return 0L;
         }
         MaxmemoryCoordinator coordinator = maxmemoryCoordinator;
         if (coordinator != null) {
-            e.lruClock = coordinator.nextLruClock();
-            return;
+            return coordinator.nextLruClock();
         }
-        e.lruClock = ++lruClock;
+        return ++lruClock;
     }
 
     public void bindToCurrentThread() {
@@ -480,14 +473,14 @@ public final class YierdisDb implements RuntimeDbEngine {
             return;
         }
         ledger.resetUsage();
-        resources.releaseAll(store, expires, entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
+        resources.releaseAll(expires, entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
     }
 
     public yier.bubu.redis.storage.api.MutationOutcome flushDb() {
         checkThread();
         boolean hadKeys = keyLifecycle.keyCount() != 0;
         boolean hadTtl = expires.size() != 0;
-        resources.clearData(store, expires, entries, keyDirectory);
+        resources.clearData(expires, entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
         ledger.resetUsage();
         return yier.bubu.redis.storage.api.MutationOutcome.of(hadKeys, hadTtl);
     }
@@ -508,22 +501,6 @@ public final class YierdisDb implements RuntimeDbEngine {
     public void cleanupExpired() {
         checkThread();
         expirationSupport.cleanupExpired();
-    }
-
-    YierdisObject getObjectIfNotExpired(byte[] keyBytes) {
-        return keyLifecycle.getLiveObject(keyBytes);
-    }
-
-    boolean removeIfExpired(byte[] keyBytes, YierdisObject e, long nowMillis) {
-        return keyLifecycle.removeIfExpired(keyBytes, e, nowMillis);
-    }
-
-    YierdisObject getObjectIfNotExpired(KeyHandle keyHandle) {
-        return keyLifecycle.getLiveObject(keyHandle);
-    }
-
-    boolean removeIfExpired(KeyHandle keyHandle, YierdisObject e, long nowMillis) {
-        return keyLifecycle.removeIfExpired(keyHandle, e, nowMillis);
     }
 
     boolean isKeyExpired(byte[] keyBytes, long nowMillis) {

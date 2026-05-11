@@ -63,7 +63,6 @@ YierdisInstance
 - `EntryTable`
 - `NativeKeyDirectory`
 - `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot`
-- `store`
 - `expires`
 
 默认实现分别是：
@@ -71,7 +70,6 @@ YierdisInstance
 - `EntryTable` 使用 slab allocator 保存 entry 元数据
 - `NativeKeyDirectory` 保存 key bytes 并映射到 `EntryHandle`
 - 各 `TypeRoot` 用 `ValueHandle` 管理具体 payload
-- `YierdisFfmKeyspace<YierdisObject>` 保留为迁移期兼容索引
 - `YierdisFfmExpireIndex`
 
 这说明：
@@ -79,7 +77,6 @@ YierdisInstance
 - `NativeKeyDirectory` 负责 key -> entry handle
 - `EntryRecord` 负责 type、encoding、value handle、expire、estimate 和 LRU 元数据
 - `TypeRoot` 负责 value handle -> payload
-- `store` 里的 `YierdisObject` 现在是兼容视图，不是新的 canonical payload 宿主
 - `expires` 负责 key -> expireAt，并同步回 entry 元数据
 
 ### 2. 线程与资源底座
@@ -179,7 +176,6 @@ YierdisDb
   -> EntryTable(entry handle -> EntryRecord)
   -> NativeKeyDirectory(key -> entry handle)
   -> TypeRoot(value handle -> payload)
-  -> compatibility store(key -> YierdisObject adapter)
   -> expires(key -> expireAt)
   -> threadGuard
   -> memoryRuntime / offHeapAllocator
@@ -210,22 +206,18 @@ YierdisDb
 - `keyHandle(...)`
 - `entryRecord(...)`
 - `liveEntryRecord(...)`
-- `getStoredObject(...)`
-- `getLiveObject(...)`
 - `removeIfExpired(...)`
 - `expireAtMillis(...)`
 
-`getLiveObject(...)` 的语义很重要：
+`liveEntryRecord(...)` 的语义很重要：
 
-- 不是简单返回 object adapter
+- 不是简单返回 entry metadata
 - 它会先做惰性过期删除
-- 然后 touch 兼容对象
-- 最后才返回仍然有效的兼容视图
+- 然后由调用方通过 `touchRecord(...)` 更新 LRU/last-access
+- 最后才返回仍然有效的 `EntryRecord`
 
-新路径需要 entry 元数据时会先走 `liveEntryRecord(...)` 或
-`entryRecord(...)`，再用 `EntryRecord.valueHandle()` 交给对应
-`TypeRoot`。`YierdisObject` 只负责把还没迁完的 helper 代码桥接到这些
-root handle。
+读写路径需要 entry 元数据时会先走 `liveEntryRecord(...)` 或
+`entryRecord(...)`，再用 `EntryRecord.valueHandle()` 交给对应 `TypeRoot`。
 
 这意味着很多读路径天然就带有：
 
@@ -242,14 +234,13 @@ root handle。
 command
   -> DbReads.strings()
   -> YierdisStringOps.getStringValue(...)
-  -> keyLifecycle.liveEntryRecord(...) / getLiveObject(...)
+  -> keyLifecycle.liveEntryRecord(...)
   -> EntryRecord.valueHandle()
   -> StringRoot
 ```
 
 如果你在追 `TTL`、`TYPE`、`MEMORY USAGE`，最终也会走到类似的
-`BytesView -> keyHandle -> EntryRecord -> TypeRoot` 路径；只有旧 helper
-还需要 `YierdisObject` adapter。
+`BytesView -> keyHandle -> EntryRecord -> TypeRoot` 路径。
 
 ## 写路径是怎么走的
 
@@ -419,7 +410,6 @@ TTL 不是存在对象里的一个裸字段，而是被拆成：
 - `HashRoot`
 - `SetRoot`
 - `ZSetRoot`
-- 兼容用的 `YierdisObject`
 
 ### `EntryRecord`
 
@@ -434,7 +424,7 @@ TTL 不是存在对象里的一个裸字段，而是被拆成：
 - LRU 相关字段
 
 删除、过期清理、maxmemory 淘汰和 memory reporter 都优先从 entry
-元数据计算，不再假设 `YierdisObject.estimatedBytes` 是权威来源。
+元数据计算。
 
 ### `TypeRoot`
 
@@ -447,19 +437,8 @@ TTL 不是存在对象里的一个裸字段，而是被拆成：
 - `ZSetRoot`
 
 root 负责 `ValueHandle` 的创建、读取、变更、估算和释放。集合类型原来的
-`HashValue`、`ListValue`、`SetValue`、`ZSetValue` 仍可作为兼容 adapter
-出现，但 hot path 会优先通过 root 访问 native-backed payload。
-
-### `YierdisObject`
-
-`YierdisObject` 仍然存在，但角色已经降级为兼容层：
-
-- 桥接旧 helper 到 `EntryRecord` 和 `TypeRoot`
-- 保存命令路径还需要的类型、encoding 和 LRU 视图
-- 持有当前 `ValueHandle`，用于把旧 value API 转发到 root
-
-它不应该再被当成 canonical storage state。新代码如果需要真实类型、
-encoding、estimate 或释放信息，应优先读 entry metadata 和 root state。
+`HashValue`、`ListValue`、`SetValue`、`ZSetValue` 是 root 内部的 payload
+结构；DB hot path 不再通过单独的兼容 value object 访问 key state。
 
 更细的编码说明请配合：
 

@@ -12,6 +12,9 @@ public interface TypeRoot extends AutoCloseable {
 
     void release(ValueHandle handle);
 
+    default void clear() {
+    }
+
     @Override
     default void close() {
     }

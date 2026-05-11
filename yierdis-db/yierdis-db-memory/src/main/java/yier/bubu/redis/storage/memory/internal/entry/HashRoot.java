@@ -35,6 +35,11 @@ public final class HashRoot implements TypeRoot {
         return requireHash(handle).encoding();
     }
 
+    public synchronized boolean contains(ValueHandle handle) {
+        ensureOpen();
+        return handle != null && hashes.containsKey(handle.raw());
+    }
+
     public synchronized ValueHandle create() {
         ensureOpen();
         ValueHandle handle = new ValueHandle(nextHandle++);
@@ -119,10 +124,8 @@ public final class HashRoot implements TypeRoot {
     }
 
     @Override
-    public synchronized void close() {
-        if (closed) {
-            return;
-        }
+    public synchronized void clear() {
+        ensureOpen();
         RuntimeException failure = null;
         for (HashValue hash : hashes.values()) {
             try {
@@ -136,10 +139,18 @@ public final class HashRoot implements TypeRoot {
             }
         }
         hashes.clear();
-        closed = true;
         if (failure != null) {
             throw failure;
         }
+    }
+
+    @Override
+    public synchronized void close() {
+        if (closed) {
+            return;
+        }
+        clear();
+        closed = true;
     }
 
     private HashValue requireHash(ValueHandle handle) {

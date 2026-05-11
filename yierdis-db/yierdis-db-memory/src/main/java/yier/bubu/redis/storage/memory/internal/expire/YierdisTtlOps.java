@@ -9,6 +9,7 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.TtlReadOps;
@@ -33,19 +34,15 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
-        YierdisObject e = keyLifecycle.getStoredObject(handle);
-        if (e == null) {
-            return WriteResult.unchanged(Boolean.FALSE);
-        }
-        long nowMillis = System.currentTimeMillis();
-        if (keyLifecycle.removeIfExpired(handle, e, nowMillis)) {
+        EntryRecord record = liveRecord(handle);
+        if (record == null) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
         if (seconds <= 0) {
-            return deleteImmediately(handle, e);
+            return deleteImmediately(handle, record);
         }
 
-        long expireAtMillis = safeExpireAtMillis(nowMillis, seconds);
+        long expireAtMillis = safeExpireAtMillis(System.currentTimeMillis(), seconds);
         long upperBound = keyLifecycle.expireAtMillis(handle) == null ? ttlEntryBytesEstimate() : 0;
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
             @Override
@@ -56,7 +53,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
                 keyLifecycle.setExpireAtMillis(handle, expireAtMillis);
-                keyLifecycle.touch(e);
+                keyLifecycle.touchRecord(handle, record);
                 return YierdisDbMutationExecutor.MutationResult.of(
                         WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED),
                         0
@@ -72,21 +69,16 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
-        YierdisObject e = keyLifecycle.getStoredObject(handle);
-        if (e == null) {
+        EntryRecord record = liveRecord(handle);
+        if (record == null) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
-        long nowMillis = System.currentTimeMillis();
-        if (keyLifecycle.removeIfExpired(handle, e, nowMillis)) {
-            return WriteResult.unchanged(Boolean.FALSE);
-        }
-        keyLifecycle.touch(e);
 
         if (milliseconds <= 0) {
-            return deleteImmediately(handle, e);
+            return deleteImmediately(handle, record);
         }
 
-        long expireAtMillis = safeAddMillis(nowMillis, milliseconds);
+        long expireAtMillis = safeAddMillis(System.currentTimeMillis(), milliseconds);
         long upperBound = keyLifecycle.expireAtMillis(handle) == null ? ttlEntryBytesEstimate() : 0;
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
             @Override
@@ -97,6 +89,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
                 keyLifecycle.setExpireAtMillis(handle, expireAtMillis);
+                keyLifecycle.touchRecord(handle, record);
                 return YierdisDbMutationExecutor.MutationResult.of(
                         WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED),
                         0
@@ -123,18 +116,14 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
-        YierdisObject e = keyLifecycle.getStoredObject(handle);
-        if (e == null) {
-            return WriteResult.unchanged(Boolean.FALSE);
-        }
+        EntryRecord record = liveRecord(handle);
         long now = System.currentTimeMillis();
-        if (keyLifecycle.removeIfExpired(handle, e, now)) {
+        if (record == null) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
-        keyLifecycle.touch(e);
 
         if (unixMillis <= now) {
-            return deleteImmediately(handle, e);
+            return deleteImmediately(handle, record);
         }
 
         long upperBound = keyLifecycle.expireAtMillis(handle) == null ? ttlEntryBytesEstimate() : 0;
@@ -147,6 +136,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
                 keyLifecycle.setExpireAtMillis(handle, unixMillis);
+                keyLifecycle.touchRecord(handle, record);
                 return YierdisDbMutationExecutor.MutationResult.of(
                         WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED),
                         0
@@ -162,16 +152,11 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         if (handle == null) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
-        YierdisObject e = keyLifecycle.getStoredObject(handle);
-        if (e == null) {
-            return WriteResult.unchanged(Boolean.FALSE);
-        }
-        long nowMillis = System.currentTimeMillis();
-        if (keyLifecycle.removeIfExpired(handle, e, nowMillis)) {
+        EntryRecord record = liveRecord(handle);
+        if (record == null) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
 
-        keyLifecycle.touch(e);
         Long expireAtMillis = keyLifecycle.expireAtMillis(handle);
         if (expireAtMillis == null) {
             return WriteResult.unchanged(Boolean.FALSE);
@@ -185,6 +170,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
                 keyLifecycle.removeExpire(handle);
+                keyLifecycle.touchRecord(handle, record);
                 return YierdisDbMutationExecutor.MutationResult.of(
                         WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED),
                         0
@@ -200,17 +186,13 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         if (handle == null) {
             return -2;
         }
-        YierdisObject e = keyLifecycle.getStoredObject(handle);
-        if (e == null) {
+        EntryRecord record = liveRecord(handle);
+        if (record == null) {
             return -2;
         }
+        keyLifecycle.touchRecord(handle, record);
 
         long now = System.currentTimeMillis();
-        if (keyLifecycle.removeIfExpired(handle, e, now)) {
-            return -2;
-        }
-        keyLifecycle.touch(e);
-
         Long expireAtMillis = keyLifecycle.expireAtMillis(handle);
         if (expireAtMillis == null) {
             return -1;
@@ -226,17 +208,13 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         if (handle == null) {
             return -2;
         }
-        YierdisObject e = keyLifecycle.getStoredObject(handle);
-        if (e == null) {
+        EntryRecord record = liveRecord(handle);
+        if (record == null) {
             return -2;
         }
+        keyLifecycle.touchRecord(handle, record);
 
         long now = System.currentTimeMillis();
-        if (keyLifecycle.removeIfExpired(handle, e, now)) {
-            return -2;
-        }
-        keyLifecycle.touch(e);
-
         Long expireAtMillis = keyLifecycle.expireAtMillis(handle);
         if (expireAtMillis == null) {
             return -1;
@@ -245,7 +223,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         return remainingMillis <= 0 ? -2 : remainingMillis;
     }
 
-    private WriteResult<Boolean> deleteImmediately(KeyHandle handle, YierdisObject e) {
+    private WriteResult<Boolean> deleteImmediately(KeyHandle handle, EntryRecord record) {
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
             @Override
             public long upperBoundBytes() {
@@ -255,10 +233,10 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
                 long deltaBytes = 0;
-                long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, e);
-                keyLifecycle.removeExpire(handle);
-                if (keyLifecycle.remove(handle, e)) {
-                    e.releasePayloadIfAny();
+                long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, record);
+                byte[] keyBytes = copyKeyBytes(handle);
+                if (keyLifecycle.removeEntry(handle, record)) {
+                    keyLifecycle.removeExpireByKeyBytes(keyBytes);
                     deltaBytes -= removalBytes;
                 }
                 return YierdisDbMutationExecutor.MutationResult.of(
@@ -267,6 +245,15 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
                 );
             }
         });
+    }
+
+    private EntryRecord liveRecord(KeyHandle handle) {
+        EntryRecord record = keyLifecycle.entryRecord(handle);
+        if (record == null) {
+            return null;
+        }
+        long nowMillis = System.currentTimeMillis();
+        return keyLifecycle.removeIfExpired(handle, record, nowMillis) ? null : record;
     }
 
     private static long safeExpireAtMillis(long nowMillis, long seconds) {
@@ -294,4 +281,13 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
     private static long ttlEntryBytesEstimate() {
         return yier.bubu.redis.storage.api.DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
     }
+
+    private static byte[] copyKeyBytes(KeyHandle keyHandle) {
+        byte[] out = new byte[keyHandle.len()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = keyHandle.byteAt(i);
+        }
+        return out;
+    }
+
 }

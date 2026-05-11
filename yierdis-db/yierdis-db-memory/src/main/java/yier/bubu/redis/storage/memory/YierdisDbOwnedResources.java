@@ -30,37 +30,17 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
         this.ownsOffHeapAllocator = ownsOffHeapAllocator;
     }
 
-    void clearData(YierdisKeyspace<YierdisObject> store, YierdisExpireIndex expires) {
-        clearData(store, expires, null, null);
-    }
-
     void clearData(
-            YierdisKeyspace<YierdisObject> store,
             YierdisExpireIndex expires,
             EntryTable entries,
-            NativeKeyDirectory keyDirectory
+            NativeKeyDirectory keyDirectory,
+            StringRoot stringRoot,
+            ListRoot listRoot,
+            HashRoot hashRoot,
+            SetRoot setRoot,
+            ZSetRoot zsetRoot
     ) {
         Throwable failure = null;
-        if (store != null) {
-            final Throwable[] releaseFailure = new Throwable[1];
-            try {
-                store.forEach((k, e) -> {
-                    try {
-                        e.releasePayloadIfAny();
-                    } catch (Throwable t) {
-                        releaseFailure[0] = recordFailure(releaseFailure[0], t);
-                    }
-                });
-            } catch (Throwable t) {
-                failure = recordFailure(failure, t);
-            }
-            failure = recordFailure(failure, releaseFailure[0]);
-            try {
-                store.clear();
-            } catch (Throwable t) {
-                failure = recordFailure(failure, t);
-            }
-        }
         if (expires != null) {
             try {
                 expires.clear();
@@ -82,6 +62,11 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
                 failure = recordFailure(failure, t);
             }
         }
+        failure = clearRoot(failure, stringRoot);
+        failure = clearRoot(failure, listRoot);
+        failure = clearRoot(failure, hashRoot);
+        failure = clearRoot(failure, setRoot);
+        failure = clearRoot(failure, zsetRoot);
         throwIfFailure(failure);
     }
 
@@ -98,42 +83,7 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
         throw new IllegalStateException("db resource cleanup failed", failure);
     }
 
-    void releaseAll(YierdisKeyspace<YierdisObject> store, YierdisExpireIndex expires) {
-        releaseAll(store, expires, null, null);
-    }
-
     void releaseAll(
-            YierdisKeyspace<YierdisObject> store,
-            YierdisExpireIndex expires,
-            EntryTable entries,
-            NativeKeyDirectory keyDirectory
-    ) {
-        releaseAll(store, expires, entries, keyDirectory, null);
-    }
-
-    void releaseAll(
-            YierdisKeyspace<YierdisObject> store,
-            YierdisExpireIndex expires,
-            EntryTable entries,
-            NativeKeyDirectory keyDirectory,
-            StringRoot stringRoot
-    ) {
-        releaseAll(store, expires, entries, keyDirectory, stringRoot, null, null, null, null);
-    }
-
-    void releaseAll(
-            YierdisKeyspace<YierdisObject> store,
-            YierdisExpireIndex expires,
-            EntryTable entries,
-            NativeKeyDirectory keyDirectory,
-            StringRoot stringRoot,
-            ListRoot listRoot
-    ) {
-        releaseAll(store, expires, entries, keyDirectory, stringRoot, listRoot, null, null, null);
-    }
-
-    void releaseAll(
-            YierdisKeyspace<YierdisObject> store,
             YierdisExpireIndex expires,
             EntryTable entries,
             NativeKeyDirectory keyDirectory,
@@ -145,7 +95,7 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
     ) {
         Throwable failure = null;
         try {
-            clearData(store, expires, entries, keyDirectory);
+            clearData(expires, entries, keyDirectory, null, null, null, null, null);
         } catch (Throwable t) {
             failure = recordFailure(failure, t);
         }
@@ -204,6 +154,18 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
             failure = recordFailure(failure, t);
         }
         throwIfFailure(failure);
+    }
+
+    private static Throwable clearRoot(Throwable failure, TypeRoot root) {
+        if (root == null) {
+            return failure;
+        }
+        try {
+            root.clear();
+        } catch (Throwable t) {
+            return recordFailure(failure, t);
+        }
+        return failure;
     }
 
     @Override

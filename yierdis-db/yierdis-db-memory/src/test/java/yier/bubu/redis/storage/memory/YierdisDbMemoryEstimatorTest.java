@@ -10,9 +10,12 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.memory.api.OffHeapAllocator;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
+import yier.bubu.redis.storage.api.ValueType;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -22,33 +25,33 @@ public class YierdisDbMemoryEstimatorTest {
     public void estimatesHeapStringEntryBytesIncludingHeapKey() {
         YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator(false, null);
         KeyHandle key = KeyHandle.forHeap(b("abc"), 1);
-        YierdisObject object = YierdisObject.newString((OffHeapAllocator) null, b("hello"));
+        EntryRecord record = record(ValueEncoding.STRING_RAW, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
 
-        long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 3L + 5L;
+        long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
 
-        Assert.assertEquals(expected, estimator.estimateEntryBytes(key, object));
+        Assert.assertEquals(expected, estimator.estimateEntryBytes(key, record));
     }
 
     @Test
     public void estimatesHeapStringEntryBytesExcludingOffHeapKey() {
         YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator(true, null);
         KeyHandle key = KeyHandle.forHeap(b("abc"), 1);
-        YierdisObject object = YierdisObject.newString((OffHeapAllocator) null, b("hello"));
+        EntryRecord record = record(ValueEncoding.STRING_RAW, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
 
-        long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 5L;
+        long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
 
-        Assert.assertEquals(expected, estimator.estimateEntryBytes(key, object));
+        Assert.assertEquals(expected, estimator.estimateEntryBytes(key, record));
     }
 
     @Test
     public void estimatesIntegerEncodedStringPayloadAsLongBytes() {
         YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator(false, null);
         KeyHandle key = KeyHandle.forHeap(b("n"), 1);
-        YierdisObject object = YierdisObject.newStringInt(42L);
+        EntryRecord record = record(ValueEncoding.STRING_INT, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + Long.BYTES);
 
-        long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 1L + Long.BYTES;
+        long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + Long.BYTES;
 
-        Assert.assertEquals(expected, estimator.estimateEntryBytes(key, object));
+        Assert.assertEquals(expected, estimator.estimateEntryBytes(key, record));
     }
 
     @Test
@@ -72,5 +75,19 @@ public class YierdisDbMemoryEstimatorTest {
 
     private static byte[] b(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static EntryRecord record(ValueEncoding encoding, long estimatedBytes) {
+        return new EntryRecord(
+                1L,
+                new ValueHandle(1L),
+                1,
+                ValueType.STRING,
+                encoding,
+                0,
+                -1L,
+                estimatedBytes,
+                0L
+        );
     }
 }

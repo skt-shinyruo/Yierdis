@@ -11,7 +11,6 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBlobStore;
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmKeyspace;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisFfmSlabAllocator;
 import yier.bubu.redis.memory.foreign.YierdisForeignOffHeapAllocator;
@@ -21,7 +20,6 @@ public final class YierdisDbStorageComponents {
     final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
     final YierdisDbOwnedResources resources;
-    final YierdisKeyspace<YierdisObject> store;
     final YierdisExpireIndex expires;
     final EntryTable entries;
     final NativeKeyDirectory keyDirectory;
@@ -36,7 +34,6 @@ public final class YierdisDbStorageComponents {
             YierdisFfmMemoryRuntime memoryRuntime,
             OffHeapAllocator offHeapAllocator,
             YierdisDbOwnedResources resources,
-            YierdisKeyspace<YierdisObject> store,
             YierdisExpireIndex expires,
             EntryTable entries,
             NativeKeyDirectory keyDirectory,
@@ -50,7 +47,6 @@ public final class YierdisDbStorageComponents {
         this.memoryRuntime = memoryRuntime;
         this.offHeapAllocator = offHeapAllocator;
         this.resources = resources;
-        this.store = store;
         this.expires = expires;
         this.entries = entries;
         this.keyDirectory = keyDirectory;
@@ -108,7 +104,6 @@ public final class YierdisDbStorageComponents {
                 resolvedRuntime,
                 resolvedAllocator,
                 resources,
-                new YierdisFfmKeyspace<>(blobStore),
                 new YierdisFfmExpireIndex(blobStore),
                 entries,
                 keyDirectory,

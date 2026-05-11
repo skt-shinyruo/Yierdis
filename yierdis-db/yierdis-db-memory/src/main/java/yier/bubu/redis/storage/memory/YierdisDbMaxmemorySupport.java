@@ -9,6 +9,7 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
@@ -52,19 +53,14 @@ public final class YierdisDbMaxmemorySupport {
             if (victim == null) {
                 break;
             }
-            YierdisObject e = db.keyLifecycle().getStoredObject(victim);
-            if (e == null) {
+            EntryRecord record = db.keyLifecycle().entryRecord(victim);
+            if (record == null) {
                 continue;
             }
-            if (db.removeIfExpired(victim, e, nowMillis)) {
+            if (db.keyLifecycle().removeIfExpired(victim, record, nowMillis)) {
                 continue;
             }
-            long removalBytes = db.keyLifecycle().estimatedBytesForRemoval(victim, e);
-            db.removeExpire(victim);
-            if (db.keyLifecycle().removeObject(victim, e)) {
-                e.releasePayloadIfAny();
-                db.adjustUsedBytes(-removalBytes);
-            }
+            removeRecord(victim, record);
         }
     }
 
@@ -80,15 +76,15 @@ public final class YierdisDbMaxmemorySupport {
         if (keyHandle == null) {
             return null;
         }
-        YierdisObject e = db.keyLifecycle().getStoredObject(keyHandle);
-        if (e == null) {
+        EntryRecord record = db.keyLifecycle().entryRecord(keyHandle);
+        if (record == null) {
             return null;
         }
         if (db.isKeyExpired(keyHandle, nowMillis)) {
             return null;
         }
 
-        long lruClock = policy == MaxmemoryPolicy.ALLKEYS_LRU ? e.lruClock : 0L;
+        long lruClock = policy == MaxmemoryPolicy.ALLKEYS_LRU ? record.lruOrLfu() : 0L;
         return new MaxmemoryCandidate(db, keyHandle, lruClock);
     }
 
@@ -102,14 +98,14 @@ public final class YierdisDbMaxmemorySupport {
 
         final KeyHandle[] bestKeyHandleRef = new KeyHandle[1];
         final long[] bestLruRef = new long[]{Long.MAX_VALUE};
-        db.keyLifecycle().forEachKeyHandle((k, e) -> {
-            if (k == null || e == null) {
+        db.keyLifecycle().forEachKeyHandle((k, record) -> {
+            if (k == null || record == null) {
                 return;
             }
             if (db.isKeyExpired(k, nowMillis)) {
                 return;
             }
-            long lru = e.lruClock;
+            long lru = record.lruOrLfu();
             if (bestKeyHandleRef[0] == null || lru < bestLruRef[0]) {
                 bestKeyHandleRef[0] = k;
                 bestLruRef[0] = lru;
@@ -131,21 +127,14 @@ public final class YierdisDbMaxmemorySupport {
         if (!(candidate.keyHandle() instanceof KeyHandle key)) {
             return false;
         }
-        YierdisObject e = db.keyLifecycle().getStoredObject(key);
-        if (e == null) {
+        EntryRecord record = db.keyLifecycle().entryRecord(key);
+        if (record == null) {
             return false;
         }
-        if (db.removeIfExpired(key, e, nowMillis)) {
+        if (db.keyLifecycle().removeIfExpired(key, record, nowMillis)) {
             return true;
         }
-        long removalBytes = db.keyLifecycle().estimatedBytesForRemoval(key, e);
-        db.removeExpire(key);
-        if (db.keyLifecycle().removeObject(key, e)) {
-            e.releasePayloadIfAny();
-            db.adjustUsedBytes(-removalBytes);
-            return true;
-        }
-        return false;
+        return removeRecord(key, record);
     }
 
     private KeyHandle pickEvictionKey(long nowMillis) {
@@ -169,11 +158,14 @@ public final class YierdisDbMaxmemorySupport {
         if (samples >= total) {
             final KeyHandle[] bestKeyRef = new KeyHandle[1];
             final long[] bestLruRef = new long[]{Long.MAX_VALUE};
-            db.keyLifecycle().forEachKeyHandle((k, e) -> {
+            db.keyLifecycle().forEachKeyHandle((k, record) -> {
                 if (db.isKeyExpired(k, nowMillis)) {
                     return;
                 }
-                long lru = e.lruClock;
+                if (record == null) {
+                    return;
+                }
+                long lru = record.lruOrLfu();
                 if (bestKeyRef[0] == null || lru < bestLruRef[0]) {
                     bestKeyRef[0] = k;
                     bestLruRef[0] = lru;
@@ -187,19 +179,38 @@ public final class YierdisDbMaxmemorySupport {
             if (key == null) {
                 break;
             }
-            YierdisObject e = db.keyLifecycle().getStoredObject(key);
-            if (e == null) {
+            EntryRecord record = db.keyLifecycle().entryRecord(key);
+            if (record == null) {
                 continue;
             }
             if (db.isKeyExpired(key, nowMillis)) {
                 continue;
             }
-            long lru = e.lruClock;
+            long lru = record.lruOrLfu();
             if (bestKey == null || lru < bestLru) {
                 bestKey = key;
                 bestLru = lru;
             }
         }
         return bestKey;
+    }
+
+    private boolean removeRecord(KeyHandle keyHandle, EntryRecord record) {
+        long removalBytes = db.keyLifecycle().estimatedBytesForRemoval(keyHandle, record);
+        byte[] keyBytes = copyKeyBytes(keyHandle);
+        if (db.keyLifecycle().removeEntry(keyHandle, record)) {
+            db.keyLifecycle().removeExpireByKeyBytes(keyBytes);
+            db.adjustUsedBytes(-removalBytes);
+            return true;
+        }
+        return false;
+    }
+
+    private static byte[] copyKeyBytes(KeyHandle keyHandle) {
+        byte[] out = new byte[keyHandle.len()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = keyHandle.byteAt(i);
+        }
+        return out;
     }
 }

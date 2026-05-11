@@ -153,29 +153,28 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 字符串值不走 `YierdisFfmBlobStore`，而是由 `StringRoot` 管理。
 `StringRoot` 内部使用 `OffHeapAllocator` 分配连续 buffer，并用
-`ValueHandle` 暴露给 entry 元数据和兼容对象。
+`ValueHandle` 暴露给 entry 元数据。
 
 ### 写入
 
 `YierdisStringOps.set(...)` 最终会调用：
 
-- `YierdisObject.newString(stringRoot, value)`
+- `StringRoot.store(...)` 创建新的 string payload
+- `YierdisDbKeyLifecycle.newRecord(...)` 创建新的 `EntryRecord`
 
-这个对象是兼容 adapter：真正的字符串 bytes 落在 `StringRoot` 管理的
-`OffHeapBuf` 里，adapter 只保存当前 `ValueHandle`。写入完成后，
-`YierdisDbKeyLifecycle` 会把 key 同步到 `NativeKeyDirectory` 和
-`EntryTable`，`EntryRecord` 里保存 type、encoding、value handle、TTL
-和估算字节数。
+真正的字符串 bytes 落在 `StringRoot` 管理的 `OffHeapBuf` 里。
+写入完成后，`YierdisDbKeyLifecycle` 会把 key 同步到
+`NativeKeyDirectory` 和 `EntryTable`，`EntryRecord` 里保存
+type、encoding、value handle、TTL 和估算字节数。
 
 代表路径：
 
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
 
 ### 覆盖和扩容
 
-`YierdisObject.overwriteWithString(StringRoot, ...)` 会转发到
+如果旧 entry 也是 string，覆盖路径会保留原 `ValueHandle` 并调用
 `StringRoot.overwrite(...)`。这个路径保留了关键优化：
 
 - 如果旧 handle 指向的 `OffHeapBuf` 容量足够容纳新值
@@ -187,11 +186,11 @@ buffer”。
 
 如果容量不够，则会重新分配新 buffer，并把旧内容做 off-heap -> off-heap 复制。
 `EntryRecord` 的 estimate 会随后刷新，delete、expire 和 eviction 路径不再依赖
-旧 adapter 上的估算值作为唯一来源。
+旧对象估算值。
 
 代表路径：
 
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
 
 ### 读取
@@ -227,31 +226,28 @@ off-heap 存储路径。也就是说：
 
 keyspace 是 FFM 使用最核心的部分之一。
 
-当前迁移期同时存在两层 key 结构：
+当前 DB 只保留 native key directory 作为 key -> entry 的权威索引：
 
-- `YierdisFfmKeyspace<YierdisObject>`：保留给兼容 adapter 和旧 scan/helper 路径
-- `NativeKeyDirectory`：保存 native entry graph 的 key -> `EntryHandle`
+- `NativeKeyDirectory` 保存 native entry graph 的 key -> `EntryHandle`
+- `EntryTable` 保存 `EntryHandle` -> `EntryRecord`
 
-`YierdisFfmKeyspace.computeWithHandle(...)` 在 key 首次出现时会：
+`NativeKeyDirectory.compute(...)` 在 key 首次出现时会：
 
 1. 通过 `blobStore.store(key)` 把 key bytes 存进 native memory
 2. 基于这个 blob 创建 `KeyHandle.forFfm(ref, hash)`
-3. 把 handle 传给上层 mutation 逻辑
-4. 把 `ref` 放进兼容 keyspace table
+3. 把 key ref 和 `EntryHandle` 放进 native directory table
 
-mutation 完成后，`YierdisDbKeyLifecycle.syncEntry(...)` 会把同一个逻辑 key
-同步到 native entry graph：
+mutation 由 `YierdisDbKeyLifecycle.computeWithHandle(...)` 收口：
 
 1. `NativeKeyDirectory` 存储 key bytes
-2. `EntryTable` 分配或替换 `EntryRecord`
+2. `EntryTable` 分配、替换或释放 `EntryRecord`
 3. `EntryRecord.valueHandle()` 指向对应 `TypeRoot` 里的 payload
 
 之后 DB 内部很多路径都围绕 `KeyHandle`、`EntryHandle` 和 `ValueHandle`
-传递 identity，而不是不断回到新的 heap `byte[]` 或把 `YierdisObject` 当主存储。
+传递 identity，而不是不断回到新的 heap `byte[]` 或旧对象容器。
 
 代表路径：
 
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmKeyspace.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/key/KeyHandle.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryTable.java`
@@ -459,7 +455,7 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
 - `OffHeapCollectionReadStreamingTest`
   说明部分集合读路径可以直接流式输出 off-heap slice
 - `NativeStorageRegressionTest`
-  说明 string/list/hash/set/zset/HLL 删除后 native accounting 可以回到 0，且删除记账不依赖兼容 object 的旧估算值
+  说明 string/list/hash/set/zset/HLL 删除后 native accounting 可以回到 0，且删除记账以 entry metadata 为准
 - `MemoryStatsAccountingConsistencyTest`
   说明 memory reporter 和 maxmemory 统计保持一致
 
@@ -482,8 +478,8 @@ Yierdis 当前对 FFM 的使用方式可以概括为：
 - 用 slab allocator、`EntryTable` 和 64-bit handle 承载 entry metadata
 - 用 `NativeKeyDirectory` 把 key bytes 映射到 entry handle
 - 用 `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 承载各类型 payload
-- 用兼容 `YierdisObject` 桥接尚未移除的旧 helper 路径
-- 用 `BlobStore + BytesRef + KeyHandle` 路径承载兼容 keyspace、TTL 索引和复合结构成员 bytes
+- 用 `EntryRecord`、`ValueHandle` 和 `TypeRoot` 作为 DB hot path 的权威状态
+- 用 `BlobStore + BytesRef + KeyHandle` 路径承载 native key directory、TTL 索引和复合结构成员 bytes
 - 用 `OffHeapSlice` / `YierdisFfmBytesRefSlice` 给读路径提供尽量少拷贝的输出接口
 - 用单线程 owner model 约束 `Arena.ofConfined()` 的访问纪律
 - 用 runtime accounting、memory reporter 和 shutdown leak check 把 FFM 内存纳入 maxmemory 与资源回收体系

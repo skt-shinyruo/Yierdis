@@ -10,9 +10,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
-import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
-import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 
 import java.util.List;
@@ -29,15 +27,6 @@ public final class YierdisDbMemoryEstimator {
         this.offHeapAllocator = offHeapAllocator;
     }
 
-    long estimateEntryBytes(KeyHandle keyHandle, YierdisObject object) {
-        if (keyHandle == null || object == null) {
-            return 0;
-        }
-        int keyLen = Math.max(0, keyHandle.len());
-        int keyBytesCost = keysStoredOffHeap ? 0 : keyLen;
-        return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + keyBytesCost + estimateValueBytes(object);
-    }
-
     long estimateEntryBytes(KeyHandle keyHandle, EntryRecord record) {
         if (keyHandle == null || record == null) {
             return 0;
@@ -48,50 +37,6 @@ public final class YierdisDbMemoryEstimator {
         int keyLen = Math.max(0, keyHandle.len());
         int keyBytesCost = keysStoredOffHeap ? 0 : keyLen;
         return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + keyBytesCost;
-    }
-
-    private long estimateValueBytes(YierdisObject object) {
-        if (object == null) {
-            return 0;
-        }
-        if (object.type == ValueType.STRING) {
-            if (object.encoding == ValueEncoding.STRING_INT) {
-                return Long.BYTES;
-            }
-            if (object.hasStringRoot()) {
-                return 0;
-            }
-            if (offHeapAllocator != null && object.payload instanceof OffHeapBuf) {
-                return 0;
-            }
-            return object.rawLen;
-        }
-
-        if (object.type == ValueType.HASH && object.hasHashRoot()) {
-            return 0;
-        }
-        if (object.payload instanceof HashValue hv) {
-            return hv.estimatedBytes();
-        }
-        if (object.type == ValueType.LIST && object.hasListRoot()) {
-            return 0;
-        }
-        if (object.payload instanceof ListValue lv) {
-            return lv.estimatedBytes();
-        }
-        if (object.type == ValueType.SET && object.hasSetRoot()) {
-            return 0;
-        }
-        if (object.payload instanceof SetValue sv) {
-            return sv.estimatedBytes();
-        }
-        if (object.type == ValueType.ZSET && object.hasZSetRoot()) {
-            return 0;
-        }
-        if (object.payload instanceof ZSetValue zv) {
-            return zv.estimatedBytes();
-        }
-        return 0;
     }
 
     static long estimateStringWriteUpperBound(int keyLength, int valueLength) {

@@ -12,11 +12,11 @@
 - 当前 server 的常见写入路径里，请求参数先在 heap。RESP 适配层会把请求里的命令和参数转成 heap `byte[]`。
   代表路径：`yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`
 - `SET`、`APPEND` 等字符串写入命令，会把这些 heap `byte[]` 或 `BytesSlice` 复制到 native memory。
-  代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
+  代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
 - 当前 keyspace 使用 FFM 存储时，第一次插入 key 也会把 key 从 heap `byte[]` 复制到 native memory。
-  代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmKeyspace.java`
+  代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java`
 - 但如果 source 本身就是带 memory address 的 `BytesSlice`，则可以直接走 address-to-address copy，不必先落成 heap 临时数组。
-  代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
+  代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
 
 需要注意的是，当前 server 的网络入口通常不是这种“source 已经带 native 地址”的场景，所以线上常见写入仍然主要是 `heap -> off-heap`。
 
@@ -28,7 +28,7 @@
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
 - off-heap key 只要走 `randomKey()`、`forEach()` 这种 `byte[]` 语义接口，就会复制回 heap。
   代表路径：
-  - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmKeyspace.java`
+  - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java`
   - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmExpireIndex.java`
 - 集合类里，凡是返回 `List<byte[]>` 的读取接口，也会把结果 materialize 到 heap。例如 `HGETALL` 的“返回 pairs 列表”路径。
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/HashValue.java`

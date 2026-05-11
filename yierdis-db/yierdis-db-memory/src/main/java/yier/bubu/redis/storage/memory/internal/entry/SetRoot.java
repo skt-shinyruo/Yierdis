@@ -35,6 +35,11 @@ public final class SetRoot implements TypeRoot {
         return requireSet(handle).encoding();
     }
 
+    public synchronized boolean contains(ValueHandle handle) {
+        ensureOpen();
+        return handle != null && sets.containsKey(handle.raw());
+    }
+
     public synchronized ValueHandle create() {
         ensureOpen();
         ValueHandle handle = new ValueHandle(nextHandle++);
@@ -109,10 +114,8 @@ public final class SetRoot implements TypeRoot {
     }
 
     @Override
-    public synchronized void close() {
-        if (closed) {
-            return;
-        }
+    public synchronized void clear() {
+        ensureOpen();
         RuntimeException failure = null;
         for (SetValue set : sets.values()) {
             try {
@@ -126,10 +129,18 @@ public final class SetRoot implements TypeRoot {
             }
         }
         sets.clear();
-        closed = true;
         if (failure != null) {
             throw failure;
         }
+    }
+
+    @Override
+    public synchronized void close() {
+        if (closed) {
+            return;
+        }
+        clear();
+        closed = true;
     }
 
     private SetValue requireSet(ValueHandle handle) {
