@@ -128,10 +128,22 @@ public final class YierdisDbKeyLifecycle {
     }
 
     public KeyHandle keyHandle(byte[] keyBytes) {
+        if (keyDirectory != null) {
+            KeyHandle nativeHandle = keyDirectory.getKeyHandle(keyBytes);
+            if (nativeHandle != null) {
+                return nativeHandle;
+            }
+        }
         return store.keyHandle(keyBytes);
     }
 
     public KeyHandle keyHandle(BytesView keyView) {
+        if (keyDirectory != null && keyView != null) {
+            KeyHandle nativeHandle = keyDirectory.getKeyHandle(YierdisDb.toByteArray(keyView));
+            if (nativeHandle != null) {
+                return nativeHandle;
+            }
+        }
         return store.keyHandle(keyView);
     }
 
@@ -169,23 +181,24 @@ public final class YierdisDbKeyLifecycle {
     }
 
     public EntryRecord liveEntryRecord(byte[] keyBytes) {
+        EntryHandle handle = entryHandle(keyBytes);
+        if (handle == null) {
+            return null;
+        }
+        EntryRecord record = entryRecord(handle);
+        if (record == null) {
+            unlinkEntry(keyBytes);
+            return null;
+        }
         KeyHandle keyHandle = keyHandle(keyBytes);
         if (keyHandle == null) {
             return null;
         }
         YierdisObject object = getStoredObject(keyHandle);
-        if (object == null) {
-            unlinkEntry(keyBytes);
+        if (object != null && removeIfExpired(keyHandle, object, System.currentTimeMillis())) {
             return null;
         }
-        if (removeIfExpired(keyHandle, object, System.currentTimeMillis())) {
-            return null;
-        }
-        EntryRecord record = entryRecord(keyBytes);
-        if (record == null) {
-            return null;
-        }
-        return record;
+        return isKeyExpired(keyHandle, System.currentTimeMillis()) ? null : record;
     }
 
     public EntryRecord liveEntryRecord(BytesView keyView) {
@@ -229,7 +242,7 @@ public final class YierdisDbKeyLifecycle {
     }
 
     public int keyCount() {
-        return store.size();
+        return keyDirectory == null ? store.size() : keyDirectory.size();
     }
 
     public int expireCount() {
@@ -237,7 +250,7 @@ public final class YierdisDbKeyLifecycle {
     }
 
     public KeyHandle randomKeyHandle() {
-        return store.randomKeyHandle();
+        return keyDirectory == null ? store.randomKeyHandle() : keyDirectory.randomKeyHandle();
     }
 
     public KeyHandle randomExpireKeyHandle() {
@@ -246,7 +259,11 @@ public final class YierdisDbKeyLifecycle {
 
     public void forEachKeyHandle(java.util.function.BiConsumer<KeyHandle, YierdisObject> consumer) {
         Objects.requireNonNull(consumer, "consumer");
-        store.forEachKeyHandle(consumer);
+        if (keyDirectory == null) {
+            store.forEachKeyHandle(consumer);
+            return;
+        }
+        keyDirectory.forEachEntry((keyHandle, entryHandle) -> consumer.accept(keyHandle, getStoredObject(keyHandle)));
     }
 
     public Long expireAtMillis(byte[] keyBytes) {
@@ -414,7 +431,10 @@ public final class YierdisDbKeyLifecycle {
     }
 
     public ScanCursorV2 scan(ScanCursorV2 cursor, int maxSteps, YierdisKeyspace.ScanConsumer<YierdisObject> consumer) {
-        return store.scan(cursor, maxSteps, consumer);
+        if (keyDirectory == null) {
+            return store.scan(cursor, maxSteps, consumer);
+        }
+        return keyDirectory.scan(cursor, maxSteps, (keyHandle, entryHandle) -> consumer.accept(keyHandle, getStoredObject(keyHandle)));
     }
 
     public Long expireAtMillis(KeyHandle keyHandle) {
