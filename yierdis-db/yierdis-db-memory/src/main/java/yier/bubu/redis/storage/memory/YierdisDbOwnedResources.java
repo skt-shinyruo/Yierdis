@@ -108,6 +108,16 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
             EntryTable entries,
             NativeKeyDirectory keyDirectory
     ) {
+        releaseAll(store, expires, entries, keyDirectory, null);
+    }
+
+    void releaseAll(
+            YierdisKeyspace<YierdisObject> store,
+            YierdisExpireIndex expires,
+            EntryTable entries,
+            NativeKeyDirectory keyDirectory,
+            StringRoot stringRoot
+    ) {
         Throwable failure = null;
         try {
             clearData(store, expires, entries, keyDirectory);
@@ -124,6 +134,13 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
         if (keyDirectory != null) {
             try {
                 keyDirectory.close();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+        }
+        if (stringRoot != null) {
+            try {
+                stringRoot.close();
             } catch (Throwable t) {
                 failure = recordFailure(failure, t);
             }

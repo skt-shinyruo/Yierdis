@@ -47,6 +47,11 @@ public final class NativeKeyDirectory implements AutoCloseable {
         return size;
     }
 
+    public synchronized long nativeBytes() {
+        ensureOpen();
+        return blobStore.liveBytes();
+    }
+
     public synchronized EntryHandle get(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         ensureOpen();

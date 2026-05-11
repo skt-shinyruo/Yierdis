@@ -28,6 +28,7 @@ public final class YierdisDbKeyLifecycle {
     private final YierdisFfmMemoryRuntime memoryRuntime;
     private final EntryTable entryTable;
     private final NativeKeyDirectory keyDirectory;
+    private final StringRoot stringRoot;
     private final Consumer<YierdisObject> touchCallback;
     private final LongConsumer adjustUsedBytesCallback;
 
@@ -46,6 +47,7 @@ public final class YierdisDbKeyLifecycle {
                 memoryRuntime,
                 null,
                 null,
+                null,
                 touchCallback,
                 adjustUsedBytesCallback
         );
@@ -58,6 +60,7 @@ public final class YierdisDbKeyLifecycle {
             YierdisFfmMemoryRuntime memoryRuntime,
             EntryTable entryTable,
             NativeKeyDirectory keyDirectory,
+            StringRoot stringRoot,
             Consumer<YierdisObject> touchCallback,
             LongConsumer adjustUsedBytesCallback
     ) {
@@ -67,6 +70,7 @@ public final class YierdisDbKeyLifecycle {
         this.memoryRuntime = memoryRuntime;
         this.entryTable = entryTable;
         this.keyDirectory = keyDirectory;
+        this.stringRoot = stringRoot;
         this.touchCallback = Objects.requireNonNull(touchCallback, "touchCallback");
         this.adjustUsedBytesCallback = Objects.requireNonNull(adjustUsedBytesCallback, "adjustUsedBytesCallback");
     }
@@ -85,6 +89,10 @@ public final class YierdisDbKeyLifecycle {
 
     public NativeKeyDirectory keyDirectory() {
         return keyDirectory;
+    }
+
+    public StringRoot stringRoot() {
+        return stringRoot;
     }
 
     public KeyHandle keyHandle(byte[] keyBytes) {
@@ -508,7 +516,7 @@ public final class YierdisDbKeyLifecycle {
     private EntryRecord toEntryRecord(KeyHandle keyHandle, YierdisObject object, long expireAtMillis) {
         return new EntryRecord(
                 keyHandleIdentity(keyHandle),
-                new ValueHandle(valueIdentity(object)),
+                valueHandle(object),
                 keyHandle.dictHash(),
                 object == null ? ValueType.STRING : object.type,
                 object == null ? ValueEncoding.STRING_EMBSTR : object.encoding,
@@ -551,8 +559,14 @@ public final class YierdisDbKeyLifecycle {
         return System.identityHashCode(keyHandle);
     }
 
-    private static long valueIdentity(YierdisObject object) {
-        return object == null ? 0L : System.identityHashCode(object);
+    private static ValueHandle valueHandle(YierdisObject object) {
+        if (object == null) {
+            return new ValueHandle(0L);
+        }
+        if (object.valueHandle() != null) {
+            return object.valueHandle();
+        }
+        return new ValueHandle(System.identityHashCode(object));
     }
 
     private static byte[] keyBytes(KeyHandle keyHandle) {

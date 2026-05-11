@@ -14,9 +14,12 @@ import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.memory.api.OffHeapSlice;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * A Redis-like value container: {@link ValueType} + {@link ValueEncoding} + payload.
@@ -36,6 +39,8 @@ public final class YierdisObject {
     public ValueType type;
     public ValueEncoding encoding;
     public Object payload;
+    public StringRoot stringRoot;
+    public ValueHandle valueHandle;
 
     public int rawLen;
     public long intValue;
@@ -53,7 +58,7 @@ public final class YierdisObject {
     }
 
     public static YierdisObject newString(byte[] valueBytes) {
-        return newString(null, valueBytes);
+        return newString((OffHeapAllocator) null, valueBytes);
     }
 
     public static YierdisObject newString(OffHeapAllocator offHeapAllocator, byte[] valueBytes) {
@@ -120,6 +125,26 @@ public final class YierdisObject {
         return o;
     }
 
+    public static YierdisObject newString(StringRoot root, byte[] valueBytes) {
+        Objects.requireNonNull(root, "root");
+        ValueHandle handle = root.store(valueBytes);
+        YierdisObject o = new YierdisObject(ValueType.STRING, ValueEncoding.STRING_RAW, root);
+        o.stringRoot = root;
+        o.valueHandle = handle;
+        o.rawLen = root.length(handle);
+        return o;
+    }
+
+    public static YierdisObject newString(StringRoot root, BytesSlice value) {
+        Objects.requireNonNull(root, "root");
+        ValueHandle handle = root.store(value);
+        YierdisObject o = new YierdisObject(ValueType.STRING, ValueEncoding.STRING_RAW, root);
+        o.stringRoot = root;
+        o.valueHandle = handle;
+        o.rawLen = root.length(handle);
+        return o;
+    }
+
     public static YierdisObject newStringInt(long intValue) {
         YierdisObject o = new YierdisObject(ValueType.STRING, ValueEncoding.STRING_INT, null);
         o.intValue = intValue;
@@ -144,7 +169,7 @@ public final class YierdisObject {
     }
 
     public void overwriteWithString(byte[] valueBytes) {
-        overwriteWithString(null, valueBytes);
+        overwriteWithString((OffHeapAllocator) null, valueBytes);
     }
 
     public void overwriteWithString(OffHeapAllocator offHeapAllocator, byte[] valueBytes) {
@@ -345,9 +370,77 @@ public final class YierdisObject {
         this.intBytesCacheFor = 0L;
     }
 
+    public void overwriteWithString(StringRoot root, byte[] valueBytes) {
+        Objects.requireNonNull(root, "root");
+        if (stringRoot == root && valueHandle != null) {
+            root.overwrite(valueHandle, valueBytes);
+        } else {
+            releaseStringPayloadIfAny();
+            valueHandle = root.store(valueBytes);
+        }
+        this.type = ValueType.STRING;
+        this.encoding = ValueEncoding.STRING_RAW;
+        this.payload = root;
+        this.stringRoot = root;
+        this.rawLen = root.length(valueHandle);
+        this.intValue = 0L;
+        this.intBytesCache = null;
+        this.intBytesCacheFor = 0L;
+    }
+
+    public void overwriteWithString(StringRoot root, BytesSlice value) {
+        Objects.requireNonNull(root, "root");
+        if (stringRoot == root && valueHandle != null) {
+            root.overwrite(valueHandle, value);
+        } else {
+            releaseStringPayloadIfAny();
+            valueHandle = root.store(value);
+        }
+        this.type = ValueType.STRING;
+        this.encoding = ValueEncoding.STRING_RAW;
+        this.payload = root;
+        this.stringRoot = root;
+        this.rawLen = root.length(valueHandle);
+        this.intValue = 0L;
+        this.intBytesCache = null;
+        this.intBytesCacheFor = 0L;
+    }
+
+    public ValueHandle valueHandle() {
+        return valueHandle;
+    }
+
+    public boolean hasStringRoot() {
+        return stringRoot != null && valueHandle != null;
+    }
+
+    public void useStringHandle(StringRoot root, ValueHandle handle) {
+        Objects.requireNonNull(root, "root");
+        Objects.requireNonNull(handle, "handle");
+        if (stringRoot == root && valueHandle != null && valueHandle.raw() == handle.raw()) {
+            this.rawLen = root.length(handle);
+            this.payload = root;
+            this.encoding = ValueEncoding.STRING_RAW;
+            return;
+        }
+        releaseStringPayloadIfAny();
+        this.type = ValueType.STRING;
+        this.encoding = ValueEncoding.STRING_RAW;
+        this.payload = root;
+        this.stringRoot = root;
+        this.valueHandle = handle;
+        this.rawLen = root.length(handle);
+        this.intValue = 0L;
+        this.intBytesCache = null;
+        this.intBytesCacheFor = 0L;
+    }
+
     public int stringByteLength() {
         if (encoding == ValueEncoding.STRING_INT) {
             return longByteLength(intValue);
+        }
+        if (stringRoot != null && valueHandle != null) {
+            rawLen = stringRoot.length(valueHandle);
         }
         return rawLen;
     }
@@ -361,6 +454,10 @@ public final class YierdisObject {
                 intBytesCacheFor = intValue;
             }
             return cached;
+        }
+        if (stringRoot != null && valueHandle != null) {
+            rawLen = stringRoot.length(valueHandle);
+            return stringRoot.copy(valueHandle);
         }
         if (payload instanceof byte[] buf) {
             if (rawLen == buf.length) {
@@ -380,6 +477,10 @@ public final class YierdisObject {
     }
 
     public OffHeapSlice stringOffHeapSlice() {
+        if (stringRoot != null && valueHandle != null) {
+            rawLen = stringRoot.length(valueHandle);
+            return stringRoot.slice(valueHandle);
+        }
         if (payload instanceof OffHeapBuf buf) {
             return buf.slice(0, rawLen);
         }
@@ -406,7 +507,7 @@ public final class YierdisObject {
             return (view[byteIndex] & mask) == 0 ? 0 : 1;
         }
 
-        if (byteIndex >= rawLen) {
+        if (byteIndex >= stringByteLength()) {
             return 0;
         }
         byte b = stringByteAt(byteIndex);
@@ -448,6 +549,36 @@ public final class YierdisObject {
         return oldBit;
     }
 
+    public int stringSetBit(StringRoot root, long offset, int value) {
+        if (value != 0 && value != 1) {
+            throw new YierdisCommandException("ERR bit is not an integer or out of range");
+        }
+        if (offset < 0) {
+            throw new YierdisCommandException("ERR bit offset is not an integer or out of range");
+        }
+        long byteIndexLong = offset >>> 3;
+        if (byteIndexLong > Integer.MAX_VALUE) {
+            throw new YierdisCommandException("ERR bit offset is not an integer or out of range");
+        }
+        int byteIndex = (int) byteIndexLong;
+        int requiredLen = byteIndex + 1;
+        if (requiredLen > MAX_STRING_BYTES) {
+            throw new YierdisCommandException("ERR string exceeds maximum allowed size");
+        }
+
+        stringEnsureLength(root, requiredLen);
+
+        int bit = (int) (offset & 7);
+        int mask = 1 << (7 - bit);
+        byte oldByte = stringByteAt(byteIndex);
+        int oldBit = (oldByte & mask) == 0 ? 0 : 1;
+        byte nextByte = value == 1 ? (byte) (oldByte | mask) : (byte) (oldByte & ~mask);
+        if (nextByte != oldByte) {
+            stringSetByteAt(byteIndex, nextByte);
+        }
+        return oldBit;
+    }
+
     public void stringEnsureLength(OffHeapAllocator offHeapAllocator, int requiredLen) {
         if (requiredLen < 0) {
             throw new IllegalArgumentException("requiredLen must be >= 0");
@@ -466,12 +597,30 @@ public final class YierdisObject {
         rawLen = requiredLen;
     }
 
+    public void stringEnsureLength(StringRoot root, int requiredLen) {
+        Objects.requireNonNull(root, "root");
+        if (requiredLen < 0) {
+            throw new IllegalArgumentException("requiredLen must be >= 0");
+        }
+        if (requiredLen > MAX_STRING_BYTES) {
+            throw new YierdisCommandException("ERR string exceeds maximum allowed size");
+        }
+        moveStringToRoot(root);
+        root.ensureLength(valueHandle, requiredLen);
+        rawLen = root.length(valueHandle);
+        encoding = ValueEncoding.STRING_RAW;
+    }
+
     public byte stringByteAt(int index) {
-        if (index < 0 || index >= rawLen) {
+        int len = stringByteLength();
+        if (index < 0 || index >= len) {
             throw new IndexOutOfBoundsException();
         }
         if (payload instanceof byte[] buf) {
             return buf[index];
+        }
+        if (stringRoot != null && valueHandle != null) {
+            return stringRoot.byteAt(valueHandle, index);
         }
         if (payload instanceof OffHeapBuf buf) {
             return buf.getByte(index);
@@ -480,11 +629,16 @@ public final class YierdisObject {
     }
 
     public void stringSetByteAt(int index, byte value) {
-        if (index < 0 || index >= rawLen) {
+        int len = stringByteLength();
+        if (index < 0 || index >= len) {
             throw new IndexOutOfBoundsException();
         }
         if (payload instanceof byte[] buf) {
             buf[index] = value;
+            return;
+        }
+        if (stringRoot != null && valueHandle != null) {
+            stringRoot.setByteAt(valueHandle, index, value);
             return;
         }
         if (payload instanceof OffHeapBuf buf) {
@@ -565,12 +719,23 @@ public final class YierdisObject {
         throw new IllegalStateException("unexpected string payload: " + payload);
     }
 
+    public int stringAppend(StringRoot root, BytesSlice suffix) {
+        Objects.requireNonNull(root, "root");
+        if (suffix == null || suffix.length() == 0) {
+            return stringByteLength();
+        }
+        moveStringToRoot(root);
+        rawLen = root.append(valueHandle, suffix);
+        encoding = ValueEncoding.STRING_RAW;
+        return rawLen;
+    }
+
     public long stringIncrBy(OffHeapAllocator offHeapAllocator, long delta) {
         long current;
         if (encoding == ValueEncoding.STRING_INT) {
             current = intValue;
         } else {
-            current = parseLongAsciiPayload(rawLen);
+            current = parseLongAsciiPayload(stringByteLength());
         }
 
         long next = safeAdd(current, delta);
@@ -588,6 +753,25 @@ public final class YierdisObject {
         if (payload instanceof YierdisValue v) {
             encoding = v.encoding();
         }
+    }
+
+    private void moveStringToRoot(StringRoot root) {
+        Objects.requireNonNull(root, "root");
+        if (stringRoot == root && valueHandle != null) {
+            rawLen = root.length(valueHandle);
+            payload = root;
+            return;
+        }
+        byte[] raw = stringBytesView();
+        releaseStringPayloadIfAny();
+        valueHandle = root.store(raw);
+        stringRoot = root;
+        payload = root;
+        rawLen = raw.length;
+        intValue = 0L;
+        intBytesCache = null;
+        intBytesCacheFor = 0L;
+        encoding = ValueEncoding.STRING_RAW;
     }
 
     private void ensureStringRaw() {
@@ -718,6 +902,9 @@ public final class YierdisObject {
         if (payload instanceof OffHeapBuf buf) {
             return parseLongAscii(buf, len);
         }
+        if (stringRoot != null && valueHandle != null) {
+            return parseLongAscii(stringRoot.copy(valueHandle), len);
+        }
         throw new YierdisCommandException("ERR value is not an integer or out of range");
     }
 
@@ -755,9 +942,18 @@ public final class YierdisObject {
     }
 
     public void releaseStringPayloadIfAny() {
+        if (stringRoot != null && valueHandle != null) {
+            stringRoot.release(valueHandle);
+            stringRoot = null;
+            valueHandle = null;
+            payload = null;
+            return;
+        }
         if (payload instanceof OffHeapBuf buf) {
             buf.close();
         }
+        stringRoot = null;
+        valueHandle = null;
     }
 
     public void releasePayloadIfAny() {

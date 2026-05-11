@@ -14,7 +14,9 @@ import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedger;
 import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
+import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 
 import java.util.function.BooleanSupplier;
 
@@ -86,8 +88,8 @@ public final class YierdisDbMemoryReporter {
                 maxmemoryBytes,
                 ledger.usedBytes(),
                 ledger.reservedBytes(),
-                null,
-                runtimeUsedBytes(),
+                keyLifecycle.offHeapAllocator(),
+                directNativeBytes(),
                 store,
                 expires,
                 keysStoredOffHeap,
@@ -97,7 +99,7 @@ public final class YierdisDbMemoryReporter {
 
     long usedBytesForMaxmemory() {
         threadChecker.run();
-        long nativeBytes = offHeapIncludedInMaxmemorySupplier.getAsBoolean() ? runtimeUsedBytes() : 0L;
+        long nativeBytes = offHeapIncludedInMaxmemorySupplier.getAsBoolean() ? nativeBytesForMaxmemory() : 0L;
         long ttlBytes = estimateTtlBytesForMaxmemory();
         long total = ledger.usedBytes() + nativeBytes;
         if (ttlBytes <= 0) {
@@ -140,6 +142,13 @@ public final class YierdisDbMemoryReporter {
             extra += keyLen;
         }
         ValueType type = record == null ? object.type : record.type();
+        if (type == ValueType.STRING && object.hasStringRoot()) {
+            ValueHandle handle = record == null ? object.valueHandle() : record.valueHandle();
+            if (handle != null) {
+                extra += keyLifecycle.stringRoot().estimatedBytes(handle);
+            }
+            return extra;
+        }
         if (type == ValueType.STRING && object.payload instanceof OffHeapBuf buf) {
             extra += buf.capacity();
         }
@@ -167,15 +176,48 @@ public final class YierdisDbMemoryReporter {
         }
     }
 
-    private long runtimeUsedBytes() {
-        var memoryRuntime = keyLifecycle.memoryRuntime();
-        if (memoryRuntime == null) {
+    private long nativeBytesForMaxmemory() {
+        return addSaturating(safeOffHeapUsedBytes(), directNativeBytes());
+    }
+
+    private long directNativeBytes() {
+        long total = 0L;
+        if (store instanceof YierdisFfmKeyspace<?> ffmStore) {
+            total = addSaturating(total, ffmStore.nativeBytes());
+        }
+        if (expires instanceof YierdisFfmExpireIndex ffmExpires) {
+            total = addSaturating(total, ffmExpires.nativeBytes());
+        }
+        EntryTable entryTable = keyLifecycle.entryTable();
+        if (entryTable != null) {
+            total = addSaturating(total, entryTable.nativeBytes());
+        }
+        NativeKeyDirectory keyDirectory = keyLifecycle.keyDirectory();
+        if (keyDirectory != null) {
+            total = addSaturating(total, keyDirectory.nativeBytes());
+        }
+        return total;
+    }
+
+    private long safeOffHeapUsedBytes() {
+        var allocator = keyLifecycle.offHeapAllocator();
+        if (allocator == null) {
             return 0L;
         }
         try {
-            return Math.max(0L, memoryRuntime.usedBytes());
+            return Math.max(0L, allocator.usedBytes());
         } catch (Throwable ignored) {
             return 0L;
         }
+    }
+
+    private static long addSaturating(long left, long right) {
+        if (left < 0 || right < 0) {
+            return Long.MAX_VALUE;
+        }
+        if (Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 }
