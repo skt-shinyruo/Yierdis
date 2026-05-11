@@ -11,7 +11,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
     private final long maxBytes;
     private final YierdisFfmMemoryRuntime runtime;
     private final boolean ownsRuntime;
-    private final YierdisFfmSlabAllocator slabAllocator;
+    private YierdisFfmSlabAllocator slabAllocator;
 
     private boolean closed;
     private long usedBytes;
@@ -31,7 +31,7 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
         this.runtime = runtime;
         this.maxBytes = maxBytes;
         this.ownsRuntime = ownsRuntime;
-        this.slabAllocator = new YierdisFfmSlabAllocator(runtime, maxBytes);
+        this.slabAllocator = newSlabAllocator();
     }
 
     @Override
@@ -85,6 +85,19 @@ public final class YierdisForeignOffHeapAllocator implements OffHeapAllocator {
             throw new IllegalStateException("allocator accounting underflow");
         }
         usedBytes = next;
+        releaseIdleSlabs();
+    }
+
+    private YierdisFfmSlabAllocator newSlabAllocator() {
+        return new YierdisFfmSlabAllocator(runtime, maxBytes);
+    }
+
+    private void releaseIdleSlabs() {
+        if (closed || usedBytes != 0) {
+            return;
+        }
+        slabAllocator.close();
+        slabAllocator = newSlabAllocator();
     }
 
     private static final class YierdisForeignOffHeapBuf implements OffHeapBuf {
