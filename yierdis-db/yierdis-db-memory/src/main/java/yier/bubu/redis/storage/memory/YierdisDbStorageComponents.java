@@ -97,13 +97,13 @@ public final class YierdisDbStorageComponents {
                 resolvedOwnsAllocator
         );
         EntryTable entries = new EntryTable(resolvedRuntime, new YierdisFfmSlabAllocator(resolvedRuntime), 64);
-        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(entries);
+        YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(resolvedRuntime, "ffm-key");
+        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(blobStore);
         StringRoot stringRoot = new StringRoot(resolvedAllocator);
         ListRoot listRoot = new ListRoot(resolvedRuntime);
         HashRoot hashRoot = new HashRoot(resolvedRuntime);
         SetRoot setRoot = new SetRoot(resolvedRuntime);
         ZSetRoot zsetRoot = new ZSetRoot(resolvedRuntime);
-        YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(resolvedRuntime, "ffm-key");
         return new YierdisDbStorageComponents(
                 resolvedRuntime,
                 resolvedAllocator,

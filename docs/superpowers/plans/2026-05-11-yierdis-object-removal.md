@@ -14,21 +14,21 @@
 
 Production files to change:
 
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/YierdisDb.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/YierdisDbComponentFactory.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/YierdisDbComponents.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/YierdisDbInternals.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/YierdisDbKeyLifecycle.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/YierdisDbMemoryReporter.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/YierdisDbOwnedResources.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/YierdisDbStorageComponents.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/nativeentry/NativeKeyDirectory.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/string/YierdisStringOps.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/string/YierdisHyperLogLog.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/list/YierdisListOps.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/hash/YierdisHashOps.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/set/YierdisSetOps.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/zset/YierdisZSetOps.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbComponentFactory.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbComponents.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbInternals.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbOwnedResources.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbStorageComponents.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisHllOps.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisListOps.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisHashOps.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisSetOps.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisZSetOps.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisObject.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisStringValue.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisListValue.java`
@@ -38,10 +38,10 @@ Production files to change:
 
 Test files to change or add:
 
-- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/nativeentry/NativeKeyDirectoryTest.java`
-- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/nativeentry/NativeStorageRegressionTest.java`
-- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/YierdisDbMemoryEstimatorTest.java`
-- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/MemoryStatsAccountingConsistencyTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectoryTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/NativeStorageRegressionTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/YierdisDbMemoryEstimatorTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/MemoryStatsAccountingConsistencyTest.java`
 - `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/storage/memory/YierdisDbArchitectureGuardTest.java`
 
 Verification commands use:
@@ -268,7 +268,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 mvn -pl yierdis-db/yierdis-db-memor
 - [ ] Commit:
 
 ```bash
-git add yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/nativeentry/NativeKeyDirectory.java yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/YierdisDb.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/nativeentry/NativeKeyDirectoryTest.java
+git add yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbStorageComponents.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectoryTest.java
 git commit -m "feat: expose native key directory iteration"
 ```
 
@@ -411,7 +411,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 mvn -pl yierdis-db/yierdis-db-memor
 - [ ] Commit:
 
 ```bash
-git add yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/YierdisDbKeyLifecycle.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/nativeentry/NativeStorageRegressionTest.java
+git add yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/NativeStorageRegressionTest.java
 git commit -m "feat: make native entries key lifecycle authority"
 ```
 
@@ -486,7 +486,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 mvn -pl yierdis-db/yierdis-db-memor
 - [ ] Commit:
 
 ```bash
-git add yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/string/YierdisStringOps.java yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/string/YierdisHyperLogLog.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/nativeentry/NativeStorageRegressionTest.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/YierdisDbMemoryEstimatorTest.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/MemoryStatsAccountingConsistencyTest.java
+git add yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisHllOps.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/NativeStorageRegressionTest.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/YierdisDbMemoryEstimatorTest.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/MemoryStatsAccountingConsistencyTest.java
 git commit -m "refactor: route string ops through native records"
 ```
 
@@ -522,7 +522,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 mvn -pl yierdis-db/yierdis-db-memor
 - [ ] Commit:
 
 ```bash
-git add yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/list/YierdisListOps.java yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/hash/YierdisHashOps.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/nativeentry/NativeStorageRegressionTest.java
+git add yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisListOps.java yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisHashOps.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/NativeStorageRegressionTest.java
 git commit -m "refactor: route list and hash ops through native records"
 ```
 
@@ -558,7 +558,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 mvn -pl yierdis-db/yierdis-db-memor
 - [ ] Commit:
 
 ```bash
-git add yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/set/YierdisSetOps.java yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/zset/YierdisZSetOps.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/nativeentry/NativeStorageRegressionTest.java
+git add yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisSetOps.java yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisZSetOps.java yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/NativeStorageRegressionTest.java
 git commit -m "refactor: route set and zset ops through native records"
 ```
 
