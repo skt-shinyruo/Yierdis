@@ -3,6 +3,7 @@ package yier.bubu.redis.storage.memory;
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
 import yier.bubu.redis.storage.memory.internal.ffm.*;
+import yier.bubu.redis.storage.memory.internal.entry.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -16,6 +17,8 @@ import yier.bubu.redis.storage.api.MemoryOps;
 
 public final class YierdisDbComponents {
     final YierdisDbStorageComponents storage;
+    final EntryTable entries;
+    final NativeKeyDirectory keyDirectory;
     final YierdisDbConfig config;
     final YierdisDbMemoryLedger ledger;
     final YierdisDbMutationExecutor mutationExecutor;
@@ -41,6 +44,8 @@ public final class YierdisDbComponents {
 
     YierdisDbComponents(
             YierdisDbStorageComponents storage,
+            EntryTable entries,
+            NativeKeyDirectory keyDirectory,
             YierdisDbConfig config,
             YierdisDbMemoryLedger ledger,
             YierdisDbMutationExecutor mutationExecutor,
@@ -65,6 +70,8 @@ public final class YierdisDbComponents {
             DbLifecycleOps lifecycleOps
     ) {
         this.storage = storage;
+        this.entries = entries;
+        this.keyDirectory = keyDirectory;
         this.config = config;
         this.ledger = ledger;
         this.mutationExecutor = mutationExecutor;

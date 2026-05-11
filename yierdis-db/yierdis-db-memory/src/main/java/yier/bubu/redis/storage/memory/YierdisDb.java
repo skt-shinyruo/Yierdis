@@ -3,6 +3,7 @@ package yier.bubu.redis.storage.memory;
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
 import yier.bubu.redis.storage.memory.internal.ffm.*;
+import yier.bubu.redis.storage.memory.internal.entry.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -43,6 +44,8 @@ public final class YierdisDb implements RuntimeDbEngine {
 
     private final YierdisKeyspace<YierdisObject> store;
     private final YierdisExpireIndex expires;
+    private final EntryTable entries;
+    private final NativeKeyDirectory keyDirectory;
     private final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
     private final YierdisDbOwnedResources resources;
@@ -271,6 +274,8 @@ public final class YierdisDb implements RuntimeDbEngine {
         this.resources = components.storage.resources;
         this.store = components.storage.store;
         this.expires = components.storage.expires;
+        this.entries = components.storage.entries;
+        this.keyDirectory = components.storage.keyDirectory;
         this.keysStoredOffHeap = components.storage.keysStoredOffHeap;
         this.maxmemoryBytes = components.config.maxmemoryBytes;
         this.maxmemoryPolicy = components.config.maxmemoryPolicy;
@@ -465,14 +470,14 @@ public final class YierdisDb implements RuntimeDbEngine {
             return;
         }
         ledger.resetUsage();
-        resources.releaseAll(store, expires);
+        resources.releaseAll(store, expires, entries, keyDirectory);
     }
 
     public yier.bubu.redis.storage.api.MutationOutcome flushDb() {
         checkThread();
         boolean hadKeys = store.size() != 0;
         boolean hadTtl = expires.size() != 0;
-        resources.clearData(store, expires);
+        resources.clearData(store, expires, entries, keyDirectory);
         ledger.resetUsage();
         return yier.bubu.redis.storage.api.MutationOutcome.of(hadKeys, hadTtl);
     }

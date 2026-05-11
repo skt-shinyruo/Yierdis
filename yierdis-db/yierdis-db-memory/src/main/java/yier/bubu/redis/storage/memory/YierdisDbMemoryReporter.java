@@ -9,10 +9,12 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedger;
 import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 
 import java.util.function.BooleanSupplier;
 
@@ -25,6 +27,7 @@ public final class YierdisDbMemoryReporter {
     private final boolean keysStoredOffHeap;
     private final MemoryLedger ledger;
     private final BooleanSupplier offHeapIncludedInMaxmemorySupplier;
+    private final YierdisDbMemoryEstimator memoryEstimator;
 
     YierdisDbMemoryReporter(
             Runnable threadChecker,
@@ -34,7 +37,8 @@ public final class YierdisDbMemoryReporter {
             long maxmemoryBytes,
             boolean keysStoredOffHeap,
             MemoryLedger ledger,
-            BooleanSupplier offHeapIncludedInMaxmemorySupplier
+            BooleanSupplier offHeapIncludedInMaxmemorySupplier,
+            YierdisDbMemoryEstimator memoryEstimator
     ) {
         this.threadChecker = java.util.Objects.requireNonNull(threadChecker, "threadChecker");
         this.keyLifecycle = java.util.Objects.requireNonNull(keyLifecycle, "keyLifecycle");
@@ -47,16 +51,19 @@ public final class YierdisDbMemoryReporter {
                 offHeapIncludedInMaxmemorySupplier,
                 "offHeapIncludedInMaxmemorySupplier"
         );
+        this.memoryEstimator = java.util.Objects.requireNonNull(memoryEstimator, "memoryEstimator");
     }
 
     long memoryUsage(BytesView keyView) {
         threadChecker.run();
+        EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
         YierdisObject object = keyLifecycle.getLiveObject(keyView);
         if (object == null) {
             return -1;
         }
         long keyLen = keyView == null ? 0 : Math.max(0L, (long) keyView.len());
-        return object.estimatedBytes + estimateOffHeapBytesForMemoryUsage(keyLen, object);
+        var keyHandle = keyLifecycle.keyHandle(keyView);
+        return metadataEstimatedBytes(keyHandle, record, object) + estimateOffHeapBytesForMemoryUsage(keyLen, record, object);
     }
 
     long memoryUsage(byte[] keyBytes) {
@@ -64,11 +71,13 @@ public final class YierdisDbMemoryReporter {
         if (keyBytes == null) {
             return -1;
         }
+        EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
         YierdisObject object = keyLifecycle.getLiveObject(keyBytes);
         if (object == null) {
             return -1;
         }
-        return object.estimatedBytes + estimateOffHeapBytesForMemoryUsage(keyBytes.length, object);
+        var keyHandle = keyLifecycle.keyHandle(keyBytes);
+        return metadataEstimatedBytes(keyHandle, record, object) + estimateOffHeapBytesForMemoryUsage(keyBytes.length, record, object);
     }
 
     YierdisMemoryStats memoryStats() {
@@ -115,7 +124,14 @@ public final class YierdisDbMemoryReporter {
         return Math.max(0, size);
     }
 
-    private long estimateOffHeapBytesForMemoryUsage(long keyLen, YierdisObject object) {
+    private long metadataEstimatedBytes(KeyHandle keyHandle, EntryRecord record, YierdisObject object) {
+        if (record != null && keyHandle != null) {
+            return memoryEstimator.estimateEntryBytes(keyHandle, record);
+        }
+        return object == null ? 0L : object.estimatedBytes;
+    }
+
+    private long estimateOffHeapBytesForMemoryUsage(long keyLen, EntryRecord record, YierdisObject object) {
         if (keyLifecycle.offHeapAllocator() == null || object == null) {
             return 0;
         }
@@ -123,7 +139,8 @@ public final class YierdisDbMemoryReporter {
         if (keysStoredOffHeap && keyLen > 0) {
             extra += keyLen;
         }
-        if (object.type == ValueType.STRING && object.payload instanceof OffHeapBuf buf) {
+        ValueType type = record == null ? object.type : record.type();
+        if (type == ValueType.STRING && object.payload instanceof OffHeapBuf buf) {
             extra += buf.capacity();
         }
         return extra;

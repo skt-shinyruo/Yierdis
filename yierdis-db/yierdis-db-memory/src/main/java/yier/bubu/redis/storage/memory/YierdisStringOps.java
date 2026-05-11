@@ -69,7 +69,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 final byte[][] oldValue = new byte[1][];
                 final boolean[] ttlChanged = new boolean[]{false};
 
-                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
                     handleRef[0] = k;
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
                     if (old != null && keyLifecycle.isKeyExpired(k, now)) {
@@ -171,7 +171,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 final int[] newLen = new int[]{0};
                 final boolean[] changed = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
                     if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
@@ -237,7 +237,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 final int[] oldBit = new int[]{0};
                 final boolean[] changed = new boolean[]{false};
                 final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
                     if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();
@@ -299,7 +299,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 final long[] result = new long[]{0L};
                 final long[] deltaBytes = new long[]{0L};
                 final boolean[] changed = new boolean[]{false};
-                keyLifecycle.computeWithHandle(keyBytes, (k, old) -> {
+                keyLifecycle.computeObjectWithHandle(keyBytes, (k, old) -> {
                     long oldEstimate = old == null ? 0 : old.estimatedBytes;
                     if (old != null && keyLifecycle.isKeyExpired(k, now)) {
                         old.releasePayloadIfAny();

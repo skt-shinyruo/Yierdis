@@ -3,6 +3,7 @@ package yier.bubu.redis.storage.memory;
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
 import yier.bubu.redis.storage.memory.internal.ffm.*;
+import yier.bubu.redis.storage.memory.internal.entry.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -30,18 +31,109 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
     }
 
     void clearData(YierdisKeyspace<YierdisObject> store, YierdisExpireIndex expires) {
+        clearData(store, expires, null, null);
+    }
+
+    void clearData(
+            YierdisKeyspace<YierdisObject> store,
+            YierdisExpireIndex expires,
+            EntryTable entries,
+            NativeKeyDirectory keyDirectory
+    ) {
+        Throwable failure = null;
         if (store != null) {
-            store.forEach((k, e) -> e.releasePayloadIfAny());
-            store.clear();
+            final Throwable[] releaseFailure = new Throwable[1];
+            try {
+                store.forEach((k, e) -> {
+                    try {
+                        e.releasePayloadIfAny();
+                    } catch (Throwable t) {
+                        releaseFailure[0] = recordFailure(releaseFailure[0], t);
+                    }
+                });
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+            failure = recordFailure(failure, releaseFailure[0]);
+            try {
+                store.clear();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
         }
         if (expires != null) {
-            expires.clear();
+            try {
+                expires.clear();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
         }
+        if (entries != null) {
+            try {
+                entries.clear();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+        }
+        if (keyDirectory != null) {
+            try {
+                keyDirectory.clear();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+        }
+        throwIfFailure(failure);
+    }
+
+    private static void throwIfFailure(Throwable failure) {
+        if (failure == null) {
+            return;
+        }
+        if (failure instanceof RuntimeException runtimeException) {
+            throw runtimeException;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw new IllegalStateException("db resource cleanup failed", failure);
     }
 
     void releaseAll(YierdisKeyspace<YierdisObject> store, YierdisExpireIndex expires) {
-        clearData(store, expires);
-        close();
+        releaseAll(store, expires, null, null);
+    }
+
+    void releaseAll(
+            YierdisKeyspace<YierdisObject> store,
+            YierdisExpireIndex expires,
+            EntryTable entries,
+            NativeKeyDirectory keyDirectory
+    ) {
+        Throwable failure = null;
+        try {
+            clearData(store, expires, entries, keyDirectory);
+        } catch (Throwable t) {
+            failure = recordFailure(failure, t);
+        }
+        if (entries != null) {
+            try {
+                entries.close();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+        }
+        if (keyDirectory != null) {
+            try {
+                keyDirectory.close();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+        }
+        try {
+            close();
+        } catch (Throwable t) {
+            failure = recordFailure(failure, t);
+        }
+        throwIfFailure(failure);
     }
 
     @Override

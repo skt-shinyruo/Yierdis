@@ -3,6 +3,7 @@ package yier.bubu.redis.storage.memory;
 import yier.bubu.redis.storage.memory.*;
 import yier.bubu.redis.storage.memory.internal.expire.*;
 import yier.bubu.redis.storage.memory.internal.ffm.*;
+import yier.bubu.redis.storage.memory.internal.entry.*;
 import yier.bubu.redis.storage.memory.internal.key.*;
 import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
@@ -70,6 +71,8 @@ public final class YierdisDbComponentFactory {
                 storage.expires,
                 storage.offHeapAllocator,
                 storage.memoryRuntime,
+                storage.entries,
+                storage.keyDirectory,
                 owner::touch,
                 owner::adjustUsedBytes
         );
@@ -95,12 +98,15 @@ public final class YierdisDbComponentFactory {
                 config.maxmemoryBytes,
                 storage.keysStoredOffHeap,
                 ledger,
-                () -> owner.maxmemoryCoordinator() == null
+                () -> owner.maxmemoryCoordinator() == null,
+                memoryEstimator
         );
         YierdisDbIntrospection introspection = new YierdisDbIntrospection(owner::checkThread, keyLifecycle);
 
         return new YierdisDbComponents(
                 storage,
+                storage.entries,
+                storage.keyDirectory,
                 config,
                 ledger,
                 mutationExecutor,
