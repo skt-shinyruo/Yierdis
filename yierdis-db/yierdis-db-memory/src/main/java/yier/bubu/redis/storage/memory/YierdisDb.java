@@ -485,7 +485,7 @@ public final class YierdisDb implements RuntimeDbEngine {
 
     public yier.bubu.redis.storage.api.MutationOutcome flushDb() {
         checkThread();
-        boolean hadKeys = store.size() != 0;
+        boolean hadKeys = keyLifecycle.keyCount() != 0;
         boolean hadTtl = expires.size() != 0;
         resources.clearData(store, expires, entries, keyDirectory);
         ledger.resetUsage();
@@ -494,7 +494,7 @@ public final class YierdisDb implements RuntimeDbEngine {
 
     public int size() {
         checkThread();
-        return store.size();
+        return keyLifecycle.keyCount();
     }
 
     public long estimatedUsedBytes() {
