@@ -35,17 +35,18 @@ mvn -DskipTests package
 2. `docs/project-docs/project-overview.md`
 3. `docs/project-docs/request-execution-flow.md`
 4. `docs/project-docs/main-path-walkthrough.md`
-5. `docs/project-docs/protocol-reference.md`
-6. `docs/project-docs/commands-and-data-model.md`
-7. `docs/project-docs/db-internals.md`
-8. `docs/project-docs/executor-and-backpressure.md`
-9. `docs/project-docs/bytes-and-fast-paths.md`
-10. `docs/project-docs/configuration-and-operations.md`
-11. `docs/project-docs/client-and-bench-internals.md`
-12. `docs/project-docs/testing-and-debugging.md`
-13. `docs/project-docs/glossary.md`
-14. `docs/project-docs/module-architecture.md`
-15. `docs/project-docs/development-navigation.md`
+5. `docs/project-docs/core-logic-index.md`
+6. `docs/project-docs/protocol-reference.md`
+7. `docs/project-docs/commands-and-data-model.md`
+8. `docs/project-docs/db-internals.md`
+9. `docs/project-docs/executor-and-backpressure.md`
+10. `docs/project-docs/bytes-and-fast-paths.md`
+11. `docs/project-docs/configuration-and-operations.md`
+12. `docs/project-docs/client-and-bench-internals.md`
+13. `docs/project-docs/testing-and-debugging.md`
+14. `docs/project-docs/glossary.md`
+15. `docs/project-docs/module-architecture.md`
+16. `docs/project-docs/development-navigation.md`
 
 这组文档分别覆盖：
 
@@ -53,6 +54,7 @@ mvn -DskipTests package
 - 项目定位：这个项目想解决什么问题，不想解决什么问题
 - 请求执行链：一条请求从 Netty 收包到 DB 读写、回包写出是怎么流动的
 - 主链源码导读：把启动、协议适配、执行器、命令分发和 `SET` 写路径按类和方法串起来
+- 核心逻辑索引：把核心类、核心方法、职责和边界集中成速查表
 - 协议细节：RESP 请求/回包、inline command、`HELLO 3` 协商、协议上限和错误断连策略
 - 命令与数据模型：命令家族怎么注册、逻辑类型和内部编码怎么对应、HLL 为什么复用 string
 - DB 内核：`YierdisDb`、key lifecycle、mutation executor、memory ledger、TTL、maxmemory 在单 DB 内部如何协作

@@ -8,17 +8,18 @@
 2. [`project-overview.md`](./project-overview.md)
 3. [`request-execution-flow.md`](./request-execution-flow.md)
 4. [`main-path-walkthrough.md`](./main-path-walkthrough.md)
-5. [`protocol-reference.md`](./protocol-reference.md)
-6. [`commands-and-data-model.md`](./commands-and-data-model.md)
-7. [`db-internals.md`](./db-internals.md)
-8. [`executor-and-backpressure.md`](./executor-and-backpressure.md)
-9. [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)
-10. [`configuration-and-operations.md`](./configuration-and-operations.md)
-11. [`client-and-bench-internals.md`](./client-and-bench-internals.md)
-12. [`testing-and-debugging.md`](./testing-and-debugging.md)
-13. [`glossary.md`](./glossary.md)
-14. [`module-architecture.md`](./module-architecture.md)
-15. [`development-navigation.md`](./development-navigation.md)
+5. [`core-logic-index.md`](./core-logic-index.md)
+6. [`protocol-reference.md`](./protocol-reference.md)
+7. [`commands-and-data-model.md`](./commands-and-data-model.md)
+8. [`db-internals.md`](./db-internals.md)
+9. [`executor-and-backpressure.md`](./executor-and-backpressure.md)
+10. [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)
+11. [`configuration-and-operations.md`](./configuration-and-operations.md)
+12. [`client-and-bench-internals.md`](./client-and-bench-internals.md)
+13. [`testing-and-debugging.md`](./testing-and-debugging.md)
+14. [`glossary.md`](./glossary.md)
+15. [`module-architecture.md`](./module-architecture.md)
+16. [`development-navigation.md`](./development-navigation.md)
 
 ## 文档分工
 
@@ -32,6 +33,8 @@
   说明从 Netty 收包到命令执行、DB 读写、回包写出的主链路，并用 `PING` 和 `SET` 做例子。
 - [`main-path-walkthrough.md`](./main-path-walkthrough.md)
   按源码阅读顺序，把 `YierdisServerBootstrap -> CommandExecutor -> YierdisEngine -> YierdisFastCommandProcessor -> YierdisStringOps` 这条主链逐段串起来。
+- [`core-logic-index.md`](./core-logic-index.md)
+  集中索引当前代码里的核心类、核心方法、职责和边界，适合读源码或改代码前快速定位。
 - [`db-internals.md`](./db-internals.md)
   专门展开 `YierdisDb`、key lifecycle、mutation executor、memory ledger、TTL 和 maxmemory 在单 DB 内核里是如何协作的。
 - [`executor-and-backpressure.md`](./executor-and-backpressure.md)
@@ -83,6 +86,7 @@
 - 如果你还没建立“这个项目为什么值得读”的整体印象，先看 [`project-introduction.md`](./project-introduction.md)。
 - 如果你准备跟踪一次请求的完整路径，先看 [`request-execution-flow.md`](./request-execution-flow.md)。
 - 如果你想开始一边看文档一边跟源码，接着看 [`main-path-walkthrough.md`](./main-path-walkthrough.md)。
+- 如果你想快速定位所有核心类、核心方法和边界，接着看 [`core-logic-index.md`](./core-logic-index.md)。
 - 如果你还没真正看懂线上协议长什么样，接着看 [`protocol-reference.md`](./protocol-reference.md)。
 - 如果你想把命令实现和内部编码对应起来，再看 [`commands-and-data-model.md`](./commands-and-data-model.md)。
 - 如果你想继续看单 DB 内核内部怎么协作，再看 [`db-internals.md`](./db-internals.md)。
