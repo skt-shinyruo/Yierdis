@@ -64,6 +64,18 @@
 
 这层最适合命令开发者，因为它不需要起 Netty server 就能把大部分行为跑清楚。
 
+#### 操作覆盖矩阵
+
+`docs/project-docs/operation-test-coverage-matrix.md` 是命令、DB API、native 内部结构三层测试覆盖的索引。新增命令或新增 server-only 命令时，先补矩阵行，再补对应测试；否则 `OperationCoverageMatrixTest` 或 `ServerOperationCoverageMatrixTest` 会失败。
+
+常用 guard：
+
+```bash
+mvn -pl yierdis-tests/yierdis-integration-tests,yierdis-server/yierdis-server-main -am \
+  -Dtest=OperationCoverageMatrixTest,ServerOperationCoverageMatrixTest,StringBitmapOperationCoverageTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
 ### 4. DB / 数据结构层
 
 目标是验证 native entry/root、类型 payload adapter、TTL、maxmemory 和内存估算。
