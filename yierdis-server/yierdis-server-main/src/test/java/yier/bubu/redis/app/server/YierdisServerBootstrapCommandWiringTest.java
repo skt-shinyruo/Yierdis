@@ -145,6 +145,34 @@ public class YierdisServerBootstrapCommandWiringTest {
     }
 
     @Test
+    public void infoVariantsCoverDefaultKnownAndUnknownSections() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0")) {
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+                socket.setSoTimeout(2000);
+
+                OutputStream out = socket.getOutputStream();
+                InputStream in = socket.getInputStream();
+
+                String defaultInfo = asString(roundTrip(out, in, "INFO"));
+                Assert.assertTrue(defaultInfo.contains("redis_version:"));
+
+                Map<String, Object> yierdis = respMap(roundTrip(out, in, "INFO", "yierdis"));
+                Assert.assertTrue(yierdis.containsKey("executor_policy"));
+
+                String memory = asString(roundTrip(out, in, "INFO", "memory"));
+                Assert.assertTrue(memory.contains("used_memory:"));
+
+                String keyspace = asString(roundTrip(out, in, "INFO", "keyspace"));
+                Assert.assertTrue(keyspace.contains("# Keyspace"));
+
+                String unknown = asString(roundTrip(out, in, "INFO", "unknown-section"));
+                Assert.assertEquals("", unknown);
+            }
+        }
+    }
+
+    @Test
     public void channelInitializerUsesRuntimeConfigForSessionAndProtocolLimits() throws Exception {
         try (InitializerTestEnv env = new InitializerTestEnv()) {
             YierdisServerRuntimeConfig commandLimitedConfig = runtimeConfig(1, 0, 3, 2, 4);

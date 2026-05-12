@@ -23,10 +23,21 @@ public class CollectionDirectOpsTest {
     public void hashHlenAndHdelCoverMissingNoOpWrongTypeAndTtl() {
         withDb(db -> {
             Assert.assertEquals(0L, db.reads().hashes().hlen(b("missing")));
+            Assert.assertNull(db.reads().hashes().hget(b("missing"), b("f")));
+            Assert.assertEquals(0, db.reads().hashes().hgetall(b("missing")).pairCount());
             Assert.assertEquals(0L, db.writes().hashes().hdel(b("missing"), List.of(b("f"))).value().longValue());
 
             Assert.assertEquals(2L, db.writes().hashes().hset(b("h"), List.of(b("a"), b("1"), b("b"), b("2"))).value().longValue());
             Assert.assertEquals(2L, db.reads().hashes().hlen(b("h")));
+            Assert.assertArrayEquals(b("1"), db.reads().hashes().hget(b("h"), b("a")));
+            Assert.assertNull(db.reads().hashes().hget(b("h"), b("missing-field")));
+            Assert.assertEquals(2, db.reads().hashes().hgetall(b("h")).pairCount());
+
+            db.writes().ttl().pexpire(view("h"), 5000);
+            Assert.assertTrue(db.reads().ttl().ttlMillis(view("h")) > 0L);
+            Assert.assertEquals(0L, db.writes().hashes().hset(b("h"), List.of(b("a"), b("updated"))).value().longValue());
+            Assert.assertArrayEquals(b("updated"), db.reads().hashes().hget(b("h"), b("a")));
+            Assert.assertTrue(db.reads().ttl().ttlMillis(view("h")) > 0L);
 
             Assert.assertEquals(0L, db.writes().hashes().hdel(b("h"), List.of(b("x"))).value().longValue());
             Assert.assertEquals(1L, db.writes().hashes().hdel(b("h"), List.of(b("a"))).value().longValue());
@@ -38,7 +49,10 @@ public class CollectionDirectOpsTest {
             Assert.assertNull(db.reads().keyspace().typeOf(view("h")));
 
             db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null);
+            expectWrongType(() -> db.reads().hashes().hget(b("s"), b("f")));
+            expectWrongType(() -> db.reads().hashes().hgetall(b("s")).pairCount());
             expectWrongType(() -> db.reads().hashes().hlen(b("s")));
+            expectWrongType(() -> db.writes().hashes().hset(b("s"), List.of(b("f"), b("v"))));
             expectWrongType(() -> db.writes().hashes().hdel(b("s"), List.of(b("f"))));
         });
     }
@@ -76,9 +90,16 @@ public class CollectionDirectOpsTest {
     @Test
     public void setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion() {
         withDb(db -> {
+            Assert.assertEquals(0, db.reads().sets().smembers(b("missing")).count());
+            Assert.assertFalse(db.reads().sets().sismember(b("missing"), b("a")));
+            Assert.assertEquals(0L, db.reads().sets().scard(b("missing")));
             Assert.assertEquals(0L, db.writes().sets().srem(b("missing"), List.of(b("a"))).value().longValue());
 
             Assert.assertEquals(3L, db.writes().sets().sadd(b("set"), List.of(b("a"), b("b"), b("c"))).value().longValue());
+            Assert.assertEquals(0L, db.writes().sets().sadd(b("set"), List.of(b("a"), b("b"))).value().longValue());
+            Assert.assertEquals(3L, db.reads().sets().scard(b("set")));
+            Assert.assertTrue(db.reads().sets().sismember(b("set"), b("a")));
+            Assert.assertFalse(db.reads().sets().sismember(b("set"), b("missing-member")));
             Assert.assertEquals(0L, db.writes().sets().srem(b("set"), List.of(b("x"))).value().longValue());
             Assert.assertEquals(2L, db.writes().sets().srem(b("set"), List.of(b("a"), b("c"))).value().longValue());
             Assert.assertEquals(Set.of("b"), new HashSet<>(sequence(db.reads().sets().smembers(b("set")))));
@@ -89,10 +110,16 @@ public class CollectionDirectOpsTest {
             db.writes().sets().sadd(b("ttl-set"), List.of(b("x")));
             db.writes().ttl().pexpire(view("ttl-set"), 1);
             sleepPastTtl();
+            Assert.assertFalse(db.reads().sets().sismember(b("ttl-set"), b("x")));
+            Assert.assertEquals(0L, db.reads().sets().scard(b("ttl-set")));
             Assert.assertEquals(0L, db.writes().sets().srem(b("ttl-set"), List.of(b("x"))).value().longValue());
             Assert.assertNull(db.reads().keyspace().typeOf(view("ttl-set")));
 
             db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null);
+            expectWrongType(() -> db.reads().sets().smembers(b("s")).count());
+            expectWrongType(() -> db.reads().sets().sismember(b("s"), b("v")));
+            expectWrongType(() -> db.reads().sets().scard(b("s")));
+            expectWrongType(() -> db.writes().sets().sadd(b("s"), List.of(b("x"))));
             expectWrongType(() -> db.writes().sets().srem(b("s"), List.of(b("x"))));
         });
     }
@@ -100,10 +127,21 @@ public class CollectionDirectOpsTest {
     @Test
     public void zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl() {
         withDb(db -> {
+            Assert.assertEquals(0, db.reads().zsets().zrange(b("missing"), 0, -1, false).count());
             Assert.assertEquals(0, db.reads().zsets().zrevrange(b("missing"), 0, -1, false).count());
+            Assert.assertEquals(0, db.reads().zsets().zrangeByScore(b("missing"), 0, true, 1, true, false, 0, 10).count());
+            Assert.assertEquals(0, db.reads().zsets().zrevrangeByScore(b("missing"), 0, true, 1, true, false, 0, 10).count());
+            Assert.assertEquals(0L, db.writes().zsets().zremrangeByScore(b("missing"), 0, true, 1, true).value().longValue());
+            Assert.assertEquals(0L, db.writes().zsets().zremrangeByRank(b("missing"), 0, -1).value().longValue());
             Assert.assertEquals(0L, db.writes().zsets().zrem(b("missing"), List.of(b("a"))).value().longValue());
 
-            db.writes().zsets().zadd(b("z"), List.of(b("1"), b("a"), b("2"), b("b"), b("3"), b("c"), b("4"), b("d")));
+            db.writes().zsets().zadd(b("ttl-z-update"), List.of(b("1"), b("a")));
+            db.writes().ttl().pexpire(view("ttl-z-update"), 5000);
+            Assert.assertTrue(db.reads().ttl().ttlMillis(view("ttl-z-update")) > 0L);
+            Assert.assertEquals(0L, db.writes().zsets().zadd(b("ttl-z-update"), List.of(b("5"), b("a"))).value().longValue());
+            Assert.assertTrue(db.reads().ttl().ttlMillis(view("ttl-z-update")) > 0L);
+
+            Assert.assertEquals(4L, db.writes().zsets().zadd(b("z"), List.of(b("1"), b("a"), b("2"), b("b"), b("3"), b("c"), b("4"), b("d"))).value().longValue());
 
             Assert.assertEquals(List.of("d", "c", "b", "a"), sequence(db.reads().zsets().zrevrange(b("z"), 0, -1, false)));
             Assert.assertEquals(List.of("b", "c"), sequence(db.reads().zsets().zrangeByScore(b("z"), 1, true, 4, true, false, 0, 10)));
@@ -127,7 +165,13 @@ public class CollectionDirectOpsTest {
             Assert.assertNull(db.reads().keyspace().typeOf(view("ttl-z")));
 
             db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null);
+            expectWrongType(() -> db.reads().zsets().zrange(b("s"), 0, -1, false).count());
             expectWrongType(() -> db.reads().zsets().zrevrange(b("s"), 0, -1, false).count());
+            expectWrongType(() -> db.reads().zsets().zrangeByScore(b("s"), 0, true, 1, true, false, 0, 10).count());
+            expectWrongType(() -> db.reads().zsets().zrevrangeByScore(b("s"), 0, true, 1, true, false, 0, 10).count());
+            expectWrongType(() -> db.writes().zsets().zadd(b("s"), List.of(b("1"), b("v"))));
+            expectWrongType(() -> db.writes().zsets().zremrangeByScore(b("s"), 0, true, 1, true));
+            expectWrongType(() -> db.writes().zsets().zremrangeByRank(b("s"), 0, -1));
             expectWrongType(() -> db.writes().zsets().zrem(b("s"), List.of(b("v"))));
         });
     }

@@ -89,13 +89,7 @@ public final class YierdisInstance implements AutoCloseable {
                 }
 
                 MaxmemoryUsageSource[] sharedUsage = new MaxmemoryUsageSource[]{
-                        () -> {
-                            try {
-                                return Math.max(0L, memoryRuntime.usedBytes());
-                            } catch (Throwable ignored) {
-                                return 0L;
-                            }
-                        }
+                        () -> sharedOffHeapUsedBytes(dbs)
                 };
 
                 governor = new YierdisGlobalMaxmemoryGovernor(
@@ -119,6 +113,32 @@ public final class YierdisInstance implements AutoCloseable {
         } catch (Throwable t) {
             throw YierdisInstanceResources.startupFailure(t, dbs, memoryRuntime, true);
         }
+    }
+
+    private static long sharedOffHeapUsedBytes(RuntimeDbEngine[] dbs) {
+        if (dbs == null || dbs.length == 0) {
+            return 0L;
+        }
+        long total = 0L;
+        for (RuntimeDbEngine engine : dbs) {
+            if (engine == null) {
+                continue;
+            }
+            long used;
+            try {
+                used = engine.memory().memoryStats().offHeapUsedBytes();
+            } catch (Throwable ignored) {
+                used = 0L;
+            }
+            if (used <= 0L) {
+                continue;
+            }
+            if (Long.MAX_VALUE - total < used) {
+                return Long.MAX_VALUE;
+            }
+            total += used;
+        }
+        return total;
     }
 
     public YierdisInstanceConfig config() {

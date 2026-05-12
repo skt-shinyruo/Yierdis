@@ -126,6 +126,38 @@ public class YierdisInstanceTest {
     }
 
     @Test
+    public void instanceObservabilityUsesSharedRuntimeOffHeapInGlobalScope() {
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(2)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
+                .maxmemoryBytes(0)
+                .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
+                .build();
+
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
+            instance.bindToCurrentThread();
+            byte[] value = new byte[4_000];
+            Arrays.fill(value, (byte) 'a');
+
+            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("a"), value, SetMode.NORMAL, null).value());
+            Assert.assertTrue(instance.engine(1).writes().strings().setString(b("b"), value, SetMode.NORMAL, null).value());
+
+            long off0 = instance.engine(0).memory().memoryStats().offHeapUsedBytes();
+            long off1 = instance.engine(1).memory().memoryStats().offHeapUsedBytes();
+
+            var stats = instance.observability().memoryStats();
+            Assert.assertTrue("expected off-heap to be included in global maxmemory accounting", stats.offHeapIncludedInMaxmemory());
+            long expectedLogicalOffHeap = addSaturating(off0, off1);
+            Assert.assertEquals("expected global observability to sum actual DB off-heap usage",
+                    expectedLogicalOffHeap,
+                    stats.offHeapUsedBytes());
+            Assert.assertEquals("global maxmemory usage should use the same off-heap total exposed in stats",
+                    stats.heapDataBytesEstimate() + stats.offHeapUsedBytes(),
+                    stats.usedBytesForMaxmemory());
+        }
+    }
+
+    @Test
     public void maxmemoryPolicyBuilderUsesDomainEnumAndKeepsStringCompatibility() {
         YierdisInstanceConfig typed = YierdisInstanceConfig.builder()
                 .maxmemoryPolicy(MaxmemoryPolicy.ALLKEYS_LRU)
@@ -146,6 +178,13 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(" ")
                 .build();
         Assert.assertEquals(MaxmemoryPolicy.NOEVICTION, legacyBlank.maxmemoryPolicy());
+    }
+
+    private static long addSaturating(long left, long right) {
+        if (Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     @Test

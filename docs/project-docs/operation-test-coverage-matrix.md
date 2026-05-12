@@ -13,381 +13,459 @@ Status values:
 
 ### AUTH
 
-- **Command layer**: `covered-by-shared-test` - `CommandProcessorTest.authReportsNoPasswordConfigured`.
+- **Command layer**: `covered-by-shared-test` - `CommandProcessorTest#authReportsNoPasswordConfigured`.
 - **DB API**: `not-applicable` - authentication currently has no DB state.
 - **Native internals**: `not-applicable` - authentication currently has no native storage state.
 
 ### APPEND
 
-- **Command layer**: `covered` - `CommandProcessorTest.stringIsBinarySafe` and `MaxmemoryDoubleReplyRegressionTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `StringWriteOps.append`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise raw string growth through native string storage.
+- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr`.
+- **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
+- **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootOverwriteReusesSpareCapacityForShorterValue`.
 
 ### BITCOUNT
 
-- **Command layer**: `covered` - `BitmapCommandTest.bitcountRangeFollowsRedisByteRangeRules`.
-- **DB API**: `covered-by-shared-test` - command tests exercise full and ranged `StringReadOps.bitcount`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise raw byte-backed bit counting.
+- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#bitmapTemplateCoversMutationReadsAndByteRanges` and `BitmapCommandTest#bitcountRangeFollowsRedisByteRangeRules`.
+- **DB API**: `covered` - `StringDirectOpsTest#bitcountSupportsWholeStringRangesMissingKeysTtlAndWrongType`.
+- **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootEnsureLengthSupportsBitmapStyleGrowthWithZeroFill`.
 
 ### CLIENT
 
-- **Command layer**: `covered` - `CommandProcessorTest.clientMetadataCommandsAreAccepted`.
+- **Command layer**: `covered` - `CommandProcessorTest#clientMetadataCommandsAreAccepted`.
 - **DB API**: `not-applicable` - client metadata lives on `ServerSession`.
 - **Native internals**: `not-applicable` - client metadata has no native storage state.
 
 ### COMMAND
 
-- **Command layer**: `covered` - `CommandMetadataRegressionTest` and `CommandDescriptorRegistryTest`.
+- **Command layer**: `covered` - `CommandVariantCoverageTest#commandVariantsCoverBaseCountInfoAndUnknownName`, `CommandMetadataRegressionTest#commandInfoKeepsMetadataForBuiltInAndExtraCommands`, and `CommandDescriptorRegistryTest#commandInfoUsesDescriptorFromRegistryRegistration`.
 - **DB API**: `not-applicable` - command metadata is registry state.
 - **Native internals**: `not-applicable` - command metadata has no native storage state.
 
 ### DECR
 
-- **Command layer**: `covered` - `CommandProcessorTest` integer-string tests cover decrement semantics.
-- **DB API**: `covered-by-shared-test` - command tests exercise `StringWriteOps.incrBy` with negative delta.
-- **Native internals**: `covered-by-shared-test` - command tests exercise integer-like raw string replacement.
+- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr`.
+- **DB API**: `covered-by-shared-test` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` covers `StringWriteOps.incrBy`.
+- **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootStoresIntegerLikeBytesAsRawNativeBytes`.
 
 ### DEL
 
-- **Command layer**: `covered-by-shared-test` - `CommandProcessorTest.binaryKeyIsSupportedEndToEnd`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `KeyspaceWriteOps.del`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native key removal.
+- **Command layer**: `covered-by-shared-test` - `CommandProcessorTest#binaryKeyIsSupportedEndToEnd`.
+- **DB API**: `covered` - `OffHeapStringStorageTest#setGetUsesFfmSliceAndDelFrees`.
+- **Native internals**: `covered-by-shared-test` - `NativeStorageRegressionTest#allNativeRootsReleaseToZeroAfterDelete`.
 
 ### DISCARD
 
-- **Command layer**: `covered` - `TransactionCommandTest`.
+- **Command layer**: `covered` - `TransactionCommandTest#execAndDiscardWithoutMultiReturnErrors` and `TransactionCommandTest#multiCannotBeNested`.
 - **DB API**: `not-applicable` - transaction queue control does not directly mutate DB API state.
 - **Native internals**: `not-applicable` - transaction queue control has no native storage state.
 
 ### ECHO
 
-- **Command layer**: `covered-by-shared-test` - connection command coverage exercises bulk-string echoing.
+- **Command layer**: `covered` - `CommandVariantCoverageTest#connectionCommandsCoverPingEchoQuitAndSelectValidation`.
 - **DB API**: `not-applicable` - echo has no DB state.
 - **Native internals**: `not-applicable` - echo has no native storage state.
 
 ### EXEC
 
-- **Command layer**: `covered` - `TransactionCommandTest`.
-- **DB API**: `covered-by-shared-test` - transaction tests execute queued DB operations.
-- **Native internals**: `covered-by-shared-test` - transaction tests execute queued storage mutations.
+- **Command layer**: `covered` - `TransactionCommandTest#multiQueuesAndExecAppliesInOrder`.
+- **DB API**: `covered-by-shared-test` - `TransactionCommandTest#multiQueuesAndExecAppliesInOrder`.
+- **Native internals**: `covered-by-shared-test` - `TransactionCommandTest#multiQueuesAndExecAppliesInOrder`.
 
 ### EXISTS
 
-- **Command layer**: `covered-by-shared-test` - `CommandProcessorTest.binaryKeyIsSupportedEndToEnd`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `KeyspaceReadOps.existsKey`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native key lookup.
+- **Command layer**: `covered-by-shared-test` - `CommandProcessorTest#binaryKeyIsSupportedEndToEnd`.
+- **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
+- **Native internals**: `covered-by-shared-test` - `NativeKeyDirectoryTest#nativeKeyDirectoryMapsKeysToStableHandlesAndReleasesThem`.
 
 ### EXPIRE
 
-- **Command layer**: `covered-by-shared-test` - `ExpireSemanticsTest` and server INFO keyspace coverage.
-- **DB API**: `covered-by-shared-test` - TTL tests exercise `TtlWriteOps.expire`.
-- **Native internals**: `covered-by-shared-test` - TTL tests exercise expire index insertion.
+- **Command layer**: `covered-by-shared-test` - `CommandProcessorTest#setGetIncrExpireTtl` and `CommandProcessorTest#expireZeroDeletesKeyImmediately`.
+- **DB API**: `covered` - `ExpireIndexTest#ttlAccountingAffectsUsedBytesForMaxmemory`.
+- **Native internals**: `covered-by-shared-test` - `ExpireIndexContractTest#heapExpireIndexRoundTripsHandleLookupAndClear` and `ExpireIndexContractTest#ffmExpireIndexRoundTripsHandleLookupAndClear`.
 
 ### EXPIREAT
 
-- **Command layer**: `covered-by-shared-test` - `ExpireSemanticsTest`.
-- **DB API**: `covered-by-shared-test` - TTL tests exercise `TtlWriteOps.expireAtSeconds`.
-- **Native internals**: `covered-by-shared-test` - TTL tests exercise expire index timestamp storage.
+- **Command layer**: `covered` - `Milestone1CompatTest#expireAtUsesUnixSecondsAndReportsRemainingTtl`.
+- **DB API**: `covered` - `TtlLifecycleDirectOpsTest#ttlMillisAndAbsoluteExpirationCoverMissingPersistentExpiredAndCleanup`.
+- **Native internals**: `covered-by-shared-test` - `ExpireIndexContractTest#heapExpireIndexRoundTripsHandleLookupAndClear`.
 
 ### FLUSHDB
 
-- **Command layer**: `covered-by-shared-test` - DB lifecycle command coverage exercises default and mode parsing.
-- **DB API**: `covered-by-shared-test` - command tests exercise `DbLifecycleOps.flushDb`.
-- **Native internals**: `covered-by-shared-test` - lifecycle tests exercise native table clearing.
+- **Command layer**: `covered` - `CommandVariantCoverageTest#flushdbVariantsCoverDefaultSyncAsyncAndInvalidMode`.
+- **DB API**: `covered` - `TtlLifecycleDirectOpsTest#lifecycleFlushDbAndMemoryObjectApisCoverExistingMissingAndAccessors`.
+- **Native internals**: `covered-by-shared-test` - `NativeStorageRegressionTest#allNativeRootsReleaseToZeroAfterDelete`.
 
 ### GET
 
-- **Command layer**: `covered` - `CommandProcessorTest.stringIsBinarySafe`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `StringReadOps.getStringBytes`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise raw string read through native key lookup.
+- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr`.
+- **DB API**: `covered` - `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit`.
+- **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootOverwritesWithoutReintroducingHeapPayloads`.
 
 ### GETBIT
 
-- **Command layer**: `covered` - `BitmapCommandTest.getbitSetbitBasicSemantics`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `StringReadOps.getBit`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise raw string bit addressing.
+- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#bitmapTemplateCoversMutationReadsAndByteRanges`.
+- **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
+- **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootEnsureLengthSupportsBitmapStyleGrowthWithZeroFill`.
 
 ### HELLO
 
-- **Command layer**: `covered-by-shared-test` - `YierdisServerBootstrapCommandWiringTest` and `RespHandshakeIntegrationTest`.
+- **Command layer**: `covered` - `RespHandshakeIntegrationTest#hello3SwitchesConnectionToResp3`, `RespHandshakeIntegrationTest#hello2SetnameUnsupportedProtoAndAuthAreHandled`, and `TransactionCommandTest#modulesCanRejectCommandsInsideMultiAndAbortTransaction`.
 - **DB API**: `not-applicable` - HELLO changes session protocol state.
 - **Native internals**: `not-applicable` - HELLO has no native storage state.
 
 ### HDEL
 
-- **Command layer**: `covered` - `HashCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `HashWriteOps.hdel`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native hash value mutation.
+- **Command layer**: `covered` - `HashCommandTest#hdelRemovesHashKeyWhenEmpty`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#hashHlenAndHdelCoverMissingNoOpWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `HashValueTest#packedHashSupportsUpdateAndDeleteWithRepacking`.
 
 ### HGET
 
-- **Command layer**: `covered` - `HashCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `HashReadOps.hget`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native hash lookup.
+- **Command layer**: `covered` - `HashCommandTest#hsetHgetHlenAndHgetallAreBinarySafe`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#hashHlenAndHdelCoverMissingNoOpWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `HashValueTest#packedHashSupportsUpdateAndDeleteWithRepacking`.
 
 ### HGETALL
 
-- **Command layer**: `covered` - `HashCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `HashReadOps.hgetall`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native hash iteration.
+- **Command layer**: `covered` - `HashCommandTest#hsetHgetHlenAndHgetallAreBinarySafe`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#hashHlenAndHdelCoverMissingNoOpWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `HashValueTest#packedHashSupportsUpdateAndDeleteWithRepacking`.
 
 ### HLEN
 
-- **Command layer**: `covered` - `HashCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `HashReadOps.hlen`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native hash cardinality.
+- **Command layer**: `covered` - `HashCommandTest#hsetHgetHlenAndHgetallAreBinarySafe`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#hashHlenAndHdelCoverMissingNoOpWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `HashValueTest#hashConvertsToHashTableAfterTooManyFields`.
 
 ### HSET
 
-- **Command layer**: `covered` - `HashCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `HashWriteOps.hset`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native hash field mutation.
+- **Command layer**: `covered` - `HashCommandTest#hsetHgetHlenAndHgetallAreBinarySafe`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#hashHlenAndHdelCoverMissingNoOpWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `HashValueTest#packedHashSupportsUpdateAndDeleteWithRepacking`.
 
 ### INFO
 
-- **Command layer**: `covered-by-shared-test` - `YierdisServerBootstrapCommandWiringTest`.
-- **DB API**: `covered-by-shared-test` - INFO keyspace and memory sections read DB observability state.
-- **Native internals**: `covered-by-shared-test` - INFO memory coverage reads native memory reporting.
+- **Command layer**: `covered` - `YierdisServerBootstrapCommandWiringTest#infoVariantsCoverDefaultKnownAndUnknownSections`.
+- **DB API**: `covered-by-shared-test` - `YierdisServerBootstrapCommandWiringTest#infoVariantsCoverDefaultKnownAndUnknownSections`.
+- **Native internals**: `covered-by-shared-test` - `YierdisDbMemoryReporterTest#memoryStatsIncludesFfmNativeBytesWhenEnabledForMaxmemory`.
 
 ### INCR
 
-- **Command layer**: `covered` - `CommandProcessorTest.incrWorksAfterAppendWhenRawStringHasSpareCapacity`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `StringWriteOps.incrBy`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise integer-like raw string replacement.
+- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr` and `CommandProcessorTest#incrWorksAfterAppendWhenRawStringHasSpareCapacity`.
+- **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
+- **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootStoresIntegerLikeBytesAsRawNativeBytes`.
 
 ### KEYS
 
-- **Command layer**: `covered` - `CommandProcessorTest.keysGlobMatchesOnRawBytes` and `CommandProcessorTest.keysGlobSupportsBracketsNegationRangesAndEscapes`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `KeyspaceReadOps.keys`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native key scanning and byte glob matching.
+- **Command layer**: `covered` - `CommandProcessorTest#keysGlobMatchesOnRawBytes` and `CommandProcessorTest#keysGlobSupportsBracketsNegationRangesAndEscapes`.
+- **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
+- **Native internals**: `covered-by-shared-test` - `ByteArrayKeyspaceTest#computeGetAndForEachWorkAcrossRehash` and `NativeKeyDirectoryTest#nativeKeyDirectoryExposesKeyHandlesForScanAndRandomSelection`.
 
 ### LPOP
 
-- **Command layer**: `covered` - `ListCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ListWriteOps.lpop`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native list head removal.
+- **Command layer**: `covered` - `ListCommandTest#lpopRpopCountVariantsAndDeleteWhenEmpty` and `Milestone1CompatTest#lpopCountHandlesNullArrayAndEmptyArray`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#listPushPopCoverBothEndsMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ListRootTest#listRootSupportsPushPopAndStreaming`.
 
 ### LPUSH
 
-- **Command layer**: `covered` - `ListCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ListWriteOps.lpush`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native list head insertion.
+- **Command layer**: `covered` - `ListCommandTest#lpopRpopCountVariantsAndDeleteWhenEmpty`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#listPushPopCoverBothEndsMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ListRootTest#listRootSupportsPushPopAndStreaming`.
 
 ### LRANGE
 
-- **Command layer**: `covered` - `ListCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ListReadOps.lrange`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native list range traversal.
+- **Command layer**: `covered` - `ListCommandTest#lrangeClampsIndicesAndHandlesOutOfRange`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#listPushPopCoverBothEndsMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ListRootTest#listRootSupportsPushPopAndStreaming`.
 
 ### MEMORY
 
-- **Command layer**: `covered` - `MemoryStatsCommandTest`.
-- **DB API**: `covered-by-shared-test` - memory command tests exercise `MemoryOps`.
-- **Native internals**: `covered-by-shared-test` - memory tests exercise native memory ledger and reporter output.
+- **Command layer**: `covered` - `MemoryStatsCommandTest#memoryStatsReturnsStableKeyValuePairs` and `MaxmemoryEvictionTest#objectEncodingAndMemoryUsageAreExposed`.
+- **DB API**: `covered` - `YierdisDbMemoryReporterTest#directMemoryUsageReadsNativeEntryAndValueMetadata` and `TtlLifecycleDirectOpsTest#lifecycleFlushDbAndMemoryObjectApisCoverExistingMissingAndAccessors`.
+- **Native internals**: `covered-by-shared-test` - `MemoryLedgerContractTest#reserveCommitRollbackMaintainInvariants`.
 
 ### MULTI
 
-- **Command layer**: `covered` - `TransactionCommandTest`.
+- **Command layer**: `covered` - `TransactionCommandTest#multiQueuesAndExecAppliesInOrder` and `TransactionCommandTest#multiCannotBeNested`.
 - **DB API**: `not-applicable` - MULTI only opens transaction queue state.
 - **Native internals**: `not-applicable` - MULTI has no native storage state.
 
 ### OBJECT
 
-- **Command layer**: `covered-by-shared-test` - object encoding coverage exercises command replies.
-- **DB API**: `covered-by-shared-test` - object coverage reads introspection state.
-- **Native internals**: `covered-by-shared-test` - object coverage reads root encoding metadata.
+- **Command layer**: `covered` - `MaxmemoryEvictionTest#objectEncodingAndMemoryUsageAreExposed`.
+- **DB API**: `covered` - `YierdisDbIntrospectionTest#objectEncodingReadsNativeEntryEncoding`.
+- **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootStoresIntegerLikeBytesAsRawNativeBytes` and `HashValueTest#hashConvertsToHashTableAfterTooManyFields`.
 
 ### PERSIST
 
-- **Command layer**: `covered-by-shared-test` - `ExpireSemanticsTest`.
-- **DB API**: `covered-by-shared-test` - TTL tests exercise `TtlWriteOps.persist`.
-- **Native internals**: `covered-by-shared-test` - TTL tests exercise expire index removal.
+- **Command layer**: `covered-by-shared-test` - `Milestone1CompatTest#ttlFamilyPersistAndPexpireMatchRedisLikeConventions`.
+- **DB API**: `covered` - `TtlLifecycleDirectOpsTest#ttlMillisAndAbsoluteExpirationCoverMissingPersistentExpiredAndCleanup`.
+- **Native internals**: `covered-by-shared-test` - `ExpireIndexTest#ttlAccountingAffectsUsedBytesForMaxmemory`.
 
 ### PEXPIRE
 
-- **Command layer**: `covered-by-shared-test` - `ExpireSemanticsTest`.
-- **DB API**: `covered-by-shared-test` - TTL tests exercise `TtlWriteOps.pexpire`.
-- **Native internals**: `covered-by-shared-test` - TTL tests exercise millisecond expire index insertion.
+- **Command layer**: `covered-by-shared-test` - `Milestone1CompatTest#ttlFamilyPersistAndPexpireMatchRedisLikeConventions` and `TtlMaxmemoryTest#pexpireIsRejectedWhenItWouldAddTtlMetadataUnderNoeviction`.
+- **DB API**: `covered` - `StringDirectOpsTest#bitcountSupportsWholeStringRangesMissingKeysTtlAndWrongType`.
+- **Native internals**: `covered-by-shared-test` - `ExpireIndexContractTest#ffmExpireIndexRoundTripsHandleLookupAndClear`.
 
 ### PEXPIREAT
 
-- **Command layer**: `covered-by-shared-test` - `ExpireSemanticsTest`.
-- **DB API**: `covered-by-shared-test` - TTL tests exercise `TtlWriteOps.expireAtMillis`.
-- **Native internals**: `covered-by-shared-test` - TTL tests exercise millisecond expire timestamp storage.
+- **Command layer**: `covered-by-shared-test` - `TtlMaxmemoryTest#pexpireatIsRejectedWhenItWouldAddTtlMetadataUnderNoeviction`.
+- **DB API**: `covered` - `TtlLifecycleDirectOpsTest#ttlMillisAndAbsoluteExpirationCoverMissingPersistentExpiredAndCleanup`.
+- **Native internals**: `covered-by-shared-test` - `ExpireIndexContractTest#ffmExpireIndexRoundTripsHandleLookupAndClear`.
 
 ### PFADD
 
-- **Command layer**: `covered` - `HllCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `HllWriteOps.pfadd`.
-- **Native internals**: `covered-by-shared-test` - HLL command tests exercise raw string-backed HLL storage.
+- **Command layer**: `covered` - `HllCommandTest#pfaddCreatesAndUpdates`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#hllPfcountAndPfmergeCoverMissingWrongTypeTtlAndDestinationSemantics`.
+- **Native internals**: `covered-by-shared-test` - `YierdisHyperLogLogTest#sparseHllAddsElementsAndMergesIntoRegisters`.
 
 ### PFCOUNT
 
-- **Command layer**: `covered` - `HllCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `HllReadOps.pfcount`.
-- **Native internals**: `covered-by-shared-test` - HLL command tests exercise raw string-backed HLL reads.
+- **Command layer**: `covered` - `HllCommandTest#pfcountAndPfmergeWorkOnUnion`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#hllPfcountAndPfmergeCoverMissingWrongTypeTtlAndDestinationSemantics`.
+- **Native internals**: `covered-by-shared-test` - `YierdisHyperLogLogTest#denseHllUpdatesInPlaceAndMergesViaBytesSlice`.
 
 ### PFMERGE
 
-- **Command layer**: `covered` - `HllCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `HllWriteOps.pfmerge`.
-- **Native internals**: `covered-by-shared-test` - HLL command tests exercise raw string-backed HLL merge storage.
+- **Command layer**: `covered` - `HllCommandTest#pfcountAndPfmergeWorkOnUnion`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#hllPfcountAndPfmergeCoverMissingWrongTypeTtlAndDestinationSemantics`.
+- **Native internals**: `covered-by-shared-test` - `YierdisHyperLogLogTest#denseBytesFromRegistersClampsAndRoundTripsThroughMerge`.
 
 ### PING
 
-- **Command layer**: `covered-by-shared-test` - command processor connection coverage exercises PING.
+- **Command layer**: `covered` - `CommandVariantCoverageTest#connectionCommandsCoverPingEchoQuitAndSelectValidation`.
 - **DB API**: `not-applicable` - PING has no DB state.
 - **Native internals**: `not-applicable` - PING has no native storage state.
 
 ### PTTL
 
-- **Command layer**: `covered-by-shared-test` - `ExpireSemanticsTest`.
-- **DB API**: `covered-by-shared-test` - TTL tests exercise `TtlReadOps.ttlMillis`.
-- **Native internals**: `covered-by-shared-test` - TTL tests exercise expire index reads.
+- **Command layer**: `covered-by-shared-test` - `Milestone1CompatTest#ttlFamilyPersistAndPexpireMatchRedisLikeConventions`.
+- **DB API**: `covered` - `TtlLifecycleDirectOpsTest#ttlMillisAndAbsoluteExpirationCoverMissingPersistentExpiredAndCleanup`.
+- **Native internals**: `covered-by-shared-test` - `ExpireIndexContractTest#ffmExpireIndexRoundTripsHandleLookupAndClear`.
 
 ### QUIT
 
-- **Command layer**: `covered-by-shared-test` - connection command coverage exercises close-after-reply semantics.
+- **Command layer**: `covered` - `CommandVariantCoverageTest#connectionCommandsCoverPingEchoQuitAndSelectValidation`.
 - **DB API**: `not-applicable` - QUIT has no DB state.
 - **Native internals**: `not-applicable` - QUIT has no native storage state.
 
 ### RPOP
 
-- **Command layer**: `covered` - `ListCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ListWriteOps.rpop`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native list tail removal.
+- **Command layer**: `covered` - `ListCommandTest#lpopRpopCountVariantsAndDeleteWhenEmpty` and `CommandVariantCoverageTest#rpopCountVariantsCoverNullArrayEmptyArrayAndNegativeCount`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#listPushPopCoverBothEndsMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ListRootTest#listRootSupportsPushPopAndStreaming`.
 
 ### RPUSH
 
-- **Command layer**: `covered` - `ListCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ListWriteOps.rpush`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native list tail insertion.
+- **Command layer**: `covered` - `ListCommandTest#lpopRpopCountVariantsAndDeleteWhenEmpty`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#listPushPopCoverBothEndsMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ListRootTest#listRootSupportsPushPopAndStreaming`.
 
 ### SADD
 
-- **Command layer**: `covered` - `SetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `SetWriteOps.sadd`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native set member insertion.
+- **Command layer**: `covered` - `SetCommandTest#upgradeFromIntsetKeepsExistingMembers`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion`.
+- **Native internals**: `covered-by-shared-test` - `SetValueTest#ffmSetKeepsIntsetMembersOffHeapAndUpgradesToHashtable`.
 
 ### SCAN
 
-- **Command layer**: `covered-by-shared-test` - keyspace scan coverage exercises cursor and match behavior.
-- **DB API**: `covered-by-shared-test` - scan coverage exercises `KeyspaceReadOps.scan`.
-- **Native internals**: `covered-by-shared-test` - scan coverage exercises native key iteration.
+- **Command layer**: `covered` - `Milestone1CompatTest#scanMatchAndCountEventuallyReturnsAllMatchingKeys`, `ScanCursorContractTest#cursorTerminatesAtZeroAndMakesProgress`, and `CommandVariantCoverageTest#scanVariantsCoverInvalidCursorAndDuplicateOptions`.
+- **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
+- **Native internals**: `covered-by-shared-test` - `NativeKeyDirectoryTest#nativeKeyDirectoryExposesKeyHandlesForScanAndRandomSelection`.
 
 ### SCARD
 
-- **Command layer**: `covered` - `SetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `SetReadOps.scard`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native set cardinality.
+- **Command layer**: `covered` - `SetCommandTest#upgradeFromIntsetKeepsExistingMembers`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion`.
+- **Native internals**: `covered-by-shared-test` - `SetValueTest#ffmSetKeepsIntsetMembersOffHeapAndUpgradesToHashtable`.
 
 ### SELECT
 
-- **Command layer**: `covered-by-shared-test` - `YierdisServerBootstrapCommandWiringTest`.
-- **DB API**: `covered-by-shared-test` - server tests exercise DB routing.
+- **Command layer**: `covered` - `CommandVariantCoverageTest#connectionCommandsCoverPingEchoQuitAndSelectValidation` and `YierdisServerBootstrapCommandWiringTest#bootstrapWiresServerAndCoreConnectionCommandsTogether`.
+- **DB API**: `covered-by-shared-test` - `YierdisServerBootstrapCommandWiringTest#bootstrapWiresServerAndCoreConnectionCommandsTogether`.
 - **Native internals**: `not-applicable` - SELECT changes session DB index, not native storage.
 
 ### SET
 
-- **Command layer**: `covered` - `CommandProcessorTest.stringIsBinarySafe`, `Milestone1CompatTest`, and `CommandErrorTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `StringWriteOps.set` and `setString`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise raw string writes through native key lookup.
+- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr`, `CommandProcessorTest#setNxReturnsNilWhenKeyExists`, and `Milestone1CompatTest#setGetAndKeepTtlBehaveAsExpected`.
+- **DB API**: `covered` - `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit`.
+- **Native internals**: `covered` - `StringRootTest#stringRootOverwritesWithoutReintroducingHeapPayloads`.
 
 ### SETBIT
 
-- **Command layer**: `covered` - `BitmapCommandTest.getbitSetbitBasicSemantics` and `BitmapCommandTest.setbitZeroFillsGrownBytesWithinCapacity`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `StringWriteOps.setBit`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise raw byte growth and bit mutation.
+- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#bitmapTemplateCoversMutationReadsAndByteRanges`.
+- **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
+- **Native internals**: `covered` - `StringRootTest#stringRootEnsureLengthSupportsBitmapStyleGrowthWithZeroFill`.
 
 ### SISMEMBER
 
-- **Command layer**: `covered` - `SetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `SetReadOps.sismember`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native set membership lookup.
+- **Command layer**: `covered` - `SetCommandTest#setMembersAreBinarySafeEvenWhenIntegerLike`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion`.
+- **Native internals**: `covered-by-shared-test` - `SetValueTest#ffmSetKeepsIntsetMembersOffHeapAndUpgradesToHashtable`.
 
 ### SMEMBERS
 
-- **Command layer**: `covered` - `SetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `SetReadOps.smembers`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native set iteration.
+- **Command layer**: `covered` - `SetCommandTest#setMembersAreBinarySafeEvenWhenIntegerLike`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion`.
+- **Native internals**: `covered-by-shared-test` - `SetValueTest#ffmSetKeepsIntsetMembersOffHeapAndUpgradesToHashtable`.
 
 ### SREM
 
-- **Command layer**: `covered` - `SetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `SetWriteOps.srem`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native set member removal.
+- **Command layer**: `covered` - `SetCommandTest#sremDeletesKeyWhenEmpty`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion`.
+- **Native internals**: `covered-by-shared-test` - `SetValueTest#ffmSetKeepsIntsetMembersOffHeapAndUpgradesToHashtable`.
 
 ### STATS
 
-- **Command layer**: `covered-by-shared-test` - `YierdisServerBootstrapCommandWiringTest`.
+- **Command layer**: `covered` - `YierdisServerBootstrapCommandWiringTest#bootstrapBindsTransportNeutralExecutorIntoInfoProvider`.
 - **DB API**: `not-applicable` - STATS reads server executor and connection counters.
 - **Native internals**: `not-applicable` - STATS has no native storage state.
 
 ### STRLEN
 
-- **Command layer**: `covered` - `CommandProcessorTest.stringIsBinarySafe`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `StringReadOps.strlen`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise raw string length reads.
+- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr`.
+- **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
+- **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootOverwritesWithoutReintroducingHeapPayloads`.
 
 ### TTL
 
-- **Command layer**: `covered-by-shared-test` - `ExpireSemanticsTest`.
-- **DB API**: `covered-by-shared-test` - TTL tests exercise `TtlReadOps.ttlSeconds`.
-- **Native internals**: `covered-by-shared-test` - TTL tests exercise expire index reads.
+- **Command layer**: `covered-by-shared-test` - `CommandProcessorTest#setGetIncrExpireTtl` and `Milestone1CompatTest#ttlFamilyPersistAndPexpireMatchRedisLikeConventions`.
+- **DB API**: `covered` - `ExpireIndexTest#ttlBytesViewLazilyDeletesExpiredKeys`.
+- **Native internals**: `covered-by-shared-test` - `ExpireIndexContractTest#heapExpireIndexRoundTripsHandleLookupAndClear`.
 
 ### TYPE
 
-- **Command layer**: `covered-by-shared-test` - type coverage exercises command replies for multiple value types.
-- **DB API**: `covered-by-shared-test` - type coverage exercises `KeyspaceReadOps.typeOf`.
-- **Native internals**: `covered-by-shared-test` - type coverage reads root type metadata.
+- **Command layer**: `covered-by-shared-test` - `ListCommandTest#lpopRpopCountVariantsAndDeleteWhenEmpty`, `HashCommandTest#hdelRemovesHashKeyWhenEmpty`, and `ZSetCommandTest#zremDeletesKeyWhenEmpty`.
+- **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
+- **Native internals**: `covered-by-shared-test` - `EntryTableContractTest#entryRecordCarriesNativeMetadata`.
 
 ### ZADD
 
-- **Command layer**: `covered` - `ZSetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ZSetWriteOps.zadd`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native zset member and score writes.
+- **Command layer**: `covered` - `ZSetCommandTest#zrangeTieBreakIsRawByteLexAndBoundsWork` and `ZSetCommandTest#zaddRejectsInvalidScores`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ZSetValueTest#packedZSetKeepsScoreOrderingAndSupportsUpdates`.
 
 ### ZRANGE
 
-- **Command layer**: `covered` - `ZSetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ZSetReadOps.zrange`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native zset range traversal.
+- **Command layer**: `covered` - `ZSetCommandTest#zrangeTieBreakIsRawByteLexAndBoundsWork`, `ZSetCommandTest#zrevrangeAndZrangeRevReturnReverseOrder`, and `CommandErrorTest#arityAndSyntaxErrorsMatchExpectedMessages`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ZSetValueTest#packedZSetKeepsScoreOrderingAndSupportsUpdates`.
 
 ### ZRANGEBYSCORE
 
-- **Command layer**: `covered` - `ZSetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ZSetReadOps.zrangeByScore`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native zset score index traversal.
+- **Command layer**: `covered` - `ZSetCommandTest#zrangeByScoreRespectsBoundsLimitAndWithScores` and `CommandErrorTest#scoreRangeCommandsValidateArityAndLimitArguments`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ZSetValueTest#packedZSetKeepsScoreOrderingAndSupportsUpdates`.
 
 ### ZREM
 
-- **Command layer**: `covered` - `ZSetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ZSetWriteOps.zrem`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native zset member removal.
+- **Command layer**: `covered` - `ZSetCommandTest#zremDeletesKeyWhenEmpty`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ZSetValueTest#packedZSetKeepsScoreOrderingAndSupportsUpdates`.
 
 ### ZREMRANGEBYRANK
 
-- **Command layer**: `covered` - `ZSetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ZSetWriteOps.zremrangeByRank`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native zset rank deletion.
+- **Command layer**: `covered` - `ZSetCommandTest#zremrangeByRankRemovesAndDeletesKeyWhenEmpty`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ZSetValueTest#zsetUpgradesAfterTooManyEntries`.
 
 ### ZREMRANGEBYSCORE
 
-- **Command layer**: `covered` - `ZSetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ZSetWriteOps.zremrangeByScore`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native zset score deletion.
+- **Command layer**: `covered` - `ZSetCommandTest#zremrangeByScoreRemovesAndDeletesKeyWhenEmpty`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ZSetValueTest#packedZSetKeepsScoreOrderingAndSupportsUpdates`.
 
 ### ZREVRANGE
 
-- **Command layer**: `covered` - `ZSetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ZSetReadOps.zrevrange`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native zset reverse range traversal.
+- **Command layer**: `covered` - `ZSetCommandTest#zrevrangeAndZrangeRevReturnReverseOrder` and `CommandVariantCoverageTest#zrevrangeInvalidOptionIsSyntaxError`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ZSetValueTest#packedZSetKeepsScoreOrderingAndSupportsUpdates`.
 
 ### ZREVRANGEBYSCORE
 
-- **Command layer**: `covered` - `ZSetCommandTest`.
-- **DB API**: `covered-by-shared-test` - command tests exercise `ZSetReadOps.zrevrangeByScore`.
-- **Native internals**: `covered-by-shared-test` - command tests exercise native zset reverse score traversal.
+- **Command layer**: `covered` - `ZSetCommandTest#zrevrangeByScoreRespectsBoundsLimitAndWithScores` and `CommandErrorTest#scoreRangeCommandsValidateArityAndLimitArguments`.
+- **DB API**: `covered` - `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl`.
+- **Native internals**: `covered-by-shared-test` - `ZSetValueTest#zsetUpgradesAfterTooManyEntries`.
+
+## Option And Subcommand Coverage
+
+- **Command variant**: `COMMAND / base` - `covered` - `CommandVariantCoverageTest#commandVariantsCoverBaseCountInfoAndUnknownName`.
+- **Command variant**: `COMMAND / COUNT` - `covered` - `CommandVariantCoverageTest#commandVariantsCoverBaseCountInfoAndUnknownName`.
+- **Command variant**: `COMMAND / INFO` - `covered` - `CommandVariantCoverageTest#commandVariantsCoverBaseCountInfoAndUnknownName`.
+- **Command variant**: `COMMAND / unknown name` - `covered` - `CommandVariantCoverageTest#commandVariantsCoverBaseCountInfoAndUnknownName`.
+- **Command variant**: `CLIENT / SETINFO` - `covered` - `CommandProcessorTest#clientMetadataCommandsAreAccepted`.
+- **Command variant**: `CLIENT / SETNAME` - `covered` - `CommandProcessorTest#clientMetadataCommandsAreAccepted`.
+- **Command variant**: `CLIENT / GETNAME` - `covered` - `CommandProcessorTest#clientMetadataCommandsAreAccepted`.
+- **Command variant**: `CLIENT / unknown subcommand` - `covered` - `CommandVariantCoverageTest#clientUnknownSubcommandReturnsRedisStyleError`.
+- **Command variant**: `HELLO / RESP2` - `covered` - `RespHandshakeIntegrationTest#hello2SetnameUnsupportedProtoAndAuthAreHandled`.
+- **Command variant**: `HELLO / RESP3` - `covered` - `RespHandshakeIntegrationTest#hello3SwitchesConnectionToResp3`.
+- **Command variant**: `HELLO / SETNAME` - `covered` - `RespHandshakeIntegrationTest#hello2SetnameUnsupportedProtoAndAuthAreHandled`.
+- **Command variant**: `HELLO / unsupported proto` - `covered` - `RespHandshakeIntegrationTest#hello2SetnameUnsupportedProtoAndAuthAreHandled`.
+- **Command variant**: `HELLO / AUTH` - `covered` - `RespHandshakeIntegrationTest#hello2SetnameUnsupportedProtoAndAuthAreHandled`.
+- **Command variant**: `HELLO / disallowed in MULTI` - `covered` - `TransactionCommandTest#modulesCanRejectCommandsInsideMultiAndAbortTransaction`.
+- **Command variant**: `INFO / no section` - `covered` - `YierdisServerBootstrapCommandWiringTest#infoVariantsCoverDefaultKnownAndUnknownSections`.
+- **Command variant**: `INFO / yierdis` - `covered` - `YierdisServerBootstrapCommandWiringTest#infoVariantsCoverDefaultKnownAndUnknownSections`.
+- **Command variant**: `INFO / memory` - `covered` - `YierdisServerBootstrapCommandWiringTest#infoVariantsCoverDefaultKnownAndUnknownSections`.
+- **Command variant**: `INFO / keyspace` - `covered` - `YierdisServerBootstrapCommandWiringTest#infoVariantsCoverDefaultKnownAndUnknownSections`.
+- **Command variant**: `INFO / unknown section` - `covered` - `YierdisServerBootstrapCommandWiringTest#infoVariantsCoverDefaultKnownAndUnknownSections`.
+- **Command variant**: `MEMORY / STATS` - `covered` - `MemoryStatsCommandTest#memoryStatsReturnsStableKeyValuePairs`.
+- **Command variant**: `MEMORY / USAGE` - `covered` - `MaxmemoryEvictionTest#objectEncodingAndMemoryUsageAreExposed`.
+- **Command variant**: `MEMORY / invalid subcommand` - `covered` - `MaxmemoryEvictionTest#objectEncodingAndMemoryUsageAreExposed`.
+- **Command variant**: `OBJECT / ENCODING` - `covered` - `MaxmemoryEvictionTest#objectEncodingAndMemoryUsageAreExposed`.
+- **Command variant**: `OBJECT / invalid subcommand` - `covered` - `MaxmemoryEvictionTest#objectEncodingAndMemoryUsageAreExposed`.
+- **Command variant**: `SCAN / cursor` - `covered` - `ScanCursorContractTest#cursorTerminatesAtZeroAndMakesProgress`.
+- **Command variant**: `SCAN / MATCH` - `covered` - `Milestone1CompatTest#scanMatchAndCountEventuallyReturnsAllMatchingKeys`.
+- **Command variant**: `SCAN / COUNT` - `covered` - `ScanCursorContractTest#countAndMatchNeverDeadlockEvenWhenNoKeyMatches`.
+- **Command variant**: `SCAN / invalid cursor` - `covered` - `CommandVariantCoverageTest#scanVariantsCoverInvalidCursorAndDuplicateOptions`.
+- **Command variant**: `SCAN / duplicate option` - `covered` - `CommandVariantCoverageTest#scanVariantsCoverInvalidCursorAndDuplicateOptions`.
+- **Command variant**: `SET / plain` - `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr`.
+- **Command variant**: `SET / NX` - `covered` - `CommandProcessorTest#setNxReturnsNilWhenKeyExists`.
+- **Command variant**: `SET / XX` - `covered` - `CommandVariantCoverageTest#setVariantsCoverXxPxExatPxatAndConflicts`.
+- **Command variant**: `SET / GET` - `covered` - `Milestone1CompatTest#setGetAndKeepTtlBehaveAsExpected`.
+- **Command variant**: `SET / EX` - `covered` - `Milestone1CompatTest#setGetAndKeepTtlBehaveAsExpected`.
+- **Command variant**: `SET / PX` - `covered` - `CommandVariantCoverageTest#setVariantsCoverXxPxExatPxatAndConflicts`.
+- **Command variant**: `SET / EXAT` - `covered` - `CommandVariantCoverageTest#setVariantsCoverXxPxExatPxatAndConflicts`.
+- **Command variant**: `SET / PXAT` - `covered` - `CommandVariantCoverageTest#setVariantsCoverXxPxExatPxatAndConflicts`.
+- **Command variant**: `SET / KEEPTTL` - `covered` - `Milestone1CompatTest#setGetAndKeepTtlBehaveAsExpected`.
+- **Command variant**: `SET / conflicts` - `covered` - `Milestone1CompatTest#setRejectsConflictingModeOptions`.
+- **Command variant**: `BITCOUNT / full string` - `covered` - `StringBitmapOperationCoverageTest#bitmapTemplateCoversMutationReadsAndByteRanges`.
+- **Command variant**: `BITCOUNT / positive byte range` - `covered` - `StringBitmapOperationCoverageTest#bitmapTemplateCoversMutationReadsAndByteRanges`.
+- **Command variant**: `BITCOUNT / negative byte range` - `covered` - `StringBitmapOperationCoverageTest#bitmapTemplateCoversMutationReadsAndByteRanges`.
+- **Command variant**: `BITCOUNT / invalid bounds` - `covered` - `CommandVariantCoverageTest#bitcountInvalidBoundsRejectNonIntegerRanges`.
+- **Command variant**: `LPOP / single pop` - `covered` - `ListCommandTest#lpopRpopCountVariantsAndDeleteWhenEmpty`.
+- **Command variant**: `LPOP / counted pop` - `covered` - `ListCommandTest#lpopRpopCountVariantsAndDeleteWhenEmpty`.
+- **Command variant**: `LPOP / zero count` - `covered` - `Milestone1CompatTest#lpopCountHandlesNullArrayAndEmptyArray`.
+- **Command variant**: `LPOP / negative count` - `covered` - `Milestone1CompatTest#lpopCountHandlesNullArrayAndEmptyArray`.
+- **Command variant**: `RPOP / single pop` - `covered` - `ListCommandTest#lpopRpopCountVariantsAndDeleteWhenEmpty`.
+- **Command variant**: `RPOP / counted pop` - `covered` - `ListCommandTest#lpopRpopCountVariantsAndDeleteWhenEmpty`.
+- **Command variant**: `RPOP / zero count` - `covered` - `CommandVariantCoverageTest#rpopCountVariantsCoverNullArrayEmptyArrayAndNegativeCount`.
+- **Command variant**: `RPOP / negative count` - `covered` - `CommandVariantCoverageTest#rpopCountVariantsCoverNullArrayEmptyArrayAndNegativeCount`.
+- **Command variant**: `ZRANGE / normal` - `covered` - `ZSetCommandTest#zrangeTieBreakIsRawByteLexAndBoundsWork`.
+- **Command variant**: `ZRANGE / WITHSCORES` - `covered` - `ZSetCommandTest#zrangeTieBreakIsRawByteLexAndBoundsWork`.
+- **Command variant**: `ZRANGE / REV` - `covered` - `ZSetCommandTest#zrevrangeAndZrangeRevReturnReverseOrder`.
+- **Command variant**: `ZRANGE / bounds` - `covered` - `ZSetCommandTest#zrangeTieBreakIsRawByteLexAndBoundsWork`.
+- **Command variant**: `ZRANGE / invalid option` - `covered` - `CommandErrorTest#arityAndSyntaxErrorsMatchExpectedMessages`.
+- **Command variant**: `ZREVRANGE / normal` - `covered` - `ZSetCommandTest#zrevrangeAndZrangeRevReturnReverseOrder`.
+- **Command variant**: `ZREVRANGE / WITHSCORES` - `covered` - `ZSetCommandTest#zrevrangeAndZrangeRevReturnReverseOrder`.
+- **Command variant**: `ZREVRANGE / invalid option` - `covered` - `CommandVariantCoverageTest#zrevrangeInvalidOptionIsSyntaxError`.
+- **Command variant**: `ZRANGEBYSCORE / inclusive bounds` - `covered` - `ZSetCommandTest#zrangeByScoreRespectsBoundsLimitAndWithScores`.
+- **Command variant**: `ZRANGEBYSCORE / exclusive bounds` - `covered` - `ZSetCommandTest#zrangeByScoreRespectsBoundsLimitAndWithScores`.
+- **Command variant**: `ZRANGEBYSCORE / infinities` - `covered` - `ZSetCommandTest#zrangeByScoreRespectsBoundsLimitAndWithScores`.
+- **Command variant**: `ZRANGEBYSCORE / WITHSCORES` - `covered` - `ZSetCommandTest#zrangeByScoreRespectsBoundsLimitAndWithScores`.
+- **Command variant**: `ZRANGEBYSCORE / LIMIT` - `covered` - `ZSetCommandTest#zrangeByScoreRespectsBoundsLimitAndWithScores`.
+- **Command variant**: `ZRANGEBYSCORE / invalid syntax` - `covered` - `CommandErrorTest#scoreRangeCommandsValidateArityAndLimitArguments`.
+- **Command variant**: `ZREVRANGEBYSCORE / inclusive bounds` - `covered` - `ZSetCommandTest#zrevrangeByScoreRespectsBoundsLimitAndWithScores`.
+- **Command variant**: `ZREVRANGEBYSCORE / exclusive bounds` - `covered` - `ZSetCommandTest#zrevrangeByScoreRespectsBoundsLimitAndWithScores`.
+- **Command variant**: `ZREVRANGEBYSCORE / infinities` - `covered` - `ZSetCommandTest#zrevrangeByScoreRespectsBoundsLimitAndWithScores`.
+- **Command variant**: `ZREVRANGEBYSCORE / WITHSCORES` - `covered` - `ZSetCommandTest#zrevrangeByScoreRespectsBoundsLimitAndWithScores`.
+- **Command variant**: `ZREVRANGEBYSCORE / LIMIT` - `covered` - `ZSetCommandTest#zrevrangeByScoreRespectsBoundsLimitAndWithScores`.
+- **Command variant**: `ZREVRANGEBYSCORE / invalid syntax` - `covered` - `CommandErrorTest#scoreRangeCommandsValidateArityAndLimitArguments`.
+- **Command variant**: `FLUSHDB / default` - `covered` - `CommandVariantCoverageTest#flushdbVariantsCoverDefaultSyncAsyncAndInvalidMode`.
+- **Command variant**: `FLUSHDB / SYNC` - `covered` - `CommandVariantCoverageTest#flushdbVariantsCoverDefaultSyncAsyncAndInvalidMode`.
+- **Command variant**: `FLUSHDB / ASYNC` - `covered` - `CommandVariantCoverageTest#flushdbVariantsCoverDefaultSyncAsyncAndInvalidMode`.
+- **Command variant**: `FLUSHDB / invalid mode` - `covered` - `CommandVariantCoverageTest#flushdbVariantsCoverDefaultSyncAsyncAndInvalidMode`.
 
 ## Option And Subcommand Inventory
 
@@ -412,49 +490,100 @@ Status values:
 
 ## DB API Inventory
 
-| API family | Methods that require rows when direct API tests are added |
-| --- | --- |
-| `StringReadOps` | `getStringBytes`, `getStringValue`, `strlen`, `getBit`, `bitcount`, ranged `bitcount` |
-| `StringWriteOps` | `set`, `setString`, `append`, `setBit`, `incrBy` |
-| `HashReadOps` | `hget`, `hgetall`, `hlen` |
-| `HashWriteOps` | `hset`, `hdel` |
-| `ListReadOps` | `lrange` |
-| `ListWriteOps` | `lpush`, `rpush`, `lpop`, `rpop` |
-| `SetReadOps` | `smembers`, `sismember`, `scard` |
-| `SetWriteOps` | `sadd`, `srem` |
-| `ZSetReadOps` | `zrange`, `zrevrange`, `zrangeByScore`, `zrevrangeByScore` |
-| `ZSetWriteOps` | `zadd`, `zremrangeByScore`, `zremrangeByRank`, `zrem` |
-| `HllReadOps` | `pfcount` |
-| `HllWriteOps` | `pfadd`, `pfmerge` |
-| `KeyspaceReadOps` | `typeOf`, `existsKey`, `keys`, `scan` |
-| `KeyspaceWriteOps` | `del` |
-| `TtlReadOps` | `ttlSeconds`, `ttlMillis` |
-| `TtlWriteOps` | `expire`, `pexpire`, `expireAtSeconds`, `expireAtMillis`, `persist` |
-| `DbLifecycleOps` | `flushDb` |
-| `MemoryOps` | stats, usage, reporter integration |
+| API method | Status | Evidence |
+| --- | --- | --- |
+| `StringReadOps.getStringBytes` | `covered` | `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit` |
+| `StringReadOps.getStringValue` | `covered` | `OffHeapStringStorageTest#setGetUsesFfmSliceAndDelFrees` |
+| `StringReadOps.strlen` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
+| `StringReadOps.getBit` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
+| `StringReadOps.bitcount` | `covered` | `StringDirectOpsTest#bitcountSupportsWholeStringRangesMissingKeysTtlAndWrongType` |
+| `StringReadOps.bitcount(start,end)` | `covered` | `StringDirectOpsTest#bitcountSupportsWholeStringRangesMissingKeysTtlAndWrongType` |
+| `StringWriteOps.set` | `covered` | `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit` |
+| `StringWriteOps.setString(byte[])` | `covered` | `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit` |
+| `StringWriteOps.setString(BytesSlice)` | `covered` | `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit` |
+| `StringWriteOps.append` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
+| `StringWriteOps.setBit` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
+| `StringWriteOps.incrBy` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
+| `HashReadOps.hget` | `covered` | `CollectionDirectOpsTest#hashHlenAndHdelCoverMissingNoOpWrongTypeAndTtl` |
+| `HashReadOps.hgetall` | `covered` | `CollectionDirectOpsTest#hashHlenAndHdelCoverMissingNoOpWrongTypeAndTtl` |
+| `HashReadOps.hlen` | `covered` | `CollectionDirectOpsTest#hashHlenAndHdelCoverMissingNoOpWrongTypeAndTtl` |
+| `HashWriteOps.hset` | `covered` | `CollectionDirectOpsTest#hashHlenAndHdelCoverMissingNoOpWrongTypeAndTtl` |
+| `HashWriteOps.hdel` | `covered` | `CollectionDirectOpsTest#hashHlenAndHdelCoverMissingNoOpWrongTypeAndTtl` |
+| `ListReadOps.lrange` | `covered` | `CollectionDirectOpsTest#listPushPopCoverBothEndsMissingWrongTypeAndTtl` |
+| `ListWriteOps.lpush` | `covered` | `CollectionDirectOpsTest#listPushPopCoverBothEndsMissingWrongTypeAndTtl` |
+| `ListWriteOps.rpush` | `covered` | `CollectionDirectOpsTest#listPushPopCoverBothEndsMissingWrongTypeAndTtl` |
+| `ListWriteOps.lpop` | `covered` | `CollectionDirectOpsTest#listPushPopCoverBothEndsMissingWrongTypeAndTtl` |
+| `ListWriteOps.rpop` | `covered` | `CollectionDirectOpsTest#listPushPopCoverBothEndsMissingWrongTypeAndTtl` |
+| `SetReadOps.smembers` | `covered` | `CollectionDirectOpsTest#setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion` |
+| `SetReadOps.sismember` | `covered` | `CollectionDirectOpsTest#setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion` |
+| `SetReadOps.scard` | `covered` | `CollectionDirectOpsTest#setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion` |
+| `SetWriteOps.sadd` | `covered` | `CollectionDirectOpsTest#setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion` |
+| `SetWriteOps.srem` | `covered` | `CollectionDirectOpsTest#setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion` |
+| `ZSetReadOps.zrange` | `covered` | `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl` |
+| `ZSetReadOps.zrevrange` | `covered` | `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl` |
+| `ZSetReadOps.zrangeByScore` | `covered` | `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl` |
+| `ZSetReadOps.zrevrangeByScore` | `covered` | `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl` |
+| `ZSetWriteOps.zadd` | `covered` | `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl` |
+| `ZSetWriteOps.zremrangeByScore` | `covered` | `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl` |
+| `ZSetWriteOps.zremrangeByRank` | `covered` | `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl` |
+| `ZSetWriteOps.zrem` | `covered` | `CollectionDirectOpsTest#zsetReadsAndRemovalsCoverReverseScoreRankMissingWrongTypeAndTtl` |
+| `HllReadOps.pfcount` | `covered` | `CollectionDirectOpsTest#hllPfcountAndPfmergeCoverMissingWrongTypeTtlAndDestinationSemantics` |
+| `HllWriteOps.pfadd` | `covered` | `CollectionDirectOpsTest#hllPfcountAndPfmergeCoverMissingWrongTypeTtlAndDestinationSemantics` |
+| `HllWriteOps.pfmerge` | `covered` | `CollectionDirectOpsTest#hllPfcountAndPfmergeCoverMissingWrongTypeTtlAndDestinationSemantics` |
+| `KeyspaceReadOps.typeOf` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
+| `KeyspaceReadOps.existsKey` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
+| `KeyspaceReadOps.keys` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
+| `KeyspaceReadOps.scan` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
+| `KeyspaceWriteOps.del` | `covered` | `OffHeapStringStorageTest#setGetUsesFfmSliceAndDelFrees` |
+| `TtlReadOps.ttlSeconds` | `covered` | `ExpireIndexTest#ttlBytesViewLazilyDeletesExpiredKeys` |
+| `TtlReadOps.ttlMillis` | `covered` | `TtlLifecycleDirectOpsTest#ttlMillisAndAbsoluteExpirationCoverMissingPersistentExpiredAndCleanup` |
+| `TtlWriteOps.expire` | `covered` | `ExpireIndexTest#ttlAccountingAffectsUsedBytesForMaxmemory` |
+| `TtlWriteOps.pexpire` | `covered` | `StringDirectOpsTest#bitcountSupportsWholeStringRangesMissingKeysTtlAndWrongType` |
+| `TtlWriteOps.expireAtSeconds` | `covered` | `TtlLifecycleDirectOpsTest#ttlMillisAndAbsoluteExpirationCoverMissingPersistentExpiredAndCleanup` |
+| `TtlWriteOps.expireAtMillis` | `covered` | `TtlLifecycleDirectOpsTest#ttlMillisAndAbsoluteExpirationCoverMissingPersistentExpiredAndCleanup` |
+| `TtlWriteOps.persist` | `covered` | `TtlLifecycleDirectOpsTest#ttlMillisAndAbsoluteExpirationCoverMissingPersistentExpiredAndCleanup` |
+| `DbLifecycleOps.flushDb` | `covered` | `TtlLifecycleDirectOpsTest#lifecycleFlushDbAndMemoryObjectApisCoverExistingMissingAndAccessors` |
+| `MemoryOps.memoryUsage` | `covered` | `YierdisDbMemoryReporterTest#directMemoryUsageReadsNativeEntryAndValueMetadata` |
+| `MemoryOps.memoryStats` | `covered` | `YierdisDbMemoryReporterTest#memoryStatsIncludesFfmNativeBytesWhenEnabledForMaxmemory` |
+| `MemoryOps.objectEncoding` | `covered` | `YierdisDbIntrospectionTest#objectEncodingReadsNativeEntryEncoding` |
+| `ExpirationManager.cleanupExpired` | `covered` | `TtlLifecycleDirectOpsTest#ttlMillisAndAbsoluteExpirationCoverMissingPersistentExpiredAndCleanup` |
+| `DbEngine.reads` | `covered` | `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit` |
+| `DbEngine.writes` | `covered` | `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit` |
+| `DbEngine.expiration` | `covered` | `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit` |
+| `DbEngine.memory` | `covered` | `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit` |
+| `DbEngine.lifecycle` | `covered` | `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit` |
 
 ## Native/Internal Inventory
 
-| Area | Structures and behavior that require direct internal tests |
-| --- | --- |
-| Entry table | `EntryRecord`, `EntryTable`, `EntryHandle`, `ValueHandle` |
-| Key handles | `KeyHandle`, `HeapKeyHandle`, `FfmKeyHandle`, byte equality, hash stability, lifecycle |
-| Native key directory | `NativeKeyDirectory` lookup, insert, replace, remove, scan, tombstone, rehash |
-| FFM keyspace | `YierdisFfmBlobStore`, `YierdisFfmKeyspace`, allocation failure cleanup |
-| Heap keyspace | `ByteArrayKeyspace`, binary key matching, scan cursor behavior |
-| String roots | `StringRoot`, raw bytes, integer-like bytes, spare capacity, bitmap growth |
-| Collection roots | `ListRoot`, `HashRoot`, `SetRoot`, `ZSetRoot` |
-| Collection values | `ListValue`, `HashValue`, `SetValue`, `ZSetValue` |
-| HLL storage | `YierdisHyperLogLog` stored as `StringRoot` with `ValueType.STRING` and `ValueEncoding.STRING_RAW` |
-| Expiration | `YierdisExpireIndex`, `YierdisHeapExpireIndex`, `YierdisFfmExpireIndex` |
-| Memory accounting | `YierdisDbMemoryLedger`, `MemoryLedger`, `InMemoryLedger`, reserve, commit, rollback |
-| Mutation executor | `YierdisDbMutationExecutor`, type conversion, wrong-type errors, cleanup on failure |
-| Observability | `YierdisDbMemoryEstimator`, `YierdisDbMemoryReporter`, `YierdisDbIntrospection` |
-| Maxmemory | sampling, eviction policy, double-reply regression, noeviction behavior |
+| Area | Status | Evidence |
+| --- | --- | --- |
+| `EntryRecord` metadata | `covered` | `EntryTableContractTest#entryRecordCarriesNativeMetadata` |
+| `EntryTable` allocation and release | `covered` | `EntryTableContractTest#entryTableAllocatesAndReleasesHandles` |
+| `EntryTable` replacement | `covered` | `EntryTableContractTest#entryTableReplacesRecordsInPlaceAndClosesNativeSlots` |
+| `EntryTable` growth / idle slab lifecycle | `covered` | `EntryTableContractTest#ownedSlabEntryTableReleasesIdleSlabsAndCanAllocateAgain` |
+| `EntryHandle` identity | `covered` | `EntryHandleContractTest#entryHandleCarriesRawIdentity` |
+| `ValueHandle` identity and sentinels | `covered` | `ValueHandleContractTest#valueHandleExposesRawIdentityAndRecordEquality` and `ValueHandleContractTest#valueHandlePreservesSentinelRawValues` |
+| `KeyHandle`, `HeapKeyHandle`, `FfmKeyHandle` equality and hash stability | `covered` | `KeyHandleContractTest#keyHandleEqualityIsContentBasedAcrossHeapAndFfm` and `KeyHandleContractTest#keyHandleDistinguishesDifferentKeys` |
+| `NativeKeyDirectory` lookup, insert, replacement, removal, scan, random selection, and growth | `covered` | `NativeKeyDirectoryTest#nativeKeyDirectoryMapsKeysToStableHandlesAndReleasesThem`, `NativeKeyDirectoryTest#nativeKeyDirectoryExposesKeyHandlesForScanAndRandomSelection`, and `NativeKeyDirectoryTest#nativeKeyDirectoryScanCanStopEarlyAndRandomKeyIsNullWhenEmpty` |
+| `YierdisFfmBlobStore` allocation and release | `covered` | `YierdisFfmBlobStoreTest#storeRetainReleaseTracksLiveBytesUntilFinalRelease` |
+| `YierdisFfmKeyspace` allocation failure cleanup | `covered` | `YierdisFfmKeyspaceTest#computeWithHandleReleasesNewKeyWhenRemappingThrows` and `YierdisFfmKeyspaceTest#computeWithHandleKeepsExistingEntryWhenRemappingThrows` |
+| `ByteArrayKeyspace` binary lookup, scan, tombstone, and rehash | `covered` | `ByteArrayKeyspaceTest#sliceLookupFindsExistingKeysAndReturnsCanonicalKey`, `ByteArrayKeyspaceTest#computeGetAndForEachWorkAcrossRehash`, and `ByteArrayKeyspaceTest#tombstonesTriggerRebuildWithoutGrowing` |
+| `StringRoot` raw bytes, integer-like bytes, spare capacity, and bitmap growth | `covered` | `StringRootTest#stringRootOverwritesWithoutReintroducingHeapPayloads`, `StringRootTest#stringRootStoresIntegerLikeBytesAsRawNativeBytes`, `StringRootTest#stringRootOverwriteReusesSpareCapacityForShorterValue`, and `StringRootTest#stringRootEnsureLengthSupportsBitmapStyleGrowthWithZeroFill` |
+| `ListRoot` push, pop, release, and streaming | `covered` | `ListRootTest#listRootSupportsPushPopAndStreaming` |
+| `HashRoot`, `SetRoot`, and `ZSetRoot` round trips | `covered` | `CollectionRootTest#hashSetAndZsetRootsRoundTripMembers` |
+| `ListValue` packed and quicklist paths | `covered` | `ListValueTest#packedListPreservesNullVsEmptyElements` and `ListValueTest#quicklistSplitsByBytesAndMerges` |
+| `HashValue` packed and hashtable paths | `covered` | `HashValueTest#packedHashSupportsUpdateAndDeleteWithRepacking` and `HashValueTest#hashConvertsToHashTableAfterTooManyFields` |
+| `SetValue` intset and hashtable paths | `covered` | `SetValueTest#ffmSetKeepsIntsetMembersOffHeapAndUpgradesToHashtable` |
+| `ZSetValue` listpack and skiplist paths | `covered` | `ZSetValueTest#packedZSetKeepsScoreOrderingAndSupportsUpdates` and `ZSetValueTest#zsetUpgradesAfterTooManyEntries` |
+| `YierdisHyperLogLog` sparse, dense, merge, and byte round trip | `covered` | `YierdisHyperLogLogTest#sparseHllAddsElementsAndMergesIntoRegisters`, `YierdisHyperLogLogTest#denseHllUpdatesInPlaceAndMergesViaBytesSlice`, and `YierdisHyperLogLogTest#denseBytesFromRegistersClampsAndRoundTripsThroughMerge` |
+| `YierdisExpireIndex`, `YierdisHeapExpireIndex`, and `YierdisFfmExpireIndex` lookup and clear | `covered` | `ExpireIndexContractTest#heapExpireIndexRoundTripsHandleLookupAndClear` and `ExpireIndexContractTest#ffmExpireIndexRoundTripsHandleLookupAndClear` |
+| `YierdisDbMemoryLedger`, `MemoryLedger`, and `InMemoryLedger` reserve, commit, and rollback | `covered` | `MemoryLedgerContractTest#reserveCommitRollbackMaintainInvariants` |
+| `YierdisDbMutationExecutor` cleanup on failed mutation plans and no-op accounting | `covered` | `MutationExecutorReservationTest#failedMutationRollsBackReservationAndDoesNotPoisonNextMutation`, `MutationExecutorReservationTest#noevictionRejectsBeforeMutationCanRun`, and `MutationExecutorReservationTest#appendAndSetbitNoopsDoNotMarkValueChanged` |
+| `YierdisDbMemoryEstimator` and `YierdisDbMemoryReporter` | `covered` | `YierdisDbMemoryEstimatorTest#estimatesWriteUpperBoundsAndByteSums` and `YierdisDbMemoryReporterTest#directMemoryUsageReadsNativeEntryAndValueMetadata` |
+| `YierdisDbIntrospection` | `covered` | `YierdisDbIntrospectionTest#objectEncodingReadsNativeEntryEncoding` and `YierdisDbIntrospectionTest#snapshotCopiesNativeStringValueAndExpireMetadata` |
+| Maxmemory candidate sampling, eviction, noeviction, reserve, commit, and rollback | `covered` | `MaxmemoryEvictionTest#allkeysRandomEvictsToStayWithinLimit`, `MaxmemoryEvictionTest#allkeysLruEvictsLeastRecentlyUsedWhenSamplesCoverAllKeys`, and `MutationExecutorReservationTest#noevictionRejectsBeforeMutationCanRun` |
 
 ## Current Gap Queue
 
-1. Add direct DB API tests for each API family instead of relying only on command-layer traversal.
-2. Add direct native/internal tests for every root/value/keyspace/expiration/memory structure in the inventory.
-3. Expand command option rows into one test row per option group for `SET`, `SCAN`, `ZRANGE`, `ZRANGEBYSCORE`, `HELLO`, `INFO`, `MEMORY`, `OBJECT`, and counted list pops.
-4. Add one dedicated matrix section per command family as later plans fill the missing direct tests.
+1. Expand command option rows into one narrow test per option group where current rows rely on shared family tests, especially score-range syntax and SCAN option duplication.
+2. Keep adding direct DB API and native/internal rows whenever new public API methods or native structures are introduced.
