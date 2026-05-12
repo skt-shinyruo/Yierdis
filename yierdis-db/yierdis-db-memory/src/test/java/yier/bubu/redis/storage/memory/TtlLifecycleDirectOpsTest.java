@@ -1,0 +1,123 @@
+package yier.bubu.redis.storage.memory;
+
+import org.junit.Assert;
+import org.junit.Test;
+import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.storage.api.MutationOutcome;
+import yier.bubu.redis.storage.api.SetMode;
+
+import java.util.List;
+
+import static yier.bubu.redis.storage.testkit.TestBytes.b;
+
+public class TtlLifecycleDirectOpsTest {
+    @Test
+    public void ttlMillisAndAbsoluteExpirationCoverMissingPersistentExpiredAndCleanup() {
+        withDb(db -> {
+            Assert.assertEquals(-2L, db.reads().ttl().ttlMillis(view("missing")));
+
+            db.writes().strings().setString(b("k"), b("v"), SetMode.NORMAL, null);
+            Assert.assertEquals(-1L, db.reads().ttl().ttlMillis(view("k")));
+            Assert.assertFalse(db.writes().ttl().expireAtSeconds(view("missing"), futureSeconds()).value());
+
+            Assert.assertTrue(db.writes().ttl().expireAtSeconds(view("k"), futureSeconds()).value());
+            Assert.assertTrue(db.reads().ttl().ttlMillis(view("k")) > 0L);
+            Assert.assertTrue(db.writes().ttl().persist(view("k")).value());
+            Assert.assertEquals(-1L, db.reads().ttl().ttlMillis(view("k")));
+
+            Assert.assertTrue(db.writes().ttl().expireAtMillis(view("k"), System.currentTimeMillis() + 5000L).value());
+            Assert.assertTrue(db.reads().ttl().ttlMillis(view("k")) > 0L);
+
+            db.writes().strings().setString(b("expired"), b("v"), SetMode.NORMAL, null);
+            Assert.assertTrue(db.writes().ttl().expireAtMillis(view("expired"), System.currentTimeMillis() + 1L).value());
+            sleepPastTtl();
+            db.expiration().cleanupExpired();
+            Assert.assertNull(db.reads().keyspace().typeOf(view("expired")));
+            Assert.assertEquals(-2L, db.reads().ttl().ttlMillis(view("expired")));
+        });
+    }
+
+    @Test
+    public void lifecycleFlushDbAndMemoryObjectApisCoverExistingMissingAndAccessors() {
+        withDb(db -> {
+            Assert.assertSame(db.reads(), db.reads());
+            Assert.assertSame(db.writes(), db.writes());
+            Assert.assertSame(db.expiration(), db.expiration());
+            Assert.assertSame(db.memory(), db.memory());
+            Assert.assertSame(db.lifecycle(), db.lifecycle());
+
+            Assert.assertEquals(-1L, db.memory().memoryUsage(view("missing")));
+            Assert.assertNull(db.memory().objectEncoding(view("missing")));
+
+            db.writes().strings().setString(b("s"), b("123"), SetMode.NORMAL, null);
+            db.writes().lists().rpush(b("l"), List.of(b("a"), b("b")));
+            Assert.assertTrue(db.memory().memoryUsage(view("s")) > 0L);
+            Assert.assertTrue(db.memory().memoryUsage(view("l")) > 0L);
+            Assert.assertEquals("int", db.memory().objectEncoding(view("s")));
+            Assert.assertNotNull(db.memory().objectEncoding(view("l")));
+            Assert.assertTrue(db.memory().memoryStats().keyCount() >= 2L);
+
+            Assert.assertSame(MutationOutcome.VALUE_CHANGED, db.lifecycle().flushDb());
+            Assert.assertNull(db.reads().keyspace().typeOf(view("s")));
+            Assert.assertEquals(-1L, db.memory().memoryUsage(view("s")));
+            Assert.assertEquals(0L, db.memory().memoryStats().keyCount());
+            Assert.assertSame(MutationOutcome.NONE, db.lifecycle().flushDb());
+        });
+    }
+
+    private static void withDb(DbConsumer consumer) {
+        YierdisDb db = new YierdisDb();
+        try {
+            db.bindToCurrentThread();
+            consumer.accept(db);
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    private static long futureSeconds() {
+        return (System.currentTimeMillis() / 1000L) + 60L;
+    }
+
+    private static BytesSlice view(String text) {
+        return new ArrayBytesSlice(b(text));
+    }
+
+    private static void sleepPastTtl() {
+        try {
+            Thread.sleep(20L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
+    }
+
+    @FunctionalInterface
+    private interface DbConsumer {
+        void accept(YierdisDb db);
+    }
+
+    private static final class ArrayBytesSlice implements BytesSlice {
+        private final byte[] bytes;
+
+        private ArrayBytesSlice(byte[] bytes) {
+            this.bytes = bytes;
+        }
+
+        @Override
+        public void writeTo(BytesSink out) {
+            out.writeBytes(bytes, 0, bytes.length);
+        }
+
+        @Override
+        public int length() {
+            return bytes.length;
+        }
+
+        @Override
+        public byte getByte(int index) {
+            return bytes[index];
+        }
+    }
+}
