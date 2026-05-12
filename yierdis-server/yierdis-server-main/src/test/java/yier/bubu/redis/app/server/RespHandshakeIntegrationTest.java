@@ -31,6 +31,37 @@ public class RespHandshakeIntegrationTest {
     }
 
     @Test
+    public void hello2SetnameUnsupportedProtoAndAuthAreHandled() throws Exception {
+        ServerConfig config = ServerConfig.fromArgs(new String[]{"--port", "0"});
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config);
+             Socket socket = new Socket("127.0.0.1", server.port())) {
+            socket.setSoTimeout(3000);
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            out.write("*4\r\n$5\r\nHELLO\r\n$1\r\n2\r\n$7\r\nSETNAME\r\n$5\r\nalpha\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            String hello2 = readSome(in);
+            Assert.assertTrue(hello2.startsWith("*10\r\n"));
+            Assert.assertTrue(hello2.contains("$5\r\nproto\r\n:2\r\n"));
+
+            out.write("*2\r\n$6\r\nCLIENT\r\n$7\r\nGETNAME\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            Assert.assertEquals("$5\r\nalpha\r\n", readAscii(in, 11));
+
+            out.write("*2\r\n$5\r\nHELLO\r\n$1\r\n4\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            Assert.assertEquals("-NOPROTO unsupported protocol version\r\n", readAscii(in, 39));
+
+            out.write(("*5\r\n$5\r\nHELLO\r\n$1\r\n3\r\n$4\r\nAUTH\r\n$7\r\ndefault\r\n$2\r\npw\r\n")
+                    .getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            String authError = readSome(in);
+            Assert.assertTrue(authError.contains("called without any password configured"));
+        }
+    }
+
+    @Test
     public void clientSetinfoSetnameAndGetnameAreAccepted() throws Exception {
         ServerConfig config = ServerConfig.fromArgs(new String[]{"--port", "0"});
         try (YierdisServerBootstrap server = YierdisServerBootstrap.start(config);

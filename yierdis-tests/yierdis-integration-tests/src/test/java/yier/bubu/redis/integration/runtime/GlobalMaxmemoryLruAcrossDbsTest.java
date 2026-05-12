@@ -69,16 +69,16 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
     }
 
     private static long maxmemoryBudgetThatFitsThreeKeysButNotFour(byte[] value, long writeUpperBound) {
-        long usedAfterTwoKeys = probeGlobalUsedBytes(value, false);
+        long usedAfterDistributedTwoKeys = probeGlobalUsedBytes(value, false);
         long usedAfterThreeKeys = probeGlobalUsedBytes(value, true);
-        long lowerBound = usedAfterTwoKeys + writeUpperBound;
+        long lowerBound = usedAfterDistributedTwoKeys + writeUpperBound;
         long upperExclusive = usedAfterThreeKeys + writeUpperBound;
         Assert.assertTrue("probe budget must leave room between 3rd and 4th write", upperExclusive > lowerBound);
         long span = upperExclusive - lowerBound;
         return lowerBound + Math.max(0L, (span - 1L) / 2L);
     }
 
-    private static long probeGlobalUsedBytes(byte[] value, boolean includeThirdKey) {
+    private static long probeGlobalUsedBytes(byte[] value, boolean includeSecondDb0Key) {
         YierdisInstanceConfig probeConfig = YierdisInstanceConfig.builder()
                 .databases(2)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
@@ -93,10 +93,10 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
             YierdisDb db0 = (YierdisDb) instance.engine(0);
             YierdisDb db1 = (YierdisDb) instance.engine(1);
             db0.writes().strings().setString(b("a"), value, SetMode.NORMAL, null);
-            db0.writes().strings().setString(b("b"), value, SetMode.NORMAL, null);
-            if (includeThirdKey) {
-                db1.writes().strings().setString(b("c"), value, SetMode.NORMAL, null);
+            if (includeSecondDb0Key) {
+                db0.writes().strings().setString(b("b"), value, SetMode.NORMAL, null);
             }
+            db1.writes().strings().setString(b("c"), value, SetMode.NORMAL, null);
             return instance.observability().memoryStats().usedBytesForMaxmemory();
         }
     }

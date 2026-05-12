@@ -33,6 +33,7 @@ public final class YierdisInstanceObservability {
         long expireOverhead = 0;
         long expireValueObjects = 0;
         long offHeap = 0;
+        long globalOffHeapFallback = 0;
         long reserved = 0;
         long usedBytesForMaxmemory = 0;
         long effectiveUsedBytesForMaxmemory = 0;
@@ -55,15 +56,10 @@ public final class YierdisInstanceObservability {
             expireValueObjects += s.expireValueObjectsBytesEstimate();
             long dbOffHeap = Math.max(0L, s.offHeapUsedBytes());
             if (globalScope) {
-                // GLOBAL: the default wiring uses a shared off-heap runtime, so count it once.
-                offHeap = Math.max(offHeap, dbOffHeap);
+                globalOffHeapFallback = addSaturating(globalOffHeapFallback, dbOffHeap);
             } else {
                 // PER_DB: each DB owns its runtime, so sum.
-                if (Long.MAX_VALUE - offHeap < dbOffHeap) {
-                    offHeap = Long.MAX_VALUE;
-                } else {
-                    offHeap += dbOffHeap;
-                }
+                offHeap = addSaturating(offHeap, dbOffHeap);
             }
             reserved += s.reservedBytes();
             keyCount += s.keyCount();
@@ -83,12 +79,17 @@ public final class YierdisInstanceObservability {
         }
 
         if (globalScope) {
-            usedBytesForMaxmemory = heap + offHeap;
-            effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + Math.max(0L, reserved);
+            // GLOBAL: DB participants exclude off-heap while the shared source counts actual native usage once.
+            offHeap = globalOffHeapFallback;
+            usedBytesForMaxmemory = addSaturating(heap, offHeap);
+            effectiveUsedBytesForMaxmemory = addSaturating(usedBytesForMaxmemory, Math.max(0L, reserved));
             offHeapIncludedInMaxmemory = true;
         }
 
-        long totalEstimatedBytes = heap + offHeap + keyspaceOverhead + expireOverhead + expireValueObjects;
+        long totalEstimatedBytes = addSaturating(
+                addSaturating(addSaturating(heap, offHeap), keyspaceOverhead),
+                addSaturating(expireOverhead, expireValueObjects)
+        );
 
         return new YierdisMemoryStats(
                 instance.config().maxmemoryBytes(),
@@ -150,5 +151,15 @@ public final class YierdisInstanceObservability {
                 0,
                 0
         );
+    }
+
+    private static long addSaturating(long left, long right) {
+        if (right <= 0) {
+            return left;
+        }
+        if (left >= Long.MAX_VALUE - right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 }

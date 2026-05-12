@@ -28,6 +28,7 @@ import java.util.Objects;
 public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private static final long TTL_ENTRY_BYTES_ESTIMATE = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
     private static final int MAX_STRING_BYTES = 512 * 1024 * 1024;
+    private static final int EMBSTR_BYTES_LIMIT = 44;
     private static final String INTEGER_RANGE_ERROR = "ERR value is not an integer or out of range";
 
     private final YierdisDbInternals internals;
@@ -377,22 +378,20 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     @Override
     public byte[] getStringBytes(byte[] keyBytes) {
         internals.checkThread();
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
+        EntryRecord record = liveTouchedStringRecord(keyBytes);
         if (record == null) {
             return null;
         }
-        requireString(record);
         return copyStringBytes(record);
     }
 
     @Override
     public BulkStringValue getStringValue(BytesView keyView) {
         internals.checkThread();
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
+        EntryRecord record = liveTouchedStringRecord(keyView);
         if (record == null) {
             return BulkStringValue.nullValue();
         }
-        requireString(record);
         if (record.encoding() == ValueEncoding.STRING_INT) {
             return BulkStringValue.longAscii(parseLongAscii(copyStringBytes(record)));
         }
@@ -401,28 +400,31 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
 
     @Override
     public long strlen(BytesView keyView) {
-        return stringLength(keyView);
+        internals.checkThread();
+        EntryRecord record = liveTouchedStringRecord(keyView);
+        if (record == null) {
+            return 0;
+        }
+        return stringRoot.length(requireStringHandle(record));
     }
 
     @Override
     public int getBit(BytesView keyView, long offset) {
         internals.checkThread();
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
+        EntryRecord record = liveTouchedStringRecord(keyView);
         if (record == null) {
             return 0;
         }
-        requireString(record);
         return getBit(requireStringHandle(record), offset);
     }
 
     @Override
     public long bitcount(BytesView keyView) {
         internals.checkThread();
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
+        EntryRecord record = liveTouchedStringRecord(keyView);
         if (record == null) {
             return 0L;
         }
-        requireString(record);
         byte[] bytes = copyStringBytes(record);
         if (bytes.length == 0) {
             return 0L;
@@ -433,11 +435,10 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     @Override
     public long bitcount(BytesView keyView, long start, long end) {
         internals.checkThread();
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
+        EntryRecord record = liveTouchedStringRecord(keyView);
         if (record == null) {
             return 0L;
         }
-        requireString(record);
         byte[] bytes = copyStringBytes(record);
         int len = bytes.length;
         if (len <= 0) {
@@ -487,10 +488,29 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         return stringRoot.length(requireStringHandle(record));
     }
 
+    private EntryRecord liveTouchedStringRecord(byte[] keyBytes) {
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        return liveTouchedStringRecord(keyHandle);
+    }
+
+    private EntryRecord liveTouchedStringRecord(BytesView keyView) {
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyView);
+        return liveTouchedStringRecord(keyHandle);
+    }
+
+    private EntryRecord liveTouchedStringRecord(KeyHandle keyHandle) {
+        EntryRecord record = keyLifecycle.liveEntryRecord(keyHandle);
+        if (record == null) {
+            return null;
+        }
+        requireString(record);
+        return keyLifecycle.touchRecord(keyHandle, record);
+    }
+
     private StoredString storeSetValue(EntryRecord current, BytesSlice value) {
         byte[] bytes = bytesOf(value);
         Long parsed = tryParseLongForIntEncoding(bytes);
-        ValueEncoding encoding = parsed == null ? ValueEncoding.STRING_RAW : ValueEncoding.STRING_INT;
+        ValueEncoding encoding = parsed == null ? stringObjectEncoding(bytes) : ValueEncoding.STRING_INT;
         byte[] storedBytes = parsed == null
                 ? bytes
                 : Long.toString(parsed).getBytes(StandardCharsets.US_ASCII);
@@ -572,10 +592,18 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
             return null;
         }
         try {
-            return parseLongAscii(bytes);
+            long parsed = parseLongAscii(bytes);
+            byte[] canonical = Long.toString(parsed).getBytes(StandardCharsets.US_ASCII);
+            return Arrays.equals(bytes, canonical) ? parsed : null;
         } catch (YierdisCommandException ignored) {
             return null;
         }
+    }
+
+    private static ValueEncoding stringObjectEncoding(byte[] bytes) {
+        return bytes != null && bytes.length <= EMBSTR_BYTES_LIMIT
+                ? ValueEncoding.STRING_EMBSTR
+                : ValueEncoding.STRING_RAW;
     }
 
     private static long parseLongAscii(byte[] buf) {

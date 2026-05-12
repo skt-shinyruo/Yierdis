@@ -23,7 +23,7 @@ public class YierdisDbIntrospectionTest {
                 byte[] key = bytes("encoding-key");
                 db.writes().strings().setString(key, bytes("value"), SetMode.NORMAL, null);
 
-                Assert.assertEquals("raw", db.memory().objectEncoding(view(key)));
+                Assert.assertEquals("embstr", db.memory().objectEncoding(view(key)));
                 Assert.assertNull(db.memory().objectEncoding(view(bytes("missing"))));
             } finally {
                 db.shutdown();

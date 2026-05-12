@@ -131,7 +131,7 @@ public class YierdisDbConstructionTest {
             EntryRecord record = db.keyLifecycle().entryRecord(handle);
             Assert.assertNotNull(record);
             Assert.assertEquals(ValueType.STRING, record.type());
-            Assert.assertEquals(ValueEncoding.STRING_RAW, record.encoding());
+            Assert.assertEquals(ValueEncoding.STRING_EMBSTR, record.encoding());
             Assert.assertEquals(-1L, record.expireAtMillis());
             Assert.assertTrue(record.version() > 0L);
         } finally {

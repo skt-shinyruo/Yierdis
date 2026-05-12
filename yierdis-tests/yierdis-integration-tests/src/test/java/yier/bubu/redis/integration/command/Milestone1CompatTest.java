@@ -91,6 +91,27 @@ public class Milestone1CompatTest {
     }
 
     @Test
+    public void expireAtUsesUnixSecondsAndReportsRemainingTtl() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                Assert.assertTrue(client.execute(Arrays.asList(b("SET"), b("abs"), b("v"))) instanceof ReplySimpleString);
+
+                long unixSeconds = (System.currentTimeMillis() / 1000L) + 60L;
+                ReplyInteger expireAt = (ReplyInteger) client.execute(Arrays.asList(
+                        b("EXPIREAT"),
+                        b("abs"),
+                        b(Long.toString(unixSeconds))
+                ));
+                Assert.assertEquals(1L, expireAt.value());
+
+                ReplyInteger ttl = (ReplyInteger) client.execute(Arrays.asList(b("TTL"), b("abs")));
+                Assert.assertTrue("expected positive ttl after EXPIREAT, got " + ttl.value(), ttl.value() > 0L);
+            }
+        });
+    }
+
+    @Test
     public void setGetAndKeepTtlBehaveAsExpected() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
