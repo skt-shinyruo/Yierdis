@@ -184,6 +184,18 @@ CommandExecutor
 
 这也是 `NettyExecutionConnection` 作为“连接态根对象”的一个关键作用。
 
+`ExecutorTaskQueue` 通过两个小接口拿到这份状态：
+
+- `ExecutorKeyState<T>`
+  保存 per-key local queue 和 `scheduled` flag。queue 里是该连接自己的待执行 task；
+  `scheduled` 防止同一个连接被重复放进 `activeKeys`。
+- `ExecutorKeyStateProvider<K, T>`
+  根据调度 key 取得或创建 state。生产路径的 key 是 `NettyExecutionConnection`，状态最终挂在
+  `ExecutionConnectionContext` 上；测试可以用 `constant(...)` 提供轻量 state。
+
+这层接口让 FAIR 算法保持 transport-neutral。它只知道“某个 key 有本地队列和是否已被调度”，
+不知道 Netty channel、session、DB index 或命令语义。
+
 ## `CommandExecutorDrainLoop` 是真正执行命令的地方
 
 提交成功并不代表命令已经执行。真正执行发生在：
@@ -342,6 +354,11 @@ Yierdis 的背压不是只有一种，而是四类因素一起作用。
 - 不会额外引入第二条直接操作 DB 的线程
 
 这和 DB 的 owner-thread 约束是严格一致的。
+
+server 侧传入的 maintenance task 通常来自 `YierdisInstanceMaintenance`。它是 runtime 层的
+Netty-free wrapper，只做一件事：把一次 tick 委托给 `YierdisInstanceRuntimeAccess.maintenanceTick()`。
+这样 bootstrap 只负责“什么时候调度 tick”，过期清理和 maxmemory enforcement 的策略仍留在 runtime
+模块里；embedded 用户也可以复用同一个入口，但必须保证 instance 已经绑定到当前 owner thread。
 
 ## 统计和观测从哪来
 

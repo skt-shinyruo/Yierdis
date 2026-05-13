@@ -272,8 +272,19 @@ policy 有三种：
 - `offheap_used_bytes`
 - `key_count`
 - `expire_count`
+- `offheap_included_in_maxmemory`
+- `keyspace_rehashing`
+- `expire_rehashing`
 
 如果 `maxmemoryScope=global`，server 的 `NettyServerInfoProvider` 会优先返回聚合视角；否则更接近单 DB 视角。
+
+排障时可以按下面的口径读：
+
+- `used_bytes_for_maxmemory` 是当前预算口径下已经计入 maxmemory 的用量。
+- `effective_used_bytes_for_maxmemory` 会再加上 mutation 中尚未 commit 的 reservation。
+- `ledger_reserved_bytes` 长时间不归零，通常说明有写路径没有正常释放 reservation，应该回到 DB mutation/ledger 测试看。
+- `offheap_included_in_maxmemory=false` 不一定表示没有 off-heap，只可能表示当前是 global scope 的单 DB 视图，共享 FFM usage 会在聚合视角计一次。
+- rehash 字段用于解释 key directory 或 expire index 正在扩容迁移，短期 table overhead 可能偏高。
 
 ### `MEMORY USAGE key`
 

@@ -136,12 +136,16 @@ core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发�
 - `MemoryOps`
 - `KeyHandle`
 - 各种 `*ReadOps` / `*WriteOps`
+- `BulkStringValue` / `BulkStringSequence` / `BulkStringMapPairs`
+- `MaxmemoryCoordinator` / `MaxmemoryParticipant` / `RuntimeDbEngine`
 
 它的意义是：
 
 - 命令层只依赖稳定的能力接口
 - 不直接依赖 `YierdisDb` 具体实现
 - TTL / maxmemory 等 storage pressure path 可以通过 API 级 `KeyHandle` 表达 key identity
+- 集合读结果可以通过 result sink 流式写回，不需要命令层知道具体 value/off-heap 结构
+- runtime 可以通过 maxmemory SPI 协调多个 DB，而不是依赖 storage implementation
 
 ### `yierdis-server-runtime-api`
 

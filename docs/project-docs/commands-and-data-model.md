@@ -75,6 +75,38 @@ ExecutionRequest
 - 这个命令参数个数该怎么校验
 - 哪些参数位置会被当作 key
 
+## 命令解析 API 的统一契约
+
+命令注册项真正执行前，都会先经过 `CommandSpec<T>.parse(...)`。这层 parser
+不是随手写在 handler 里的普通 if，而是 command API 的一组稳定小组件：
+
+- `ArgReader`
+  包住 `ExecutionRequest`，提供 `argc()`、`is(index, literal)`、`longAt(...)`、
+  `positiveLongAt(...)` 等常用读取能力。它直接按 argv bytes 做 ASCII
+  case-insensitive 比较，避免为了判断选项先把热路径参数转成字符串。
+- `CommandArity`
+  表达参数个数规则，包括 exact、min、range、one-of 和 pair-tail。pair-tail
+  主要服务 `HSET field value ...`、`ZADD score member ...` 这类尾部成对参数。
+- `CommandParsers`
+  把常见 arity rule 包成 `CommandParser<T>`，也支持通过 mapper 把 `ArgReader`
+  转成 typed parsed object。
+- `CommandParseResult`
+  只表达两种结果：parsed value 或 `CommandParseError`。
+- `CommandParseError`
+  集中把 wrong arity、syntax、integer out of range 和自定义错误映射成 Redis
+  风格 reply 文案。
+
+这套契约有两个重要效果。
+
+第一，普通执行和事务入队前校验复用同一套 parser。`MULTI` 状态下，普通命令不是
+先无脑入队，而是先 lookup `CommandSpec`、检查 MULTI policy、运行 parser；只有解析
+通过才会保存 `ExecutionRequest` 快照并返回 `QUEUED`。因此 `EXEC` replay 不会再遇到
+一批本该在入队阶段发现的 arity/syntax 错误。
+
+第二，命令 handler 拿到的是 typed parsed object，而不是每个 handler 自己重新解析
+argv。新增命令时，优先把“参数形状”和“业务执行”分开：parser 负责 arity、选项冲突、
+整数/score 边界；handler 只负责调用 DB capability 和写 reply。
+
 ## 命令家族总览
 
 ### 1. Connection / Session
@@ -218,6 +250,35 @@ HLL 在逻辑上是一组独立命令，但在存储上并不是独立 `ValueTyp
 - `support.dbWrites(ctx).keyspace()`
 
 而不是直接 new 或调用具体数据结构类。
+
+## DB 结果如何流式写回
+
+集合读命令不会要求 DB 先构造完整的 `List<byte[]>` 再交给命令层。DB API 里有一组
+专门的 bulk-string 结果接口：
+
+- `BulkStringValue`
+  表达单个 bulk string，可以是 null、heap bytes、`BytesSlice`、off-heap slice 或
+  long-ascii。
+- `BulkStringSequence`
+  表达一组 bulk string，例如 `LRANGE`、`SMEMBERS`、`ZRANGE`。
+- `BulkStringMapPairs`
+  表达 field/value pair 序列，例如 `HGETALL`。
+- `BulkStringSink`
+  是 DB/value 层向外写 bulk string 的中立端口。
+- `BulkStringReplyAdapter`
+  在 command 层把 `BulkStringSink` 适配到 `ReplyWriter`。
+
+命令层的固定顺序是：
+
+```text
+read DB result
+  -> out.arrayHeader(...) / out.mapHeader(...)
+  -> result.emitTo(new BulkStringReplyAdapter(out))
+```
+
+这条边界让 DB/value/off-heap 代码不依赖 `ReplyWriter` 或 RESP；同时又允许
+`BytesSlice`、`YierdisFfmBytesRefSlice`、`OffHeapSlice` 这类对象直接写到 reply sink，
+避免为了回包把集合结果全部复制成 heap byte array。
 
 ## 逻辑类型和内部编码
 

@@ -228,6 +228,35 @@ EXEC
 
 事务不是额外 IR。它排队和重放的都是 `ExecutionRequest` 快照。
 
+## 变更事件
+
+变更事件是 command processor 在命令成功执行后发出的 best-effort hook，当前用于
+embedded/AOF/replication 风格扩展点。相关契约在 `yierdis-server-runtime-api`：
+
+- `YierdisChangeEvent`
+- `YierdisChangeSink`
+
+事件载荷不是 DB 内部 diff，而是 `ExecutionRecord(dbIndex, request)`。这意味着消费端
+看到的是“可重放的命令快照”，不会拿到 `EntryRecord`、`ValueHandle` 或 type root
+这样的内部对象。
+
+发射条件有三条：
+
+1. 当前 processor 的 `YierdisChangeSink` 不是 `NOOP`。
+2. 命令执行成功，没有在 parser、wrong-type、DB command error 或 handler 运行时错误处提前返回。
+3. 本次命令造成真实变化，表现为 `CommandContext.changedAny()` 为 true。
+
+第三条不是按命令名硬编码。DB/ops 写路径会返回 `MutationOutcome` 或带
+`MutationOutcome` 的 `WriteResult<T>`；命令 handler 通过 `CommandSupport.recordMutation(...)`
+把 value/TTL/keyspace 的真实变化记录到 `CommandContext`。例如 `SET key value NX`
+因为 key 已存在而没有生效时，虽然它是写命令，仍不会发事件。
+
+事务 replay 复用同一个 processor，所以 queued command 在 `EXEC` 中逐条执行时也走同一套
+change gate。`EXEC` 自身只负责 drain 和数组回包，不代表整批事务只有一个合并事件。
+
+`YierdisChangeSink.onChange(...)` 是 best-effort：sink 抛出的异常会被吞掉，不影响已经成功
+写出的命令回复，也不会回滚 DB mutation。
+
 ## TTL 和 Maxmemory
 
 storage pressure path 使用 key handle，而不是在热路径上把 key 统一物化为 heap `byte[]`。

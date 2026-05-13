@@ -75,6 +75,26 @@ server 命令写回的单一语义出口。命令处理器和命令模块不会�
 - 拿到 `DbReads/DbWrites`
 - 复用 scratch buffer
 
+### `ArgReader`
+
+命令 parser 读取 `ExecutionRequest` argv 的轻量包装。它负责 ASCII option 比较、整数解析和常见正数/非负数校验，避免每个命令 handler 重复写参数读取逻辑。
+
+### `CommandArity` / `CommandParsers`
+
+命令参数形状的统一表达。`CommandArity` 描述 exact/min/range/one-of/pair-tail 规则，`CommandParsers` 把这些规则变成 `CommandParser<T>`，供 `CommandSpec<T>` 在普通执行和事务入队前共同使用。
+
+### `CommandParseError`
+
+命令 parser 的错误模型。它把 wrong arity、syntax、integer out of range 和自定义错误集中映射成 Redis 风格 reply 文案。
+
+### `MutationOutcome`
+
+DB 写操作返回的“真实变更”标记，区分 value changed 和 TTL changed。命令层把它记录到 `CommandContext`，`YierdisFastCommandProcessor` 再用它决定是否发 `YierdisChangeEvent`。
+
+### `BulkStringSink`
+
+DB/value 层流式输出 bulk string 的中立端口。集合读结果通过 `BulkStringSequence` 或 `BulkStringMapPairs` 写到 sink，命令层再用 `BulkStringReplyAdapter` 接到 `ReplyWriter`。
+
 ### `YierdisFastCommandProcessor`
 
 server 侧真正执行命令的处理器。它负责：
@@ -186,6 +206,14 @@ DB 内部受控写路径的执行器。很多写命令不会直接改状态，�
 
 它是当前项目唯一公开的 native-memory 预算入口。
 
+### `MaxmemoryCoordinator`
+
+global maxmemory scope 下的实例级协调者。DB 写入前调用 `prepareWrite(...)`，coordinator 可以跨 DB cleanup/evict，并提供跨 DB 可比较的 LRU clock。
+
+### `MaxmemoryParticipant`
+
+参与 global maxmemory 的单 DB 视图。它报告本 DB usage、key 数、候选 victim，并负责真正删除被 coordinator 选中的 key。
+
 ### backpressure
 
 当执行器队列或单连接 pending 达到阈值时，server 暂停继续从 socket 读请求的机制。最直接的表现通常是：
@@ -196,6 +224,10 @@ DB 内部受控写路径的执行器。很多写命令不会直接改状态，�
 ### retained bytes
 
 协议请求在被解码成 argv 后，逻辑上“保留下来”的参数字节数估计。它主要用于排队、事务队列和预算控制，而不是给业务代码直接使用。
+
+### `YierdisMemoryStats`
+
+`MEMORY STATS` 的字段模型。它提供 maxmemory 用量、reservation、off-heap usage、key/expire 数、rehash 状态和总体估算，目标是可解释而不是精确 JVM heap measurement。
 
 ## Data Model
 

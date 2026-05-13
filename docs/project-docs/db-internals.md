@@ -412,6 +412,30 @@ instance 级 `YierdisGlobalMaxmemoryGovernor.prepareWrite(...)`。governor 会�
 - 多 DB 全局协调发生在 `YierdisInstance` / `YierdisGlobalMaxmemoryGovernor`
 - global scope 会避免把共享 off-heap usage 在每个 DB 上重复计入
 
+### global maxmemory SPI
+
+全局 maxmemory 不是让 runtime 直接依赖 `YierdisDb`。runtime 只通过 `yierdis-db-api`
+里的 SPI 协调多个 DB：
+
+- `MaxmemoryCoordinator`
+  由 instance 级 governor 实现。DB 写入前把 `estimatedExtraBytes` 交给
+  `prepareWrite(...)`，coordinator 可以先 cleanup/evict；无法接纳时抛 Redis 风格 OOM。
+  `nextLruClock()` 提供跨 DB 可比较的全局 LRU 时间线。
+- `MaxmemoryParticipant`
+  由每个 runtime DB engine 暴露。它提供 `usedBytesForMaxmemory()`、`keyCountEstimate()`、
+  `cleanupExpired(...)`、`sampleCandidate(...)`、可选 `scanBestCandidate(...)` 和
+  `evict(...)`。
+- `MaxmemoryCoordinatorAware`
+  让 runtime 在 global scope 下把 coordinator attach 到每个 DB；`per-db` scope 下则不需要。
+- `RuntimeDbEngine`
+  把 command-facing `DbEngine`、runtime lifecycle hook 和 maxmemory participant hook
+  合在一起，runtime 因此不需要知道具体实现是不是 `YierdisDb`。
+
+这条 SPI 的边界很重要：DB 负责报告自己可淘汰的 key 和执行本地删除；instance governor
+负责跨 DB 选择 victim、统计 shared usage、统一 noeviction/random/LRU policy。共享 FFM
+runtime 的 usage 作为 `MaxmemoryUsageSource` 只在 governor 聚合时计一次，不会在每个 DB 的
+participant usage 里重复相加。
+
 ## Memory 和 Introspection
 
 观测相关 facade 是：
@@ -441,6 +465,30 @@ instance 级 `YierdisGlobalMaxmemoryGovernor.prepareWrite(...)`。governor 会�
 - rehash 状态
 
 这些数字是 explainable estimate，不是精确 JVM heap measurement。
+
+`YierdisMemoryStats` 是这组观测的稳定字段模型。几个容易混淆的字段如下：
+
+- `usedBytesForMaxmemory`
+  当前 DB 或聚合视角下参与 maxmemory 判断的已用量。它来自 heap data estimate，加上按当前
+  scope 决定是否纳入的 off-heap usage，再加上 TTL entry 的估算成本。
+- `reservedBytes`
+  已经通过写入预算但 mutation 尚未 commit 的 reservation。
+- `effectiveUsedBytesForMaxmemory`
+  `usedBytesForMaxmemory + reservedBytes`，用于解释为什么某些写入看似还没落盘也会占预算。
+- `heapDataBytesEstimate`
+  DB/value 层可解释的 heap 数据估算，不是 JVM instrumentation 的对象图扫描。
+- `offHeapUsedBytes`
+  allocator usage 加上 DB 内部直接 native structure usage。
+- `offHeapIncludedInMaxmemory`
+  表示当前这份 stats 是否把 off-heap usage 纳入 `usedBytesForMaxmemory`。global scope 下，
+  单 DB stats 通常不重复计 shared off-heap，聚合 stats 才按实例口径计入。
+- `keyspaceRehashing` / `expireRehashing` 和 table capacity/overhead 字段
+  用来解释 key directory 或 expire index 当前是否处在渐进 rehash，以及 table 自身的估算成本。
+- `totalEstimatedBytes`
+  更偏诊断视角的总体估算，方便看 heap estimate、off-heap usage 和部分索引 overhead 的合计。
+
+这些字段由 `DbMemoryAccounting.snapshot(...)` 汇总。它刻意保持 best-effort：如果 allocator
+查询失败，会保守返回可解释的 0，而不是让观测命令影响主路径。
 
 `OBJECT ENCODING` 则从 `EntryRecord.encoding()` 映射成 Redis 风格名称，例如：
 
@@ -496,6 +544,10 @@ maintenance task 也会被调度回 owner thread 执行。
 - TTL index 和 `EntryRecord.expireAtMillis` 不要只更新一边
 - maxmemory 判断不要放到 mutation 之后
 - Netty I/O 线程不要直接访问 DB
+- 需要访问 key handle 的 heap/FFM 实现细节时，只在 DB internal package 里通过
+  `KeyHandleAccess` 做桥接；不要把 off-heap ref 暴露成 API 级 `KeyHandle` 契约
+- `ByteArrayHashMap` / `ByteArrayHashSet` 是内部 byte-key 容器，可被 hash/set/zset 的 heap
+  fallback 或测试结构复用；外层 keyspace 入口仍应优先看 `NativeKeyDirectory`
 
 ## 推荐源码阅读顺序
 

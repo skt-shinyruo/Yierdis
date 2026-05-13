@@ -58,6 +58,14 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 4. 如果会改变 DB 写入语义，再改 `YierdisStringOps.set(...)`
 5. 如果会影响 TTL / 生命周期，再继续看 `YierdisDbKeyLifecycle`
 
+参数形状和错误文案尽量先落在 command API parser 上，而不是在 handler 里散写：
+
+- `ArgReader` 负责按 argv bytes 读取参数和解析整数
+- `CommandArity` / `CommandParsers` 负责 arity 与常见参数形状
+- `CommandParseError` 负责 Redis 风格错误文案
+
+这样普通执行和 `MULTI` 入队前校验会自然复用同一套规则。
+
 ### 初学者最好先建立的 `SET` 代码心智模型
 
 可以先把 `SET` 看成 5 层协作：
@@ -255,6 +263,9 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMemoryLedger.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMaxmemorySupport.java`
 - `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisGlobalMaxmemoryGovernor.java`
+- `yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/MaxmemoryCoordinator.java`
+- `yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/MaxmemoryParticipant.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/DbMemoryAccounting.java`
 
 ### off-heap / FFM
 
@@ -298,6 +309,13 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 ### 通用背压算法
 
 - `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorBackpressureController.java`
+
+### FAIR 调度状态
+
+- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorTaskQueue.java`
+- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorKeyState.java`
+- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorKeyStateProvider.java`
+- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutionConnectionContext.java`
 
 ### 建议先看的测试
 

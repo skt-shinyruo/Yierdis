@@ -264,6 +264,22 @@ writeBufferBackpressure
 
 这层是 server 调 runtime 生命周期的正确入口。
 
+### `YierdisInstanceMaintenance`
+
+源码：
+
+- [`YierdisInstanceMaintenance.java`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceMaintenance.java)
+
+核心方法：
+
+- `maintenanceTick()`
+
+职责：
+
+- 作为 runtime 层的 Netty-free maintenance wrapper。
+- server bootstrap 只负责调度它，具体过期清理和 maxmemory enforcement 策略仍留在 runtime seam。
+- embedded 用户可以复用同一入口，但调用前必须确保 instance 已绑定到当前 owner thread。
+
 ### `YierdisInstanceResources`
 
 源码：
@@ -313,6 +329,13 @@ writeBufferBackpressure
 
 - global scope 下 shared FFM runtime 的 usage 只按实例口径计入，不按 DB 重复相加。
 - governor 只依赖 `yierdis-db-api` 的 maxmemory SPI，不依赖具体 `YierdisDb` 类型。
+
+相关 SPI：
+
+- `MaxmemoryCoordinator`：写入前 admission、跨 DB cleanup/evict 和全局 LRU clock。
+- `MaxmemoryParticipant`：单 DB usage、key count、victim sampling/scanning 和本地 evict hook。
+- `MaxmemoryCoordinatorAware`：runtime attach/detach 全局 coordinator。
+- `RuntimeDbEngine`：把 `DbEngine`、runtime lifecycle 和 maxmemory participant hook 合成 runtime 可见 contract。
 
 ## Executor、调度和背压
 
@@ -421,7 +444,12 @@ writeBufferBackpressure
 - `GLOBAL` 模式使用单个 FIFO queue。
 - `FAIR` 模式使用连接本地 queue + `activeKeys` round-robin。
 
-`FAIR` 需要的每连接状态来自 `ExecutionConnectionContext.queueState()`。
+`FAIR` 需要的每连接状态来自 `ExecutionConnectionContext.queueState()`，底层 contract 是：
+
+- `ExecutorKeyState<T>`：per-key local queue + scheduled flag。
+- `ExecutorKeyStateProvider<K, T>`：根据 key 取得或创建 state。
+
+这让 FAIR 算法只依赖调度状态，不依赖 Netty、session 或 DB。
 
 ### `CommandExecutorDrainLoop`
 
@@ -635,6 +663,29 @@ writeBufferBackpressure
 
 - 把一个命令注册项统一成 descriptor + parser + typed handler + MULTI policy。
 - 让事务入队前 parse 和正常执行 parse 复用同一套逻辑。
+
+### `ArgReader` / `CommandArity` / `CommandParsers` / `CommandParseError`
+
+源码：
+
+- [`ArgReader.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ArgReader.java)
+- [`CommandArity.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandArity.java)
+- [`CommandParsers.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandParsers.java)
+- [`CommandParseError.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandParseError.java)
+- [`CommandParseResult.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandParseResult.java)
+
+职责：
+
+- `ArgReader` 统一按 `ExecutionRequest` argv bytes 读取参数、比较 ASCII option 和解析整数。
+- `CommandArity` 表达 exact/min/range/one-of/pair-tail 等参数形状。
+- `CommandParsers` 把 arity rule 和 typed mapper 组合成 `CommandParser<T>`。
+- `CommandParseError` 集中映射 wrong arity、syntax、integer out of range 和自定义错误文案。
+- `CommandParseResult` 在 parser 和 processor 之间携带 parsed value 或 parse error。
+
+关键边界：
+
+- parser 负责参数形状和语法；handler 负责业务执行和回包。
+- 普通执行和事务入队前校验必须复用同一套 parser。
 
 ### `CommandRegistry`
 
@@ -980,6 +1031,28 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 - 定义 command-facing storage 能力边界。
 - 命令层依赖这些接口，而不是依赖 `YierdisDb`。
 - 多 DB routing 返回的是 `DbEngine` 视图。
+
+### `BulkStringValue` / `BulkStringSequence` / `BulkStringMapPairs` / `BulkStringSink`
+
+源码：
+
+- [`BulkStringValue.java`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/result/BulkStringValue.java)
+- [`BulkStringSequence.java`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/result/BulkStringSequence.java)
+- [`BulkStringMapPairs.java`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/result/BulkStringMapPairs.java)
+- [`BulkStringSink.java`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/result/BulkStringSink.java)
+- [`BulkStringReplyAdapter.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/BulkStringReplyAdapter.java)
+
+职责：
+
+- 在 DB API 层表达可流式消费的 bulk string、bulk string 序列和 field/value pair 序列。
+- 让 `GET`、`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE` 等读路径不用先构造完整 heap collection。
+- `BulkStringReplyAdapter` 把 storage result sink 接到 command-facing `ReplyWriter`。
+- 保留 `BytesSlice` / off-heap slice 直接写 reply sink 的 fast path。
+
+关键边界：
+
+- DB/value/off-heap 层不依赖 RESP 或 `ReplyWriter`。
+- 命令层负责先写 array/map header，再调用 result emit。
 
 ### `YierdisDbReads` / `YierdisDbWrites`
 
@@ -1437,6 +1510,8 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 源码：
 
 - [`YierdisDbMemoryReporter.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java)
+- [`DbMemoryAccounting.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/DbMemoryAccounting.java)
+- [`YierdisMemoryStats.java`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/YierdisMemoryStats.java)
 
 核心方法：
 
@@ -1445,12 +1520,15 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 - `usedBytesForMaxmemory()`
 - `estimatedUsedBytes()`
 - `keyCountEstimate()`
+- `DbMemoryAccounting.snapshot(...)`
 
 职责：
 
 - 提供 `MEMORY USAGE` / `MEMORY STATS` 所需视图。
 - 汇总 ledger、off-heap allocator、entry table、key directory、expire index、各 root native bytes。
 - global scope 下配合 observability 避免共享 off-heap usage 被重复计入。
+- `YierdisMemoryStats` 固化观测字段：maxmemory usage、reservation、off-heap usage、key/expire count、rehash 状态和 overall estimate。
+- `DbMemoryAccounting` 负责把这些内部来源压成 explainable estimate，而不是精确 JVM heap measurement。
 
 ### `NativeKeyDirectory` / `YierdisKeyspace`
 
@@ -1459,6 +1537,8 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 - [`NativeKeyDirectory.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java)
 - [`YierdisKeyspace.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/YierdisKeyspace.java)
 - [`ByteArrayKeyspace.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/ByteArrayKeyspace.java)
+- [`ByteArrayHashMap.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/ByteArrayHashMap.java)
+- [`ByteArrayHashSet.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/ByteArrayHashSet.java)
 - [`YierdisFfmKeyspace.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmKeyspace.java)
 
 核心方法：
@@ -1478,11 +1558,25 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 - key bytes 存在 `YierdisFfmBlobStore`，directory slot 保存 key ref、entry handle、hash 和 state。
 - 支持 tombstone、rehash、随机采样和 scan cursor。
 - `YierdisKeyspace` 是早期/测试用 keyspace contract，heap/off-heap 实现保留为内部结构和回归测试对象。
+- `ByteArrayHashMap` / `ByteArrayHashSet` 是内部 byte-key 容器，仍被 hash/set/zset 的 heap fallback 或辅助结构使用。
 
 关键边界：
 
 - key directory 只知道 key 到 entry handle 的映射，不知道 value 类型语义。
 - value 释放和 expire index 维护必须由 `YierdisDbKeyLifecycle` 协调。
+- 生产顶层 keyspace 入口优先看 `NativeKeyDirectory`，不要把 `ByteArrayHashMap` 当作 DB 主索引。
+
+### `KeyHandleAccess`
+
+源码：
+
+- [`KeyHandleAccess.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/key/KeyHandleAccess.java)
+
+职责：
+
+- 在 DB internal package 内桥接 heap/FFM `KeyHandle` 的实现细节。
+- 允许 keyspace、expire index、scan 等内部组件在确认 handle 类型后访问 heap bytes 或 `YierdisFfmBytesRef`。
+- 避免把 off-heap ref/address 直接暴露成 API 级 `KeyHandle` 契约。
 
 ### `EntryTable` / `EntryRecord`
 
