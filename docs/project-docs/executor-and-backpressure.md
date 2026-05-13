@@ -16,6 +16,8 @@ Yierdis 不是“收到请求就立刻执行”的 server。
 
 它的核心模型是：
 
+![Command executor and backpressure](./assets/executor-backpressure.svg)
+
 - I/O 线程负责收包和提交
 - command executor 线程负责串行执行
 - backlog budget 和 backpressure 负责防止系统无界积压

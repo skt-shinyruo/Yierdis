@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="600" viewBox="0 0 1160 600" role="img" aria-labelledby="title desc">
+  <title id="title">Yierdis module dependency architecture</title>
+  <desc id="desc">A dependency map showing common bytes and memory at the base, API contracts in the middle, concrete command, DB, networking and server modules above, and CLI benchmark as TCP consumers.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#385d7a"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .group { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.4; rx: 14; }
+      .api { fill: #eef6fb; stroke: #385d7a; stroke-width: 1.5; rx: 10; }
+      .impl { fill: #f2f8ed; stroke: #4f7d3a; stroke-width: 1.5; rx: 10; }
+      .app { fill: #fff6e8; stroke: #9a6b1f; stroke-width: 1.5; rx: 10; }
+      .text { fill: #0f172a; font: 15px sans-serif; }
+      .small { fill: #475569; font: 13px sans-serif; }
+      .title { fill: #0f172a; font: 700 28px sans-serif; }
+      .group-title { fill: #334155; font: 700 17px sans-serif; }
+      .arrow { stroke: #385d7a; stroke-width: 2; marker-end: url(#arrow); fill: none; }
+      .guard { stroke: #b45309; stroke-width: 1.8; stroke-dasharray: 8 6; fill: none; }
+    </style>
+  </defs>
+  <rect class="bg" width="1160" height="600"/>
+  <text class="title" x="40" y="42">Module Architecture</text>
+  <text class="small" x="40" y="70">Dependencies converge from the app composition layer toward stable contracts and shared infrastructure.</text>
+
+  <rect class="group" x="40" y="105" width="240" height="370"/>
+  <text class="group-title" x="70" y="140">Protocol lane</text>
+  <rect class="impl" x="70" y="170" width="180" height="58"/>
+  <text class="text" x="99" y="194">networking-netty</text>
+  <text class="small" x="97" y="214">ByteBuf / pipeline</text>
+  <rect class="api" x="70" y="270" width="180" height="58"/>
+  <text class="text" x="99" y="294">networking-resp</text>
+  <text class="small" x="96" y="314">RESP model / codec</text>
+
+  <rect class="group" x="320" y="105" width="250" height="370"/>
+  <text class="group-title" x="350" y="140">Execution lane</text>
+  <rect class="impl" x="350" y="170" width="190" height="58"/>
+  <text class="text" x="383" y="194">server-executor</text>
+  <text class="small" x="389" y="214">queue / budget</text>
+  <rect class="impl" x="350" y="255" width="190" height="58"/>
+  <text class="text" x="389" y="279">server-core</text>
+  <text class="small" x="390" y="299">engine / session</text>
+  <rect class="api" x="350" y="350" width="190" height="58"/>
+  <text class="text" x="388" y="374">server-api</text>
+  <text class="small" x="384" y="394">ExecutionRequest</text>
+
+  <rect class="group" x="610" y="105" width="250" height="370"/>
+  <text class="group-title" x="640" y="140">Command / DB lane</text>
+  <rect class="impl" x="640" y="170" width="190" height="58"/>
+  <text class="text" x="675" y="194">command-builtin</text>
+  <text class="small" x="680" y="214">typed handlers</text>
+  <rect class="impl" x="640" y="255" width="190" height="58"/>
+  <text class="text" x="681" y="279">command-core</text>
+  <text class="small" x="682" y="299">registry / parser</text>
+  <rect class="api" x="640" y="350" width="190" height="58"/>
+  <text class="text" x="683" y="374">command-api</text>
+  <text class="small" x="676" y="394">CommandSpec</text>
+  <rect class="api" x="640" y="435" width="190" height="58"/>
+  <text class="text" x="692" y="459">db-api</text>
+  <text class="small" x="682" y="479">DbReads / Writes</text>
+
+  <rect class="group" x="900" y="105" width="220" height="370"/>
+  <text class="group-title" x="930" y="140">Composition</text>
+  <rect class="app" x="930" y="170" width="160" height="58"/>
+  <text class="text" x="958" y="194">server-main</text>
+  <text class="small" x="954" y="214">wires everything</text>
+  <rect class="impl" x="930" y="270" width="160" height="58"/>
+  <text class="text" x="971" y="294">db-memory</text>
+  <text class="small" x="957" y="314">native storage</text>
+  <rect class="app" x="930" y="370" width="160" height="58"/>
+  <text class="text" x="955" y="394">cli / benchmark</text>
+  <text class="small" x="958" y="414">external TCP</text>
+
+  <rect class="api" x="160" y="515" width="210" height="52"/>
+  <text class="text" x="205" y="546">common-bytes</text>
+  <rect class="api" x="435" y="515" width="210" height="52"/>
+  <text class="text" x="485" y="546">runtime-api</text>
+  <rect class="api" x="710" y="515" width="210" height="52"/>
+  <text class="text" x="758" y="546">memory-api</text>
+  <rect class="impl" x="940" y="515" width="150" height="52"/>
+  <text class="text" x="973" y="546">memory-ffm</text>
+
+  <path class="arrow" d="M 1010 228 C 880 245 820 260 760 350"/>
+  <path class="arrow" d="M 1010 228 C 770 155 575 178 540 198"/>
+  <path class="arrow" d="M 1010 228 C 690 90 305 120 250 195"/>
+  <path class="arrow" d="M 1010 270 L 830 464"/>
+  <path class="arrow" d="M 735 228 L 735 255"/>
+  <path class="arrow" d="M 735 313 L 735 350"/>
+  <path class="arrow" d="M 735 408 L 735 435"/>
+  <path class="arrow" d="M 1010 328 L 830 464"/>
+  <path class="arrow" d="M 540 379 C 580 385 610 390 640 379"/>
+  <path class="arrow" d="M 445 313 L 445 350"/>
+  <path class="arrow" d="M 445 228 L 445 255"/>
+  <path class="arrow" d="M 160 228 L 160 270"/>
+  <path class="arrow" d="M 160 328 C 170 400 210 470 265 515"/>
+  <path class="arrow" d="M 1010 428 C 870 495 480 500 250 328"/>
+  <path class="arrow" d="M 1015 515 L 920 541"/>
+  <path class="arrow" d="M 815 515 L 815 493"/>
+  <path class="arrow" d="M 540 515 L 540 408"/>
+
+  <path class="guard" d="M 620 420 C 520 455 450 455 360 410"/>
+  <text class="small" x="396" y="445">architecture tests keep reverse dependencies out</text>
+</svg>

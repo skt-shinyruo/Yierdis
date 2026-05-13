@@ -1,508 +1,547 @@
 # DB Internals
 
-本文专门解释 Yierdis 的 DB 内核是怎么组织起来的。
+本文专门解释 Yierdis 的单 DB 内核：`YierdisDb` 拥有哪些状态，命令如何穿过
+`DbReads` / `DbWrites` 落到类型化 ops，写路径为什么必须经过 memory ledger，
+以及 TTL、maxmemory、native entry 和 type root 如何协作。
 
-如果你已经看过：
+如果你还没有建立主链路印象，建议先读：
 
-- [`commands-and-data-model.md`](./commands-and-data-model.md)
 - [`request-execution-flow.md`](./request-execution-flow.md)
 - [`main-path-walkthrough.md`](./main-path-walkthrough.md)
+- [`commands-and-data-model.md`](./commands-and-data-model.md)
 
-那么这篇文档的目标就是把这些问题讲透：
+这篇文档的目标不是重复命令列表，而是回答一个更底层的问题：
 
-- `YierdisDb` 到底拥有哪一批核心状态和协作者
-- 一次读操作和写操作分别如何穿过 DB 内核
-- TTL、内存记账、maxmemory 和 entry/root value state 是如何协作的
+- 一个 key 在 DB 内核里到底由哪些结构共同表示？
+- 一次读操作和写操作分别经过哪些内部协作者？
+- 为什么 TTL、LRU、memory accounting 和 value release 不能散落在命令代码里？
 
 ## 先记住一句话
 
-`YierdisDb` 不是一个“大 Map 包装类”，而是一个“单 DB 状态 owner + 一组高密度协作者”的对象图。
+`YierdisDb` 不是一个“大 Map 包装类”，而是一个单 DB 状态 owner。
 
-如果把它只看成“key -> value 容器”，会看丢掉很多真正关键的逻辑：
+它真正持有的是一张对象图：
 
-- key 生命周期
-- 过期索引
-- mutation 记账
-- maxmemory/淘汰
-- value 编码升级
-- owner-thread 约束
+![YierdisDb internal object graph](./assets/db-internals-object-graph.svg)
 
-## 从 instance 到单 DB
+```text
+YierdisDb
+  -> EntryTable
+  -> NativeKeyDirectory
+  -> StringRoot / ListRoot / HashRoot / SetRoot / ZSetRoot
+  -> YierdisFfmExpireIndex
+  -> YierdisDbKeyLifecycle
+  -> YierdisDbMutationExecutor
+  -> YierdisDbMemoryLedger
+  -> YierdisDbExpirationSupport
+  -> YierdisDbMaxmemorySupport
+  -> Yierdis*Ops
+  -> DbReads / DbWrites / ExpirationManager / MemoryOps / DbLifecycleOps
+```
 
-在 server 启动或 embedded 启动时，真正创建 DB 的不是命令层，而是 `YierdisInstance`。
+如果只把它理解成 `key -> value`，会漏掉真正的内核逻辑：
 
-大致关系是：
+- key bytes、entry metadata 和 payload 不在同一个结构里
+- 读路径会做惰性过期和 LRU touch
+- 写路径先 reserve memory，再执行 mutation，再按实际 delta commit
+- 删除 key 必须同时释放 entry、key bytes、expire metadata 和 type root payload
+- maxmemory 可以是单 DB 本地预算，也可以由 instance 级 governor 跨 DB 协调
+- 所有 DB 访问必须在 owner thread 上执行
+
+## 从 Instance 到单 DB
+
+生产启动和 embedded 启动时，命令层不会直接创建 DB。DB 由 runtime 层装配：
 
 ```text
 YierdisInstance
   -> RuntimeDbEngine[]
-  -> YierdisDb
-     -> DbReads / DbWrites / MemoryOps / ExpirationManager / DbLifecycleOps
+     -> YierdisDb
+        -> DbEngine facades
 ```
 
-这里最重要的分层是：
+这三层边界要分清：
 
 - `YierdisInstance`
-  负责“多 DB 实例装配、资源 ownership、global/per-db maxmemory 组织”
-- `YierdisDb`
-  负责“单个 DB 的真实状态和策略”
+  负责多 DB 数量、FFM runtime 归属、global/per-db maxmemory 和 runtime 生命周期。
+- `RuntimeDbEngine`
+  是 runtime 看到的 DB contract，除了 `DbEngine` 能力外，还包含 thread binding、
+  shutdown、maintenance 和 maxmemory participant hook。
 - `DbEngine`
-  负责把 `YierdisDb` 暴露成 command 层能依赖的能力视图
+  是 command 层看到的能力视图，只暴露 `reads()`、`writes()`、`expiration()`、
+  `memory()` 和 `lifecycle()`。
 
-## `YierdisDb` 拥有什么
-
-`YierdisDb` 仍然长期持有单 DB 运行所需的核心对象，但这些对象的创建不再集中在
-`YierdisDb` 构造函数里。构造细节由 `YierdisDbConfig`、
-`YierdisDbStorageComponents`、`YierdisDbComponents` 和
-`YierdisDbComponentFactory` 收敛。
-
-### 1. 主存储、native entry 和过期索引
-
-当前 DB 存储图已经拆成几层：
-
-- `EntryTable`
-- `NativeKeyDirectory`
-- `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot`
-- `expires`
-
-默认实现分别是：
-
-- `EntryTable` 使用 slab allocator 保存 entry 元数据
-- `NativeKeyDirectory` 保存 key bytes 并映射到 `EntryHandle`
-- 各 `TypeRoot` 用 `ValueHandle` 管理具体 payload
-- `YierdisFfmExpireIndex`
-
-这说明：
-
-- `NativeKeyDirectory` 负责 key -> entry handle
-- `EntryRecord` 负责 type、encoding、value handle、expire、estimate 和 LRU 元数据
-- `TypeRoot` 负责 value handle -> payload
-- `expires` 负责 key -> expireAt，并同步回 entry 元数据
-
-### 2. 线程与资源底座
-
-- `threadGuard`
-- `memoryRuntime`
-- `offHeapAllocator`
-- `resources`
-
-这些对象不是业务逻辑，但它们决定了：
-
-- 当前线程是不是 owner thread
-- DB 是否能安全访问
-- off-heap/native memory 资源由谁持有和关闭
-
-### 3. 记账与策略协作者
-
-- `ledger`
-- `mutationExecutor`
-- `expirationSupport`
-- `maxmemorySupport`
-- `keyLifecycle`
-
-这几个对象是 DB 内核最值得理解的部分：
-
-- `YierdisDbMemoryLedger`
-  负责 reservation / commit / rollback 和 maxmemory 预算入口
-- `YierdisDbMutationExecutor`
-  负责把“上界估算 + 真正 mutation + 记账提交/回滚”串成受控写路径
-- `YierdisDbExpirationSupport`
-  负责清理过期 key
-- `YierdisDbMaxmemorySupport`
-  负责采样候选、淘汰和 LRU 相关策略
-- `YierdisDbKeyLifecycle`
-  负责 key handle、live `EntryRecord`、惰性过期删除和 TTL 元数据更新
-
-### 4. 类型化操作对象
-
-- `YierdisStringOps`
-- `YierdisHashOps`
-- `YierdisListOps`
-- `YierdisSetOps`
-- `YierdisZSetOps`
-- `YierdisHllOps`
-- `YierdisTtlOps`
-- `YierdisKeyspaceOps`
-
-这批 `*Ops` 才是命令层最终会落到的地方。
-
-### 5. 观测和内省
-
-- `memoryReporter`
-- `introspection`
-
-它们负责把内部状态整理成：
-
-- `MEMORY USAGE`
-- `MEMORY STATS`
-- `OBJECT ENCODING`
-
-这类命令可以消费的视图。
-
-### 6. 面向 command 层的 facade
-
-- `reads`
-- `writes`
-- `expirationManager`
-- `memoryOps`
-- `lifecycleOps`
-
-这一步很关键，因为它说明命令层看到的不是 `YierdisDb` 本体，而是经过能力裁剪后的 facade。
-
-### 7. 构造和纯工具类
-
-为了避免 `YierdisDb` 再次变成所有细节的落点，几个非 facade 职责被放在独立类里：
-
-- `YierdisDbConfig`
-  负责校验构造参数、保存 `yierdis-db-api` maxmemory policy、计算时间预算和 LRU 开关。
-- `YierdisDbStorageComponents`
-  负责 FFM runtime、allocator、keyspace、expire index 和 owned resources 的组装结果。
-- `YierdisDbComponents`
-  负责承载 factory 返回的包内对象图 bundle。
-- `YierdisDbComponentFactory`
-  负责把 storage、ledger、mutation executor、key lifecycle、ops 和 facade 拼成对象图。
-- `YierdisDbMemoryEstimator`
-  负责 entry 估算和写入上界估算。
-- `YierdisGlobMatcher`
-  负责 `KEYS` / `SCAN` 使用的 Redis 风格 byte glob 匹配。
-
-这几个类的共同点是：它们是 DB 包内部实现细节，不扩大 command 层或 runtime 层能看到的 API。
-
-## 可以把 `YierdisDb` 想成下面这张图
+所以命令实现通常走的是：
 
 ```text
-YierdisDb
-  -> components/config/factory assemble object graph
-  -> EntryTable(entry handle -> EntryRecord)
-  -> NativeKeyDirectory(key -> entry handle)
-  -> TypeRoot(value handle -> payload)
-  -> expires(key -> expireAt)
-  -> threadGuard
-  -> memoryRuntime / offHeapAllocator
-  -> ledger
-  -> mutationExecutor
-  -> expirationSupport
-  -> maxmemorySupport
-  -> keyLifecycle
-  -> string/hash/list/set/zset/hll/ttl/keyspace ops
-  -> memoryReporter / introspection
-  -> reads / writes / memory / lifecycle facades
+CommandSupport
+  -> DbEngine / DbReads / DbWrites
+  -> YierdisDbReads / YierdisDbWrites
+  -> YierdisStringOps / YierdisKeyspaceOps / ...
 ```
 
-## 读路径是怎么走的
+命令层不应该 import 或调用 `YierdisDb` 具体实现类。
 
-读路径的核心不是“直接从 Map 里 get”，而是：
+## 构造阶段做了什么
 
-1. 先定位 key
-2. 检查是否过期
-3. 过期就删除
-4. 未过期则 touch
-5. 再把对象交给具体类型逻辑处理
+`YierdisDb` 构造函数本身不再手写所有协作者创建逻辑。对象图主要由这几个类收敛：
 
-### `YierdisDbKeyLifecycle` 的角色
+- `YierdisDbConfig`
+  校验并保存 `maxmemoryBytes`、`MaxmemoryPolicy`、samples、eviction 时间预算、
+  expire cleanup 时间预算，并决定 LRU clock 是否启用。
+- `YierdisDbStorageComponents`
+  解析或创建 `YierdisFfmMemoryRuntime`、`OffHeapAllocator`、entry table、key directory、
+  expire index 和各 type root。
+- `YierdisDbComponentFactory`
+  创建 ledger、mutation executor、expiration support、maxmemory support、key lifecycle、
+  所有类型化 ops，以及 command-facing facade。
+- `YierdisDbComponents`
+  只是 factory 返回给 `YierdisDb` 的包内对象图 bundle。
+- `YierdisDbRuntimeInternals`
+  给 `Yierdis*Ops` 提供最小内部入口：`checkThread()`、`executeMutation(...)`、
+  `keyLifecycle()` 和 `ledger()`。
 
-这条路径的中心基本都在 `YierdisDbKeyLifecycle`：
+这样做的结果是：
+
+- `YierdisDb` 继续作为状态 owner
+- `Yierdis*Ops` 不需要拿完整 DB 实现类
+- command 层只依赖 `yierdis-db-api` 的稳定能力接口
+- runtime 层通过 `RuntimeDbEngine` 和 maxmemory SPI 做装配与协调
+
+## 存储图
+
+当前单 DB 的 key/value 图拆成四层：
+
+```text
+NativeKeyDirectory
+  key bytes -> EntryHandle
+
+EntryTable
+  EntryHandle -> EntryRecord
+
+EntryRecord
+  ValueType + ValueEncoding + ValueHandle + expireAtMillis + estimated bytes + LRU clock
+
+TypeRoot
+  ValueHandle -> payload
+```
+
+### `NativeKeyDirectory`
+
+`NativeKeyDirectory` 是 key 目录。它保存 key bytes，并把 key 映射到
+`EntryHandle`。它不理解 value 类型，不负责释放 payload，也不直接维护 TTL 语义。
+
+它提供给上层的能力包括：
+
+- key lookup
+- key insertion/removal
+- random key sampling
+- cursor scan
+- native table stats
+
+### `EntryTable` 和 `EntryRecord`
+
+`EntryTable` 使用 native/slab 风格的 entry 存储保存 metadata。`EntryRecord` 是每个
+key 的 metadata，包含：
+
+- `ValueType`
+- `ValueEncoding`
+- `ValueHandle`
+- key hash / key handle identity
+- `expireAtMillis`
+- 估算字节数
+- LRU/LFU 槽位
+
+注意：`EntryRecord` 不保存 Java collection 本体。它只保存 metadata 和指向 type root
+payload 的 handle。
+
+### Type Root
+
+不同逻辑类型的真实 payload 由不同 root 管：
+
+- `StringRoot`
+- `ListRoot`
+- `HashRoot`
+- `SetRoot`
+- `ZSetRoot`
+
+root 的职责是：
+
+- 创建、读取、修改 payload
+- 返回当前 encoding 和 estimated bytes
+- 通过 `ValueHandle` 释放 payload
+- 在 DB clear / shutdown 时释放内部 native 资源
+
+集合类型内部仍会使用 `ListValue`、`HashValue`、`SetValue`、`ZSetValue` 等结构，
+但这些是 root 内部的 payload 实现，不再是 keyspace 的顶层 value 容器。
+
+### Expire Index
+
+TTL 由两份信息协作：
+
+- `EntryRecord.expireAtMillis`
+- `YierdisFfmExpireIndex` 中的 key handle -> expireAtMillis 索引
+
+`EntryRecord` 让单 key 读取时能快速知道 TTL metadata；expire index 让 cleanup 能从
+“有 TTL 的 key 集合”里采样，而不是扫描所有 key。
+
+## Key Lifecycle 是中心协调者
+
+`YierdisDbKeyLifecycle` 是 DB 内核里最关键的协作者。它连接了：
+
+- key bytes / `BytesView`
+- `NativeKeyDirectory`
+- `EntryTable`
+- `EntryRecord`
+- expire index
+- type roots
+- LRU clock
+- ledger delta callback
+
+它的核心方法可以分成几组。
+
+### 读取 live entry
 
 - `keyHandle(...)`
 - `entryRecord(...)`
 - `liveEntryRecord(...)`
 - `removeIfExpired(...)`
+- `touchRecord(...)`
+
+`liveEntryRecord(...)` 不是普通 get。它会先确认 key 仍然存在，再做惰性过期删除，
+最后返回仍然有效的 `EntryRecord`。调用方如果需要记录访问，还会调用
+`touchRecord(...)` 更新 LRU clock。
+
+这就是为什么 TTL 不只存在于后台 cleanup：普通读路径也会触发 lazy expiration。
+
+### 受控修改 entry
+
+- `computeWithHandle(...)`
+- `computeIfPresentWithHandle(...)`
+- `newRecord(...)`
+- `removeEntry(...)`
+
+写路径不会让每个 ops 自己拼 key directory 和 entry table。ops 会通过
+`computeWithHandle(...)` 取得 key handle 和旧 record，构造新 record 后交回 lifecycle。
+
+lifecycle 会负责：
+
+- 新 key 时分配 `EntryHandle`
+- 已存在 key 时替换 `EntryRecord`
+- 删除 key 时移除 directory 和 entry table
+- 替换 value handle 时释放旧 payload
+
+### TTL metadata
+
 - `expireAtMillis(...)`
+- `setExpireAtMillis(...)`
+- `removeExpire(...)`
+- `removeExpireByKeyBytes(...)`
 
-`liveEntryRecord(...)` 的语义很重要：
+设置或移除 TTL 时，lifecycle 同时更新 expire index 和 `EntryRecord.expireAtMillis`。
+这保证 `TTL`、lazy expiration、cleanup 和 snapshot 看到的是同一套状态。
 
-- 不是简单返回 entry metadata
-- 它会先做惰性过期删除
-- 然后由调用方通过 `touchRecord(...)` 更新 LRU/last-access
-- 最后才返回仍然有效的 `EntryRecord`
+## 读路径
 
-读写路径需要 entry 元数据时会先走 `liveEntryRecord(...)` 或
-`entryRecord(...)`，再用 `EntryRecord.valueHandle()` 交给对应 `TypeRoot`。
-
-这意味着很多读路径天然就带有：
-
-- lazy expiration
-- LRU 触摸
-
-这也是为什么 TTL 逻辑不会只存在于后台 cleanup 里。
-
-### 典型读链
-
-例如 string 读取，逻辑大致是：
+读路径的主线是：
 
 ```text
-command
+command handler
+  -> CommandSupport.dbReads(ctx)
+  -> DbReads.<family>()
+  -> Yierdis*Ops read method
+  -> keyLifecycle.liveEntryRecord(...)
+  -> require type
+  -> EntryRecord.valueHandle()
+  -> TypeRoot read
+```
+
+以 `GET` 为例：
+
+```text
+StringCommands
   -> DbReads.strings()
   -> YierdisStringOps.getStringValue(...)
+  -> liveTouchedStringRecord(...)
   -> keyLifecycle.liveEntryRecord(...)
-  -> EntryRecord.valueHandle()
-  -> StringRoot
+  -> keyLifecycle.touchRecord(...)
+  -> StringRoot.slice(...) / StringRoot.copy(...)
 ```
 
-如果你在追 `TTL`、`TYPE`、`MEMORY USAGE`，最终也会走到类似的
-`BytesView -> keyHandle -> EntryRecord -> TypeRoot` 路径。
+读路径通常会做三件隐含工作：
 
-## 写路径是怎么走的
+- 访问前检查 owner thread
+- 如果 key 已过期，惰性删除并返回“key 不存在”
+- 如果 key 仍然有效，按策略更新 LRU clock
 
-真正体现 DB 内核设计的，是写路径。
+不同命令的后半段才开始分化：
 
-对 Yierdis 来说，写操作通常不是：
+- `GET` 读 `StringRoot`
+- `TYPE` 读 `EntryRecord.type()`
+- `OBJECT ENCODING` 读 `EntryRecord.encoding()`
+- `MEMORY USAGE` 结合 entry metadata 和 root estimated bytes
+- `SCAN` 通过 key lifecycle cursor 遍历 key directory
 
-- “直接改对象，再顺手记账”
+## 写路径
 
-而是：
+写路径的核心约束是：不能先改数据结构，再补做内存检查。
 
-- “先估算上界，预留预算，再执行 mutation，最后按实际 delta 提交”
-
-### 写路径主线
-
-可以把主线记成：
+标准写路径是：
 
 ```text
-command
-  -> *Ops
-  -> executeMutation(plan)
-  -> ledger.reserve(upperBound)
-  -> keyLifecycle.computeWithHandle(...)
-  -> refreshEstimatedBytes(...)
-  -> ledger.commit(actualDelta)
+command handler
+  -> CommandSupport.dbWrites(ctx)
+  -> DbWrites.<family>()
+  -> Yierdis*Ops write method
+  -> estimate upper bound
+  -> internals.executeMutation(plan)
+     -> mutationExecutor.execute(plan)
+        -> ledger.reserve(upperBound)
+        -> plan.apply()
+           -> keyLifecycle.computeWithHandle(...)
+           -> TypeRoot mutation
+           -> EntryRecord replacement / delete
+           -> TTL metadata update
+        -> ledger.commit(actualDelta)
 ```
 
-### `YierdisDbMutationExecutor`
+`YierdisDbMutationExecutor` 把所有 mutation 压成同一个内部协议：
 
-`YierdisDbMutationExecutor` 的职责非常聚焦：
+```text
+MutationPlan.upperBoundBytes()
+MutationPlan.apply() -> MutationResult<T>
+MutationResult.actualDeltaBytes()
+```
 
-- 检查当前线程必须是 owner thread
-- 向 ledger 申请 reservation
-- 执行 mutation plan
-- commit 实际 delta
-- 在异常时 rollback
+它负责：
 
-它把所有 mutation 压成了统一协议：
+- 检查 owner thread
+- 调用 `ledger.reserve(...)`
+- 执行真正 mutation
+- 成功时用实际 delta `commit`
+- ledger OOM、off-heap OOM 或 runtime exception 时 rollback reservation
+- 把 maxmemory OOM 映射成 Redis 风格错误
 
-- `upperBoundBytes()`
-- `apply() -> MutationResult<T>`
+这不是用户可见的事务，但它是 DB 内部的受控写协议。
 
-这让 DB 写路径变成一种“受控事务样式”的内部协议，即便它不是用户可见事务。
+### 为什么需要 upper bound
 
-### 为什么要先算 upper bound
+maxmemory 判断必须发生在 mutation 前。否则写入已经把 native/heap 状态改掉了，再报
+OOM 就会留下难以回滚的半完成状态。
 
-因为 maxmemory 和 memory ledger 不能等对象真的写进去了再补救。
+所以每个写操作都要先估算“最多可能增长多少”：
 
-正确顺序必须是：
+- 新 key 的 entry metadata
+- key bytes
+- value payload
+- 可能新增的 TTL entry
+- 编码升级可能引入的额外结构
 
-1. 先估算这次写入理论上最多会多占多少
-2. 再判断预算够不够
-3. 再决定是否需要 cleanup/evict
-4. 真正执行 mutation
-5. 最后用实际 delta 校正
+mutation 完成后，再用实际 delta 修正 ledger。
 
-这就是 `MemoryLedger` 的意义。
+### `reservedBytes` 的意义
 
-## `YierdisDbMemoryLedger` 在做什么
-
-`YierdisDbMemoryLedger` 是 DB 内核的预算入口。
-
-它维护的不是一个单纯的 `usedBytes`，而是至少两类量：
+`YierdisDbMemoryLedger` 维护两个核心量：
 
 - `usedBytes`
 - `reservedBytes`
 
-### reserve 阶段
+`reservedBytes` 保护的是“预算已经通过，但 mutation 还没完成”的窗口。成功后 reservation
+被释放，实际 delta 进入 `usedBytes`；失败时只撤销 reservation，不把这次写入计为成功。
 
-当 mutation executor 调用 `reserve(...)` 时，ledger 会：
+## TTL 和过期清理
 
-1. 先看是否存在全局 `MaxmemoryCoordinator`
-2. 如果有，就交给 coordinator 统一判断
-3. 如果没有，就在当前 DB 内做：
-   - cleanup expired
-   - noeviction 判断
-   - eviction 判断
-4. 如果预算允许，则增加 `reservedBytes`
+TTL 相关代码分成两层：
 
-### commit / rollback 阶段
+- `YierdisTtlOps`
+  实现 `EXPIRE`、`PEXPIRE`、`EXPIREAT`、`PEXPIREAT`、`PERSIST`、`TTL`、`PTTL`。
+- `YierdisDbExpirationSupport`
+  实现批量 cleanup 策略。
 
-- `commit(...)` 会结束 reservation，并把 `actualDeltaBytes` 记到 `usedBytes`
-- `rollback(...)` 只撤销 reservation，不会把 mutation 当成成功写入
+`YierdisTtlOps` 仍然通过 mutation executor 修改状态。首次给 key 增加 TTL 时，会把
+expire index entry 的估算成本计入 upper bound。过期时间小于等于当前时间时，TTL ops
+直接删除 key，并返回 value changed。
 
-### 为什么 `reservedBytes` 很关键
+`YierdisDbExpirationSupport.cleanupExpired(...)` 做的是批量策略：
 
-因为如果没有它，写路径在“估算”和“真实 mutation”之间会有一段无保护窗口。
+- 从 expire index 随机采样 key
+- 找不到 entry 或 TTL metadata 不一致时清理索引
+- 过期则通过 key lifecycle 删除 record 和 payload
+- 过期比例低、循环次数达到上限或时间预算耗尽时停止
 
-`reservedBytes` 的意义就是：
+也就是说：
 
-- 在 mutation 还没真正完成前，先把预算占住
-- 出错再回滚
+- 单 key TTL 状态由 key lifecycle 保持一致
+- 命令语义由 `YierdisTtlOps` 实现
+- 批量清理节奏由 `YierdisDbExpirationSupport` 控制
 
-## TTL 和 expire index 是怎么协作的
+## Maxmemory 和 Memory Ledger
 
-TTL 不是只存在 payload 里的一个裸字段，而是被拆成：
+maxmemory 的入口在 `YierdisDbMemoryLedger.reserve(...)`。
 
-- `EntryRecord.expireAtMillis`
-- expire index 里的时间元数据
+本地 DB scope 下，reserve 的顺序是：
 
-### 为什么要分开
+1. 如果配置了 maxmemory，先 cleanup expired
+2. 如果本次 upper bound 大于总 limit，直接 OOM
+3. 计算写入前必须压到的 limit：`maxmemoryBytes - estimatedExtraBytes`
+4. 如果当前 usage 超过 limit：
+   - `noeviction`：增长型写入直接 OOM
+   - `allkeys-random` / `allkeys-lru`：调用 `YierdisDbMaxmemorySupport.evictUntilUnder(...)`
+5. 如果仍然超限，增长型写入 OOM
+6. 预算通过后创建 reservation
 
-因为：
+`YierdisDbMaxmemorySupport` 负责单 DB 内的淘汰策略：
 
-- 不是所有 key 都有 TTL
-- TTL 逻辑需要独立扫描和清理
-- `persist`、`expire`、惰性删除、后台 cleanup 都要围绕这份索引工作
+- `allkeys-random` 随机取 victim
+- `allkeys-lru` 按 samples 选 LRU clock 最小的 key
+- samples 覆盖所有 key 时，可以扫描最佳候选，减少测试不稳定性
+- 删除 victim 前会先处理已经过期的 key
+- 删除成功后通过 ledger delta callback 扣减 used bytes
 
-### `YierdisDbKeyLifecycle` 管什么
+global maxmemory scope 下，`YierdisDbMemoryLedger` 不自己决定全局预算，而是委托
+instance 级 `YierdisGlobalMaxmemoryGovernor.prepareWrite(...)`。governor 会：
 
-它负责：
+- 对所有 participant 做 expired cleanup
+- 汇总所有 DB 的 maxmemory usage
+- 加上共享 off-heap usage source
+- 按全局 policy 从各 DB 采样或扫描 victim
+- 通过 participant 的 `evict(...)` hook 删除候选
 
-- `setExpireAtMillis(...)`
-- `removeExpire(...)`
-- `expireAtMillis(...)`
-- `removeIfExpired(...)`
+因此要记住：
 
-### `YierdisDbExpirationSupport` 管什么
+- 单 DB 内看到的是 ledger + maxmemory support
+- 多 DB 全局协调发生在 `YierdisInstance` / `YierdisGlobalMaxmemoryGovernor`
+- global scope 会避免把共享 off-heap usage 在每个 DB 上重复计入
 
-它负责：
+## Memory 和 Introspection
 
-- `cleanupExpired()`
-- `cleanupExpired(nowMillis)`
+观测相关 facade 是：
 
-也就是：
+- `MemoryOps`
+- `DbLifecycleOps`
+- `ExpirationManager`
 
-- keyLifecycle 负责“单 key 生命周期动作”
-- expirationSupport 负责“批量过期清理策略”
+对应实现主要是：
 
-## maxmemory 是怎么接进来的
+- `YierdisDbMemoryOps`
+- `YierdisDbMemoryReporter`
+- `YierdisDbIntrospection`
+- `YierdisDbLifecycleOps`
+- `YierdisDbExpirationManager`
 
-对单个 DB 来说，maxmemory 相关逻辑主要在：
+`MEMORY USAGE` 和 `MEMORY STATS` 不直接扫描 Java object graph，而是从可解释的内部来源汇总：
 
-- `YierdisDbMemoryLedger`
-- `YierdisDbMaxmemorySupport`
+- ledger used bytes
+- ledger reserved bytes
+- off-heap allocator usage
+- entry table native bytes
+- key directory native bytes
+- expire index native bytes
+- type root native bytes / estimated bytes
+- key count 和 expire count
+- rehash 状态
 
-对多 DB 实例来说，还会接到：
+这些数字是 explainable estimate，不是精确 JVM heap measurement。
 
-- `YierdisInstance`
-- `YierdisGlobalMaxmemoryGovernor`
+`OBJECT ENCODING` 则从 `EntryRecord.encoding()` 映射成 Redis 风格名称，例如：
 
-### 两种作用方式
+- `int`
+- `embstr`
+- `raw`
+- `listpack`
+- `hashtable`
+- `intset`
+- `quicklist`
+- `skiplist`
 
-第一种：per-db scope
+## Owner Thread 约束
 
-- `YierdisInstance` 把 `maxmemoryBytes` 按 DB 数量分摊给各 DB
-- 默认 `YierdisDbEngineFactory` 会为每个 DB 创建独立 FFM runtime
-- 每个 DB 有自己的本地预算
-- ledger 本地处理 cleanup/evict/noeviction
+`YierdisDb` 不是线程安全并发容器。它依赖 `DbThreadGuard` 强制单线程 DB 语义：
 
-第二种：global scope
+- `bindToCurrentThread()` 把 DB 绑定到 owner thread
+- `checkThread()` 在未绑定、已关闭或跨线程访问时 fail fast
+- `checkThreadForShutdown()` 防止从非 owner thread 关闭已绑定 DB
 
-- 默认 `YierdisDbEngineFactory` 让所有 DB 复用实例级 shared runtime
-- instance 级 governor 作为 `MaxmemoryCoordinator`
-- 各 DB attach 到同一个全局协调器
-- governor 汇总各 DB participant，并把 shared runtime 的 `usedBytes()` 作为共享 usage source 计入一次
+生产路径中，DB owner thread 是 command executor 线程。Netty I/O 线程不直接访问 DB；
+maintenance task 也会被调度回 owner thread 执行。
 
-所以：
+这个约束非常重要：很多内部结构可以保持简单，是因为它们不需要处理多线程并发修改。
 
-- 单 DB 里看到的是 ledger + support
-- 多 DB 里真正的跨库协调来自 instance/runtime 层
-- `MEMORY STATS` 在 global scope 下返回实例聚合视角，off-heap shared runtime 不按 DB 重复相加
+## 改代码时的边界
 
-## native entry/root 在 DB 内核里处于什么位置
+如果你要改 DB 内核，优先按职责定位文件：
 
-命令层通常只关心 string/list/hash 之类的逻辑类型，但 DB 内核现在真正处理的是：
+- 新增或修改命令语义：
+  先看 `YierdisStringOps`、`YierdisHashOps`、`YierdisListOps`、`YierdisSetOps`、
+  `YierdisZSetOps`、`YierdisHllOps`、`YierdisTtlOps` 或 `YierdisKeyspaceOps`。
+- 改 key 生命周期、删除、TTL metadata、payload release：
+  看 `YierdisDbKeyLifecycle`。
+- 改写路径预算、OOM、commit/rollback：
+  看 `YierdisDbMutationExecutor` 和 `YierdisDbMemoryLedger`。
+- 改过期清理策略：
+  看 `YierdisDbExpirationSupport`。
+- 改淘汰策略：
+  看 `YierdisDbMaxmemorySupport` 和 `YierdisGlobalMaxmemoryGovernor`。
+- 改 memory 命令或 encoding/snapshot：
+  看 `YierdisDbMemoryReporter` 和 `YierdisDbIntrospection`。
+- 改 native storage 布局：
+  看 `NativeKeyDirectory`、`EntryTable`、`EntryRecord` 和各 `TypeRoot`。
+- 改 instance 级 DB 数量、runtime 归属或 global maxmemory：
+  看 `YierdisInstance` 和 `YierdisDbEngineFactory`。
 
-- `EntryRecord`
-- `ValueHandle`
-- `StringRoot`
-- `ListRoot`
-- `HashRoot`
-- `SetRoot`
-- `ZSetRoot`
+几个不要跨越的边界：
 
-### `EntryRecord`
+- command 层不要直接依赖 `YierdisDb`
+- ops 不要绕过 mutation executor 做增长型写入
+- 删除 key 不要绕过 key lifecycle
+- TTL index 和 `EntryRecord.expireAtMillis` 不要只更新一边
+- maxmemory 判断不要放到 mutation 之后
+- Netty I/O 线程不要直接访问 DB
 
-它是每个 key 的元数据记录，持有：
+## 推荐源码阅读顺序
 
-- key handle identity
-- value handle
-- `ValueType`
-- `ValueEncoding`
-- expireAt
-- 估算字节数
-- LRU 相关字段
+1. `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
+   看多 DB、runtime 归属和 maxmemory scope 如何决定。
+2. `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
+   看单 DB 状态 owner 暴露哪些 facade 和 runtime hook。
+3. `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbComponentFactory.java`
+   看对象图如何组装。
+4. `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java`
+   看 key、entry、expire、value release 如何协调。
+5. `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java`
+   看受控 mutation 协议。
+6. `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMemoryLedger.java`
+   看 reserve、commit、rollback 和 maxmemory 入口。
+7. `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java`
+   看 memory stats 如何从内部结构汇总。
 
-删除、过期清理、maxmemory 淘汰和 memory reporter 都优先从 entry
-元数据计算。
-
-### `TypeRoot`
-
-各类型的 payload 由 root 管理：
-
-- `StringRoot`
-- `ListRoot`
-- `HashRoot`
-- `SetRoot`
-- `ZSetRoot`
-
-root 负责 `ValueHandle` 的创建、读取、变更、估算和释放。集合类型原来的
-`HashValue`、`ListValue`、`SetValue`、`ZSetValue` 是 root 内部的 payload
-结构；DB hot path 不再通过单独的兼容对象容器访问 key state。
-
-更细的编码说明请配合：
-
-- [`commands-and-data-model.md`](./commands-and-data-model.md)
-
-## owner thread 为什么是硬约束
-
-`YierdisDb` 不是线程安全并发容器，它明确要求：
-
-- 所有 DB 访问必须在绑定后的 owner thread 上进行
-
-相关入口：
-
-- `threadGuard`
-- `bindToCurrentThread()`
-- `checkThread()`
-
-这也是为什么：
-
-- Netty I/O 线程不直接访问 DB
-- maintenance 也要回到 executor 线程执行
-
-如果你把这个约束拿掉，很多“简单”的方法都会瞬间变成竞态点。
-
-## 对照源码时推荐看的顺序
-
-1. `YierdisInstance`
-   看 DB 是如何被实例层装配出来的
-2. `YierdisDb`
-   看对象图是如何拼起来的
-3. `YierdisDbKeyLifecycle`
-   看 key handle、live `EntryRecord`、TTL 元数据
-4. `YierdisDbMutationExecutor`
-   看受控 mutation 协议
-5. `YierdisDbMemoryLedger`
-   看预算、reservation 和 commit/rollback
-6. `YierdisDbMemoryReporter`
-   看观测和记账结果怎么被暴露出来
-
-## 最值得看的测试
+## 推荐测试
 
 - `YierdisInstanceTest`
-  看多 DB、global/per-db maxmemory、owner thread 约束
+  看多 DB、owner thread 和 runtime 级行为。
+- `GlobalMaxmemoryLruAcrossDbsTest`
+  看 global maxmemory 如何跨 DB 选择 LRU victim。
 - `MutationExecutorReservationTest`
-  看 reservation rollback 和 noeviction 拒绝路径
+  看 reservation rollback、noeviction 拒绝和 no-op mutation 行为。
+- `MemoryLedgerContractTest`
+  看 ledger reserve/commit/rollback 不变量。
 - `ExpireIndexTest`
-  看 expire index、lazy delete 和 TTL 记账
+  看 expire index 和 TTL 生命周期。
+- `TtlLifecycleDirectOpsTest`
+  看 TTL、flush 和 memory/object API 的 direct ops 行为。
 - `MemoryStatsAccountingConsistencyTest`
-  看记账结果是否一致
+  看 memory accounting 是否保持一致。
+- `NativeStorageRegressionTest`
+  看 native entry/key/value graph 的回归覆盖。
 - `YierdisDbArchitectureGuardTest`
-  看 DB 暴露面被哪些测试约束
+  看 command 层和 DB 实现之间的架构边界。
 
-## 一句话总结
+## 总结
 
-Yierdis 的 DB 内核不是“Map + 一些命令辅助方法”，而是：
+Yierdis 的 DB 内核可以压成四条主线：
 
-- 用 key lifecycle 管活 key
-- 用 mutation executor 管写路径
-- 用 memory ledger 管预算
-- 用 entry/root 管真实编码和 payload handle
+- `NativeKeyDirectory + EntryTable + TypeRoot` 表示 key/value 状态
+- `YierdisDbKeyLifecycle` 统一管理 key 生命周期、TTL metadata 和 payload release
+- `YierdisDbMutationExecutor + YierdisDbMemoryLedger` 统一管理写路径预算和提交/回滚
+- `YierdisDbExpirationSupport + YierdisDbMaxmemorySupport` 在 owner thread 内执行清理和淘汰策略
 
-这四层协作起来，才组成了一个真正像数据库内核的单 DB 实现。
+这四条线协作起来，才是 `YierdisDb` 作为单 DB 内核的真实形态。

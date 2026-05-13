@@ -1,453 +1,285 @@
 # Main Path Walkthrough
 
-本文是一篇“源码导读式”文档，目标不是列出所有模块，而是带着初学者沿着一条最核心的主链，理解 Yierdis 是怎么真正跑起来的。
+本文按源码阅读顺序走一遍 Yierdis 的主路径。它不是模块清单，也不替代
+[`request-execution-flow.md`](./request-execution-flow.md)；后者回答“一条请求怎么流动”，本文回答“打开哪些类、按什么顺序读，才能把这条链真正看懂”。
 
-如果你已经看过：
+建议先读：
 
 - [`project-overview.md`](./project-overview.md)
 - [`request-execution-flow.md`](./request-execution-flow.md)
+- [`core-logic-index.md`](./core-logic-index.md)
 
-那这篇文档就是下一步：把抽象流程落到具体类、关键方法和对象传递上。
+读本文时最好一段一段对照源码。每一节都先给入口文件，再说明这个类在主路径里的边界。
 
-## 建议的阅读方式
+## 一张路线图
 
-最适合的方式不是把本文一次性读完，而是：
-
-1. 先读一个阶段
-2. 打开对应源码文件
-3. 顺着类和方法名对照代码
-4. 再回来读下一个阶段
-
-这篇文档假设你最关心的问题是：
-
-- server 是怎么从 `main()` 变成一个能收请求的进程的？
-- 一条请求是怎么从 Netty 流到命令层和 DB 的？
-- `SET` 这种写命令到底是怎么安全落到内存里的？
-
-## 主链一览
-
-可以先把主链压成下面这条“类接类”的路线：
+把生产路径压缩成一条链，大致是：
 
 ```text
 YierdisServer
+  -> ServerConfig / ForeignMemoryAutoModules
   -> YierdisServerBootstrap
   -> YierdisInstance
+  -> DefaultYierdisEngine
+  -> CommandExecutor
   -> YierdisServerChannelInitializer
+  -> NettyExecutionConnection
   -> RespRequestDecoder
   -> RespCommandAdapter
   -> YierdisFastCommandHandler
-  -> CommandExecutor
-     -> CommandExecutorSubmitter
-     -> CommandExecutorDrainLoop
-     -> CommandExecutorExecutionSupport
-  -> YierdisEngine / DefaultYierdisEngine
+  -> CommandExecutorSubmitter
+  -> CommandExecutorDrainLoop
+  -> CommandExecutorExecutionSupport
+  -> DefaultYierdisEngine.execute(...)
   -> YierdisFastCommandProcessor
-  -> StringCommands / CoreConnectionCommands / ...
+  -> CommandSpec<T>.parse(...)
+  -> typed command handler
   -> CommandSupport
-  -> DbReads / DbWrites
-  -> YierdisStringOps / YierdisKeyspaceOps / ...
+  -> DbEngine / DbReads / DbWrites
+  -> Yierdis*Ops
   -> YierdisDbMutationExecutor
   -> YierdisDbKeyLifecycle
   -> EntryRecord / ValueHandle / TypeRoot
-  -> ReplyWriter
-  -> RespReplyWriter
+  -> ReplyWriter / RespReplyWriter
+  -> NettyExecutionIoAdapter
 ```
 
-先不要被类名吓到。真正读的时候，可以把它们分成 6 个阶段。
+这条链里有五条边界最重要：
 
-## 阶段 1：进程入口
+- Netty I/O 线程只负责收包、适配和提交，不直接访问 DB。
+- RESP 协议对象不会进入命令层，必须先变成 `ExecutionRequest`。
+- executor 只负责排队、背压、owner-thread 调度和 request 生命周期，不创建 `CommandContext`。
+- engine 负责把 `Session + ExecutionRequest + ReplyWriter` 变成命令层的 `CommandContext`。
+- DB 写入统一走 mutation plan、memory ledger 和 key lifecycle，不绕过内存预算直接改结构。
 
-入口文件是：
+## 1. 进程入口：`YierdisServer`
 
-- [`yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java)
+源码：
 
-这个类很小，但它决定了启动的最外层行为。
+- [`YierdisServer.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java)
+- [`ServerConfig.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerConfig.java)
+- [`ForeignMemoryAutoModules.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ForeignMemoryAutoModules.java)
 
-### 它做了什么
+`YierdisServer.main(...)` 是很薄的一层：
 
-`main(String[] args)` 的逻辑基本只有四步：
+1. `ServerConfig.fromArgs(args)` 用 picocli 解析、归一化和校验启动参数。
+2. 如果用户请求 help，`fromArgs(...)` 返回 `null`，进程直接结束。
+3. `ForeignMemoryAutoModules.ensureFfmAvailable()` 确认当前 JVM 有 JDK 25 FFM API。
+4. `YierdisServerBootstrap.start(config)` 进入真正的 server 组装。
+5. `server.awaitClose()` 等待 server channel 关闭。
 
-1. `ServerConfig.fromArgs(args)`
-   解析命令行参数
-2. `ForeignMemoryAutoModules.ensureFfmAvailable()`
-   确保当前 JVM 支持 JDK 25 FFM
-3. `YierdisServerBootstrap.start(config)`
-   真正创建并启动 server
-4. `server.awaitClose()`
-   进程阻塞等待 server 关闭
+所以 `YierdisServer` 不是业务中心。它只做启动前校验、稳定退出和生命周期外壳。
 
-### 初学者要注意什么
+## 2. 组装中心：`YierdisServerBootstrap`
 
-- `YierdisServer` 不是业务逻辑中心
-- 它更像一个“外壳”，负责：
-  - 启动前校验
-  - 参数错误的稳定退出
-  - 把真正的组装委托给 bootstrap
+源码：
 
-如果你在读代码时还没搞懂“server 到底是谁组起来的”，说明你还没真正进入下一层。
+- [`YierdisServerBootstrap.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java)
+- [`CommandExecutorConfigs.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/CommandExecutorConfigs.java)
 
-## 阶段 2：server 组装中心
+`YierdisServerBootstrap` 是 server 的 composition root。最值得读的方法是 `startInternal()`，它按固定顺序完成组装：
 
-组装中心在：
+1. 再次检查 FFM 可用性。
+2. 从 runtime config 构造 `YierdisInstanceConfig`。
+3. `YierdisInstance.create(...)` 创建实例和多 DB 资源。
+4. 拿到 `runtimeAccess`、maintenance hook 和 `observability`。
+5. 创建 `NettyServerInfoProvider`，绑定 observability。
+6. 创建 `SlowCommandGovernor`。
+7. 创建 `DefaultYierdisEngine`，注入 `DefaultCommandModules` 和 `ServerCommandModule`。
+8. 创建 `CommandExecutor<NettyExecutionConnection>`，把 `commandEngine::execute` 作为唯一命令执行函数交给 executor。
+9. 创建 Netty boss / worker group。
+10. `executor.start()` 在 owner executor 上调用 `runtimeAccess::bindToCurrentThread`。
+11. 如果开启 cleanup interval，用 worker event loop 做定时器，再通过 `executor.executeMaintenance(...)` 把 cleanup 调回 owner thread。
+12. 装配 Netty `ServerBootstrap` 并 `bind(port)`。
 
-- [`yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java)
+这里的顺序很关键：DB、engine 和 executor 都先就绪，Netty 最后才对外 bind。第一个请求进来时，主执行路径已经完整存在。
 
-这是整个主链里最重要的类之一。
+`close()` 也值得看一遍。它按反向顺序 best-effort 关闭 server channel、cleanup future、executor、engine、instance runtime 和 Netty group。`closeRuntimeAccess(...)` 会尽量把 runtime close 调度回 owner thread，保持 DB 线程语义一致。
 
-### 它拥有什么
+## 3. 实例和多 DB：`YierdisInstance`
 
-这个类长期持有并最终负责关闭的核心资源包括：
+源码：
 
-- `YierdisInstance`
-- `CommandExecutor`
-- command executor 对应的 `EventExecutorGroup`
-- Netty `bossGroup`
-- Netty `workerGroup`
-- `serverChannel`
-- 可选的定时 cleanup future
+- [`YierdisInstance.java`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java)
 
-可以把它理解成：
+不要把 `YierdisInstance` 理解成“一个 DB”。它是 embedded instance API 和资源 owner，负责创建多个 `RuntimeDbEngine`，并对上层暴露 `DbEngine` 能力视图。
 
-- “把 DB、执行器、Netty 和生命周期都握在一起的总装类”
+`YierdisInstance.create(...)` 的关键逻辑是：
 
-### `startInternal()` 的核心逻辑
+- 至少创建 1 个逻辑 DB。
+- 创建实例级 `YierdisFfmMemoryRuntime`。
+- 根据 `maxmemoryScope` 选择 `GLOBAL` 或 `PER_DB` 预算。
+- `GLOBAL` 默认让多个 DB 共享同一个 FFM runtime，并用 `YierdisGlobalMaxmemoryGovernor` 统一协调 eviction。
+- `PER_DB` 会把 maxmemory 按 DB 数量分摊给每个 DB。
+- 最终把 DB 数组、memory runtime 和 governor 装进 `YierdisInstanceResources`。
 
-最值得读的方法是 `startInternal()`。
+bootstrap 通过 `instance.engines()` 拿到的是 `DbEngine[]` 防御性拷贝。命令层后续只会看到 `DbEngine / DbReads / DbWrites`，不会直接依赖 `YierdisDb` 实现类。
 
-它的步骤顺序大致是：
+## 4. 连接根对象和 pipeline
 
-1. 再次检查 FFM 可用性
-2. 根据 `runtimeConfig` 组出 `YierdisInstanceConfig`
-3. `YierdisInstance.create(...)`
-4. 从 instance 上拿到：
-   - `runtimeAccess`
-   - `maintenance`
-   - `observability`
-5. 创建 `NettyServerInfoProvider`
-6. 创建 `SlowCommandGovernor`
-7. 创建 `DefaultYierdisEngine`，由 engine 内部持有当前命令处理实现
-8. 创建 `CommandExecutor`
-9. 启动 executor，把 DB 绑定到 executor 线程
-10. 如果开启了 cleanup interval，则调度 maintenance task
-11. 组装 Netty `ServerBootstrap`
-12. `bind(port)`
+源码：
 
-### 这里最值得注意的设计点
+- [`YierdisServerChannelInitializer.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java)
+- [`NettyExecutionConnection.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionConnection.java)
 
-#### 1. DB 先于 Netty 就绪
+`initChannel(...)` 先根据输出缓冲配置设置 Netty `WriteBufferWaterMark`，然后调用：
 
-bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`。
+```java
+NettyExecutionConnection.getOrCreate(ch, txMaxCommands, txMaxBytes)
+```
 
-这意味着：
+这个对象是连接级根对象，里面有三块状态：
 
-- 收到第一个请求时，核心执行路径已经完整存在
-- Netty 不是去“边跑边找 DB”，而是把请求送给已经就绪的系统
+- Netty `Channel`：真实 transport。
+- `EngineSession`：engine-owned 业务会话态，包含 DB index、transaction、client id/name、auth、RESP version。
+- `ExecutionConnectionContext`：executor-owned 调度态，包含 pending、pending bytes、closing、backpressure、fair scheduling 状态和统计。
 
-#### 2. 命令执行器是 DB 的 owner thread
+`EngineSession` 可以绑定一个只读 stats supplier 给 `INFO/STATS` 用，但它不拥有 executor 的 pending 计数。`NettyExecutionConnection.markClosing()` 会先标记 executor context closing，再丢弃 session 上的事务队列，避免 close 之后的已排队命令继续产生副作用。
 
-`executor.start()` 不是简单地启动一个线程，而是会在 executor 线程里先执行：
+pipeline 当前顺序是：
 
-- `runtimeAccess::bindToCurrentThread`
+```text
+writeBufferBackpressure
+  -> optional idleTimeout
+  -> optional idleTimeoutCloser
+  -> respRequestDecoder
+  -> respCommandAdapter
+  -> respProtocolErrorReply
+  -> commandHandler
+```
 
-也就是说：
+`writeBufferBackpressure` 监听 channel writability：不可写时通知 executor 关闭输入，可写后让 executor 重新评估是否恢复 `autoRead`。如果配置了 idle timeout，还会插入读空闲关闭逻辑。
 
-- DB 从启动开始就绑定在命令执行器线程上
-- 这就是 Redis 风格单线程命令语义的基础
+## 5. 协议边界：RESP 到 `ExecutionRequest`
 
-#### 3. cleanup 不是独立 DB 线程
+源码：
 
-定时过期清理不是另外起一个“后台 DB 线程”，而是：
+- [`RespRequestDecoder.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java)
+- [`RespCommandAdapter.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java)
+- [`RespExecutionAdapter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespExecutionAdapter.java)
 
-- 用 Netty worker event loop 做定时器
-- 再通过 `executor.executeMaintenance(...)` 把真正的 maintenance 调度回 DB owner thread
-
-这样可以避免：
-
-- 多线程同时直接碰 DB
-- cleanup 和正常命令并发修改同一份 DB 状态
-
-## 阶段 3：实例级装配
-
-实例装配中心在：
-
-- [`yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java)
-
-### 这个类不要误解成什么
-
-初学者最容易误解的是：
-
-- “`YierdisInstance` 就是数据库”
-
-其实更准确的理解是：
-
-- “`YierdisInstance` 是一个实例级组装器和资源 owner”
-
-它负责的不是单个 key 的读写，而是：
-
-- 这个实例有几个逻辑 DB
-- DB 共享还是独占 FFM runtime
-- 是否需要全局 maxmemory governor
-- 对外暴露哪些 runtime seam
-
-### `create(...)` 做了什么
-
-这个方法的代码逻辑值得逐段看：
-
-1. 读配置里的 `databases`
-2. 判断 `maxmemoryScope` 是 `GLOBAL` 还是 `PER_DB`
-3. 创建实例级 `YierdisFfmMemoryRuntime`
-4. 如果是 `PER_DB`，把 `maxmemoryBytes` 按 DB 数量分摊给每个 DB
-5. 决定使用哪个 `DbEngineFactory`
-6. 为每个 DB 创建一个 `RuntimeDbEngine`
-7. 如果是全局 maxmemory，再创建 `YierdisGlobalMaxmemoryGovernor`
-8. 把 governor attach 到每个 DB
-9. 最后把 DB 数组、memory runtime 和 ownership 信息装进 `YierdisInstanceResources`
-
-默认 factory 的资源归属也在这里定下来：`GLOBAL` 会把同一个 shared FFM runtime 传给 DB factory，global governor 额外把 shared runtime 的 `usedBytes()` 计入一次；`PER_DB` 则让每个 DB 拥有自己的 FFM runtime 和本地预算。
-
-### 为什么这里要返回 `DbEngine[]`
-
-`YierdisInstance.engines()` 暴露的是 `DbEngine[]`，不是 `YierdisDb[]`。
-
-这是为了让上层看到的是能力视图，而不是实现类。
-
-对初学者来说，可以这样记：
-
-- `YierdisInstance` 是“多 DB 机房”
-- `DbEngine` 是给命令层看的“统一控制面板”
-- `YierdisDb` 是控制面板背后的具体机器
-
-## 阶段 4：连接建立和 pipeline
-
-入口在：
-
-- [`yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java)
-
-### `initChannel(...)` 先做什么
-
-它做的第一件事不是加 decoder，而是：
-
-- `NettyExecutionConnection.getOrCreate(...)`
-
-这一步非常关键，因为它把连接级状态先挂到了 `Channel` 上。
-
-### 为什么先建 `NettyExecutionConnection`
-
-因为后面的很多 handler 都需要共享同一份连接状态：
-
-- `SELECT` 用的 session state
-- `MULTI` 用的事务队列
-- pending / pendingBytes
-- 背压 enter / exit 计数
-- closing 标记
-- 公平调度的 channel state
-
-如果没有这个根对象，各层会很容易各自挂一份状态，最后变成：
-
-- 协议层一份
-- 命令层一份
-- 执行器一份
-
-这个项目刻意避免了那种局面。
-
-### pipeline 顺序为什么这么排
-
-`initChannel(...)` 里的顺序是：
-
-1. `writeBufferBackpressure`
-2. `respRequestDecoder`
-3. `respCommandAdapter`
-4. `protocolErrorReply`
-5. `commandHandler`
-
-可以这样理解：
-
-- 先监听 Netty 自己的出站写缓冲背压
-- 再把网络 bytes 解成协议请求
-- 再把协议请求适配成统一的 `ExecutionRequest`
-- 如果是协议错误，统一交给错误回包 handler
-- 最后才进入命令提交逻辑
-
-所以 `YierdisFastCommandHandler` 的输入已经不是“任意对象”，而是命令层真正认识的 `ExecutionRequest`。
-
-## 阶段 5：协议对象变成命令对象
-
-桥接类是：
-
-- [`yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java)
-
-### 它做的事非常专一
-
-它只做一件事：
-
-- 把 protocol request 变成 `ByteArrayExecutionRequest`
-
-如果输入是：
+`RespRequestDecoder` 从 Netty `ByteBuf` 里解 RESP array 或 inline command，输出两类对象：
 
 - `RespCommandRequest`
+- `RespProtocolError`
 
-它就把每个参数取出来，转成 `byte[][] argv`，再包成 `ExecutionRequest`。
+正常命令会继续进入 `RespCommandAdapter`。这个 adapter 只做一件事：
 
-### 为什么这一层必须存在
+```text
+RespCommandRequest -> ByteArrayExecutionRequest.wrapReadOnly(...)
+```
 
-因为项目的边界设计要求：
+这一步让协议 DTO 停在 networking 边界内。进入 server handler 和 command 层之后，公共请求模型就是 `ExecutionRequest`。
 
-- protocol 层的 DTO 不直接漏进命令层
-- 命令层统一基于 `ExecutionRequest`
+协议错误会由 `respProtocolErrorReply` 写回错误并按协议安全性决定 close-after-reply。无法可靠恢复帧边界时，连接不能继续假装正常。
 
-对初学者来说，这一层很值得认真看，因为它是“分层真正落地”的最好例子：
+## 6. 提交入口：`YierdisFastCommandHandler`
 
-- 上一层只懂协议
-- 下一层只懂命令执行契约
-- 中间有一个非常窄的翻译器
+源码：
 
-## 阶段 6：提交到 command executor
+- [`YierdisFastCommandHandler.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java)
 
-命令提交入口在：
+`YierdisFastCommandHandler` 的输入类型已经是 `ExecutionRequest`。`channelRead0(...)` 做的事情很窄：
 
-- [`yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java)
+1. 从 channel attribute 取 `NettyExecutionConnection`。
+2. 调用 `executor.trySubmit(connection, msg)`。
+3. 如果成功，request 生命周期交给 executor，handler 直接返回。
+4. 如果失败，立即写 `ERR busy <reason>`，再关闭当前 request。
 
-### `channelRead0(...)` 在做什么
+这里不执行命令，因为当前线程仍是 I/O 线程。Yierdis 保持 Redis 风格的 owner-thread 语义：I/O 线程只提交，DB 只能由 command executor 线程访问。
 
-这个 handler 也很克制。它不会自己执行命令，而是：
+`exceptionCaught(...)` 也体现了边界：协议错误尽量回包，内部错误会标记连接 closing、关闭输入，并在回包后关闭连接。
 
-1. 从 channel 里取出 `NettyExecutionConnection`
-2. 调用 `executor.trySubmit(connection, msg)`
-3. 如果成功：
-   - executor 接管请求对象生命周期
-   - handler 直接返回
-4. 如果失败：
-   - 构造一个 `ERR busy ...`
-   - 立即写回
-   - 自己负责关闭 /回收当前请求对象
+## 7. Executor：队列、预算、背压和 owner thread
 
-### 这里为什么不直接执行命令
+源码：
 
-因为这仍然是在 I/O 线程里。
+- [`CommandExecutor.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java)
+- [`CommandExecutorSubmitter.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorSubmitter.java)
+- [`CommandExecutorDrainLoop.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorDrainLoop.java)
+- [`CommandExecutorExecutionSupport.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java)
+- [`ExecutorBackpressureController.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorBackpressureController.java)
 
-项目想保住的语义是：
+`CommandExecutor` 本身是一个总控对象。构造时它组出：
 
-- I/O 线程负责“把命令送进去”
-- command executor 线程负责“真正碰 DB”
-
-所以这里的职责只到“提交”为止。
-
-## 阶段 7：队列、预算和背压
-
-这部分的核心类有 4 个：
-
-- [`CommandExecutor`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java)
-- [`CommandExecutorSubmitter`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorSubmitter.java)
-- [`CommandExecutorDrainLoop`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorDrainLoop.java)
-- [`ExecutorBackpressureController`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorBackpressureController.java)
-
-### 先看 `CommandExecutor`
-
-它不是单一算法类，而是一个“组装容器”。
-
-它在构造时会把下面这些东西拼起来：
-
-- `ExecutorTaskQueue`
 - `ExecutorBacklogBudget`
 - `ExecutorBackpressureController`
-- `CommandExecutorExecutionSupport`
+- `ExecutorTaskQueue`
 - `CommandExecutorSubmitter`
 - `CommandExecutorDrainLoop`
+- `CommandExecutorExecutionSupport`
 
-也就是说：
+`start()` 会先在 owner executor 上执行 `bindToCurrentThread`，再把 drain loop 标记为 started。
 
-- `CommandExecutor` 自己更像总控台
-- 真正的入队、执行、恢复逻辑分散在各个协作者里
+提交阶段由 `CommandExecutorSubmitter` 负责。它会检查：
 
-### 再看 `CommandExecutorSubmitter`
+- executor 是否还在 running；
+- 全局 queue slot 是否够；
+- queued bytes 预算是否够；
+- 当前连接 pending / pendingBytes 是否超过高水位；
+- 全局 backlog 是否已经进入高水位。
 
-初学者读这部分时，可以带着一个固定问题：
+拒绝时返回 `NOT_RUNNING`、`QUEUE_FULL`、`BYTES_BUDGET` 或 `OFFER_FAILED`。接受时记录连接 pending，保留 request retained bytes 预算，并调度 drain。
 
-- “请求在什么条件下会被拒绝？”
+执行阶段由 `CommandExecutorDrainLoop` 在 owner executor 上跑。它按 `maxDrainCommands` 和 drain time budget 从队列取任务，逐条交给 `CommandExecutorExecutionSupport.execute(...)`，最后对本轮触达的连接批量 flush。
 
-入队阶段主要检查：
+`CommandExecutorExecutionSupport` 才真正调用命令执行函数：
 
-- executor 是否还在运行
-- 全局 queue slot 是否还有空位
-- queued bytes 预算是否够
+```text
+ReplyWriter writer = replyWriterFactory.newWriter(session, sink)
+commandProcessor.execute(session, request, writer)
+ioAdapter.writeBufferedReply(connection, writer.closeAfterReplyRequested())
+```
 
-如果不够：
+它还负责：
 
-- 返回具体 reject reason
-- 更新连接统计
-- 关闭连接 `autoRead`
+- closing 连接跳过副作用；
+- close-after-reply 时标记连接 closing；
+- 内部异常时 best-effort 写 `ERR internal error` 并关闭；
+- finally 中关闭 request、释放 slot / bytes 预算；
+- pending 和全局 backlog 回落后恢复输入。
 
-所以“背压”并不是执行阶段才发生，入队阶段就已经开始生效了。
+`ExecutorBackpressureController` 不懂业务命令，也不依赖 Netty。它只通过 `ExecutorBackpressureIo` 关闭或恢复输入，并记录哪些连接是 executor 自己禁用了 `autoRead`。
 
-### 然后看 `CommandExecutorDrainLoop`
+## 8. Engine：从调度合同进入命令层
 
-这个类是在 command executor 线程上真正“取任务并执行”的地方。
+源码：
 
-每条命令的大致路径是：
+- [`YierdisEngine.java`](../../yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/YierdisEngine.java)
+- [`DefaultYierdisEngine.java`](../../yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java)
+- [`EngineSession.java`](../../yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java)
 
-1. 拿到 `CommandExecutorTask`
-2. 检查 channel 是否 active 或 closing
-3. 为本次执行分配出站 buffer
-4. 创建 `ReplyWriter`
-5. 调用 `executionSupport.execute(...)`
-6. 根据 `closeAfterReplyRequested()` 决定正常 flush 还是 flush 后 close
-7. 最后释放请求对象和 backlog 预算
+engine 的外部入口固定为：
 
-### 最后看 `ExecutorBackpressureController`
+```java
+void execute(Session session, ExecutionRequest request, ReplyWriter out);
+```
 
-这个类本身不懂业务命令，它只是：
+`DefaultYierdisEngine` 会校验传入的是 `ServerSession`，然后创建：
 
-- 负责 enter backpressure
-- 负责 exit backpressure
-- 负责在合适时机重新开启 `autoRead`
+```java
+new CommandContext(serverSession, out)
+```
 
-所以对初学者最重要的理解是：
+再把请求交给 `YierdisFastCommandProcessor`。
 
-- `CommandExecutorSubmitter` 负责“发现压力”
-- `CommandExecutorDrainLoop` 负责“释放压力后的回收”
-- `ExecutorBackpressureController` 负责“把 enter / exit / recovery 变成统一策略”
+这就是 executor 和 command 层之间的分界线。executor 不知道 `CommandContext`，command 层也不需要知道 Netty 或 executor queue。
 
-## 阶段 8：真正执行命令
+`maintenanceTick()` 也在 engine 上暴露，但 bootstrap 会通过 `executor.executeMaintenance(...)` 调度它，保证 cleanup 仍在 owner thread 上访问 DB。
 
-这一层的桥梁是：
+## 9. 命令分发：`YierdisFastCommandProcessor`
 
-- [`CommandExecutorExecutionSupport`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java)
+源码：
 
-### 它做了哪几件关键事
+- [`YierdisFastCommandProcessor.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java)
+- [`DefaultCommandModules.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/DefaultCommandModules.java)
 
-1. 从 connection 上拿到 `EngineSession`
-2. 创建 `ReplyWriter`
-3. 调 `YierdisEngine.execute(session, request, writer)`
-4. 命令执行结束后释放 slot 和 bytes 预算
-5. 在条件满足时恢复 `autoRead`
+processor 构造时会先注册事务命令，再注册外部注入的 command module。生产启动时，bootstrap 注入的是：
 
-`CommandContext` 的创建发生在 `DefaultYierdisEngine` 内部，不在 executor 层。
+- `DefaultCommandModules.create(dbRouter(instance), infoProvider, slowGovernor)`
+- `ServerCommandModule`
 
-### 为什么 `CommandContext` 很关键
-
-`CommandContext` 本身很简单，但它把命令执行所需要的两个入口固定下来：
-
-- `session`
-- `ReplyWriter out`
-
-这让命令层可以保持 transport-agnostic：
-
-- 想读连接态，看 `ctx.session()`
-- 想写回包，看 `ctx.out()`
-
-而不需要知道 Netty 的 `ChannelHandlerContext`。
-
-## 阶段 9：命令分发
-
-命令分发中心在：
-
-- [`yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java)
-
-### 构造时它做了什么
-
-构造阶段，`YierdisFastCommandProcessor` 会先把事务命令注册进 `CommandRegistry`，再注册外部注入的命令模块。生产启动时，`DefaultYierdisEngine` 会把 `DefaultCommandModules` 和 `ServerCommandModule` 传给 processor。
-
-其中 `DefaultCommandModules` 会注册：
+`DefaultCommandModules` 会注册：
 
 - `CoreConnectionCommands`
 - `KeyCommands`
@@ -458,271 +290,237 @@ bootstrap 先把 instance、engine、executor 都组好，最后才真正 `bind`
 - `SetCommands`
 - `ZSetCommands`
 
-server 额外命令则通过 `extraModules` 注入，例如：
+执行时，processor 的顺序是：
 
-- `ServerCommandModule`
+1. 检查空命令和空 `argv[0]`。
+2. 拒绝不允许的 null bulk string。
+3. 如果事务 active，判断当前命令是否 `MULTI/EXEC/DISCARD`。
+4. 普通事务入队命令先查 `CommandSpec`，再运行同一个 parser 做入队前校验。
+5. 入队成功后 `EngineSession.transaction().tryEnqueue(request)` 保存 `ByteArrayExecutionRequest.copyOf(...)` 快照并返回 `QUEUED`。
+6. 非入队路径查 `CommandSpec<T>`，parse 成 typed 参数，再执行 typed handler。
+7. 捕获 wrong type、command exception、参数错误，统一写错误回复。
+8. 如果命令真实改变了 value 或 TTL，再按 change event gate 触发事件。
 
-### 执行时它做了什么
+事务不是另一套 IR。它排队和重放的仍是 `ExecutionRequest` 快照，重放时仍走同一套 parser、handler、DB 路由和错误映射。
 
-`execute(request, ctx)` 的大致顺序是：
+## 10. 最短路径：`PING`
 
-1. 检查空命令 / 空 argv[0]
-2. 检查不允许的 null bulk string
-3. 看当前连接是否处于事务态
-4. 如果事务 active，则决定：
-   - 立即执行 `MULTI/EXEC/DISCARD`
-   - 还是把命令入队并返回 `QUEUED`
-5. 如果不是事务入队路径，则：
-   - 查命令 spec
-   - 调 handler
-   - 捕获 wrong-type / command / OOM / 参数错误
-   - 必要时发 change event
+`PING` 不访问 DB，适合先确认主链前半段：
 
-可以把它理解成：
+```text
+ByteBuf
+  -> RespRequestDecoder
+  -> RespCommandRequest
+  -> RespCommandAdapter
+  -> ExecutionRequest
+  -> YierdisFastCommandHandler
+  -> CommandExecutor.trySubmit(...)
+  -> owner thread
+  -> DefaultYierdisEngine.execute(...)
+  -> YierdisFastCommandProcessor
+  -> CoreConnectionCommands.ping(...)
+  -> ReplyWriter.simpleString("PONG")
+  -> NettyExecutionIoAdapter
+```
 
-- “命令执行的总闸门”
+读 `PING` 时重点看三件事：
 
-所有命令在真正落到 `*Commands` 之前，都会先过这道闸。
+- 请求什么时候从 protocol DTO 变成 `ExecutionRequest`。
+- 命令什么时候从 I/O 线程切到 owner executor。
+- handler 为什么只写语义回复，而不关心 RESP bytes 怎么编码。
 
-## 阶段 10：`SET` 的完整写路径
+## 11. 写路径：`SET`
 
-这是整条主链里最值得初学者认真看的部分。
+`SET` 能把命令解析、DB 路由、内存预算、TTL 和 payload 生命周期串起来。
 
-### 第 1 层：`StringCommands.set(...)`
+### 11.1 `StringCommands.set(...)`
 
-文件：
+源码：
 
-- [`yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java)
+- [`StringCommands.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java)
 
-它负责：
+`StringCommands` 通过 `CommandSpec` 注册 `SET`。`parseSet(...)` 负责解析：
 
-- 解释用户输入
-- 解析 `NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL`
-- 把这些选项转成命令层的稳定类型：
-  - `SetMode`
-  - `ExpireOption`
+- `NX`
+- `XX`
+- `GET`
+- `EX`
+- `PX`
+- `EXAT`
+- `PXAT`
+- `KEEPTTL`
 
-它不负责：
+解析结果会变成稳定类型：
 
-- 真正修改 DB 内存结构
+- `SetMode`
+- `ExpireOption`
+- `getOld`
 
-### 第 2 层：`CommandSupport`
+`set(...)` 本身不直接修改 DB，而是调用：
 
-文件：
+```java
+support.dbWrites(ctx).strings().set(...)
+```
 
-- [`yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
+成功时写 `OK`，`GET` 模式写旧值，`NX/XX` 未生效时写 null bulk string。mutation outcome 会通过 `support.recordMutation(...)` 记录到 `CommandContext`，供 change event gate 使用。
 
-这里最关键的一句是：
+### 11.2 `CommandSupport`
 
-- `dbWrites(ctx)`
+源码：
 
-它做的事情是：
+- [`CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
 
-- 从 `CommandContext` 里拿到会话 DB index
-- 交给 `YierdisDbRouter`
-- 返回当前 DB 的 `DbWrites`
+`CommandSupport.dbWrites(ctx)` 的路线是：
 
-也就是说，命令层看到的不是具体 DB 类，而是当前 DB 的写能力视图。
+```text
+CommandContext
+  -> ctx.session()
+  -> YierdisDbRouter.dbFor(session)
+  -> DbEngine
+  -> DbWrites
+```
 
-### 第 3 层：`YierdisStringOps.set(...)`
+bootstrap 创建 router 时用的是 `instance.engines()`。如果 session 的 DB index 越界，router 会回退到 DB 0。
 
-文件：
+这保证 typed command handler 只依赖能力接口，不依赖 `YierdisDb` 内部结构。
 
-- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java)
+### 11.3 `YierdisStringOps.set(...)`
 
-这是“真正开始把 `SET` 落成 mutation”的地方。
+源码：
 
-它的逻辑可以概括成：
+- [`YierdisStringOps.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java)
 
-1. 先算写入 upper bound
-2. 构造一个 mutation plan
-3. 把 plan 交给 `internals.executeMutation(...)`
+这里才开始真正形成 storage mutation。它先 `internals.checkThread()`，确保当前线程是 DB owner thread；然后：
 
-初学者这里最该注意的是：
+1. 计算 expire 目标时间和 `KEEPTTL` 语义。
+2. 用 `YierdisDbMemoryEstimator.estimateStringWriteUpperBound(...)` 估算写入上界。
+3. 如果需要 TTL，再加 TTL entry 预算。
+4. 构造 `YierdisDbMutationExecutor.MutationPlan`。
+5. 在 plan 里通过 `keyLifecycle.computeWithHandle(...)` 读旧 record、处理过期、判断 `NX/XX`、复制旧值、写入新字符串、计算实际 delta bytes。
 
-- `YierdisStringOps` 仍然不会直接裸写内存
-- 它先把这次写操作包成一个受保护的 mutation plan
+注意这里仍然没有裸写全局状态。写入被包在 mutation plan 里，后续由 mutation executor 做预算、commit 和 rollback。
 
-### 第 4 层：`YierdisDbMutationExecutor`
+### 11.4 `YierdisDbMutationExecutor`
 
-文件：
+源码：
 
-- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java)
+- [`YierdisDbMutationExecutor.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java)
 
-它的核心模板是：
+mutation executor 是 maxmemory 和回滚语义的收口点：
 
-1. `ledger.reserve(upperBoundBytes)`
-2. 执行真正 mutation
-3. `ledger.commit(...)`
-4. 如果出错则 `rollback(...)`
+```text
+ledger.reserve(upperBoundBytes)
+  -> plan.apply()
+  -> ledger.commit(actualDeltaBytes)
+```
 
-这一层是：
+如果 reserve 失败，会把 `MemoryLedgerOutOfMemoryException` 映射成 Redis 风格 OOM。off-heap 分配失败会映射成 off-heap OOM。任何 runtime exception 或 error 都会 rollback 已保留预算。
 
-- maxmemory
-- OOM
-- 回滚
+### 11.5 `YierdisDbKeyLifecycle`
 
-这些行为真正收敛的地方。
+源码：
 
-### 第 5 层：`YierdisDbKeyLifecycle`
+- [`YierdisDbKeyLifecycle.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java)
 
-文件：
+key lifecycle 负责 keyspace、entry table、TTL 和 value root 的一致性。`SET` 路径里最重要的是：
 
-- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java)
+- `computeWithHandle(...)` 统一处理 key handle 和 entry record 替换。
+- `isKeyExpired(...)` / `removeExpire(...)` 处理已过期旧值。
+- `setExpireAtMillis(...)` / `removeExpire(...)` 更新 expire index 和 entry record 上的 expire 字段。
+- `releaseReplacedValue(...)` 避免旧 payload 泄漏。
+- `touchRecord(...)` 更新访问元数据。
 
-它是 key 生命周期的统一入口。
+所以 `SET` 不是“把 map 里的 value 换掉”这么简单。它同时维护 key directory、entry table、TTL index、memory ledger 和 payload 生命周期。
 
-在 `SET` 路径里，它会负责：
+### 11.6 `EntryRecord`、`ValueHandle` 和 `StringRoot`
 
-- 在 `NativeKeyDirectory` / `EntryTable` 上 `computeWithHandle(...)`
-- 判断旧 key 是否已经过期
-- 删除旧 TTL
-- 设置新 TTL
-- 释放旧 payload
-- 调整 used bytes
-- touch entry metadata 做 LRU/last-access 更新
+源码：
 
-可以把它理解成：
+- [`EntryRecord.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java)
+- [`ValueHandle.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/ValueHandle.java)
+- [`TypeRoot.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/TypeRoot.java)
+- [`StringRoot.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java)
 
-- “所有和 key 生命周期有关的事情，都尽量在这里集中”
+`EntryRecord` 保存的是元数据：key identity、`ValueHandle`、type、encoding、expire time、估算字节数和访问元数据。真实字符串 payload 在 `StringRoot` 里，通过 `ValueHandle` 访问。
 
-### 第 6 层：`EntryRecord` / `TypeRoot`
-
-文件：
-
-- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java)
-- [`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/TypeRoot.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/TypeRoot.java)
-
-最终字符串并不是简单的 `byte[]`，而是由两部分组成：
-
-- 有逻辑类型
-- 有内部编码
-- 有 payload 生命周期
-
-`EntryRecord` 保存 type、encoding、TTL、估算字节数和当前 `ValueHandle`。
-对应的 `TypeRoot` 再通过这个 handle 访问真实 payload。
-
-对字符串来说，常见编码有：
+字符串常见编码包括：
 
 - `STRING_INT`
 - `STRING_EMBSTR`
 - `STRING_RAW`
 
-字符串 payload 由 `StringRoot` 存进 `OffHeapBuf`。
+这层设计让 keyspace 的 entry 元数据和不同类型的 payload root 分开演进。
 
-### 为什么这条路径值得初学者反复看
+## 12. 回包写出
 
-因为它把这个项目的很多核心设计都串起来了：
+源码：
 
-- 命令层只做解释
-- 路由层只做能力选择
-- `*Ops` 负责把语义落成 mutation
-- mutation executor 负责预算和回滚
-- key lifecycle 负责 key / TTL / payload 生命周期
-- `EntryRecord` 负责记录逻辑类型、编码和 `ValueHandle`，各 `TypeRoot` 负责真正 payload
+- [`ReplyWriter.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ReplyWriter.java)
+- [`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java)
+- [`RespReplyWriterFactory.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriterFactory.java)
+- [`NettyExecutionIoAdapter.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java)
 
-你一旦把 `SET` 这条链看明白了，再看别的写命令就会轻松很多。
+命令层只调用语义 API：
 
-## 阶段 11：回包写出
+- `simpleString(...)`
+- `error(...)`
+- `integer(...)`
+- `bulkString(...)`
+- `arrayHeader(...)`
+- `requestCloseAfterReply()`
 
-回包最终通过：
+`RespReplyWriter` 根据 session 上的 RESP version 编码成 RESP2 或 RESP3。`RespReplyWriterFactory` 如果拿不到 `ServerSession`，默认用 RESP2；server 正常路径会传入 `EngineSession`，因此可以跟随 `HELLO` 协商后的版本。
 
-- `ReplyWriter`
-- `RespReplyWriter`
+`NettyExecutionIoAdapter` 为每次执行创建 reply buffer。普通回复先 `channel.write(...)`，本轮 drain 结束后由 `flushPending(...)` 批量 flush；close-after-reply 则直接 `writeAndFlush(...).addListener(CLOSE)`。
 
-落成 RESP2 或协商后的 RESP3。
+## 最容易读错的地方
 
-这里的关键理解是：
+- `YierdisServerBootstrap` 是接线中心，不是命令语义中心。
+- `YierdisInstance` 是实例级资源 owner，不是单个 DB。
+- `EngineSession` 管业务会话态，`ExecutionConnectionContext` 管调度态。
+- `YierdisFastCommandHandler` 不执行命令，只提交到 executor。
+- executor 不创建 `CommandContext`，它只传 `Session + ExecutionRequest + ReplyWriter`。
+- `CommandSpec<T>` 是命令解析和 typed handler 的入口，不应该在 server handler 里重新解析参数。
+- `SET` 的真实写入必须走 `YierdisDbMutationExecutor` 和 `YierdisDbKeyLifecycle`。
+- backpressure 同时受单连接 pending、pending bytes、全局 queue slot、queued bytes 和 channel writability 影响。
+- 事务队列保存的是 `ExecutionRequest` 快照，不是另一套命令 IR。
 
-- 命令层不关心具体 RESP 字节怎么拼
-- 命令层只调用 `out.simpleString(...)`、`out.integer(...)`、`out.bulkString(...)` 这类 API
-- server 侧的 writer 再把这些语义编码成协议格式
+## 配合哪些测试读
 
-这也是为什么项目反复强调：
+启动和真实 socket 接线：
 
-- `ReplyWriter` 是 server write-back 的语义 authority
+- [`YierdisServerBootstrapCommandWiringTest.java`](../../yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java)
 
-## 这条主链最适合配合哪些测试一起读
+executor、背压和 closing：
 
-如果你准备真正边看源码边理解行为，最推荐的测试组合是：
+- [`CommandExecutorTest.java`](../../yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorTest.java)
+- [`ExecutionConnectionContextTest.java`](../../yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/ExecutionConnectionContextTest.java)
 
-### 1. 启动和整体接线
+engine 和 session：
 
-- [`yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java`](../../yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java)
+- [`DefaultYierdisEngineTest.java`](../../yierdis-server/yierdis-server-core/src/test/java/yier/bubu/redis/execution/engine/DefaultYierdisEngineTest.java)
+- [`EngineSessionTest.java`](../../yierdis-server/yierdis-server-core/src/test/java/yier/bubu/redis/execution/engine/EngineSessionTest.java)
 
-看点：
+命令行为和事务：
 
-- server 是否真的把核心命令和 server 命令一起接起来
-- `HELLO/INFO/STATS/SET/GET/SELECT` 在真实 socket 下是否可用
+- [`CommandProcessorTest.java`](../../yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandProcessorTest.java)
+- [`TransactionCommandTest.java`](../../yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TransactionCommandTest.java)
+- [`TransactionQueueCleanupTest.java`](../../yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/TransactionQueueCleanupTest.java)
 
-### 2. 执行器行为
+storage 和 off-heap 字符串：
 
-- [`yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorTest.java`](../../yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorTest.java)
+- [`OffHeapStringStorageTest.java`](../../yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapStringStorageTest.java)
 
-看点：
+架构边界：
 
-- `maxDrainCommands`
-- queued bytes budget
-- `QUIT` 后跳过后续命令
-- internal error 后 closing 行为
+- [`ArchitectureBoundaryTest.java`](../../yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java)
 
-### 3. `SET` 和基础命令行为
+## 读完后继续看什么
 
-- [`yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandProcessorTest.java`](../../yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandProcessorTest.java)
-
-看点：
-
-- `SET/GET`
-- `NX`
-- `GET`
-- `KEEPTTL`
-
-### 4. 事务路径
-
-- [`yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TransactionCommandTest.java`](../../yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TransactionCommandTest.java)
-
-看点：
-
-- `MULTI/EXEC/DISCARD`
-- `QUEUED`
-- 事务队列快照和重放
-
-### 5. off-heap 字符串路径
-
-- [`yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapStringStorageTest.java`](../../yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapStringStorageTest.java)
-
-看点：
-
-- `SET` 后 native bytes 增长
-- `GET` 是否走 off-heap slice 读路径
-- 删除或过期后内存是否释放
-
-## 初学者最容易卡住的 5 个点
-
-### 1. 以为 I/O 线程在直接执行命令
-
-不是。I/O 线程只负责把请求送进 executor。
-
-### 2. 以为 `YierdisInstance` 就是 DB
-
-不是。它是实例级装配器和资源 owner。
-
-### 3. 以为命令层直接调用 `YierdisDb`
-
-不是。命令层只看 `DbEngine -> DbReads/DbWrites`。
-
-### 4. 以为事务队列里存的是某种特殊 IR
-
-不是。它存的是 `ExecutionRequest` 快照。
-
-### 5. 以为 backpressure 只和单连接 pending 数有关
-
-不是。它还和全局 slot、queued bytes 预算、channel writability 协作。
-
-## 读完这篇后下一步看什么
-
-- 如果你想把这条主链前半段的 request/reply 协议细节补齐，看 [`protocol-reference.md`](./protocol-reference.md)。
-- 如果你想把命令分发和底层数据结构编码补齐，看 [`commands-and-data-model.md`](./commands-and-data-model.md)。
-- 如果你想知道运行参数、观测命令和背压护栏怎么看，看 [`configuration-and-operations.md`](./configuration-and-operations.md)。
-- 如果你想继续看“改需求时该怎么下手”，下一篇看 [`development-navigation.md`](./development-navigation.md)。
-- 如果你想继续深挖 off-heap / FFM 在这条主链里是怎么工作的，看 [`ffm-usage.md`](./ffm-usage.md)。
+- 协议细节：[`protocol-reference.md`](./protocol-reference.md)
+- 命令和数据模型：[`commands-and-data-model.md`](./commands-and-data-model.md)
+- DB 内核：[`db-internals.md`](./db-internals.md)
+- executor 和背压：[`executor-and-backpressure.md`](./executor-and-backpressure.md)
+- 配置和运维：[`configuration-and-operations.md`](./configuration-and-operations.md)
+- FFM 和 off-heap：[`ffm-usage.md`](./ffm-usage.md)
+- 开发导航：[`development-navigation.md`](./development-navigation.md)

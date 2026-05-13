@@ -69,8 +69,7 @@ mvn -DskipTests package
 
 如果你对 FFM / off-heap 本身还不熟，建议再配合阅读：
 
-- `docs/project-docs/ffm-beginner-guide.md`
-- `docs/project-docs/ffm-usage.md`
+- `docs/project-docs/ffm-usage.md`（合并了 JDK FFM 入门和 Yierdis 实际落点）
 - `docs/project-docs/offheap-copy-behavior.md`
 
 ## 开发者：模块边界（契约 / 组装）

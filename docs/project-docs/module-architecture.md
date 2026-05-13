@@ -6,6 +6,8 @@
 
 可以先把项目看成几组核心关系：
 
+![Yierdis module dependency architecture](./assets/module-architecture.svg)
+
 - `yierdis-common-bytes` 是公共 bytes 抽象，被 memory、db、execution 和 protocol 复用
 - `yierdis-memory-api` 提供 off-heap contract，`yierdis-memory-ffm` 是它的 JDK 25 FFM backend
 - `yierdis-db-api` 定义 DB 能力边界，`yierdis-db-memory` 提供具体存储实现

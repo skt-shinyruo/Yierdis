@@ -66,10 +66,8 @@
 
 ### 现有 FFM / Off-Heap 文档
 
-- [`ffm-beginner-guide.md`](./ffm-beginner-guide.md)
-  面向第一次接触 FFM 的读者，重点是 JDK FFM 本身的心智模型。
 - [`ffm-usage.md`](./ffm-usage.md)
-  说明 FFM 在 Yierdis 里的实际落点和生命周期组装。
+  合并说明 JDK FFM 本身的入门心智模型，以及 FFM 在 Yierdis 里的实际落点和生命周期组装。
 - [`offheap-copy-behavior.md`](./offheap-copy-behavior.md)
   说明 heap / off-heap / direct buffer 之间哪些路径会发生拷贝。
 
@@ -77,7 +75,7 @@
 
 - 快速启动、常用命令和脚本入口，仍建议先看仓库根部的 `README.md`。
 - 本组文档会把协议、编码、配置和测试背后的代码逻辑讲得更细，但不替代 README 的“先跑起来”角色。
-- FFM / native memory 的底层细节，仍以现有 `docs/project-docs/ffm-*.md` 和 `docs/project-docs/offheap-copy-behavior.md` 为主。
+- FFM / native memory 的底层细节，仍以现有 `docs/project-docs/ffm-usage.md` 和 `docs/project-docs/offheap-copy-behavior.md` 为主。
 - 本组文档重点覆盖代码结构、执行流程、模块边界、协议细节、数据模型、DB 内核、执行器/背压、bytes 抽象、运行时配置和开发导航。
 
 ## 推荐阅读方式

@@ -6,6 +6,8 @@
 
 当前官方主链是：
 
+![Yierdis request execution flow](./assets/request-execution-flow.svg)
+
 ```text
 Netty ByteBuf
   -> RespRequestDecoder

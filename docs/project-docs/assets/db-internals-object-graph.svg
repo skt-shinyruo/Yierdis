@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="680" viewBox="0 0 1160 680" role="img" aria-labelledby="title desc">
+  <title id="title">YierdisDb internal object graph</title>
+  <desc id="desc">A diagram of YierdisDb as a single DB state owner with storage, policy, operation, facade, and observability collaborators.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#355f7a"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .center { fill: #17324d; stroke: #0f2438; stroke-width: 2; rx: 18; }
+      .center-text { fill: #ffffff; font: 700 24px sans-serif; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; rx: 12; }
+      .storage { fill: #eef6fb; stroke: #355f7a; stroke-width: 1.5; rx: 12; }
+      .policy { fill: #fff6e8; stroke: #9a6b1f; stroke-width: 1.5; rx: 12; }
+      .ops { fill: #f2f8ed; stroke: #4f7d3a; stroke-width: 1.5; rx: 12; }
+      .facade { fill: #f8f0fb; stroke: #7b4d8e; stroke-width: 1.5; rx: 12; }
+      .title { fill: #0f172a; font: 700 28px sans-serif; }
+      .group-title { fill: #334155; font: 700 17px sans-serif; }
+      .text { fill: #0f172a; font: 15px sans-serif; }
+      .small { fill: #475569; font: 13px sans-serif; }
+      .arrow { stroke: #355f7a; stroke-width: 2; marker-end: url(#arrow); fill: none; }
+      .thin { stroke: #94a3b8; stroke-width: 1.4; fill: none; }
+    </style>
+  </defs>
+  <rect class="bg" width="1160" height="680"/>
+  <text class="title" x="40" y="42">YierdisDb Object Graph</text>
+  <text class="small" x="40" y="70">A single DB owner holds real state; command code enters through narrowed facades.</text>
+
+  <rect class="center" x="455" y="280" width="250" height="90"/>
+  <text class="center-text" x="518" y="318">YierdisDb</text>
+  <text x="500" y="348" fill="#dbeafe" font-family="sans-serif" font-size="15">single DB state owner</text>
+
+  <rect class="storage" x="55" y="125" width="260" height="185"/>
+  <text class="group-title" x="85" y="160">Storage identity</text>
+  <text class="text" x="85" y="194">NativeKeyDirectory</text>
+  <text class="small" x="85" y="216">key bytes -> EntryHandle</text>
+  <text class="text" x="85" y="250">EntryTable</text>
+  <text class="small" x="85" y="272">EntryHandle -> EntryRecord</text>
+
+  <rect class="storage" x="55" y="375" width="260" height="185"/>
+  <text class="group-title" x="85" y="410">Payload roots</text>
+  <text class="text" x="85" y="444">String/List/Hash/Set/ZSetRoot</text>
+  <text class="small" x="85" y="466">ValueHandle -> payload</text>
+  <text class="text" x="85" y="500">YierdisFfmExpireIndex</text>
+  <text class="small" x="85" y="522">key -> expireAt</text>
+
+  <rect class="policy" x="390" y="105" width="380" height="135"/>
+  <text class="group-title" x="420" y="140">Resource and policy base</text>
+  <text class="text" x="420" y="174">threadGuard / memoryRuntime / offHeapAllocator</text>
+  <text class="small" x="420" y="196">owner-thread access and native resource ownership</text>
+
+  <rect class="policy" x="845" y="125" width="260" height="185"/>
+  <text class="group-title" x="875" y="160">Mutation protocol</text>
+  <text class="text" x="875" y="194">YierdisDbMemoryLedger</text>
+  <text class="small" x="875" y="216">reserve / commit / rollback</text>
+  <text class="text" x="875" y="250">YierdisDbMutationExecutor</text>
+  <text class="small" x="875" y="272">upper bound -> apply -> delta</text>
+
+  <rect class="policy" x="845" y="375" width="260" height="185"/>
+  <text class="group-title" x="875" y="410">Pressure support</text>
+  <text class="text" x="875" y="444">expirationSupport</text>
+  <text class="small" x="875" y="466">batch cleanup</text>
+  <text class="text" x="875" y="500">maxmemorySupport</text>
+  <text class="small" x="875" y="522">candidate sampling / eviction</text>
+
+  <rect class="ops" x="390" y="430" width="380" height="95"/>
+  <text class="group-title" x="420" y="465">Typed operations</text>
+  <text class="text" x="420" y="493">string / hash / list / set / zset / hll / ttl / keyspace ops</text>
+
+  <rect class="facade" x="390" y="570" width="380" height="70"/>
+  <text class="group-title" x="420" y="612">Command-facing facade</text>
+  <text class="text" x="610" y="612">reads / writes / memory / lifecycle</text>
+
+  <rect class="box" x="390" y="20" width="380" height="55"/>
+  <text class="text" x="436" y="54">YierdisDbComponentFactory assembles the bundle</text>
+
+  <path class="arrow" d="M 455 305 C 385 255 350 225 315 210"/>
+  <path class="arrow" d="M 455 345 C 380 410 350 455 315 468"/>
+  <path class="arrow" d="M 580 280 L 580 240"/>
+  <path class="arrow" d="M 705 305 C 780 250 810 215 845 205"/>
+  <path class="arrow" d="M 705 345 C 780 410 810 455 845 468"/>
+  <path class="arrow" d="M 580 370 L 580 430"/>
+  <path class="arrow" d="M 580 525 L 580 570"/>
+  <path class="arrow" d="M 580 75 L 580 105"/>
+  <path class="thin" d="M 185 310 C 280 345 355 355 455 345"/>
+  <path class="thin" d="M 975 310 C 880 345 805 355 705 345"/>
+</svg>
