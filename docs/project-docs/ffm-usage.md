@@ -967,20 +967,24 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 `YierdisForeignOffHeapAllocator.allocate(capacity)` 会：
 
-1. 通过 runtime 申请一个 region
-2. 把它包装成 `OffHeapBuf`
-3. 用 allocator 自己的 `usedBytes` 做额外 accounting
+1. 先检查 allocator 是否关闭，以及 `maxBytes` hard cap
+2. 委托内部的 `YierdisFfmSlabAllocator` 从 slab 中分配一段连续空间
+3. 把 slab allocation 包装成 `OffHeapBuf`
+4. 用 allocator 自己的 `usedBytes` 做逻辑 payload accounting
 
 `OffHeapBuf.close()` 最终会：
 
-1. 关闭底层 region
+1. 释放底层 slab block
 2. 通知 allocator 扣减字节数
+3. 如果 allocator 当前没有任何 live buffer，则关闭 idle slab allocator 并重建一个空 allocator，从而把空闲 slab 对应的 FFM region 还给 runtime
 
 它还支持 `slice(index, len)` 返回 `OffHeapSlice`，让读取路径可以直接把 off-heap 内容暴露给上游，而不必先 materialize 成 `byte[]`。
 
 代表路径：
 
 - `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisForeignOffHeapAllocator.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmSlabAllocator.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmSlab.java`
 
 #### 路径二：`YierdisFfmBlobStore` / `YierdisFfmBytesRef`
 
@@ -999,6 +1003,159 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBlobStore.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBytesRef.java`
+
+### 堆外内存管理的三层模型
+
+从实现上看，Yierdis 的堆外内存不是“每个 value 一个 direct buffer”，也不是“进程里维护一个大 native heap”。它更像三层组合：
+
+1. FFM 原始内存层：`YierdisFfmMemoryRuntime` / `YierdisFfmRegion` / `YierdisFfmSpan` / `YierdisFfmAccess`
+2. allocator 层：`YierdisFfmSlabAllocator` / `YierdisFfmSlab` / `YierdisForeignOffHeapAllocator`
+3. DB 对象生命周期层：`NativeKeyDirectory` / `EntryTable` / `YierdisFfmBlobStore` / `YierdisFfmExpireIndex` / 各类型 `*Root`
+
+#### 第一层：FFM region 是真实 native memory owner
+
+`YierdisFfmMemoryRuntime` 是实例级 native memory runtime。它负责：
+
+- 分配 region
+- 跟踪 live regions
+- 维护 `usedBytes`
+- 在 `close()` 时做 leak check
+
+每次 `allocateRegion(owner, bytes)` 都会创建新的 `Arena.ofConfined()`，再从这个 arena 分配一个 `MemorySegment`，最后包成 `YierdisFfmRegion`。
+
+`YierdisFfmRegion` 才是某一块 native memory 的 owner。它内部持有：
+
+- `Arena`
+- `MemorySegment`
+- `size`
+- `runtime`
+
+region 的 `span(offset, length)` 返回的是切片 view；`close()` 会关闭底层 arena，并通过 `runtime.onRegionClosed(...)` 从 runtime accounting 中扣掉对应 bytes。
+
+`YierdisFfmSpan` 不拥有内存，只是 `MemorySegment` 的轻量 view。`YierdisFfmAccess` 把 byte/int/long/byte array 的读写收口起来，避免业务层到处直接操作 `MemorySegment`。
+
+这层的核心约束是：谁分配 region，谁最终必须 close region。runtime 不会在正常关闭时主动帮你清理 live regions；如果还有 live region，它会直接报 leak。
+
+#### 第二层：slab allocator 管理连续 buffer
+
+`YierdisFfmSlabAllocator` 在 FFM region 上再做 slab allocation。
+
+默认 slab 大小是 64 KiB。分配时它会：
+
+1. 检查 `capacity`、关闭状态和 `maxBytes`
+2. 在现有 slabs 的 free blocks 中找可用空间
+3. 找不到就新建 `YierdisFfmSlab`
+4. 从 slab 中切出一段 allocation
+5. 返回 slab-backed `OffHeapBuf`
+
+`YierdisFfmSlab` 内部维护 free block list。释放时把 block 加回 free list，按 offset 排序，再合并相邻空闲块。
+
+这里有两个不同的 accounting 口径：
+
+- `YierdisFfmSlabAllocator.usedBytes()`：已经分配给 live `OffHeapBuf` 的逻辑容量
+- runtime 的 `usedBytes()`：底层 FFM region 真实还活着的 reserved native bytes
+
+例如一个 64 KiB slab 里只分配了 16 bytes，allocator 的 `usedBytes()` 可能是 16，但 runtime 看到的 live region 是整个 slab。
+
+`YierdisForeignOffHeapAllocator` 是对外暴露的 `OffHeapAllocator`。它进一步维护自己的 `usedBytes` 和 `maxBytes`，并在所有 live buffer 都释放后关闭 idle slab allocator，把空闲 slab region 释放掉。
+
+#### 第三层：DB 对象用 handle 和 refcount 管生命周期
+
+DB 层不会把 Java 对象直接塞进 native memory，而是用 handle 串起来：
+
+- `KeyHandle` 表示 key identity
+- `EntryHandle` 指向 `EntryTable` 中的 entry slot
+- `ValueHandle` 指向某个 type root 中的 payload
+- `YierdisFfmBytesRef` 表示一段 off-heap bytes
+
+`NativeKeyDirectory` 是 key -> `EntryHandle` 的权威目录。它的 table 数组仍在 heap，但 key bytes 存在 `YierdisFfmBlobStore` 中。插入新 key 时，directory 会调用 `blobStore.store(keyBytes)`；删除 key 时，会调用 `blobStore.release(keyRef)`。
+
+`EntryTable` 是 `EntryHandle` -> `EntryRecord`。当前生产组装里 entry slot 来自 `YierdisFfmSlabAllocator`，每条 record 逻辑大小是 56 bytes，字段包括：
+
+- key handle identity
+- value handle
+- key hash
+- type
+- encoding
+- flags
+- expire time
+- version / estimated bytes
+- LRU / LFU 信息
+
+`YierdisFfmBlobStore` 管理离散 bytes。`store(byte[])` 分配 region、拷贝 bytes、返回 `YierdisFfmBytesRef`，并建立 refcount。`retain(ref)` 增加引用，`release(ref)` 减少引用；最后一次 release 会关闭底层 region。
+
+`YierdisFfmExpireIndex` 复用 keyspace 中同一份 key bytes。设置 TTL 时，它会从 `KeyHandle` 取出底层 `YierdisFfmBytesRef` 并 `retain(ref)`，TTL 删除或清理时再 `release(ref)`。因此 expires 不会为了 TTL 再复制一份 key bytes。
+
+expire table 本身也部分 off-heap：
+
+- `states` 在 FFM region
+- `hashes` 在 FFM region
+- `expireAt` 在 FFM region
+- `refs[]` 仍在 heap，保存 `YierdisFfmBytesRef`
+
+#### 写入、替换和删除的释放链路
+
+写入时，命令通常先进入 `YierdisDbMutationExecutor`：
+
+1. `YierdisDbMemoryLedger.reserve(estimatedExtraBytes)` 做 maxmemory 预算检查
+2. 真正执行 mutation，期间可能分配 off-heap buffer、blob 或 entry slot
+3. 成功后 `commit(reservation, actualDeltaBytes)`
+4. 如果 maxmemory 或 off-heap hard cap 失败，rollback reservation
+
+key 创建和替换由 `YierdisDbKeyLifecycle.computeWithHandle(...)` 收口：
+
+1. 先准备或查找 `KeyHandle`
+2. 新 entry 通过 `EntryTable.allocate(...)` 拿到 `EntryHandle`
+3. `NativeKeyDirectory.compute(...)` 把 key bytes 存进 blob store，并映射到 entry handle
+4. `EntryRecord.valueHandle()` 指向 `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 内部 payload
+
+删除 key 时，释放链路是反向的：
+
+1. 从 `NativeKeyDirectory` 移除 key，并 release key blob
+2. 从 `EntryTable` release entry slot
+3. 根据 `EntryRecord.type()` 调用对应 root 的 `release(valueHandle)`
+4. TTL 路径如果 retain 过同一份 key ref，也会在 remove / clear 时 release
+
+替换 value 时，`releaseReplacedValue(...)` 会检查新旧 type 和 `ValueHandle`。如果覆盖路径复用了原 `ValueHandle`，不会误释放旧 payload；如果换成了新的 handle，才释放旧 payload。
+
+#### String 和 HLL 的连续 buffer 管理
+
+字符串值由 `StringRoot` 管理，不走 `YierdisFfmBlobStore`。
+
+`StringRoot.store(...)` 会通过 `OffHeapAllocator` 分配 `OffHeapBuf`，把 value bytes 写进去，然后用 `ValueHandle` 暴露给 `EntryRecord`。
+
+覆盖时有一个重要优化：
+
+- 如果旧 buffer capacity 足够容纳新 value，就原地覆盖
+- 如果不够，才分配新 buffer，并关闭旧 buffer
+
+这避免了 `SET` 覆盖路径在 maxmemory 很紧时临时同时持有 old + new 两份 payload。
+
+`StringRoot.slice(...)` 返回 `OffHeapSlice`。读路径如果支持流式写出，就可以直接把 off-heap slice 写到上游 sink，而不是先复制成 heap `byte[]`。
+
+这里的“直接”指 DB 读接口层不需要先 materialize 成 `byte[]`。当前 RESP 写出链路仍会调用
+`BytesSlice.writeTo(...)`，由 slice 实现通过 `ThreadLocal<byte[]>` scratch buffer 分块复制到
+sink，并不是 native memory 到 socket 的真正零拷贝。
+
+HLL 逻辑上复用 string 存储路径，因此 HLL bytes 也可以落在 `StringRoot` 管理的 `OffHeapBuf` 中。
+
+#### 复合结构的 off-heap 边界
+
+List / Hash / Set / ZSet 的 root 负责 `ValueHandle` -> value adapter：
+
+- `ListRoot` 管理 `ListValue`
+- `HashRoot` 管理 `HashValue`
+- `SetRoot` 管理 `SetValue`
+- `ZSetRoot` 管理 `ZSetValue`
+
+adapter 内部再使用 FFM-backed primitive：
+
+- `YierdisFfmListpack`：entry bytes 存在 blob store，外层 entry list 仍是 heap `ArrayList`
+- `YierdisFfmByteMap`：member / field bytes 存在 blob store，table 索引数组仍在 heap
+- `YierdisFfmIntSet`：整数集合是更纯的 native long array
+- `YierdisFfmZSet`：zset member bytes 存在 blob store，排序列表和分数仍主要在 heap
+
+所以这里的原则是：把大块或重复的 bytes 尽量移到 off-heap，把复杂控制结构保留在 heap，以降低实现复杂度。
 
 ### 字符串路径：FFM 如何进入 `SET` / `GET`
 
@@ -1052,11 +1209,16 @@ buffer”。
 - 可流式输出时返回 `BulkStringValue.slice(slice)`，底层直接指向 `OffHeapSlice`
 - 需要 materialize 时才复制成 heap `byte[]`
 
-这就是字符串路径里真正的零拷贝读优化。
+这就是字符串路径里避免 DB 层 `byte[]` materialization 的读优化。它不是端到端
+native-to-socket 零拷贝：当前 `YierdisSlabBackedOffHeapSlice.writeTo(...)` 会用
+8 KiB `ThreadLocal<byte[]>` scratch buffer 从 `MemorySegment` / `ByteBuffer` 分块读出，
+再调用 `BytesSink.writeBytes(...)` 写入下游 sink。
 
 代表路径：
 
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmSlabAllocator.java`
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java`
 
 #### HLL
 
@@ -1065,8 +1227,14 @@ off-heap 存储路径。也就是说：
 
 - HLL 逻辑上是一个特殊的 string
 - HLL bytes 也可以存在 `StringRoot` 管理的 `OffHeapBuf` 里
+- HLL 的 sparse / dense 编码、register 计算、估算和 merge 仍是 Java heap 逻辑
+- 最终只是把 HLL 格式化后的 bytes 作为 string payload 落到 off-heap
 
-但要注意，`PFCOUNT` / `PFMERGE` 这类计算路径目前仍可能调用 `stringBytesView()` 把内容 materialize 成 `byte[]` 后再做计算，所以它不是完整的零拷贝方案。
+`PFADD` 对 dense HLL 可以通过 `StringRoot.byteAt(...)` / register 写入接口原地更新
+底层 string payload；sparse HLL 则会把现有内容复制出来，在 heap 上重建 sparse 或 dense
+bytes 后再 overwrite。`PFCOUNT` / `PFMERGE` 使用 `StringRoot.slice(handle)` 读取 HLL
+bytes 并把它 merge 到 heap `int[] registers`，所以 HLL 不是 native algorithm，只是 payload
+storage off-heap。
 
 代表路径：
 
@@ -1118,6 +1286,18 @@ mutation 由 `YierdisDbKeyLifecycle.computeWithHandle(...)` 收口：
 
 也就是说，keyspace 和 expires 共享同一份 off-heap key bytes，只是通过引用计数协调生命周期。
 
+`YierdisFfmExpireIndex` 自己的 table 也是渐进 rehash 的 open-addressing 结构：
+
+- `table0` 是当前主表，`table1` 是 rehash 目标表
+- 插入前如果 `used + 1` 超过 `capacity * 0.75`，会启动扩容 rehash
+- 删除后如果表过稀，或 tombstone 超过 `capacity / 4`，会启动 shrink / compact rehash
+- 每次 `get` / `setExpireAtMillis` / `removeExpire` / scan / random 等操作都会推进一个 `rehashStep()`
+- 每个 step 只迁移一个 filled slot，迁完后 `finishRehash()` 把旧 `table0` 放进 `retiredTables`
+- 后续操作开头会调用 `closeRetiredTables()`，延迟关闭旧 table 持有的 FFM regions
+
+table 里只有 `states`、`hashes`、`expireAt` 三组数组在 FFM region；`refs[]` 仍是 heap
+数组，保存共享 key bytes 的 `YierdisFfmBytesRef`。
+
 设置或移除 TTL 时，`YierdisDbKeyLifecycle` 还会同步更新 `EntryRecord.expireAtMillis`，
 让过期、introspection 和 memory 路径都能从 entry metadata 看到同一份状态。
 
@@ -1141,6 +1321,26 @@ mutation 由 `YierdisDbKeyLifecycle.computeWithHandle(...)` 收口：
 这些 root 仍复用 `HashValue`、`ListValue`、`SetValue`、`ZSetValue` 作为内部
 adapter，但 key 的 canonical metadata 在 `EntryTable`，value identity 是
 `ValueHandle`。总体思路是一致的：把成员 bytes 尽量放到 off-heap，把部分索引元数据也放到 off-heap，并在流式读路径里优先暴露 `OffHeapSlice` 风格接口。
+
+#### 编码阈值和转换条件
+
+复合类型不是一写入就进入“大结构”编码，而是先用 packed / intset 形态，超过阈值后再转换。
+这些阈值集中在 `YierdisEncodingThresholds`，当前不是用户可配置项：
+
+- Hash：packed listpack 最多 512 个 field；新增 field 前如果已达到 512，或 field / value 任一超过 64 bytes，就转换到 `YierdisFfmByteMap<YierdisFfmBytesRef>`
+- List：packed listpack 的估算编码大小超过约 8 KiB 时，转换到 FFM quicklist-like nodes；批量 push 会先预测是否越过这个阈值
+- Set：先走 `YierdisFfmIntSet`；整数集合超过 512 个元素，或出现非 canonical integer member，就转换到 `YierdisFfmByteMap<Object>`
+- ZSet：packed zset 超过 128 个 member，或新增 member 超过 64 bytes，就转换到 skiplist-mode；FFM 路径里的这个 mode 实际是增加 member lookup map
+
+转换通常是单向的：超过阈值后进入 hash table / quicklist / skiplist-mode，不因为后续删除而自动降回 packed。
+
+代表路径：
+
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/YierdisEncodingThresholds.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/HashValue.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ListValue.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/SetValue.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ZSetValue.java`
 
 #### Hash
 
@@ -1194,9 +1394,22 @@ adapter，但 key 的 canonical metadata 在 `EntryTable`，value identity 是
 #### ZSet
 
 `ZSetRoot` 通过 `ValueHandle` 管理内部 `ZSetValue` adapter，adapter 内部使用
-`YierdisFfmZSet`。
+`YierdisFfmZSet`。这里的名字容易造成误解：它不是完整 native skiplist。
+
+`YierdisFfmZSet` 的真实结构是：
+
+- `ordered = ArrayList<Entry>` 仍在 heap，用来按 score / member 字典序维护顺序
+- `Entry.memberRef` 指向 blob store 里的 off-heap member bytes
+- `Entry.score` 是 Java `double`
+- packed mode 下查 member 是线性扫描 `ordered`
+- 超过 128 个 member 或新增 member 超过 64 bytes 后，会创建 `YierdisFfmByteMap<Entry> byMember` 做 member lookup
+- `ValueEncoding.ZSET_SKIPLIST` 在这条 FFM 路径里表示“有 byMember map 的大编码”，不是说排序索引主体已经变成 native skiplist
+
+因此 ZSet 的 off-heap 收益主要来自 member bytes 和流式输出，排序主体仍由 heap
+`ArrayList<Entry>` 承载。
 
 在 `ZRANGE` / `ZRANGEBYSCORE` 这种输出路径里，member 可以直接作为 `YierdisFfmBytesRefSlice` 发送给 `BulkStringSink`，因此它也支持 off-heap 流式读取。
+不过和 string 一样，当前 RESP sink 侧仍是 scratch buffer 分块写出，不是 native-to-socket 零拷贝。
 
 代表路径：
 
@@ -1215,10 +1428,16 @@ adapter，但 key 的 canonical metadata 在 `EntryTable`，value identity 是
 - `EntryTable` 的 entry slots 来自 slab allocator，但 `EntryHandle` 本身是 Java record
 - `NativeKeyDirectory` 的 key bytes 在 native blob store，table 数组仍在 heap
 - `YierdisFfmExpireIndex` 的 `states` / `hashes` / `expireAt` 在 native memory，但 `refs[]` 仍在 heap
+- `YierdisFfmZSet` 的 member bytes 在 native blob store，但 `ordered` 和 `Entry.score` 仍在 heap
 - `StringRoot` 管理 off-heap buffer，但 handle -> slot map 仍在 heap
 - `HashRoot` / `ListRoot` / `SetRoot` / `ZSetRoot` 的 handle table 仍在 heap，payload 通过各 value adapter 进入 FFM-backed 结构
 - `YierdisFfmByteMap` 的 table 索引数组本身仍在 heap，只是 key bytes 放在 off-heap
 - `YierdisFfmListpack` 本身是 `ArrayList<YierdisFfmBytesRef>`，真正 off-heap 的是 entry bytes
+
+保留的低层 `YierdisFfmKeyspace<V>` 也使用 `table0` / `table1` 的渐进 rehash 模型，
+但它不是生产 DB 的主 key directory。它和 `YierdisFfmExpireIndex` 一样，插入可能触发扩容，
+删除 / tombstone 过多可能触发 shrink / compact，每次操作推进一个 rehash step，旧 table
+进入 `retiredTables` 后再关闭 FFM regions。
 
 所以更准确的描述应该是：
 
@@ -1253,10 +1472,20 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
 `YierdisDbMemoryReporter.usedBytesForMaxmemory()` 会把：
 
 - `ledger.usedBytes()`
-- `memoryRuntime.usedBytes()`
+- `offHeapAllocator.usedBytes()`
+- `directNativeBytes()`
 - TTL 估算开销
 
 综合起来，作为 DB 侧 maxmemory 判断依据。
+
+这里的 `directNativeBytes()` 不是简单取 `memoryRuntime.usedBytes()`，而是把 DB 可解释的 native 结构逐项汇总：
+
+- `YierdisFfmExpireIndex.nativeBytes()`
+- `EntryTable.nativeBytes()`
+- `NativeKeyDirectory.nativeBytes()`
+- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 的 native bytes
+
+这意味着 maxmemory 统计的是业务上可解释的 live data / metadata，而不是把 slab 内部暂时空闲但尚未关闭的 reserved bytes 全部算成用户数据。
 
 这意味着：
 
@@ -1264,10 +1493,28 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
 - keyspace / expires / entry table / native key directory / type root 的 native bytes 不会被忽略
 - delete、expire 和 eviction 释放记账优先读 `EntryRecord`，避免依赖旧对象容器里的估算值
 
+在实例级 `maxmemoryScope=global` 时，还要避免多 DB 共享 runtime / allocator 导致 off-heap
+重复计数。这里的策略是：
+
+- `YierdisDbComponentFactory` 给每个 DB reporter 传入 `() -> owner.maxmemoryCoordinator() == null`
+- 没有 global coordinator 时，DB 自己的 `usedBytesForMaxmemory()` 会包含 allocator 和 direct native bytes
+- 有 global coordinator 时，DB participant 的 `usedBytesForMaxmemory()` 只报 heap ledger 和 TTL 估算，不把 off-heap 加进去
+- `YierdisGlobalMaxmemoryGovernor` 通过 `MaxmemoryUsageSource[] sharedUsage` 额外汇总一次共享 off-heap usage
+- `YierdisInstance.sharedOffHeapUsedBytes(...)` 从各 DB 的 `memoryStats().offHeapUsedBytes()` 读取 off-heap 视图，作为 shared usage 参与全局预算
+
+因此 global 模式下不是“每个 DB 都算一遍 native bytes”，而是 DB 参与者排除 off-heap，
+再由 governor 的 shared usage source 汇总一次。`memoryStats()` 仍会暴露 off-heap
+usage；只是单 DB 的 `offHeapIncludedInMaxmemory` 在 global coordinator 存在时会是 false，
+实例级 observability 再把 global off-heap 作为已纳入全局 maxmemory 的数据展示。
+
 代表路径：
 
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbComponentFactory.java`
+- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisGlobalMaxmemoryGovernor.java`
+- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
+- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceObservability.java`
 
 #### 关闭和泄漏检测
 
@@ -1317,6 +1564,22 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
   说明 string payload 的 `ValueHandle`、覆盖和释放行为
 - `YierdisFfmRehashConsistencyTest`
   说明保留的低层 `YierdisFfmKeyspace<V>` primitive 在 rehash 时保持一致
+- `YierdisFfmSlabAllocatorTest`
+  说明 slab allocator 的分配、释放、复用和容量限制行为
+- `YierdisForeignOffHeapAllocatorTest`
+  说明 `OffHeapAllocator` 对 FFM slab 的封装、used bytes 记账和关闭泄漏检查
+- `YierdisFfmBlobStoreTest`
+  说明 blob store 的 bytes 读写、refcount、retain / release 生命周期
+- `ExpireIndexContractTest`
+  说明 expire index 的通用 TTL 行为，FFM 实现需要满足同一契约
+- `ListValueTest` / `HashValueTest` / `SetValueTest` / `ZSetValueTest`
+  说明复合类型的 packed -> large 编码转换、读写语义和释放路径
+- `YierdisGlobalMaxmemoryGovernorTest`
+  说明 global maxmemory coordinator 跨 DB 淘汰和 shared usage source 计数
+- `MaxmemoryScopeTest`
+  说明 server 配置里 global / per-db scope 的解析和运行时 wiring
+- `OffHeapBytesViewTtlRegressionTest`
+  说明 BytesView 读写和 TTL 路径在 off-heap key 场景下保持一致
 
 代表路径：
 
@@ -1332,6 +1595,17 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
 - `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/EntryTableContractTest.java`
 - `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/StringRootTest.java`
 - `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmRehashConsistencyTest.java`
+- `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/YierdisFfmSlabAllocatorTest.java`
+- `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/YierdisForeignOffHeapAllocatorTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBlobStoreTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/expire/ExpireIndexContractTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/value/ListValueTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/value/HashValueTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/value/SetValueTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/value/ZSetValueTest.java`
+- `yierdis-server/yierdis-server-runtime/src/test/java/yier/bubu/redis/runtime/embedded/YierdisGlobalMaxmemoryGovernorTest.java`
+- `yierdis-cli/src/test/java/yier/bubu/redis/app/client/MaxmemoryScopeTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapBytesViewTtlRegressionTest.java`
 
 ### 最后再压缩成一句话
 
