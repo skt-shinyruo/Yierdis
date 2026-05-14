@@ -33,21 +33,21 @@
   <rect class="storage" x="55" y="125" width="260" height="185"/>
   <text class="group-title" x="85" y="160">Storage identity</text>
   <text class="text" x="85" y="194">NativeKeyDirectory</text>
-  <text class="small" x="85" y="216">key bytes -> EntryHandle</text>
+  <text class="small" x="85" y="216">key bytes -> stable EntryHandle</text>
   <text class="text" x="85" y="250">EntryTable</text>
-  <text class="small" x="85" y="272">EntryHandle -> EntryRecord</text>
+  <text class="small" x="85" y="272">EntryHandle -> native ENTRY_RECORD</text>
 
   <rect class="storage" x="55" y="375" width="260" height="185"/>
   <text class="group-title" x="85" y="410">Payload roots</text>
   <text class="text" x="85" y="444">String/List/Hash/Set/ZSetRoot</text>
-  <text class="small" x="85" y="466">ValueHandle -> payload</text>
+  <text class="small" x="85" y="466">typed ValueHandle -> payload</text>
   <text class="text" x="85" y="500">YierdisFfmExpireIndex</text>
   <text class="small" x="85" y="522">key -> expireAt</text>
 
   <rect class="policy" x="390" y="105" width="380" height="135"/>
   <text class="group-title" x="420" y="140">Resource and policy base</text>
-  <text class="text" x="420" y="174">threadGuard / memoryRuntime / offHeapAllocator</text>
-  <text class="small" x="420" y="196">owner-thread access and native resource ownership</text>
+  <text class="text" x="420" y="174">threadGuard / memoryRuntime / native allocators</text>
+  <text class="small" x="420" y="196">owner-thread access, object table, FFM ownership</text>
 
   <rect class="policy" x="845" y="125" width="260" height="185"/>
   <text class="group-title" x="875" y="160">Mutation protocol</text>

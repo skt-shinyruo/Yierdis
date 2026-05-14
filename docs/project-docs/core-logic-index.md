@@ -34,7 +34,7 @@ CLI args / process
   -> Yierdis*Ops
   -> YierdisDbMutationExecutor
   -> YierdisDbKeyLifecycle
-  -> EntryRecord / ValueHandle / TypeRoot
+  -> EntryRecord / typed ValueHandle / TypeRoot
   -> ReplyWriter
   -> RespReplyWriter
   -> NettyExecutionIoAdapter
@@ -1599,8 +1599,10 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 
 - `EntryTable` 是 key directory 指向的 entry 存储表。
 - `EntryRecord` 保存 `ValueType`、`ValueEncoding`、`ValueHandle`、`expireAtMillis`、LRU clock 等 metadata。
-- `EntryHandle` 指向 entry slot，`ValueHandle` 指向对应 type root 内的 payload。
-- entry metadata 使用 FFM/slab allocator 保存，避免所有 key metadata 都落在 Java object 上。
+- `EntryHandle` 包装 `ENTRY_RECORD` 类型的 `NativeHandle`，不是 physical address。
+- `ValueHandle` 包装 string/list/hash/set/zset 等 value/root 相关 `NativeHandle` raw value；当前多数 value handle 是 type-root-owned identity，不是 object table slot。
+- entry metadata 使用 `YierdisStableNativeAllocator` 保存为 56 bytes native `ENTRY_RECORD`，避免所有 key metadata 都落在 Java object 上。
+- `EntryTable` 读写 entry 时通过 allocator resolve 得到短生命周期 `NativeObjectView`，关闭 view 后释放 pin。
 
 ### `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot`
 
@@ -1618,11 +1620,51 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 - root 提供类型内操作、encoding 查询、estimated bytes、native bytes、release 和 clear。
 - `StringRoot` 管 off-heap string buffer，并支持 append、ensureLength、byteAt、setByteAt、slice/copy。
 - collection roots 包装 `ListValue/HashValue/SetValue/ZSetValue`，并给 ops 提供同步的类型化方法。
+- type roots 会给 `ValueHandle` 写入对应 `NativeObjectKind`，但当前集合 payload adapter 的控制结构仍主要由 root 自己管理，不等于整个集合对象已经完全交给 stable allocator，也不能把任意 `ValueHandle` 直接交给 allocator resolve。
 
 关键边界：
 
 - `EntryRecord` 只保存 handle 和 metadata，不保存 Java collection。
 - 删除 key 时必须先由 key lifecycle 根据 `ValueType` 找到正确 root 释放 payload。
+- handle 是跨层 stable identity；allocator-private page id、offset、span 和 raw address 不能传到 DB hot path 外。
+
+### `NativeHandle` / stable native allocator
+
+源码：
+
+- [`NativeHandle.java`](../../yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeHandle.java)
+- [`NativeAllocator.java`](../../yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeAllocator.java)
+- [`NativeAllocatorStats.java`](../../yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeAllocatorStats.java)
+- [`NativeObjectView.java`](../../yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeObjectView.java)
+- [`YierdisStableNativeAllocator.java`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java)
+- [`YierdisNativeObjectTable.java`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java)
+- [`YierdisNativePageAllocator.java`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativePageAllocator.java)
+- [`YierdisNativeEpochManager.java`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeEpochManager.java)
+
+核心方法：
+
+- `NativeAllocator.allocate(kind, size)`
+- `NativeAllocator.resolve(handle, mode)`
+- `NativeAllocator.realloc(handle, newSize, policy)`
+- `NativeAllocator.free(handle)`
+- `NativeAllocator.beginEpoch(kind)`
+- `NativeAllocator.defragOne(handle, maxMoveBytes)`
+- `NativeAllocator.defragCycle(options)`
+- `NativeAllocator.stats()`
+
+职责：
+
+- 提供 64-bit stable `NativeHandle` ABI：domain、kind、slot id、generation、flags。
+- 用 object table 保存 handle -> metadata -> current physical block 的 indirection。
+- 用 64 KiB page allocator 管理 small size-class、medium span 和 large span。
+- 在 resolve view 时 pin 对象，view close 时 unpin。
+- 用 epoch/quarantine 保护 freed 或 moved block，避免读者仍可见时释放。
+- 用 generation、domain/kind 校验和 slot lifecycle 防 stale handle、double-free、wrong-kind 和 ABA 风险。
+- 支持 `realloc` 的 in-place resize、move 扩容和失败回滚。
+- 支持 active defrag，移动 unpinned object 时只发布 object table 新 location，DB graph 不需要重写 handle。
+- 暴露 fragmentation、page counts、object kind counts、quarantine bytes、stale/double-free、realloc、defrag 和 allocation latency 指标。
+
+完整语义见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 ### `ValueEncoding` 和 value 实现
 

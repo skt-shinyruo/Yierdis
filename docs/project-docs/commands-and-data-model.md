@@ -24,7 +24,7 @@ ExecutionRequest
   -> CommandSupport
   -> DbReads / DbWrites / DbEngine
   -> Yierdis*Ops
-  -> EntryRecord / ValueHandle / TypeRoot
+  -> EntryRecord / typed ValueHandle / TypeRoot
 ```
 
 也就是说：
@@ -323,7 +323,8 @@ read DB result
 ## String：为什么会有 `int / embstr / raw`
 
 string 由 `EntryRecord` 记录类型和 encoding，由 `StringRoot` 通过
-`ValueHandle` 持有真实 bytes。
+`ValueHandle` 持有真实 bytes。这里的 `ValueHandle` 是 `NativeHandle` raw value 的包装，
+带有 `STRING_BYTES` kind；它不是 native physical address。
 
 大致规则是：
 
@@ -338,6 +339,31 @@ string 由 `EntryRecord` 记录类型和 encoding，由 `StringRoot` 通过
 - 长字符串走普通 raw 存储
 
 `SET`、`APPEND`、`INCR`、`DECR` 这几类命令最能把这一点看清楚。
+
+## Handle 和物理存储的边界
+
+命令层不直接接触 `EntryHandle`、`ValueHandle` 或 allocator。它只通过 DB API 读写逻辑类型。
+
+DB 内部的主图是：
+
+```text
+NativeKeyDirectory
+  key bytes -> EntryHandle(raw NativeHandle)
+
+EntryTable
+  EntryHandle -> native ENTRY_RECORD
+
+EntryRecord
+  ValueType + ValueEncoding + ValueHandle(raw NativeHandle) + TTL/accounting/access metadata
+
+TypeRoot
+  ValueHandle -> payload adapter / off-heap bytes
+```
+
+`EntryHandle` 要求 handle kind 是 `ENTRY_RECORD`，并且由 stable allocator object table 背书；`ValueHandle` 按 string/list/hash/set/zset
+写入对应 `NativeObjectKind`，但当前多数 value handle 是 type-root-owned identity。allocator 可以移动 entry record 的 physical block，DB graph 仍然保存同一个 stable handle。
+
+这层细节在命令语义里通常不可见，但它解释了为什么 `MEMORY`、`OBJECT ENCODING`、TTL、delete 和 active defrag 都必须以 entry metadata 和 stable handle 为准。完整 allocator 语义见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 ## Hash：packed 什么时候升级成 hashtable
 

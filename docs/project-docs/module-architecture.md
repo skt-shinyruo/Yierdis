@@ -9,7 +9,7 @@
 ![Yierdis module dependency architecture](./assets/module-architecture.svg)
 
 - `yierdis-common-bytes` 是公共 bytes 抽象，被 memory、db、execution 和 protocol 复用
-- `yierdis-memory-api` 提供 off-heap contract，`yierdis-memory-ffm` 是它的 JDK 25 FFM backend
+- `yierdis-memory-api` 提供 off-heap 和 stable native allocator contract，`yierdis-memory-ffm` 是它的 JDK 25 FFM backend
 - `yierdis-db-api` 定义 DB 能力边界，`yierdis-db-memory` 提供具体存储实现
 - `yierdis-server-api` 定义执行契约，`yierdis-server-core` 和 `yierdis-server-executor` 依赖它
 - `yierdis-command-api` 定义命令注册契约，`yierdis-command-core` 和 `yierdis-command-builtin` 依赖它
@@ -82,6 +82,32 @@ Java package names mirror module ownership. Active production package families a
 
 - Netty 适配层集中
 - core / protocol 的非 Netty 代码不需要知道 `ByteBuf`
+
+## memory 车道
+
+memory 车道负责 native memory contract 和 FFM backend，不拥有 DB 语义，也不依赖 command / server。
+
+### `yierdis-memory-api`
+
+这个模块定义两组能力：
+
+- 连续 bytes off-heap contract：`OffHeapAllocator`、`OffHeapBuf`、`OffHeapSlice`
+- stable native object allocator contract：`NativeHandle`、`NativeAllocator`、`NativeObjectView`、`NativeAllocatorStats`、`NativeDefrag*`、`NativeEpoch*`
+
+`NativeHandle` 是跨 DB memory 层的 64-bit stable identity，包含 domain、kind、slot id、generation 和 flags。它不是 physical address。
+
+### `yierdis-memory-ffm`
+
+这个模块提供 JDK FFM backend：
+
+- `YierdisFfmMemoryRuntime` 管理 FFM region 和 runtime accounting
+- `YierdisForeignOffHeapAllocator` / `YierdisFfmSlabAllocator` 服务 string/HLL 这类连续 bytes buffer
+- `YierdisStableNativeAllocator` / `YierdisNativeObjectTable` / `YierdisNativePageAllocator` 服务可移动 native object
+- `YierdisNativeEpochManager` 和 quarantine 保护 active read / scan / snapshot / defrag
+
+DB implementation 可以依赖 memory API 和 FFM backend；command、protocol 和 server API 不能直接依赖这些 allocator 实现细节。
+
+完整 allocator 语义见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 ## protocol 车道
 

@@ -174,7 +174,7 @@ server 侧真正执行命令的处理器。它负责：
 
 ### keyspace
 
-主索引现在由 `NativeKeyDirectory` 承担，也就是“key 到 `EntryHandle`”的映射。`EntryHandle` 再进入 `EntryTable` 取得 `EntryRecord`，读写一个 key 时，绝大多数路径都会先碰到这组结构。
+主索引现在由 `NativeKeyDirectory` 承担，也就是“key 到 `EntryHandle`”的映射。`EntryHandle` 包装 `ENTRY_RECORD` native handle，再进入 `EntryTable` 取得 native `EntryRecord`，读写一个 key 时，绝大多数路径都会先碰到这组结构。
 
 ### expire index
 
@@ -229,6 +229,46 @@ global maxmemory scope 下的实例级协调者。DB 写入前调用 `prepareWri
 
 `MEMORY STATS` 的字段模型。它提供 maxmemory 用量、reservation、off-heap usage、key/expire 数、rehash 状态和总体估算，目标是可解释而不是精确 JVM heap measurement。
 
+### `NativeHandle`
+
+allocator 和 DB memory 层之间的 64-bit stable handle。它不是 physical address，而是：
+
+- domain
+- kind
+- slot id
+- generation
+- flags
+
+DB 层可以长期保存 handle；allocator 内部可以改变 object table 中的 physical block。generation 用来防止释放后的旧 handle 命中复用后的新对象。
+
+### object table
+
+`YierdisNativeObjectTable`，负责把 `NativeHandle.slotId()` 映射到对象 metadata。metadata 记录 address、size、capacity、domain/kind、generation、pin count、state、alloc/free epoch 等信息。
+
+object table 是 active defrag 和 stale handle 防护的关键 indirection：DB graph 保存 handle，不保存 physical address；对象移动时更新 object table，而不是重写 DB 里的所有引用。
+
+### stable native allocator
+
+`YierdisStableNativeAllocator`。它实现 `NativeAllocator`，返回 stable `NativeHandle`，并用 `YierdisNativePageAllocator` 和 object table 管理真实 FFM block。
+
+它负责 allocate、resolve、free、`realloc`、pin/unpin、epoch、quarantine、active defrag 和 allocator stats。
+
+### pin
+
+对象级读写保护。`NativeAllocator.resolve(...)` 返回 `NativeObjectView` 时会 pin 对象；view close 时 unpin。pinned 对象不能被 defrag 移动，free 时也不能立即回收 physical block。
+
+### quarantine
+
+延迟释放区。对象已经 free 或旧 block 已经被 move 替换，但仍可能被 active view 或 epoch 看到时，会进入 quarantine。等 pin count 为 0 且 epoch 安全后，allocator 才真正释放 block 或 slot。
+
+### native epoch
+
+批量读或维护操作的安全边界。当前 epoch kind 包括 command、scan、snapshot 和 defrag。只要有 active epoch 可能观察到 retired block，allocator 就不会回收对应 quarantine memory。
+
+### active defrag
+
+主动碎片整理。allocator 选择未 pin 且在预算内的对象，分配新 block，复制旧数据，校验后在 object table 中发布新 location。由于 DB 层只保存 stable handle，所以对象移动不需要重写 `NativeKeyDirectory`、`EntryTable` 或 type root 里的引用。
+
 ## Data Model
 
 ### `EntryRecord`
@@ -243,6 +283,14 @@ DB native key graph 的 entry metadata。它持有：
 - LRU / LFU 相关字段
 
 真实 payload 由对应的 `TypeRoot` 通过 `ValueHandle` 管理。
+
+### `EntryHandle`
+
+`ENTRY_RECORD` 类型 `NativeHandle` 的 DB 包装。它只表示 stable entry identity，不表示 physical slot 或 raw native address。`EntryTable` 用它 resolve native 56 bytes `EntryRecord`。
+
+### `ValueHandle`
+
+value/root 侧 `NativeHandle` raw value 的 DB 包装。string 使用 `STRING_BYTES` kind，集合 root 使用对应 `LIST_NODE`、`HASH_NODE`、`SET_NODE`、`ZSET_NODE` kind。它给 `EntryRecord` 一个稳定 payload identity，但不意味着所有集合控制结构都完全 native 化，也不意味着每个 `ValueHandle` 都是 object-table-backed allocator handle。
 
 ### `ValueType`
 
