@@ -11,6 +11,8 @@ public interface NativeAllocator extends AutoCloseable {
 
     void unpin(NativeHandle handle);
 
+    NativeEpochScope beginEpoch(NativeEpochKind kind);
+
     NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode);
 
     NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes);
