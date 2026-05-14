@@ -215,6 +215,43 @@ public class YierdisStableNativeAllocatorTest {
     }
 
     @Test
+    public void reallocNoMoveFailsWithoutChangingObjectWhenGrowthNeedsMove() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setByte(0, (byte) 1);
+                view.setByte(1, (byte) 2);
+                view.setByte(2, (byte) 3);
+                view.setByte(3, (byte) 4);
+            }
+
+            try {
+                allocator.realloc(handle, 8, NativeReallocPolicy.NO_MOVE);
+                Assert.fail("expected no-move realloc failure");
+            } catch (NativeMemoryException expected) {
+                Assert.assertTrue(expected.getMessage().contains("cannot grow in place"));
+            }
+
+            NativeAllocatorStats stats = allocator.stats();
+            Assert.assertEquals(4L, stats.logicalUsedBytes());
+            Assert.assertEquals(1L, stats.liveObjects());
+            Assert.assertEquals(0L, stats.reallocInPlaceCount());
+            Assert.assertEquals(0L, stats.reallocMovedCount());
+
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(4, view.size());
+                Assert.assertEquals(4, view.capacity());
+                Assert.assertEquals(1, view.getByte(0));
+                Assert.assertEquals(2, view.getByte(1));
+                Assert.assertEquals(3, view.getByte(2));
+                Assert.assertEquals(4, view.getByte(3));
+            }
+        }
+    }
+
+    @Test
     public void preservePrefixGrowsWithinCapacityAfterShrinkWithoutMove() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
