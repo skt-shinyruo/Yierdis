@@ -2,6 +2,7 @@ package yier.bubu.redis.memory.foreign;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.bytes.BytesSource;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeHandle;
@@ -9,6 +10,9 @@ import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
+import yier.bubu.redis.memory.api.OffHeapAllocator;
+import yier.bubu.redis.memory.api.OffHeapBuf;
+import yier.bubu.redis.memory.api.OffHeapSlice;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public class YierdisStableNativeAllocatorTest {
@@ -240,6 +244,217 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(6L, stats.logicalUsedBytes());
             Assert.assertEquals(2L, stats.reallocInPlaceCount());
             Assert.assertEquals(0L, stats.reallocMovedCount());
+        }
+    }
+
+    @Test
+    public void retiresSlotWhenGenerationSpaceIsExhausted() {
+        try (TestOffHeapAllocator payload = new TestOffHeapAllocator();
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(payload, 1)) {
+
+            NativeHandle original = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
+            allocator.free(original);
+
+            for (int generation = 2; generation <= 0x0fff; generation++) {
+                NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
+                Assert.assertEquals(generation, handle.generation());
+                allocator.free(handle);
+            }
+
+            try {
+                allocator.resolve(original, NativeAccessMode.READ_ONLY);
+                Assert.fail("expected original handle to remain stale");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
+            }
+
+            try {
+                allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
+                Assert.fail("expected retired slot exhaustion");
+            } catch (NativeMemoryException expected) {
+                Assert.assertTrue(expected.getMessage().contains("slot limit"));
+            }
+        }
+    }
+
+    @Test
+    public void reallocMoveCloseFailureLeavesOriginalObjectReadable() {
+        TestOffHeapAllocator payload = new TestOffHeapAllocator();
+        try (YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(payload, 4)) {
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+            TestOffHeapBuf originalBuffer = payload.buffer(0);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setByte(0, (byte) 1);
+                view.setByte(1, (byte) 2);
+                view.setByte(2, (byte) 3);
+                view.setByte(3, (byte) 4);
+            }
+
+            originalBuffer.throwOnClose = true;
+            try {
+                allocator.realloc(handle, 8, NativeReallocPolicy.PRESERVE_PREFIX);
+                Assert.fail("expected close failure");
+            } catch (IllegalStateException expected) {
+                Assert.assertTrue(expected.getMessage().contains("close failed"));
+            }
+            originalBuffer.throwOnClose = false;
+
+            NativeAllocatorStats stats = allocator.stats();
+            Assert.assertEquals(4L, stats.logicalUsedBytes());
+            Assert.assertEquals(1L, stats.liveObjects());
+            Assert.assertEquals(0L, stats.reallocMovedCount());
+
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(4, view.size());
+                Assert.assertEquals(4, view.capacity());
+                Assert.assertEquals(1, view.getByte(0));
+                Assert.assertEquals(2, view.getByte(1));
+                Assert.assertEquals(3, view.getByte(2));
+                Assert.assertEquals(4, view.getByte(3));
+            }
+        }
+    }
+
+    @Test
+    public void freeCloseFailureStalesHandleAndDoesNotReuseSlot() {
+        TestOffHeapAllocator payload = new TestOffHeapAllocator();
+        try (YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(payload, 1)) {
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+            payload.buffer(0).throwOnClose = true;
+
+            try {
+                allocator.free(handle);
+                Assert.fail("expected close failure");
+            } catch (IllegalStateException expected) {
+                Assert.assertTrue(expected.getMessage().contains("close failed"));
+            }
+
+            NativeAllocatorStats stats = allocator.stats();
+            Assert.assertEquals(0L, stats.logicalUsedBytes());
+            Assert.assertEquals(0L, stats.liveObjects());
+
+            try {
+                allocator.resolve(handle, NativeAccessMode.READ_ONLY);
+                Assert.fail("expected stale handle");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
+            }
+
+            try {
+                allocator.free(handle);
+                Assert.fail("expected stale handle");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
+            }
+
+            try {
+                allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+                Assert.fail("expected slot exhaustion");
+            } catch (NativeMemoryException expected) {
+                Assert.assertTrue(expected.getMessage().contains("slot limit"));
+            }
+        }
+    }
+
+    private static final class TestOffHeapAllocator implements OffHeapAllocator {
+        private TestOffHeapBuf[] buffers = new TestOffHeapBuf[8];
+        private int bufferCount;
+        private long usedBytes;
+
+        @Override
+        public OffHeapBuf allocate(int capacity) {
+            TestOffHeapBuf buffer = new TestOffHeapBuf(this, capacity);
+            if (bufferCount == buffers.length) {
+                TestOffHeapBuf[] next = new TestOffHeapBuf[buffers.length * 2];
+                System.arraycopy(buffers, 0, next, 0, buffers.length);
+                buffers = next;
+            }
+            buffers[bufferCount++] = buffer;
+            usedBytes += capacity;
+            return buffer;
+        }
+
+        @Override
+        public long usedBytes() {
+            return usedBytes;
+        }
+
+        @Override
+        public long maxBytes() {
+            return 0;
+        }
+
+        @Override
+        public void close() {
+        }
+
+        private TestOffHeapBuf buffer(int index) {
+            return buffers[index];
+        }
+
+        private void onClosed(int capacity) {
+            usedBytes -= capacity;
+        }
+    }
+
+    private static final class TestOffHeapBuf implements OffHeapBuf {
+        private final TestOffHeapAllocator owner;
+        private final byte[] bytes;
+        private boolean closed;
+        private boolean throwOnClose;
+
+        private TestOffHeapBuf(TestOffHeapAllocator owner, int capacity) {
+            this.owner = owner;
+            this.bytes = new byte[capacity];
+        }
+
+        @Override
+        public int capacity() {
+            return bytes.length;
+        }
+
+        @Override
+        public byte getByte(int index) {
+            return bytes[index];
+        }
+
+        @Override
+        public void setByte(int index, byte value) {
+            bytes[index] = value;
+        }
+
+        @Override
+        public void getBytes(int index, byte[] dst, int dstOff, int len) {
+            System.arraycopy(bytes, index, dst, dstOff, len);
+        }
+
+        @Override
+        public void setBytes(int index, byte[] src, int srcOff, int len) {
+            System.arraycopy(src, srcOff, bytes, index, len);
+        }
+
+        @Override
+        public void setBytes(int index, BytesSource src, int srcIndex, int len) {
+            for (int i = 0; i < len; i++) {
+                bytes[index + i] = src.getByte(srcIndex + i);
+            }
+        }
+
+        @Override
+        public OffHeapSlice slice(int index, int len) {
+            throw new UnsupportedOperationException("slice not needed");
+        }
+
+        @Override
+        public void close() {
+            if (throwOnClose) {
+                throw new IllegalStateException("close failed");
+            }
+            if (closed) {
+                return;
+            }
+            closed = true;
+            owner.onClosed(bytes.length);
         }
     }
 }

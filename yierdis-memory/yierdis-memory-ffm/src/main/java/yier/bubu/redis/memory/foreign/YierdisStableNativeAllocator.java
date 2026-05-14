@@ -16,6 +16,8 @@ import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public final class YierdisStableNativeAllocator implements NativeAllocator {
     private static final int INITIAL_GENERATION = 1;
+    private static final int MAX_GENERATION = 0x0fff;
+    private static final int REALLOC_COPY_CHUNK_BYTES = 64 * 1024;
 
     private final OffHeapAllocator payloadAllocator;
     private final Slot[] slots;
@@ -102,16 +104,13 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         OffHeapBuf next = payloadAllocator.allocate(newSize);
         boolean moved = false;
         try {
-            byte[] copy = new byte[oldSize];
-            slot.buffer.getBytes(0, copy, 0, copy.length);
-            next.setBytes(0, copy, 0, copy.length);
-
             OffHeapBuf previous = slot.buffer;
+            copyPrefix(previous, next, oldSize);
+            previous.close();
             slot.buffer = next;
             slot.size = newSize;
             slot.capacity = newSize;
             logicalUsedBytes += (long) newSize - oldSize;
-            previous.close();
             reallocMovedCount++;
             moved = true;
             return handle;
@@ -175,7 +174,10 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                         failure.addSuppressed(e);
                     }
                 } finally {
+                    logicalUsedBytes -= slot.size;
+                    liveObjects--;
                     slot.clear();
+                    advanceOrRetire(slot);
                 }
             }
         }
@@ -225,12 +227,32 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     private void releaseSlot(Slot slot) {
         OffHeapBuf buffer = slot.buffer;
         int size = slot.size;
-        buffer.close();
         logicalUsedBytes -= size;
         liveObjects--;
         slot.clear();
-        slot.generation = nextGeneration(slot.generation);
-        freeSlots.addLast(slot.slotId);
+        boolean reusable = advanceOrRetire(slot);
+        boolean closedBuffer = false;
+        try {
+            buffer.close();
+            closedBuffer = true;
+        } finally {
+            if (closedBuffer && reusable) {
+                freeSlots.addLast(slot.slotId);
+            } else if (!closedBuffer) {
+                slot.retired = true;
+            }
+        }
+    }
+
+    private static void copyPrefix(OffHeapBuf src, OffHeapBuf dst, int len) {
+        byte[] scratch = new byte[Math.min(len, REALLOC_COPY_CHUNK_BYTES)];
+        int offset = 0;
+        while (offset < len) {
+            int chunk = Math.min(scratch.length, len - offset);
+            src.getBytes(offset, scratch, 0, chunk);
+            dst.setBytes(offset, scratch, 0, chunk);
+            offset += chunk;
+        }
     }
 
     private long pinnedObjects() {
@@ -253,9 +275,13 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         return count;
     }
 
-    private static int nextGeneration(int current) {
-        int next = (current + 1) & 0x0fff;
-        return next == 0 ? INITIAL_GENERATION : next;
+    private static boolean advanceOrRetire(Slot slot) {
+        if (slot.generation >= MAX_GENERATION) {
+            slot.retired = true;
+            return false;
+        }
+        slot.generation++;
+        return true;
     }
 
     private void ensureOpen() {
@@ -274,12 +300,16 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         private int pinCount;
         private boolean live;
         private boolean quarantined;
+        private boolean retired;
 
         private Slot(int slotId) {
             this.slotId = slotId;
         }
 
         private void allocate(NativeObjectKind kind, OffHeapBuf buffer, int size) {
+            if (retired) {
+                throw new IllegalStateException("native object slot is retired");
+            }
             this.kind = kind;
             this.buffer = buffer;
             this.size = size;
@@ -324,53 +354,69 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
         @Override
         public NativeHandle handle() {
-            ensureViewOpen();
-            return handle;
+            synchronized (YierdisStableNativeAllocator.this) {
+                ensureLiveSlot();
+                return handle;
+            }
         }
 
         @Override
         public int size() {
-            ensureLiveSlot();
-            return slot.size;
+            synchronized (YierdisStableNativeAllocator.this) {
+                ensureLiveSlot();
+                return slot.size;
+            }
         }
 
         @Override
         public int capacity() {
-            ensureLiveSlot();
-            return slot.capacity;
+            synchronized (YierdisStableNativeAllocator.this) {
+                ensureLiveSlot();
+                return slot.capacity;
+            }
         }
 
         @Override
         public byte getByte(int index) {
-            ensureLiveSlot();
-            checkRange(index, 1);
-            return slot.buffer.getByte(index);
+            synchronized (YierdisStableNativeAllocator.this) {
+                ensureLiveSlot();
+                checkRange(index, 1);
+                return slot.buffer.getByte(index);
+            }
         }
 
         @Override
         public void setByte(int index, byte value) {
-            ensureWritable();
-            checkRange(index, 1);
-            slot.buffer.setByte(index, value);
+            synchronized (YierdisStableNativeAllocator.this) {
+                ensureWritable();
+                checkRange(index, 1);
+                slot.buffer.setByte(index, value);
+            }
         }
 
         @Override
         public void getBytes(int index, byte[] dst, int dstOff, int len) {
-            ensureLiveSlot();
-            checkRange(index, len);
-            slot.buffer.getBytes(index, dst, dstOff, len);
+            synchronized (YierdisStableNativeAllocator.this) {
+                ensureLiveSlot();
+                checkRange(index, len);
+                slot.buffer.getBytes(index, dst, dstOff, len);
+            }
         }
 
         @Override
         public void setBytes(int index, byte[] src, int srcOff, int len) {
-            ensureWritable();
-            checkRange(index, len);
-            slot.buffer.setBytes(index, src, srcOff, len);
+            synchronized (YierdisStableNativeAllocator.this) {
+                ensureWritable();
+                checkRange(index, len);
+                slot.buffer.setBytes(index, src, srcOff, len);
+            }
         }
 
         @Override
         public void close() {
-            closedView = true;
+            synchronized (YierdisStableNativeAllocator.this) {
+                closedView = true;
+            }
         }
 
         private void ensureWritable() {
