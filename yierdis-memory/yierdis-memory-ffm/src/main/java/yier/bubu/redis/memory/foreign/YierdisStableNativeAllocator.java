@@ -8,6 +8,8 @@ import java.util.Objects;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
+import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.NativeDefragResult;
 import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
@@ -24,6 +26,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     private final YierdisNativePageAllocator pageAllocator;
     private final YierdisNativeObjectTable objectTable;
     private final YierdisNativeEpochManager epochManager = new YierdisNativeEpochManager();
+    private final YierdisNativeDefragValidator defragValidator;
     private final Map<Long, Allocation> allocations = new HashMap<>();
     private final List<RetainedBlock> retainedMovedBlocks = new ArrayList<>();
 
@@ -38,7 +41,17 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     private long defragSkippedPinnedObjects;
 
     public YierdisStableNativeAllocator(YierdisFfmMemoryRuntime runtime, int maxSlots) {
+        this(runtime, maxSlots, (handle, sourceMeta, target) -> {
+        });
+    }
+
+    YierdisStableNativeAllocator(
+            YierdisFfmMemoryRuntime runtime,
+            int maxSlots,
+            YierdisNativeDefragValidator defragValidator
+    ) {
         Objects.requireNonNull(runtime, "runtime");
+        this.defragValidator = Objects.requireNonNull(defragValidator, "defragValidator");
         this.pageAllocator = new YierdisNativePageAllocator(runtime);
         this.objectTable = new YierdisNativeObjectTable(runtime, maxSlots, 0);
     }
@@ -204,29 +217,67 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             return NativeDefragResult.skippedPinnedObject();
         }
 
-        Allocation allocation = allocationFor(handle);
-        YierdisNativeBlock target = pageAllocator.allocate(meta.size());
-        boolean moved = false;
-        try {
-            copyPrefix(allocation.current, target, meta.size());
-            YierdisNativeBlock previous = allocation.current;
-            objectTable.updateLocation(
-                    handle,
-                    meta.size(),
-                    target.capacity(),
-                    packedAddress(target),
-                    target.pageClass().ordinal()
-            );
-            allocation.current = target;
-            reserveMovedBlock(previous, target.capacity(), epochManager.nextEpoch());
-            defragMovedBytes += meta.size();
-            moved = true;
-            return NativeDefragResult.moved(meta.size());
-        } finally {
-            if (!moved) {
-                target.close();
+        return moveLiveObject(handle);
+    }
+
+    @Override
+    public synchronized NativeDefragReport defragCycle(NativeDefragOptions options) {
+        ensureOpen();
+        Objects.requireNonNull(options, "options");
+
+        YierdisNativeDefragPlanner planner = new YierdisNativeDefragPlanner(options);
+        long movedObjects = 0L;
+        long skippedPinnedObjects = 0L;
+        long skippedBudgetObjects = 0L;
+        long failedMoves = 0L;
+
+        for (NativeHandle handle : candidateHandles()) {
+            YierdisNativeObjectMeta meta = objectTable.snapshot(handle, true);
+            if (meta.state() == YierdisNativeObjectTable.STATE_FREED_QUARANTINED) {
+                continue;
+            }
+            if (meta.state() != YierdisNativeObjectTable.STATE_ALLOCATED
+                    && meta.state() != YierdisNativeObjectTable.STATE_PINNED) {
+                continue;
+            }
+            if (!planner.canInspectNext()) {
+                break;
+            }
+            planner.onCandidateInspected();
+
+            if (meta.pinCount() > 0) {
+                skippedPinnedObjects++;
+                defragSkippedPinnedObjects++;
+                continue;
+            }
+            if (!planner.canMove(meta.size())) {
+                skippedBudgetObjects++;
+                break;
+            }
+
+            try {
+                NativeDefragResult result = moveLiveObject(handle);
+                if (result.moved()) {
+                    movedObjects++;
+                    planner.onMoved(result.movedBytes());
+                }
+            } catch (RuntimeException e) {
+                failedMoves++;
             }
         }
+
+        reclaimEligibleQuarantine();
+        return new NativeDefragReport(
+                planner.scannedObjects(),
+                movedObjects,
+                planner.movedBytes(),
+                skippedPinnedObjects,
+                skippedBudgetObjects,
+                failedMoves,
+                planner.stoppedByByteBudget(),
+                planner.stoppedByObjectBudget(),
+                planner.stoppedByTimeBudget()
+        );
     }
 
     @Override
@@ -296,6 +347,47 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
     private YierdisNativeObjectMeta requireLiveMeta(NativeHandle handle) {
         return trackStale(() -> objectTable.resolve(handle));
+    }
+
+    private NativeDefragResult moveLiveObject(NativeHandle handle) {
+        Allocation allocation = allocationFor(handle);
+        YierdisNativeObjectMeta sourceMeta = objectTable.beginMove(handle);
+        YierdisNativeBlock target = null;
+        boolean published = false;
+        try {
+            target = pageAllocator.allocate(sourceMeta.size());
+            copyPrefix(allocation.current, target, sourceMeta.size());
+            defragValidator.validate(handle, sourceMeta, target);
+
+            YierdisNativeBlock previous = allocation.current;
+            int targetCapacity = target.capacity();
+            objectTable.publishMoved(
+                    handle,
+                    sourceMeta.size(),
+                    targetCapacity,
+                    packedAddress(target),
+                    target.pageClass().ordinal()
+            );
+            published = true;
+            allocation.current = target;
+            target = null;
+            reserveMovedBlock(previous, targetCapacity, epochManager.nextEpoch());
+            defragMovedBytes += sourceMeta.size();
+            return NativeDefragResult.moved(sourceMeta.size());
+        } catch (RuntimeException e) {
+            if (!published) {
+                try {
+                    objectTable.abortMove(handle);
+                } catch (RuntimeException abortFailure) {
+                    e.addSuppressed(abortFailure);
+                }
+            }
+            throw e;
+        } finally {
+            if (target != null) {
+                target.close();
+            }
+        }
     }
 
     private NativeHandle trackStale(NativeHandle handle) {
@@ -426,6 +518,19 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             return null;
         }
         return allocation.lastHandle;
+    }
+
+    private List<NativeHandle> candidateHandles() {
+        List<Long> slotIds = new ArrayList<>(allocations.keySet());
+        slotIds.sort(Long::compare);
+        List<NativeHandle> handles = new ArrayList<>(slotIds.size());
+        for (Long slotId : slotIds) {
+            NativeHandle handle = handleForSlot(slotId);
+            if (handle != null) {
+                handles.add(handle);
+            }
+        }
+        return handles;
     }
 
     private static long packedAddress(YierdisNativeBlock block) {

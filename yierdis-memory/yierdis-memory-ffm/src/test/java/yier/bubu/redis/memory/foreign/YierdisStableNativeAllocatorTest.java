@@ -5,6 +5,8 @@ import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragResult;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
+import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeHandle;
@@ -620,6 +622,80 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertFalse(budget.moved());
             Assert.assertTrue(budget.skippedBudget());
             Assert.assertEquals(address, allocator.objectMeta(handle, false).address());
+        }
+    }
+
+    @Test
+    public void defragCycleMovesEligibleObjectsWithinByteBudget() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+
+            NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            NativeHandle second = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            NativeHandle third = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            long firstAddress = allocator.objectMeta(first, false).address();
+            long secondAddress = allocator.objectMeta(second, false).address();
+            long thirdAddress = allocator.objectMeta(third, false).address();
+
+            NativeDefragReport report = allocator.defragCycle(new NativeDefragOptions(48, 10, Long.MAX_VALUE));
+
+            Assert.assertEquals(2L, report.movedObjects());
+            Assert.assertEquals(48L, report.movedBytes());
+            Assert.assertEquals(1L, report.skippedBudgetObjects());
+            Assert.assertTrue(report.stoppedByByteBudget());
+            Assert.assertNotEquals(firstAddress, allocator.objectMeta(first, false).address());
+            Assert.assertNotEquals(secondAddress, allocator.objectMeta(second, false).address());
+            Assert.assertEquals(thirdAddress, allocator.objectMeta(third, false).address());
+        }
+    }
+
+    @Test
+    public void defragCycleSkipsPinnedObjectsAndContinues() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+
+            NativeHandle pinned = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            NativeHandle movable = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            long pinnedAddress = allocator.objectMeta(pinned, false).address();
+            long movableAddress = allocator.objectMeta(movable, false).address();
+            allocator.pin(pinned);
+
+            NativeDefragReport report = allocator.defragCycle(new NativeDefragOptions(48, 10, Long.MAX_VALUE));
+
+            Assert.assertEquals(1L, report.movedObjects());
+            Assert.assertEquals(24L, report.movedBytes());
+            Assert.assertEquals(1L, report.skippedPinnedObjects());
+            Assert.assertEquals(pinnedAddress, allocator.objectMeta(pinned, false).address());
+            Assert.assertNotEquals(movableAddress, allocator.objectMeta(movable, false).address());
+        }
+    }
+
+    @Test
+    public void defragValidationFailureRollsBackMove() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(
+                     runtime,
+                     1024,
+                     (handle, sourceMeta, target) -> {
+                         throw new NativeMemoryException("validation failed");
+                     }
+             )) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setByte(0, (byte) 7);
+            }
+            long beforeAddress = allocator.objectMeta(handle, false).address();
+
+            NativeDefragReport report = allocator.defragCycle(new NativeDefragOptions(24, 10, Long.MAX_VALUE));
+
+            Assert.assertEquals(0L, report.movedObjects());
+            Assert.assertEquals(1L, report.failedMoves());
+            Assert.assertEquals(beforeAddress, allocator.objectMeta(handle, false).address());
+            Assert.assertEquals(0L, allocator.stats().defragMovedBytes());
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(7, view.getByte(0));
+            }
         }
     }
 

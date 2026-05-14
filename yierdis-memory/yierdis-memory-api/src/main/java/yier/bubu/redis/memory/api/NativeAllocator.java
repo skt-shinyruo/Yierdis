@@ -17,6 +17,8 @@ public interface NativeAllocator extends AutoCloseable {
 
     NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes);
 
+    NativeDefragReport defragCycle(NativeDefragOptions options);
+
     NativeAllocatorStats stats();
 
     @Override

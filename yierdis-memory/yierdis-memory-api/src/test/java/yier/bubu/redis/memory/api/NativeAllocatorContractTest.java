@@ -59,6 +59,35 @@ public class NativeAllocatorContractTest {
     }
 
     @Test
+    public void defragCycleRecordsExposeBudgetsAndCounters() {
+        NativeDefragOptions options = new NativeDefragOptions(64, 3, 1_000);
+        Assert.assertEquals(64L, options.maxMoveBytes());
+        Assert.assertEquals(3L, options.maxObjects());
+        Assert.assertEquals(1_000L, options.timeBudgetNanos());
+
+        NativeDefragReport report = new NativeDefragReport(
+                4,
+                2,
+                48,
+                1,
+                1,
+                1,
+                true,
+                false,
+                true
+        );
+        Assert.assertEquals(4L, report.scannedObjects());
+        Assert.assertEquals(2L, report.movedObjects());
+        Assert.assertEquals(48L, report.movedBytes());
+        Assert.assertEquals(1L, report.skippedPinnedObjects());
+        Assert.assertEquals(1L, report.skippedBudgetObjects());
+        Assert.assertEquals(1L, report.failedMoves());
+        Assert.assertTrue(report.stoppedByByteBudget());
+        Assert.assertFalse(report.stoppedByObjectBudget());
+        Assert.assertTrue(report.stoppedByTimeBudget());
+    }
+
+    @Test
     public void epochKindsCoverAllocatorReadSafetyScopes() {
         Assert.assertEquals(NativeEpochKind.COMMAND, NativeEpochKind.valueOf("COMMAND"));
         Assert.assertEquals(NativeEpochKind.SCAN, NativeEpochKind.valueOf("SCAN"));
