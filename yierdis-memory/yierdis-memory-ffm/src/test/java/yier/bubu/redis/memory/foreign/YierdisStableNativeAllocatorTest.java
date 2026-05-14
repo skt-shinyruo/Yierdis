@@ -320,7 +320,8 @@ public class YierdisStableNativeAllocatorTest {
         TestOffHeapAllocator payload = new TestOffHeapAllocator();
         try (YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(payload, 1)) {
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
-            payload.buffer(0).throwOnClose = true;
+            TestOffHeapBuf buffer = payload.buffer(0);
+            buffer.throwOnClose = true;
 
             try {
                 allocator.free(handle);
@@ -332,6 +333,7 @@ public class YierdisStableNativeAllocatorTest {
             NativeAllocatorStats stats = allocator.stats();
             Assert.assertEquals(0L, stats.logicalUsedBytes());
             Assert.assertEquals(0L, stats.liveObjects());
+            Assert.assertEquals(4L, stats.reservedBytes());
 
             try {
                 allocator.resolve(handle, NativeAccessMode.READ_ONLY);
@@ -353,6 +355,42 @@ public class YierdisStableNativeAllocatorTest {
             } catch (NativeMemoryException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
             }
+
+            buffer.throwOnClose = false;
+            allocator.close();
+            Assert.assertEquals(0L, payload.usedBytes());
+        }
+    }
+
+    @Test
+    public void closeFailureKeepsBufferForRetry() {
+        TestOffHeapAllocator payload = new TestOffHeapAllocator();
+        YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(payload, 1);
+        NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+        TestOffHeapBuf buffer = payload.buffer(0);
+        buffer.throwOnClose = true;
+
+        try {
+            allocator.close();
+            Assert.fail("expected close failure");
+        } catch (IllegalStateException expected) {
+            Assert.assertTrue(expected.getMessage().contains("close failed"));
+        }
+
+        NativeAllocatorStats stats = allocator.stats();
+        Assert.assertEquals(0L, stats.logicalUsedBytes());
+        Assert.assertEquals(0L, stats.liveObjects());
+        Assert.assertEquals(4L, stats.reservedBytes());
+
+        buffer.throwOnClose = false;
+        allocator.close();
+        Assert.assertEquals(0L, payload.usedBytes());
+
+        try {
+            allocator.resolve(handle, NativeAccessMode.READ_ONLY);
+            Assert.fail("expected allocator closed");
+        } catch (IllegalStateException expected) {
+            Assert.assertTrue(expected.getMessage().contains("closed"));
         }
     }
 

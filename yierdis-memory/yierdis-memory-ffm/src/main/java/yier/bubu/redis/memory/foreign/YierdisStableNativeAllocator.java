@@ -24,6 +24,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     private final ArrayDeque<Integer> freeSlots = new ArrayDeque<>();
 
     private boolean closed;
+    private boolean payloadClosed;
     private long logicalUsedBytes;
     private long liveObjects;
     private long staleHandleDetections;
@@ -156,7 +157,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
     @Override
     public synchronized void close() {
-        if (closed) {
+        if (closed && payloadClosed && !hasPendingBuffers()) {
             return;
         }
         closed = true;
@@ -164,31 +165,43 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         RuntimeException failure = null;
         for (int i = 1; i < slots.length; i++) {
             Slot slot = slots[i];
-            if (slot.live && slot.buffer != null) {
-                try {
-                    slot.buffer.close();
-                } catch (RuntimeException e) {
-                    if (failure == null) {
-                        failure = e;
-                    } else {
-                        failure.addSuppressed(e);
-                    }
-                } finally {
-                    logicalUsedBytes -= slot.size;
+            if (slot.buffer != null) {
+                boolean wasLive = slot.live;
+                int size = slot.size;
+                RuntimeException closeFailure = closeBuffer(slot);
+                if (wasLive) {
+                    logicalUsedBytes -= size;
                     liveObjects--;
-                    slot.clear();
+                    if (closeFailure == null) {
+                        slot.clear();
+                    } else {
+                        slot.markFreed();
+                        slot.retired = true;
+                    }
                     advanceOrRetire(slot);
+                } else if (closeFailure == null) {
+                    slot.clear();
+                }
+                if (closeFailure != null) {
+                    if (failure == null) {
+                        failure = closeFailure;
+                    } else {
+                        failure.addSuppressed(closeFailure);
+                    }
                 }
             }
         }
 
-        try {
-            payloadAllocator.close();
-        } catch (RuntimeException e) {
-            if (failure == null) {
-                failure = e;
-            } else {
-                failure.addSuppressed(e);
+        if (!payloadClosed) {
+            try {
+                payloadAllocator.close();
+                payloadClosed = true;
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
             }
         }
 
@@ -225,22 +238,29 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     }
 
     private void releaseSlot(Slot slot) {
-        OffHeapBuf buffer = slot.buffer;
         int size = slot.size;
         logicalUsedBytes -= size;
         liveObjects--;
-        slot.clear();
+        slot.markFreed();
         boolean reusable = advanceOrRetire(slot);
-        boolean closedBuffer = false;
+        RuntimeException closeFailure = closeBuffer(slot);
+        if (closeFailure == null && reusable) {
+            freeSlots.addLast(slot.slotId);
+            return;
+        }
+        if (closeFailure != null) {
+            slot.retired = true;
+            throw closeFailure;
+        }
+    }
+
+    private static RuntimeException closeBuffer(Slot slot) {
         try {
-            buffer.close();
-            closedBuffer = true;
-        } finally {
-            if (closedBuffer && reusable) {
-                freeSlots.addLast(slot.slotId);
-            } else if (!closedBuffer) {
-                slot.retired = true;
-            }
+            slot.buffer.close();
+            slot.buffer = null;
+            return null;
+        } catch (RuntimeException e) {
+            return e;
         }
     }
 
@@ -290,6 +310,15 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
     }
 
+    private boolean hasPendingBuffers() {
+        for (int i = 1; i < slots.length; i++) {
+            if (slots[i].buffer != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static final class Slot {
         private final int slotId;
         private int generation = INITIAL_GENERATION;
@@ -322,6 +351,15 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         private void resetAfterFailedAllocation() {
             this.kind = null;
             this.buffer = null;
+            this.size = 0;
+            this.capacity = 0;
+            this.pinCount = 0;
+            this.live = false;
+            this.quarantined = false;
+        }
+
+        private void markFreed() {
+            this.kind = null;
             this.size = 0;
             this.capacity = 0;
             this.pinCount = 0;
