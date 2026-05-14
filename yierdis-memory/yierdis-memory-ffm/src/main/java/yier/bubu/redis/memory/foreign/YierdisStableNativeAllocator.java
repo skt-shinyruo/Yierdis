@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import yier.bubu.redis.memory.api.NativeAccessMode;
+import yier.bubu.redis.memory.api.NativeAllocationLatencyHistogram;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
@@ -15,6 +16,7 @@ import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeMemoryException;
+import yier.bubu.redis.memory.api.NativeObjectKindCounts;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
@@ -39,6 +41,16 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     private long reallocMovedCount;
     private long defragMovedBytes;
     private long defragSkippedPinnedObjects;
+    private long doubleFreeDetections;
+    private long defragReclaimedPages;
+    private long allocationCount;
+    private long allocationTotalNanos;
+    private long allocationMaxNanos;
+    private long allocationUnder1Micros;
+    private long allocationUnder10Micros;
+    private long allocationUnder100Micros;
+    private long allocationUnder1Millis;
+    private long allocationAtLeast1Millis;
 
     public YierdisStableNativeAllocator(YierdisFfmMemoryRuntime runtime, int maxSlots) {
         this(runtime, maxSlots, (handle, sourceMeta, target) -> {
@@ -64,6 +76,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             throw new IllegalArgumentException("size must be > 0");
         }
 
+        long startedNanos = System.nanoTime();
         YierdisNativeBlock block = pageAllocator.allocate(size);
         boolean allocated = false;
         try {
@@ -84,6 +97,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             allocated = true;
             return handle;
         } finally {
+            recordAllocationLatency(System.nanoTime() - startedNanos);
             if (!allocated) {
                 block.close();
             }
@@ -150,7 +164,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     @Override
     public synchronized void free(NativeHandle handle) {
         ensureOpen();
-        YierdisNativeObjectMeta meta = requireLiveMeta(handle);
+        YierdisNativeObjectMeta meta = requireLiveMetaForFree(handle);
         Allocation allocation = allocationFor(handle);
         long freeEpoch = epochManager.nextEpoch();
         boolean delayRelease = meta.pinCount() > 0 || !epochManager.canReclaim(freeEpoch);
@@ -299,7 +313,17 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                 reallocInPlaceCount,
                 reallocMovedCount,
                 defragMovedBytes,
-                defragSkippedPinnedObjects
+                defragSkippedPinnedObjects,
+                Math.max(0L, pageStats.freeBytes() - retainedMovedBlockBytes()),
+                pageStats.smallFreeBytes(),
+                pageStats.mediumFreeBytes(),
+                pageStats.largeFreeBytes(),
+                pageStats.freePages(),
+                quarantineBytes(),
+                doubleFreeDetections,
+                defragReclaimedPages,
+                objectKindCounts(),
+                allocationLatencyHistogram()
         );
     }
 
@@ -349,6 +373,15 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         return trackStale(() -> objectTable.resolve(handle));
     }
 
+    private YierdisNativeObjectMeta requireLiveMetaForFree(NativeHandle handle) {
+        try {
+            return requireLiveMeta(handle);
+        } catch (StaleNativeHandleException e) {
+            doubleFreeDetections++;
+            throw e;
+        }
+    }
+
     private NativeDefragResult moveLiveObject(NativeHandle handle) {
         Allocation allocation = allocationFor(handle);
         YierdisNativeObjectMeta sourceMeta = objectTable.beginMove(handle);
@@ -371,7 +404,9 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             published = true;
             allocation.current = target;
             target = null;
+            long retiredBytes = previous.capacity();
             reserveMovedBlock(previous, targetCapacity, epochManager.nextEpoch());
+            defragReclaimedPages += retiredBytes / YierdisNativePageAllocator.PAGE_BYTES;
             defragMovedBytes += sourceMeta.size();
             return NativeDefragResult.moved(sourceMeta.size());
         } catch (RuntimeException e) {
@@ -510,6 +545,110 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             }
         }
         return count;
+    }
+
+    private long quarantineBytes() {
+        long bytes = retainedMovedBlockBytes();
+        for (Allocation allocation : allocations.values()) {
+            if (allocation.quarantined) {
+                bytes += allocation.current.capacity();
+            }
+        }
+        return bytes;
+    }
+
+    private long retainedMovedBlockBytes() {
+        long bytes = 0L;
+        for (RetainedBlock retained : retainedMovedBlocks) {
+            bytes += retained.block.capacity();
+        }
+        return bytes;
+    }
+
+    private NativeObjectKindCounts objectKindCounts() {
+        long generic = 0;
+        long stringBytes = 0;
+        long entryRecords = 0;
+        long keyBytes = 0;
+        long listNodes = 0;
+        long hashNodes = 0;
+        long setNodes = 0;
+        long zsetNodes = 0;
+        long indexNodes = 0;
+        long metadataRecords = 0;
+        for (Allocation allocation : allocations.values()) {
+            if (allocation.lastHandle == null || allocation.quarantined) {
+                continue;
+            }
+            NativeObjectKind kind = kindFor(allocation.lastHandle);
+            if (kind == null) {
+                continue;
+            }
+            switch (kind) {
+                case GENERIC -> generic++;
+                case STRING_BYTES -> stringBytes++;
+                case ENTRY_RECORD -> entryRecords++;
+                case KEY_BYTES -> keyBytes++;
+                case LIST_NODE -> listNodes++;
+                case HASH_NODE -> hashNodes++;
+                case SET_NODE -> setNodes++;
+                case ZSET_NODE -> zsetNodes++;
+                case INDEX_NODE -> indexNodes++;
+                case METADATA_RECORD -> metadataRecords++;
+            }
+        }
+        return new NativeObjectKindCounts(
+                generic,
+                stringBytes,
+                entryRecords,
+                keyBytes,
+                listNodes,
+                hashNodes,
+                setNodes,
+                zsetNodes,
+                indexNodes,
+                metadataRecords
+        );
+    }
+
+    private NativeAllocationLatencyHistogram allocationLatencyHistogram() {
+        return new NativeAllocationLatencyHistogram(
+                allocationCount,
+                allocationTotalNanos,
+                allocationMaxNanos,
+                allocationUnder1Micros,
+                allocationUnder10Micros,
+                allocationUnder100Micros,
+                allocationUnder1Millis,
+                allocationAtLeast1Millis
+        );
+    }
+
+    private void recordAllocationLatency(long nanos) {
+        long safeNanos = Math.max(0L, nanos);
+        allocationCount++;
+        allocationTotalNanos += safeNanos;
+        allocationMaxNanos = Math.max(allocationMaxNanos, safeNanos);
+        if (safeNanos < 1_000L) {
+            allocationUnder1Micros++;
+        } else if (safeNanos < 10_000L) {
+            allocationUnder10Micros++;
+        } else if (safeNanos < 100_000L) {
+            allocationUnder100Micros++;
+        } else if (safeNanos < 1_000_000L) {
+            allocationUnder1Millis++;
+        } else {
+            allocationAtLeast1Millis++;
+        }
+    }
+
+    private static NativeObjectKind kindFor(NativeHandle handle) {
+        for (NativeObjectKind kind : NativeObjectKind.values()) {
+            if (kind.domain() == handle.domain() && kind.code() == handle.kindCode()) {
+                return kind;
+            }
+        }
+        return null;
     }
 
     private NativeHandle handleForSlot(long slotId) {

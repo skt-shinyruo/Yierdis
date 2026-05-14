@@ -44,6 +44,73 @@ public class NativeAllocatorContractTest {
     }
 
     @Test
+    public void statsRecordExposesProductionAllocatorCounters() {
+        NativeObjectKindCounts counts = new NativeObjectKindCounts(
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10
+        );
+        NativeAllocationLatencyHistogram histogram = new NativeAllocationLatencyHistogram(
+                20,
+                10_000,
+                2_000,
+                11,
+                4,
+                3,
+                2,
+                0
+        );
+        NativeAllocatorStats stats = new NativeAllocatorStats(
+                10,
+                64,
+                128,
+                64,
+                54,
+                2,
+                3,
+                4,
+                2,
+                1,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                counts,
+                histogram
+        );
+
+        Assert.assertEquals(9L, stats.externalFragmentationBytes());
+        Assert.assertEquals(10L, stats.smallFreeBytes());
+        Assert.assertEquals(11L, stats.mediumFreeBytes());
+        Assert.assertEquals(12L, stats.largeFreeBytes());
+        Assert.assertEquals(13L, stats.freePages());
+        Assert.assertEquals(14L, stats.quarantineBytes());
+        Assert.assertEquals(15L, stats.doubleFreeDetections());
+        Assert.assertEquals(16L, stats.defragReclaimedPages());
+        Assert.assertEquals(2L, stats.objectCount(NativeObjectKind.STRING_BYTES));
+        Assert.assertEquals(3L, stats.objectCount(NativeObjectKind.ENTRY_RECORD));
+        Assert.assertEquals(20L, stats.allocationLatencyHistogram().allocationCount());
+        Assert.assertEquals(10_000L, stats.allocationLatencyHistogram().totalNanos());
+    }
+
+    @Test
     public void defragResultFactoriesExposeMovementOutcomes() {
         NativeDefragResult moved = NativeDefragResult.moved(12);
         Assert.assertTrue(moved.moved());

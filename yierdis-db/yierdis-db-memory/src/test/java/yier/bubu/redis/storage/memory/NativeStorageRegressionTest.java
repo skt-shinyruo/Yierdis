@@ -5,6 +5,8 @@ import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ValueType;
@@ -156,6 +158,64 @@ public class NativeStorageRegressionTest {
             Assert.assertEquals(0L, db.usedBytesForMaxmemory());
         } finally {
             db.shutdown();
+        }
+    }
+
+    @Test
+    public void nativeDbChurnKeepsReporterAndRuntimeAccountingConsistent() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-db-churn")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+                    runtime,
+                    2_000_000L,
+                    MaxmemoryPolicy.NOEVICTION,
+                    5,
+                    5,
+                    5
+            );
+            db.bindToCurrentThread();
+            try {
+                List<byte[]> keys = new ArrayList<>();
+                for (int i = 0; i < 64; i++) {
+                    byte[] key = b("churn-" + i);
+                    keys.add(key);
+                    Assert.assertTrue(db.writes().strings().setString(
+                            key,
+                            b("value-" + i),
+                            SetMode.NORMAL,
+                            null
+                    ).value());
+                    if ((i & 1) == 0) {
+                        Assert.assertEquals(Long.valueOf(("value-" + i + "-tail").length()),
+                                db.writes().strings().append(key, sliceOf(b("-tail"))).value());
+                    }
+                    if (i % 5 == 0) {
+                        Assert.assertTrue(db.writes().ttl().pexpire(view(key), 60_000L).value());
+                    }
+                }
+
+                YierdisMemoryStats populated = db.memory().memoryStats();
+                Assert.assertEquals(db.size(), populated.keyCount());
+                Assert.assertEquals(db.usedBytesForMaxmemory(), populated.usedBytesForMaxmemory());
+                Assert.assertTrue(populated.offHeapUsedBytes() > 0L);
+
+                List<byte[]> evens = new ArrayList<>();
+                for (int i = 0; i < keys.size(); i += 2) {
+                    evens.add(keys.get(i));
+                }
+                Assert.assertEquals(Long.valueOf(evens.size()), db.writes().keyspace().del(evens).value());
+
+                YierdisMemoryStats afterDelete = db.memory().memoryStats();
+                Assert.assertEquals(db.size(), afterDelete.keyCount());
+                Assert.assertEquals(db.usedBytesForMaxmemory(), afterDelete.usedBytesForMaxmemory());
+                Assert.assertTrue(afterDelete.usedBytesForMaxmemory() <= populated.usedBytesForMaxmemory());
+
+                Assert.assertEquals(Long.valueOf(keys.size() - evens.size()), db.writes().keyspace().del(keys).value());
+                Assert.assertEquals(0, db.size());
+                Assert.assertEquals(0L, db.memory().memoryStats().usedBytesForMaxmemory());
+            } finally {
+                db.shutdown();
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 

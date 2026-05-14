@@ -33,6 +33,18 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
     }
 
     public synchronized YierdisNativePageAllocatorStats stats() {
+        long smallFreeBytes = 0;
+        long freePages = 0;
+        for (int i = 0; i < smallPages.size(); i++) {
+            SmallPage page = smallPages.get(i);
+            if (page.closed) {
+                continue;
+            }
+            smallFreeBytes += (long) page.freeOffsets.size() * page.sizeClass.bytes();
+            if (page.liveBlocks == 0) {
+                freePages++;
+            }
+        }
         long mediumPages = 0;
         long largePages = 0;
         for (int i = 0; i < spans.size(); i++) {
@@ -52,7 +64,11 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
                 committedBytes - usedBytes,
                 smallPages.size(),
                 mediumPages,
-                largePages
+                largePages,
+                smallFreeBytes,
+                0,
+                0,
+                freePages
         );
     }
 
