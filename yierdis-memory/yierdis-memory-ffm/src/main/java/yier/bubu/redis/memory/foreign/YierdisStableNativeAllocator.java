@@ -223,9 +223,11 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     }
 
     private void releaseSlot(Slot slot) {
-        logicalUsedBytes -= slot.size;
+        OffHeapBuf buffer = slot.buffer;
+        int size = slot.size;
+        buffer.close();
+        logicalUsedBytes -= size;
         liveObjects--;
-        slot.buffer.close();
         slot.clear();
         slot.generation = nextGeneration(slot.generation);
         freeSlots.addLast(slot.slotId);
@@ -328,19 +330,19 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
         @Override
         public int size() {
-            ensureViewOpen();
+            ensureLiveSlot();
             return slot.size;
         }
 
         @Override
         public int capacity() {
-            ensureViewOpen();
+            ensureLiveSlot();
             return slot.capacity;
         }
 
         @Override
         public byte getByte(int index) {
-            ensureViewOpen();
+            ensureLiveSlot();
             checkRange(index, 1);
             return slot.buffer.getByte(index);
         }
@@ -354,7 +356,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
         @Override
         public void getBytes(int index, byte[] dst, int dstOff, int len) {
-            ensureViewOpen();
+            ensureLiveSlot();
             checkRange(index, len);
             slot.buffer.getBytes(index, dst, dstOff, len);
         }
@@ -372,7 +374,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
 
         private void ensureWritable() {
-            ensureViewOpen();
+            ensureLiveSlot();
             if (mode != NativeAccessMode.READ_WRITE) {
                 throw new NativeMemoryException("resolved object is read-only");
             }
@@ -382,6 +384,11 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             if (closedView) {
                 throw new IllegalStateException("native object view is closed");
             }
+        }
+
+        private void ensureLiveSlot() {
+            ensureViewOpen();
+            requireLiveSlot(handle);
         }
 
         private void checkRange(int index, int len) {
