@@ -21,6 +21,7 @@ public class NativeHandleTest {
         );
 
         Assert.assertFalse(handle.isNull());
+        Assert.assertEquals(0x1100_075b_cd15_04d3L, handle.raw());
         Assert.assertEquals(NativeHandleDomain.STORAGE_OBJECT, handle.domain());
         Assert.assertEquals(NativeObjectKind.STRING_BYTES.code(), handle.kindCode());
         Assert.assertEquals(123456789L, handle.slotId());
@@ -36,6 +37,11 @@ public class NativeHandleTest {
         assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.STRING_BYTES, 1, 4096, 0));
         assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.STRING_BYTES, 1, 1, -1));
         assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.STRING_BYTES, 1, 1, 16));
+    }
+
+    @Test
+    public void rejectsMismatchedDomainAndKind() {
+        assertIllegal(() -> NativeHandle.of(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.ENTRY_RECORD, 1, 1, 0));
     }
 
     @Test
