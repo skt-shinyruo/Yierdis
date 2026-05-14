@@ -36,6 +36,9 @@ public record NativeHandle(long raw) {
         if (domain == NativeHandleDomain.RESERVED) {
             throw new IllegalArgumentException("domain must not be reserved");
         }
+        if (kind.domain() != domain) {
+            throw new IllegalArgumentException("kind domain " + kind.domain() + " does not match handle domain " + domain);
+        }
         if (slotId < 0 || slotId > SLOT_MASK) {
             throw new IllegalArgumentException("slotId out of range: " + slotId);
         }
