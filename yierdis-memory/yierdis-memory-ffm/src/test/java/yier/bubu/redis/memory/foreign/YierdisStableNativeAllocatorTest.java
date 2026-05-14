@@ -149,6 +149,25 @@ public class YierdisStableNativeAllocatorTest {
     }
 
     @Test
+    public void rejectsOverflowingViewRanges() {
+        try (TestOffHeapAllocator payload = new TestOffHeapAllocator();
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(payload, 1)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                try {
+                    view.getBytes(Integer.MAX_VALUE, new byte[1], 0, 1);
+                    Assert.fail("expected range rejection");
+                } catch (IndexOutOfBoundsException expected) {
+                    Assert.assertNotNull(expected);
+                }
+            }
+
+            Assert.assertEquals(0, payload.buffer(0).getBytesCalls);
+        }
+    }
+
+    @Test
     public void reallocPreservesHandleAndPrefixWhenMoved() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
@@ -475,6 +494,7 @@ public class YierdisStableNativeAllocatorTest {
     private static final class TestOffHeapBuf implements OffHeapBuf {
         private final TestOffHeapAllocator owner;
         private final byte[] bytes;
+        private int getBytesCalls;
         private boolean closed;
         private boolean throwOnClose;
 
@@ -500,6 +520,7 @@ public class YierdisStableNativeAllocatorTest {
 
         @Override
         public void getBytes(int index, byte[] dst, int dstOff, int len) {
+            getBytesCalls++;
             System.arraycopy(bytes, index, dst, dstOff, len);
         }
 
