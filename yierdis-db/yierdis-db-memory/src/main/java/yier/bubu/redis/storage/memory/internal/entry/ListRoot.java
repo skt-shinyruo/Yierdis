@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
@@ -42,7 +44,7 @@ public final class ListRoot implements TypeRoot {
 
     public synchronized ValueHandle create() {
         ensureOpen();
-        ValueHandle handle = new ValueHandle(nextHandle++);
+        ValueHandle handle = newHandle();
         lists.put(handle.raw(), new ListValue(runtime));
         return handle;
     }
@@ -177,5 +179,11 @@ public final class ListRoot implements TypeRoot {
         if (closed) {
             throw new IllegalStateException("list root is closed");
         }
+    }
+
+    private ValueHandle newHandle() {
+        NativeObjectKind kind = NativeObjectKind.LIST_NODE;
+        NativeHandle handle = NativeHandle.of(kind.domain(), kind, nextHandle++, 1, 0);
+        return ValueHandle.fromNativeHandle(handle);
     }
 }

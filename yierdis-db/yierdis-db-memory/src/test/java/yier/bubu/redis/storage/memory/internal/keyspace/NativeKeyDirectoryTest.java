@@ -2,6 +2,8 @@ package yier.bubu.redis.storage.memory.internal.keyspace;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
@@ -108,8 +110,8 @@ public class NativeKeyDirectoryTest {
                 Assert.assertNull(directory.randomKeyHandle());
                 Assert.assertEquals(0L, directory.scan(ScanCursorV2.start(), 8, (key, handle) -> true).value());
 
-                directory.compute(bytes("one"), (key, old) -> new EntryHandle(1L));
-                directory.compute(bytes("two"), (key, old) -> new EntryHandle(2L));
+                directory.compute(bytes("one"), (key, old) -> entryHandle(1L));
+                directory.compute(bytes("two"), (key, old) -> entryHandle(2L));
 
                 int[] visited = {0};
                 ScanCursorV2 cursor = directory.scan(ScanCursorV2.start(), 8, (key, handle) -> {
@@ -130,7 +132,7 @@ public class NativeKeyDirectoryTest {
     private static EntryRecord entryRecord(long keyHandle) {
         return new EntryRecord(
                 keyHandle,
-                new ValueHandle(0L),
+                ValueHandle.NULL,
                 1,
                 ValueType.STRING,
                 ValueEncoding.STRING_RAW,
@@ -139,6 +141,11 @@ public class NativeKeyDirectoryTest {
                 0L,
                 0L
         );
+    }
+
+    private static EntryHandle entryHandle(long slotId) {
+        NativeObjectKind kind = NativeObjectKind.ENTRY_RECORD;
+        return EntryHandle.fromNativeHandle(NativeHandle.of(kind.domain(), kind, slotId, 1, 0));
     }
 
     private static byte[] bytes(String value) {

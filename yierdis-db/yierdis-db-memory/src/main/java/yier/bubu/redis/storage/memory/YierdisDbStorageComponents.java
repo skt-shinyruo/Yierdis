@@ -17,6 +17,8 @@ import yier.bubu.redis.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 
 public final class YierdisDbStorageComponents {
+    private static final int ENTRY_TABLE_NATIVE_SLOT_CAPACITY = 64 * 1024;
+
     final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
     final YierdisDbOwnedResources resources;
@@ -92,7 +94,11 @@ public final class YierdisDbStorageComponents {
                 resolvedOwnsRuntime,
                 resolvedOwnsAllocator
         );
-        EntryTable entries = new EntryTable(resolvedRuntime, new YierdisFfmSlabAllocator(resolvedRuntime), 64);
+        EntryTable entries = new EntryTable(
+                resolvedRuntime,
+                new YierdisFfmSlabAllocator(resolvedRuntime),
+                ENTRY_TABLE_NATIVE_SLOT_CAPACITY
+        );
         YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(resolvedRuntime, "ffm-key");
         NativeKeyDirectory keyDirectory = new NativeKeyDirectory(blobStore);
         StringRoot stringRoot = new StringRoot(resolvedAllocator);

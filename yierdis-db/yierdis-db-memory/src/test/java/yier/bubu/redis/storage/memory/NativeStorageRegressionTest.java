@@ -86,7 +86,7 @@ public class NativeStorageRegressionTest {
             byte[] key = b("native-only");
             EntryRecord record = new EntryRecord(
                     1L,
-                    new ValueHandle(0L),
+                    ValueHandle.NULL,
                     31,
                     ValueType.STRING,
                     ValueEncoding.STRING_RAW,

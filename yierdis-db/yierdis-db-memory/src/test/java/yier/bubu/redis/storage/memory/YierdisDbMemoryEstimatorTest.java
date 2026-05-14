@@ -10,6 +10,8 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
@@ -80,7 +82,7 @@ public class YierdisDbMemoryEstimatorTest {
     private static EntryRecord record(ValueEncoding encoding, long estimatedBytes) {
         return new EntryRecord(
                 1L,
-                new ValueHandle(1L),
+                valueHandle(1L),
                 1,
                 ValueType.STRING,
                 encoding,
@@ -89,5 +91,10 @@ public class YierdisDbMemoryEstimatorTest {
                 estimatedBytes,
                 0L
         );
+    }
+
+    private static ValueHandle valueHandle(long slotId) {
+        NativeObjectKind kind = NativeObjectKind.STRING_BYTES;
+        return ValueHandle.fromNativeHandle(NativeHandle.of(kind.domain(), kind, slotId, 1, 0));
     }
 }

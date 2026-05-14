@@ -10,6 +10,8 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -99,7 +101,7 @@ public class YierdisDbConstructionTest {
         db.bindToCurrentThread();
         EntryHandle handle = db.keyLifecycle().entryTable().allocate(new EntryRecord(
                 1L,
-                new ValueHandle(2L),
+                valueHandle(2L),
                 3,
                 ValueType.STRING,
                 ValueEncoding.STRING_RAW,
@@ -231,6 +233,11 @@ public class YierdisDbConstructionTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static ValueHandle valueHandle(long slotId) {
+        NativeObjectKind kind = NativeObjectKind.STRING_BYTES;
+        return ValueHandle.fromNativeHandle(NativeHandle.of(kind.domain(), kind, slotId, 1, 0));
     }
 
     private static yier.bubu.redis.bytes.BytesView view(byte[] data) {
