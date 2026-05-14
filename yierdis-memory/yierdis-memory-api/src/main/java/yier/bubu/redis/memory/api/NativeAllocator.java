@@ -7,6 +7,10 @@ public interface NativeAllocator extends AutoCloseable {
 
     void free(NativeHandle handle);
 
+    void pin(NativeHandle handle);
+
+    void unpin(NativeHandle handle);
+
     NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode);
 
     NativeAllocatorStats stats();
