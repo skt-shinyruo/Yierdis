@@ -90,6 +90,10 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
 
         Slot slot = requireLiveSlot(handle);
+        if (slot.pinCount > 0) {
+            throw new NativeMemoryException("native object is pinned");
+        }
+
         int oldSize = slot.size;
         if (newSize <= slot.capacity) {
             slot.size = newSize;
