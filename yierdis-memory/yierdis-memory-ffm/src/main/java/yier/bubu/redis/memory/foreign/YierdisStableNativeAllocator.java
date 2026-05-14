@@ -143,7 +143,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     @Override
     public synchronized void unpin(NativeHandle handle) {
         ensureOpen();
-        Slot slot = requireLiveSlot(handle);
+        Slot slot = requireLiveSlot(handle, true);
         if (slot.pinCount <= 0) {
             throw new NativeMemoryException("native object is not pinned");
         }
@@ -231,6 +231,10 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     }
 
     private Slot requireLiveSlot(NativeHandle handle) {
+        return requireLiveSlot(handle, false);
+    }
+
+    private Slot requireLiveSlot(NativeHandle handle, boolean allowQuarantined) {
         if (handle == null) {
             return stale("stale native handle: null");
         }
@@ -247,6 +251,10 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
         if (slot.kind.code() != handle.kindCode() || slot.kind.domain() != handle.domain()) {
             throw new NativeMemoryException("native handle kind/domain mismatch: " + handle.raw());
+        }
+
+        if (slot.quarantined && !allowQuarantined) {
+            return stale("stale native handle: quarantined slot=" + slotId);
         }
 
         return slot;

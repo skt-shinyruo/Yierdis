@@ -109,6 +109,40 @@ public class YierdisStableNativeAllocatorTest {
     }
 
     @Test
+    public void quarantinedObjectRejectsResolveAndReallocUntilUnpinned() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+            allocator.pin(handle);
+            allocator.free(handle);
+
+            try {
+                allocator.resolve(handle, NativeAccessMode.READ_ONLY);
+                Assert.fail("expected quarantined resolve rejection");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("quarantined"));
+            }
+
+            try {
+                allocator.realloc(handle, 8, NativeReallocPolicy.PRESERVE_PREFIX);
+                Assert.fail("expected quarantined realloc rejection");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("quarantined"));
+            }
+
+            allocator.unpin(handle);
+
+            try {
+                allocator.resolve(handle, NativeAccessMode.READ_ONLY);
+                Assert.fail("expected stale handle after quarantine release");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
+            }
+        }
+    }
+
+    @Test
     public void multiplePinsRequireMatchingUnpinsBeforeQuarantineRelease() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
