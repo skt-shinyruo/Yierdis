@@ -14,6 +14,8 @@ public record NativeAllocatorStats(
         long quarantinedObjects,
         long staleHandleDetections,
         long reallocInPlaceCount,
-        long reallocMovedCount
+        long reallocMovedCount,
+        long defragMovedBytes,
+        long defragSkippedPinnedObjects
 ) {
 }

@@ -20,7 +20,9 @@ public class NativeAllocatorContractTest {
                 3,
                 4,
                 5,
-                6
+                6,
+                7,
+                8
         );
 
         Assert.assertEquals(10L, stats.logicalUsedBytes());
@@ -37,6 +39,23 @@ public class NativeAllocatorContractTest {
         Assert.assertEquals(4L, stats.staleHandleDetections());
         Assert.assertEquals(5L, stats.reallocInPlaceCount());
         Assert.assertEquals(6L, stats.reallocMovedCount());
+        Assert.assertEquals(7L, stats.defragMovedBytes());
+        Assert.assertEquals(8L, stats.defragSkippedPinnedObjects());
+    }
+
+    @Test
+    public void defragResultFactoriesExposeMovementOutcomes() {
+        NativeDefragResult moved = NativeDefragResult.moved(12);
+        Assert.assertTrue(moved.moved());
+        Assert.assertEquals(12L, moved.movedBytes());
+
+        NativeDefragResult pinned = NativeDefragResult.skippedPinnedObject();
+        Assert.assertFalse(pinned.moved());
+        Assert.assertTrue(pinned.skippedPinned());
+
+        NativeDefragResult budget = NativeDefragResult.skippedMoveBudget();
+        Assert.assertFalse(budget.moved());
+        Assert.assertTrue(budget.skippedBudget());
     }
 
     @Test

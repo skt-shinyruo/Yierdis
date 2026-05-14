@@ -13,6 +13,8 @@ public interface NativeAllocator extends AutoCloseable {
 
     NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode);
 
+    NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes);
+
     NativeAllocatorStats stats();
 
     @Override

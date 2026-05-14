@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeDefragResult;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
@@ -267,7 +268,7 @@ public class YierdisStableNativeAllocatorTest {
     }
 
     @Test
-    public void oldViewFailsAfterFreeAndSlotReuse() {
+    public void oldViewFailsAfterFreeAndSlotReuseAfterClose() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
 
@@ -276,6 +277,20 @@ public class YierdisStableNativeAllocatorTest {
             oldView.setByte(0, (byte) 11);
 
             allocator.free(first);
+            try {
+                allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+                Assert.fail("expected open resolved view to keep slot quarantined");
+            } catch (NativeMemoryException expected) {
+                Assert.assertTrue(expected.getMessage().contains("slot limit"));
+            }
+
+            try {
+                oldView.getByte(0);
+                Assert.fail("expected quarantined view");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("quarantined"));
+            }
+            oldView.close();
 
             NativeHandle second = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             Assert.assertNotEquals(first.generation(), second.generation());
@@ -285,16 +300,57 @@ public class YierdisStableNativeAllocatorTest {
 
             try {
                 oldView.getByte(0);
-                Assert.fail("expected stale view");
-            } catch (StaleNativeHandleException expected) {
-                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
-            } finally {
-                oldView.close();
+                Assert.fail("expected closed view");
+            } catch (IllegalStateException expected) {
+                Assert.assertTrue(expected.getMessage().contains("closed"));
             }
 
             try (NativeObjectView view = allocator.resolve(second, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(22, view.getByte(0));
             }
+        }
+    }
+
+    @Test
+    public void resolvedViewPinsObjectUntilClosed() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+            NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE);
+            view.setByte(0, (byte) 11);
+
+            Assert.assertEquals(1L, allocator.stats().pinnedObjects());
+            allocator.free(handle);
+
+            NativeAllocatorStats quarantined = allocator.stats();
+            Assert.assertEquals(1L, quarantined.pinnedObjects());
+            Assert.assertEquals(1L, quarantined.quarantinedObjects());
+            Assert.assertEquals(1L, quarantined.liveObjects());
+
+            try {
+                allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+                Assert.fail("expected resolved view to keep slot unavailable");
+            } catch (NativeMemoryException expected) {
+                Assert.assertTrue(expected.getMessage().contains("slot limit"));
+            }
+
+            try {
+                view.getByte(0);
+                Assert.fail("expected quarantined view to reject access");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("quarantined"));
+            }
+
+            view.close();
+
+            NativeAllocatorStats released = allocator.stats();
+            Assert.assertEquals(0L, released.pinnedObjects());
+            Assert.assertEquals(0L, released.quarantinedObjects());
+            Assert.assertEquals(0L, released.liveObjects());
+
+            NativeHandle reused = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+            Assert.assertNotEquals(handle.generation(), reused.generation());
         }
     }
 
@@ -439,6 +495,67 @@ public class YierdisStableNativeAllocatorTest {
                 Assert.assertEquals(3, view.getByte(2));
                 Assert.assertEquals(4, view.getByte(3));
             }
+        }
+    }
+
+    @Test
+    public void defragMovesUnpinnedObjectWithoutChangingHandle() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setByte(0, (byte) 1);
+                view.setByte(1, (byte) 2);
+                view.setByte(2, (byte) 3);
+            }
+            long beforeAddress = allocator.objectMeta(handle, false).address();
+
+            NativeDefragResult result = allocator.defragOne(handle, 24);
+
+            Assert.assertTrue(result.moved());
+            Assert.assertEquals(24L, result.movedBytes());
+            YierdisNativeObjectMeta after = allocator.objectMeta(handle, false);
+            Assert.assertEquals(handle.slotId(), after.slotId());
+            Assert.assertEquals(handle.generation(), after.generation());
+            Assert.assertEquals(24, after.size());
+            Assert.assertNotEquals(beforeAddress, after.address());
+
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(1, view.getByte(0));
+                Assert.assertEquals(2, view.getByte(1));
+                Assert.assertEquals(3, view.getByte(2));
+            }
+
+            NativeAllocatorStats stats = allocator.stats();
+            Assert.assertEquals(24L, stats.defragMovedBytes());
+            Assert.assertEquals(0L, stats.defragSkippedPinnedObjects());
+        }
+    }
+
+    @Test
+    public void defragSkipsPinnedAndOverBudgetObjects() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            long address = allocator.objectMeta(handle, false).address();
+
+            NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY);
+            try {
+                NativeDefragResult pinned = allocator.defragOne(handle, 24);
+                Assert.assertFalse(pinned.moved());
+                Assert.assertTrue(pinned.skippedPinned());
+                Assert.assertEquals(address, allocator.objectMeta(handle, false).address());
+                Assert.assertEquals(1L, allocator.stats().defragSkippedPinnedObjects());
+            } finally {
+                view.close();
+            }
+
+            NativeDefragResult budget = allocator.defragOne(handle, 23);
+            Assert.assertFalse(budget.moved());
+            Assert.assertTrue(budget.skippedBudget());
+            Assert.assertEquals(address, allocator.objectMeta(handle, false).address());
         }
     }
 
