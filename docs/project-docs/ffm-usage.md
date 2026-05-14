@@ -1004,13 +1004,14 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBlobStore.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBytesRef.java`
 
-### 堆外内存管理的三层模型
+### 堆外内存管理的四层模型
 
-从实现上看，Yierdis 的堆外内存不是“每个 value 一个 direct buffer”，也不是“进程里维护一个大 native heap”。它更像三层组合：
+从实现上看，Yierdis 的堆外内存不是“每个 value 一个 direct buffer”，也不是“进程里维护一个大 native heap”。它更像四层组合：
 
 1. FFM 原始内存层：`YierdisFfmMemoryRuntime` / `YierdisFfmRegion` / `YierdisFfmSpan` / `YierdisFfmAccess`
-2. allocator 层：`YierdisFfmSlabAllocator` / `YierdisFfmSlab` / `YierdisForeignOffHeapAllocator`
-3. DB 对象生命周期层：`NativeKeyDirectory` / `EntryTable` / `YierdisFfmBlobStore` / `YierdisFfmExpireIndex` / 各类型 `*Root`
+2. 连续 bytes allocator 层：`YierdisFfmSlabAllocator` / `YierdisFfmSlab` / `YierdisForeignOffHeapAllocator`
+3. stable native object allocator 层：`YierdisStableNativeAllocator` / `YierdisNativeObjectTable` / `YierdisNativePageAllocator`
+4. DB 对象生命周期层：`NativeKeyDirectory` / `EntryTable` / `YierdisFfmBlobStore` / `YierdisFfmExpireIndex` / 各类型 `*Root`
 
 #### 第一层：FFM region 是真实 native memory owner
 
@@ -1036,7 +1037,7 @@ region 的 `span(offset, length)` 返回的是切片 view；`close()` 会关闭�
 
 这层的核心约束是：谁分配 region，谁最终必须 close region。runtime 不会在正常关闭时主动帮你清理 live regions；如果还有 live region，它会直接报 leak。
 
-#### 第二层：slab allocator 管理连续 buffer
+#### 第二层：slab allocator 管理连续 bytes buffer
 
 `YierdisFfmSlabAllocator` 在 FFM region 上再做 slab allocation。
 
@@ -1059,18 +1060,42 @@ region 的 `span(offset, length)` 返回的是切片 view；`close()` 会关闭�
 
 `YierdisForeignOffHeapAllocator` 是对外暴露的 `OffHeapAllocator`。它进一步维护自己的 `usedBytes` 和 `maxBytes`，并在所有 live buffer 都释放后关闭 idle slab allocator，把空闲 slab region 释放掉。
 
-#### 第三层：DB 对象用 handle 和 refcount 管生命周期
+#### 第三层：stable allocator 管理可移动 native object
+
+`YierdisStableNativeAllocator` 是生产级 native object allocator。它不直接把物理地址暴露给 DB，而是返回 64-bit `NativeHandle`。
+
+`NativeHandle` 包含 domain、kind、slot id、generation 和 flags。allocator 用 slot id 查 `YierdisNativeObjectTable`，再从 object metadata 中得到当前物理 block。generation 用来防止释放后的旧 handle 命中复用后的新对象。
+
+底层 block 由 `YierdisNativePageAllocator` 管理：
+
+- 64 KiB page
+- 16..32768 bytes small size classes
+- 32768 bytes 以上按 medium / large span 分配
+
+这层还负责：
+
+- object table 状态机
+- stale handle / double-free / wrong-kind / wrong-domain 检测
+- resolve view 时 pin 对象，close view 时 unpin
+- epoch / quarantine，避免读者仍可见时释放 moved 或 freed block
+- `realloc` 的原地调整、可移动扩容和失败回滚
+- active defrag，通过更新 object table 的物理 block 移动对象
+- allocator metrics，包括 fragmentation、page counts、object kind counts、quarantine bytes 和 allocation latency
+
+完整语义见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
+
+#### 第四层：DB 对象用 handle 和 refcount 管生命周期
 
 DB 层不会把 Java 对象直接塞进 native memory，而是用 handle 串起来：
 
 - `KeyHandle` 表示 key identity
-- `EntryHandle` 指向 `EntryTable` 中的 entry slot
-- `ValueHandle` 指向某个 type root 中的 payload
+- `EntryHandle` 包装 `ENTRY_RECORD` 类型的 `NativeHandle`
+- `ValueHandle` 包装 string/list/hash/set/zset 等 value/root 相关 typed `NativeHandle` raw value；当前它是 type-root-owned identity，不保证都能直接由 stable allocator resolve
 - `YierdisFfmBytesRef` 表示一段 off-heap bytes
 
 `NativeKeyDirectory` 是 key -> `EntryHandle` 的权威目录。它的 table 数组仍在 heap，但 key bytes 存在 `YierdisFfmBlobStore` 中。插入新 key 时，directory 会调用 `blobStore.store(keyBytes)`；删除 key 时，会调用 `blobStore.release(keyRef)`。
 
-`EntryTable` 是 `EntryHandle` -> `EntryRecord`。当前生产组装里 entry slot 来自 `YierdisFfmSlabAllocator`，每条 record 逻辑大小是 56 bytes，字段包括：
+`EntryTable` 是 `EntryHandle` -> native `EntryRecord`。当前生产组装里 entry record 来自 `YierdisStableNativeAllocator.allocate(ENTRY_RECORD, 56)`，不是直接暴露 slab offset。每条 record 逻辑大小是 56 bytes，字段包括：
 
 - key handle identity
 - value handle
@@ -1098,7 +1123,7 @@ expire table 本身也部分 off-heap：
 写入时，命令通常先进入 `YierdisDbMutationExecutor`：
 
 1. `YierdisDbMemoryLedger.reserve(estimatedExtraBytes)` 做 maxmemory 预算检查
-2. 真正执行 mutation，期间可能分配 off-heap buffer、blob 或 entry slot
+2. 真正执行 mutation，期间可能分配 off-heap buffer、blob 或 native entry record
 3. 成功后 `commit(reservation, actualDeltaBytes)`
 4. 如果 maxmemory 或 off-heap hard cap 失败，rollback reservation
 
@@ -1112,7 +1137,7 @@ key 创建和替换由 `YierdisDbKeyLifecycle.computeWithHandle(...)` 收口：
 删除 key 时，释放链路是反向的：
 
 1. 从 `NativeKeyDirectory` 移除 key，并 release key blob
-2. 从 `EntryTable` release entry slot
+2. 从 `EntryTable` release native entry record
 3. 根据 `EntryRecord.type()` 调用对应 root 的 `release(valueHandle)`
 4. TTL 路径如果 retain 过同一份 key ref，也会在 remove / clear 时 release
 
@@ -1425,12 +1450,12 @@ adapter，但 key 的 canonical metadata 在 `EntryTable`，value identity 是
 
 例如：
 
-- `EntryTable` 的 entry slots 来自 slab allocator，但 `EntryHandle` 本身是 Java record
+- `EntryTable` 的 entry record 来自 stable native allocator，`EntryHandle` 是 `ENTRY_RECORD` native handle 的 Java record 包装
 - `NativeKeyDirectory` 的 key bytes 在 native blob store，table 数组仍在 heap
 - `YierdisFfmExpireIndex` 的 `states` / `hashes` / `expireAt` 在 native memory，但 `refs[]` 仍在 heap
 - `YierdisFfmZSet` 的 member bytes 在 native blob store，但 `ordered` 和 `Entry.score` 仍在 heap
-- `StringRoot` 管理 off-heap buffer，但 handle -> slot map 仍在 heap
-- `HashRoot` / `ListRoot` / `SetRoot` / `ZSetRoot` 的 handle table 仍在 heap，payload 通过各 value adapter 进入 FFM-backed 结构
+- `StringRoot` 管理 off-heap buffer，`ValueHandle` 使用 `STRING_BYTES` kind，但 handle -> slot map 仍在 heap；这里的 slot id 是 root-local identity，不是 object table slot
+- `HashRoot` / `ListRoot` / `SetRoot` / `ZSetRoot` 的 handle table 仍在 heap，`ValueHandle` 使用对应 type-root kind，payload 通过各 value adapter 进入 FFM-backed 结构；这些 `ValueHandle` 不能被随意拿去 stable allocator resolve
 - `YierdisFfmByteMap` 的 table 索引数组本身仍在 heap，只是 key bytes 放在 off-heap
 - `YierdisFfmListpack` 本身是 `ArrayList<YierdisFfmBytesRef>`，真正 off-heap 的是 entry bytes
 
@@ -1443,7 +1468,7 @@ adapter，但 key 的 canonical metadata 在 `EntryTable`，value identity 是
 
 - 关键字节数据大量 off-heap 化
 - 部分索引元数据 off-heap 化
-- key、entry metadata 和 value payload 都通过 64-bit handle 串起来
+- key、entry metadata 和 value payload 都通过 64-bit handle 串起来；entry metadata 已进入 stable allocator，部分 type-root payload table 仍保留 heap 控制结构
 - 但并不是“整个 DB 内部结构完全 native 化”
 
 ### 为什么这里可以放心使用 `Arena.ofConfined()`
@@ -1559,7 +1584,17 @@ usage；只是单 DB 的 `offHeapIncludedInMaxmemory` 在 global coordinator 存
 - `NativeKeyDirectoryTest`
   说明生产 key directory 的 key -> `EntryHandle` 路径、删除和 clear 行为
 - `EntryTableContractTest`
-  说明 `EntryRecord` slot 的 allocate/get/replace/release 行为
+  说明 native `EntryRecord` 的 allocate/get/replace/release 行为
+- `NativeHandleTest`
+  说明 `NativeHandle` 的 domain/kind/slot/generation/flags 位布局和校验
+- `NativeAllocatorContractTest`
+  说明 stable allocator contract 的 allocate/resolve/realloc/free/defrag 行为
+- `YierdisNativeObjectTableTest`
+  说明 object table slot lifecycle、generation、pin/quarantine 和 stale handle 防护
+- `YierdisNativePageAllocatorTest`
+  说明 64 KiB page、small size-class 和 medium/large span 行为
+- `YierdisStableNativeAllocatorTest`
+  说明 stable allocator 的 object table 集成、realloc 回滚、epoch-safe read、active defrag 和 metrics
 - `StringRootTest`
   说明 string payload 的 `ValueHandle`、覆盖和释放行为
 - `YierdisFfmRehashConsistencyTest`
@@ -1612,32 +1647,32 @@ usage；只是单 DB 的 `offHeapIncludedInMaxmemory` 在 global coordinator 存
 Yierdis 当前对 FFM 的使用方式可以概括为：
 
 - 用 `YierdisFfmMemoryRuntime` 统一承载实例级 native memory
-- 用 slab allocator、`EntryTable` 和 64-bit handle 承载 entry metadata
+- 用 stable native allocator、`EntryTable` 和 64-bit `NativeHandle` 承载 entry metadata
 - 用 `NativeKeyDirectory` 把 key bytes 映射到 entry handle
 - 用 `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 承载各类型 payload
 - 用 `EntryRecord`、`ValueHandle` 和 `TypeRoot` 作为 DB hot path 的权威状态
 - 用 `BlobStore + BytesRef + KeyHandle` 路径承载 native key directory、TTL 索引和复合结构成员 bytes
 - 用 `OffHeapSlice` / `YierdisFfmBytesRefSlice` 给读路径提供尽量少拷贝的输出接口
 - 用单线程 owner model 约束 `Arena.ofConfined()` 的访问纪律
-- 用 runtime accounting、memory reporter 和 shutdown leak check 把 FFM 内存纳入 maxmemory 与资源回收体系
+- 用 runtime accounting、memory reporter、allocator stats 和 shutdown leak check 把 FFM 内存纳入 maxmemory 与资源回收体系
 
 这也是 README 里“项目现在统一使用 JDK 25 FFM API 管理 native memory”那句话在实现层面的具体含义。
 
 ### Stable native object allocator
 
-`YierdisStableNativeAllocator` implements the production stable-handle ABI described in `docs/superpowers/specs/2026-05-14-production-allocator-handle-design.md`.
+`YierdisStableNativeAllocator` 是当前生产 stable-handle ABI 的实现。完整细节不要散读本文件的摘要，直接看 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
-It provides:
+这层提供：
 
-- 64-bit `NativeHandle` values with domain, kind, slot id, generation, and flags
-- native object-table metadata for address, size, capacity, generation, kind/domain, pin count, owner shard, state, and alloc/free epochs
-- 64 KiB page allocation with small size classes, medium spans, and large spans
-- generation checks for stale handle, double-free, wrong-kind, wrong-domain, and quarantined-object detection
-- bounded resolved object views with read-only and read-write access modes
-- stable-handle `realloc` semantics with prefix preservation, in-place resize when capacity allows, and move rollback coverage
-- DB `EntryHandle` / `ValueHandle` integration through `NativeHandle` so entry records, key bytes, string bytes, and collection roots keep stable allocator references rather than physical addresses
-- pin and epoch quarantine so freed or moved physical blocks are not released while resolved views, scan epochs, snapshot epochs, command epochs, or defrag epochs may still observe them
-- active defrag cycles that move eligible unpinned objects by updating allocator metadata; DB graph references do not need to be rewritten because they store stable handles
-- allocator stats for logical/reserved/committed/free bytes, internal/external fragmentation, page counts, object kind counts, quarantine bytes, pin counts, stale/double-free detections, realloc counters, defrag counters, and allocation latency buckets
+- 64-bit `NativeHandle`：domain / kind / slot id / generation / flags
+- object table：address、size、capacity、generation、kind/domain、pin count、state、alloc/free epoch
+- 64 KiB page allocator：small size classes、medium span、large span
+- stale handle、double-free、wrong-kind、wrong-domain、quarantined-object 检测
+- 有界 `NativeObjectView`，resolve 时 pin，close 时 unpin
+- stable-handle `realloc`，包括 prefix preservation、in-place resize、move rollback
+- `EntryHandle` / `ValueHandle` 的 `NativeHandle` 包装语义
+- pin / epoch quarantine，保护 freed 或 moved physical block
+- active defrag，通过更新 allocator metadata 移动对象，DB graph 不需要重写引用
+- allocator stats：logical/reserved/committed/free、fragmentation、page counts、object kind counts、quarantine bytes、pin/stale/double-free/realloc/defrag counters 和 allocation latency buckets
 
-The allocator still keeps physical address packing private. DB hot paths must resolve a handle only for a bounded operation, close the resolved view promptly, and never persist allocator-private page ids, offsets, spans, or raw memory addresses.
+allocator 仍然把 physical address packing 作为私有实现细节。DB hot path 只能在一次有界操作里 resolve handle，及时关闭 resolved view，不能持久化 allocator-private page id、offset、span 或 raw memory address。

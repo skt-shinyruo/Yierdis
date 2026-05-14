@@ -39,7 +39,7 @@ YierdisServer
   -> Yierdis*Ops
   -> YierdisDbMutationExecutor
   -> YierdisDbKeyLifecycle
-  -> EntryRecord / ValueHandle / TypeRoot
+  -> EntryRecord / typed ValueHandle / TypeRoot
   -> ReplyWriter / RespReplyWriter
   -> NettyExecutionIoAdapter
 ```
@@ -432,16 +432,21 @@ key lifecycle 负责 keyspace、entry table、TTL 和 value root 的一致性。
 
 所以 `SET` 不是“把 map 里的 value 换掉”这么简单。它同时维护 key directory、entry table、TTL index、memory ledger 和 payload 生命周期。
 
-### 11.6 `EntryRecord`、`ValueHandle` 和 `StringRoot`
+### 11.6 `EntryRecord`、stable handle 和 `StringRoot`
 
 源码：
 
 - [`EntryRecord.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java)
+- [`EntryHandle.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryHandle.java)
 - [`ValueHandle.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/ValueHandle.java)
 - [`TypeRoot.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/TypeRoot.java)
 - [`StringRoot.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java)
 
 `EntryRecord` 保存的是元数据：key identity、`ValueHandle`、type、encoding、expire time、估算字节数和访问元数据。真实字符串 payload 在 `StringRoot` 里，通过 `ValueHandle` 访问。
+
+`EntryHandle` 和 `ValueHandle` 都是 `NativeHandle` raw value 的 Java record 包装。`EntryHandle` 只能包装 `ENTRY_RECORD`，`EntryTable` 通过 stable allocator resolve handle 后读写 56 bytes native entry metadata。`ValueHandle` 使用 string/list/hash/set/zset 对应的 native kind，给 type root payload 一个稳定 identity；当前多数 value handle 由 root 自己解析，不能当成 object table slot 使用。
+
+这意味着主链路里传递的是 handle，不是 physical address。allocator 如果通过 `realloc` 或 active defrag 移动 entry record，只更新 object table；`NativeKeyDirectory` 和 `EntryRecord` 里的 handle 不需要重写。更底层的 object table、pin/quarantine 和 defrag 协议见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 字符串常见编码包括：
 

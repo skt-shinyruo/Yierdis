@@ -82,8 +82,15 @@ mvn -pl yierdis-tests/yierdis-integration-tests,yierdis-server/yierdis-server-ma
 
 代表测试：
 
+- `NativeHandleTest`
+- `NativeAllocatorContractTest`
+- `YierdisNativeObjectTableTest`
+- `YierdisNativePageAllocatorTest`
+- `YierdisStableNativeAllocatorTest`
 - `NativeKeyDirectoryTest`
 - `EntryTableContractTest`
+- `EntryHandleContractTest`
+- `ValueHandleContractTest`
 - `StringRootTest`
 - `SetCommandTest`
 - `HashCommandTest`
@@ -99,6 +106,9 @@ mvn -pl yierdis-tests/yierdis-integration-tests,yierdis-server/yierdis-server-ma
 
 如果你改的是：
 
+- stable native allocator / `NativeHandle`
+- object table、pin/quarantine、epoch、`realloc` 或 active defrag
+- `EntryHandle` / `ValueHandle` 语义
 - 内部编码升级
 - TTL 语义
 - maxmemory / eviction
@@ -197,6 +207,23 @@ mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-integration-tests -am
   -Dtest=OffHeapStringStorageTest,MemoryStatsCommandTest,MaxmemoryEvictionTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
+
+### 改 stable native allocator 或 DB handle
+
+如果改的是 `NativeHandle` 位布局、`NativeAllocator` API、object table 状态机、page / size-class、pin/quarantine、epoch、`realloc`、active defrag、`EntryHandle` / `ValueHandle` 或 `EntryTable` native record，至少跑：
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-api,yierdis-memory/yierdis-memory-ffm,yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-architecture-tests -am test
+```
+
+最窄的关注点可以拆成：
+
+- `NativeHandleTest`：64-bit handle 编解码和 domain/kind 校验。
+- `NativeAllocatorContractTest`：allocator API record、defrag report、epoch kind 和异常 contract。
+- `YierdisNativeObjectTableTest`：slot lifecycle、generation、quarantine、wrong-kind/domain 和 stale handle。
+- `YierdisNativePageAllocatorTest`：64 KiB page、small size class、medium/large span 和 page accounting。
+- `YierdisStableNativeAllocatorTest`：resolve view pin、free quarantine、epoch-safe reclaim、`realloc` 回滚、active defrag、metrics 和 stress。
+- `EntryHandleContractTest` / `ValueHandleContractTest` / `EntryTableContractTest`：DB handle 包装和 native `ENTRY_RECORD` 读写。
 
 ### 改启动参数、背压、pipeline
 

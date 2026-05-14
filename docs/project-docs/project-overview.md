@@ -67,11 +67,16 @@ Netty I/O 线程只负责收包和入队，真正访问 DB 的是单独的 comma
 如果你已经看过 `docs/project-docs/ffm-usage.md`，会发现这里的核心关键词是：
 
 - `YierdisFfmMemoryRuntime`
+- `YierdisStableNativeAllocator`
+- `NativeHandle`
+- `YierdisNativeObjectTable`
 - `NativeKeyDirectory`
 - `EntryTable`
 - `EntryRecord`
 - `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot`
 - `YierdisFfmExpireIndex`
+
+更底层的 allocator 细节在 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)：DB 层保存 stable handle，不保存 native physical address；entry metadata 通过 object table 做 indirection，所以 `realloc` 和 active defrag 可以移动对象而不重写 DB graph。
 
 ### 4. 不只是实现命令，还在复刻 Redis 风格内部编码
 
@@ -179,7 +184,7 @@ Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格�
 
 在构造阶段，`YierdisDb` 会把下面这些东西拼起来：
 
-- `NativeKeyDirectory` / `EntryTable`：负责 key -> `EntryHandle` -> `EntryRecord` 的主索引
+- `NativeKeyDirectory` / `EntryTable`：负责 key -> stable `EntryHandle` -> native `EntryRecord` 的主索引
 - expires：负责 key -> expireAt 的过期索引
 - `YierdisStringOps`
 - `YierdisHashOps`

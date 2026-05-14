@@ -272,22 +272,42 @@ Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近
 - `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/OffHeapAllocator.java`
 - `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/OffHeapBuf.java`
 - `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/OffHeapSlice.java`
+- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeHandle.java`
+- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeAllocator.java`
+- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeAllocatorStats.java`
 - `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmMemoryRuntime.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativePageAllocator.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeEpochManager.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryTable.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryHandle.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/ValueHandle.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmExpireIndex.java`
 - `docs/project-docs/ffm-usage.md`
+- `docs/project-docs/native-allocator-and-handles.md`
 - `docs/project-docs/offheap-copy-behavior.md`
 
-`yierdis-memory-api` 是 off-heap contract 的模块兼容面；包名是 `yier.bubu.redis.memory.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`。`yierdis-command-builtin` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
+`yierdis-memory-api` 是 off-heap 和 stable native allocator contract 的模块兼容面；包名是 `yier.bubu.redis.memory.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`。`yierdis-command-builtin` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
+
+如果你改的是 allocator API、`NativeHandle` 位布局、object table、pin/quarantine、`realloc`、active defrag 或 `EntryHandle` / `ValueHandle` 迁移，先读 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。这些改动的关键判断是：DB 层只能保存 stable handle，不能保存 allocator-private physical address；对象移动只能通过 object table 发布新 location。
 
 ### 建议先看的测试
 
 - `yierdis-memory/yierdis-memory-api/src/test/java/yier/bubu/redis/memory/api/OffHeapContractsSmokeTest.java`
+- `yierdis-memory/yierdis-memory-api/src/test/java/yier/bubu/redis/memory/api/NativeHandleTest.java`
+- `yierdis-memory/yierdis-memory-api/src/test/java/yier/bubu/redis/memory/api/NativeAllocatorContractTest.java`
+- `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTableTest.java`
+- `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/YierdisNativePageAllocatorTest.java`
+- `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocatorTest.java`
 - `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapStringStorageTest.java`
 - `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/UnsafeOffHeapDbSmokeTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/EntryHandleContractTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/ValueHandleContractTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/EntryTableContractTest.java`
 - `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/runtime/GlobalMaxmemoryLruAcrossDbsTest.java`
 - `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TtlMaxmemoryTest.java`
 

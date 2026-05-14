@@ -17,9 +17,10 @@
 11. [`configuration-and-operations.md`](./configuration-and-operations.md)
 12. [`client-and-bench-internals.md`](./client-and-bench-internals.md)
 13. [`testing-and-debugging.md`](./testing-and-debugging.md)
-14. [`glossary.md`](./glossary.md)
-15. [`module-architecture.md`](./module-architecture.md)
-16. [`development-navigation.md`](./development-navigation.md)
+14. [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)
+15. [`glossary.md`](./glossary.md)
+16. [`module-architecture.md`](./module-architecture.md)
+17. [`development-navigation.md`](./development-navigation.md)
 
 ## 文档分工
 
@@ -68,6 +69,8 @@
 
 - [`ffm-usage.md`](./ffm-usage.md)
   合并说明 JDK FFM 本身的入门心智模型，以及 FFM 在 Yierdis 里的实际落点和生命周期组装。
+- [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)
+  专门说明生产级 stable native allocator、`NativeHandle` 位布局、object table、pin/quarantine、`realloc`、active defrag、DB handle 迁移和 allocator metrics。
 - [`offheap-copy-behavior.md`](./offheap-copy-behavior.md)
   说明 heap / off-heap / direct buffer 之间哪些路径会发生拷贝。
 
@@ -75,7 +78,7 @@
 
 - 快速启动、常用命令和脚本入口，仍建议先看仓库根部的 `README.md`。
 - 本组文档会把协议、编码、配置和测试背后的代码逻辑讲得更细，但不替代 README 的“先跑起来”角色。
-- FFM / native memory 的底层细节，仍以现有 `docs/project-docs/ffm-usage.md` 和 `docs/project-docs/offheap-copy-behavior.md` 为主。
+- FFM / native memory 的底层细节，仍以现有 `docs/project-docs/ffm-usage.md`、`docs/project-docs/native-allocator-and-handles.md` 和 `docs/project-docs/offheap-copy-behavior.md` 为主。
 - 本组文档重点覆盖代码结构、执行流程、模块边界、协议细节、数据模型、DB 内核、执行器/背压、bytes 抽象、运行时配置和开发导航。
 
 ## 推荐阅读方式
@@ -93,6 +96,7 @@
 - 如果你准备启动、调参、看观测指标，看 [`configuration-and-operations.md`](./configuration-and-operations.md)。
 - 如果你想知道 CLI、client 和 bench 是怎么沿真实协议路径工作的，看 [`client-and-bench-internals.md`](./client-and-bench-internals.md)。
 - 如果你准备改完代码以后验证或排障，看 [`testing-and-debugging.md`](./testing-and-debugging.md)。
+- 如果你要改 native allocator、stable handle、object table、entry/value handle 或 active defrag，看 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 - 如果你总是被类名和术语绊住，随手配合 [`glossary.md`](./glossary.md) 一起看。
 - 如果你准备改模块边界或新增依赖，先看 [`module-architecture.md`](./module-architecture.md)。
 - 如果你已经准备动手改代码，直接看 [`development-navigation.md`](./development-navigation.md)。

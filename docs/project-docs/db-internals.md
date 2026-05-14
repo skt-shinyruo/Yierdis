@@ -89,8 +89,8 @@ CommandSupport
   校验并保存 `maxmemoryBytes`、`MaxmemoryPolicy`、samples、eviction 时间预算、
   expire cleanup 时间预算，并决定 LRU clock 是否启用。
 - `YierdisDbStorageComponents`
-  解析或创建 `YierdisFfmMemoryRuntime`、`OffHeapAllocator`、entry table、key directory、
-  expire index 和各 type root。
+  解析或创建 `YierdisFfmMemoryRuntime`、`OffHeapAllocator`、production stable allocator
+  backed entry table、key directory、expire index 和各 type root。
 - `YierdisDbComponentFactory`
   创建 ledger、mutation executor、expiration support、maxmemory support、key lifecycle、
   所有类型化 ops，以及 command-facing facade。
@@ -113,17 +113,22 @@ CommandSupport
 
 ```text
 NativeKeyDirectory
-  key bytes -> EntryHandle
+  key bytes -> EntryHandle(raw NativeHandle)
 
 EntryTable
-  EntryHandle -> EntryRecord
+  EntryHandle -> native ENTRY_RECORD
 
 EntryRecord
-  ValueType + ValueEncoding + ValueHandle + expireAtMillis + estimated bytes + LRU clock
+  ValueType + ValueEncoding + ValueHandle(raw NativeHandle) + expireAtMillis + estimated bytes + LRU clock
 
 TypeRoot
   ValueHandle -> payload
 ```
+
+这里的 handle 都是 64-bit identity，不是 native 物理地址。`EntryHandle` 包装
+`ENTRY_RECORD` 类型的 object-table-backed `NativeHandle`，`EntryTable` 通过 allocator resolve handle 后才读写
+entry metadata。`ValueHandle` 也包装 `NativeHandle` raw value，用 string/list/hash/set/zset
+对应的 kind 给 type root payload 一个稳定引用形状；但当前多数 `ValueHandle.slotId()` 是 type root 局部 identity，不等同于 object table slot。
 
 ### `NativeKeyDirectory`
 
@@ -140,8 +145,11 @@ TypeRoot
 
 ### `EntryTable` 和 `EntryRecord`
 
-`EntryTable` 使用 native/slab 风格的 entry 存储保存 metadata。`EntryRecord` 是每个
-key 的 metadata，包含：
+`EntryTable` 使用 `YierdisStableNativeAllocator` 保存 native `ENTRY_RECORD`
+metadata。每条 record 逻辑大小是 56 bytes，`EntryHandle` 保存的是 allocator stable
+handle，DB 层不会保存 entry 的 physical page id、offset 或 raw address。
+
+`EntryRecord` 是每个 key 的 metadata，包含：
 
 - `ValueType`
 - `ValueEncoding`
@@ -153,6 +161,18 @@ key 的 metadata，包含：
 
 注意：`EntryRecord` 不保存 Java collection 本体。它只保存 metadata 和指向 type root
 payload 的 handle。
+
+entry record 的读写流程是：
+
+```text
+EntryTable.get/replace
+  -> allocator.resolve(entryHandle.nativeHandle(), READ_ONLY/READ_WRITE)
+  -> NativeObjectView 按固定 offset 读写 56 bytes metadata
+  -> view.close() 释放 pin
+```
+
+因此 active defrag 移动 entry record 时，只需要更新 allocator object table 中的 physical
+block。`NativeKeyDirectory` 和 DB graph 里保存的 `EntryHandle` 不需要重写。
 
 ### Type Root
 
@@ -173,6 +193,17 @@ root 的职责是：
 
 集合类型内部仍会使用 `ListValue`、`HashValue`、`SetValue`、`ZSetValue` 等结构，
 但这些是 root 内部的 payload 实现，不再是 keyspace 的顶层 value 容器。
+
+当前 type roots 的实现边界是：
+
+- `StringRoot` 用 `OffHeapAllocator` 管理连续 bytes buffer，`ValueHandle` 使用 `STRING_BYTES` kind。
+- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 用对应 `LIST_NODE` / `HASH_NODE` /
+  `SET_NODE` / `ZSET_NODE` kind 构造 `ValueHandle`，内部 payload adapter 仍管理自己的 heap
+  控制结构和 FFM-backed bytes。
+- `ValueHandle` 提供统一 raw identity，但不表示所有集合控制结构都已经完全 native 化，也不表示每个 value handle 都能通过 stable allocator resolve。
+
+stable allocator、object table、pin/quarantine、`realloc` 和 defrag 的完整语义见
+[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 ### Expire Index
 
@@ -225,7 +256,7 @@ TTL 由两份信息协作：
 
 lifecycle 会负责：
 
-- 新 key 时分配 `EntryHandle`
+- 新 key 时分配 stable `EntryHandle`
 - 已存在 key 时替换 `EntryRecord`
 - 删除 key 时移除 directory 和 entry table
 - 替换 value handle 时释放旧 payload
