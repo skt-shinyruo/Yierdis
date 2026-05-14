@@ -196,8 +196,8 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     }
 
     private Slot requireLiveSlot(NativeHandle handle) {
-        if (handle == null || handle.isNull()) {
-            throw new IllegalArgumentException("native handle must not be null");
+        if (handle == null) {
+            return stale("stale native handle: null");
         }
 
         long slotId = handle.slotId();
