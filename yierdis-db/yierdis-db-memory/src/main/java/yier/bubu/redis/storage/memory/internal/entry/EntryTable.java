@@ -1,18 +1,18 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
-import yier.bubu.redis.memory.api.OffHeapAllocator;
-import yier.bubu.redis.memory.api.OffHeapBuf;
-import yier.bubu.redis.memory.foreign.YierdisFfmAccess;
+import java.util.Objects;
+import java.util.HashSet;
+import yier.bubu.redis.memory.api.NativeAccessMode;
+import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeMemoryException;
+import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisFfmRegion;
 import yier.bubu.redis.memory.foreign.YierdisFfmSlabAllocator;
-import yier.bubu.redis.memory.foreign.YierdisForeignOffHeapAllocator;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
-
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Objects;
 
 public final class EntryTable implements AutoCloseable {
     private static final int KEY_HANDLE_OFFSET = 0;
@@ -30,50 +30,51 @@ public final class EntryTable implements AutoCloseable {
     private static final ValueEncoding[] VALUE_ENCODINGS = ValueEncoding.values();
 
     private final YierdisFfmMemoryRuntime runtime;
-    private OffHeapAllocator allocator;
+    private final NativeAllocator allocator;
     private final boolean ownsAllocator;
-    private final Map<Long, Slot> entries;
-    private long nextHandle = 1L;
+    private final HashSet<Long> liveHandles = new HashSet<>();
+
     private boolean closed;
 
     public EntryTable(YierdisFfmMemoryRuntime runtime, int initialCapacity) {
-        this.runtime = Objects.requireNonNull(runtime, "runtime");
-        this.allocator = null;
-        this.ownsAllocator = false;
-        this.entries = new HashMap<>(Math.max(16, initialCapacity));
+        this(runtime, new YierdisStableNativeAllocator(
+                Objects.requireNonNull(runtime, "runtime"),
+                Math.max(4096, initialCapacity)
+        ), true);
     }
 
-    public EntryTable(OffHeapAllocator allocator, int initialCapacity) {
-        this.allocator = Objects.requireNonNull(allocator, "allocator");
-        if (!(allocator instanceof YierdisForeignOffHeapAllocator foreignAllocator)) {
-            throw new IllegalArgumentException("EntryTable requires a foreign off-heap allocator");
-        }
-        this.runtime = foreignAllocator.memoryRuntime();
-        this.ownsAllocator = false;
-        this.entries = new HashMap<>(Math.max(16, initialCapacity));
+    public EntryTable(YierdisFfmMemoryRuntime runtime, YierdisFfmSlabAllocator ignored, int initialCapacity) {
+        this(runtime, new YierdisStableNativeAllocator(
+                Objects.requireNonNull(runtime, "runtime"),
+                Math.max(4096, initialCapacity)
+        ), true);
+        Objects.requireNonNull(ignored, "allocator").close();
     }
 
-    public EntryTable(YierdisFfmMemoryRuntime runtime, YierdisFfmSlabAllocator allocator, int initialCapacity) {
+    public EntryTable(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator) {
+        this(runtime, allocator, false);
+    }
+
+    private EntryTable(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator, boolean ownsAllocator) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.allocator = Objects.requireNonNull(allocator, "allocator");
-        this.ownsAllocator = true;
-        this.entries = new HashMap<>(Math.max(16, initialCapacity));
+        this.ownsAllocator = ownsAllocator;
     }
 
     public synchronized EntryHandle allocate(EntryRecord record) {
         Objects.requireNonNull(record, "record");
         ensureOpen();
-        EntryHandle handle = new EntryHandle(nextHandle++);
-        Slot slot = allocateSlot();
+        NativeHandle nativeHandle = allocator.allocate(NativeObjectKind.ENTRY_RECORD, RECORD_BYTES);
         boolean ok = false;
         try {
-            write(slot, record);
-            entries.put(handle.raw(), slot);
+            EntryHandle handle = EntryHandle.fromNativeHandle(nativeHandle);
+            write(nativeHandle, record);
+            liveHandles.add(handle.raw());
             ok = true;
             return handle;
         } finally {
             if (!ok) {
-                slot.close();
+                allocator.free(nativeHandle);
             }
         }
     }
@@ -83,66 +84,59 @@ public final class EntryTable implements AutoCloseable {
             return null;
         }
         ensureOpen();
-        Slot slot = entries.get(handle.raw());
-        return slot == null ? null : read(slot);
+        try {
+            return read(handle.nativeHandle());
+        } catch (NativeMemoryException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            if (e.getMessage() != null && e.getMessage().contains("stale native handle")) {
+                throw e;
+            }
+            throw e;
+        }
     }
 
     public synchronized EntryRecord replace(EntryHandle handle, EntryRecord record) {
         Objects.requireNonNull(handle, "handle");
         Objects.requireNonNull(record, "record");
         ensureOpen();
-        Slot slot = entries.get(handle.raw());
-        if (slot == null) {
-            throw new IllegalStateException("unknown entry handle: " + handle.raw());
-        }
-        EntryRecord previous = read(slot);
-        write(slot, record);
+        EntryRecord previous = read(handle.nativeHandle());
+        write(handle.nativeHandle(), record);
         return previous;
     }
 
     public synchronized void release(EntryHandle handle) {
         Objects.requireNonNull(handle, "handle");
         ensureOpen();
-        Slot slot = entries.get(handle.raw());
-        if (slot == null) {
-            throw new IllegalStateException("unknown entry handle: " + handle.raw());
-        }
-        slot.close();
-        entries.remove(handle.raw());
-        releaseOwnedAllocatorIfEmpty();
+        allocator.free(handle.nativeHandle());
+        liveHandles.remove(handle.raw());
     }
 
     public synchronized int size() {
         ensureOpen();
-        return entries.size();
+        return liveHandles.size();
     }
 
     public synchronized long nativeBytes() {
         ensureOpen();
-        return (long) entries.size() * RECORD_BYTES;
+        return (long) liveHandles.size() * RECORD_BYTES;
     }
 
     public synchronized void clear() {
         ensureOpen();
         RuntimeException failure = null;
-        for (Map.Entry<Long, Slot> entry : entries.entrySet()) {
+        Long[] handles = liveHandles.toArray(Long[]::new);
+        for (long raw : handles) {
             try {
-                entry.getValue().close();
+                allocator.free(NativeHandle.fromRaw(raw));
+                liveHandles.remove(raw);
             } catch (RuntimeException e) {
-                if (failure == null) {
-                    failure = e;
-                } else {
-                    failure.addSuppressed(e);
-                }
-                continue;
+                failure = addFailure(failure, e);
             }
-            entry.setValue(null);
         }
-        entries.values().removeIf(Objects::isNull);
         if (failure != null) {
             throw failure;
         }
-        releaseOwnedAllocatorIfEmpty();
     }
 
     @Override
@@ -150,32 +144,22 @@ public final class EntryTable implements AutoCloseable {
         if (closed) {
             return;
         }
-        Throwable failure = null;
+        RuntimeException failure = null;
         try {
             clear();
-        } catch (Throwable t) {
-            failure = t;
+        } catch (RuntimeException e) {
+            failure = e;
         }
-        if (ownsAllocator && allocator != null) {
+        if (ownsAllocator) {
             try {
-                closeOwnedAllocator();
-            } catch (Throwable t) {
-                if (failure == null) {
-                    failure = t;
-                } else {
-                    failure.addSuppressed(t);
-                }
+                allocator.close();
+            } catch (RuntimeException e) {
+                failure = addFailure(failure, e);
             }
         }
         closed = true;
         if (failure != null) {
-            if (failure instanceof RuntimeException runtimeException) {
-                throw runtimeException;
-            }
-            if (failure instanceof Error error) {
-                throw error;
-            }
-            throw new IllegalStateException("entry table close failed", failure);
+            throw failure;
         }
     }
 
@@ -183,56 +167,40 @@ public final class EntryTable implements AutoCloseable {
         return runtime;
     }
 
-    private Slot allocateSlot() {
-        if (allocator != null) {
-            return new Slot(allocator.allocate(RECORD_BYTES));
+    private void write(NativeHandle handle, EntryRecord record) {
+        try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+            setLong(view, KEY_HANDLE_OFFSET, record.keyHandle());
+            setLong(view, VALUE_HANDLE_OFFSET, record.valueHandle().raw());
+            setInt(view, KEY_HASH_OFFSET, record.keyHash());
+            setInt(view, TYPE_OFFSET, record.type().ordinal());
+            setInt(view, ENCODING_OFFSET, record.encoding().ordinal());
+            setInt(view, FLAGS_OFFSET, record.flags());
+            setLong(view, EXPIRE_AT_MILLIS_OFFSET, record.expireAtMillis());
+            setLong(view, VERSION_OFFSET, record.version());
+            setLong(view, LRU_OR_LFU_OFFSET, record.lruOrLfu());
         }
-        return new Slot(runtime.allocateRegion("entry-record", RECORD_BYTES));
     }
 
-    private void releaseOwnedAllocatorIfEmpty() {
-        if (!ownsAllocator || allocator == null || !entries.isEmpty()) {
-            return;
+    private EntryRecord read(NativeHandle handle) {
+        try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+            return new EntryRecord(
+                    getLong(view, KEY_HANDLE_OFFSET),
+                    ValueHandle.fromRaw(getLong(view, VALUE_HANDLE_OFFSET)),
+                    getInt(view, KEY_HASH_OFFSET),
+                    valueType(getInt(view, TYPE_OFFSET)),
+                    valueEncoding(getInt(view, ENCODING_OFFSET)),
+                    getInt(view, FLAGS_OFFSET),
+                    getLong(view, EXPIRE_AT_MILLIS_OFFSET),
+                    getLong(view, VERSION_OFFSET),
+                    getLong(view, LRU_OR_LFU_OFFSET)
+            );
         }
-        allocator.close();
-        allocator = new YierdisFfmSlabAllocator(runtime);
-    }
-
-    private void closeOwnedAllocator() {
-        allocator.close();
-        allocator = null;
     }
 
     private void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("entry table is closed");
         }
-    }
-
-    private static void write(Slot slot, EntryRecord record) {
-        slot.setLong(KEY_HANDLE_OFFSET, record.keyHandle());
-        slot.setLong(VALUE_HANDLE_OFFSET, record.valueHandle().raw());
-        slot.setInt(KEY_HASH_OFFSET, record.keyHash());
-        slot.setInt(TYPE_OFFSET, record.type().ordinal());
-        slot.setInt(ENCODING_OFFSET, record.encoding().ordinal());
-        slot.setInt(FLAGS_OFFSET, record.flags());
-        slot.setLong(EXPIRE_AT_MILLIS_OFFSET, record.expireAtMillis());
-        slot.setLong(VERSION_OFFSET, record.version());
-        slot.setLong(LRU_OR_LFU_OFFSET, record.lruOrLfu());
-    }
-
-    private static EntryRecord read(Slot slot) {
-        return new EntryRecord(
-                slot.getLong(KEY_HANDLE_OFFSET),
-                new ValueHandle(slot.getLong(VALUE_HANDLE_OFFSET)),
-                slot.getInt(KEY_HASH_OFFSET),
-                valueType(slot.getInt(TYPE_OFFSET)),
-                valueEncoding(slot.getInt(ENCODING_OFFSET)),
-                slot.getInt(FLAGS_OFFSET),
-                slot.getLong(EXPIRE_AT_MILLIS_OFFSET),
-                slot.getLong(VERSION_OFFSET),
-                slot.getLong(LRU_OR_LFU_OFFSET)
-        );
     }
 
     private static ValueType valueType(int ordinal) {
@@ -249,70 +217,41 @@ public final class EntryTable implements AutoCloseable {
         return VALUE_ENCODINGS[ordinal];
     }
 
-    private static final class Slot {
-        private final YierdisFfmRegion region;
-        private final OffHeapBuf buffer;
+    private static long getLong(NativeObjectView view, int offset) {
+        return ((long) view.getByte(offset) & 0xff)
+                | (((long) view.getByte(offset + 1) & 0xff) << 8)
+                | (((long) view.getByte(offset + 2) & 0xff) << 16)
+                | (((long) view.getByte(offset + 3) & 0xff) << 24)
+                | (((long) view.getByte(offset + 4) & 0xff) << 32)
+                | (((long) view.getByte(offset + 5) & 0xff) << 40)
+                | (((long) view.getByte(offset + 6) & 0xff) << 48)
+                | (((long) view.getByte(offset + 7) & 0xff) << 56);
+    }
 
-        private Slot(YierdisFfmRegion region) {
-            this.region = Objects.requireNonNull(region, "region");
-            this.buffer = null;
+    private static void setLong(NativeObjectView view, int offset, long value) {
+        for (int i = 0; i < Long.BYTES; i++) {
+            view.setByte(offset + i, (byte) (value >>> (i * 8)));
         }
+    }
 
-        private Slot(OffHeapBuf buffer) {
-            this.region = null;
-            this.buffer = Objects.requireNonNull(buffer, "buffer");
-        }
+    private static int getInt(NativeObjectView view, int offset) {
+        return (view.getByte(offset) & 0xff)
+                | ((view.getByte(offset + 1) & 0xff) << 8)
+                | ((view.getByte(offset + 2) & 0xff) << 16)
+                | ((view.getByte(offset + 3) & 0xff) << 24);
+    }
 
-        private long getLong(int offset) {
-            if (region != null) {
-                return YierdisFfmAccess.getLong(region.span(0, RECORD_BYTES), offset);
-            }
-            return ((long) buffer.getByte(offset) & 0xff)
-                    | (((long) buffer.getByte(offset + 1) & 0xff) << 8)
-                    | (((long) buffer.getByte(offset + 2) & 0xff) << 16)
-                    | (((long) buffer.getByte(offset + 3) & 0xff) << 24)
-                    | (((long) buffer.getByte(offset + 4) & 0xff) << 32)
-                    | (((long) buffer.getByte(offset + 5) & 0xff) << 40)
-                    | (((long) buffer.getByte(offset + 6) & 0xff) << 48)
-                    | (((long) buffer.getByte(offset + 7) & 0xff) << 56);
+    private static void setInt(NativeObjectView view, int offset, int value) {
+        for (int i = 0; i < Integer.BYTES; i++) {
+            view.setByte(offset + i, (byte) (value >>> (i * 8)));
         }
+    }
 
-        private void setLong(int offset, long value) {
-            if (region != null) {
-                YierdisFfmAccess.setLong(region.span(0, RECORD_BYTES), offset, value);
-                return;
-            }
-            for (int i = 0; i < Long.BYTES; i++) {
-                buffer.setByte(offset + i, (byte) (value >>> (i * 8)));
-            }
+    private static RuntimeException addFailure(RuntimeException failure, RuntimeException next) {
+        if (failure == null) {
+            return next;
         }
-
-        private int getInt(int offset) {
-            if (region != null) {
-                return YierdisFfmAccess.getInt(region.span(0, RECORD_BYTES), offset);
-            }
-            return (buffer.getByte(offset) & 0xff)
-                    | ((buffer.getByte(offset + 1) & 0xff) << 8)
-                    | ((buffer.getByte(offset + 2) & 0xff) << 16)
-                    | ((buffer.getByte(offset + 3) & 0xff) << 24);
-        }
-
-        private void setInt(int offset, int value) {
-            if (region != null) {
-                YierdisFfmAccess.setInt(region.span(0, RECORD_BYTES), offset, value);
-                return;
-            }
-            for (int i = 0; i < Integer.BYTES; i++) {
-                buffer.setByte(offset + i, (byte) (value >>> (i * 8)));
-            }
-        }
-
-        private void close() {
-            if (region != null) {
-                region.close();
-            } else {
-                buffer.close();
-            }
-        }
+        failure.addSuppressed(next);
+        return failure;
     }
 }

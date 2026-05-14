@@ -2,6 +2,8 @@ package yier.bubu.redis.storage.memory.internal.entry;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.memory.api.OffHeapSlice;
@@ -85,7 +87,7 @@ public final class StringRoot implements TypeRoot {
     public synchronized ValueHandle store(byte[] value) {
         ensureOpen();
         int len = value == null ? 0 : value.length;
-        ValueHandle handle = new ValueHandle(nextHandle++);
+        ValueHandle handle = newHandle();
         slots.put(handle.raw(), new Slot(allocate(value, len), len));
         return handle;
     }
@@ -93,7 +95,7 @@ public final class StringRoot implements TypeRoot {
     public synchronized ValueHandle store(BytesSlice value) {
         ensureOpen();
         int len = value == null ? 0 : value.length();
-        ValueHandle handle = new ValueHandle(nextHandle++);
+        ValueHandle handle = newHandle();
         slots.put(handle.raw(), new Slot(allocate(value, len), len));
         return handle;
     }
@@ -414,6 +416,12 @@ public final class StringRoot implements TypeRoot {
         if (closed) {
             throw new IllegalStateException("string root is closed");
         }
+    }
+
+    private ValueHandle newHandle() {
+        NativeObjectKind kind = NativeObjectKind.STRING_BYTES;
+        NativeHandle handle = NativeHandle.of(kind.domain(), kind, nextHandle++, 1, 0);
+        return ValueHandle.fromNativeHandle(handle);
     }
 
     private static final class Slot {

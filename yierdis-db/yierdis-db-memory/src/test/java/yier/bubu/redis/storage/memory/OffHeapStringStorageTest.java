@@ -46,10 +46,11 @@ public class OffHeapStringStorageTest {
 
                 Assert.assertEquals(1L, (long) db.writes().keyspace().del(Collections.singletonList(key)).value());
                 Assert.assertEquals(0, db.size());
-                Assert.assertEquals(0L, runtime.usedBytes());
+                Assert.assertEquals(0L, db.usedBytesForMaxmemory());
             } finally {
                 db.shutdown();
             }
+            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
@@ -66,10 +67,11 @@ public class OffHeapStringStorageTest {
                 db.cleanupExpired();
                 Assert.assertEquals(0, db.size());
                 Assert.assertEquals(0, db.memory().memoryStats().expireCount());
-                Assert.assertEquals(0L, runtime.usedBytes());
+                Assert.assertEquals(0L, db.usedBytesForMaxmemory());
             } finally {
                 db.shutdown();
             }
+            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 

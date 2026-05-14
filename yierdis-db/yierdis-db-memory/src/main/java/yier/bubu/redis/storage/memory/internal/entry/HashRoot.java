@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
@@ -42,7 +44,7 @@ public final class HashRoot implements TypeRoot {
 
     public synchronized ValueHandle create() {
         ensureOpen();
-        ValueHandle handle = new ValueHandle(nextHandle++);
+        ValueHandle handle = newHandle();
         hashes.put(handle.raw(), new HashValue(runtime));
         return handle;
     }
@@ -166,6 +168,12 @@ public final class HashRoot implements TypeRoot {
         if (closed) {
             throw new IllegalStateException("hash root is closed");
         }
+    }
+
+    private ValueHandle newHandle() {
+        NativeObjectKind kind = NativeObjectKind.HASH_NODE;
+        NativeHandle handle = NativeHandle.of(kind.domain(), kind, nextHandle++, 1, 0);
+        return ValueHandle.fromNativeHandle(handle);
     }
 
     private static long addSaturating(long left, long right) {
