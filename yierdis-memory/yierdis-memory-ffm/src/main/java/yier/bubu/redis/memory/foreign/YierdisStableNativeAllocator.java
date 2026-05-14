@@ -476,7 +476,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
 
         private void checkRange(int index, int len) {
-            if (len < 0 || index < 0 || index + len > slot.size) {
+            if (len < 0 || index < 0 || index > slot.size - len) {
                 throw new IndexOutOfBoundsException();
             }
         }
