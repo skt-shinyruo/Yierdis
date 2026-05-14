@@ -1622,3 +1622,18 @@ Yierdis 当前对 FFM 的使用方式可以概括为：
 - 用 runtime accounting、memory reporter 和 shutdown leak check 把 FFM 内存纳入 maxmemory 与资源回收体系
 
 这也是 README 里“项目现在统一使用 JDK 25 FFM API 管理 native memory”那句话在实现层面的具体含义。
+
+### Stable native object allocator
+
+`YierdisStableNativeAllocator` is the first executable milestone of the production stable-handle ABI described in `docs/superpowers/specs/2026-05-14-production-allocator-handle-design.md`.
+
+It provides:
+
+- 64-bit `NativeHandle` values with domain, kind, slot id, generation, and flags
+- generation checks for stale handle detection, including slot retirement before generation wrap
+- bounded resolved object views with read-only and read-write access modes
+- stable-handle `realloc` semantics with prefix preservation and failure rollback coverage
+- pin/quarantine behavior for future snapshot, scan, and defrag protocols
+- allocator stats for logical bytes, reserved bytes, live objects, pinned objects, quarantined objects, stale-handle detections, and realloc counters
+
+This allocator is intentionally non-moving in this milestone. Page size classes, native object-table metadata compaction, DB `EntryTable` / `ValueHandle` migration, epoch reclamation, and active defrag movement remain follow-up work.
