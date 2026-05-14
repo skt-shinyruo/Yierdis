@@ -134,6 +134,26 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     }
 
     @Override
+    public synchronized void pin(NativeHandle handle) {
+        ensureOpen();
+        Slot slot = requireLiveSlot(handle);
+        slot.pinCount++;
+    }
+
+    @Override
+    public synchronized void unpin(NativeHandle handle) {
+        ensureOpen();
+        Slot slot = requireLiveSlot(handle);
+        if (slot.pinCount <= 0) {
+            throw new NativeMemoryException("native object is not pinned");
+        }
+        slot.pinCount--;
+        if (slot.pinCount == 0 && slot.quarantined) {
+            releaseSlot(slot);
+        }
+    }
+
+    @Override
     public synchronized NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode) {
         ensureOpen();
         Objects.requireNonNull(mode, "mode");

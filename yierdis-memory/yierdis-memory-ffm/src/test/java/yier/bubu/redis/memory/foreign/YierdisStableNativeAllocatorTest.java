@@ -68,6 +68,87 @@ public class YierdisStableNativeAllocatorTest {
     }
 
     @Test
+    public void freePinnedObjectQuarantinesUntilUnpin() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+            allocator.pin(handle);
+            allocator.free(handle);
+
+            NativeAllocatorStats quarantined = allocator.stats();
+            Assert.assertEquals(4L, quarantined.logicalUsedBytes());
+            Assert.assertEquals(4L, quarantined.reservedBytes());
+            Assert.assertEquals(1L, quarantined.pinnedObjects());
+            Assert.assertEquals(1L, quarantined.quarantinedObjects());
+            Assert.assertEquals(1L, quarantined.liveObjects());
+
+            try {
+                allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+                Assert.fail("expected quarantined object to keep slot unavailable");
+            } catch (NativeMemoryException expected) {
+                Assert.assertTrue(expected.getMessage().contains("slot limit"));
+            }
+
+            allocator.unpin(handle);
+
+            NativeAllocatorStats released = allocator.stats();
+            Assert.assertEquals(0L, released.logicalUsedBytes());
+            Assert.assertEquals(0L, released.reservedBytes());
+            Assert.assertEquals(0L, released.pinnedObjects());
+            Assert.assertEquals(0L, released.quarantinedObjects());
+            Assert.assertEquals(0L, released.liveObjects());
+
+            try {
+                allocator.resolve(handle, NativeAccessMode.READ_ONLY);
+                Assert.fail("expected stale handle");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
+            }
+        }
+    }
+
+    @Test
+    public void multiplePinsRequireMatchingUnpinsBeforeQuarantineRelease() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+            allocator.pin(handle);
+            allocator.pin(handle);
+            allocator.free(handle);
+
+            allocator.unpin(handle);
+            NativeAllocatorStats stillQuarantined = allocator.stats();
+            Assert.assertEquals(1L, stillQuarantined.pinnedObjects());
+            Assert.assertEquals(1L, stillQuarantined.quarantinedObjects());
+            Assert.assertEquals(1L, stillQuarantined.liveObjects());
+
+            allocator.unpin(handle);
+            NativeAllocatorStats released = allocator.stats();
+            Assert.assertEquals(0L, released.pinnedObjects());
+            Assert.assertEquals(0L, released.quarantinedObjects());
+            Assert.assertEquals(0L, released.liveObjects());
+        }
+    }
+
+    @Test
+    public void unpinWithoutPinThrows() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+
+            try {
+                allocator.unpin(handle);
+                Assert.fail("expected unpinned rejection");
+            } catch (NativeMemoryException expected) {
+                Assert.assertTrue(expected.getMessage().contains("not pinned"));
+            }
+        }
+    }
+
+    @Test
     public void detectsNullHandle() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
