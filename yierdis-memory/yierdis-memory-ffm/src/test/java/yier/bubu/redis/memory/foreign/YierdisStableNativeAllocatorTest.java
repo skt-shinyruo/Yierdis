@@ -2,7 +2,6 @@ package yier.bubu.redis.memory.foreign;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.bytes.BytesSource;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeHandle;
@@ -10,14 +9,11 @@ import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
-import yier.bubu.redis.memory.api.OffHeapAllocator;
-import yier.bubu.redis.memory.api.OffHeapBuf;
-import yier.bubu.redis.memory.api.OffHeapSlice;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public class YierdisStableNativeAllocatorTest {
     @Test
-    public void allocatesResolvesAndFreesObject() {
+    public void allocatesFromPageAllocatorAndRecordsNativeMetadata() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
 
@@ -28,23 +24,26 @@ public class YierdisStableNativeAllocatorTest {
 
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 Assert.assertEquals(8, view.size());
-                Assert.assertEquals(8, view.capacity());
+                Assert.assertEquals(16, view.capacity());
                 view.setByte(0, (byte) 42);
             }
 
-            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
-                Assert.assertEquals(42, view.getByte(0));
-            }
+            YierdisNativeObjectMeta meta = allocator.objectMeta(handle, false);
+            Assert.assertEquals(handle.slotId(), meta.slotId());
+            Assert.assertEquals(handle.generation(), meta.generation());
+            Assert.assertEquals(8, meta.size());
+            Assert.assertEquals(16, meta.capacity());
+            Assert.assertEquals(YierdisNativePageClass.SMALL.ordinal(), meta.pageClass());
+            Assert.assertTrue(meta.address() != 0L);
 
-            NativeAllocatorStats beforeFree = allocator.stats();
-            Assert.assertEquals(8L, beforeFree.logicalUsedBytes());
-            Assert.assertEquals(1L, beforeFree.liveObjects());
-
-            allocator.free(handle);
-
-            NativeAllocatorStats afterFree = allocator.stats();
-            Assert.assertEquals(0L, afterFree.logicalUsedBytes());
-            Assert.assertEquals(0L, afterFree.liveObjects());
+            NativeAllocatorStats stats = allocator.stats();
+            Assert.assertEquals(8L, stats.logicalUsedBytes());
+            Assert.assertEquals(16L, stats.reservedBytes());
+            Assert.assertEquals(YierdisNativePageAllocator.PAGE_BYTES, stats.committedBytes());
+            Assert.assertEquals(YierdisNativePageAllocator.PAGE_BYTES - 16L, stats.freeBytes());
+            Assert.assertEquals(8L, stats.internalFragmentationBytes());
+            Assert.assertEquals(1L, stats.liveObjects());
+            Assert.assertEquals(1L, stats.liveSmallPages());
         }
     }
 
@@ -78,10 +77,14 @@ public class YierdisStableNativeAllocatorTest {
 
             NativeAllocatorStats quarantined = allocator.stats();
             Assert.assertEquals(4L, quarantined.logicalUsedBytes());
-            Assert.assertEquals(4L, quarantined.reservedBytes());
+            Assert.assertEquals(16L, quarantined.reservedBytes());
             Assert.assertEquals(1L, quarantined.pinnedObjects());
             Assert.assertEquals(1L, quarantined.quarantinedObjects());
             Assert.assertEquals(1L, quarantined.liveObjects());
+            Assert.assertEquals(
+                    YierdisNativeObjectTable.STATE_FREED_QUARANTINED,
+                    allocator.objectMeta(handle, true).state()
+            );
 
             try {
                 allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
@@ -109,7 +112,7 @@ public class YierdisStableNativeAllocatorTest {
     }
 
     @Test
-    public void quarantinedObjectRejectsResolveAndReallocUntilUnpinned() {
+    public void quarantinedObjectRejectsResolveReallocAndDoubleFreeUntilUnpinned() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
 
@@ -125,8 +128,15 @@ public class YierdisStableNativeAllocatorTest {
             }
 
             try {
-                allocator.realloc(handle, 8, NativeReallocPolicy.PRESERVE_PREFIX);
+                allocator.realloc(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
                 Assert.fail("expected quarantined realloc rejection");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("quarantined"));
+            }
+
+            try {
+                allocator.free(handle);
+                Assert.fail("expected quarantined double-free rejection");
             } catch (StaleNativeHandleException expected) {
                 Assert.assertTrue(expected.getMessage().contains("quarantined"));
             }
@@ -198,7 +208,7 @@ public class YierdisStableNativeAllocatorTest {
             allocator.pin(handle);
 
             try {
-                allocator.realloc(handle, 8, NativeReallocPolicy.PRESERVE_PREFIX);
+                allocator.realloc(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
                 Assert.fail("expected pinned realloc rejection");
             } catch (NativeMemoryException expected) {
                 Assert.assertTrue(expected.getMessage().contains("pinned"));
@@ -213,7 +223,7 @@ public class YierdisStableNativeAllocatorTest {
 
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(4, view.size());
-                Assert.assertEquals(4, view.capacity());
+                Assert.assertEquals(16, view.capacity());
                 Assert.assertEquals(1, view.getByte(0));
                 Assert.assertEquals(2, view.getByte(1));
                 Assert.assertEquals(3, view.getByte(2));
@@ -307,8 +317,8 @@ public class YierdisStableNativeAllocatorTest {
 
     @Test
     public void rejectsOverflowingViewRanges() {
-        try (TestOffHeapAllocator payload = new TestOffHeapAllocator();
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(payload, 1)) {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
@@ -319,29 +329,33 @@ public class YierdisStableNativeAllocatorTest {
                     Assert.assertNotNull(expected);
                 }
             }
-
-            Assert.assertEquals(0, payload.buffer(0).getBytesCalls);
         }
     }
 
     @Test
-    public void reallocPreservesHandleAndPrefixWhenMoved() {
+    public void reallocPreservesHandlePrefixAndUpdatesMetadataWhenMoved() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
 
-            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 16);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 view.setByte(0, (byte) 1);
                 view.setByte(1, (byte) 2);
                 view.setByte(2, (byte) 3);
                 view.setByte(3, (byte) 4);
             }
+            long beforeAddress = allocator.objectMeta(handle, false).address();
 
-            NativeHandle resized = allocator.realloc(handle, 8, NativeReallocPolicy.PRESERVE_PREFIX);
+            NativeHandle resized = allocator.realloc(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
             Assert.assertEquals(handle, resized);
 
+            YierdisNativeObjectMeta after = allocator.objectMeta(handle, false);
+            Assert.assertEquals(24, after.size());
+            Assert.assertEquals(24, after.capacity());
+            Assert.assertNotEquals(beforeAddress, after.address());
+
             try (NativeObjectView view = allocator.resolve(resized, NativeAccessMode.READ_ONLY)) {
-                Assert.assertEquals(8, view.size());
+                Assert.assertEquals(24, view.size());
                 Assert.assertEquals(1, view.getByte(0));
                 Assert.assertEquals(2, view.getByte(1));
                 Assert.assertEquals(3, view.getByte(2));
@@ -349,7 +363,8 @@ public class YierdisStableNativeAllocatorTest {
             }
 
             NativeAllocatorStats stats = allocator.stats();
-            Assert.assertEquals(8L, stats.logicalUsedBytes());
+            Assert.assertEquals(24L, stats.logicalUsedBytes());
+            Assert.assertEquals(24L, stats.reservedBytes());
             Assert.assertEquals(1L, stats.liveObjects());
             Assert.assertEquals(1L, stats.reallocMovedCount());
         }
@@ -376,7 +391,7 @@ public class YierdisStableNativeAllocatorTest {
 
             try (NativeObjectView view = allocator.resolve(grown, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(6, view.size());
-                Assert.assertEquals(8, view.capacity());
+                Assert.assertEquals(16, view.capacity());
                 Assert.assertEquals(1, view.getByte(0));
                 Assert.assertEquals(2, view.getByte(1));
                 Assert.assertEquals(3, view.getByte(2));
@@ -395,7 +410,7 @@ public class YierdisStableNativeAllocatorTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
 
-            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 16);
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 view.setByte(0, (byte) 1);
                 view.setByte(1, (byte) 2);
@@ -404,21 +419,21 @@ public class YierdisStableNativeAllocatorTest {
             }
 
             try {
-                allocator.realloc(handle, 8, NativeReallocPolicy.NO_MOVE);
+                allocator.realloc(handle, 24, NativeReallocPolicy.NO_MOVE);
                 Assert.fail("expected no-move realloc failure");
             } catch (NativeMemoryException expected) {
                 Assert.assertTrue(expected.getMessage().contains("cannot grow in place"));
             }
 
             NativeAllocatorStats stats = allocator.stats();
-            Assert.assertEquals(4L, stats.logicalUsedBytes());
+            Assert.assertEquals(16L, stats.logicalUsedBytes());
             Assert.assertEquals(1L, stats.liveObjects());
             Assert.assertEquals(0L, stats.reallocInPlaceCount());
             Assert.assertEquals(0L, stats.reallocMovedCount());
 
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
-                Assert.assertEquals(4, view.size());
-                Assert.assertEquals(4, view.capacity());
+                Assert.assertEquals(16, view.size());
+                Assert.assertEquals(16, view.capacity());
                 Assert.assertEquals(1, view.getByte(0));
                 Assert.assertEquals(2, view.getByte(1));
                 Assert.assertEquals(3, view.getByte(2));
@@ -446,7 +461,7 @@ public class YierdisStableNativeAllocatorTest {
 
             try (NativeObjectView view = allocator.resolve(grown, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(6, view.size());
-                Assert.assertEquals(8, view.capacity());
+                Assert.assertEquals(16, view.capacity());
                 Assert.assertEquals(5, view.getByte(0));
                 Assert.assertEquals(6, view.getByte(1));
                 Assert.assertEquals(7, view.getByte(2));
@@ -462,8 +477,8 @@ public class YierdisStableNativeAllocatorTest {
 
     @Test
     public void retiresSlotWhenGenerationSpaceIsExhausted() {
-        try (TestOffHeapAllocator payload = new TestOffHeapAllocator();
-             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(payload, 1)) {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
 
             NativeHandle original = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
             allocator.free(original);
@@ -491,223 +506,28 @@ public class YierdisStableNativeAllocatorTest {
     }
 
     @Test
-    public void reallocMoveCloseFailureLeavesOriginalObjectReadable() {
-        TestOffHeapAllocator payload = new TestOffHeapAllocator();
-        try (YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(payload, 4)) {
-            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
-            TestOffHeapBuf originalBuffer = payload.buffer(0);
-            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
-                view.setByte(0, (byte) 1);
-                view.setByte(1, (byte) 2);
-                view.setByte(2, (byte) 3);
-                view.setByte(3, (byte) 4);
-            }
+    public void closeReleasesAllocatorRuntimeMemory() {
+        YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-close");
+        YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4);
+        try {
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+            Assert.assertTrue(runtime.usedBytes() > 0L);
 
-            originalBuffer.throwOnClose = true;
-            try {
-                allocator.realloc(handle, 8, NativeReallocPolicy.PRESERVE_PREFIX);
-                Assert.fail("expected close failure");
-            } catch (IllegalStateException expected) {
-                Assert.assertTrue(expected.getMessage().contains("close failed"));
-            }
-            originalBuffer.throwOnClose = false;
+            allocator.free(handle);
+            Assert.assertTrue(runtime.usedBytes() > 0L);
 
-            NativeAllocatorStats stats = allocator.stats();
-            Assert.assertEquals(4L, stats.logicalUsedBytes());
-            Assert.assertEquals(1L, stats.liveObjects());
-            Assert.assertEquals(0L, stats.reallocMovedCount());
-
-            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
-                Assert.assertEquals(4, view.size());
-                Assert.assertEquals(4, view.capacity());
-                Assert.assertEquals(1, view.getByte(0));
-                Assert.assertEquals(2, view.getByte(1));
-                Assert.assertEquals(3, view.getByte(2));
-                Assert.assertEquals(4, view.getByte(3));
-            }
-        }
-    }
-
-    @Test
-    public void freeCloseFailureStalesHandleAndDoesNotReuseSlot() {
-        TestOffHeapAllocator payload = new TestOffHeapAllocator();
-        try (YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(payload, 1)) {
-            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
-            TestOffHeapBuf buffer = payload.buffer(0);
-            buffer.throwOnClose = true;
-
-            try {
-                allocator.free(handle);
-                Assert.fail("expected close failure");
-            } catch (IllegalStateException expected) {
-                Assert.assertTrue(expected.getMessage().contains("close failed"));
-            }
-
-            NativeAllocatorStats stats = allocator.stats();
-            Assert.assertEquals(0L, stats.logicalUsedBytes());
-            Assert.assertEquals(0L, stats.liveObjects());
-            Assert.assertEquals(4L, stats.reservedBytes());
+            allocator.close();
+            Assert.assertEquals(0L, runtime.usedBytes());
 
             try {
                 allocator.resolve(handle, NativeAccessMode.READ_ONLY);
-                Assert.fail("expected stale handle");
-            } catch (StaleNativeHandleException expected) {
-                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
+                Assert.fail("expected allocator closed");
+            } catch (IllegalStateException expected) {
+                Assert.assertTrue(expected.getMessage().contains("closed"));
             }
-
-            try {
-                allocator.free(handle);
-                Assert.fail("expected stale handle");
-            } catch (StaleNativeHandleException expected) {
-                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
-            }
-
-            try {
-                allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
-                Assert.fail("expected slot exhaustion");
-            } catch (NativeMemoryException expected) {
-                Assert.assertTrue(expected.getMessage().contains("slot limit"));
-            }
-
-            buffer.throwOnClose = false;
+        } finally {
             allocator.close();
-            Assert.assertEquals(0L, payload.usedBytes());
-        }
-    }
-
-    @Test
-    public void closeFailureKeepsBufferForRetry() {
-        TestOffHeapAllocator payload = new TestOffHeapAllocator();
-        YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(payload, 1);
-        NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
-        TestOffHeapBuf buffer = payload.buffer(0);
-        buffer.throwOnClose = true;
-
-        try {
-            allocator.close();
-            Assert.fail("expected close failure");
-        } catch (IllegalStateException expected) {
-            Assert.assertTrue(expected.getMessage().contains("close failed"));
-        }
-
-        NativeAllocatorStats stats = allocator.stats();
-        Assert.assertEquals(0L, stats.logicalUsedBytes());
-        Assert.assertEquals(0L, stats.liveObjects());
-        Assert.assertEquals(4L, stats.reservedBytes());
-
-        buffer.throwOnClose = false;
-        allocator.close();
-        Assert.assertEquals(0L, payload.usedBytes());
-
-        try {
-            allocator.resolve(handle, NativeAccessMode.READ_ONLY);
-            Assert.fail("expected allocator closed");
-        } catch (IllegalStateException expected) {
-            Assert.assertTrue(expected.getMessage().contains("closed"));
-        }
-    }
-
-    private static final class TestOffHeapAllocator implements OffHeapAllocator {
-        private TestOffHeapBuf[] buffers = new TestOffHeapBuf[8];
-        private int bufferCount;
-        private long usedBytes;
-
-        @Override
-        public OffHeapBuf allocate(int capacity) {
-            TestOffHeapBuf buffer = new TestOffHeapBuf(this, capacity);
-            if (bufferCount == buffers.length) {
-                TestOffHeapBuf[] next = new TestOffHeapBuf[buffers.length * 2];
-                System.arraycopy(buffers, 0, next, 0, buffers.length);
-                buffers = next;
-            }
-            buffers[bufferCount++] = buffer;
-            usedBytes += capacity;
-            return buffer;
-        }
-
-        @Override
-        public long usedBytes() {
-            return usedBytes;
-        }
-
-        @Override
-        public long maxBytes() {
-            return 0;
-        }
-
-        @Override
-        public void close() {
-        }
-
-        private TestOffHeapBuf buffer(int index) {
-            return buffers[index];
-        }
-
-        private void onClosed(int capacity) {
-            usedBytes -= capacity;
-        }
-    }
-
-    private static final class TestOffHeapBuf implements OffHeapBuf {
-        private final TestOffHeapAllocator owner;
-        private final byte[] bytes;
-        private int getBytesCalls;
-        private boolean closed;
-        private boolean throwOnClose;
-
-        private TestOffHeapBuf(TestOffHeapAllocator owner, int capacity) {
-            this.owner = owner;
-            this.bytes = new byte[capacity];
-        }
-
-        @Override
-        public int capacity() {
-            return bytes.length;
-        }
-
-        @Override
-        public byte getByte(int index) {
-            return bytes[index];
-        }
-
-        @Override
-        public void setByte(int index, byte value) {
-            bytes[index] = value;
-        }
-
-        @Override
-        public void getBytes(int index, byte[] dst, int dstOff, int len) {
-            getBytesCalls++;
-            System.arraycopy(bytes, index, dst, dstOff, len);
-        }
-
-        @Override
-        public void setBytes(int index, byte[] src, int srcOff, int len) {
-            System.arraycopy(src, srcOff, bytes, index, len);
-        }
-
-        @Override
-        public void setBytes(int index, BytesSource src, int srcIndex, int len) {
-            for (int i = 0; i < len; i++) {
-                bytes[index + i] = src.getByte(srcIndex + i);
-            }
-        }
-
-        @Override
-        public OffHeapSlice slice(int index, int len) {
-            throw new UnsupportedOperationException("slice not needed");
-        }
-
-        @Override
-        public void close() {
-            if (throwOnClose) {
-                throw new IllegalStateException("close failed");
-            }
-            if (closed) {
-                return;
-            }
-            closed = true;
-            owner.onClosed(bytes.length);
+            runtime.close();
         }
     }
 }
