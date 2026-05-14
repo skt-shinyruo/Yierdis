@@ -107,6 +107,7 @@ public class YierdisStableNativeAllocatorTest {
             allocator.free(first);
 
             NativeHandle second = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+            Assert.assertNotEquals(first.generation(), second.generation());
             try (NativeObjectView newView = allocator.resolve(second, NativeAccessMode.READ_WRITE)) {
                 newView.setByte(0, (byte) 22);
             }
@@ -171,6 +172,74 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(8L, stats.logicalUsedBytes());
             Assert.assertEquals(1L, stats.liveObjects());
             Assert.assertEquals(1L, stats.reallocMovedCount());
+        }
+    }
+
+    @Test
+    public void reallocNoMoveGrowsWithinCapacityAfterShrink() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setByte(0, (byte) 1);
+                view.setByte(1, (byte) 2);
+                view.setByte(2, (byte) 3);
+                view.setByte(3, (byte) 4);
+            }
+
+            NativeHandle shrunk = allocator.realloc(handle, 4, NativeReallocPolicy.NO_MOVE);
+            Assert.assertEquals(handle, shrunk);
+
+            NativeHandle grown = allocator.realloc(handle, 6, NativeReallocPolicy.NO_MOVE);
+            Assert.assertEquals(handle, grown);
+
+            try (NativeObjectView view = allocator.resolve(grown, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(6, view.size());
+                Assert.assertEquals(8, view.capacity());
+                Assert.assertEquals(1, view.getByte(0));
+                Assert.assertEquals(2, view.getByte(1));
+                Assert.assertEquals(3, view.getByte(2));
+                Assert.assertEquals(4, view.getByte(3));
+            }
+
+            NativeAllocatorStats stats = allocator.stats();
+            Assert.assertEquals(6L, stats.logicalUsedBytes());
+            Assert.assertEquals(2L, stats.reallocInPlaceCount());
+            Assert.assertEquals(0L, stats.reallocMovedCount());
+        }
+    }
+
+    @Test
+    public void preservePrefixGrowsWithinCapacityAfterShrinkWithoutMove() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setByte(0, (byte) 5);
+                view.setByte(1, (byte) 6);
+                view.setByte(2, (byte) 7);
+                view.setByte(3, (byte) 8);
+            }
+
+            allocator.realloc(handle, 4, NativeReallocPolicy.PRESERVE_PREFIX);
+            NativeHandle grown = allocator.realloc(handle, 6, NativeReallocPolicy.PRESERVE_PREFIX);
+            Assert.assertEquals(handle, grown);
+
+            try (NativeObjectView view = allocator.resolve(grown, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(6, view.size());
+                Assert.assertEquals(8, view.capacity());
+                Assert.assertEquals(5, view.getByte(0));
+                Assert.assertEquals(6, view.getByte(1));
+                Assert.assertEquals(7, view.getByte(2));
+                Assert.assertEquals(8, view.getByte(3));
+            }
+
+            NativeAllocatorStats stats = allocator.stats();
+            Assert.assertEquals(6L, stats.logicalUsedBytes());
+            Assert.assertEquals(2L, stats.reallocInPlaceCount());
+            Assert.assertEquals(0L, stats.reallocMovedCount());
         }
     }
 }

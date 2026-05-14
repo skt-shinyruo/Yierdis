@@ -88,7 +88,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
         Slot slot = requireLiveSlot(handle);
         int oldSize = slot.size;
-        if (newSize <= oldSize) {
+        if (newSize <= slot.capacity) {
             slot.size = newSize;
             logicalUsedBytes += (long) newSize - oldSize;
             reallocInPlaceCount++;
