@@ -64,6 +64,38 @@ public class YierdisStableNativeAllocatorTest {
     }
 
     @Test
+    public void detectsNullHandle() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+
+            try {
+                allocator.resolve(null, NativeAccessMode.READ_ONLY);
+                Assert.fail("expected stale handle");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
+            }
+
+            Assert.assertEquals(1L, allocator.stats().staleHandleDetections());
+        }
+    }
+
+    @Test
+    public void detectsNativeNullHandle() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+
+            try {
+                allocator.resolve(NativeHandle.NULL, NativeAccessMode.READ_ONLY);
+                Assert.fail("expected stale handle");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
+            }
+
+            Assert.assertEquals(1L, allocator.stats().staleHandleDetections());
+        }
+    }
+
+    @Test
     public void oldViewFailsAfterFreeAndSlotReuse() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
