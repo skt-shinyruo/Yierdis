@@ -1,5 +1,8 @@
 package yier.bubu.redis.memory.foreign;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAccessMode;
@@ -696,6 +699,106 @@ public class YierdisStableNativeAllocatorTest {
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(7, view.getByte(0));
             }
+        }
+    }
+
+    @Test
+    public void statsExposeProductionAllocatorMetrics() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+
+            NativeHandle string = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            NativeHandle entry = allocator.allocate(NativeObjectKind.ENTRY_RECORD, 70_000);
+
+            NativeAllocatorStats allocated = allocator.stats();
+            Assert.assertEquals(1L, allocated.objectCount(NativeObjectKind.STRING_BYTES));
+            Assert.assertEquals(1L, allocated.objectCount(NativeObjectKind.ENTRY_RECORD));
+            Assert.assertTrue(allocated.externalFragmentationBytes() > 0L);
+            Assert.assertTrue(allocated.smallFreeBytes() > 0L);
+            Assert.assertEquals(0L, allocated.mediumFreeBytes());
+            Assert.assertEquals(0L, allocated.largeFreeBytes());
+            Assert.assertEquals(0L, allocated.freePages());
+            Assert.assertTrue(allocated.allocationLatencyHistogram().allocationCount() >= 2L);
+
+            long reclaimedPages = allocator.objectMeta(entry, false).capacity()
+                    / YierdisNativePageAllocator.PAGE_BYTES;
+            NativeDefragResult moved = allocator.defragOne(entry, 70_000);
+            Assert.assertTrue(moved.moved());
+            Assert.assertEquals(reclaimedPages, allocator.stats().defragReclaimedPages());
+
+            allocator.pin(string);
+            allocator.free(string);
+            Assert.assertTrue(allocator.stats().quarantineBytes() >= 24L);
+
+            try {
+                allocator.free(string);
+                Assert.fail("expected double-free detection");
+            } catch (StaleNativeHandleException expected) {
+                Assert.assertTrue(expected.getMessage().contains("quarantined"));
+            }
+
+            Assert.assertEquals(1L, allocator.stats().doubleFreeDetections());
+            allocator.unpin(string);
+        }
+    }
+
+    @Test
+    public void deterministicAllocatorChurnStressMaintainsAccounting() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-churn");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 128)) {
+
+            Random random = new Random(0x5eed1234L);
+            List<NativeHandle> live = new ArrayList<>();
+
+            for (int i = 0; i < 180; i++) {
+                int op = live.isEmpty() ? 0 : random.nextInt(100);
+                if (op < 35) {
+                    live.add(allocator.allocate(NativeObjectKind.STRING_BYTES, 1 + random.nextInt(128)));
+                    continue;
+                }
+
+                int index = random.nextInt(live.size());
+                NativeHandle handle = live.get(index);
+                if (op < 55) {
+                    allocator.realloc(handle, 1 + random.nextInt(192), NativeReallocPolicy.PRESERVE_PREFIX);
+                } else if (op < 70) {
+                    try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                        view.setByte(0, (byte) i);
+                        Assert.assertEquals((byte) i, view.getByte(0));
+                    }
+                } else if (op < 85) {
+                    allocator.pin(handle);
+                    try {
+                        NativeDefragResult result = allocator.defragOne(handle, 192);
+                        Assert.assertTrue(result.skippedPinned());
+                    } finally {
+                        allocator.unpin(handle);
+                    }
+                } else if (op < 95) {
+                    allocator.defragOne(handle, 192);
+                } else {
+                    allocator.free(handle);
+                    live.remove(index);
+                    try {
+                        allocator.resolve(handle, NativeAccessMode.READ_ONLY);
+                        Assert.fail("expected stale handle after churn free");
+                    } catch (StaleNativeHandleException expected) {
+                        Assert.assertTrue(expected.getMessage().contains("stale native handle"));
+                    }
+                }
+            }
+
+            for (NativeHandle handle : live) {
+                allocator.free(handle);
+            }
+
+            NativeAllocatorStats stats = allocator.stats();
+            Assert.assertEquals(0L, stats.logicalUsedBytes());
+            Assert.assertEquals(0L, stats.reservedBytes());
+            Assert.assertEquals(0L, stats.liveObjects());
+            Assert.assertTrue(stats.staleHandleDetections() > 0L);
+            Assert.assertTrue(stats.defragSkippedPinnedObjects() > 0L);
+            Assert.assertTrue(stats.allocationLatencyHistogram().allocationCount() > 0L);
         }
     }
 

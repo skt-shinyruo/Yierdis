@@ -111,6 +111,10 @@ public class YierdisNativePageAllocatorTest {
             Assert.assertEquals(1L, stats.liveSmallPages());
             Assert.assertEquals(1L, stats.liveMediumSpanPages());
             Assert.assertEquals(0L, stats.liveLargeSpanPages());
+            Assert.assertTrue(stats.smallFreeBytes() > 0L);
+            Assert.assertEquals(0L, stats.mediumFreeBytes());
+            Assert.assertEquals(0L, stats.largeFreeBytes());
+            Assert.assertEquals(0L, stats.freePages());
 
             small.close();
             medium.close();
@@ -118,6 +122,8 @@ public class YierdisNativePageAllocatorTest {
             YierdisNativePageAllocatorStats afterFree = allocator.stats();
             Assert.assertEquals(0L, afterFree.usedBytes());
             Assert.assertEquals(afterFree.committedBytes(), afterFree.freeBytes());
+            Assert.assertEquals(YierdisNativePageAllocator.PAGE_BYTES, afterFree.smallFreeBytes());
+            Assert.assertEquals(1L, afterFree.freePages());
         }
     }
 }
