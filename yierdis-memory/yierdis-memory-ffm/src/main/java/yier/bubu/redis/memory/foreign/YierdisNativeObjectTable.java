@@ -116,10 +116,14 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
     }
 
     public synchronized void free(NativeHandle handle, long freeEpoch) {
+        free(handle, freeEpoch, false);
+    }
+
+    public synchronized void free(NativeHandle handle, long freeEpoch, boolean forceQuarantine) {
         ensureOpen();
         SlotRef ref = requireLiveSlot(handle, false);
         int pinCount = readInt(ref.slotId, PIN_COUNT_OFFSET);
-        if (pinCount > 0) {
+        if (forceQuarantine || pinCount > 0) {
             writeLong(ref.slotId, FREE_EPOCH_OFFSET, freeEpoch);
             writeInt(ref.slotId, STATE_OFFSET, STATE_FREED_QUARANTINED);
             return;
@@ -136,6 +140,10 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
     }
 
     public synchronized void unpin(NativeHandle handle) {
+        unpin(handle, true);
+    }
+
+    public synchronized void unpin(NativeHandle handle, boolean releaseQuarantinedOnZero) {
         ensureOpen();
         SlotRef ref = requireLiveSlot(handle, true);
         int pinCount = readInt(ref.slotId, PIN_COUNT_OFFSET);
@@ -145,11 +153,26 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         pinCount--;
         writeInt(ref.slotId, PIN_COUNT_OFFSET, pinCount);
         int state = readInt(ref.slotId, STATE_OFFSET);
-        if (pinCount == 0 && state == STATE_FREED_QUARANTINED) {
+        if (pinCount == 0 && state == STATE_FREED_QUARANTINED && releaseQuarantinedOnZero) {
             releaseSlot(ref.slotId, readLong(ref.slotId, FREE_EPOCH_OFFSET));
         } else if (pinCount == 0) {
-            writeInt(ref.slotId, STATE_OFFSET, STATE_ALLOCATED);
+            if (state != STATE_FREED_QUARANTINED) {
+                writeInt(ref.slotId, STATE_OFFSET, STATE_ALLOCATED);
+            }
         }
+    }
+
+    public synchronized void releaseQuarantined(NativeHandle handle) {
+        ensureOpen();
+        SlotRef ref = requireLiveSlot(handle, true);
+        int state = readInt(ref.slotId, STATE_OFFSET);
+        if (state != STATE_FREED_QUARANTINED) {
+            throw new NativeMemoryException("native object is not quarantined");
+        }
+        if (readInt(ref.slotId, PIN_COUNT_OFFSET) != 0) {
+            throw new NativeMemoryException("native object is still pinned");
+        }
+        releaseSlot(ref.slotId, readLong(ref.slotId, FREE_EPOCH_OFFSET));
     }
 
     public synchronized void updateLocation(NativeHandle handle, int size, int capacity, long address, int pageClass) {

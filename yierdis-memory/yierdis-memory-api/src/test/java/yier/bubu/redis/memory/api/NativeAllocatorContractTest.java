@@ -59,6 +59,14 @@ public class NativeAllocatorContractTest {
     }
 
     @Test
+    public void epochKindsCoverAllocatorReadSafetyScopes() {
+        Assert.assertEquals(NativeEpochKind.COMMAND, NativeEpochKind.valueOf("COMMAND"));
+        Assert.assertEquals(NativeEpochKind.SCAN, NativeEpochKind.valueOf("SCAN"));
+        Assert.assertEquals(NativeEpochKind.SNAPSHOT, NativeEpochKind.valueOf("SNAPSHOT"));
+        Assert.assertEquals(NativeEpochKind.DEFRAG, NativeEpochKind.valueOf("DEFRAG"));
+    }
+
+    @Test
     public void exceptionTypesCarryMessages() {
         NativeMemoryException base = new NativeMemoryException("base");
         StaleNativeHandleException stale = new StaleNativeHandleException("stale");
