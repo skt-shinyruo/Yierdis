@@ -1625,15 +1625,19 @@ Yierdis 当前对 FFM 的使用方式可以概括为：
 
 ### Stable native object allocator
 
-`YierdisStableNativeAllocator` is the first executable milestone of the production stable-handle ABI described in `docs/superpowers/specs/2026-05-14-production-allocator-handle-design.md`.
+`YierdisStableNativeAllocator` implements the production stable-handle ABI described in `docs/superpowers/specs/2026-05-14-production-allocator-handle-design.md`.
 
 It provides:
 
 - 64-bit `NativeHandle` values with domain, kind, slot id, generation, and flags
-- generation checks for stale handle detection, including slot retirement before generation wrap
+- native object-table metadata for address, size, capacity, generation, kind/domain, pin count, owner shard, state, and alloc/free epochs
+- 64 KiB page allocation with small size classes, medium spans, and large spans
+- generation checks for stale handle, double-free, wrong-kind, wrong-domain, and quarantined-object detection
 - bounded resolved object views with read-only and read-write access modes
-- stable-handle `realloc` semantics with prefix preservation and failure rollback coverage
-- pin/quarantine behavior for future snapshot, scan, and defrag protocols
-- allocator stats for logical bytes, reserved bytes, live objects, pinned objects, quarantined objects, stale-handle detections, and realloc counters
+- stable-handle `realloc` semantics with prefix preservation, in-place resize when capacity allows, and move rollback coverage
+- DB `EntryHandle` / `ValueHandle` integration through `NativeHandle` so entry records, key bytes, string bytes, and collection roots keep stable allocator references rather than physical addresses
+- pin and epoch quarantine so freed or moved physical blocks are not released while resolved views, scan epochs, snapshot epochs, command epochs, or defrag epochs may still observe them
+- active defrag cycles that move eligible unpinned objects by updating allocator metadata; DB graph references do not need to be rewritten because they store stable handles
+- allocator stats for logical/reserved/committed/free bytes, internal/external fragmentation, page counts, object kind counts, quarantine bytes, pin counts, stale/double-free detections, realloc counters, defrag counters, and allocation latency buckets
 
-This allocator is intentionally non-moving in this milestone. Page size classes, native object-table metadata compaction, DB `EntryTable` / `ValueHandle` migration, epoch reclamation, and active defrag movement remain follow-up work.
+The allocator still keeps physical address packing private. DB hot paths must resolve a handle only for a bounded operation, close the resolved view promptly, and never persist allocator-private page ids, offsets, spans, or raw memory addresses.
