@@ -190,6 +190,41 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         writeInt(ref.slotId, PAGE_CLASS_OFFSET, pageClass);
     }
 
+    public synchronized YierdisNativeObjectMeta beginMove(NativeHandle handle) {
+        ensureOpen();
+        SlotRef ref = requireLiveSlot(handle, false);
+        int state = readInt(ref.slotId, STATE_OFFSET);
+        int pinCount = readInt(ref.slotId, PIN_COUNT_OFFSET);
+        if (state != STATE_ALLOCATED || pinCount != 0) {
+            throw new NativeMemoryException("native object cannot move");
+        }
+        YierdisNativeObjectMeta meta = readMeta(ref.slotId);
+        writeInt(ref.slotId, STATE_OFFSET, STATE_MOVING);
+        return meta;
+    }
+
+    public synchronized void publishMoved(NativeHandle handle, int size, int capacity, long address, int pageClass) {
+        ensureOpen();
+        SlotRef ref = requireSlotInState(handle, STATE_MOVING);
+        if (size <= 0) {
+            throw new IllegalArgumentException("size must be > 0");
+        }
+        if (capacity < size) {
+            throw new IllegalArgumentException("capacity must be >= size");
+        }
+        writeLong(ref.slotId, ADDRESS_OFFSET, address);
+        writeInt(ref.slotId, SIZE_OFFSET, size);
+        writeInt(ref.slotId, CAPACITY_OFFSET, capacity);
+        writeInt(ref.slotId, PAGE_CLASS_OFFSET, pageClass);
+        writeInt(ref.slotId, STATE_OFFSET, STATE_ALLOCATED);
+    }
+
+    public synchronized void abortMove(NativeHandle handle) {
+        ensureOpen();
+        SlotRef ref = requireSlotInState(handle, STATE_MOVING);
+        writeInt(ref.slotId, STATE_OFFSET, STATE_ALLOCATED);
+    }
+
     @Override
     public synchronized void close() {
         if (closed) {
@@ -223,6 +258,15 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
             throw new NativeMemoryException("native handle kind/domain mismatch: " + handle.raw());
         }
         return new SlotRef(slotId);
+    }
+
+    private SlotRef requireSlotInState(NativeHandle handle, int expectedState) {
+        SlotRef ref = requireLiveSlot(handle, false);
+        int state = readInt(ref.slotId, STATE_OFFSET);
+        if (state != expectedState) {
+            throw new NativeMemoryException("native object state mismatch: expected " + expectedState + " but was " + state);
+        }
+        return ref;
     }
 
     private void releaseSlot(int slotId, long freeEpoch) {
