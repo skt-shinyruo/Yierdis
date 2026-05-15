@@ -1,6 +1,7 @@
 package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
@@ -31,6 +32,7 @@ import java.util.function.LongSupplier;
 public final class YierdisDbKeyLifecycle {
     private final YierdisExpireIndex expires;
     private final OffHeapAllocator offHeapAllocator;
+    private final NativeAllocator nativeAllocator;
     private final YierdisFfmMemoryRuntime memoryRuntime;
     private final EntryTable entryTable;
     private final NativeKeyDirectory keyDirectory;
@@ -45,6 +47,7 @@ public final class YierdisDbKeyLifecycle {
     YierdisDbKeyLifecycle(
             YierdisExpireIndex expires,
             OffHeapAllocator offHeapAllocator,
+            NativeAllocator nativeAllocator,
             YierdisFfmMemoryRuntime memoryRuntime,
             EntryTable entryTable,
             NativeKeyDirectory keyDirectory,
@@ -58,6 +61,7 @@ public final class YierdisDbKeyLifecycle {
     ) {
         this.expires = Objects.requireNonNull(expires, "expires");
         this.offHeapAllocator = offHeapAllocator;
+        this.nativeAllocator = java.util.Objects.requireNonNull(nativeAllocator, "nativeAllocator");
         this.memoryRuntime = memoryRuntime;
         this.entryTable = Objects.requireNonNull(entryTable, "entryTable");
         this.keyDirectory = Objects.requireNonNull(keyDirectory, "keyDirectory");
@@ -72,6 +76,10 @@ public final class YierdisDbKeyLifecycle {
 
     public OffHeapAllocator offHeapAllocator() {
         return offHeapAllocator;
+    }
+
+    NativeAllocator nativeAllocator() {
+        return nativeAllocator;
     }
 
     public YierdisFfmMemoryRuntime memoryRuntime() {

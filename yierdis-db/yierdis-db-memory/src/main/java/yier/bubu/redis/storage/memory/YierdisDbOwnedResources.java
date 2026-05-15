@@ -9,25 +9,32 @@ import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
+import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 
 public final class YierdisDbOwnedResources implements AutoCloseable {
     private final YierdisFfmMemoryRuntime memoryRuntime;
     private final OffHeapAllocator offHeapAllocator;
+    private final NativeAllocator nativeAllocator;
     private final boolean ownsMemoryRuntime;
     private final boolean ownsOffHeapAllocator;
+    private final boolean ownsNativeAllocator;
 
     YierdisDbOwnedResources(
             YierdisFfmMemoryRuntime memoryRuntime,
             OffHeapAllocator offHeapAllocator,
+            NativeAllocator nativeAllocator,
             boolean ownsMemoryRuntime,
-            boolean ownsOffHeapAllocator
+            boolean ownsOffHeapAllocator,
+            boolean ownsNativeAllocator
     ) {
         this.memoryRuntime = memoryRuntime;
         this.offHeapAllocator = offHeapAllocator;
+        this.nativeAllocator = nativeAllocator;
         this.ownsMemoryRuntime = ownsMemoryRuntime;
         this.ownsOffHeapAllocator = ownsOffHeapAllocator;
+        this.ownsNativeAllocator = ownsNativeAllocator;
     }
 
     void clearData(
@@ -174,6 +181,13 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
         if (ownsOffHeapAllocator && offHeapAllocator != null) {
             try {
                 offHeapAllocator.close();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+        }
+        if (ownsNativeAllocator && nativeAllocator != null) {
+            try {
+                nativeAllocator.close();
             } catch (Throwable t) {
                 failure = recordFailure(failure, t);
             }

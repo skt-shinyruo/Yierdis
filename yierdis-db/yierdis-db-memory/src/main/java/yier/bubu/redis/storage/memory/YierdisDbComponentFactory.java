@@ -69,6 +69,7 @@ public final class YierdisDbComponentFactory {
         YierdisDbKeyLifecycle keyLifecycle = new YierdisDbKeyLifecycle(
                 storage.expires,
                 storage.offHeapAllocator,
+                storage.nativeAllocator,
                 storage.memoryRuntime,
                 storage.entries,
                 storage.keyDirectory,
