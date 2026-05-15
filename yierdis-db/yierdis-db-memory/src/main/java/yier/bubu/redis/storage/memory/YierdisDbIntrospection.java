@@ -9,6 +9,8 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.memory.api.NativeEpochKind;
+import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
@@ -55,36 +57,38 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
             throw new IllegalArgumentException("count must be > 0");
         }
 
-        long now = System.currentTimeMillis();
-        int maxSteps = Math.max(64, count * 10);
-        final int[] remaining = new int[]{count};
+        try (NativeEpochScope ignored = keyLifecycle.nativeAllocator().beginEpoch(NativeEpochKind.SNAPSHOT)) {
+            long now = System.currentTimeMillis();
+            int maxSteps = Math.max(64, count * 10);
+            final int[] remaining = new int[]{count};
 
-        return keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, record) -> {
-            if (k == null || record == null) {
-                return true;
-            }
-            if (keyLifecycle.isKeyExpired(k, now)) {
-                return true;
-            }
+            return keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, record) -> {
+                if (k == null || record == null) {
+                    return true;
+                }
+                if (keyLifecycle.isKeyExpired(k, now)) {
+                    return true;
+                }
 
-            byte[] keyBytes = YierdisDb.toByteArray(k);
-            ValueType type = record.type();
-            byte[] stringValue = null;
-            if (type == ValueType.STRING) {
-                ValueHandle handle = record.valueHandle();
-                stringValue = handle == null ? null : keyLifecycle.stringRoot().copy(handle);
-            }
-            Long expireAtMillis;
-            if (record.expireAtMillis() < 0) {
-                expireAtMillis = keyLifecycle.expireAtMillis(k);
-            } else {
-                expireAtMillis = record.expireAtMillis();
-            }
-            out.add(new YierdisSnapshotEntry(keyBytes, type, stringValue, expireAtMillis));
+                byte[] keyBytes = YierdisDb.toByteArray(k);
+                ValueType type = record.type();
+                byte[] stringValue = null;
+                if (type == ValueType.STRING) {
+                    ValueHandle handle = record.valueHandle();
+                    stringValue = handle == null ? null : keyLifecycle.stringRoot().copy(handle);
+                }
+                Long expireAtMillis;
+                if (record.expireAtMillis() < 0) {
+                    expireAtMillis = keyLifecycle.expireAtMillis(k);
+                } else {
+                    expireAtMillis = record.expireAtMillis();
+                }
+                out.add(new YierdisSnapshotEntry(keyBytes, type, stringValue, expireAtMillis));
 
-            remaining[0]--;
-            return remaining[0] > 0;
-        });
+                remaining[0]--;
+                return remaining[0] > 0;
+            });
+        }
     }
 
     private static String encodingName(ValueEncoding encoding) {

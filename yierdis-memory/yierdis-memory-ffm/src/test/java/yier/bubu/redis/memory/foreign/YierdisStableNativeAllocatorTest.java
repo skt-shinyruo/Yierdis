@@ -222,6 +222,43 @@ public class YierdisStableNativeAllocatorTest {
     }
 
     @Test
+    public void activeSnapshotEpochDelaysFreedSlotReuseUntilClosed() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1)) {
+
+            NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+            NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.SNAPSHOT);
+
+            allocator.free(first);
+
+            NativeAllocatorStats quarantined = allocator.stats();
+            Assert.assertEquals(4L, quarantined.logicalUsedBytes());
+            Assert.assertEquals(16L, quarantined.reservedBytes());
+            Assert.assertEquals(1L, quarantined.quarantinedObjects());
+            Assert.assertEquals(1L, quarantined.liveObjects());
+
+            try {
+                allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+                Assert.fail("expected active epoch to keep freed slot unavailable");
+            } catch (NativeMemoryException expected) {
+                Assert.assertTrue(expected.getMessage().contains("slot limit"));
+            }
+
+            epoch.close();
+
+            NativeAllocatorStats released = allocator.stats();
+            Assert.assertEquals(0L, released.logicalUsedBytes());
+            Assert.assertEquals(0L, released.reservedBytes());
+            Assert.assertEquals(0L, released.quarantinedObjects());
+            Assert.assertEquals(0L, released.liveObjects());
+
+            NativeHandle second = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
+            Assert.assertEquals(first.slotId(), second.slotId());
+            Assert.assertEquals(first.generation() + 1, second.generation());
+        }
+    }
+
+    @Test
     public void unpinWithoutPinThrows() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
@@ -598,6 +635,31 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(24L, allocator.stats().reservedBytes());
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(1, view.getByte(0));
+            }
+        }
+    }
+
+    @Test
+    public void activeSnapshotEpochDelaysDefragOldBlockReleaseUntilClosed() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
+
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setByte(0, (byte) 7);
+            }
+            NativeEpochScope epoch = allocator.beginEpoch(NativeEpochKind.SNAPSHOT);
+
+            NativeDefragResult result = allocator.defragOne(handle, 24);
+
+            Assert.assertTrue(result.moved());
+            Assert.assertEquals(48L, allocator.stats().reservedBytes());
+
+            epoch.close();
+
+            Assert.assertEquals(24L, allocator.stats().reservedBytes());
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(7, view.getByte(0));
             }
         }
     }

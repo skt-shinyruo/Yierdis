@@ -9,6 +9,8 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.memory.api.NativeEpochKind;
+import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.api.KeyspaceReadOps;
@@ -110,65 +112,67 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
         }
         final long deadline = deadlineNanos;
 
-        long nowMillis = System.currentTimeMillis();
-        List<byte[]> out = new ArrayList<>();
-        List<byte[]> expiredKeys = new ArrayList<>();
-        final boolean[] timedOut = new boolean[]{false};
+        try (NativeEpochScope ignored = keyLifecycle.nativeAllocator().beginEpoch(NativeEpochKind.SCAN)) {
+            long nowMillis = System.currentTimeMillis();
+            List<byte[]> out = new ArrayList<>();
+            List<byte[]> expiredKeys = new ArrayList<>();
+            final boolean[] timedOut = new boolean[]{false};
 
-        ScanCursorV2 cursor = ScanCursorV2.start();
-        int guard = 0;
-        while (true) {
-            if (System.nanoTime() >= deadline) {
-                timedOut[0] = true;
-                break;
-            }
-            ScanCursorV2 next = keyLifecycle.scan(cursor, 1024, (k, record) -> {
-                if (k == null) {
-                    return true;
-                }
-                if (record == null) {
-                    return true;
-                }
-                if (keyLifecycle.isKeyExpired(k, nowMillis)) {
-                    expiredKeys.add(YierdisDb.toByteArray(k));
-                    return true;
-                }
-                if (YierdisGlobMatcher.matches(globPattern, k)) {
-                    out.add(YierdisDb.toByteArray(k));
-                    if (out.size() >= limit) {
-                        return false;
-                    }
-                }
+            ScanCursorV2 cursor = ScanCursorV2.start();
+            int guard = 0;
+            while (true) {
                 if (System.nanoTime() >= deadline) {
                     timedOut[0] = true;
-                    return false;
+                    break;
                 }
-                return true;
-            });
-            cursor = next;
-            if (cursor.value() == 0) {
-                break;
+                ScanCursorV2 next = keyLifecycle.scan(cursor, 1024, (k, record) -> {
+                    if (k == null) {
+                        return true;
+                    }
+                    if (record == null) {
+                        return true;
+                    }
+                    if (keyLifecycle.isKeyExpired(k, nowMillis)) {
+                        expiredKeys.add(YierdisDb.toByteArray(k));
+                        return true;
+                    }
+                    if (YierdisGlobMatcher.matches(globPattern, k)) {
+                        out.add(YierdisDb.toByteArray(k));
+                        if (out.size() >= limit) {
+                            return false;
+                        }
+                    }
+                    if (System.nanoTime() >= deadline) {
+                        timedOut[0] = true;
+                        return false;
+                    }
+                    return true;
+                });
+                cursor = next;
+                if (cursor.value() == 0) {
+                    break;
+                }
+                if (out.size() >= limit || timedOut[0]) {
+                    break;
+                }
+                if (++guard > 1_000_000) {
+                    throw new IllegalStateException("KEYS scan did not make progress");
+                }
             }
-            if (out.size() >= limit || timedOut[0]) {
-                break;
-            }
-            if (++guard > 1_000_000) {
-                throw new IllegalStateException("KEYS scan did not make progress");
-            }
-        }
 
-        for (int i = 0; i < expiredKeys.size(); i++) {
-            byte[] key = expiredKeys.get(i);
-            KeyHandle handle = keyLifecycle.keyHandle(key);
-            if (handle == null) {
-                continue;
+            for (int i = 0; i < expiredKeys.size(); i++) {
+                byte[] key = expiredKeys.get(i);
+                KeyHandle handle = keyLifecycle.keyHandle(key);
+                if (handle == null) {
+                    continue;
+                }
+                EntryRecord record = keyLifecycle.entryRecord(handle);
+                if (record != null) {
+                    keyLifecycle.removeIfExpired(handle, record, nowMillis);
+                }
             }
-            EntryRecord record = keyLifecycle.entryRecord(handle);
-            if (record != null) {
-                keyLifecycle.removeIfExpired(handle, record, nowMillis);
-            }
+            return out;
         }
-        return out;
     }
 
     @Override
@@ -179,43 +183,45 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
             throw new IllegalArgumentException("count must be > 0");
         }
 
-        long now = System.currentTimeMillis();
-        List<byte[]> expiredKeys = new ArrayList<>();
-        int maxSteps = Math.max(64, count * 10);
-        final int[] remaining = new int[]{count};
+        try (NativeEpochScope ignored = keyLifecycle.nativeAllocator().beginEpoch(NativeEpochKind.SCAN)) {
+            long now = System.currentTimeMillis();
+            List<byte[]> expiredKeys = new ArrayList<>();
+            int maxSteps = Math.max(64, count * 10);
+            final int[] remaining = new int[]{count};
 
-        ScanCursorV2 next = keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, record) -> {
-            if (k == null) {
+            ScanCursorV2 next = keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, record) -> {
+                if (k == null) {
+                    return true;
+                }
+                if (record == null) {
+                    return true;
+                }
+                if (keyLifecycle.isKeyExpired(k, now)) {
+                    expiredKeys.add(YierdisDb.toByteArray(k));
+                    return true;
+                }
+                if (globPattern == null || YierdisGlobMatcher.matches(globPattern, k)) {
+                    out.add(YierdisDb.toByteArray(k));
+                    remaining[0]--;
+                    if (remaining[0] <= 0) {
+                        return false;
+                    }
+                }
                 return true;
-            }
-            if (record == null) {
-                return true;
-            }
-            if (keyLifecycle.isKeyExpired(k, now)) {
-                expiredKeys.add(YierdisDb.toByteArray(k));
-                return true;
-            }
-            if (globPattern == null || YierdisGlobMatcher.matches(globPattern, k)) {
-                out.add(YierdisDb.toByteArray(k));
-                remaining[0]--;
-                if (remaining[0] <= 0) {
-                    return false;
+            });
+
+            for (int i = 0; i < expiredKeys.size(); i++) {
+                byte[] key = expiredKeys.get(i);
+                KeyHandle handle = keyLifecycle.keyHandle(key);
+                if (handle == null) {
+                    continue;
+                }
+                EntryRecord record = keyLifecycle.entryRecord(handle);
+                if (record != null) {
+                    keyLifecycle.removeIfExpired(handle, record, now);
                 }
             }
-            return true;
-        });
-
-        for (int i = 0; i < expiredKeys.size(); i++) {
-            byte[] key = expiredKeys.get(i);
-            KeyHandle handle = keyLifecycle.keyHandle(key);
-            if (handle == null) {
-                continue;
-            }
-            EntryRecord record = keyLifecycle.entryRecord(handle);
-            if (record != null) {
-                keyLifecycle.removeIfExpired(handle, record, now);
-            }
+            return next;
         }
-        return next;
     }
 }
