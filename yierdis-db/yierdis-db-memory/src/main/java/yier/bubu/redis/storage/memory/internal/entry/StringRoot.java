@@ -2,66 +2,54 @@ package yier.bubu.redis.storage.memory.internal.entry;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.memory.api.NativeAccessMode;
+import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.NativeObjectView;
+import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
-import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.memory.api.OffHeapSlice;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisForeignOffHeapAllocator;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Objects;
 
 public final class StringRoot implements TypeRoot {
     private static final int COPY_BUFFER_BYTES = 8 * 1024;
     private static final ThreadLocal<byte[]> TL_COPY_BUF = ThreadLocal.withInitial(() -> new byte[COPY_BUFFER_BYTES]);
     private static final byte[] ZERO_BUF = new byte[COPY_BUFFER_BYTES];
-    private static final OffHeapSlice EMPTY_SLICE = new OffHeapSlice() {
-        @Override
-        public int length() {
-            return 0;
-        }
+    private static final OffHeapSlice EMPTY_SLICE = new HeapBackedOffHeapSlice(new byte[0]);
 
-        @Override
-        public byte getByte(int index) {
-            throw new IndexOutOfBoundsException();
-        }
-
-        @Override
-        public void getBytes(int index, byte[] dst, int dstOff, int len) {
-            Objects.requireNonNull(dst, "dst");
-            if (index != 0 || len != 0 || dstOff < 0 || dstOff > dst.length) {
-                throw new IndexOutOfBoundsException();
-            }
-        }
-
-        @Override
-        public void writeTo(BytesSink out) {
-            Objects.requireNonNull(out, "out");
-        }
-    };
-
-    private final OffHeapAllocator allocator;
+    private final NativeAllocator allocator;
     private final boolean ownsAllocator;
-    private final Map<Long, Slot> slots = new HashMap<>();
-    private long nextHandle = 1L;
+    private final HashSet<Long> liveHandles = new HashSet<>();
     private boolean closed;
 
     public StringRoot(YierdisFfmMemoryRuntime runtime) {
-        this(new YierdisForeignOffHeapAllocator(Objects.requireNonNull(runtime, "runtime"), 0), true);
+        this(new YierdisStableNativeAllocator(Objects.requireNonNull(runtime, "runtime"), 4096), true);
     }
 
-    public StringRoot(OffHeapAllocator allocator) {
+    public StringRoot(NativeAllocator allocator) {
         this(allocator, false);
     }
 
-    private StringRoot(OffHeapAllocator allocator, boolean ownsAllocator) {
+    public StringRoot(OffHeapAllocator allocator) {
+        this(stableAllocatorFromLegacyAllocator(allocator), true);
+    }
+
+    private StringRoot(NativeAllocator allocator, boolean ownsAllocator) {
         this.allocator = Objects.requireNonNull(allocator, "allocator");
         this.ownsAllocator = ownsAllocator;
+    }
+
+    NativeAllocator allocator() {
+        return allocator;
     }
 
     @Override
@@ -75,43 +63,80 @@ public final class StringRoot implements TypeRoot {
     }
 
     public synchronized ValueEncoding encoding(ValueHandle handle) {
-        requireSlot(handle);
-        return ValueEncoding.STRING_RAW;
+        try (NativeObjectView ignored = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+            return ValueEncoding.STRING_RAW;
+        }
     }
 
     public synchronized boolean contains(ValueHandle handle) {
         ensureOpen();
-        return handle != null && slots.containsKey(handle.raw());
+        return handle != null && liveHandles.contains(handle.raw());
     }
 
     public synchronized ValueHandle store(byte[] value) {
         ensureOpen();
         int len = value == null ? 0 : value.length;
-        ValueHandle handle = newHandle();
-        slots.put(handle.raw(), new Slot(allocate(value, len), len));
-        return handle;
+        NativeHandle nativeHandle = allocator.allocate(NativeObjectKind.STRING_BYTES, len);
+        boolean ok = false;
+        try {
+            if (len > 0) {
+                try (NativeObjectView view = allocator.resolve(nativeHandle, NativeAccessMode.READ_WRITE)) {
+                    view.setBytes(0, value, 0, len);
+                }
+            }
+            ValueHandle handle = ValueHandle.fromNativeHandle(nativeHandle);
+            liveHandles.add(handle.raw());
+            ok = true;
+            return handle;
+        } finally {
+            if (!ok) {
+                allocator.free(nativeHandle);
+            }
+        }
     }
 
     public synchronized ValueHandle store(BytesSlice value) {
         ensureOpen();
         int len = value == null ? 0 : value.length();
-        ValueHandle handle = newHandle();
-        slots.put(handle.raw(), new Slot(allocate(value, len), len));
-        return handle;
+        NativeHandle nativeHandle = allocator.allocate(NativeObjectKind.STRING_BYTES, len);
+        boolean ok = false;
+        try {
+            if (len > 0) {
+                try (NativeObjectView view = allocator.resolve(nativeHandle, NativeAccessMode.READ_WRITE)) {
+                    setBytes(view, 0, value, len);
+                }
+            }
+            ValueHandle handle = ValueHandle.fromNativeHandle(nativeHandle);
+            liveHandles.add(handle.raw());
+            ok = true;
+            return handle;
+        } finally {
+            if (!ok) {
+                allocator.free(nativeHandle);
+            }
+        }
     }
 
     public synchronized void overwrite(ValueHandle handle, byte[] value) {
         ensureOpen();
-        Slot slot = requireSlot(handle);
         int len = value == null ? 0 : value.length;
-        overwrite(slot, value, len);
+        resizePreservingHandle(handle, len);
+        if (len > 0) {
+            try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+                view.setBytes(0, value, 0, len);
+            }
+        }
     }
 
     public synchronized void overwrite(ValueHandle handle, BytesSlice value) {
         ensureOpen();
-        Slot slot = requireSlot(handle);
         int len = value == null ? 0 : value.length();
-        overwrite(slot, value, len);
+        resizePreservingHandle(handle, len);
+        if (len > 0) {
+            try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+                setBytes(view, 0, value, len);
+            }
+        }
     }
 
     public synchronized int append(ValueHandle handle, byte[] suffix) {
@@ -119,12 +144,12 @@ public final class StringRoot implements TypeRoot {
         if (suffix == null || suffix.length == 0) {
             return length(handle);
         }
-        Slot slot = requireSlot(handle);
-        int oldLen = slot.length;
+        int oldLen = length(handle);
         int nextLen = Math.addExact(oldLen, suffix.length);
-        ensureCapacity(slot, nextLen);
-        slot.buffer.setBytes(oldLen, suffix, 0, suffix.length);
-        slot.length = nextLen;
+        resizePreservingHandle(handle, nextLen);
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+            view.setBytes(oldLen, suffix, 0, suffix.length);
+        }
         return nextLen;
     }
 
@@ -133,13 +158,13 @@ public final class StringRoot implements TypeRoot {
         if (suffix == null || suffix.length() == 0) {
             return length(handle);
         }
-        Slot slot = requireSlot(handle);
-        int oldLen = slot.length;
+        int oldLen = length(handle);
         int suffixLen = suffix.length();
         int nextLen = Math.addExact(oldLen, suffixLen);
-        ensureCapacity(slot, nextLen);
-        slot.buffer.setBytes(oldLen, suffix, 0, suffixLen);
-        slot.length = nextLen;
+        resizePreservingHandle(handle, nextLen);
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+            setBytes(view, oldLen, suffix, suffixLen);
+        }
         return nextLen;
     }
 
@@ -148,64 +173,71 @@ public final class StringRoot implements TypeRoot {
         if (requiredLen < 0) {
             throw new IllegalArgumentException("requiredLen must be >= 0");
         }
-        Slot slot = requireSlot(handle);
-        if (requiredLen <= slot.length) {
+        int oldLen = length(handle);
+        if (requiredLen <= oldLen) {
             return;
         }
-        int oldLen = slot.length;
-        ensureCapacity(slot, requiredLen);
-        zeroFill(slot.buffer, oldLen, requiredLen);
-        slot.length = requiredLen;
+        resizePreservingHandle(handle, requiredLen);
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+            zeroFill(view, oldLen, requiredLen);
+        }
     }
 
     public synchronized byte byteAt(ValueHandle handle, int index) {
         ensureOpen();
-        Slot slot = requireSlot(handle);
-        if (index < 0 || index >= slot.length || slot.buffer == null) {
-            throw new IndexOutOfBoundsException();
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+            if (index < 0 || index >= view.size()) {
+                throw new IndexOutOfBoundsException();
+            }
+            return view.getByte(index);
         }
-        return slot.buffer.getByte(index);
     }
 
     public synchronized void setByteAt(ValueHandle handle, int index, byte value) {
         ensureOpen();
-        Slot slot = requireSlot(handle);
-        if (index < 0 || index >= slot.length || slot.buffer == null) {
-            throw new IndexOutOfBoundsException();
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+            if (index < 0 || index >= view.size()) {
+                throw new IndexOutOfBoundsException();
+            }
+            view.setByte(index, value);
         }
-        slot.buffer.setByte(index, value);
     }
 
     public synchronized OffHeapSlice slice(ValueHandle handle) {
         ensureOpen();
-        Slot slot = requireSlot(handle);
-        if (slot.length == 0) {
+        byte[] copy = copy(handle);
+        if (copy.length == 0) {
             return EMPTY_SLICE;
         }
-        return slot.buffer.slice(0, slot.length);
+        return new HeapBackedOffHeapSlice(copy);
     }
 
     public synchronized byte[] copy(ValueHandle handle) {
         ensureOpen();
-        Slot slot = requireSlot(handle);
-        if (slot.length == 0) {
-            return new byte[0];
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+            int len = view.size();
+            if (len == 0) {
+                return new byte[0];
+            }
+            byte[] out = new byte[len];
+            view.getBytes(0, out, 0, len);
+            return out;
         }
-        byte[] out = new byte[slot.length];
-        slot.buffer.getBytes(0, out, 0, slot.length);
-        return out;
     }
 
     public synchronized int length(ValueHandle handle) {
         ensureOpen();
-        return requireSlot(handle).length;
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+            return view.size();
+        }
     }
 
     @Override
     public synchronized long estimatedBytes(ValueHandle handle) {
         ensureOpen();
-        Slot slot = requireSlot(handle);
-        return slot.buffer == null ? 0L : slot.buffer.capacity();
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+            return view.capacity();
+        }
     }
 
     @Override
@@ -213,19 +245,20 @@ public final class StringRoot implements TypeRoot {
         if (handle == null) {
             return;
         }
-        Slot removed = slots.remove(handle.raw());
-        if (removed != null) {
-            closeSlotBuffer(removed);
-        }
+        NativeHandle nativeHandle = requireStringHandle(handle);
+        allocator.free(nativeHandle);
+        liveHandles.remove(handle.raw());
     }
 
     @Override
     public synchronized void clear() {
         ensureOpen();
         RuntimeException failure = null;
-        for (Slot slot : slots.values()) {
+        Long[] handles = liveHandles.toArray(Long[]::new);
+        for (Long raw : handles) {
             try {
-                closeSlotBuffer(slot);
+                allocator.free(NativeHandle.fromRaw(raw));
+                liveHandles.remove(raw);
             } catch (RuntimeException e) {
                 if (failure == null) {
                     failure = e;
@@ -234,7 +267,6 @@ public final class StringRoot implements TypeRoot {
                 }
             }
         }
-        slots.clear();
         if (failure != null) {
             throw failure;
         }
@@ -268,148 +300,60 @@ public final class StringRoot implements TypeRoot {
         }
     }
 
-    private OffHeapBuf allocate(byte[] value, int len) {
-        if (len <= 0) {
-            return null;
+    private NativeHandle requireStringHandle(ValueHandle handle) {
+        Objects.requireNonNull(handle, "handle");
+        NativeHandle nativeHandle = handle.nativeHandle();
+        nativeHandle.requireNonNull();
+        NativeObjectKind kind = NativeObjectKind.STRING_BYTES;
+        if (nativeHandle.domain() != kind.domain() || nativeHandle.kindCode() != kind.code()) {
+            throw new IllegalArgumentException("value handle is not string bytes: " + handle.raw());
         }
-        OffHeapBuf buffer = allocator.allocate(len);
-        boolean ok = false;
-        try {
-            buffer.setBytes(0, value, 0, len);
-            ok = true;
-            return buffer;
-        } finally {
-            if (!ok) {
-                buffer.close();
-            }
+        return nativeHandle;
+    }
+
+    private void resizePreservingHandle(ValueHandle handle, int len) {
+        if (len < 0) {
+            throw new IllegalArgumentException("len must be >= 0");
+        }
+        NativeHandle nativeHandle = requireStringHandle(handle);
+        NativeHandle resized = allocator.realloc(nativeHandle, len, NativeReallocPolicy.PRESERVE_PREFIX);
+        if (resized.raw() != nativeHandle.raw()) {
+            throw new IllegalStateException("string realloc changed stable handle");
         }
     }
 
-    private OffHeapBuf allocate(BytesSlice value, int len) {
-        if (len <= 0) {
-            return null;
-        }
-        OffHeapBuf buffer = allocator.allocate(len);
-        boolean ok = false;
-        try {
-            buffer.setBytes(0, value, 0, len);
-            ok = true;
-            return buffer;
-        } finally {
-            if (!ok) {
-                buffer.close();
-            }
-        }
-    }
-
-    private void overwrite(Slot slot, byte[] value, int len) {
-        if (len <= 0) {
-            closeSlotBuffer(slot);
-            slot.length = 0;
-            return;
-        }
-        if (slot.buffer != null && slot.buffer.capacity() >= len) {
-            slot.buffer.setBytes(0, value, 0, len);
-            slot.length = len;
-            return;
-        }
-        OffHeapBuf next = allocate(value, len);
-        closeSlotBuffer(slot);
-        slot.buffer = next;
-        slot.length = len;
-    }
-
-    private void overwrite(Slot slot, BytesSlice value, int len) {
-        if (len <= 0) {
-            closeSlotBuffer(slot);
-            slot.length = 0;
-            return;
-        }
-        if (slot.buffer != null && slot.buffer.capacity() >= len) {
-            slot.buffer.setBytes(0, value, 0, len);
-            slot.length = len;
-            return;
-        }
-        OffHeapBuf next = allocate(value, len);
-        closeSlotBuffer(slot);
-        slot.buffer = next;
-        slot.length = len;
-    }
-
-    private void ensureCapacity(Slot slot, int required) {
-        if (required <= 0) {
-            return;
-        }
-        if (slot.buffer != null && slot.buffer.capacity() >= required) {
-            return;
-        }
-        int nextCapacity = nextCapacity(slot.buffer == null ? 0 : slot.buffer.capacity(), required);
-        OffHeapBuf next = allocator.allocate(nextCapacity);
-        boolean ok = false;
-        try {
-            if (slot.buffer != null && slot.length > 0) {
-                copy(slot.buffer, next, slot.length);
-            }
-            ok = true;
-        } finally {
-            if (!ok) {
-                next.close();
-            }
-        }
-        closeSlotBuffer(slot);
-        slot.buffer = next;
-    }
-
-    private static void copy(OffHeapBuf src, OffHeapBuf dst, int len) {
+    private static void setBytes(NativeObjectView view, int index, BytesSlice value, int len) {
         byte[] scratch = TL_COPY_BUF.get();
         int remaining = len;
-        int offset = 0;
+        int srcOffset = 0;
+        int dstOffset = index;
         while (remaining > 0) {
             int chunk = Math.min(remaining, scratch.length);
-            src.getBytes(offset, scratch, 0, chunk);
-            dst.setBytes(offset, scratch, 0, chunk);
-            offset += chunk;
+            value.getBytes(srcOffset, scratch, 0, chunk);
+            view.setBytes(dstOffset, scratch, 0, chunk);
+            srcOffset += chunk;
+            dstOffset += chunk;
             remaining -= chunk;
         }
     }
 
-    private static void zeroFill(OffHeapBuf buffer, int from, int toExclusive) {
+    private static void zeroFill(NativeObjectView view, int from, int toExclusive) {
         int remaining = toExclusive - from;
         int offset = from;
         while (remaining > 0) {
             int chunk = Math.min(remaining, ZERO_BUF.length);
-            buffer.setBytes(offset, ZERO_BUF, 0, chunk);
+            view.setBytes(offset, ZERO_BUF, 0, chunk);
             offset += chunk;
             remaining -= chunk;
         }
     }
 
-    private static int nextCapacity(int current, int required) {
-        int cap = Math.max(16, current);
-        while (cap < required) {
-            int next = cap < 1024 * 1024 ? (cap << 1) : (cap + 1024 * 1024);
-            if (next <= cap) {
-                return required;
-            }
-            cap = next;
+    private static NativeAllocator stableAllocatorFromLegacyAllocator(OffHeapAllocator allocator) {
+        Objects.requireNonNull(allocator, "allocator");
+        if (allocator instanceof YierdisForeignOffHeapAllocator foreignAllocator) {
+            return new YierdisStableNativeAllocator(foreignAllocator.memoryRuntime(), 4096);
         }
-        return cap;
-    }
-
-    private void closeSlotBuffer(Slot slot) {
-        if (slot.buffer != null) {
-            slot.buffer.close();
-            slot.buffer = null;
-        }
-    }
-
-    private Slot requireSlot(ValueHandle handle) {
-        Objects.requireNonNull(handle, "handle");
-        Slot slot = slots.get(handle.raw());
-        if (slot == null) {
-            throw new IllegalArgumentException("unknown string value handle: " + handle.raw());
-        }
-        return slot;
+        throw new IllegalArgumentException("Only the foreign off-heap allocator is supported");
     }
 
     private void ensureOpen() {
@@ -418,19 +362,44 @@ public final class StringRoot implements TypeRoot {
         }
     }
 
-    private ValueHandle newHandle() {
-        NativeObjectKind kind = NativeObjectKind.STRING_BYTES;
-        NativeHandle handle = NativeHandle.of(kind.domain(), kind, nextHandle++, 1, 0);
-        return ValueHandle.fromNativeHandle(handle);
-    }
+    private static final class HeapBackedOffHeapSlice implements OffHeapSlice {
+        private final byte[] bytes;
 
-    private static final class Slot {
-        private OffHeapBuf buffer;
-        private int length;
+        private HeapBackedOffHeapSlice(byte[] bytes) {
+            this.bytes = Objects.requireNonNull(bytes, "bytes").length == 0 ? bytes : Arrays.copyOf(bytes, bytes.length);
+        }
 
-        private Slot(OffHeapBuf buffer, int length) {
-            this.buffer = buffer;
-            this.length = length;
+        @Override
+        public int length() {
+            return bytes.length;
+        }
+
+        @Override
+        public byte getByte(int index) {
+            if (index < 0 || index >= bytes.length) {
+                throw new IndexOutOfBoundsException();
+            }
+            return bytes[index];
+        }
+
+        @Override
+        public void getBytes(int index, byte[] dst, int dstOff, int len) {
+            Objects.requireNonNull(dst, "dst");
+            if (len < 0) {
+                throw new IllegalArgumentException("len must be >= 0");
+            }
+            if (index < 0 || dstOff < 0 || index + len > bytes.length || dstOff + len > dst.length) {
+                throw new IndexOutOfBoundsException();
+            }
+            if (len > 0) {
+                System.arraycopy(bytes, index, dst, dstOff, len);
+            }
+        }
+
+        @Override
+        public void writeTo(BytesSink out) {
+            Objects.requireNonNull(out, "out");
+            out.writeBytes(bytes, 0, bytes.length);
         }
     }
 }
