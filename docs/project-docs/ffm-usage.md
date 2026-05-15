@@ -963,7 +963,8 @@ Yierdis 对 FFM 做了一层很薄的封装，核心对象有四个：
 
 #### 路径一：`OffHeapAllocator` / `OffHeapBuf`
 
-这条路径现在是 legacy / transitional 的连续字节缓冲入口，保留给仍依赖 `OffHeapAllocator` / `OffHeapBuf` contract 的兼容或非 string 临时用法。当前 string/HLL payload 不由它拥有；`StringRoot` 通过 DB 级 shared `NativeAllocator` 分配 `STRING_BYTES`，HLL 复用 string payload。
+这条路径现在是 legacy / transitional 的连续字节缓冲入口，保留给仍依赖 `OffHeapAllocator` / `OffHeapBuf` contract 的兼容入口或临时用法。
+当前 string/HLL payload 不由这条 legacy path 拥有；`StringRoot` 通过 DB 级 shared `NativeAllocator` 分配 `STRING_BYTES`，HLL 复用 string payload。
 
 `YierdisForeignOffHeapAllocator.allocate(capacity)` 会：
 

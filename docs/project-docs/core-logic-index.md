@@ -1600,7 +1600,7 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 - `EntryTable` 是 key directory 指向的 entry 存储表。
 - `EntryRecord` 保存 `ValueType`、`ValueEncoding`、`ValueHandle`、`expireAtMillis`、LRU clock 等 metadata。
 - `EntryHandle` 包装 `ENTRY_RECORD` 类型的 `NativeHandle`，不是 physical address。
-- `ValueHandle` 包装 string/list/hash/set/zset 等 value/root 相关 `NativeHandle` raw value；当前多数 value handle 是 type-root-owned identity，不是 object table slot。
+- `ValueHandle` 包装 string/list/hash/set/zset 等 value/root 相关 `NativeHandle` raw value；string value handle 当前是 allocator-backed `STRING_BYTES` stable handle，collection root handles 仍是 type-root-owned/root-local identity，不是 object table slot。
 - entry metadata 使用 `YierdisStableNativeAllocator` 保存为 56 bytes native `ENTRY_RECORD`，避免所有 key metadata 都落在 Java object 上。
 - `EntryTable` 读写 entry 时通过 allocator resolve 得到短生命周期 `NativeObjectView`，关闭 view 后释放 pin。
 
@@ -1618,7 +1618,7 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 
 - 每个 type root 管理一种 logical type 的 payload map：`ValueHandle -> actual value`。
 - root 提供类型内操作、encoding 查询、estimated bytes、native bytes、release 和 clear。
-- `StringRoot` 管 off-heap string buffer，并支持 append、ensureLength、byteAt、setByteAt、slice/copy。
+- `StringRoot` 管理 allocator-backed `STRING_BYTES` payload，并支持 append、ensureLength、byteAt、setByteAt、slice/copy。
 - collection roots 包装 `ListValue/HashValue/SetValue/ZSetValue`，并给 ops 提供同步的类型化方法。
 - type roots 会给 `ValueHandle` 写入对应 `NativeObjectKind`，但当前集合 payload adapter 的控制结构仍主要由 root 自己管理，不等于整个集合对象已经完全交给 stable allocator，也不能把任意 `ValueHandle` 直接交给 allocator resolve。
 
