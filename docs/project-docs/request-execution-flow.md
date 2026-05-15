@@ -197,7 +197,7 @@ server-local 命令也一样使用 typed spec；普通 server handler、executor
 5. `YierdisDbKeyLifecycle.computeWithHandle(...)` 处理 keyspace、旧值释放、TTL、LRU touch 和内存记账。
 6. `YierdisStringOps` 写入 `StringRoot`，再用 `EntryRecord` 记录 encoding、`ValueHandle`、TTL 和估算字节数。
 
-这里的 `EntryHandle` / `ValueHandle` 都是 `NativeHandle` raw value 的包装，不是 native physical address。`EntryTable` 的 entry metadata 通过 production stable allocator 存储；对象移动、`realloc` 或 defrag 只更新 allocator object table，不要求命令路径重写 DB 引用。`ValueHandle` 当前主要由各 type root 解析，不等同于 object table slot。
+这里的 `EntryHandle` / `ValueHandle` 都是 stable identity，不是 native physical address。`EntryTable` 的 entry metadata 通过 production stable allocator 存储；对象移动、`realloc` 或 defrag 只更新 allocator object table，不要求命令路径重写 DB 引用。当前 string `ValueHandle` 包装 allocator-backed `STRING_BYTES` stable handle；collection roots 的 `ValueHandle` 仍是 root-local typed identity，不能直接当作 stable allocator slot resolve。
 
 命令层只看到 `DbReads/DbWrites` 能力接口，不直接改 `YierdisDb` 内部结构。
 
