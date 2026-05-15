@@ -131,6 +131,32 @@ public class StringRootTest {
     }
 
     @Test
+    public void liveStringHandleFromAnotherRootIsRejectedWithoutFreeingIt() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("string-root-foreign-handle");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32);
+             StringRoot firstRoot = new StringRoot(allocator);
+             StringRoot secondRoot = new StringRoot(allocator)) {
+            ValueHandle secondHandle = secondRoot.store(new byte[] { 'b' });
+
+            try {
+                firstRoot.copy(secondHandle);
+                Assert.fail("expected foreign string handle to be rejected");
+            } catch (IllegalArgumentException expected) {
+                Assert.assertTrue(expected.getMessage().contains("unknown string value handle"));
+            }
+
+            try {
+                firstRoot.release(secondHandle);
+                Assert.fail("expected foreign string handle release to be rejected");
+            } catch (IllegalArgumentException expected) {
+                Assert.assertTrue(expected.getMessage().contains("unknown string value handle"));
+            }
+
+            Assert.assertArrayEquals(new byte[] { 'b' }, secondRoot.copy(secondHandle));
+        }
+    }
+
+    @Test
     public void emptyStringHandleCanGrowAndShrinkWithoutChangingHandle() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("string-root-empty");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32);
