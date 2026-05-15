@@ -1501,17 +1501,17 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
 
 这里的 `directNativeBytes()` 不是简单取 `memoryRuntime.usedBytes()`，而是把 DB 可解释的 native 结构逐项汇总：
 
+- 共享 `NativeAllocator.stats().logicalUsedBytes()`，覆盖 allocator-backed `ENTRY_RECORD` 和 `STRING_BYTES`
 - `YierdisFfmExpireIndex.nativeBytes()`
-- `EntryTable.nativeBytes()`
 - `NativeKeyDirectory.nativeBytes()`
-- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 的 native bytes
+- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` root native bytes
 
 这意味着 maxmemory 统计的是业务上可解释的 live data / metadata，而不是把 slab 内部暂时空闲但尚未关闭的 reserved bytes 全部算成用户数据。
 
 这意味着：
 
 - off-heap bytes 会影响 maxmemory
-- keyspace / expires / entry table / native key directory / type root 的 native bytes 不会被忽略
+- allocator-backed entry/string、expires、native key directory 和 type root 的 native bytes 不会被忽略
 - delete、expire 和 eviction 释放记账优先读 `EntryRecord`，避免依赖旧对象容器里的估算值
 
 在实例级 `maxmemoryScope=global` 时，还要避免多 DB 共享 runtime / allocator 导致 off-heap
