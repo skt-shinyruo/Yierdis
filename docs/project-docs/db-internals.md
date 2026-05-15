@@ -196,7 +196,7 @@ root 的职责是：
 
 当前 type roots 的实现边界是：
 
-- `StringRoot` 用 `OffHeapAllocator` 管理连续 bytes buffer，`ValueHandle` 使用 `STRING_BYTES` kind。
+- `StringRoot` payload 由 DB 级共享 `NativeAllocator` 以 `STRING_BYTES` 管理；string `ValueHandle` 是 allocator-backed stable handle。
 - `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 用对应 `LIST_NODE` / `HASH_NODE` /
   `SET_NODE` / `ZSET_NODE` kind 构造 `ValueHandle`，内部 payload adapter 仍管理自己的 heap
   控制结构和 FFM-backed bytes。
