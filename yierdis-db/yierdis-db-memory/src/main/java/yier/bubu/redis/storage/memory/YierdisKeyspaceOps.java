@@ -60,8 +60,8 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                         continue;
                     }
                     long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, record);
+                    keyLifecycle.removeExpireIndexOnly(handle);
                     if (keyLifecycle.removeEntry(handle, record)) {
-                        keyLifecycle.removeExpireByKeyBytes(keyBytes);
                         deltaBytes -= removalBytes;
                         removed++;
                     }

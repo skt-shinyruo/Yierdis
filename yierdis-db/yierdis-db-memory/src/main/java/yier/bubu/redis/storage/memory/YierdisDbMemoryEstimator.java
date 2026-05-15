@@ -9,7 +9,6 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 
@@ -19,12 +18,7 @@ public final class YierdisDbMemoryEstimator {
     private static final long SET_MEMBER_OVERHEAD_BYTES_ESTIMATE = 32L;
     private static final long ZSET_MEMBER_OVERHEAD_BYTES_ESTIMATE = 96L;
 
-    private final boolean keysStoredOffHeap;
-    private final OffHeapAllocator offHeapAllocator;
-
-    YierdisDbMemoryEstimator(boolean keysStoredOffHeap, OffHeapAllocator offHeapAllocator) {
-        this.keysStoredOffHeap = keysStoredOffHeap;
-        this.offHeapAllocator = offHeapAllocator;
+    YierdisDbMemoryEstimator(boolean keysStoredOffHeap, yier.bubu.redis.memory.api.OffHeapAllocator offHeapAllocator) {
     }
 
     long estimateEntryBytes(KeyHandle keyHandle, EntryRecord record) {
@@ -34,9 +28,7 @@ public final class YierdisDbMemoryEstimator {
         if (record.version() > 0) {
             return record.version();
         }
-        int keyLen = Math.max(0, keyHandle.len());
-        int keyBytesCost = keysStoredOffHeap ? 0 : keyLen;
-        return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + keyBytesCost;
+        return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
     }
 
     static long estimateStringWriteUpperBound(int keyLength, int valueLength) {

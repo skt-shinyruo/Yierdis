@@ -9,7 +9,6 @@ import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBlobStore;
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
@@ -20,6 +19,7 @@ import yier.bubu.redis.memory.api.OffHeapAllocator;
 public final class YierdisDbStorageComponents {
     private static final int ENTRY_TABLE_NATIVE_SLOT_CAPACITY = 64 * 1024;
     private static final int STRING_NATIVE_SLOT_CAPACITY = 64 * 1024;
+    private static final int KEY_NATIVE_SLOT_CAPACITY = 64 * 1024;
 
     final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
@@ -106,8 +106,7 @@ public final class YierdisDbStorageComponents {
                 true
         );
         EntryTable entries = new EntryTable(resolvedRuntime, nativeAllocator);
-        YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(resolvedRuntime, "ffm-key");
-        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(blobStore);
+        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(nativeAllocator);
         StringRoot stringRoot = new StringRoot(nativeAllocator);
         ListRoot listRoot = new ListRoot(resolvedRuntime);
         HashRoot hashRoot = new HashRoot(resolvedRuntime);
@@ -118,7 +117,7 @@ public final class YierdisDbStorageComponents {
                 resolvedAllocator,
                 nativeAllocator,
                 resources,
-                new YierdisFfmExpireIndex(blobStore),
+                new YierdisFfmExpireIndex(resolvedRuntime, nativeAllocator),
                 entries,
                 keyDirectory,
                 stringRoot,
@@ -126,11 +125,11 @@ public final class YierdisDbStorageComponents {
                 hashRoot,
                 setRoot,
                 zsetRoot,
-                true
+                false
         );
     }
 
     static int sharedNativeSlotCapacity() {
-        return ENTRY_TABLE_NATIVE_SLOT_CAPACITY + STRING_NATIVE_SLOT_CAPACITY;
+        return ENTRY_TABLE_NATIVE_SLOT_CAPACITY + STRING_NATIVE_SLOT_CAPACITY + KEY_NATIVE_SLOT_CAPACITY;
     }
 }

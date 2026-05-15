@@ -1,12 +1,17 @@
 package yier.bubu.redis.storage.memory.internal.keyspace;
 
+import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.memory.api.NativeAccessMode;
+import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.ScanCursorV2;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBlobStore;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBytesRef;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
@@ -19,8 +24,9 @@ public final class NativeKeyDirectory implements AutoCloseable {
     private static final byte STATE_FILLED = 1;
     private static final byte STATE_TOMBSTONE = 2;
 
-    private final YierdisFfmBlobStore blobStore;
-    private YierdisFfmBytesRef[] keyRefs;
+    private final NativeAllocator allocator;
+    private final boolean ownsAllocator;
+    private NativeHandle[] keyHandles;
     private EntryHandle[] handles;
     private int[] hashes;
     private byte[] states;
@@ -29,17 +35,18 @@ public final class NativeKeyDirectory implements AutoCloseable {
     private boolean closed;
 
     public NativeKeyDirectory(YierdisFfmMemoryRuntime runtime) {
-        this(new YierdisFfmBlobStore(Objects.requireNonNull(runtime, "runtime"), "native-key"));
+        this(new YierdisStableNativeAllocator(Objects.requireNonNull(runtime, "runtime"), 4096), true);
     }
 
-    public NativeKeyDirectory(EntryTable entryTable) {
-        this(new YierdisFfmBlobStore(Objects.requireNonNull(entryTable, "entryTable").runtime(), "native-key"));
+    public NativeKeyDirectory(NativeAllocator allocator) {
+        this(allocator, false);
     }
 
-    public NativeKeyDirectory(YierdisFfmBlobStore blobStore) {
-        this.blobStore = Objects.requireNonNull(blobStore, "blobStore");
+    private NativeKeyDirectory(NativeAllocator allocator, boolean ownsAllocator) {
+        this.allocator = Objects.requireNonNull(allocator, "allocator");
+        this.ownsAllocator = ownsAllocator;
         int capacity = MIN_CAPACITY;
-        this.keyRefs = new YierdisFfmBytesRef[capacity];
+        this.keyHandles = new NativeHandle[capacity];
         this.handles = new EntryHandle[capacity];
         this.hashes = new int[capacity];
         this.states = new byte[capacity];
@@ -51,7 +58,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
 
     public synchronized long nativeBytes() {
         ensureOpen();
-        return blobStore.liveBytes();
+        return 0L;
     }
 
     public synchronized EntryHandle get(byte[] keyBytes) {
@@ -73,9 +80,9 @@ public final class NativeKeyDirectory implements AutoCloseable {
         if (size == 0) {
             return null;
         }
-        int start = ThreadLocalRandom.current().nextInt(keyRefs.length);
-        for (int step = 0; step < keyRefs.length; step++) {
-            int index = (start + step) & (keyRefs.length - 1);
+        int start = ThreadLocalRandom.current().nextInt(keyHandles.length);
+        for (int step = 0; step < keyHandles.length; step++) {
+            int index = (start + step) & (keyHandles.length - 1);
             if (states[index] == STATE_FILLED) {
                 return keyHandleAt(index);
             }
@@ -86,7 +93,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
     public synchronized void forEachEntry(EntryConsumer consumer) {
         Objects.requireNonNull(consumer, "consumer");
         ensureOpen();
-        for (int i = 0; i < keyRefs.length; i++) {
+        for (int i = 0; i < keyHandles.length; i++) {
             if (states[i] == STATE_FILLED) {
                 consumer.accept(keyHandleAt(i), handles[i]);
             }
@@ -101,9 +108,9 @@ public final class NativeKeyDirectory implements AutoCloseable {
             return ScanCursorV2.start();
         }
 
-        int index = Math.toIntExact(Math.min(cursor.position(), keyRefs.length));
+        int index = Math.toIntExact(Math.min(cursor.position(), keyHandles.length));
         int visited = 0;
-        while (index < keyRefs.length && visited < maxSteps) {
+        while (index < keyHandles.length && visited < maxSteps) {
             if (states[index] == STATE_FILLED) {
                 visited++;
                 if (!consumer.accept(keyHandleAt(index), handles[index])) {
@@ -146,7 +153,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
         if (states[insertIndex] == STATE_TOMBSTONE) {
             tombstones--;
         }
-        keyRefs[insertIndex] = blobStore.store(keyBytes);
+        keyHandles[insertIndex] = allocateKey(keyBytes);
         handles[insertIndex] = newHandle;
         hashes[insertIndex] = hash;
         states[insertIndex] = STATE_FILLED;
@@ -199,8 +206,23 @@ public final class NativeKeyDirectory implements AutoCloseable {
         if (closed) {
             return;
         }
-        clearInternal();
+        RuntimeException failure = null;
+        try {
+            clearInternal();
+        } catch (RuntimeException e) {
+            failure = e;
+        }
+        if (ownsAllocator) {
+            try {
+                allocator.close();
+            } catch (RuntimeException e) {
+                failure = addFailure(failure, e);
+            }
+        }
         closed = true;
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     private void ensureOpen() {
@@ -210,29 +232,25 @@ public final class NativeKeyDirectory implements AutoCloseable {
     }
 
     private KeyHandle keyHandleAt(int index) {
-        return KeyHandle.forFfm(keyRefs[index], hashes[index]);
+        return KeyHandle.forNative(allocator, keyHandles[index], hashes[index]);
     }
 
     private ScanCursorV2 nextCursor(int nextIndex) {
-        return nextIndex >= keyRefs.length ? ScanCursorV2.start() : ScanCursorV2.of(nextIndex);
+        return nextIndex >= keyHandles.length ? ScanCursorV2.start() : ScanCursorV2.of(nextIndex);
     }
 
     private void clearInternal() {
         RuntimeException failure = null;
-        for (int i = 0; i < keyRefs.length; i++) {
+        for (int i = 0; i < keyHandles.length; i++) {
             if (states[i] == STATE_FILLED) {
                 try {
-                    blobStore.release(keyRefs[i]);
+                    allocator.free(keyHandles[i]);
                 } catch (RuntimeException e) {
-                    if (failure == null) {
-                        failure = e;
-                    } else {
-                        failure.addSuppressed(e);
-                    }
+                    failure = addFailure(failure, e);
                     continue;
                 }
             }
-            keyRefs[i] = null;
+            keyHandles[i] = null;
             handles[i] = null;
             hashes[i] = 0;
             states[i] = STATE_EMPTY;
@@ -249,30 +267,30 @@ public final class NativeKeyDirectory implements AutoCloseable {
         if (size + tombstones + 1 <= threshold()) {
             return;
         }
-        rehash(keyRefs.length << 1);
+        rehash(keyHandles.length << 1);
     }
 
     private void rehash(int newCapacity) {
-        YierdisFfmBytesRef[] oldKeyRefs = keyRefs;
+        NativeHandle[] oldKeyHandles = keyHandles;
         EntryHandle[] oldHandles = handles;
         int[] oldHashes = hashes;
         byte[] oldStates = states;
 
-        keyRefs = new YierdisFfmBytesRef[newCapacity];
+        keyHandles = new NativeHandle[newCapacity];
         handles = new EntryHandle[newCapacity];
         hashes = new int[newCapacity];
         states = new byte[newCapacity];
         tombstones = 0;
 
-        for (int i = 0; i < oldKeyRefs.length; i++) {
+        for (int i = 0; i < oldKeyHandles.length; i++) {
             if (oldStates[i] != STATE_FILLED) {
                 continue;
             }
-            YierdisFfmBytesRef keyRef = oldKeyRefs[i];
+            NativeHandle keyHandle = oldKeyHandles[i];
             EntryHandle handle = oldHandles[i];
             int hash = oldHashes[i];
-            int index = findInsertIndex(keyRef, hash);
-            keyRefs[index] = keyRef;
+            int index = findInsertIndex(keyHandle, hash);
+            keyHandles[index] = keyHandle;
             handles[index] = handle;
             hashes[index] = hash;
             states[index] = STATE_FILLED;
@@ -280,18 +298,18 @@ public final class NativeKeyDirectory implements AutoCloseable {
     }
 
     private int threshold() {
-        return Math.max(1, (int) (keyRefs.length * LOAD_FACTOR));
+        return Math.max(1, (int) (keyHandles.length * LOAD_FACTOR));
     }
 
     private int findIndex(byte[] keyBytes, int hash) {
-        int mask = keyRefs.length - 1;
+        int mask = keyHandles.length - 1;
         int index = hash & mask;
         while (true) {
             byte state = states[index];
             if (state == STATE_EMPTY) {
                 return -1;
             }
-            if (state == STATE_FILLED && hashes[index] == hash && blobStore.equalsBytes(keyRefs[index], keyBytes)) {
+            if (state == STATE_FILLED && hashes[index] == hash && equalsBytes(keyHandles[index], keyBytes)) {
                 return index;
             }
             index = (index + 1) & mask;
@@ -308,7 +326,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
     }
 
     private int findInsertIndex(byte[] keyBytes, int hash) {
-        int mask = keyRefs.length - 1;
+        int mask = keyHandles.length - 1;
         int index = hash & mask;
         int firstTombstone = -1;
         while (true) {
@@ -320,15 +338,15 @@ public final class NativeKeyDirectory implements AutoCloseable {
                 if (firstTombstone < 0) {
                     firstTombstone = index;
                 }
-            } else if (hashes[index] == hash && blobStore.equalsBytes(keyRefs[index], keyBytes)) {
+            } else if (hashes[index] == hash && equalsBytes(keyHandles[index], keyBytes)) {
                 return index;
             }
             index = (index + 1) & mask;
         }
     }
 
-    private int findInsertIndex(YierdisFfmBytesRef keyRef, int hash) {
-        int mask = keyRefs.length - 1;
+    private int findInsertIndex(NativeHandle keyHandle, int hash) {
+        int mask = keyHandles.length - 1;
         int index = hash & mask;
         while (true) {
             if (states[index] == STATE_EMPTY) {
@@ -342,8 +360,8 @@ public final class NativeKeyDirectory implements AutoCloseable {
         if (states[index] != STATE_FILLED) {
             return;
         }
-        blobStore.release(keyRefs[index]);
-        keyRefs[index] = null;
+        allocator.free(keyHandles[index]);
+        keyHandles[index] = null;
         handles[index] = null;
         hashes[index] = 0;
         states[index] = STATE_TOMBSTONE;
@@ -371,6 +389,46 @@ public final class NativeKeyDirectory implements AutoCloseable {
             h = 31 * h + keyByte;
         }
         return h;
+    }
+
+    private NativeHandle allocateKey(byte[] keyBytes) {
+        NativeHandle handle = allocator.allocate(NativeObjectKind.KEY_BYTES, keyBytes.length);
+        boolean ok = false;
+        try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+            if (keyBytes.length > 0) {
+                view.setBytes(0, keyBytes, 0, keyBytes.length);
+            }
+            ok = true;
+            return handle;
+        } finally {
+            if (!ok) {
+                allocator.free(handle);
+            }
+        }
+    }
+
+    private boolean equalsBytes(NativeHandle handle, byte[] keyBytes) {
+        Objects.requireNonNull(handle, "handle");
+        Objects.requireNonNull(keyBytes, "keyBytes");
+        try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+            if (view.size() != keyBytes.length) {
+                return false;
+            }
+            for (int i = 0; i < keyBytes.length; i++) {
+                if (view.getByte(i) != keyBytes[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    private static RuntimeException addFailure(RuntimeException failure, RuntimeException next) {
+        if (failure == null) {
+            return next;
+        }
+        failure.addSuppressed(next);
+        return failure;
     }
 
     @FunctionalInterface

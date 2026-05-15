@@ -234,9 +234,8 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
                 long deltaBytes = 0;
                 long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, record);
-                byte[] keyBytes = copyKeyBytes(handle);
+                keyLifecycle.removeExpireIndexOnly(handle);
                 if (keyLifecycle.removeEntry(handle, record)) {
-                    keyLifecycle.removeExpireByKeyBytes(keyBytes);
                     deltaBytes -= removalBytes;
                 }
                 return YierdisDbMutationExecutor.MutationResult.of(
@@ -280,14 +279,6 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
 
     private static long ttlEntryBytesEstimate() {
         return yier.bubu.redis.storage.api.DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-    }
-
-    private static byte[] copyKeyBytes(KeyHandle keyHandle) {
-        byte[] out = new byte[keyHandle.len()];
-        for (int i = 0; i < out.length; i++) {
-            out[i] = keyHandle.byteAt(i);
-        }
-        return out;
     }
 
 }

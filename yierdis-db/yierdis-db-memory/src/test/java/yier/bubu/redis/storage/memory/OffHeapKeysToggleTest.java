@@ -17,12 +17,12 @@ import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class OffHeapKeysToggleTest {
     @Test
-    public void defaultDbStoresKeysOffHeap() {
+    public void defaultDbStoresKeysInNativeAllocator() {
         YierdisDb db = new YierdisDb();
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(b("k"), b("v"), SetMode.NORMAL, null);
-            Assert.assertTrue(db.memory().memoryStats().keysStoredOffHeap());
+            Assert.assertFalse(db.memory().memoryStats().keysStoredOffHeap());
         } finally {
             db.shutdown();
         }
@@ -46,7 +46,7 @@ public class OffHeapKeysToggleTest {
         try {
             db.bindToCurrentThread();
             db.writes().strings().setString(b("k"), b("v"), SetMode.NORMAL, null);
-            Assert.assertTrue(db.memory().memoryStats().keysStoredOffHeap());
+            Assert.assertFalse(db.memory().memoryStats().keysStoredOffHeap());
         } finally {
             db.shutdown();
         }

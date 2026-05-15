@@ -2,9 +2,11 @@ package yier.bubu.redis.storage.memory.internal.keyspace;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
@@ -126,6 +128,41 @@ public class NativeKeyDirectoryTest {
             }
 
             Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
+    @Test
+    public void nativeKeyDirectoryStoresKeysAsAllocatorKeyBytesAndRejectsFreedHandles() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-key-bytes-test");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 64)) {
+            NativeKeyDirectory directory = new NativeKeyDirectory(allocator);
+            try {
+                byte[] key = bytes("native-key");
+                EntryHandle handle = entryHandle(1L);
+
+                directory.compute(key, (ignored, old) -> handle);
+
+                KeyHandle stored = directory.getKeyHandle(key);
+                Assert.assertNotNull(stored);
+                Assert.assertArrayEquals(key, copy(stored));
+                Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.KEY_BYTES));
+                Assert.assertEquals(key.length, allocator.stats().logicalUsedBytes());
+                Assert.assertEquals("KEY_BYTES are reported by the allocator, not the directory side channel",
+                        0L, directory.nativeBytes());
+
+                Assert.assertTrue(directory.remove(key, handle));
+                Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.KEY_BYTES));
+                try {
+                    stored.len();
+                    Assert.fail("freed key handle should fail through allocator stale-handle checks");
+                } catch (RuntimeException expected) {
+                    Assert.assertTrue(expected.getMessage().contains("stale native handle"));
+                }
+            } finally {
+                directory.close();
+            }
+
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.KEY_BYTES));
         }
     }
 

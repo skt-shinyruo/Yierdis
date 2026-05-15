@@ -11,6 +11,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 // KeyHandleAccess：KeyHandle 的内部访问桥接（用于将 handle 落地到 keyspace/expire index 等实现细节）。
 
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBytesRef;
+import yier.bubu.redis.memory.api.NativeHandle;
 
 /**
  * KeyHandle 的内部访问桥接。
@@ -31,6 +32,10 @@ public final class KeyHandleAccess {
         return handle instanceof FfmKeyHandle;
     }
 
+    public static boolean isAllocator(KeyHandle handle) {
+        return handle instanceof AllocatorKeyHandle;
+    }
+
     public static byte[] heapBytesOrNull(KeyHandle handle) {
         if (handle instanceof HeapKeyHandle h) {
             return h.bytesUnsafe();
@@ -48,6 +53,13 @@ public final class KeyHandleAccess {
     public static YierdisFfmBytesRef ffmBytesRefOrNull(KeyHandle handle) {
         if (handle instanceof FfmKeyHandle h) {
             return h.refUnsafe();
+        }
+        return null;
+    }
+
+    public static NativeHandle allocatorNativeHandleOrNull(KeyHandle handle) {
+        if (handle instanceof AllocatorKeyHandle h) {
+            return h.nativeHandle();
         }
         return null;
     }
