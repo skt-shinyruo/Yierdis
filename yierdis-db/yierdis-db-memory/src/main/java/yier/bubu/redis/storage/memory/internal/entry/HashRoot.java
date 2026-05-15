@@ -1,26 +1,46 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
-import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.value.HashValue;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 public final class HashRoot implements TypeRoot {
     private final YierdisFfmMemoryRuntime runtime;
-    private final Map<Long, HashValue> hashes = new HashMap<>();
-    private long nextHandle = 1L;
+    private final NativeCollectionRootTable<HashValue> hashes;
     private boolean closed;
 
     public HashRoot(YierdisFfmMemoryRuntime runtime) {
-        this.runtime = Objects.requireNonNull(runtime, "runtime");
+        this(runtime, new YierdisStableNativeAllocator(Objects.requireNonNull(runtime, "runtime"), 4096), true);
+    }
+
+    public HashRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator) {
+        this(runtime, allocator, false);
+    }
+
+    public HashRoot(NativeAllocator allocator) {
+        this(null, allocator, false);
+    }
+
+    private HashRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator, boolean ownsAllocator) {
+        this.runtime = runtime;
+        this.hashes = new NativeCollectionRootTable<>(
+                allocator,
+                NativeObjectKind.HASH_NODE,
+                "hash",
+                ownsAllocator
+        );
+    }
+
+    NativeAllocator allocator() {
+        return hashes.allocator();
     }
 
     @Override
@@ -39,14 +59,12 @@ public final class HashRoot implements TypeRoot {
 
     public synchronized boolean contains(ValueHandle handle) {
         ensureOpen();
-        return handle != null && hashes.containsKey(handle.raw());
+        return hashes.contains(handle);
     }
 
     public synchronized ValueHandle create() {
         ensureOpen();
-        ValueHandle handle = newHandle();
-        hashes.put(handle.raw(), new HashValue(runtime));
-        return handle;
+        return hashes.create(this::newHashValue);
     }
 
     public synchronized ValueHandle store(HashValue value) {
@@ -107,43 +125,18 @@ public final class HashRoot implements TypeRoot {
     }
 
     public synchronized long nativeBytes() {
-        long total = 0L;
-        for (HashValue hash : hashes.values()) {
-            total = addSaturating(total, hash.estimatedBytes());
-        }
-        return total;
+        return hashes.adapterBytes(HashValue::estimatedBytes);
     }
 
     @Override
     public synchronized void release(ValueHandle handle) {
-        if (handle == null) {
-            return;
-        }
-        HashValue removed = hashes.remove(handle.raw());
-        if (removed != null) {
-            removed.close();
-        }
+        hashes.release(handle);
     }
 
     @Override
     public synchronized void clear() {
         ensureOpen();
-        RuntimeException failure = null;
-        for (HashValue hash : hashes.values()) {
-            try {
-                hash.close();
-            } catch (RuntimeException e) {
-                if (failure == null) {
-                    failure = e;
-                } else {
-                    failure.addSuppressed(e);
-                }
-            }
-        }
         hashes.clear();
-        if (failure != null) {
-            throw failure;
-        }
     }
 
     @Override
@@ -151,35 +144,21 @@ public final class HashRoot implements TypeRoot {
         if (closed) {
             return;
         }
-        clear();
+        hashes.close();
         closed = true;
     }
 
     private HashValue requireHash(ValueHandle handle) {
-        Objects.requireNonNull(handle, "handle");
-        HashValue hash = hashes.get(handle.raw());
-        if (hash == null) {
-            throw new IllegalArgumentException("unknown hash value handle: " + handle.raw());
-        }
-        return hash;
+        return hashes.require(handle);
+    }
+
+    private HashValue newHashValue() {
+        return runtime == null ? new HashValue() : new HashValue(runtime);
     }
 
     private void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("hash root is closed");
         }
-    }
-
-    private ValueHandle newHandle() {
-        NativeObjectKind kind = NativeObjectKind.HASH_NODE;
-        NativeHandle handle = NativeHandle.of(kind.domain(), kind, nextHandle++, 1, 0);
-        return ValueHandle.fromNativeHandle(handle);
-    }
-
-    private static long addSaturating(long left, long right) {
-        if (left < 0 || right < 0 || Long.MAX_VALUE - left < right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
     }
 }

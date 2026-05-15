@@ -62,6 +62,55 @@ public class NativeStorageRegressionTest {
     }
 
     @Test
+    public void productionCollectionRootsUseSharedNativeAllocatorAndReleaseAfterDeleteAndShutdown() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-collection-root-counts")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+                    runtime,
+                    0,
+                    MaxmemoryPolicy.NOEVICTION,
+                    5,
+                    5,
+                    5
+            );
+            db.bindToCurrentThread();
+            try {
+                writeOneOfEachCollection(db);
+
+                assertCollectionRootCounts(db, 1L);
+
+                Assert.assertEquals(Long.valueOf(4L), db.writes().keyspace().del(List.of(
+                        b("list"),
+                        b("hash"),
+                        b("set"),
+                        b("zset")
+                )).value());
+                assertCollectionRootCounts(db, 0L);
+            } finally {
+                db.shutdown();
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-collection-root-shutdown")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+                    runtime,
+                    0,
+                    MaxmemoryPolicy.NOEVICTION,
+                    5,
+                    5,
+                    5
+            );
+            db.bindToCurrentThread();
+            writeOneOfEachCollection(db);
+            assertCollectionRootCounts(db, 1L);
+
+            db.shutdown();
+
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
+    @Test
     public void deleteUsesEntryMetadataInsteadOfCompatibilityObjectEstimate() {
         YierdisDb db = new YierdisDb();
         try {
@@ -225,6 +274,20 @@ public class NativeStorageRegressionTest {
             }
             Assert.assertEquals(0L, runtime.usedBytes());
         }
+    }
+
+    private static void writeOneOfEachCollection(YierdisDb db) {
+        Assert.assertEquals(Long.valueOf(1L), db.writes().lists().rpush(b("list"), List.of(b("a"))).value());
+        Assert.assertEquals(Long.valueOf(1L), db.writes().hashes().hset(b("hash"), List.of(b("field"), b("value"))).value());
+        Assert.assertEquals(Long.valueOf(1L), db.writes().sets().sadd(b("set"), List.of(b("member"))).value());
+        Assert.assertEquals(Long.valueOf(1L), db.writes().zsets().zadd(b("zset"), List.of(b("1"), b("member"))).value());
+    }
+
+    private static void assertCollectionRootCounts(YierdisDb db, long expected) {
+        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.LIST_NODE));
+        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.HASH_NODE));
+        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.SET_NODE));
+        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.ZSET_NODE));
     }
 
     private static void assertNativeStringOnly(YierdisDb db, byte[] key, byte[] expectedBytes) {

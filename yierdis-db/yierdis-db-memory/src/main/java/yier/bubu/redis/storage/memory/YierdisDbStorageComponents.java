@@ -20,6 +20,7 @@ public final class YierdisDbStorageComponents {
     private static final int ENTRY_TABLE_NATIVE_SLOT_CAPACITY = 64 * 1024;
     private static final int STRING_NATIVE_SLOT_CAPACITY = 64 * 1024;
     private static final int KEY_NATIVE_SLOT_CAPACITY = 64 * 1024;
+    private static final int COLLECTION_ROOT_NATIVE_SLOT_CAPACITY = 64 * 1024;
 
     final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
@@ -108,10 +109,10 @@ public final class YierdisDbStorageComponents {
         EntryTable entries = new EntryTable(resolvedRuntime, nativeAllocator);
         NativeKeyDirectory keyDirectory = new NativeKeyDirectory(nativeAllocator);
         StringRoot stringRoot = new StringRoot(nativeAllocator);
-        ListRoot listRoot = new ListRoot(resolvedRuntime);
-        HashRoot hashRoot = new HashRoot(resolvedRuntime);
-        SetRoot setRoot = new SetRoot(resolvedRuntime);
-        ZSetRoot zsetRoot = new ZSetRoot(resolvedRuntime);
+        ListRoot listRoot = new ListRoot(resolvedRuntime, nativeAllocator);
+        HashRoot hashRoot = new HashRoot(resolvedRuntime, nativeAllocator);
+        SetRoot setRoot = new SetRoot(resolvedRuntime, nativeAllocator);
+        ZSetRoot zsetRoot = new ZSetRoot(resolvedRuntime, nativeAllocator);
         return new YierdisDbStorageComponents(
                 resolvedRuntime,
                 resolvedAllocator,
@@ -130,6 +131,9 @@ public final class YierdisDbStorageComponents {
     }
 
     static int sharedNativeSlotCapacity() {
-        return ENTRY_TABLE_NATIVE_SLOT_CAPACITY + STRING_NATIVE_SLOT_CAPACITY + KEY_NATIVE_SLOT_CAPACITY;
+        return ENTRY_TABLE_NATIVE_SLOT_CAPACITY
+                + STRING_NATIVE_SLOT_CAPACITY
+                + KEY_NATIVE_SLOT_CAPACITY
+                + COLLECTION_ROOT_NATIVE_SLOT_CAPACITY;
     }
 }
