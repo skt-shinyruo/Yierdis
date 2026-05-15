@@ -158,6 +158,27 @@ public class YierdisInstanceTest {
     }
 
     @Test
+    public void nativeDefragConfigEnablesDefaultFactoryMaintenance() {
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(1)
+                .nativeDefragEnabled(true)
+                .nativeDefragMaxMoveBytes(1_000_000)
+                .nativeDefragMaxObjects(1_000)
+                .nativeDefragTimeLimitMillis(1000)
+                .build();
+
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
+            instance.bindToCurrentThread();
+            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("k"), b("value"), SetMode.NORMAL, null).value());
+
+            new YierdisInstanceMaintenance(instance).maintenanceTick();
+
+            Assert.assertArrayEquals(b("value"), instance.engine(0).reads().strings().getStringBytes(b("k")));
+            Assert.assertTrue(instance.engine(0).memory().memoryStats().nativeDefragLastMovedObjects() > 0L);
+        }
+    }
+
+    @Test
     public void maxmemoryPolicyBuilderUsesDomainEnumAndKeepsStringCompatibility() {
         YierdisInstanceConfig typed = YierdisInstanceConfig.builder()
                 .maxmemoryPolicy(MaxmemoryPolicy.ALLKEYS_LRU)
@@ -307,6 +328,7 @@ public class YierdisInstanceTest {
 
         Assert.assertEquals(1, engine.bindCalls);
         Assert.assertEquals(1, engine.expirationCleanupCalls);
+        Assert.assertEquals(1, engine.defragMaintenanceCalls);
         Assert.assertEquals(1, engine.maxmemoryMaintenanceCalls);
         Assert.assertEquals(1, engine.shutdownCalls);
     }
@@ -332,6 +354,7 @@ public class YierdisInstanceTest {
         }
 
         Assert.assertEquals(1, engine.expirationCleanupCalls);
+        Assert.assertEquals(1, engine.defragMaintenanceCalls);
         Assert.assertEquals(1, engine.maxmemoryMaintenanceCalls);
     }
 
@@ -358,6 +381,8 @@ public class YierdisInstanceTest {
 
         Assert.assertEquals(1, engine0.expirationCleanupCalls);
         Assert.assertEquals(1, engine1.expirationCleanupCalls);
+        Assert.assertEquals(1, engine0.defragMaintenanceCalls);
+        Assert.assertEquals(1, engine1.defragMaintenanceCalls);
         Assert.assertEquals(0, engine0.maxmemoryMaintenanceCalls);
         Assert.assertEquals(0, engine1.maxmemoryMaintenanceCalls);
         Assert.assertEquals(1, engine0.participantCleanupCalls);
@@ -573,6 +598,7 @@ public class YierdisInstanceTest {
     private static final class TrackingRuntimeDbEngine implements RuntimeDbEngine {
         private int bindCalls;
         private int expirationCleanupCalls;
+        private int defragMaintenanceCalls;
         private int maxmemoryMaintenanceCalls;
         private int shutdownCalls;
         private int participantCleanupCalls;
@@ -585,6 +611,11 @@ public class YierdisInstanceTest {
         @Override
         public void enforceMaxmemoryMaintenance() {
             maxmemoryMaintenanceCalls++;
+        }
+
+        @Override
+        public void defragMaintenance() {
+            defragMaintenanceCalls++;
         }
 
         @Override

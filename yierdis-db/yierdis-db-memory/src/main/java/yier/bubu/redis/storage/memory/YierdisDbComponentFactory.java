@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -28,7 +29,8 @@ public final class YierdisDbComponentFactory {
             MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
             long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions
     ) {
         YierdisDbStorageComponents storage = YierdisDbStorageComponents.create(
                 memoryRuntime,
@@ -41,7 +43,8 @@ public final class YierdisDbComponentFactory {
                 maxmemoryPolicy,
                 maxmemorySamples,
                 evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions
         );
         YierdisDbMemoryEstimator memoryEstimator = new YierdisDbMemoryEstimator(
                 storage.keysStoredOffHeap,
@@ -103,7 +106,8 @@ public final class YierdisDbComponentFactory {
                 storage.keysStoredOffHeap,
                 ledger,
                 () -> owner.maxmemoryCoordinator() == null,
-                memoryEstimator
+                memoryEstimator,
+                owner::lastNativeDefragReport
         );
         YierdisDbIntrospection introspection = new YierdisDbIntrospection(owner::checkThread, keyLifecycle);
 
@@ -152,5 +156,7 @@ public final class YierdisDbComponentFactory {
         long nextLruClock();
 
         void adjustUsedBytes(long deltaBytes);
+
+        yier.bubu.redis.memory.api.NativeDefragReport lastNativeDefragReport();
     }
 }

@@ -58,6 +58,21 @@ public class YierdisChangeSinkTest {
         Assert.assertEquals(5, config.maxmemorySamples());
         Assert.assertEquals(5L, config.evictionTimeLimitMillis());
         Assert.assertEquals(5L, config.expireCleanupTimeLimitMillis());
+        Assert.assertFalse(config.nativeDefragEnabled());
+        Assert.assertEquals(64L * 1024L, config.nativeDefragMaxMoveBytes());
+        Assert.assertEquals(64L, config.nativeDefragMaxObjects());
+        Assert.assertEquals(1L, config.nativeDefragTimeLimitMillis());
+
+        YierdisInstanceConfig defragConfig = YierdisInstanceConfig.builder()
+                .nativeDefragEnabled(true)
+                .nativeDefragMaxMoveBytes(1024)
+                .nativeDefragMaxObjects(7)
+                .nativeDefragTimeLimitMillis(3)
+                .build();
+        Assert.assertTrue(defragConfig.nativeDefragEnabled());
+        Assert.assertEquals(1024L, defragConfig.nativeDefragMaxMoveBytes());
+        Assert.assertEquals(7L, defragConfig.nativeDefragMaxObjects());
+        Assert.assertEquals(3L, defragConfig.nativeDefragTimeLimitMillis());
 
         Assert.assertEquals(
                 MaxmemoryPolicy.ALLKEYS_LRU,
@@ -72,6 +87,12 @@ public class YierdisChangeSinkTest {
                 () -> YierdisInstanceConfig.builder().evictionTimeLimitMillis(0).build());
         expectIllegalArgument("expireCleanupTimeLimitMillis must be > 0",
                 () -> YierdisInstanceConfig.builder().expireCleanupTimeLimitMillis(0).build());
+        expectIllegalArgument("nativeDefragMaxMoveBytes must be >= 0",
+                () -> YierdisInstanceConfig.builder().nativeDefragMaxMoveBytes(-1).build());
+        expectIllegalArgument("nativeDefragMaxObjects must be >= 0",
+                () -> YierdisInstanceConfig.builder().nativeDefragMaxObjects(-1).build());
+        expectIllegalArgument("nativeDefragTimeLimitMillis must be >= 0",
+                () -> YierdisInstanceConfig.builder().nativeDefragTimeLimitMillis(-1).build());
     }
 
     private static void expectIllegalArgument(String expectedMessage, Runnable action) {

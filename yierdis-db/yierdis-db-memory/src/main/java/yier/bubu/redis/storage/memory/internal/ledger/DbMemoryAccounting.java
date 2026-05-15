@@ -9,6 +9,8 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
+import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
@@ -33,7 +35,9 @@ public final class DbMemoryAccounting {
             int keyCount,
             YierdisExpireIndex expires,
             boolean keysStoredOffHeap,
-            boolean includeOffHeapInMaxmemory
+            boolean includeOffHeapInMaxmemory,
+            NativeAllocatorStats nativeAllocatorStats,
+            NativeDefragReport nativeDefragReport
     ) {
         long allocatorOffHeapUsedBytes = safeOffHeapUsedBytes(offHeapAllocator);
         long directNativeUsedBytes = Math.max(0L, directNativeBytes);
@@ -100,7 +104,19 @@ public final class DbMemoryAccounting {
                 expireCap1,
                 expireOverhead,
                 expireValueObjects,
-                totalEstimatedBytes
+                totalEstimatedBytes,
+                nativeDefragReport == null ? 0L : nativeDefragReport.scannedObjects(),
+                nativeDefragReport == null ? 0L : nativeDefragReport.movedObjects(),
+                nativeDefragReport == null ? 0L : nativeDefragReport.movedBytes(),
+                nativeDefragReport == null ? 0L : nativeDefragReport.skippedPinnedObjects(),
+                nativeDefragReport == null ? 0L : nativeDefragReport.skippedBudgetObjects(),
+                nativeDefragReport == null ? 0L : nativeDefragReport.failedMoves(),
+                nativeAllocatorStats == null ? 0L : nativeAllocatorStats.defragMovedBytes(),
+                nativeAllocatorStats == null ? 0L : nativeAllocatorStats.defragSkippedPinnedObjects(),
+                nativeAllocatorStats == null ? 0L : nativeAllocatorStats.quarantinedObjects(),
+                nativeAllocatorStats == null ? 0L : nativeAllocatorStats.quarantineBytes(),
+                nativeAllocatorStats == null ? 0L : nativeAllocatorStats.staleHandleDetections(),
+                nativeAllocatorStats == null ? 0L : nativeAllocatorStats.defragReclaimedPages()
         );
     }
 

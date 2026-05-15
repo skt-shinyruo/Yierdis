@@ -8,6 +8,7 @@ import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
+import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -20,13 +21,26 @@ import java.util.Objects;
  */
 public final class YierdisDbEngineFactory implements DbEngineFactory {
     private final YierdisFfmMemoryRuntime memoryRuntime;
+    private final NativeDefragOptions nativeDefragOptions;
 
     public YierdisDbEngineFactory() {
         this.memoryRuntime = null;
+        this.nativeDefragOptions = null;
+    }
+
+    public YierdisDbEngineFactory(NativeDefragOptions nativeDefragOptions) {
+        this.memoryRuntime = null;
+        this.nativeDefragOptions = nativeDefragOptions;
     }
 
     public YierdisDbEngineFactory(YierdisFfmMemoryRuntime memoryRuntime) {
         this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
+        this.nativeDefragOptions = null;
+    }
+
+    public YierdisDbEngineFactory(YierdisFfmMemoryRuntime memoryRuntime, NativeDefragOptions nativeDefragOptions) {
+        this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
+        this.nativeDefragOptions = nativeDefragOptions;
     }
 
     @Override
@@ -45,7 +59,8 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
                     policy,
                     maxmemorySamples,
                     evictionTimeLimitMillis,
-                    expireCleanupTimeLimitMillis
+                    expireCleanupTimeLimitMillis,
+                    nativeDefragOptions
             );
         }
         return YierdisDb.createWithSharedFfmRuntime(
@@ -54,7 +69,8 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
                 policy,
                 maxmemorySamples,
                 evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions
         );
     }
 }

@@ -18,6 +18,10 @@ public final class YierdisInstanceConfig {
     private final int maxmemorySamples;
     private final long evictionTimeLimitMillis;
     private final long expireCleanupTimeLimitMillis;
+    private final boolean nativeDefragEnabled;
+    private final long nativeDefragMaxMoveBytes;
+    private final long nativeDefragMaxObjects;
+    private final long nativeDefragTimeLimitMillis;
 
     private YierdisInstanceConfig(Builder b) {
         this.databases = b.databases;
@@ -28,6 +32,10 @@ public final class YierdisInstanceConfig {
         this.maxmemorySamples = b.maxmemorySamples;
         this.evictionTimeLimitMillis = b.evictionTimeLimitMillis;
         this.expireCleanupTimeLimitMillis = b.expireCleanupTimeLimitMillis;
+        this.nativeDefragEnabled = b.nativeDefragEnabled;
+        this.nativeDefragMaxMoveBytes = b.nativeDefragMaxMoveBytes;
+        this.nativeDefragMaxObjects = b.nativeDefragMaxObjects;
+        this.nativeDefragTimeLimitMillis = b.nativeDefragTimeLimitMillis;
     }
 
     public static Builder builder() {
@@ -66,6 +74,22 @@ public final class YierdisInstanceConfig {
         return expireCleanupTimeLimitMillis;
     }
 
+    public boolean nativeDefragEnabled() {
+        return nativeDefragEnabled;
+    }
+
+    public long nativeDefragMaxMoveBytes() {
+        return nativeDefragMaxMoveBytes;
+    }
+
+    public long nativeDefragMaxObjects() {
+        return nativeDefragMaxObjects;
+    }
+
+    public long nativeDefragTimeLimitMillis() {
+        return nativeDefragTimeLimitMillis;
+    }
+
     public static final class Builder {
         private int databases = 1;
         private DbEngineFactory engineFactory;
@@ -76,6 +100,10 @@ public final class YierdisInstanceConfig {
         private int maxmemorySamples = 5;
         private long evictionTimeLimitMillis = 5;
         private long expireCleanupTimeLimitMillis = 5;
+        private boolean nativeDefragEnabled;
+        private long nativeDefragMaxMoveBytes = 64L * 1024L;
+        private long nativeDefragMaxObjects = 64L;
+        private long nativeDefragTimeLimitMillis = 1L;
 
         private Builder() {
         }
@@ -145,6 +173,26 @@ public final class YierdisInstanceConfig {
             return this;
         }
 
+        public Builder nativeDefragEnabled(boolean nativeDefragEnabled) {
+            this.nativeDefragEnabled = nativeDefragEnabled;
+            return this;
+        }
+
+        public Builder nativeDefragMaxMoveBytes(long nativeDefragMaxMoveBytes) {
+            this.nativeDefragMaxMoveBytes = nativeDefragMaxMoveBytes;
+            return this;
+        }
+
+        public Builder nativeDefragMaxObjects(long nativeDefragMaxObjects) {
+            this.nativeDefragMaxObjects = nativeDefragMaxObjects;
+            return this;
+        }
+
+        public Builder nativeDefragTimeLimitMillis(long nativeDefragTimeLimitMillis) {
+            this.nativeDefragTimeLimitMillis = nativeDefragTimeLimitMillis;
+            return this;
+        }
+
         public YierdisInstanceConfig build() {
             int dbs = Math.max(1, databases);
             if (maxmemoryBytes < 0) {
@@ -158,6 +206,15 @@ public final class YierdisInstanceConfig {
             }
             if (expireCleanupTimeLimitMillis <= 0) {
                 throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be > 0");
+            }
+            if (nativeDefragMaxMoveBytes < 0) {
+                throw new IllegalArgumentException("nativeDefragMaxMoveBytes must be >= 0");
+            }
+            if (nativeDefragMaxObjects < 0) {
+                throw new IllegalArgumentException("nativeDefragMaxObjects must be >= 0");
+            }
+            if (nativeDefragTimeLimitMillis < 0) {
+                throw new IllegalArgumentException("nativeDefragTimeLimitMillis must be >= 0");
             }
             MaxmemoryScope scope = maxmemoryScope == null ? MaxmemoryScope.PER_DB : maxmemoryScope;
             MaxmemoryPolicy policy = maxmemoryPolicy == null ? MaxmemoryPolicy.NOEVICTION : maxmemoryPolicy;

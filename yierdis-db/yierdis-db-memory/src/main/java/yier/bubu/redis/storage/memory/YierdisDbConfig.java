@@ -9,6 +9,7 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
 
 import java.util.concurrent.TimeUnit;
 
@@ -19,13 +20,15 @@ public final class YierdisDbConfig {
     final boolean lruEnabled;
     final long evictionTimeLimitNanos;
     final long expireCleanupTimeLimitNanos;
+    final NativeDefragOptions nativeDefragOptions;
 
     private YierdisDbConfig(
             long maxmemoryBytes,
             MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
             long evictionTimeLimitNanos,
-            long expireCleanupTimeLimitNanos
+            long expireCleanupTimeLimitNanos,
+            NativeDefragOptions nativeDefragOptions
     ) {
         this.maxmemoryBytes = maxmemoryBytes;
         this.maxmemoryPolicy = maxmemoryPolicy;
@@ -33,6 +36,7 @@ public final class YierdisDbConfig {
         this.lruEnabled = maxmemoryBytes > 0 && maxmemoryPolicy == MaxmemoryPolicy.ALLKEYS_LRU;
         this.evictionTimeLimitNanos = evictionTimeLimitNanos;
         this.expireCleanupTimeLimitNanos = expireCleanupTimeLimitNanos;
+        this.nativeDefragOptions = nativeDefragOptions;
     }
 
     static YierdisDbConfig create(
@@ -41,6 +45,17 @@ public final class YierdisDbConfig {
             int maxmemorySamples,
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
+    ) {
+        return create(maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis, null);
+    }
+
+    static YierdisDbConfig create(
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions
     ) {
         if (maxmemoryBytes < 0) {
             throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
@@ -59,7 +74,8 @@ public final class YierdisDbConfig {
                 maxmemoryPolicy == null ? MaxmemoryPolicy.NOEVICTION : maxmemoryPolicy,
                 maxmemorySamples,
                 TimeUnit.MILLISECONDS.toNanos(evictionTimeLimitMillis),
-                TimeUnit.MILLISECONDS.toNanos(expireCleanupTimeLimitMillis)
+                TimeUnit.MILLISECONDS.toNanos(expireCleanupTimeLimitMillis),
+                nativeDefragOptions
         );
     }
 }

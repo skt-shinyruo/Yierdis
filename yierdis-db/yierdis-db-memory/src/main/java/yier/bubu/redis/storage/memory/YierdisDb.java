@@ -14,6 +14,8 @@ import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedgerOutOfMemoryException;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
+import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.memory.api.OffHeapOutOfMemoryException;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
@@ -41,6 +43,17 @@ import java.util.Collections;
 
 public final class YierdisDb implements RuntimeDbEngine {
     private static final long TTL_ENTRY_BYTES_ESTIMATE = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+    private static final NativeDefragReport EMPTY_NATIVE_DEFRAG_REPORT = new NativeDefragReport(
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            false,
+            false,
+            false
+    );
 
     private final YierdisExpireIndex expires;
     private final EntryTable entries;
@@ -67,6 +80,8 @@ public final class YierdisDb implements RuntimeDbEngine {
     private final boolean lruEnabled;
     private final long evictionTimeLimitNanos;
     private final long expireCleanupTimeLimitNanos;
+    private final NativeDefragOptions nativeDefragOptions;
+    private NativeDefragReport lastNativeDefragReport = EMPTY_NATIVE_DEFRAG_REPORT;
 
     private long lruClock;
 
@@ -118,7 +133,7 @@ public final class YierdisDb implements RuntimeDbEngine {
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        this(memoryRuntime, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+        this(memoryRuntime, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis, null);
     }
 
     public static YierdisDb createWithSharedFfmRuntime(
@@ -129,7 +144,28 @@ public final class YierdisDb implements RuntimeDbEngine {
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        return new YierdisDb(memoryRuntime, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+        return new YierdisDb(memoryRuntime, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis, null);
+    }
+
+    public static YierdisDb createWithSharedFfmRuntime(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions
+    ) {
+        return new YierdisDb(
+                memoryRuntime,
+                false,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions
+        );
     }
 
     @Deprecated
@@ -160,6 +196,28 @@ public final class YierdisDb implements RuntimeDbEngine {
     ) {
         return new YierdisDb(null, null, false, false,
                 maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+    }
+
+    public static YierdisDb createWithOwnedFfmRuntime(
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions
+    ) {
+        return new YierdisDb(
+                null,
+                null,
+                false,
+                false,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions
+        );
     }
 
     @Deprecated
@@ -220,6 +278,32 @@ public final class YierdisDb implements RuntimeDbEngine {
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
+        this(
+                memoryRuntime,
+                offHeapAllocator,
+                ownsOffHeapAllocator,
+                ownsMemoryRuntime,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                null
+        );
+    }
+
+    private YierdisDb(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            OffHeapAllocator offHeapAllocator,
+            boolean ownsOffHeapAllocator,
+            boolean ownsMemoryRuntime,
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions
+    ) {
         YierdisDbComponents components = YierdisDbComponentFactory.create(
                 new YierdisDbComponentFactory.OwnerCallbacks() {
                     @Override
@@ -261,6 +345,11 @@ public final class YierdisDb implements RuntimeDbEngine {
                     public void adjustUsedBytes(long deltaBytes) {
                         YierdisDb.this.adjustUsedBytes(deltaBytes);
                     }
+
+                    @Override
+                    public NativeDefragReport lastNativeDefragReport() {
+                        return YierdisDb.this.lastNativeDefragReport();
+                    }
                 },
                 memoryRuntime,
                 offHeapAllocator,
@@ -270,7 +359,8 @@ public final class YierdisDb implements RuntimeDbEngine {
                 maxmemoryPolicy,
                 maxmemorySamples,
                 evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions
         );
 
         this.memoryRuntime = components.storage.memoryRuntime;
@@ -291,6 +381,7 @@ public final class YierdisDb implements RuntimeDbEngine {
         this.lruEnabled = components.config.lruEnabled;
         this.evictionTimeLimitNanos = components.config.evictionTimeLimitNanos;
         this.expireCleanupTimeLimitNanos = components.config.expireCleanupTimeLimitNanos;
+        this.nativeDefragOptions = components.config.nativeDefragOptions;
         this.ledger = components.ledger;
         this.mutationExecutor = components.mutationExecutor;
         this.expirationSupport = components.expirationSupport;
@@ -333,7 +424,32 @@ public final class YierdisDb implements RuntimeDbEngine {
                 maxmemoryPolicy,
                 maxmemorySamples,
                 evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis
+                expireCleanupTimeLimitMillis,
+                null
+        );
+    }
+
+    private YierdisDb(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            boolean ownsMemoryRuntime,
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions
+    ) {
+        this(
+                memoryRuntime,
+                null,
+                false,
+                ownsMemoryRuntime,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions
         );
     }
 
@@ -386,6 +502,19 @@ public final class YierdisDb implements RuntimeDbEngine {
     @Override
     public void enforceMaxmemoryMaintenance() {
         enforceMaxmemory();
+    }
+
+    @Override
+    public void defragMaintenance() {
+        checkThread();
+        if (nativeDefragOptions == null) {
+            return;
+        }
+        lastNativeDefragReport = keyLifecycle.nativeAllocator().defragCycle(nativeDefragOptions);
+    }
+
+    NativeDefragReport lastNativeDefragReport() {
+        return lastNativeDefragReport;
     }
 
     private void evictUntilUnder(long limitBytes) {

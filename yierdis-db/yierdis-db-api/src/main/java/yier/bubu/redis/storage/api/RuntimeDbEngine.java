@@ -19,6 +19,13 @@ public interface RuntimeDbEngine extends DbEngine, MaxmemoryParticipant, Maxmemo
     void enforceMaxmemoryMaintenance();
 
     /**
+     * Runtime-only maintenance hook for DB-local native allocator defrag.
+     */
+    default void defragMaintenance() {
+        // Optional for engines without native allocator defrag.
+    }
+
+    /**
      * Best-effort shutdown / resource release.
      */
     void shutdown();

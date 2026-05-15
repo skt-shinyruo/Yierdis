@@ -9,6 +9,8 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedger;
 import yier.bubu.redis.memory.api.OffHeapBuf;
@@ -22,6 +24,7 @@ import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 public final class YierdisDbMemoryReporter {
     private final Runnable threadChecker;
@@ -32,6 +35,7 @@ public final class YierdisDbMemoryReporter {
     private final MemoryLedger ledger;
     private final BooleanSupplier offHeapIncludedInMaxmemorySupplier;
     private final YierdisDbMemoryEstimator memoryEstimator;
+    private final Supplier<NativeDefragReport> nativeDefragReportSupplier;
 
     YierdisDbMemoryReporter(
             Runnable threadChecker,
@@ -41,7 +45,8 @@ public final class YierdisDbMemoryReporter {
             boolean keysStoredOffHeap,
             MemoryLedger ledger,
             BooleanSupplier offHeapIncludedInMaxmemorySupplier,
-            YierdisDbMemoryEstimator memoryEstimator
+            YierdisDbMemoryEstimator memoryEstimator,
+            Supplier<NativeDefragReport> nativeDefragReportSupplier
     ) {
         this.threadChecker = java.util.Objects.requireNonNull(threadChecker, "threadChecker");
         this.keyLifecycle = java.util.Objects.requireNonNull(keyLifecycle, "keyLifecycle");
@@ -54,6 +59,10 @@ public final class YierdisDbMemoryReporter {
                 "offHeapIncludedInMaxmemorySupplier"
         );
         this.memoryEstimator = java.util.Objects.requireNonNull(memoryEstimator, "memoryEstimator");
+        this.nativeDefragReportSupplier = java.util.Objects.requireNonNull(
+                nativeDefragReportSupplier,
+                "nativeDefragReportSupplier"
+        );
     }
 
     long memoryUsage(BytesView keyView) {
@@ -91,7 +100,9 @@ public final class YierdisDbMemoryReporter {
                 keyLifecycle.keyCount(),
                 expires,
                 keysStoredOffHeap,
-                offHeapIncludedInMaxmemorySupplier.getAsBoolean()
+                offHeapIncludedInMaxmemorySupplier.getAsBoolean(),
+                safeNativeAllocatorStats(),
+                nativeDefragReportSupplier.get()
         );
     }
 
@@ -236,14 +247,19 @@ public final class YierdisDbMemoryReporter {
     }
 
     private long safeNativeAllocatorLogicalBytes() {
+        NativeAllocatorStats stats = safeNativeAllocatorStats();
+        return stats == null ? 0L : Math.max(0L, stats.logicalUsedBytes());
+    }
+
+    private NativeAllocatorStats safeNativeAllocatorStats() {
         var allocator = keyLifecycle.nativeAllocator();
         if (allocator == null) {
-            return 0L;
+            return null;
         }
         try {
-            return Math.max(0L, allocator.stats().logicalUsedBytes());
+            return allocator.stats();
         } catch (Throwable ignored) {
-            return 0L;
+            return null;
         }
     }
 
