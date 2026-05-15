@@ -26,27 +26,27 @@
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
 - `SET ... GET` 这类“返回旧值”的路径，也会先把旧值 materialize 成 heap `byte[]`。
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
+- `GET` 这类字符串读路径当前返回 `BulkStringValue.slice(...)`，但 `StringRoot.slice(...)` 会先把 native `STRING_BYTES` copy 成 heap-backed `OffHeapSlice`，不暴露 allocator view。
+  代表路径：
+  - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
+  - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
 - off-heap key 只要走 `randomKey()`、`forEach()` 这种 `byte[]` 语义接口，就会复制回 heap。
   代表路径：
   - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java`
   - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmExpireIndex.java`
 - 集合类里，凡是返回 `List<byte[]>` 的读取接口，也会把结果 materialize 到 heap。例如 `HGETALL` 的“返回 pairs 列表”路径。
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/HashValue.java`
-- 即使上游拿到的是 `OffHeapSlice`，如果最终写出的 sink 不是 direct / Netty fast-path，也会退化成“分块拷到 heap scratch buffer 再写出”。
+- 对于真正 native-ref-backed 的 `OffHeapSlice`（不是当前 string `GET` 路径），如果最终写出的 sink 不是 direct / Netty fast-path，也会退化成“分块拷到 heap scratch buffer 再写出”。
   代表路径：
-  - `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisForeignOffHeapAllocator.java`
   - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBytesRefSlice.java`
 
 ## Off-Heap -> Off-Heap / Direct -> Direct
 
-- `GET` 这类字符串读路径，如果 value 在 off-heap，当前实现可以直接返回 `BulkStringValue.slice(...)`，不必先变成 heap `byte[]`。
-  代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
-- reply 写回链路支持 `BytesSlice` 直通；下游可以通过 `DirectBytesSink` / `NettyByteBufSink` 保持协议层抽象不依赖 Netty。当前 FFM slice 实现仍以 scratch buffer 分块写出，后续如在 slice 实现中识别 direct sink，可进一步做 native-to-direct copy。
+- reply 写回链路支持 `BytesSlice` / `OffHeapSlice` 抽象直通；下游可以通过 `DirectBytesSink` / `NettyByteBufSink` 保持协议层抽象不依赖 Netty。当前 string `OffHeapSlice` 是 heap-backed copy，不暴露 allocator view；后续如果 slice 实现识别 direct sink，可进一步做 native-to-direct copy。
   代表路径：
   - `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java`
   - `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/bytes/netty/NettyByteBufSink.java`
-  - `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisForeignOffHeapAllocator.java`
-  - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBytesRefSlice.java`
+  - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
 - 集合类也有同样分界。例如 `HGETALL` 的流式写回路径，可以把 off-heap field/value 直接按 `BulkStringSink` 输出，而不必先拼成 `List<byte[]>`。
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/HashValue.java`
 

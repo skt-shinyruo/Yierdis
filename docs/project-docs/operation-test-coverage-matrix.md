@@ -50,7 +50,7 @@ Status values:
 ### DEL
 
 - **Command layer**: `covered-by-shared-test` - `CommandProcessorTest#binaryKeyIsSupportedEndToEnd`.
-- **DB API**: `covered` - `OffHeapStringStorageTest#setGetUsesFfmSliceAndDelFrees`.
+- **DB API**: `covered` - `OffHeapStringStorageTest#setGetUsesNativeStringSliceAndDelFreesStableAllocatorBytes`.
 - **Native internals**: `covered-by-shared-test` - `NativeStorageRegressionTest#allNativeRootsReleaseToZeroAfterDelete`.
 
 ### DISCARD
@@ -493,7 +493,7 @@ Status values:
 | API method | Status | Evidence |
 | --- | --- | --- |
 | `StringReadOps.getStringBytes` | `covered` | `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit` |
-| `StringReadOps.getStringValue` | `covered` | `OffHeapStringStorageTest#setGetUsesFfmSliceAndDelFrees` |
+| `StringReadOps.getStringValue` | `covered` | `OffHeapStringStorageTest#setGetUsesNativeStringSliceAndDelFreesStableAllocatorBytes` |
 | `StringReadOps.strlen` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
 | `StringReadOps.getBit` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
 | `StringReadOps.bitcount` | `covered` | `StringDirectOpsTest#bitcountSupportsWholeStringRangesMissingKeysTtlAndWrongType` |
@@ -534,7 +534,7 @@ Status values:
 | `KeyspaceReadOps.existsKey` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
 | `KeyspaceReadOps.keys` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
 | `KeyspaceReadOps.scan` | `covered` | `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` |
-| `KeyspaceWriteOps.del` | `covered` | `OffHeapStringStorageTest#setGetUsesFfmSliceAndDelFrees` |
+| `KeyspaceWriteOps.del` | `covered` | `OffHeapStringStorageTest#setGetUsesNativeStringSliceAndDelFreesStableAllocatorBytes` |
 | `TtlReadOps.ttlSeconds` | `covered` | `ExpireIndexTest#ttlBytesViewLazilyDeletesExpiredKeys` |
 | `TtlReadOps.ttlMillis` | `covered` | `TtlLifecycleDirectOpsTest#ttlMillisAndAbsoluteExpirationCoverMissingPersistentExpiredAndCleanup` |
 | `TtlWriteOps.expire` | `covered` | `ExpireIndexTest#ttlAccountingAffectsUsedBytesForMaxmemory` |
