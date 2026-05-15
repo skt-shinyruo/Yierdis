@@ -101,8 +101,8 @@ memory 车道负责 native memory contract 和 FFM backend，不拥有 DB 语义
 这个模块提供 JDK FFM backend：
 
 - `YierdisFfmMemoryRuntime` 管理 FFM region 和 runtime accounting
-- `YierdisForeignOffHeapAllocator` / `YierdisFfmSlabAllocator` 服务 string/HLL 这类连续 bytes buffer
-- `YierdisStableNativeAllocator` / `YierdisNativeObjectTable` / `YierdisNativePageAllocator` 服务可移动 native object
+- `YierdisStableNativeAllocator` / `YierdisNativeObjectTable` / `YierdisNativePageAllocator` 服务可移动 native object；string payload 由 `StringRoot` 通过 DB 级 shared `NativeAllocator` 分配 `STRING_BYTES` 管理，HLL 复用 string payload
+- `YierdisForeignOffHeapAllocator` / `YierdisFfmSlabAllocator` 保留为 legacy / transitional `OffHeapAllocator` / `OffHeapBuf` 连续 bytes buffer 入口
 - `YierdisNativeEpochManager` 和 quarantine 保护 active read / scan / snapshot / defrag
 
 DB implementation 可以依赖 memory API 和 FFM backend；command、protocol 和 server API 不能直接依赖这些 allocator 实现细节。
