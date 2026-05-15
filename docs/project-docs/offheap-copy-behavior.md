@@ -54,7 +54,7 @@
 
 - `heap -> heap`：例如协议适配阶段，`String.getBytes(...)` 会新建 heap `byte[]`。
 - `off-heap -> off-heap`：例如字符串扩容时，会新分配 native block，再把旧内容搬过去。
-- 追加写入时，如果现有 off-heap buffer 容量足够，只是继续往后写；如果容量不够，就会触发重分配和 native-to-native 搬迁。
+- 字符串追加或扩容时，会使用 allocator-backed native `STRING_BYTES` 对象的容量；如果容量不够，allocator `realloc(..., PRESERVE_PREFIX)` 可能移动 native block，同时保持 handle 稳定。
 
 ## 结论
 
