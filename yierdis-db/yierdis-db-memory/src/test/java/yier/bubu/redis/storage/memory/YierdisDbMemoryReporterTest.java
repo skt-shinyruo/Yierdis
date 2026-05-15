@@ -56,6 +56,33 @@ public class YierdisDbMemoryReporterTest {
         }
     }
 
+    @Test
+    public void memoryStatsCountsSharedNativeAllocatorLogicalBytesOnce() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("memory-stats-shared-native")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 1_000_000L, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+            db.bindToCurrentThread();
+            try {
+                db.writes().strings().setString(bytes("k"), bytes("value"), SetMode.NORMAL, null);
+
+                YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
+                long entryBytes = lifecycle.entryTable().nativeBytes();
+                long expectedOffHeap = lifecycle.offHeapAllocator().usedBytes()
+                        + lifecycle.nativeAllocator().stats().logicalUsedBytes()
+                        + lifecycle.keyDirectory().nativeBytes()
+                        + lifecycle.listRoot().nativeBytes()
+                        + lifecycle.hashRoot().nativeBytes()
+                        + lifecycle.setRoot().nativeBytes()
+                        + lifecycle.zsetRoot().nativeBytes();
+
+                Assert.assertTrue("entry records must be present for double-count regression coverage", entryBytes > 0L);
+                Assert.assertEquals(expectedOffHeap, db.memory().memoryStats().offHeapUsedBytes());
+            } finally {
+                db.shutdown();
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
     }
