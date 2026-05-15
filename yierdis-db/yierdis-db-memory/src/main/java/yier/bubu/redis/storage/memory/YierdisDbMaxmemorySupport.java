@@ -197,20 +197,11 @@ public final class YierdisDbMaxmemorySupport {
 
     private boolean removeRecord(KeyHandle keyHandle, EntryRecord record) {
         long removalBytes = db.keyLifecycle().estimatedBytesForRemoval(keyHandle, record);
-        byte[] keyBytes = copyKeyBytes(keyHandle);
+        db.keyLifecycle().removeExpireIndexOnly(keyHandle);
         if (db.keyLifecycle().removeEntry(keyHandle, record)) {
-            db.keyLifecycle().removeExpireByKeyBytes(keyBytes);
             db.adjustUsedBytes(-removalBytes);
             return true;
         }
         return false;
-    }
-
-    private static byte[] copyKeyBytes(KeyHandle keyHandle) {
-        byte[] out = new byte[keyHandle.len()];
-        for (int i = 0; i < out.length; i++) {
-            out[i] = keyHandle.byteAt(i);
-        }
-        return out;
     }
 }

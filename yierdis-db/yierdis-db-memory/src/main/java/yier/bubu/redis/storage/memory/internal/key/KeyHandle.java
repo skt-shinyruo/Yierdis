@@ -11,6 +11,8 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 // KeyHandle：key identity SSOT（heap/off-heap/bytesview），用于 keyspace/expires/scan 等内部路径的零拷贝交互。
 
 import yier.bubu.redis.bytes.BytesView;
+import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBytesRef;
 
 import java.util.Objects;
@@ -68,6 +70,12 @@ public interface KeyHandle extends yier.bubu.redis.storage.api.KeyHandle {
     public static KeyHandle forFfm(YierdisFfmBytesRef ref, int dictHash) {
         Objects.requireNonNull(ref, "ref");
         return new FfmKeyHandle(ref, dictHash);
+    }
+
+    public static KeyHandle forNative(NativeAllocator allocator, NativeHandle handle, int dictHash) {
+        Objects.requireNonNull(allocator, "allocator");
+        Objects.requireNonNull(handle, "handle");
+        return new AllocatorKeyHandle(allocator, handle, dictHash);
     }
 
     public static int hashBytesView(BytesView view, int len) {

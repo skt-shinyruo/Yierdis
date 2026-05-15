@@ -13,6 +13,8 @@ import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
 import yier.bubu.redis.storage.memory.internal.keyspace.YierdisKeyspace;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
+import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.foreign.YierdisFfmAccess;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisFfmRegion;
@@ -31,6 +33,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
     private final YierdisFfmBlobStore blobStore;
     private final YierdisFfmMemoryRuntime memoryRuntime;
+    private final NativeAllocator nativeAllocator;
     private final ArrayDeque<Table> retiredTables = new ArrayDeque<>();
 
     private Table table0;
@@ -40,6 +43,13 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     public YierdisFfmExpireIndex(YierdisFfmBlobStore blobStore) {
         this.blobStore = Objects.requireNonNull(blobStore, "blobStore");
         this.memoryRuntime = blobStore.memoryRuntime();
+        this.nativeAllocator = null;
+    }
+
+    public YierdisFfmExpireIndex(YierdisFfmMemoryRuntime memoryRuntime, NativeAllocator nativeAllocator) {
+        this.blobStore = null;
+        this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
+        this.nativeAllocator = Objects.requireNonNull(nativeAllocator, "nativeAllocator");
     }
 
     @Override
@@ -144,20 +154,8 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
     @Override
     public byte[] randomKey() {
-        rehashStep();
-        int total = size();
-        if (total == 0) {
-            return null;
-        }
-        if (table1 == null) {
-            return randomKeyFromTable(table0);
-        }
-        int r = ThreadLocalRandom.current().nextInt(total);
-        byte[] k = r < table0.size ? randomKeyFromTable(table0) : randomKeyFromTable(table1);
-        if (k != null) {
-            return k;
-        }
-        return r < table0.size ? randomKeyFromTable(table1) : randomKeyFromTable(table0);
+        KeyHandle handle = randomKeyHandle();
+        return handle == null ? null : copyKey(handle);
     }
 
     @Override
@@ -202,7 +200,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     @Override
     public void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        YierdisFfmBytesRef ref = KeyHandleAccess.ffmBytesRef(keyHandle);
+        KeyRef ref = keyRef(keyHandle);
         ensureTable0();
         rehashStep();
         maybeStartRehashForInsert();
@@ -222,12 +220,11 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             }
         }
 
-        blobStore.retain(ref);
         if (table1 != null) {
-            insertExistingIntoTable1(ref, h, expireAtMillis);
+            insertNewIntoTable1(ref, h, expireAtMillis);
             return;
         }
-        insertIntoTable(table0, ref, h, expireAtMillis);
+        insertNewIntoTable(table0, ref, h, expireAtMillis);
     }
 
     @Override
@@ -281,32 +278,10 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             if (table.stateAt(i) != STATE_FILLED) {
                 continue;
             }
-            blobStore.release(table.refs[i]);
+            table.refs[i].releaseFromIndex();
             table.refs[i] = null;
         }
         table.close();
-    }
-
-    private byte[] randomKeyFromTable(Table table) {
-        if (table == null || table.capacity == 0) {
-            return null;
-        }
-        int mask = table.capacity - 1;
-        int start = ThreadLocalRandom.current().nextInt(table.capacity);
-        int quickSteps = Math.min(16, table.capacity);
-        for (int i = 0; i < quickSteps; i++) {
-            int idx = (start + i) & mask;
-            if (table.stateAt(idx) == STATE_FILLED) {
-                return blobStore.toByteArray(table.refs[idx]);
-            }
-        }
-        for (int i = 0; i < table.capacity; i++) {
-            int idx = (start + i) & mask;
-            if (table.stateAt(idx) == STATE_FILLED) {
-                return blobStore.toByteArray(table.refs[idx]);
-            }
-        }
-        return null;
     }
 
     private KeyHandle randomKeyHandleFromTable(Table table) {
@@ -319,13 +294,13 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         for (int i = 0; i < quickSteps; i++) {
             int idx = (start + i) & mask;
             if (table.stateAt(idx) == STATE_FILLED) {
-                return KeyHandle.forFfm(table.refs[idx], table.hashAt(idx));
+                return table.refs[idx].keyHandle(table.hashAt(idx));
             }
         }
         for (int i = 0; i < table.capacity; i++) {
             int idx = (start + i) & mask;
             if (table.stateAt(idx) == STATE_FILLED) {
-                return KeyHandle.forFfm(table.refs[idx], table.hashAt(idx));
+                return table.refs[idx].keyHandle(table.hashAt(idx));
             }
         }
         return null;
@@ -402,7 +377,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             }
 
             int idx = rehashIndex;
-            YierdisFfmBytesRef ref = t0.refs[idx];
+            KeyRef ref = t0.refs[idx];
             int hash = t0.hashAt(idx);
             long expireAt = t0.expireAt(idx);
 
@@ -438,7 +413,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         }
     }
 
-    private void insertExistingIntoTable1(YierdisFfmBytesRef ref, int hash, long expireAtMillis) {
+    private void insertExistingIntoTable1(KeyRef ref, int hash, long expireAtMillis) {
         Table t1 = table1;
         if (t1.used + 1 > t1.threshold) {
             growTable1();
@@ -447,7 +422,21 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         insertIntoTable(t1, ref, hash, expireAtMillis);
     }
 
-    private void insertIntoTable(Table table, YierdisFfmBytesRef ref, int hash, long expireAtMillis) {
+    private void insertNewIntoTable1(KeyRef ref, int hash, long expireAtMillis) {
+        Table t1 = table1;
+        if (t1.used + 1 > t1.threshold) {
+            growTable1();
+            t1 = table1;
+        }
+        insertNewIntoTable(t1, ref, hash, expireAtMillis);
+    }
+
+    private void insertNewIntoTable(Table table, KeyRef ref, int hash, long expireAtMillis) {
+        ref.retainForIndex();
+        insertIntoTable(table, ref, hash, expireAtMillis);
+    }
+
+    private void insertIntoTable(Table table, KeyRef ref, int hash, long expireAtMillis) {
         int loc = findOrInsertLocation(table, ref, hash);
         int insertAt = -loc - 1;
         if (table.stateAt(insertAt) == STATE_EMPTY) {
@@ -468,7 +457,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             if (old.stateAt(i) != STATE_FILLED) {
                 continue;
             }
-            YierdisFfmBytesRef ref = old.refs[i];
+            KeyRef ref = old.refs[i];
             int hash = old.hashAt(i);
             long expireAt = old.expireAt(i);
             int loc = -findOrInsertLocation(next, ref, hash) - 1;
@@ -569,7 +558,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             if (state == STATE_EMPTY) {
                 return -1;
             }
-            if (state == STATE_FILLED && table.hashAt(idx) == hash && blobStore.equalsBytes(table.refs[idx], key)) {
+            if (state == STATE_FILLED && table.hashAt(idx) == hash && table.refs[idx].equalsBytes(key)) {
                 return idx;
             }
             idx = (idx + 1) & mask;
@@ -587,7 +576,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             if (state == STATE_EMPTY) {
                 return -1;
             }
-            if (state == STATE_FILLED && table.hashAt(idx) == hash && blobStore.equalsBytes(table.refs[idx], key)) {
+            if (state == STATE_FILLED && table.hashAt(idx) == hash && table.refs[idx].equalsBytes(key)) {
                 return idx;
             }
             idx = (idx + 1) & mask;
@@ -598,7 +587,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         if (table == null) {
             return -1;
         }
-        YierdisFfmBytesRef handleRef = KeyHandleAccess.ffmBytesRefOrNull(keyHandle);
+        KeyRef handleRef = keyRefOrNull(keyHandle);
         int mask = table.capacity - 1;
         int idx = hash & mask;
         while (true) {
@@ -607,11 +596,11 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
                 return -1;
             }
             if (state == STATE_FILLED && table.hashAt(idx) == hash) {
-                YierdisFfmBytesRef storedRef = table.refs[idx];
+                KeyRef storedRef = table.refs[idx];
                 if (handleRef != null && sameRef(storedRef, handleRef)) {
                     return idx;
                 }
-                if (equalsBytes(storedRef, keyHandle)) {
+                if (storedRef.equalsBytes(keyHandle)) {
                     return idx;
                 }
             }
@@ -619,7 +608,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         }
     }
 
-    private int findOrInsertLocation(Table table, YierdisFfmBytesRef ref, int hash) {
+    private int findOrInsertLocation(Table table, KeyRef ref, int hash) {
         int mask = table.capacity - 1;
         int idx = hash & mask;
         int firstTombstone = -1;
@@ -640,27 +629,28 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         }
     }
 
-    private boolean equalsBytes(YierdisFfmBytesRef storedRef, BytesView key) {
-        int len = key.length();
-        if (storedRef.length() != len) {
-            return false;
-        }
-        YierdisFfmSpan span = storedRef.span();
-        for (int i = 0; i < len; i++) {
-            if (YierdisFfmAccess.getByte(span, i) != key.getByte(i)) {
-                return false;
-            }
-        }
-        return true;
+    private boolean sameRef(KeyRef left, KeyRef right) {
+        return left != null && left.sameIdentity(right);
     }
 
-    private boolean sameRef(YierdisFfmBytesRef left, YierdisFfmBytesRef right) {
-        return left == right
-                || (left != null
-                && right != null
-                && left.region() == right.region()
-                && left.offset() == right.offset()
-                && left.length() == right.length());
+    private KeyRef keyRef(KeyHandle handle) {
+        KeyRef ref = keyRefOrNull(handle);
+        if (ref == null) {
+            throw new IllegalArgumentException("unsupported KeyHandle: " + handle.getClass().getName());
+        }
+        return ref;
+    }
+
+    private KeyRef keyRefOrNull(KeyHandle handle) {
+        YierdisFfmBytesRef ffm = KeyHandleAccess.ffmBytesRefOrNull(handle);
+        if (ffm != null) {
+            return new FfmKeyRef(ffm);
+        }
+        NativeHandle nativeHandle = KeyHandleAccess.allocatorNativeHandleOrNull(handle);
+        if (nativeHandle != null) {
+            return new AllocatorKeyRef(nativeHandle);
+        }
+        return null;
     }
 
     private static int tableSizeFor(int expectedSize, float loadFactor) {
@@ -683,13 +673,15 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
         void remove() {
             Table current = table == 0 ? table0 : table1;
-            YierdisFfmBytesRef ref = current.refs[index];
+            KeyRef ref = current.refs[index];
             current.setState(index, STATE_TOMBSTONE);
             current.setHash(index, 0);
             current.setExpireAt(index, 0L);
             current.refs[index] = null;
             current.size--;
-            blobStore.release(ref);
+            if (ref != null) {
+                ref.releaseFromIndex();
+            }
             if (table == 0) {
                 maybeStartRehashForDeleteOrTombstones();
             }
@@ -704,7 +696,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         private final YierdisFfmSpan hashes;
         private final YierdisFfmRegion expireAtRegion;
         private final YierdisFfmSpan expireAt;
-        private final YierdisFfmBytesRef[] refs;
+        private final KeyRef[] refs;
 
         private int size;
         private int used;
@@ -718,7 +710,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             this.hashes = hashesRegion.span(0, capacity * Integer.BYTES);
             this.expireAtRegion = memoryRuntime.allocateRegion("ffm-expire-values", capacity * Long.BYTES);
             this.expireAt = expireAtRegion.span(0, capacity * Long.BYTES);
-            this.refs = new YierdisFfmBytesRef[capacity];
+            this.refs = new KeyRef[capacity];
             this.threshold = (int) (capacity * LOAD_FACTOR);
         }
 
@@ -751,6 +743,145 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             statesRegion.close();
             hashesRegion.close();
             expireAtRegion.close();
+        }
+    }
+
+    private static byte[] copyKey(KeyHandle keyHandle) {
+        byte[] out = new byte[keyHandle.len()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = keyHandle.byteAt(i);
+        }
+        return out;
+    }
+
+    private sealed interface KeyRef permits FfmKeyRef, AllocatorKeyRef {
+        boolean equalsBytes(byte[] key);
+
+        boolean equalsBytes(BytesView key);
+
+        KeyHandle keyHandle(int hash);
+
+        boolean sameIdentity(KeyRef other);
+
+        void retainForIndex();
+
+        void releaseFromIndex();
+    }
+
+    private final class FfmKeyRef implements KeyRef {
+        private final YierdisFfmBytesRef ref;
+
+        private FfmKeyRef(YierdisFfmBytesRef ref) {
+            this.ref = Objects.requireNonNull(ref, "ref");
+        }
+
+        @Override
+        public boolean equalsBytes(byte[] key) {
+            if (key.length != ref.length()) {
+                return false;
+            }
+            for (int i = 0; i < ref.length(); i++) {
+                if (ref.byteAt(i) != key[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public boolean equalsBytes(BytesView key) {
+            if (key.length() != ref.length()) {
+                return false;
+            }
+            for (int i = 0; i < ref.length(); i++) {
+                if (ref.byteAt(i) != key.getByte(i)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public KeyHandle keyHandle(int hash) {
+            return KeyHandle.forFfm(ref, hash);
+        }
+
+        @Override
+        public boolean sameIdentity(KeyRef other) {
+            return other instanceof FfmKeyRef f
+                    && (ref == f.ref
+                    || (ref.region() == f.ref.region()
+                    && ref.offset() == f.ref.offset()
+                    && ref.length() == f.ref.length()));
+        }
+
+        @Override
+        public void retainForIndex() {
+            if (blobStore != null) {
+                blobStore.retain(ref);
+            }
+        }
+
+        @Override
+        public void releaseFromIndex() {
+            if (blobStore != null) {
+                blobStore.release(ref);
+            }
+        }
+    }
+
+    private final class AllocatorKeyRef implements KeyRef {
+        private final NativeHandle handle;
+
+        private AllocatorKeyRef(NativeHandle handle) {
+            this.handle = Objects.requireNonNull(handle, "handle");
+        }
+
+        @Override
+        public boolean equalsBytes(byte[] key) {
+            KeyHandle stored = keyHandle(0);
+            if (stored.len() != key.length) {
+                return false;
+            }
+            for (int i = 0; i < key.length; i++) {
+                if (stored.byteAt(i) != key[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public boolean equalsBytes(BytesView key) {
+            KeyHandle stored = keyHandle(0);
+            int len = key.length();
+            if (stored.len() != len) {
+                return false;
+            }
+            for (int i = 0; i < len; i++) {
+                if (stored.byteAt(i) != key.getByte(i)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public KeyHandle keyHandle(int hash) {
+            return KeyHandle.forNative(nativeAllocator, handle, hash);
+        }
+
+        @Override
+        public boolean sameIdentity(KeyRef other) {
+            return other instanceof AllocatorKeyRef a && handle.equals(a.handle);
+        }
+
+        @Override
+        public void retainForIndex() {
+        }
+
+        @Override
+        public void releaseFromIndex() {
         }
     }
 }

@@ -151,7 +151,7 @@ public class YierdisDbConstructionTest {
 
     @Test
     public void storageComponentsReserveNativeSlotsForEntriesAndStrings() {
-        Assert.assertEquals(128 * 1024, YierdisDbStorageComponents.sharedNativeSlotCapacity());
+        Assert.assertEquals(192 * 1024, YierdisDbStorageComponents.sharedNativeSlotCapacity());
     }
 
     @Test
@@ -166,10 +166,9 @@ public class YierdisDbConstructionTest {
                 false,
                 true
         );
-        YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(runtime, "db-compute-entry-allocation-failure-key");
-        YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(blobStore);
+        YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator);
         EntryTable entries = new EntryTable(runtime, allocator);
-        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(blobStore);
+        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(allocator);
         StringRoot stringRoot = new StringRoot(allocator);
         ListRoot listRoot = new ListRoot(runtime);
         HashRoot hashRoot = new HashRoot(runtime);
@@ -239,10 +238,9 @@ public class YierdisDbConstructionTest {
                 false,
                 true
         );
-        YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(runtime, "db-setbit-ensure-length-failure-key");
-        YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(blobStore);
+        YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator);
         EntryTable entries = new EntryTable(runtime, allocator);
-        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(blobStore);
+        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(allocator);
         StringRoot stringRoot = new StringRoot(allocator);
         ListRoot listRoot = new ListRoot(runtime);
         HashRoot hashRoot = new HashRoot(runtime);

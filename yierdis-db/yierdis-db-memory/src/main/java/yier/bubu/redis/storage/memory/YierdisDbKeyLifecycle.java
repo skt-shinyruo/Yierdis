@@ -385,9 +385,8 @@ public final class YierdisDbKeyLifecycle {
             return false;
         }
         long removalBytes = estimatedBytesForRemoval(keyHandle, record);
-        byte[] keyBytes = keyBytes(keyHandle);
+        removeExpireIndexOnly(keyHandle);
         if (removeEntry(keyHandle, record)) {
-            removeExpireByKeyBytes(keyBytes);
             adjustUsedBytesCallback.accept(-removalBytes);
             return true;
         }
@@ -427,8 +426,14 @@ public final class YierdisDbKeyLifecycle {
         if (keyHandle == null) {
             return;
         }
-        expires.removeExpire(keyHandle);
+        removeExpireIndexOnly(keyHandle);
         replaceEntryExpire(keyHandle, -1L);
+    }
+
+    public void removeExpireIndexOnly(KeyHandle keyHandle) {
+        if (keyHandle != null) {
+            expires.removeExpire(keyHandle);
+        }
     }
 
     public void removeExpireByKeyBytes(byte[] keyBytes) {
@@ -589,6 +594,10 @@ public final class YierdisDbKeyLifecycle {
     private static long keyHandleIdentity(KeyHandle keyHandle) {
         if (keyHandle == null) {
             return 0L;
+        }
+        var nativeHandle = KeyHandleAccess.allocatorNativeHandleOrNull(keyHandle);
+        if (nativeHandle != null) {
+            return nativeHandle.raw();
         }
         var ref = KeyHandleAccess.ffmBytesRefOrNull(keyHandle);
         if (ref != null) {

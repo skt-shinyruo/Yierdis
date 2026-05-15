@@ -196,6 +196,8 @@ public class NativeStorageRegressionTest {
 
                 YierdisMemoryStats populated = db.memory().memoryStats();
                 Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
+                Assert.assertEquals(db.size(),
+                        db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.KEY_BYTES));
                 Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().logicalUsedBytes() > 0L);
                 Assert.assertEquals(db.size(), populated.keyCount());
                 Assert.assertEquals(db.usedBytesForMaxmemory(), populated.usedBytesForMaxmemory());
@@ -216,6 +218,7 @@ public class NativeStorageRegressionTest {
                 Assert.assertEquals(0, db.size());
                 Assert.assertEquals(0L, db.memory().memoryStats().usedBytesForMaxmemory());
                 Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES));
+                Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.KEY_BYTES));
                 Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().logicalUsedBytes());
             } finally {
                 db.shutdown();
