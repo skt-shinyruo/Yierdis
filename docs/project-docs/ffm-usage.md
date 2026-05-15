@@ -1430,7 +1430,7 @@ adapter，但 key 的 canonical metadata 在 `EntryTable`，value identity 是
 `ArrayList<Entry>` 承载。
 
 在 `ZRANGE` / `ZRANGEBYSCORE` 这种输出路径里，member 可以直接作为 `YierdisFfmBytesRefSlice` 发送给 `BulkStringSink`，因此它也支持 off-heap 流式读取。
-不过和 string 一样，当前 RESP sink 侧仍是 scratch buffer 分块写出，不是 native-to-socket 零拷贝。
+不过这里的 native-ref-backed slice 仍由当前 RESP sink 通过 scratch buffer 分块写出，不是 native-to-socket 零拷贝。
 
 代表路径：
 
@@ -1564,7 +1564,7 @@ usage；只是单 DB 的 `offHeapIncludedInMaxmemory` 在 global coordinator 存
 - `OffHeapKeysToggleTest`
   说明默认 DB 已经把 key 存到 off-heap
 - `OffHeapStringStorageTest`
-  说明字符串写入后确实占用 runtime native bytes，`GET` 也可以走 off-heap slice 读路径
+  说明 allocator-backed string payload 记账，以及 `GET` 保留 heap-backed `OffHeapSlice` API path
 - `UnsafeOffHeapKeyspaceTest`
   说明 TTL 清理和 shutdown 后 native bytes 能回到 0
 - `UnsafeOffHeapDbSmokeTest`
