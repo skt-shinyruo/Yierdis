@@ -19,6 +19,7 @@ import yier.bubu.redis.memory.api.OffHeapAllocator;
 
 public final class YierdisDbStorageComponents {
     private static final int ENTRY_TABLE_NATIVE_SLOT_CAPACITY = 64 * 1024;
+    private static final int STRING_NATIVE_SLOT_CAPACITY = 64 * 1024;
 
     final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
@@ -94,7 +95,7 @@ public final class YierdisDbStorageComponents {
 
         NativeAllocator nativeAllocator = new YierdisStableNativeAllocator(
                 resolvedRuntime,
-                ENTRY_TABLE_NATIVE_SLOT_CAPACITY
+                sharedNativeSlotCapacity()
         );
         YierdisDbOwnedResources resources = new YierdisDbOwnedResources(
                 resolvedRuntime,
@@ -127,5 +128,9 @@ public final class YierdisDbStorageComponents {
                 zsetRoot,
                 true
         );
+    }
+
+    static int sharedNativeSlotCapacity() {
+        return ENTRY_TABLE_NATIVE_SLOT_CAPACITY + STRING_NATIVE_SLOT_CAPACITY;
     }
 }

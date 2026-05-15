@@ -290,20 +290,24 @@ public final class YierdisDbKeyLifecycle {
             return newRecord;
         }
 
-        EntryHandle created = entryTable.allocate(newRecord);
+        EntryHandle created = null;
         boolean inserted = false;
         try {
+            EntryHandle allocated = entryTable.allocate(newRecord);
+            created = allocated;
             keyDirectory.compute(keyBytes, (key, oldHandle) -> {
                 if (oldHandle != null) {
                     throw new IllegalStateException("native entry appeared during remapping");
                 }
-                return created;
+                return allocated;
             });
             inserted = true;
             return newRecord;
         } finally {
             if (!inserted) {
-                entryTable.release(created);
+                if (created != null) {
+                    entryTable.release(created);
+                }
                 releaseValue(newRecord);
             }
         }
