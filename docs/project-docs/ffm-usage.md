@@ -1157,7 +1157,7 @@ key 创建和替换由 `YierdisDbKeyLifecycle.computeWithHandle(...)` 收口：
 
 这让 `SET` 覆盖路径可以复用原 `ValueHandle`，并把扩容、回滚和旧 block 释放收口在 allocator 内部。
 
-`StringRoot.slice(...)` 对外仍返回 `OffHeapSlice`。它只在方法内部短暂 resolve `NativeObjectView`，不会暴露可逃逸的 allocator view。
+`StringRoot.slice(...)` 对外仍返回 `OffHeapSlice`。当前实现会先调用 `copy(handle)`，把 native `STRING_BYTES` 复制到 heap `byte[]`，再包装成 heap-backed `OffHeapSlice`；它不会暴露可逃逸的 allocator view。
 
 这里的“直接”指 DB 读接口层仍可以使用 `OffHeapSlice` 接口写出。当前实现不会把 allocator view 传到调用方，因此不是 native memory 到 socket 的真正零拷贝。
 
@@ -1227,12 +1227,12 @@ type、encoding、value handle、TTL 和估算字节数。
 `GET` 的读路径会先解析 live entry，再通过当前 value handle 访问
 `StringRoot`：
 
-- 可流式输出时返回 `BulkStringValue.slice(slice)`，底层封装为 `OffHeapSlice`
-- 需要 materialize 时才复制成 heap `byte[]`
+- 可流式输出时仍返回 `BulkStringValue.slice(slice)`，保留 `OffHeapSlice` API
+- 当前 `StringRoot.slice(...)` 会先把 native `STRING_BYTES` 复制成 heap `byte[]`，再返回 heap-backed `OffHeapSlice`
+- 需要 `byte[]` 语义的接口也会 materialize 成 heap `byte[]`
 
-这就是字符串路径里维持 `OffHeapSlice` 接口的读优化。它不是端到端
-native-to-socket 零拷贝：`StringRoot.slice(...)` 不暴露 allocator view，slice 实现负责把
-bytes 写入下游 sink。
+这就是字符串路径里维持 `OffHeapSlice` 接口的读优化，但当前实现不是避免 heap copy 的 allocator-view 暴露。它也不是端到端
+native-to-socket 零拷贝：`StringRoot.slice(...)` 不暴露 allocator view，heap-backed slice 负责把 bytes 写入下游 sink。
 
 代表路径：
 
@@ -1450,7 +1450,7 @@ adapter，但 key 的 canonical metadata 在 `EntryTable`，value identity 是
 - `NativeKeyDirectory` 的 key bytes 在 native blob store，table 数组仍在 heap
 - `YierdisFfmExpireIndex` 的 `states` / `hashes` / `expireAt` 在 native memory，但 `refs[]` 仍在 heap
 - `YierdisFfmZSet` 的 member bytes 在 native blob store，但 `ordered` 和 `Entry.score` 仍在 heap
-- `StringRoot` 的 payload 已由 DB 级 shared `NativeAllocator` 管理，kind 为 `STRING_BYTES`。`ValueHandle` 对 string 来说是 stable allocator handle；append/ensureLength 使用 allocator realloc 保持 handle 不变。`slice` 对外仍返回 `OffHeapSlice` 接口，但不会暴露可逃逸的 allocator view。
+- `StringRoot` 的 payload 已由 DB 级 shared `NativeAllocator` 管理，kind 为 `STRING_BYTES`。`ValueHandle` 对 string 来说是 stable allocator handle；append/ensureLength 使用 allocator realloc 保持 handle 不变。`slice` 对外仍返回 `OffHeapSlice` 接口，但当前会先复制 native `STRING_BYTES` 到 heap-backed `OffHeapSlice`，不会暴露可逃逸的 allocator view。
 - `HashRoot` / `ListRoot` / `SetRoot` / `ZSetRoot` 的 handle table 仍在 heap，`ValueHandle` 使用对应 type-root kind，payload 通过各 value adapter 进入 FFM-backed 结构；这些 `ValueHandle` 不能被随意拿去 stable allocator resolve
 - `YierdisFfmByteMap` 的 table 索引数组本身仍在 heap，只是 key bytes 放在 off-heap
 - `YierdisFfmListpack` 本身是 `ArrayList<YierdisFfmBytesRef>`，真正 off-heap 的是 entry bytes
