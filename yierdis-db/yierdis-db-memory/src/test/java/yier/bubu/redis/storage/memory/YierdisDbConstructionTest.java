@@ -12,16 +12,24 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
+import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
+import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
+import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
+import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.Collections;
@@ -128,6 +136,84 @@ public class YierdisDbConstructionTest {
                     storage.hashRoot,
                     storage.setRoot,
                     storage.zsetRoot
+            );
+        }
+    }
+
+    @Test
+    public void storageComponentsReserveNativeSlotsForEntriesAndStrings() {
+        Assert.assertEquals(128 * 1024, YierdisDbStorageComponents.sharedNativeSlotCapacity());
+    }
+
+    @Test
+    public void computeWithHandleReleasesNewStringWhenEntryAllocationFails() {
+        YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db-compute-entry-allocation-failure");
+        NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1);
+        YierdisDbOwnedResources resources = new YierdisDbOwnedResources(
+                runtime,
+                null,
+                allocator,
+                true,
+                false,
+                true
+        );
+        YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(runtime, "db-compute-entry-allocation-failure-key");
+        YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(blobStore);
+        EntryTable entries = new EntryTable(runtime, allocator);
+        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(blobStore);
+        StringRoot stringRoot = new StringRoot(allocator);
+        ListRoot listRoot = new ListRoot(runtime);
+        HashRoot hashRoot = new HashRoot(runtime);
+        SetRoot setRoot = new SetRoot(runtime);
+        ZSetRoot zsetRoot = new ZSetRoot(runtime);
+        try {
+            YierdisDbKeyLifecycle lifecycle = new YierdisDbKeyLifecycle(
+                    expires,
+                    null,
+                    allocator,
+                    runtime,
+                    entries,
+                    keyDirectory,
+                    stringRoot,
+                    listRoot,
+                    hashRoot,
+                    setRoot,
+                    zsetRoot,
+                    () -> 1L,
+                    ignored -> {
+                    }
+            );
+
+            try {
+                lifecycle.computeWithHandle(bytes("entry-allocation-fails"), (keyHandle, oldRecord) -> {
+                    Assert.assertNull(oldRecord);
+                    ValueHandle valueHandle = stringRoot.store(bytes("value"));
+                    return lifecycle.newRecord(
+                            keyHandle,
+                            valueHandle,
+                            ValueType.STRING,
+                            ValueEncoding.STRING_RAW,
+                            -1L,
+                            0L,
+                            null
+                    );
+                });
+                Assert.fail("entry allocation should fail when the shared native allocator has no free slots");
+            } catch (NativeMemoryException e) {
+                Assert.assertTrue(e.getMessage().contains("native object slot limit exceeded"));
+            }
+
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.STRING_BYTES));
+        } finally {
+            resources.releaseAll(
+                    expires,
+                    entries,
+                    keyDirectory,
+                    stringRoot,
+                    listRoot,
+                    hashRoot,
+                    setRoot,
+                    zsetRoot
             );
         }
     }
