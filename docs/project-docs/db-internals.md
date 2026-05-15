@@ -128,7 +128,7 @@ TypeRoot
 这里的 handle 都是 64-bit identity，不是 native 物理地址。`EntryHandle` 包装
 `ENTRY_RECORD` 类型的 object-table-backed `NativeHandle`，`EntryTable` 通过 allocator resolve handle 后才读写
 entry metadata。`ValueHandle` 也包装 `NativeHandle` raw value，用 string/list/hash/set/zset
-对应的 kind 给 type root payload 一个稳定引用形状；但当前多数 `ValueHandle.slotId()` 是 type root 局部 identity，不等同于 object table slot。
+对应的 kind 给 type root payload 一个稳定引用形状；当前 string `ValueHandle.slotId()` 是 allocator object-table slot，collection roots 的 `ValueHandle.slotId()` 仍是 type root 局部 identity。
 
 ### `NativeKeyDirectory`
 
