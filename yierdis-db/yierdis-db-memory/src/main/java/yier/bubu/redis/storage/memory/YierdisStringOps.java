@@ -274,24 +274,32 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                         beforeLen = stringRoot.length(handle);
                     }
 
-                    oldBit[0] = getBit(handle, offset);
-                    stringRoot.ensureLength(handle, requiredLen);
-                    setBit(handle, offset, value);
-                    int afterLen = stringRoot.length(handle);
-                    if (!existed || oldBit[0] != value || afterLen != beforeLen) {
-                        changed[0] = true;
-                    }
+                    boolean ok = false;
+                    try {
+                        oldBit[0] = getBit(handle, offset);
+                        stringRoot.ensureLength(handle, requiredLen);
+                        setBit(handle, offset, value);
+                        int afterLen = stringRoot.length(handle);
+                        if (!existed || oldBit[0] != value || afterLen != beforeLen) {
+                            changed[0] = true;
+                        }
 
-                    EntryRecord next = stringRecord(
-                            k,
-                            handle,
-                            ValueEncoding.STRING_RAW,
-                            current == null ? -1L : current.expireAtMillis(),
-                            current
-                    );
-                    deltaBytes[0] -= oldEstimate;
-                    deltaBytes[0] += estimateRecordBytes(k, next);
-                    return next;
+                        EntryRecord next = stringRecord(
+                                k,
+                                handle,
+                                ValueEncoding.STRING_RAW,
+                                current == null ? -1L : current.expireAtMillis(),
+                                current
+                        );
+                        deltaBytes[0] -= oldEstimate;
+                        deltaBytes[0] += estimateRecordBytes(k, next);
+                        ok = true;
+                        return next;
+                    } finally {
+                        if (!ok && current == null) {
+                            stringRoot.release(handle);
+                        }
+                    }
                 });
                 if (changed[0]) {
                     return YierdisDbMutationExecutor.MutationResult.of(

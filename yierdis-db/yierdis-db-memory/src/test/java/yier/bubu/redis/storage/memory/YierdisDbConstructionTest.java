@@ -11,9 +11,18 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeAccessMode;
+import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
+import yier.bubu.redis.memory.api.NativeDefragReport;
+import yier.bubu.redis.memory.api.NativeDefragResult;
+import yier.bubu.redis.memory.api.NativeEpochKind;
+import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.NativeObjectView;
+import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
@@ -219,6 +228,93 @@ public class YierdisDbConstructionTest {
     }
 
     @Test
+    public void setBitReleasesNewStringWhenEnsureLengthFails() {
+        YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db-setbit-ensure-length-failure");
+        NativeAllocator allocator = new ReallocSlotLimitNativeAllocator(new YierdisStableNativeAllocator(runtime, 1));
+        YierdisDbOwnedResources resources = new YierdisDbOwnedResources(
+                runtime,
+                null,
+                allocator,
+                true,
+                false,
+                true
+        );
+        YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(runtime, "db-setbit-ensure-length-failure-key");
+        YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(blobStore);
+        EntryTable entries = new EntryTable(runtime, allocator);
+        NativeKeyDirectory keyDirectory = new NativeKeyDirectory(blobStore);
+        StringRoot stringRoot = new StringRoot(allocator);
+        ListRoot listRoot = new ListRoot(runtime);
+        HashRoot hashRoot = new HashRoot(runtime);
+        SetRoot setRoot = new SetRoot(runtime);
+        ZSetRoot zsetRoot = new ZSetRoot(runtime);
+        try {
+            YierdisDbKeyLifecycle lifecycle = new YierdisDbKeyLifecycle(
+                    expires,
+                    null,
+                    allocator,
+                    runtime,
+                    entries,
+                    keyDirectory,
+                    stringRoot,
+                    listRoot,
+                    hashRoot,
+                    setRoot,
+                    zsetRoot,
+                    () -> 1L,
+                    ignored -> {
+                    }
+            );
+            InMemoryLedger ledger = new InMemoryLedger(0);
+            YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(() -> {
+            }, ledger);
+            YierdisStringOps strings = new YierdisStringOps(new YierdisDbInternals() {
+                @Override
+                public void checkThread() {
+                }
+
+                @Override
+                public <T> T executeMutation(YierdisDbMutationExecutor.MutationPlan<T> plan) {
+                    return executor.execute(plan);
+                }
+
+                @Override
+                public YierdisDbKeyLifecycle keyLifecycle() {
+                    return lifecycle;
+                }
+
+                @Override
+                public MemoryLedger ledger() {
+                    return ledger;
+                }
+            });
+            byte[] key = bytes("setbit-realloc-fails");
+
+            try {
+                strings.setBit(key, 128L, 1);
+                Assert.fail("setbit should fail when string growth cannot realloc");
+            } catch (NativeMemoryException e) {
+                Assert.assertTrue(e.getMessage().contains("native object slot limit exceeded"));
+            }
+
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.STRING_BYTES));
+            Assert.assertNull(lifecycle.entryHandle(key));
+            Assert.assertNull(lifecycle.entryRecord(key));
+        } finally {
+            resources.releaseAll(
+                    expires,
+                    entries,
+                    keyDirectory,
+                    stringRoot,
+                    listRoot,
+                    hashRoot,
+                    setRoot,
+                    zsetRoot
+            );
+        }
+    }
+
+    @Test
     public void shutdownReleasesNativeEntryDirectoryResources() {
         YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db-entry-graph-test");
         YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
@@ -389,5 +485,70 @@ public class YierdisDbConstructionTest {
                 return data[index];
             }
         };
+    }
+
+    private static final class ReallocSlotLimitNativeAllocator implements NativeAllocator {
+        private final NativeAllocator delegate;
+
+        private ReallocSlotLimitNativeAllocator(NativeAllocator delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public NativeHandle allocate(NativeObjectKind kind, int size) {
+            return delegate.allocate(kind, size);
+        }
+
+        @Override
+        public NativeHandle realloc(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
+            NativeHandle unexpected = delegate.allocate(NativeObjectKind.STRING_BYTES, newSize);
+            delegate.free(unexpected);
+            throw new AssertionError("expected one-slot native allocator to reject realloc growth");
+        }
+
+        @Override
+        public void free(NativeHandle handle) {
+            delegate.free(handle);
+        }
+
+        @Override
+        public void pin(NativeHandle handle) {
+            delegate.pin(handle);
+        }
+
+        @Override
+        public void unpin(NativeHandle handle) {
+            delegate.unpin(handle);
+        }
+
+        @Override
+        public NativeEpochScope beginEpoch(NativeEpochKind kind) {
+            return delegate.beginEpoch(kind);
+        }
+
+        @Override
+        public NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode) {
+            return delegate.resolve(handle, mode);
+        }
+
+        @Override
+        public NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes) {
+            return delegate.defragOne(handle, maxMoveBytes);
+        }
+
+        @Override
+        public NativeDefragReport defragCycle(NativeDefragOptions options) {
+            return delegate.defragCycle(options);
+        }
+
+        @Override
+        public NativeAllocatorStats stats() {
+            return delegate.stats();
+        }
+
+        @Override
+        public void close() {
+            delegate.close();
+        }
     }
 }
