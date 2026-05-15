@@ -71,8 +71,8 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
     ) {
         ensureOpen();
         Objects.requireNonNull(kind, "kind");
-        if (size <= 0) {
-            throw new IllegalArgumentException("size must be > 0");
+        if (size < 0) {
+            throw new IllegalArgumentException("size must be >= 0");
         }
         if (capacity < size) {
             throw new IllegalArgumentException("capacity must be >= size");
@@ -178,8 +178,8 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
     public synchronized void updateLocation(NativeHandle handle, int size, int capacity, long address, int pageClass) {
         ensureOpen();
         SlotRef ref = requireLiveSlot(handle, false);
-        if (size <= 0) {
-            throw new IllegalArgumentException("size must be > 0");
+        if (size < 0) {
+            throw new IllegalArgumentException("size must be >= 0");
         }
         if (capacity < size) {
             throw new IllegalArgumentException("capacity must be >= size");
@@ -206,8 +206,8 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
     public synchronized void publishMoved(NativeHandle handle, int size, int capacity, long address, int pageClass) {
         ensureOpen();
         SlotRef ref = requireSlotInState(handle, STATE_MOVING);
-        if (size <= 0) {
-            throw new IllegalArgumentException("size must be > 0");
+        if (size < 0) {
+            throw new IllegalArgumentException("size must be >= 0");
         }
         if (capacity < size) {
             throw new IllegalArgumentException("capacity must be >= size");

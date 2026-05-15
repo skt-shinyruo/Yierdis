@@ -72,12 +72,9 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     public synchronized NativeHandle allocate(NativeObjectKind kind, int size) {
         ensureOpen();
         Objects.requireNonNull(kind, "kind");
-        if (size <= 0) {
-            throw new IllegalArgumentException("size must be > 0");
-        }
 
         long startedNanos = System.nanoTime();
-        YierdisNativeBlock block = pageAllocator.allocate(size);
+        YierdisNativeBlock block = pageAllocator.allocate(physicalAllocationBytes(size));
         boolean allocated = false;
         try {
             NativeHandle handle = objectTable.allocate(
@@ -108,8 +105,8 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     public synchronized NativeHandle realloc(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
         ensureOpen();
         Objects.requireNonNull(policy, "policy");
-        if (newSize <= 0) {
-            throw new IllegalArgumentException("newSize must be > 0");
+        if (newSize < 0) {
+            throw new IllegalArgumentException("newSize must be >= 0");
         }
 
         YierdisNativeObjectMeta meta = requireLiveMeta(handle);
@@ -136,7 +133,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             throw new NativeMemoryException("native object cannot grow in place");
         }
 
-        YierdisNativeBlock next = pageAllocator.allocate(newSize);
+        YierdisNativeBlock next = pageAllocator.allocate(physicalAllocationBytes(newSize));
         boolean moved = false;
         try {
             copyPrefix(allocation.current, next, oldSize);
@@ -382,13 +379,20 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
     }
 
+    private static int physicalAllocationBytes(int logicalSize) {
+        if (logicalSize < 0) {
+            throw new IllegalArgumentException("size must be >= 0");
+        }
+        return Math.max(1, logicalSize);
+    }
+
     private NativeDefragResult moveLiveObject(NativeHandle handle) {
         Allocation allocation = allocationFor(handle);
         YierdisNativeObjectMeta sourceMeta = objectTable.beginMove(handle);
         YierdisNativeBlock target = null;
         boolean published = false;
         try {
-            target = pageAllocator.allocate(sourceMeta.size());
+            target = pageAllocator.allocate(physicalAllocationBytes(sourceMeta.size()));
             copyPrefix(allocation.current, target, sourceMeta.size());
             defragValidator.validate(handle, sourceMeta, target);
 
