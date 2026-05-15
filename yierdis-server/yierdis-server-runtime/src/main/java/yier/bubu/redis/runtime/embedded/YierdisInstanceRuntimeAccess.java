@@ -47,6 +47,7 @@ public final class YierdisInstanceRuntimeAccess implements AutoCloseable {
                 continue;
             }
             engine.expiration().cleanupExpired();
+            engine.defragMaintenance();
             if (perDb) {
                 engine.enforceMaxmemoryMaintenance();
             }

@@ -80,6 +80,10 @@ public class ServerConfigArgsTest {
                 "--maxmemorySamples", "9",
                 "--evictionTimeLimitMillis", "11",
                 "--expireCleanupTimeLimitMillis", "13",
+                "--nativeDefragEnabled",
+                "--nativeDefragMaxMoveBytes", "1024",
+                "--nativeDefragMaxObjects", "7",
+                "--nativeDefragTimeLimitMillis", "3",
                 "--keysTimeBudgetMillis", "17",
                 "--keysMaxResults", "23"
         });
@@ -109,6 +113,10 @@ public class ServerConfigArgsTest {
         Assert.assertEquals(9, runtimeConfig.get("maxmemorySamples"));
         Assert.assertEquals(11L, runtimeConfig.get("evictionTimeLimitMillis"));
         Assert.assertEquals(13L, runtimeConfig.get("expireCleanupTimeLimitMillis"));
+        Assert.assertEquals(true, runtimeConfig.get("nativeDefragEnabled"));
+        Assert.assertEquals(1024L, runtimeConfig.get("nativeDefragMaxMoveBytes"));
+        Assert.assertEquals(7L, runtimeConfig.get("nativeDefragMaxObjects"));
+        Assert.assertEquals(3L, runtimeConfig.get("nativeDefragTimeLimitMillis"));
         Assert.assertEquals(17L, runtimeConfig.get("keysTimeBudgetMillis"));
         Assert.assertEquals(23, runtimeConfig.get("keysMaxResults"));
         Assert.assertFalse(runtimeConfig.containsKey("offheapBackend"));

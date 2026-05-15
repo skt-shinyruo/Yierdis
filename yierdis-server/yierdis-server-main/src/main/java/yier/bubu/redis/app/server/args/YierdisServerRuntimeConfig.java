@@ -33,6 +33,10 @@ public record YierdisServerRuntimeConfig(
         int maxmemorySamples,
         long evictionTimeLimitMillis,
         long expireCleanupTimeLimitMillis,
+        boolean nativeDefragEnabled,
+        long nativeDefragMaxMoveBytes,
+        long nativeDefragMaxObjects,
+        long nativeDefragTimeLimitMillis,
         long keysTimeBudgetMillis,
         int keysMaxResults
 ) {
@@ -40,6 +44,15 @@ public record YierdisServerRuntimeConfig(
         Objects.requireNonNull(executorSchedulingPolicy, "executorSchedulingPolicy");
         Objects.requireNonNull(maxmemoryScope, "maxmemoryScope");
         Objects.requireNonNull(maxmemoryPolicy, "maxmemoryPolicy");
+        if (nativeDefragMaxMoveBytes < 0) {
+            throw new IllegalArgumentException("nativeDefragMaxMoveBytes must be >= 0");
+        }
+        if (nativeDefragMaxObjects < 0) {
+            throw new IllegalArgumentException("nativeDefragMaxObjects must be >= 0");
+        }
+        if (nativeDefragTimeLimitMillis < 0) {
+            throw new IllegalArgumentException("nativeDefragTimeLimitMillis must be >= 0");
+        }
     }
 
     public enum ExecutorSchedulingPolicy {

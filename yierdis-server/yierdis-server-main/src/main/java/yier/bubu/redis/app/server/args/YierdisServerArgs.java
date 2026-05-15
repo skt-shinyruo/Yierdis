@@ -176,6 +176,30 @@ public final class YierdisServerArgs {
     @Option(names = YierdisServerArgNames.EXPIRE_CLEANUP_TIME_LIMIT_MILLIS, defaultValue = "5", description = "Expire cleanup time budget per tick in milliseconds.")
     public long expireCleanupTimeLimitMillis = 5;
 
+    @Option(names = YierdisServerArgNames.NATIVE_DEFRAG_ENABLED, description = "Enable DB native allocator defrag during maintenance ticks.")
+    public boolean nativeDefragEnabled;
+
+    @Option(
+            names = YierdisServerArgNames.NATIVE_DEFRAG_MAX_MOVE_BYTES,
+            defaultValue = "65536",
+            description = "Native defrag max bytes to move per maintenance tick."
+    )
+    public long nativeDefragMaxMoveBytes = 64L * 1024L;
+
+    @Option(
+            names = YierdisServerArgNames.NATIVE_DEFRAG_MAX_OBJECTS,
+            defaultValue = "64",
+            description = "Native defrag max objects to inspect per maintenance tick."
+    )
+    public long nativeDefragMaxObjects = 64L;
+
+    @Option(
+            names = YierdisServerArgNames.NATIVE_DEFRAG_TIME_LIMIT_MILLIS,
+            defaultValue = "1",
+            description = "Native defrag time budget per maintenance tick in milliseconds."
+    )
+    public long nativeDefragTimeLimitMillis = 1L;
+
     @Option(
             names = YierdisServerArgNames.KEYS_TIME_BUDGET_MILLIS,
             defaultValue = "20",
@@ -285,6 +309,15 @@ public final class YierdisServerArgs {
         if (expireCleanupTimeLimitMillis <= 0) {
             throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be > 0");
         }
+        if (nativeDefragMaxMoveBytes < 0) {
+            throw new IllegalArgumentException("nativeDefragMaxMoveBytes must be >= 0");
+        }
+        if (nativeDefragMaxObjects < 0) {
+            throw new IllegalArgumentException("nativeDefragMaxObjects must be >= 0");
+        }
+        if (nativeDefragTimeLimitMillis < 0) {
+            throw new IllegalArgumentException("nativeDefragTimeLimitMillis must be >= 0");
+        }
         if (keysTimeBudgetMillis < 0) {
             throw new IllegalArgumentException("keysTimeBudgetMillis must be >= 0");
         }
@@ -324,6 +357,10 @@ public final class YierdisServerArgs {
         out.maxmemorySamples = maxmemorySamples;
         out.evictionTimeLimitMillis = evictionTimeLimitMillis;
         out.expireCleanupTimeLimitMillis = expireCleanupTimeLimitMillis;
+        out.nativeDefragEnabled = nativeDefragEnabled;
+        out.nativeDefragMaxMoveBytes = nativeDefragMaxMoveBytes;
+        out.nativeDefragMaxObjects = nativeDefragMaxObjects;
+        out.nativeDefragTimeLimitMillis = nativeDefragTimeLimitMillis;
         out.keysTimeBudgetMillis = keysTimeBudgetMillis;
         out.keysMaxResults = keysMaxResults;
         return out;
@@ -363,6 +400,10 @@ public final class YierdisServerArgs {
                 maxmemorySamples,
                 evictionTimeLimitMillis,
                 expireCleanupTimeLimitMillis,
+                nativeDefragEnabled,
+                nativeDefragMaxMoveBytes,
+                nativeDefragMaxObjects,
+                nativeDefragTimeLimitMillis,
                 keysTimeBudgetMillis,
                 keysMaxResults
         );
@@ -447,6 +488,16 @@ public final class YierdisServerArgs {
         out.add(Long.toString(evictionTimeLimitMillis));
         out.add(YierdisServerArgNames.EXPIRE_CLEANUP_TIME_LIMIT_MILLIS);
         out.add(Long.toString(expireCleanupTimeLimitMillis));
+
+        if (nativeDefragEnabled) {
+            out.add(YierdisServerArgNames.NATIVE_DEFRAG_ENABLED);
+        }
+        out.add(YierdisServerArgNames.NATIVE_DEFRAG_MAX_MOVE_BYTES);
+        out.add(Long.toString(nativeDefragMaxMoveBytes));
+        out.add(YierdisServerArgNames.NATIVE_DEFRAG_MAX_OBJECTS);
+        out.add(Long.toString(nativeDefragMaxObjects));
+        out.add(YierdisServerArgNames.NATIVE_DEFRAG_TIME_LIMIT_MILLIS);
+        out.add(Long.toString(nativeDefragTimeLimitMillis));
 
         out.add(YierdisServerArgNames.KEYS_TIME_BUDGET_MILLIS);
         out.add(Long.toString(keysTimeBudgetMillis));

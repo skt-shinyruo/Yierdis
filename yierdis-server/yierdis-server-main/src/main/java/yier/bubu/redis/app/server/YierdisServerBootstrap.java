@@ -119,7 +119,11 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .maxmemoryPolicy(runtimeConfig.maxmemoryPolicy())
                 .maxmemorySamples(runtimeConfig.maxmemorySamples())
                 .evictionTimeLimitMillis(runtimeConfig.evictionTimeLimitMillis())
-                .expireCleanupTimeLimitMillis(runtimeConfig.expireCleanupTimeLimitMillis());
+                .expireCleanupTimeLimitMillis(runtimeConfig.expireCleanupTimeLimitMillis())
+                .nativeDefragEnabled(runtimeConfig.nativeDefragEnabled())
+                .nativeDefragMaxMoveBytes(runtimeConfig.nativeDefragMaxMoveBytes())
+                .nativeDefragMaxObjects(runtimeConfig.nativeDefragMaxObjects())
+                .nativeDefragTimeLimitMillis(runtimeConfig.nativeDefragTimeLimitMillis());
         instance = YierdisInstance.create(instanceConfig.build());
         YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
         Runnable maintenanceTick = new YierdisInstanceMaintenance(instance)::maintenanceTick;

@@ -47,6 +47,18 @@ public final class YierdisInstanceObservability {
         int keyspaceCap1 = 0;
         int expireCap0 = 0;
         int expireCap1 = 0;
+        long nativeDefragLastScannedObjects = 0;
+        long nativeDefragLastMovedObjects = 0;
+        long nativeDefragLastMovedBytes = 0;
+        long nativeDefragLastSkippedPinnedObjects = 0;
+        long nativeDefragLastSkippedBudgetObjects = 0;
+        long nativeDefragLastFailedMoves = 0;
+        long nativeDefragMovedBytes = 0;
+        long nativeDefragSkippedPinnedObjects = 0;
+        long nativeDefragQuarantinedObjects = 0;
+        long nativeDefragQuarantineBytes = 0;
+        long nativeStaleHandleDetections = 0;
+        long nativeDefragReclaimedPages = 0;
 
         for (int dbIndex = 0; dbIndex < databases; dbIndex++) {
             YierdisMemoryStats s = instance.runtimeEngine(dbIndex).memory().memoryStats();
@@ -71,6 +83,18 @@ public final class YierdisInstanceObservability {
             keyspaceCap1 += s.keyspaceTable1Capacity();
             expireCap0 += s.expireTable0Capacity();
             expireCap1 += s.expireTable1Capacity();
+            nativeDefragLastScannedObjects += s.nativeDefragLastScannedObjects();
+            nativeDefragLastMovedObjects += s.nativeDefragLastMovedObjects();
+            nativeDefragLastMovedBytes += s.nativeDefragLastMovedBytes();
+            nativeDefragLastSkippedPinnedObjects += s.nativeDefragLastSkippedPinnedObjects();
+            nativeDefragLastSkippedBudgetObjects += s.nativeDefragLastSkippedBudgetObjects();
+            nativeDefragLastFailedMoves += s.nativeDefragLastFailedMoves();
+            nativeDefragMovedBytes += s.nativeDefragMovedBytes();
+            nativeDefragSkippedPinnedObjects += s.nativeDefragSkippedPinnedObjects();
+            nativeDefragQuarantinedObjects += s.nativeDefragQuarantinedObjects();
+            nativeDefragQuarantineBytes += s.nativeDefragQuarantineBytes();
+            nativeStaleHandleDetections += s.nativeStaleHandleDetections();
+            nativeDefragReclaimedPages += s.nativeDefragReclaimedPages();
             if (!globalScope) {
                 usedBytesForMaxmemory += s.usedBytesForMaxmemory();
                 effectiveUsedBytesForMaxmemory += s.effectiveUsedBytesForMaxmemory();
@@ -111,7 +135,19 @@ public final class YierdisInstanceObservability {
                 expireCap1,
                 expireOverhead,
                 expireValueObjects,
-                totalEstimatedBytes
+                totalEstimatedBytes,
+                nativeDefragLastScannedObjects,
+                nativeDefragLastMovedObjects,
+                nativeDefragLastMovedBytes,
+                nativeDefragLastSkippedPinnedObjects,
+                nativeDefragLastSkippedBudgetObjects,
+                nativeDefragLastFailedMoves,
+                nativeDefragMovedBytes,
+                nativeDefragSkippedPinnedObjects,
+                nativeDefragQuarantinedObjects,
+                nativeDefragQuarantineBytes,
+                nativeStaleHandleDetections,
+                nativeDefragReclaimedPages
         );
     }
 
@@ -145,6 +181,18 @@ public final class YierdisInstanceObservability {
                 0,
                 0,
                 false,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 0,
                 0,
                 0,

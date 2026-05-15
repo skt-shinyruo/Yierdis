@@ -3,6 +3,7 @@ package yier.bubu.redis.runtime.embedded;
 // YierdisInstance：提供可嵌入（embedded）的 instance API（Netty-free），负责装配多 DB、路由与资源生命周期。
 
 import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.DbEngineFactory;
@@ -41,13 +42,14 @@ public final class YierdisInstance implements AutoCloseable {
         Objects.requireNonNull(config, "config");
         int databases = Math.max(1, config.databases());
         boolean perDbScope = config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
+        NativeDefragOptions nativeDefragOptions = nativeDefragOptions(config);
 
         YierdisFfmMemoryRuntime memoryRuntime = new YierdisFfmMemoryRuntime("instance");
         DbEngineFactory engineFactory = config.engineFactory();
         if (engineFactory == null) {
             engineFactory = perDbScope
-                    ? new YierdisDbEngineFactory()
-                    : new YierdisDbEngineFactory(memoryRuntime);
+                    ? new YierdisDbEngineFactory(nativeDefragOptions)
+                    : new YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions);
         }
 
         long perDbMaxmemory = 0;
@@ -113,6 +115,17 @@ public final class YierdisInstance implements AutoCloseable {
         } catch (Throwable t) {
             throw YierdisInstanceResources.startupFailure(t, dbs, memoryRuntime, true);
         }
+    }
+
+    private static NativeDefragOptions nativeDefragOptions(YierdisInstanceConfig config) {
+        if (!config.nativeDefragEnabled()) {
+            return null;
+        }
+        return new NativeDefragOptions(
+                config.nativeDefragMaxMoveBytes(),
+                config.nativeDefragMaxObjects(),
+                TimeUnit.MILLISECONDS.toNanos(config.nativeDefragTimeLimitMillis())
+        );
     }
 
     private static long sharedOffHeapUsedBytes(RuntimeDbEngine[] dbs) {

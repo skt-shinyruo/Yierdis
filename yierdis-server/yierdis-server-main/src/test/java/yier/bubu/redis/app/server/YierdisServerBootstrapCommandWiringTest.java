@@ -140,6 +140,9 @@ public class YierdisServerBootstrapCommandWiringTest {
                 String memorySection = asString(roundTrip(out, in, "INFO", "memory"));
                 Assert.assertTrue(memorySection.contains("maxmemory_policy:allkeys-lru\r\n"));
                 Assert.assertTrue(memorySection.contains("yierdis_maxmemory_scope:per-db\r\n"));
+                Assert.assertTrue(memorySection.contains("yierdis_native_defrag_last_scanned_objects:"));
+                Assert.assertTrue(memorySection.contains("yierdis_native_defrag_moved_bytes:"));
+                Assert.assertTrue(memorySection.contains("yierdis_native_stale_handle_detections:"));
             }
         }
     }
@@ -400,6 +403,10 @@ public class YierdisServerBootstrapCommandWiringTest {
                 5,
                 5,
                 5,
+                false,
+                65536,
+                64,
+                1,
                 0,
                 0
         );

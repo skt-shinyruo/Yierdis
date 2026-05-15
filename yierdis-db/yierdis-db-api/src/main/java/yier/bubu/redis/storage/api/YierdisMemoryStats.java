@@ -25,6 +25,18 @@ public record YierdisMemoryStats(
         int expireTable1Capacity,
         long expireTableOverheadBytesEstimate,
         long expireValueObjectsBytesEstimate,
-        long totalEstimatedBytes
+        long totalEstimatedBytes,
+        long nativeDefragLastScannedObjects,
+        long nativeDefragLastMovedObjects,
+        long nativeDefragLastMovedBytes,
+        long nativeDefragLastSkippedPinnedObjects,
+        long nativeDefragLastSkippedBudgetObjects,
+        long nativeDefragLastFailedMoves,
+        long nativeDefragMovedBytes,
+        long nativeDefragSkippedPinnedObjects,
+        long nativeDefragQuarantinedObjects,
+        long nativeDefragQuarantineBytes,
+        long nativeStaleHandleDetections,
+        long nativeDefragReclaimedPages
 ) {
 }
