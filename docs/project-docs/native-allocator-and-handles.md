@@ -66,7 +66,7 @@ bits 3..0    flags       4 bits
 
 `NativeHandle.of(...)` 会校验 domain/kind 是否匹配、slot/generation/flags 是否在位宽范围内。`EntryHandle` 只允许包装 `ENTRY_RECORD` handle；`ValueHandle` 可以包装不同 value/root 相关 domain，但调用方需要在边界处校验 domain。
 
-注意：当前只有 `EntryHandle` 一定是 object-table-backed allocator handle。`ValueHandle` 采用同一套 bit layout 做 type-root-owned typed identity；除非对应 root 明确把对象交给 `NativeAllocator` 分配，否则不能把任意 `ValueHandle` 拿去 `NativeAllocator.resolve(...)`。
+注意：当前 `EntryHandle` 和 string `ValueHandle` 是 object-table-backed allocator handle。`EntryHandle` 包装 `ENTRY_RECORD`；string `ValueHandle` 包装 `STRING_BYTES`。集合 roots 的 `ValueHandle` 仍然是 root-local typed identity，除非对应 root 明确迁移到 `NativeAllocator`，不能把任意集合 `ValueHandle` 直接拿去 `NativeAllocator.resolve(...)`。
 
 ## Object table
 
@@ -322,9 +322,11 @@ kind   = ENTRY_RECORD
 - set 使用 `SET_NODE` kind。
 - zset 使用 `ZSET_NODE` kind。
 
-当前 type roots 仍各自拥有 payload adapter 或 off-heap buffer 管理结构；`ValueHandle` 负责给 `EntryRecord` 一个稳定、带 domain/kind 的引用形状。`StringRoot` 的 payload bytes 仍经 `OffHeapAllocator` 管理，集合 roots 仍包装 `ListValue` / `HashValue` / `SetValue` / `ZSetValue`。
+`StringRoot` 已迁移到 `NativeAllocator`：`store` 分配 `STRING_BYTES`，`append`/`ensureLength` 通过 `realloc(..., PRESERVE_PREFIX)` 保持 stable handle，`slice`/`copy`/byte access 只在方法内部短暂 resolve `NativeObjectView`，`release` 调用 allocator free。
 
-因此，当前 `ValueHandle.slotId()` 是对应 root 的局部 identity，不等同于 `YierdisNativeObjectTable` slot。后续如果把某类 payload 也迁入 stable allocator，需要在该 root 内明确完成 allocate / resolve / free 协议，并补齐对应测试。
+集合 roots 仍各自拥有 payload adapter 管理结构；它们的 `ValueHandle` 负责给 `EntryRecord` 一个稳定、带 domain/kind 的引用形状，并继续包装 `ListValue` / `HashValue` / `SetValue` / `ZSetValue`。
+
+因此，string `ValueHandle.slotId()` 是 `YierdisNativeObjectTable` slot；集合 root 的 `ValueHandle.slotId()` 仍是对应 root 的局部 identity。后续如果把某类集合 payload 也迁入 stable allocator，需要在该 root 内明确完成 allocate / resolve / free 协议，并补齐对应测试。
 
 ### key graph
 
@@ -341,7 +343,7 @@ EntryRecord
   ValueType + ValueEncoding + ValueHandle(raw NativeHandle) + TTL/LRU/accounting
 
 TypeRoot
-  ValueHandle -> payload adapter / off-heap bytes
+  ValueHandle -> allocator-backed string bytes / collection payload adapter
 ```
 
 关键变化是：entry metadata 进入 production stable allocator，DB 层不保存 entry slot 的物理地址。

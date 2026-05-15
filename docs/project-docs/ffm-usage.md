@@ -1090,7 +1090,7 @@ DB 层不会把 Java 对象直接塞进 native memory，而是用 handle 串起�
 
 - `KeyHandle` 表示 key identity
 - `EntryHandle` 包装 `ENTRY_RECORD` 类型的 `NativeHandle`
-- `ValueHandle` 包装 string/list/hash/set/zset 等 value/root 相关 typed `NativeHandle` raw value；当前它是 type-root-owned identity，不保证都能直接由 stable allocator resolve
+- `ValueHandle` 包装 string/list/hash/set/zset 等 value/root 相关 typed `NativeHandle` raw value；string `ValueHandle` 是 allocator-backed stable handle，集合 roots 的 `ValueHandle` 仍是 type-root-owned identity，不保证都能直接由 stable allocator resolve
 - `YierdisFfmBytesRef` 表示一段 off-heap bytes
 
 `NativeKeyDirectory` 是 key -> `EntryHandle` 的权威目录。它的 table 数组仍在 heap，但 key bytes 存在 `YierdisFfmBlobStore` 中。插入新 key 时，directory 会调用 `blobStore.store(keyBytes)`；删除 key 时，会调用 `blobStore.release(keyRef)`。
@@ -1147,22 +1147,20 @@ key 创建和替换由 `YierdisDbKeyLifecycle.computeWithHandle(...)` 收口：
 
 字符串值由 `StringRoot` 管理，不走 `YierdisFfmBlobStore`。
 
-`StringRoot.store(...)` 会通过 `OffHeapAllocator` 分配 `OffHeapBuf`，把 value bytes 写进去，然后用 `ValueHandle` 暴露给 `EntryRecord`。
+`StringRoot.store(...)` 会通过 DB 级 shared `NativeAllocator` 分配 `STRING_BYTES`，把 value bytes 写进去，然后用 stable `ValueHandle` 暴露给 `EntryRecord`。
 
 覆盖时有一个重要优化：
 
-- 如果旧 buffer capacity 足够容纳新 value，就原地覆盖
-- 如果不够，才分配新 buffer，并关闭旧 buffer
+- 如果当前 allocator capacity 足够容纳新 value，就更新 logical size 并原地覆盖
+- 如果不够，`realloc(..., PRESERVE_PREFIX)` 会移动 physical block，但 stable handle 保持不变
 
-这避免了 `SET` 覆盖路径在 maxmemory 很紧时临时同时持有 old + new 两份 payload。
+这让 `SET` 覆盖路径可以复用原 `ValueHandle`，并把扩容、回滚和旧 block 释放收口在 allocator 内部。
 
-`StringRoot.slice(...)` 返回 `OffHeapSlice`。读路径如果支持流式写出，就可以直接把 off-heap slice 写到上游 sink，而不是先复制成 heap `byte[]`。
+`StringRoot.slice(...)` 对外仍返回 `OffHeapSlice`。它只在方法内部短暂 resolve `NativeObjectView`，不会暴露可逃逸的 allocator view。
 
-这里的“直接”指 DB 读接口层不需要先 materialize 成 `byte[]`。当前 RESP 写出链路仍会调用
-`BytesSlice.writeTo(...)`，由 slice 实现通过 `ThreadLocal<byte[]>` scratch buffer 分块复制到
-sink，并不是 native memory 到 socket 的真正零拷贝。
+这里的“直接”指 DB 读接口层仍可以使用 `OffHeapSlice` 接口写出。当前实现不会把 allocator view 传到调用方，因此不是 native memory 到 socket 的真正零拷贝。
 
-HLL 逻辑上复用 string 存储路径，因此 HLL bytes 也可以落在 `StringRoot` 管理的 `OffHeapBuf` 中。
+HLL 逻辑上复用 string 存储路径，因此 HLL bytes 也落在 `StringRoot` 管理的 allocator-backed `STRING_BYTES` payload 中。
 
 #### 复合结构的 off-heap 边界
 
@@ -1185,7 +1183,7 @@ adapter 内部再使用 FFM-backed primitive：
 ### 字符串路径：FFM 如何进入 `SET` / `GET`
 
 字符串值不走 `YierdisFfmBlobStore`，而是由 `StringRoot` 管理。
-`StringRoot` 内部使用 `OffHeapAllocator` 分配连续 buffer，并用
+`StringRoot` 内部使用 DB 级 shared `NativeAllocator` 分配 `STRING_BYTES` payload，并用 stable
 `ValueHandle` 暴露给 entry 元数据。
 
 #### 写入
@@ -1195,7 +1193,7 @@ adapter 内部再使用 FFM-backed primitive：
 - `StringRoot.store(...)` 创建新的 string payload
 - `YierdisDbKeyLifecycle.newRecord(...)` 创建新的 `EntryRecord`
 
-真正的字符串 bytes 落在 `StringRoot` 管理的 `OffHeapBuf` 里。
+真正的字符串 bytes 落在 `StringRoot` 管理的 allocator-backed `STRING_BYTES` object 里。
 写入完成后，`YierdisDbKeyLifecycle` 会把 key 同步到
 `NativeKeyDirectory` 和 `EntryTable`，`EntryRecord` 里保存
 type、encoding、value handle、TTL 和估算字节数。
@@ -1210,14 +1208,11 @@ type、encoding、value handle、TTL 和估算字节数。
 如果旧 entry 也是 string，覆盖路径会保留原 `ValueHandle` 并调用
 `StringRoot.overwrite(...)`。这个路径保留了关键优化：
 
-- 如果旧 handle 指向的 `OffHeapBuf` 容量足够容纳新值
+- 如果旧 handle 指向的 allocator object capacity 足够容纳新值，就直接复用原 object，就地改写内容，而不是发布新的 `ValueHandle`
 
-那么它会直接复用原 buffer，就地改写内容，而不是“先分配新 buffer，再释放旧
-buffer”。
+这么做的目的很明确：在 `maxmemory` 有硬预算时，避免 SET 覆盖路径发生 value identity churn。
 
-这么做的目的很明确：在 `maxmemory` 有硬预算时，避免 SET 覆盖路径临时同时持有 old + new 两份 off-heap 内存。
-
-如果容量不够，则会重新分配新 buffer，并把旧内容做 off-heap -> off-heap 复制。
+如果容量不够，则会通过 allocator `realloc(..., PRESERVE_PREFIX)` 移动 physical block，并保持 `ValueHandle` 不变。
 `EntryRecord` 的 estimate 会随后刷新，delete、expire 和 eviction 路径不再依赖
 旧对象估算值。
 
@@ -1231,35 +1226,34 @@ buffer”。
 `GET` 的读路径会先解析 live entry，再通过当前 value handle 访问
 `StringRoot`：
 
-- 可流式输出时返回 `BulkStringValue.slice(slice)`，底层直接指向 `OffHeapSlice`
+- 可流式输出时返回 `BulkStringValue.slice(slice)`，底层封装为 `OffHeapSlice`
 - 需要 materialize 时才复制成 heap `byte[]`
 
-这就是字符串路径里避免 DB 层 `byte[]` materialization 的读优化。它不是端到端
-native-to-socket 零拷贝：当前 `YierdisSlabBackedOffHeapSlice.writeTo(...)` 会用
-8 KiB `ThreadLocal<byte[]>` scratch buffer 从 `MemorySegment` / `ByteBuffer` 分块读出，
-再调用 `BytesSink.writeBytes(...)` 写入下游 sink。
+这就是字符串路径里维持 `OffHeapSlice` 接口的读优化。它不是端到端
+native-to-socket 零拷贝：`StringRoot.slice(...)` 不暴露 allocator view，slice 实现负责把
+bytes 写入下游 sink。
 
 代表路径：
 
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmSlabAllocator.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
 - `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java`
 
 #### HLL
 
 HLL 并没有单独设计一套 native payload 类型，而是复用了 string root 的
-off-heap 存储路径。也就是说：
+allocator-backed 存储路径。也就是说：
 
 - HLL 逻辑上是一个特殊的 string
-- HLL bytes 也可以存在 `StringRoot` 管理的 `OffHeapBuf` 里
+- HLL bytes 也可以存在 `StringRoot` 管理的 `STRING_BYTES` object 里
 - HLL 的 sparse / dense 编码、register 计算、估算和 merge 仍是 Java heap 逻辑
-- 最终只是把 HLL 格式化后的 bytes 作为 string payload 落到 off-heap
+- 最终只是把 HLL 格式化后的 bytes 作为 string payload 落到 allocator-backed native memory
 
 `PFADD` 对 dense HLL 可以通过 `StringRoot.byteAt(...)` / register 写入接口原地更新
 底层 string payload；sparse HLL 则会把现有内容复制出来，在 heap 上重建 sparse 或 dense
 bytes 后再 overwrite。`PFCOUNT` / `PFMERGE` 使用 `StringRoot.slice(handle)` 读取 HLL
 bytes 并把它 merge 到 heap `int[] registers`，所以 HLL 不是 native algorithm，只是 payload
-storage off-heap。
+storage 迁到 allocator-backed native memory。
 
 代表路径：
 
@@ -1274,6 +1268,7 @@ keyspace 是 FFM 使用最核心的部分之一。
 
 - `NativeKeyDirectory` 保存 native entry graph 的 key -> `EntryHandle`
 - `EntryTable` 保存 `EntryHandle` -> `EntryRecord`
+- key bytes 仍由 `YierdisFfmBlobStore` / `NativeKeyDirectory` 管理，不属于 stable allocator object table。active defrag 和 allocator stats 只覆盖 allocator-backed entry/string 对象；key bytes 会在后续迁移到 `NativeObjectKind.KEY_BYTES`。
 
 `NativeKeyDirectory.compute(...)` 在 key 首次出现时会：
 
@@ -1454,7 +1449,7 @@ adapter，但 key 的 canonical metadata 在 `EntryTable`，value identity 是
 - `NativeKeyDirectory` 的 key bytes 在 native blob store，table 数组仍在 heap
 - `YierdisFfmExpireIndex` 的 `states` / `hashes` / `expireAt` 在 native memory，但 `refs[]` 仍在 heap
 - `YierdisFfmZSet` 的 member bytes 在 native blob store，但 `ordered` 和 `Entry.score` 仍在 heap
-- `StringRoot` 管理 off-heap buffer，`ValueHandle` 使用 `STRING_BYTES` kind，但 handle -> slot map 仍在 heap；这里的 slot id 是 root-local identity，不是 object table slot
+- `StringRoot` 的 payload 已由 DB 级 shared `NativeAllocator` 管理，kind 为 `STRING_BYTES`。`ValueHandle` 对 string 来说是 stable allocator handle；append/ensureLength 使用 allocator realloc 保持 handle 不变。`slice` 对外仍返回 `OffHeapSlice` 接口，但不会暴露可逃逸的 allocator view。
 - `HashRoot` / `ListRoot` / `SetRoot` / `ZSetRoot` 的 handle table 仍在 heap，`ValueHandle` 使用对应 type-root kind，payload 通过各 value adapter 进入 FFM-backed 结构；这些 `ValueHandle` 不能被随意拿去 stable allocator resolve
 - `YierdisFfmByteMap` 的 table 索引数组本身仍在 heap，只是 key bytes 放在 off-heap
 - `YierdisFfmListpack` 本身是 `ArrayList<YierdisFfmBytesRef>`，真正 off-heap 的是 entry bytes
