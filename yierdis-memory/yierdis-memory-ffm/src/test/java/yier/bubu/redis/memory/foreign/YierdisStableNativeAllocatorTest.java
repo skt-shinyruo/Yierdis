@@ -890,4 +890,48 @@ public class YierdisStableNativeAllocatorTest {
             runtime.close();
         }
     }
+
+    @Test
+    public void zeroLengthObjectHasStableHandleAndCanGrowShrinkAndFree() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-zero-length");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 16)) {
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 0);
+            try (NativeObjectView initial = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(0, initial.size());
+            }
+
+            try (NativeObjectView empty = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(0, empty.size());
+                Assert.assertTrue(empty.capacity() > 0);
+                empty.getBytes(0, new byte[0], 0, 0);
+            }
+
+            NativeHandle grown = allocator.realloc(handle, 3, NativeReallocPolicy.PRESERVE_PREFIX);
+            Assert.assertEquals(handle.raw(), grown.raw());
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setBytes(0, new byte[] { 'a', 'b', 'c' }, 0, 3);
+            }
+
+            NativeHandle shrunk = allocator.realloc(handle, 0, NativeReallocPolicy.PRESERVE_PREFIX);
+            Assert.assertEquals(handle.raw(), shrunk.raw());
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(0, view.size());
+                view.getBytes(0, new byte[0], 0, 0);
+                try {
+                    view.getByte(0);
+                    Assert.fail("zero-length object should reject byte reads");
+                } catch (IndexOutOfBoundsException expected) {
+                    // expected
+                }
+            }
+
+            allocator.free(handle);
+            try {
+                allocator.resolve(handle, NativeAccessMode.READ_ONLY);
+                Assert.fail("expected stale handle after free");
+            } catch (RuntimeException expected) {
+                Assert.assertTrue(expected.getMessage().contains("stale native handle"));
+            }
+        }
+    }
 }
