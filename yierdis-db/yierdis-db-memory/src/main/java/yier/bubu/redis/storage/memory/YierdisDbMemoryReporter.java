@@ -14,7 +14,6 @@ import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedger;
 import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
-import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
@@ -209,13 +208,9 @@ public final class YierdisDbMemoryReporter {
     }
 
     private long directNativeBytes() {
-        long total = 0L;
+        long total = safeNativeAllocatorLogicalBytes();
         if (expires instanceof YierdisFfmExpireIndex ffmExpires) {
             total = addSaturating(total, ffmExpires.nativeBytes());
-        }
-        EntryTable entryTable = keyLifecycle.entryTable();
-        if (entryTable != null) {
-            total = addSaturating(total, entryTable.nativeBytes());
         }
         NativeKeyDirectory keyDirectory = keyLifecycle.keyDirectory();
         if (keyDirectory != null) {
@@ -238,6 +233,18 @@ public final class YierdisDbMemoryReporter {
             total = addSaturating(total, zsetRoot.nativeBytes());
         }
         return total;
+    }
+
+    private long safeNativeAllocatorLogicalBytes() {
+        var allocator = keyLifecycle.nativeAllocator();
+        if (allocator == null) {
+            return 0L;
+        }
+        try {
+            return Math.max(0L, allocator.stats().logicalUsedBytes());
+        } catch (Throwable ignored) {
+            return 0L;
+        }
     }
 
     private long safeOffHeapUsedBytes() {

@@ -5,6 +5,7 @@ import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.ScanCursorV2;
@@ -194,6 +195,8 @@ public class NativeStorageRegressionTest {
                 }
 
                 YierdisMemoryStats populated = db.memory().memoryStats();
+                Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
+                Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().logicalUsedBytes() > 0L);
                 Assert.assertEquals(db.size(), populated.keyCount());
                 Assert.assertEquals(db.usedBytesForMaxmemory(), populated.usedBytesForMaxmemory());
                 Assert.assertTrue(populated.offHeapUsedBytes() > 0L);
@@ -212,6 +215,8 @@ public class NativeStorageRegressionTest {
                 Assert.assertEquals(Long.valueOf(keys.size() - evens.size()), db.writes().keyspace().del(keys).value());
                 Assert.assertEquals(0, db.size());
                 Assert.assertEquals(0L, db.memory().memoryStats().usedBytesForMaxmemory());
+                Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES));
+                Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().logicalUsedBytes());
             } finally {
                 db.shutdown();
             }

@@ -11,13 +11,13 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import yier.bubu.redis.storage.api.ValueType;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.memory.api.OffHeapSlice;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.SetMode;
-import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 
 import java.nio.charset.StandardCharsets;
@@ -28,7 +28,7 @@ import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class OffHeapStringStorageTest {
     @Test
-    public void setGetUsesFfmSliceAndDelFrees() {
+    public void setGetUsesNativeStringSliceAndDelFreesStableAllocatorBytes() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
             try {
@@ -38,6 +38,7 @@ public class OffHeapStringStorageTest {
 
                 Assert.assertTrue(db.writes().strings().setString(key, value, SetMode.NORMAL, null).value());
                 Assert.assertTrue(runtime.usedBytes() > 0);
+                Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
 
                 RecordingBulkOutput out = new RecordingBulkOutput();
                 db.reads().strings().getStringValue(new TestBytesView(key)).writeTo(out);
@@ -47,6 +48,7 @@ public class OffHeapStringStorageTest {
                 Assert.assertEquals(1L, (long) db.writes().keyspace().del(Collections.singletonList(key)).value());
                 Assert.assertEquals(0, db.size());
                 Assert.assertEquals(0L, db.usedBytesForMaxmemory());
+                Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES));
             } finally {
                 db.shutdown();
             }
@@ -77,17 +79,16 @@ public class OffHeapStringStorageTest {
 
     @Test
     public void expiredKeyStringPayloadIsReleasedWhenOverwrittenByOtherCommand() {
-        YierdisForeignOffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(0);
-        YierdisDb db = new YierdisDb(allocator, 0, "noeviction", 5, 5, 5);
+        YierdisDb db = new YierdisDb();
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
             db.writes().strings().setString(key, b("v"), SetMode.NORMAL, ExpireOption.px(0)).value();
-            Assert.assertTrue(allocator.usedBytes() > 0);
+            Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
 
             db.writes().lists().lpush(key, List.of(b("a")));
 
-            Assert.assertEquals(0L, allocator.usedBytes());
+            Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES));
             Assert.assertEquals(ValueType.LIST, db.reads().keyspace().typeOf(new TestBytesView(key)));
         } finally {
             db.shutdown();
@@ -95,9 +96,8 @@ public class OffHeapStringStorageTest {
     }
 
     @Test
-    public void overwriteReusesFfmBufferUnderHardCap() {
-        YierdisForeignOffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(5);
-        YierdisDb db = new YierdisDb(allocator, 0, "noeviction", 5, 5, 5);
+    public void overwritePreservesStableStringHandle() {
+        YierdisDb db = new YierdisDb();
         try {
             db.bindToCurrentThread();
             byte[] key = b("k");
@@ -105,10 +105,10 @@ public class OffHeapStringStorageTest {
             byte[] v2 = b("world");
 
             Assert.assertTrue(db.writes().strings().setString(key, v1, SetMode.NORMAL, null).value());
-            Assert.assertEquals(5L, allocator.usedBytes());
+            long raw = db.keyLifecycle().liveEntryRecord(key).valueHandle().raw();
 
             Assert.assertTrue(db.writes().strings().setString(key, v2, SetMode.NORMAL, null).value());
-            Assert.assertEquals(5L, allocator.usedBytes());
+            Assert.assertEquals(raw, db.keyLifecycle().liveEntryRecord(key).valueHandle().raw());
 
             RecordingBulkOutput out = new RecordingBulkOutput();
             db.reads().strings().getStringValue(new TestBytesView(key)).writeTo(out);
@@ -120,17 +120,14 @@ public class OffHeapStringStorageTest {
     }
 
     @Test
-    public void ffmMaxBytesRejectsOversizedSet() {
+    public void deprecatedOffHeapAllocatorDoesNotOwnStringPayloadsAfterStableAllocatorMigration() {
         YierdisForeignOffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(4);
         YierdisDb db = new YierdisDb(allocator, 0, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
-            try {
-                db.writes().strings().setString(b("k"), b("hello"), SetMode.NORMAL, null).value();
-                Assert.fail("expected YierdisCommandException");
-            } catch (YierdisCommandException e) {
-                Assert.assertTrue(e.getMessage().contains("off-heap"));
-            }
+            Assert.assertTrue(db.writes().strings().setString(b("k"), b("hello"), SetMode.NORMAL, null).value());
+            Assert.assertEquals(0L, allocator.usedBytes());
+            Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
         } finally {
             db.shutdown();
         }
