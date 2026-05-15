@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
@@ -92,6 +93,43 @@ public class YierdisDbConstructionTest {
                 storage.setRoot,
                 storage.zsetRoot
         );
+    }
+
+    @Test
+    public void storageComponentsShareOneNativeAllocatorForEntriesAndStrings() {
+        YierdisDbStorageComponents storage = YierdisDbStorageComponents.create(null, null, false, false);
+        try {
+            Assert.assertNotNull(storage.nativeAllocator);
+            Assert.assertSame(storage.nativeAllocator, nativeAllocator(storage.entries));
+            Assert.assertSame(storage.nativeAllocator, nativeAllocator(storage.stringRoot));
+
+            storage.stringRoot.store(bytes("value"));
+            storage.entries.allocate(new EntryRecord(
+                    1L,
+                    valueHandle(2L),
+                    3,
+                    ValueType.STRING,
+                    ValueEncoding.STRING_RAW,
+                    0,
+                    -1L,
+                    0L,
+                    0L
+            ));
+
+            Assert.assertTrue(storage.nativeAllocator.stats().objectCount(NativeObjectKind.ENTRY_RECORD) > 0L);
+            Assert.assertTrue(storage.nativeAllocator.stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
+        } finally {
+            storage.resources.releaseAll(
+                    storage.expires,
+                    storage.entries,
+                    storage.keyDirectory,
+                    storage.stringRoot,
+                    storage.listRoot,
+                    storage.hashRoot,
+                    storage.setRoot,
+                    storage.zsetRoot
+            );
+        }
     }
 
     @Test
@@ -238,6 +276,16 @@ public class YierdisDbConstructionTest {
     private static ValueHandle valueHandle(long slotId) {
         NativeObjectKind kind = NativeObjectKind.STRING_BYTES;
         return ValueHandle.fromNativeHandle(NativeHandle.of(kind.domain(), kind, slotId, 1, 0));
+    }
+
+    private static NativeAllocator nativeAllocator(Object owner) {
+        try {
+            java.lang.reflect.Method allocator = owner.getClass().getDeclaredMethod("allocator");
+            allocator.setAccessible(true);
+            return (NativeAllocator) allocator.invoke(owner);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("allocator accessor should be available", e);
+        }
     }
 
     private static yier.bubu.redis.bytes.BytesView view(byte[] data) {

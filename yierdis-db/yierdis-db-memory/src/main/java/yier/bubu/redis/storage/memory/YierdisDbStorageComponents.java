@@ -11,8 +11,9 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBlobStore;
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
+import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisFfmSlabAllocator;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 
@@ -21,6 +22,7 @@ public final class YierdisDbStorageComponents {
 
     final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
+    final NativeAllocator nativeAllocator;
     final YierdisDbOwnedResources resources;
     final YierdisExpireIndex expires;
     final EntryTable entries;
@@ -35,6 +37,7 @@ public final class YierdisDbStorageComponents {
     private YierdisDbStorageComponents(
             YierdisFfmMemoryRuntime memoryRuntime,
             OffHeapAllocator offHeapAllocator,
+            NativeAllocator nativeAllocator,
             YierdisDbOwnedResources resources,
             YierdisExpireIndex expires,
             EntryTable entries,
@@ -48,6 +51,7 @@ public final class YierdisDbStorageComponents {
     ) {
         this.memoryRuntime = memoryRuntime;
         this.offHeapAllocator = offHeapAllocator;
+        this.nativeAllocator = nativeAllocator;
         this.resources = resources;
         this.expires = expires;
         this.entries = entries;
@@ -88,20 +92,22 @@ public final class YierdisDbStorageComponents {
             throw new IllegalArgumentException("Only the foreign off-heap allocator is supported");
         }
 
+        NativeAllocator nativeAllocator = new YierdisStableNativeAllocator(
+                resolvedRuntime,
+                ENTRY_TABLE_NATIVE_SLOT_CAPACITY
+        );
         YierdisDbOwnedResources resources = new YierdisDbOwnedResources(
                 resolvedRuntime,
                 resolvedAllocator,
+                nativeAllocator,
                 resolvedOwnsRuntime,
-                resolvedOwnsAllocator
+                resolvedOwnsAllocator,
+                true
         );
-        EntryTable entries = new EntryTable(
-                resolvedRuntime,
-                new YierdisFfmSlabAllocator(resolvedRuntime),
-                ENTRY_TABLE_NATIVE_SLOT_CAPACITY
-        );
+        EntryTable entries = new EntryTable(resolvedRuntime, nativeAllocator);
         YierdisFfmBlobStore blobStore = new YierdisFfmBlobStore(resolvedRuntime, "ffm-key");
         NativeKeyDirectory keyDirectory = new NativeKeyDirectory(blobStore);
-        StringRoot stringRoot = new StringRoot(resolvedAllocator);
+        StringRoot stringRoot = new StringRoot(nativeAllocator);
         ListRoot listRoot = new ListRoot(resolvedRuntime);
         HashRoot hashRoot = new HashRoot(resolvedRuntime);
         SetRoot setRoot = new SetRoot(resolvedRuntime);
@@ -109,6 +115,7 @@ public final class YierdisDbStorageComponents {
         return new YierdisDbStorageComponents(
                 resolvedRuntime,
                 resolvedAllocator,
+                nativeAllocator,
                 resources,
                 new YierdisFfmExpireIndex(blobStore),
                 entries,

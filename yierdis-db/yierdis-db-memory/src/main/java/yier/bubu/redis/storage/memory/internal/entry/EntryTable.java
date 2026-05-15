@@ -167,6 +167,10 @@ public final class EntryTable implements AutoCloseable {
         return runtime;
     }
 
+    NativeAllocator allocator() {
+        return allocator;
+    }
+
     private void write(NativeHandle handle, EntryRecord record) {
         try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
             setLong(view, KEY_HANDLE_OFFSET, record.keyHandle());
