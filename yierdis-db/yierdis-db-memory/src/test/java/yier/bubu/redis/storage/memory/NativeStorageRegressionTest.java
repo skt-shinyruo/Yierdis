@@ -5,6 +5,10 @@ import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
+import yier.bubu.redis.memory.api.NativeEpochKind;
+import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -167,6 +171,195 @@ public class NativeStorageRegressionTest {
             Assert.assertEquals(List.of("native-only"), scanned);
         } finally {
             db.shutdown();
+        }
+    }
+
+    @Test
+    public void keyspaceScanKeepsFreedBytesQuarantinedUntilTheBatchEnds() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-scan-epoch")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+                    runtime,
+                    0,
+                    MaxmemoryPolicy.NOEVICTION,
+                    5,
+                    5,
+                    5
+            );
+            db.bindToCurrentThread();
+            try {
+                byte[] keep = b("scan-keep");
+                Assert.assertTrue(db.writes().strings().setString(keep, b("value"), SetMode.NORMAL, null).value());
+
+                List<byte[]> scanned = new ArrayList<byte[]>() {
+                    private boolean deleted;
+
+                    @Override
+                    public boolean add(byte[] value) {
+                        boolean added = super.add(value);
+                        if (added && !deleted) {
+                            deleted = true;
+                            Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(keep)).value());
+                            YierdisMemoryStats quarantined = db.memory().memoryStats();
+                            Assert.assertTrue(quarantined.nativeDefragQuarantinedObjects() > 0L);
+                            Assert.assertTrue(quarantined.nativeDefragQuarantineBytes() > 0L);
+                        }
+                        return added;
+                    }
+                };
+
+                ScanCursorV2 cursor = db.reads().keyspace().scan(ScanCursorV2.start(), b("scan-*"), 2, scanned);
+
+                Assert.assertEquals(0L, cursor.value());
+                Assert.assertEquals(1, scanned.size());
+                Assert.assertArrayEquals(keep, scanned.get(0));
+                Assert.assertNull(db.reads().strings().getStringBytes(keep));
+
+                YierdisMemoryStats after = db.memory().memoryStats();
+                Assert.assertEquals(0L, after.nativeDefragQuarantinedObjects());
+                Assert.assertEquals(0L, after.nativeDefragQuarantineBytes());
+            } finally {
+                db.shutdown();
+            }
+        }
+    }
+
+    @Test
+    public void snapshotCopiesHeapOwnedBytesAndReleasesFreedBytesAfterTheBatchEnds() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-snapshot-epoch")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+                    runtime,
+                    0,
+                    MaxmemoryPolicy.NOEVICTION,
+                    5,
+                    5,
+                    5
+            );
+            db.bindToCurrentThread();
+            try {
+                byte[] key = b("snapshot-keep");
+                byte[] value = b("snapshot-value");
+                Assert.assertTrue(db.writes().strings().setString(key, value, SetMode.NORMAL, null).value());
+
+                List<YierdisSnapshotEntry> entries = new ArrayList<YierdisSnapshotEntry>() {
+                    private boolean deleted;
+
+                    @Override
+                    public boolean add(YierdisSnapshotEntry entry) {
+                        boolean added = super.add(entry);
+                        if (added && !deleted) {
+                            deleted = true;
+                            Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(key)).value());
+                            YierdisMemoryStats quarantined = db.memory().memoryStats();
+                            Assert.assertTrue(quarantined.nativeDefragQuarantinedObjects() > 0L);
+                            Assert.assertTrue(quarantined.nativeDefragQuarantineBytes() > 0L);
+                        }
+                        return added;
+                    }
+                };
+
+                ScanCursorV2 cursor = db.introspection().snapshot(ScanCursorV2.start(), 2, entries);
+
+                Assert.assertEquals(0L, cursor.value());
+                Assert.assertEquals(1, entries.size());
+                YierdisSnapshotEntry entry = entries.get(0);
+                Assert.assertArrayEquals(key, entry.keyBytes());
+                Assert.assertEquals(ValueType.STRING, entry.type());
+                Assert.assertArrayEquals(value, entry.stringValueBytes());
+                Assert.assertNull(db.reads().strings().getStringBytes(key));
+
+                YierdisMemoryStats after = db.memory().memoryStats();
+                Assert.assertEquals(0L, after.nativeDefragQuarantinedObjects());
+                Assert.assertEquals(0L, after.nativeDefragQuarantineBytes());
+            } finally {
+                db.shutdown();
+            }
+        }
+    }
+
+    @Test
+    public void snapshotValueBytesStayStableAfterLaterOverwriteDeleteAndDefrag() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-snapshot-stability")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+                    runtime,
+                    0,
+                    MaxmemoryPolicy.NOEVICTION,
+                    5,
+                    5,
+                    5,
+                    new NativeDefragOptions(1_000_000L, 1_000L, Long.MAX_VALUE)
+            );
+            db.bindToCurrentThread();
+            try {
+                byte[] key = b("snapshot-stable");
+                byte[] initial = b("value-v1");
+                byte[] updated = b("value-v2");
+                Assert.assertTrue(db.writes().strings().setString(key, initial, SetMode.NORMAL, null).value());
+
+                List<YierdisSnapshotEntry> entries = new ArrayList<>();
+                Assert.assertEquals(0L, db.introspection().snapshot(ScanCursorV2.start(), 2, entries).value());
+                Assert.assertEquals(1, entries.size());
+                YierdisSnapshotEntry entry = entries.get(0);
+                Assert.assertArrayEquals(key, entry.keyBytes());
+                Assert.assertArrayEquals(initial, entry.stringValueBytes());
+
+                Assert.assertTrue(db.writes().strings().setString(key, updated, SetMode.NORMAL, null).value());
+                Assert.assertArrayEquals(updated, db.reads().strings().getStringBytes(key));
+
+                Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(key)).value());
+                Assert.assertNull(db.reads().strings().getStringBytes(key));
+
+                db.defragMaintenance();
+
+                Assert.assertArrayEquals(initial, entry.stringValueBytes());
+                Assert.assertArrayEquals(initial, entries.get(0).stringValueBytes());
+            } finally {
+                db.shutdown();
+            }
+        }
+    }
+
+    @Test
+    public void snapshotEpochDelaysStringReleaseUntilClosed() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-snapshot-allocator-epoch")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+                    runtime,
+                    0,
+                    MaxmemoryPolicy.NOEVICTION,
+                    5,
+                    5,
+                    5
+            );
+            db.bindToCurrentThread();
+            try {
+                byte[] key = b("epoch-key");
+                Assert.assertTrue(db.writes().strings().setString(key, b("epoch-value"), SetMode.NORMAL, null).value());
+
+                try (NativeEpochScope epoch = db.keyLifecycle().nativeAllocator().beginEpoch(NativeEpochKind.SNAPSHOT)) {
+                    Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(key)).value());
+
+                    NativeAllocatorStats during = db.keyLifecycle().nativeAllocator().stats();
+                    Assert.assertTrue(during.logicalUsedBytes() > 0L);
+                    Assert.assertTrue(during.reservedBytes() > 0L);
+                    Assert.assertTrue(during.quarantinedObjects() > 0L);
+                    Assert.assertTrue(during.liveObjects() > 0L);
+
+                    YierdisMemoryStats memoryDuring = db.memory().memoryStats();
+                    Assert.assertTrue(memoryDuring.nativeDefragQuarantinedObjects() > 0L);
+                    Assert.assertTrue(memoryDuring.nativeDefragQuarantineBytes() > 0L);
+                }
+
+                NativeAllocatorStats after = db.keyLifecycle().nativeAllocator().stats();
+                Assert.assertEquals(0L, after.logicalUsedBytes());
+                Assert.assertEquals(0L, after.reservedBytes());
+                Assert.assertEquals(0L, after.quarantinedObjects());
+                Assert.assertEquals(0L, after.liveObjects());
+
+                YierdisMemoryStats memoryAfter = db.memory().memoryStats();
+                Assert.assertEquals(0L, memoryAfter.nativeDefragQuarantinedObjects());
+                Assert.assertEquals(0L, memoryAfter.nativeDefragQuarantineBytes());
+            } finally {
+                db.shutdown();
+            }
         }
     }
 
