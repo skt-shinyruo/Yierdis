@@ -113,12 +113,16 @@ public class YierdisDbConstructionTest {
     }
 
     @Test
-    public void storageComponentsShareOneNativeAllocatorForEntriesAndStrings() {
+    public void storageComponentsShareOneNativeAllocatorForEntriesStringsAndCollectionRoots() {
         YierdisDbStorageComponents storage = YierdisDbStorageComponents.create(null, null, false, false);
         try {
             Assert.assertNotNull(storage.nativeAllocator);
             Assert.assertSame(storage.nativeAllocator, nativeAllocator(storage.entries));
             Assert.assertSame(storage.nativeAllocator, nativeAllocator(storage.stringRoot));
+            Assert.assertSame(storage.nativeAllocator, nativeAllocator(storage.listRoot));
+            Assert.assertSame(storage.nativeAllocator, nativeAllocator(storage.hashRoot));
+            Assert.assertSame(storage.nativeAllocator, nativeAllocator(storage.setRoot));
+            Assert.assertSame(storage.nativeAllocator, nativeAllocator(storage.zsetRoot));
 
             storage.stringRoot.store(bytes("value"));
             storage.entries.allocate(new EntryRecord(
@@ -150,8 +154,8 @@ public class YierdisDbConstructionTest {
     }
 
     @Test
-    public void storageComponentsReserveNativeSlotsForEntriesAndStrings() {
-        Assert.assertEquals(192 * 1024, YierdisDbStorageComponents.sharedNativeSlotCapacity());
+    public void storageComponentsReserveNativeSlotsForEntriesStringsKeysAndCollectionRoots() {
+        Assert.assertEquals(256 * 1024, YierdisDbStorageComponents.sharedNativeSlotCapacity());
     }
 
     @Test

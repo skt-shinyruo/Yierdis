@@ -1,26 +1,46 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
-import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.value.SetValue;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 public final class SetRoot implements TypeRoot {
     private final YierdisFfmMemoryRuntime runtime;
-    private final Map<Long, SetValue> sets = new HashMap<>();
-    private long nextHandle = 1L;
+    private final NativeCollectionRootTable<SetValue> sets;
     private boolean closed;
 
     public SetRoot(YierdisFfmMemoryRuntime runtime) {
-        this.runtime = Objects.requireNonNull(runtime, "runtime");
+        this(runtime, new YierdisStableNativeAllocator(Objects.requireNonNull(runtime, "runtime"), 4096), true);
+    }
+
+    public SetRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator) {
+        this(runtime, allocator, false);
+    }
+
+    public SetRoot(NativeAllocator allocator) {
+        this(null, allocator, false);
+    }
+
+    private SetRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator, boolean ownsAllocator) {
+        this.runtime = runtime;
+        this.sets = new NativeCollectionRootTable<>(
+                allocator,
+                NativeObjectKind.SET_NODE,
+                "set",
+                ownsAllocator
+        );
+    }
+
+    NativeAllocator allocator() {
+        return sets.allocator();
     }
 
     @Override
@@ -39,14 +59,12 @@ public final class SetRoot implements TypeRoot {
 
     public synchronized boolean contains(ValueHandle handle) {
         ensureOpen();
-        return handle != null && sets.containsKey(handle.raw());
+        return sets.contains(handle);
     }
 
     public synchronized ValueHandle create() {
         ensureOpen();
-        ValueHandle handle = newHandle();
-        sets.put(handle.raw(), new SetValue(runtime));
-        return handle;
+        return sets.create(this::newSetValue);
     }
 
     public synchronized ValueHandle store(SetValue value) {
@@ -97,43 +115,18 @@ public final class SetRoot implements TypeRoot {
     }
 
     public synchronized long nativeBytes() {
-        long total = 0L;
-        for (SetValue set : sets.values()) {
-            total = addSaturating(total, set.estimatedBytes());
-        }
-        return total;
+        return sets.adapterBytes(SetValue::estimatedBytes);
     }
 
     @Override
     public synchronized void release(ValueHandle handle) {
-        if (handle == null) {
-            return;
-        }
-        SetValue removed = sets.remove(handle.raw());
-        if (removed != null) {
-            removed.close();
-        }
+        sets.release(handle);
     }
 
     @Override
     public synchronized void clear() {
         ensureOpen();
-        RuntimeException failure = null;
-        for (SetValue set : sets.values()) {
-            try {
-                set.close();
-            } catch (RuntimeException e) {
-                if (failure == null) {
-                    failure = e;
-                } else {
-                    failure.addSuppressed(e);
-                }
-            }
-        }
         sets.clear();
-        if (failure != null) {
-            throw failure;
-        }
     }
 
     @Override
@@ -141,35 +134,21 @@ public final class SetRoot implements TypeRoot {
         if (closed) {
             return;
         }
-        clear();
+        sets.close();
         closed = true;
     }
 
     private SetValue requireSet(ValueHandle handle) {
-        Objects.requireNonNull(handle, "handle");
-        SetValue set = sets.get(handle.raw());
-        if (set == null) {
-            throw new IllegalArgumentException("unknown set value handle: " + handle.raw());
-        }
-        return set;
+        return sets.require(handle);
+    }
+
+    private SetValue newSetValue() {
+        return runtime == null ? new SetValue() : new SetValue(runtime);
     }
 
     private void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("set root is closed");
         }
-    }
-
-    private ValueHandle newHandle() {
-        NativeObjectKind kind = NativeObjectKind.SET_NODE;
-        NativeHandle handle = NativeHandle.of(kind.domain(), kind, nextHandle++, 1, 0);
-        return ValueHandle.fromNativeHandle(handle);
-    }
-
-    private static long addSaturating(long left, long right) {
-        if (left < 0 || right < 0 || Long.MAX_VALUE - left < right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
     }
 }

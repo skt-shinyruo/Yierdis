@@ -1,26 +1,46 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
-import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.value.ListValue;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 public final class ListRoot implements TypeRoot {
     private final YierdisFfmMemoryRuntime runtime;
-    private final Map<Long, ListValue> lists = new HashMap<>();
-    private long nextHandle = 1L;
+    private final NativeCollectionRootTable<ListValue> lists;
     private boolean closed;
 
     public ListRoot(YierdisFfmMemoryRuntime runtime) {
-        this.runtime = Objects.requireNonNull(runtime, "runtime");
+        this(runtime, new YierdisStableNativeAllocator(Objects.requireNonNull(runtime, "runtime"), 4096), true);
+    }
+
+    public ListRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator) {
+        this(runtime, allocator, false);
+    }
+
+    public ListRoot(NativeAllocator allocator) {
+        this(null, allocator, false);
+    }
+
+    private ListRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator, boolean ownsAllocator) {
+        this.runtime = runtime;
+        this.lists = new NativeCollectionRootTable<>(
+                allocator,
+                NativeObjectKind.LIST_NODE,
+                "list",
+                ownsAllocator
+        );
+    }
+
+    NativeAllocator allocator() {
+        return lists.allocator();
     }
 
     @Override
@@ -39,14 +59,12 @@ public final class ListRoot implements TypeRoot {
 
     public synchronized boolean contains(ValueHandle handle) {
         ensureOpen();
-        return handle != null && lists.containsKey(handle.raw());
+        return lists.contains(handle);
     }
 
     public synchronized ValueHandle create() {
         ensureOpen();
-        ValueHandle handle = newHandle();
-        lists.put(handle.raw(), new ListValue(runtime));
-        return handle;
+        return lists.create(this::newListValue);
     }
 
     public synchronized ValueHandle store(ListValue value) {
@@ -114,47 +132,18 @@ public final class ListRoot implements TypeRoot {
     }
 
     public synchronized long nativeBytes() {
-        long total = 0L;
-        for (ListValue list : lists.values()) {
-            long bytes = list.estimatedBytes();
-            if (bytes < 0 || Long.MAX_VALUE - total < bytes) {
-                return Long.MAX_VALUE;
-            }
-            total += bytes;
-        }
-        return total;
+        return lists.adapterBytes(ListValue::estimatedBytes);
     }
 
     @Override
     public synchronized void release(ValueHandle handle) {
-        if (handle == null) {
-            return;
-        }
-        ListValue removed = lists.remove(handle.raw());
-        if (removed != null) {
-            removed.close();
-        }
+        lists.release(handle);
     }
 
     @Override
     public synchronized void clear() {
         ensureOpen();
-        RuntimeException failure = null;
-        for (ListValue list : lists.values()) {
-            try {
-                list.close();
-            } catch (RuntimeException e) {
-                if (failure == null) {
-                    failure = e;
-                } else {
-                    failure.addSuppressed(e);
-                }
-            }
-        }
         lists.clear();
-        if (failure != null) {
-            throw failure;
-        }
     }
 
     @Override
@@ -162,28 +151,21 @@ public final class ListRoot implements TypeRoot {
         if (closed) {
             return;
         }
-        clear();
+        lists.close();
         closed = true;
     }
 
     private ListValue requireList(ValueHandle handle) {
-        Objects.requireNonNull(handle, "handle");
-        ListValue list = lists.get(handle.raw());
-        if (list == null) {
-            throw new IllegalArgumentException("unknown list value handle: " + handle.raw());
-        }
-        return list;
+        return lists.require(handle);
+    }
+
+    private ListValue newListValue() {
+        return runtime == null ? new ListValue() : new ListValue(runtime);
     }
 
     private void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("list root is closed");
         }
-    }
-
-    private ValueHandle newHandle() {
-        NativeObjectKind kind = NativeObjectKind.LIST_NODE;
-        NativeHandle handle = NativeHandle.of(kind.domain(), kind, nextHandle++, 1, 0);
-        return ValueHandle.fromNativeHandle(handle);
     }
 }
