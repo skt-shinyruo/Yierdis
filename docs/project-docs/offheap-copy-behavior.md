@@ -15,10 +15,10 @@
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
 - 当前 keyspace 使用 FFM 存储时，第一次插入 key 也会把 key 从 heap `byte[]` 复制到 native memory。
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java`
-- 但如果 source 本身就是带 memory address 的 `BytesSlice`，则可以直接走 address-to-address copy，不必先落成 heap 临时数组。
+- 如果 source 本身是带 memory address 的 `BytesSlice`，`StringRoot.setBytes(...)` 当前仍会通过 heap scratch buffer 分块读取 `BytesSlice`，再写入 native `STRING_BYTES`；`StringRoot` 内没有直接 address-to-address copy 路径。
   代表路径：`yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
 
-需要注意的是，当前 server 的网络入口通常不是这种“source 已经带 native 地址”的场景，所以线上常见写入仍然主要是 `heap -> off-heap`。
+需要注意的是，当前 server 的网络入口通常是 heap 参数；即使上游传入 `BytesSlice`，`StringRoot` 当前也按 scratch buffer 分块写入 native `STRING_BYTES`。
 
 ## Off-Heap -> Heap
 
