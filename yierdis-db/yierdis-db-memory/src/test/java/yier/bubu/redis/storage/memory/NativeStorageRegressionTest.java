@@ -11,6 +11,7 @@ import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
@@ -24,7 +25,12 @@ import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.Set;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
@@ -469,6 +475,200 @@ public class NativeStorageRegressionTest {
         }
     }
 
+    @Test
+    public void deterministicMixedNativeDbChurnPreservesResultsAndReleasesRuntime() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-db-mixed-churn")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+                    runtime,
+                    2_000_000L,
+                    MaxmemoryPolicy.NOEVICTION,
+                    5,
+                    5,
+                    5,
+                    new NativeDefragOptions(1_000_000L, 1_000L, Long.MAX_VALUE)
+            );
+            db.bindToCurrentThread();
+            try {
+                Random random = new Random(0x5EED_7A11L);
+                Map<String, String> strings = new HashMap<>();
+                Set<String> trackedKeys = new LinkedHashSet<>();
+                String[] stringKeys = {"mix:s:0", "mix:s:1", "mix:s:2", "mix:s:3", "mix:s:4"};
+                String[] collectionKeys = {"mix:list", "mix:hash", "mix:set", "mix:zset", "mix:hll"};
+                boolean expiredTtlCleanup = false;
+                boolean scannedAndSnapshotted = false;
+                boolean ranDefragMaintenance = false;
+
+                for (int op = 0; op < 128; op++) {
+                    int choice = random.nextInt(14);
+                    String key = stringKeys[random.nextInt(stringKeys.length)];
+                    switch (choice) {
+                        case 0, 1, 2 -> {
+                            String value = "v" + op + ":" + random.nextInt(1000);
+                            Assert.assertTrue(db.writes().strings().setString(
+                                    b(key),
+                                    b(value),
+                                    SetMode.NORMAL,
+                                    null
+                            ).value());
+                            strings.put(key, value);
+                            trackedKeys.add(key);
+                            assertStringMatchesModel(db, key, value);
+                        }
+                        case 3, 4 -> {
+                            if (strings.containsKey(key)) {
+                                String suffix = ":a" + op;
+                                String expected = strings.get(key) + suffix;
+                                Assert.assertEquals(Long.valueOf(expected.length()),
+                                        db.writes().strings().append(b(key), sliceOf(b(suffix))).value());
+                                strings.put(key, expected);
+                                assertStringMatchesModel(db, key, expected);
+                            } else {
+                                Assert.assertNull(db.reads().strings().getStringBytes(b(key)));
+                            }
+                        }
+                        case 5 -> {
+                            if (strings.containsKey(key)) {
+                                Assert.assertArrayEquals(b(strings.get(key)), db.reads().strings().getStringBytes(b(key)));
+                                Assert.assertEquals(strings.get(key).length(), db.reads().strings().strlen(view(b(key))));
+                            } else {
+                                Assert.assertNull(db.reads().strings().getStringBytes(b(key)));
+                                Assert.assertEquals(0L, db.reads().strings().strlen(view(b(key))));
+                            }
+                        }
+                        case 6 -> {
+                            if (strings.containsKey(key)) {
+                                Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(b(key))).value());
+                                strings.remove(key);
+                            } else {
+                                Assert.assertEquals(Long.valueOf(0L), db.writes().keyspace().del(List.of(b(key))).value());
+                            }
+                            trackedKeys.add(key);
+                        }
+                        case 7 -> {
+                            if (!expiredTtlCleanup) {
+                                String ttlKey = "mix:ttl-expired";
+                                Assert.assertTrue(db.writes().strings().setString(
+                                        b(ttlKey),
+                                        b("ttl-" + op),
+                                        SetMode.NORMAL,
+                                        ExpireOption.px(0)
+                                ).value());
+                                trackedKeys.add(ttlKey);
+                                db.cleanupExpired();
+                                Assert.assertNull(db.reads().strings().getStringBytes(b(ttlKey)));
+                                Assert.assertEquals(-2L, db.reads().ttl().ttlMillis(view(b(ttlKey))));
+                                expiredTtlCleanup = true;
+                            } else {
+                                String ttlKey = stringKeys[op % stringKeys.length];
+                                Assert.assertTrue(db.writes().strings().setString(b(ttlKey), b("ttl-" + op), SetMode.NORMAL, null).value());
+                                Assert.assertTrue(db.writes().ttl().pexpire(view(b(ttlKey)), 60_000L).value());
+                                Assert.assertTrue(db.reads().ttl().ttlMillis(view(b(ttlKey))) > 0L);
+                                strings.put(ttlKey, "ttl-" + op);
+                                trackedKeys.add(ttlKey);
+                            }
+                        }
+                        case 8 -> {
+                            Assert.assertEquals(Long.valueOf(1L),
+                                    db.writes().lists().rpush(b("mix:list"), List.of(b("l" + op))).value());
+                            Assert.assertEquals(List.of("l" + op),
+                                    strings(db.writes().lists().lpop(b("mix:list"), 1).value()));
+                            trackedKeys.add("mix:list");
+                        }
+                        case 9 -> {
+                            Assert.assertEquals(Long.valueOf(1L),
+                                    db.writes().hashes().hset(b("mix:hash"), List.of(b("f" + op), b("h" + op))).value());
+                            Assert.assertArrayEquals(b("h" + op), db.reads().hashes().hget(b("mix:hash"), b("f" + op)));
+                            Assert.assertEquals(Long.valueOf(1L),
+                                    db.writes().hashes().hdel(b("mix:hash"), List.of(b("f" + op))).value());
+                            trackedKeys.add("mix:hash");
+                        }
+                        case 10 -> {
+                            Assert.assertEquals(Long.valueOf(1L), db.writes().sets().sadd(b("mix:set"), List.of(b("m" + op))).value());
+                            Assert.assertTrue(db.reads().sets().sismember(b("mix:set"), b("m" + op)));
+                            if ((op & 1) == 0) {
+                                Assert.assertEquals(Long.valueOf(1L), db.writes().sets().srem(b("mix:set"), List.of(b("m" + op))).value());
+                            }
+                            trackedKeys.add("mix:set");
+                        }
+                        case 11 -> {
+                            Assert.assertEquals(Long.valueOf(1L),
+                                    db.writes().zsets().zadd(b("mix:zset"), List.of(b(String.valueOf(op)), b("z" + op))).value());
+                            Assert.assertTrue(db.reads().zsets().zrange(b("mix:zset"), 0, -1, false).count() >= 1);
+                            if ((op & 1) == 0) {
+                                Assert.assertEquals(Long.valueOf(1L), db.writes().zsets().zrem(b("mix:zset"), List.of(b("z" + op))).value());
+                            }
+                            trackedKeys.add("mix:zset");
+                        }
+                        case 12 -> {
+                            Assert.assertEquals(Integer.valueOf(1), db.writes().hll().pfadd(b("mix:hll"), List.of(b("hll-" + op))).value());
+                            Assert.assertTrue(db.reads().hll().pfcount(List.of(b("mix:hll"))) >= 1L);
+                            trackedKeys.add("mix:hll");
+                        }
+                        case 13 -> {
+                            List<byte[]> scanned = new ArrayList<>();
+                            ScanCursorV2 scan = db.reads().keyspace().scan(ScanCursorV2.start(), b("mix:*"), 32, scanned);
+                            Assert.assertEquals(0L, scan.value());
+                            List<YierdisSnapshotEntry> snapshot = new ArrayList<>();
+                            ScanCursorV2 snapshotCursor = db.introspection().snapshot(ScanCursorV2.start(), 32, snapshot);
+                            Assert.assertEquals(0L, snapshotCursor.value());
+                            db.defragMaintenance();
+                            scannedAndSnapshotted = true;
+                            ranDefragMaintenance = true;
+                        }
+                        default -> throw new AssertionError("unexpected op choice " + choice);
+                    }
+
+                    if (op % 8 == 0) {
+                        assertMemoryStatsCoherent(db);
+                    }
+                }
+
+                for (Map.Entry<String, String> entry : strings.entrySet()) {
+                    assertStringMatchesModel(db, entry.getKey(), entry.getValue());
+                }
+                Assert.assertTrue("expected TTL expiry cleanup branch", expiredTtlCleanup);
+                Assert.assertTrue("expected scan/snapshot branch", scannedAndSnapshotted);
+                Assert.assertTrue("expected defrag maintenance branch", ranDefragMaintenance);
+                for (String collectionKey : collectionKeys) {
+                    trackedKeys.add(collectionKey);
+                }
+                for (String stringKey : stringKeys) {
+                    trackedKeys.add(stringKey);
+                }
+                trackedKeys.add("mix:ttl-expired");
+                assertMemoryStatsCoherent(db);
+
+                List<byte[]> deleteKeys = new ArrayList<>();
+                for (String trackedKey : trackedKeys) {
+                    deleteKeys.add(b(trackedKey));
+                }
+                int sizeBeforeDelete = db.size();
+                Assert.assertEquals(Long.valueOf(sizeBeforeDelete), db.writes().keyspace().del(deleteKeys).value());
+
+                YierdisMemoryStats empty = db.memory().memoryStats();
+                NativeAllocatorStats allocator = db.keyLifecycle().nativeAllocator().stats();
+                Assert.assertEquals(0, db.size());
+                Assert.assertEquals(0L, db.usedBytesForMaxmemory());
+                Assert.assertEquals(0L, empty.keyCount());
+                Assert.assertEquals(0L, empty.usedBytesForMaxmemory());
+                Assert.assertEquals(0L, empty.heapDataBytesEstimate());
+                Assert.assertEquals(0L, empty.offHeapUsedBytes());
+                Assert.assertEquals(0L, empty.totalEstimatedBytes());
+                Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.STRING_BYTES));
+                Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.ENTRY_RECORD));
+                Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.KEY_BYTES));
+                Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.LIST_NODE));
+                Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.HASH_NODE));
+                Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.SET_NODE));
+                Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.ZSET_NODE));
+                Assert.assertEquals(0L, allocator.logicalUsedBytes());
+            } finally {
+                db.shutdown();
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
     private static void writeOneOfEachCollection(YierdisDb db) {
         Assert.assertEquals(Long.valueOf(1L), db.writes().lists().rpush(b("list"), List.of(b("a"))).value());
         Assert.assertEquals(Long.valueOf(1L), db.writes().hashes().hset(b("hash"), List.of(b("field"), b("value"))).value());
@@ -493,6 +693,19 @@ public class NativeStorageRegressionTest {
         Assert.assertArrayEquals(expectedBytes, lifecycle.stringRoot().copy(record.valueHandle()));
         Assert.assertArrayEquals(expectedBytes, db.reads().strings().getStringBytes(key));
         Assert.assertEquals(expectedBytes.length, db.reads().strings().strlen(view(key)));
+    }
+
+    private static void assertStringMatchesModel(YierdisDb db, String key, String expected) {
+        byte[] keyBytes = b(key);
+        byte[] expectedBytes = b(expected);
+        Assert.assertArrayEquals(expectedBytes, db.reads().strings().getStringBytes(keyBytes));
+        Assert.assertEquals(expected.length(), db.reads().strings().strlen(view(keyBytes)));
+    }
+
+    private static void assertMemoryStatsCoherent(YierdisDb db) {
+        YierdisMemoryStats stats = db.memory().memoryStats();
+        Assert.assertEquals(db.size(), stats.keyCount());
+        Assert.assertEquals(db.usedBytesForMaxmemory(), stats.usedBytesForMaxmemory());
     }
 
     private static byte[] copy(KeyHandle keyHandle) {
