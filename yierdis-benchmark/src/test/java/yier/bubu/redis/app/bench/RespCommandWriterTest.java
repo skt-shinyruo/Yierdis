@@ -56,6 +56,47 @@ public class RespCommandWriterTest {
     }
 
     @Test
+    public void writePfaddMatchesSharedRespEncoderBytesForEscapedUtf8Payload() throws Exception {
+        byte[] key = utf8("hll\"key");
+        byte[] value = utf8("line1\\line2\n中文");
+
+        Assert.assertArrayEquals(
+                RespClientCodec.encodeCommand(List.of(utf8("PFADD"), key, value)),
+                writeFrame(writer -> writer.writePfadd(key, value))
+        );
+    }
+
+    @Test
+    public void writePfcountMatchesSharedRespEncoderBytes() throws Exception {
+        byte[] key = utf8("hll");
+
+        Assert.assertArrayEquals(
+                RespClientCodec.encodeCommand(List.of(utf8("PFCOUNT"), key)),
+                writeFrame(writer -> writer.writePfcount(key))
+        );
+    }
+
+    @Test
+    public void writePfmergeMatchesSharedRespEncoderBytes() throws Exception {
+        byte[] destKey = utf8("dense");
+        byte[] sourceKey = utf8("source");
+
+        Assert.assertArrayEquals(
+                RespClientCodec.encodeCommand(List.of(utf8("PFMERGE"), destKey, sourceKey)),
+                writeFrame(writer -> writer.writePfmerge(destKey, sourceKey))
+        );
+    }
+
+    @Test
+    public void denseHllKeyFormatIsSharedByPrefillAndMeasuredWorkloads() {
+        byte[] key = new byte["hll:dense:".length() + 8];
+
+        YierdisBench.writeDenseHllKey(key, 42);
+
+        Assert.assertEquals("hll:dense:00000042", new String(key, StandardCharsets.US_ASCII));
+    }
+
+    @Test
     public void repeatedSummaryRenderingDoesNotTouchCommandWriterPath() throws Exception {
         byte[] key = utf8("next-key");
         byte[] value = utf8("line1\\line2\n中文");
@@ -133,6 +174,16 @@ public class RespCommandWriterTest {
         Assert.assertFalse(validateStrictReply(YierdisBench.Workload.APPEND, "$7\r\npayload\r\n", 0));
         Assert.assertFalse(validateStrictReply(YierdisBench.Workload.APPEND, ":-1\r\n", 0));
         Assert.assertFalse(validateStrictReply(YierdisBench.Workload.APPEND, ":0\r\n", 7));
+    }
+
+    @Test
+    public void strictHllReplyValidationAcceptsIntegerReplies() throws Exception {
+        Assert.assertTrue(validateStrictReply(YierdisBench.Workload.PFADD_SPARSE, ":1\r\n", 0));
+        Assert.assertTrue(validateStrictReply(YierdisBench.Workload.PFADD_DENSE, ":0\r\n", 0));
+        Assert.assertTrue(validateStrictReply(YierdisBench.Workload.PFCOUNT, ":123\r\n", 0));
+        Assert.assertFalse(validateStrictReply(YierdisBench.Workload.PFADD_SPARSE, "+OK\r\n", 0));
+        Assert.assertFalse(validateStrictReply(YierdisBench.Workload.PFADD_SPARSE, ":2\r\n", 0));
+        Assert.assertFalse(validateStrictReply(YierdisBench.Workload.PFCOUNT, ":-1\r\n", 0));
     }
 
     @Test

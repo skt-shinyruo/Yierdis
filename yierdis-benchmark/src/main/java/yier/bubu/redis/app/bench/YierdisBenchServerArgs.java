@@ -140,6 +140,18 @@ public final class YierdisBenchServerArgs {
     @Option(names = ArgNames.EXPIRE_CLEANUP_TIME_LIMIT_MILLIS, defaultValue = "5", description = "Expire cleanup time budget per tick in milliseconds.")
     public long expireCleanupTimeLimitMillis = 5;
 
+    @Option(names = ArgNames.NATIVE_DEFRAG_ENABLED, description = "Enable DB native allocator defrag during maintenance ticks.")
+    public boolean nativeDefragEnabled;
+
+    @Option(names = ArgNames.NATIVE_DEFRAG_MAX_MOVE_BYTES, defaultValue = "65536", description = "Native defrag max bytes to move per maintenance tick.")
+    public long nativeDefragMaxMoveBytes = 64L * 1024L;
+
+    @Option(names = ArgNames.NATIVE_DEFRAG_MAX_OBJECTS, defaultValue = "64", description = "Native defrag max objects to inspect per maintenance tick.")
+    public long nativeDefragMaxObjects = 64L;
+
+    @Option(names = ArgNames.NATIVE_DEFRAG_TIME_LIMIT_MILLIS, defaultValue = "1", description = "Native defrag time budget per maintenance tick in milliseconds.")
+    public long nativeDefragTimeLimitMillis = 1L;
+
     @Option(
             names = ArgNames.KEYS_TIME_BUDGET_MILLIS,
             defaultValue = "20",
@@ -237,6 +249,15 @@ public final class YierdisBenchServerArgs {
         if (expireCleanupTimeLimitMillis <= 0) {
             throw new IllegalArgumentException("expireCleanupTimeLimitMillis must be > 0");
         }
+        if (nativeDefragMaxMoveBytes < 0) {
+            throw new IllegalArgumentException("nativeDefragMaxMoveBytes must be >= 0");
+        }
+        if (nativeDefragMaxObjects < 0) {
+            throw new IllegalArgumentException("nativeDefragMaxObjects must be >= 0");
+        }
+        if (nativeDefragTimeLimitMillis < 0) {
+            throw new IllegalArgumentException("nativeDefragTimeLimitMillis must be >= 0");
+        }
         if (keysTimeBudgetMillis < 0) {
             throw new IllegalArgumentException("keysTimeBudgetMillis must be >= 0");
         }
@@ -273,6 +294,10 @@ public final class YierdisBenchServerArgs {
         out.maxmemorySamples = maxmemorySamples;
         out.evictionTimeLimitMillis = evictionTimeLimitMillis;
         out.expireCleanupTimeLimitMillis = expireCleanupTimeLimitMillis;
+        out.nativeDefragEnabled = nativeDefragEnabled;
+        out.nativeDefragMaxMoveBytes = nativeDefragMaxMoveBytes;
+        out.nativeDefragMaxObjects = nativeDefragMaxObjects;
+        out.nativeDefragTimeLimitMillis = nativeDefragTimeLimitMillis;
         out.keysTimeBudgetMillis = keysTimeBudgetMillis;
         out.keysMaxResults = keysMaxResults;
         return out;
@@ -337,6 +362,15 @@ public final class YierdisBenchServerArgs {
         out.add(Long.toString(evictionTimeLimitMillis));
         out.add(ArgNames.EXPIRE_CLEANUP_TIME_LIMIT_MILLIS);
         out.add(Long.toString(expireCleanupTimeLimitMillis));
+        if (nativeDefragEnabled) {
+            out.add(ArgNames.NATIVE_DEFRAG_ENABLED);
+        }
+        out.add(ArgNames.NATIVE_DEFRAG_MAX_MOVE_BYTES);
+        out.add(Long.toString(nativeDefragMaxMoveBytes));
+        out.add(ArgNames.NATIVE_DEFRAG_MAX_OBJECTS);
+        out.add(Long.toString(nativeDefragMaxObjects));
+        out.add(ArgNames.NATIVE_DEFRAG_TIME_LIMIT_MILLIS);
+        out.add(Long.toString(nativeDefragTimeLimitMillis));
         out.add(ArgNames.KEYS_TIME_BUDGET_MILLIS);
         out.add(Long.toString(keysTimeBudgetMillis));
         out.add(ArgNames.KEYS_MAX_RESULTS);
@@ -399,6 +433,10 @@ public final class YierdisBenchServerArgs {
         private static final String MAXMEMORY_SAMPLES = "--maxmemorySamples";
         private static final String EVICTION_TIME_LIMIT_MILLIS = "--evictionTimeLimitMillis";
         private static final String EXPIRE_CLEANUP_TIME_LIMIT_MILLIS = "--expireCleanupTimeLimitMillis";
+        private static final String NATIVE_DEFRAG_ENABLED = "--nativeDefragEnabled";
+        private static final String NATIVE_DEFRAG_MAX_MOVE_BYTES = "--nativeDefragMaxMoveBytes";
+        private static final String NATIVE_DEFRAG_MAX_OBJECTS = "--nativeDefragMaxObjects";
+        private static final String NATIVE_DEFRAG_TIME_LIMIT_MILLIS = "--nativeDefragTimeLimitMillis";
         private static final String KEYS_TIME_BUDGET_MILLIS = "--keysTimeBudgetMillis";
         private static final String KEYS_MAX_RESULTS = "--keysMaxResults";
 
