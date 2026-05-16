@@ -244,6 +244,36 @@ public final class YierdisBench {
                     println("SET : " + setLat);
                     println("GET : " + getLat);
                 }
+
+                println("");
+                println("[APPEND] 追加写入压测");
+                if (!config.skipLatency) {
+                    LatencyResult appendLat = runLatency(
+                            config.host,
+                            port,
+                            Workload.APPEND,
+                            config.latencyRequests,
+                            config.latencyClients,
+                            config.keyspace,
+                            config.dataSize,
+                            config.strictReplies
+                    );
+                    backendResult.appendLatency = appendLat;
+                    println("APPEND: " + appendLat);
+                }
+                ThroughputResult appendQps = runThroughput(
+                        config.host,
+                        port,
+                        Workload.APPEND,
+                        config.requests,
+                        config.clients,
+                        config.pipeline,
+                        config.keyspace,
+                        config.dataSize,
+                        config.strictReplies
+                );
+                backendResult.appendThroughput = appendQps;
+                println("APPEND throughput: " + appendQps);
             } finally {
                 if (server != null) {
                     server.stop();
@@ -458,35 +488,43 @@ public final class YierdisBench {
     static String renderSummary(List<BackendResult> results, boolean skipLatency) {
         StringBuilder sb = new StringBuilder();
         String header = skipLatency
-                ? String.format("%-8s | %12s | %8s | %12s | %8s", "backend", "SET_QPS", "SET_ERR", "GET_QPS", "GET_ERR")
+                ? String.format("%-8s | %12s | %8s | %12s | %8s | %12s | %8s",
+                "backend", "SET_QPS", "SET_ERR", "GET_QPS", "GET_ERR", "APPEND_QPS", "APPEND_ERR")
                 : String.format(
-                "%-8s | %12s | %8s | %12s | %8s | %14s | %8s | %14s | %8s | %14s | %8s",
+                "%-8s | %12s | %8s | %12s | %8s | %14s | %8s | %14s | %8s | %14s | %8s | %12s | %8s | %14s | %8s",
                 "backend", "SET_QPS", "SET_ERR", "GET_QPS", "GET_ERR",
-                "PING_p95(ms)", "PING_E", "SET_p95(ms)", "SET_E", "GET_p95(ms)", "GET_E"
+                "PING_p95(ms)", "PING_E", "SET_p95(ms)", "SET_E", "GET_p95(ms)", "GET_E",
+                "APPEND_QPS", "APPEND_ERR", "APPEND_p95(ms)", "APPEND_E"
         );
         sb.append(header).append('\n');
         sb.append(repeat('-', header.length())).append('\n');
 
         for (BackendResult r : results) {
             String setQps = r.setThroughput == null ? "-" : DF.format(r.setThroughput.qps);
+            String appendQps = r.appendThroughput == null ? "-" : DF.format(r.appendThroughput.qps);
             String getQps = r.getThroughput == null ? "-" : DF.format(r.getThroughput.qps);
             String setErr = r.setThroughput == null ? "-" : Long.toString(r.setThroughput.errors);
+            String appendErr = r.appendThroughput == null ? "-" : Long.toString(r.appendThroughput.errors);
             String getErr = r.getThroughput == null ? "-" : Long.toString(r.getThroughput.errors);
             if (skipLatency) {
-                sb.append(String.format("%-8s | %12s | %8s | %12s | %8s", r.backend, setQps, setErr, getQps, getErr))
+                sb.append(String.format("%-8s | %12s | %8s | %12s | %8s | %12s | %8s",
+                        r.backend, setQps, setErr, getQps, getErr, appendQps, appendErr))
                         .append('\n');
                 continue;
             }
             String pingP95 = r.pingLatency == null ? "-" : DF.format(r.pingLatency.stats.p95Millis());
             String setP95 = r.setLatency == null ? "-" : DF.format(r.setLatency.stats.p95Millis());
+            String appendP95 = r.appendLatency == null ? "-" : DF.format(r.appendLatency.stats.p95Millis());
             String getP95 = r.getLatency == null ? "-" : DF.format(r.getLatency.stats.p95Millis());
             String pingErr = r.pingLatency == null ? "-" : Long.toString(r.pingLatency.errors);
             String setLatErr = r.setLatency == null ? "-" : Long.toString(r.setLatency.errors);
+            String appendLatErr = r.appendLatency == null ? "-" : Long.toString(r.appendLatency.errors);
             String getLatErr = r.getLatency == null ? "-" : Long.toString(r.getLatency.errors);
             sb.append(String.format(
-                    "%-8s | %12s | %8s | %12s | %8s | %14s | %8s | %14s | %8s | %14s | %8s",
+                    "%-8s | %12s | %8s | %12s | %8s | %14s | %8s | %14s | %8s | %14s | %8s | %12s | %8s | %14s | %8s",
                     r.backend, setQps, setErr, getQps, getErr,
-                    pingP95, pingErr, setP95, setLatErr, getP95, getLatErr
+                    pingP95, pingErr, setP95, setLatErr, getP95, getLatErr,
+                    appendQps, appendErr, appendP95, appendLatErr
             )).append('\n');
         }
         return sb.toString();
@@ -531,6 +569,11 @@ public final class YierdisBench {
             case SET_RANDOM:
             case SET_SEQUENTIAL:
                 return reply.isSimpleString("OK");
+            case APPEND:
+                return reply.kind() == RespClientCodec.RespReply.Kind.INTEGER
+                        && reply.integer() != null
+                        && reply.integer() >= 0L
+                        && (expectedDataSize <= 0 || reply.integer() >= expectedDataSize);
             case GET_RANDOM:
                 if (reply.isNull()) {
                     return true;
@@ -555,6 +598,7 @@ public final class YierdisBench {
         PING,
         SET_RANDOM,
         SET_SEQUENTIAL,
+        APPEND,
         GET_RANDOM
     }
 
@@ -802,6 +846,9 @@ public final class YierdisBench {
                                     case SET_SEQUENTIAL:
                                         writer.writeSet(keyBuf, value);
                                         break;
+                                    case APPEND:
+                                        writer.writeAppend(keyBuf, value);
+                                        break;
                                     case GET_RANDOM:
                                         writer.writeGet(keyBuf);
                                         break;
@@ -886,6 +933,9 @@ public final class YierdisBench {
                                 case SET_RANDOM:
                                     writer.writeSet(keyBuf, value);
                                     break;
+                                case APPEND:
+                                    writer.writeAppend(keyBuf, value);
+                                    break;
                                 case GET_RANDOM:
                                     writer.writeGet(keyBuf);
                                     break;
@@ -918,6 +968,7 @@ public final class YierdisBench {
         private static final byte[] CMD_PING = "PING".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] CMD_GET = "GET".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] CMD_SET = "SET".getBytes(StandardCharsets.US_ASCII);
+        private static final byte[] CMD_APPEND = "APPEND".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] FRAME_PING = RespClientCodec.encodeCommand(List.of(CMD_PING));
 
         private final OutputStream out;
@@ -937,6 +988,10 @@ public final class YierdisBench {
 
         void writeSet(byte[] key, byte[] value) throws IOException {
             writeFrame(requestArgs.with(CMD_SET, key, value));
+        }
+
+        void writeAppend(byte[] key, byte[] value) throws IOException {
+            writeFrame(requestArgs.with(CMD_APPEND, key, value));
         }
 
         private void writeFrame(List<byte[]> args) throws IOException {
@@ -1130,9 +1185,11 @@ public final class YierdisBench {
         final String backend;
         final int port;
         ThroughputResult setThroughput;
+        ThroughputResult appendThroughput;
         ThroughputResult getThroughput;
         LatencyResult pingLatency;
         LatencyResult setLatency;
+        LatencyResult appendLatency;
         LatencyResult getLatency;
 
         BackendResult(String backend, int port) {

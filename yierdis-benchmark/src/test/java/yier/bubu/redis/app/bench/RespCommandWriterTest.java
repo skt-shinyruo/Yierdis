@@ -45,6 +45,17 @@ public class RespCommandWriterTest {
     }
 
     @Test
+    public void writeAppendMatchesSharedRespEncoderBytesForEscapedUtf8Payload() throws Exception {
+        byte[] key = utf8("bench\"key");
+        byte[] value = utf8("line1\\line2\n中文");
+
+        Assert.assertArrayEquals(
+                RespClientCodec.encodeCommand(List.of(utf8("APPEND"), key, value)),
+                writeFrame(writer -> writer.writeAppend(key, value))
+        );
+    }
+
+    @Test
     public void repeatedSummaryRenderingDoesNotTouchCommandWriterPath() throws Exception {
         byte[] key = utf8("next-key");
         byte[] value = utf8("line1\\line2\n中文");
@@ -113,6 +124,15 @@ public class RespCommandWriterTest {
     @Test
     public void strictSetReplyValidationAcceptsSimpleStringOk() throws Exception {
         Assert.assertTrue(validateStrictReply(YierdisBench.Workload.SET_RANDOM, "+OK\r\n", 0));
+    }
+
+    @Test
+    public void strictAppendReplyValidationAcceptsIntegerReply() throws Exception {
+        Assert.assertTrue(validateStrictReply(YierdisBench.Workload.APPEND, ":7\r\n", 7));
+        Assert.assertFalse(validateStrictReply(YierdisBench.Workload.APPEND, "+OK\r\n", 0));
+        Assert.assertFalse(validateStrictReply(YierdisBench.Workload.APPEND, "$7\r\npayload\r\n", 0));
+        Assert.assertFalse(validateStrictReply(YierdisBench.Workload.APPEND, ":-1\r\n", 0));
+        Assert.assertFalse(validateStrictReply(YierdisBench.Workload.APPEND, ":0\r\n", 7));
     }
 
     @Test
