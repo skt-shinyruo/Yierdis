@@ -1094,7 +1094,7 @@ DB 层不会把 Java 对象直接塞进 native memory，而是用 handle 串起�
 - `ValueHandle` 包装 string/list/hash/set/zset 等 value/root 相关 typed `NativeHandle` raw value；string `ValueHandle` 是 allocator-backed stable handle，集合 roots 的 `ValueHandle` 仍是 type-root-owned identity，不保证都能直接由 stable allocator resolve
 - `YierdisFfmBytesRef` 表示一段 off-heap bytes
 
-`NativeKeyDirectory` 是 key -> `EntryHandle` 的权威目录。它的 table 数组仍在 heap，但 key bytes 存在 `YierdisFfmBlobStore` 中。插入新 key 时，directory 会调用 `blobStore.store(keyBytes)`；删除 key 时，会调用 `blobStore.release(keyRef)`。
+`NativeKeyDirectory` 是 key -> `EntryHandle` 的权威目录。它的 table 数组仍在 heap，但 key bytes 是 stable allocator 的 `KEY_BYTES` 对象。插入新 key 时，directory 会分配 `NativeObjectKind.KEY_BYTES` 并写入 key bytes；删除 key 时，会释放对应 allocator handle。
 
 `EntryTable` 是 `EntryHandle` -> native `EntryRecord`。当前生产组装里 entry record 来自 `YierdisStableNativeAllocator.allocate(ENTRY_RECORD, 56)`，不是直接暴露 slab offset。每条 record 逻辑大小是 56 bytes，字段包括：
 
@@ -1108,16 +1108,16 @@ DB 层不会把 Java 对象直接塞进 native memory，而是用 handle 串起�
 - version / estimated bytes
 - LRU / LFU 信息
 
-`YierdisFfmBlobStore` 管理离散 bytes。`store(byte[])` 分配 region、拷贝 bytes、返回 `YierdisFfmBytesRef`，并建立 refcount。`retain(ref)` 增加引用，`release(ref)` 减少引用；最后一次 release 会关闭底层 region。
+`YierdisFfmBlobStore` 管理离散 bytes。`store(byte[])` 分配 region、拷贝 bytes、返回 `YierdisFfmBytesRef`，并建立 refcount。`retain(ref)` 增加引用，`release(ref)` 减少引用；最后一次 release 会关闭底层 region。当前它仍用于部分集合内部 payload，不再是生产 `NativeKeyDirectory` 的 key bytes owner。
 
-`YierdisFfmExpireIndex` 复用 keyspace 中同一份 key bytes。设置 TTL 时，它会从 `KeyHandle` 取出底层 `YierdisFfmBytesRef` 并 `retain(ref)`，TTL 删除或清理时再 `release(ref)`。因此 expires 不会为了 TTL 再复制一份 key bytes。
+`YierdisFfmExpireIndex` 复用 keyspace 中同一份 key bytes。生产路径下它保存 allocator-backed key handle 引用，不复制 key bytes；旧 `YierdisFfmBytesRef` key handle 仍按 blob-store refcount retain/release。TTL 删除或清理只移除 expire index 引用，不拥有生产 key bytes 的释放权。
 
 expire table 本身也部分 off-heap：
 
 - `states` 在 FFM region
 - `hashes` 在 FFM region
 - `expireAt` 在 FFM region
-- `refs[]` 仍在 heap，保存 `YierdisFfmBytesRef`
+- `refs[]` 仍在 heap，保存 key ref wrapper；生产 keyspace 下 wrapper 指向 `KEY_BYTES` native handle
 
 #### 写入、替换和删除的释放链路
 
@@ -1132,12 +1132,12 @@ key 创建和替换由 `YierdisDbKeyLifecycle.computeWithHandle(...)` 收口：
 
 1. 先准备或查找 `KeyHandle`
 2. 新 entry 通过 `EntryTable.allocate(...)` 拿到 `EntryHandle`
-3. `NativeKeyDirectory.compute(...)` 把 key bytes 存进 blob store，并映射到 entry handle
+3. `NativeKeyDirectory.compute(...)` 把 key bytes 存进 `KEY_BYTES` native object，并映射到 entry handle
 4. `EntryRecord.valueHandle()` 指向 `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 内部 payload
 
 删除 key 时，释放链路是反向的：
 
-1. 从 `NativeKeyDirectory` 移除 key，并 release key blob
+1. 从 `NativeKeyDirectory` 移除 key，并 release `KEY_BYTES` native handle
 2. 从 `EntryTable` release native entry record
 3. 根据 `EntryRecord.type()` 调用对应 root 的 `release(valueHandle)`
 4. TTL 路径如果 retain 过同一份 key ref，也会在 remove / clear 时 release
@@ -1269,13 +1269,13 @@ keyspace 是 FFM 使用最核心的部分之一。
 
 - `NativeKeyDirectory` 保存 native entry graph 的 key -> `EntryHandle`
 - `EntryTable` 保存 `EntryHandle` -> `EntryRecord`
-- key bytes 仍由 `YierdisFfmBlobStore` / `NativeKeyDirectory` 管理，不属于 stable allocator object table。active defrag 和 allocator stats 只覆盖 allocator-backed entry/string 对象；key bytes 会在后续迁移到 `NativeObjectKind.KEY_BYTES`。
+- key bytes 由 `NativeKeyDirectory` 存为 stable allocator `NativeObjectKind.KEY_BYTES` 对象，参与 allocator stats 和 active defrag。directory table 数组仍在 heap。
 
 `NativeKeyDirectory.compute(...)` 在 key 首次出现时会：
 
-1. 通过 `blobStore.store(key)` 把 key bytes 存进 native memory
-2. 基于这个 blob 创建 `KeyHandle.forFfm(ref, hash)`
-3. 把 key ref 和 `EntryHandle` 放进 native directory table
+1. 通过 allocator 分配 `NativeObjectKind.KEY_BYTES` 并写入 key bytes
+2. 基于这个 native handle 创建 `KeyHandle.forNative(allocator, handle, hash)`
+3. 把 key handle 和 `EntryHandle` 放进 native directory table
 
 mutation 由 `YierdisDbKeyLifecycle.computeWithHandle(...)` 收口：
 
@@ -1301,11 +1301,11 @@ mutation 由 `YierdisDbKeyLifecycle.computeWithHandle(...)` 收口：
 
 当调用 `setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis)` 时，它会：
 
-1. 从 handle 中取出底层的 `YierdisFfmBytesRef`
-2. 对这块 ref 执行 `blobStore.retain(ref)`
-3. 把同一个 ref 放进 expires table
+1. 从 handle 中取出底层 native key identity
+2. 对旧 blob-store key ref 执行 retain；对生产 `KEY_BYTES` handle 只保存 handle identity
+3. 把同一个 key identity 放进 expires table
 
-也就是说，keyspace 和 expires 共享同一份 off-heap key bytes，只是通过引用计数协调生命周期。
+也就是说，keyspace 和 expires 共享同一份 off-heap key bytes。生产 `KEY_BYTES` 的所有权留在 `NativeKeyDirectory`，expire index 只是引用 key identity；旧 blob-store key ref 仍通过引用计数协调生命周期。
 
 `YierdisFfmExpireIndex` 自己的 table 也是渐进 rehash 的 open-addressing 结构：
 
@@ -1317,7 +1317,7 @@ mutation 由 `YierdisDbKeyLifecycle.computeWithHandle(...)` 收口：
 - 后续操作开头会调用 `closeRetiredTables()`，延迟关闭旧 table 持有的 FFM regions
 
 table 里只有 `states`、`hashes`、`expireAt` 三组数组在 FFM region；`refs[]` 仍是 heap
-数组，保存共享 key bytes 的 `YierdisFfmBytesRef`。
+数组，保存共享 key identity wrapper。生产 keyspace 下该 wrapper 指向 `KEY_BYTES` native handle。
 
 设置或移除 TTL 时，`YierdisDbKeyLifecycle` 还会同步更新 `EntryRecord.expireAtMillis`，
 让过期、introspection 和 memory 路径都能从 entry metadata 看到同一份状态。
@@ -1447,7 +1447,7 @@ adapter，但 key 的 canonical metadata 在 `EntryTable`，value identity 是
 例如：
 
 - `EntryTable` 的 entry record 来自 stable native allocator，`EntryHandle` 是 `ENTRY_RECORD` native handle 的 Java record 包装
-- `NativeKeyDirectory` 的 key bytes 在 native blob store，table 数组仍在 heap
+- `NativeKeyDirectory` 的 key bytes 是 stable allocator `KEY_BYTES` 对象，table 数组仍在 heap
 - `YierdisFfmExpireIndex` 的 `states` / `hashes` / `expireAt` 在 native memory，但 `refs[]` 仍在 heap
 - `YierdisFfmZSet` 的 member bytes 在 native blob store，但 `ordered` 和 `Entry.score` 仍在 heap
 - `StringRoot` 的 payload 已由 DB 级 shared `NativeAllocator` 管理，kind 为 `STRING_BYTES`。`ValueHandle` 对 string 来说是 stable allocator handle；append/ensureLength 使用 allocator realloc 保持 handle 不变。`slice` 对外仍返回 `OffHeapSlice` 接口，但当前会先复制 native `STRING_BYTES` 到 heap-backed `OffHeapSlice`，不会暴露可逃逸的 allocator view。
@@ -1570,7 +1570,7 @@ usage；只是单 DB 的 `offHeapIncludedInMaxmemory` 在 global coordinator 存
 - `UnsafeOffHeapDbSmokeTest`
   说明 string/list/hash/set/zset/HLL 等常用类型都能在共享 FFM runtime 下工作
 - `ExpireKeySharingTest`
-  说明 expires 和 keyspace 共享同一份 off-heap key ref
+  说明 expires 和 keyspace 共享同一份 off-heap key identity
 - `OffHeapCollectionReadStreamingTest`
   说明部分集合读路径可以直接流式输出 off-heap slice
 - `NativeStorageRegressionTest`

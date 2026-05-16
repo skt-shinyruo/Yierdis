@@ -1555,7 +1555,7 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 职责：
 
 - `NativeKeyDirectory` 是当前 DB 的 key -> entry handle 目录。
-- key bytes 存在 `YierdisFfmBlobStore`，directory slot 保存 key ref、entry handle、hash 和 state。
+- key bytes 存在 stable allocator `KEY_BYTES` 对象，directory slot 保存 key native handle、entry handle、hash 和 state。
 - 支持 tombstone、rehash、随机采样和 scan cursor。
 - `YierdisKeyspace` 是早期/测试用 keyspace contract，heap/off-heap 实现保留为内部结构和回归测试对象。
 - `ByteArrayHashMap` / `ByteArrayHashSet` 是内部 byte-key 容器，仍被 hash/set/zset 的 heap fallback 或辅助结构使用。

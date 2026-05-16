@@ -126,7 +126,7 @@ public final class YierdisDbStorageComponents {
                 hashRoot,
                 setRoot,
                 zsetRoot,
-                false
+                true
         );
     }
 
