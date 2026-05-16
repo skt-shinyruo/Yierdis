@@ -2,6 +2,19 @@ package yier.bubu.redis.app.bench;
 
 import picocli.CommandLine;
 import picocli.CommandLine.ParameterException;
+import yier.bubu.redis.memory.api.NativeAccessMode;
+import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
+import yier.bubu.redis.memory.api.NativeEpochKind;
+import yier.bubu.redis.memory.api.NativeEpochScope;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.NativeObjectView;
+import yier.bubu.redis.memory.api.NativeReallocPolicy;
+import yier.bubu.redis.memory.foreign.YierdisNativeObjectTable;
+import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
@@ -60,11 +73,19 @@ public final class YierdisBench {
 
     private static final int DEFAULT_LATENCY_REQUESTS = 200_000;
     private static final int DEFAULT_LATENCY_CLIENTS = 50;
+    private static final byte[] HLL_SPARSE_KEY_PREFIX = "hll:sparse:".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] HLL_DENSE_KEY_PREFIX = "hll:dense:".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] HLL_ELEMENT_PREFIX = "hll:elem:".getBytes(StandardCharsets.US_ASCII);
+    private static final int HLL_FIXED_DIGITS = 8;
 
     private static final int CONNECT_TIMEOUT_MILLIS = 1000;
     private static final int READY_TIMEOUT_MILLIS = 15_000;
+    private static final int DB_DEFRAG_COMPARE_KEYSPACE = 4096;
+    private static final int DB_DEFRAG_COMPARE_REQUESTS = 8192;
+    private static final int DB_DEFRAG_COMPARE_CLIENTS = 8;
 
     private static final DecimalFormat DF = new DecimalFormat("0.000");
+    private static final int NATIVE_ALLOCATOR_MAX_SLOTS = 262_144;
 
     public static void main(String[] args) throws Exception {
         YierdisBenchArgs benchArgs = new YierdisBenchArgs();
@@ -97,7 +118,25 @@ public final class YierdisBench {
         }
         baseServerArgs.normalizeAndValidate();
 
-        BenchConfig config = BenchConfig.from(benchArgs, baseServerArgs);
+        BenchConfig config;
+        try {
+            config = BenchConfig.from(benchArgs, baseServerArgs);
+        } catch (IllegalArgumentException e) {
+            System.err.println(e.getMessage());
+            cmd.usage(System.err);
+            return;
+        }
+        if (config.nativeEval) {
+            println("YierdisBench（native allocator eval）");
+            println("模式: in-process（不启动 server）");
+            int effectiveIterations = effectiveNativeEvalIterations(config.nativeEvalIterations);
+            println("iterations: " + effectiveIterations);
+            println("");
+            printNativeEvalReport(runNativeEval(effectiveIterations));
+            println("");
+            println("完成。");
+            return;
+        }
 
         Path serverJar = null;
         if (!config.noStartServer) {
@@ -274,6 +313,81 @@ public final class YierdisBench {
                 );
                 backendResult.appendThroughput = appendQps;
                 println("APPEND throughput: " + appendQps);
+
+                println("");
+                println("[HLL] PFADD/PFCOUNT sparse/dense 压测");
+                int hllDenseKeyspace = Math.max(1, Math.min(config.keyspace, Math.min(config.requests, 4096)));
+                ThroughputResult pfaddSparseQps = runThroughput(
+                        config.host,
+                        port,
+                        Workload.PFADD_SPARSE,
+                        config.requests,
+                        config.clients,
+                        config.pipeline,
+                        config.keyspace,
+                        config.dataSize,
+                        config.strictReplies
+                );
+                prefillDenseHll(
+                        config.host,
+                        port,
+                        hllDenseKeyspace,
+                        config.pipeline
+                );
+                ThroughputResult pfaddDenseQps = runThroughput(
+                        config.host,
+                        port,
+                        Workload.PFADD_DENSE,
+                        config.requests,
+                        config.clients,
+                        config.pipeline,
+                        hllDenseKeyspace,
+                        config.dataSize,
+                        config.strictReplies
+                );
+                ThroughputResult pfcountQps = runThroughput(
+                        config.host,
+                        port,
+                        Workload.PFCOUNT,
+                        config.requests,
+                        config.clients,
+                        config.pipeline,
+                        hllDenseKeyspace,
+                        config.dataSize,
+                        config.strictReplies
+                );
+                backendResult.pfaddSparseThroughput = pfaddSparseQps;
+                backendResult.pfaddDenseThroughput = pfaddDenseQps;
+                backendResult.pfcountThroughput = pfcountQps;
+                println("PFADD sparse throughput: " + pfaddSparseQps);
+                println("PFADD dense throughput : " + pfaddDenseQps);
+                println("PFCOUNT throughput     : " + pfcountQps);
+                if (!config.skipLatency) {
+                    LatencyResult pfaddSparseLat = runLatency(
+                            config.host,
+                            port,
+                            Workload.PFADD_SPARSE,
+                            config.latencyRequests,
+                            config.latencyClients,
+                            config.keyspace,
+                            config.dataSize,
+                            config.strictReplies
+                    );
+                    LatencyResult pfaddDenseLat = runLatency(
+                            config.host,
+                            port,
+                            Workload.PFADD_DENSE,
+                            config.latencyRequests,
+                            config.latencyClients,
+                            hllDenseKeyspace,
+                            config.dataSize,
+                            config.strictReplies
+                    );
+                    backendResult.pfaddSparseLatency = pfaddSparseLat;
+                    backendResult.pfaddDenseLatency = pfaddDenseLat;
+                    println("PFADD sparse latency   : " + pfaddSparseLat);
+                    println("PFADD dense latency    : " + pfaddDenseLat);
+                }
             } finally {
                 if (server != null) {
                     server.stop();
@@ -283,10 +397,22 @@ public final class YierdisBench {
             results.add(backendResult);
         }
 
+        DbDefragComparisonResult dbDefragComparison = null;
+        if (!config.noStartServer && !config.skipNativeDefragCompare) {
+            println("");
+            println("[DB native defrag] disabled/enabled p99 对比");
+            dbDefragComparison = runDbNativeDefragComparison(config, serverJar, runDir);
+            printDbDefragComparison(dbDefragComparison);
+        }
+
         println("");
         println("============================================================");
         println("汇总（吞吐越大越好；延迟越小越好）");
         printSummary(results, config.skipLatency);
+        if (dbDefragComparison != null) {
+            println("");
+            printDbDefragComparison(dbDefragComparison);
+        }
         println("");
         println("完成。");
     }
@@ -485,16 +611,175 @@ public final class YierdisBench {
         return new LatencyResult(workload, all.length, errors, seconds, qps, stats);
     }
 
+    private static void prefillDenseHll(String host, int port, int keyspace, int pipeline) {
+        if (keyspace <= 0) {
+            throw new IllegalArgumentException("keyspace must be > 0");
+        }
+        if (pipeline <= 0) {
+            throw new IllegalArgumentException("pipeline must be > 0");
+        }
+        try (Socket socket = new Socket()) {
+            socket.setTcpNoDelay(true);
+            socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
+            try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
+                 BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024);
+                 RespCommandWriter writer = new RespCommandWriter(out)) {
+                byte[] sourceKey = hllKey("src", 0);
+                byte[] denseKey = new byte[HLL_DENSE_KEY_PREFIX.length + HLL_FIXED_DIGITS];
+                writer.writePfadd(sourceKey, hllElement("seed", 0, 0));
+                out.flush();
+                RespClientCodec.RespReply sourceReply = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+                if (isErrorReply(sourceReply)) {
+                    throw new IllegalStateException("PFADD dense source prefill failed");
+                }
+
+                int remaining = keyspace;
+                int index = 0;
+                while (remaining > 0) {
+                    int batch = Math.min(pipeline, remaining);
+                    for (int i = 0; i < batch; i++) {
+                        writeDenseHllKey(denseKey, index++);
+                        writer.writePfmerge(denseKey, sourceKey);
+                    }
+                    out.flush();
+                    for (int i = 0; i < batch; i++) {
+                        RespClientCodec.RespReply reply = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+                        if (!reply.isSimpleString("OK")) {
+                            throw new IllegalStateException("PFMERGE dense prefill failed");
+                        }
+                    }
+                    remaining -= batch;
+                }
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("dense HLL prefill failed", e);
+        }
+    }
+
+    private static DbDefragComparisonResult runDbNativeDefragComparison(BenchConfig config, Path serverJar, Path runDir) throws Exception {
+        int keyspace = Math.max(1, Math.min(config.keyspace, DB_DEFRAG_COMPARE_KEYSPACE));
+        int requests = Math.max(keyspace, Math.min(config.latencyRequests, DB_DEFRAG_COMPARE_REQUESTS));
+        int clients = Math.max(1, Math.min(config.latencyClients, DB_DEFRAG_COMPARE_CLIENTS));
+        int dataSize = Math.max(1, config.dataSize);
+        int disabledPort = config.portBase + config.backends.size();
+        int enabledPort = disabledPort + 1;
+
+        LatencyResult disabled = runDbDefragPass(
+                config,
+                serverJar,
+                runDir,
+                false,
+                disabledPort,
+                keyspace,
+                requests,
+                clients,
+                dataSize
+        );
+        LatencyResult enabled = runDbDefragPass(
+                config,
+                serverJar,
+                runDir,
+                true,
+                enabledPort,
+                keyspace,
+                requests,
+                clients,
+                dataSize
+        );
+
+        double disabledP99 = disabled.stats.p99Millis();
+        double enabledP99 = enabled.stats.p99Millis();
+        double impact = disabledP99 <= 0.0 ? 0.0 : ((enabledP99 - disabledP99) * 100.0) / disabledP99;
+        return new DbDefragComparisonResult(disabled, enabled, impact);
+    }
+
+    private static LatencyResult runDbDefragPass(
+            BenchConfig config,
+            Path serverJar,
+            Path runDir,
+            boolean nativeDefragEnabled,
+            int port,
+            int keyspace,
+            int requests,
+            int clients,
+            int dataSize
+    ) throws Exception {
+        String label = nativeDefragEnabled ? "enabled" : "disabled";
+        YierdisBenchServerArgs serverArgs = config.baseServerArgs.copy();
+        serverArgs.port = port;
+        serverArgs.cleanupIntervalMillis = 1L;
+        serverArgs.noCleanup = false;
+        serverArgs.nativeDefragEnabled = nativeDefragEnabled;
+        serverArgs.normalizeAndValidate();
+
+        Path logFile = runDir.resolve("server-native-defrag-" + label + ".log");
+        ServerProcess server = new ServerProcess(
+                config.javaCmd,
+                serverJar,
+                config.serverXms,
+                config.serverXmx,
+                config.serverMaxDirectMemory,
+                serverArgs,
+                logFile
+        );
+        try {
+            server.start();
+            if (!waitReady(config.host, port, READY_TIMEOUT_MILLIS)) {
+                throw new IllegalStateException("native defrag compare server not ready: " + logFile);
+            }
+            ThroughputResult prefill = runThroughput(
+                    config.host, port, Workload.SET_SEQUENTIAL, keyspace, clients, config.pipeline, keyspace, dataSize, config.strictReplies
+            );
+            ThroughputResult fragmented = runThroughput(
+                    config.host, port, Workload.APPEND, keyspace, clients, config.pipeline, keyspace, dataSize, config.strictReplies
+            );
+            if (prefill.errors > 0 || fragmented.errors > 0) {
+                throw new IllegalStateException("native defrag compare preparation failed for " + label);
+            }
+            return runLatency(config.host, port, Workload.APPEND, requests, clients, keyspace, dataSize, config.strictReplies);
+        } finally {
+            server.stop();
+        }
+    }
+
+    static String renderDbDefragComparison(DbDefragComparisonResult result) {
+        Objects.requireNonNull(result, "result");
+        StringBuilder sb = new StringBuilder();
+        String header = String.format("%16s | %16s | %10s | %13s",
+                "disabled_p99_ms", "enabled_p99_ms", "impact_pct", "enabled_err");
+        appendTableHeader(sb, header);
+        sb.append(String.format("%16s | %16s | %10s | %13d",
+                DF.format(result.disabled.stats.p99Millis()),
+                DF.format(result.enabled.stats.p99Millis()),
+                DF.format(result.impactPercent),
+                result.enabled.errors)).append('\n');
+        return sb.toString();
+    }
+
+    private static void printDbDefragComparison(DbDefragComparisonResult result) {
+        println("[db-native-defrag] APPEND p99 impact");
+        for (String line : renderDbDefragComparison(result).split("\n", -1)) {
+            if (!line.isEmpty()) {
+                println(line);
+            }
+        }
+    }
+
     static String renderSummary(List<BackendResult> results, boolean skipLatency) {
         StringBuilder sb = new StringBuilder();
         String header = skipLatency
-                ? String.format("%-8s | %12s | %8s | %12s | %8s | %12s | %8s",
-                "backend", "SET_QPS", "SET_ERR", "GET_QPS", "GET_ERR", "APPEND_QPS", "APPEND_ERR")
+                ? String.format(
+                "%-8s | %12s | %8s | %12s | %8s | %12s | %8s | %16s | %8s | %16s | %8s | %12s | %8s",
+                "backend", "SET_QPS", "SET_ERR", "GET_QPS", "GET_ERR", "APPEND_QPS", "APPEND_ERR",
+                "PFADD_S_QPS", "PFADD_S_E", "PFADD_D_QPS", "PFADD_D_E", "PFCOUNT_QPS", "PFCOUNT_E"
+        )
                 : String.format(
-                "%-8s | %12s | %8s | %12s | %8s | %14s | %8s | %14s | %8s | %14s | %8s | %12s | %8s | %14s | %8s",
+                "%-8s | %12s | %8s | %12s | %8s | %14s | %8s | %14s | %8s | %14s | %8s | %12s | %8s | %14s | %8s | %16s | %8s | %16s | %8s | %12s | %8s | %18s | %10s | %18s | %10s",
                 "backend", "SET_QPS", "SET_ERR", "GET_QPS", "GET_ERR",
                 "PING_p95(ms)", "PING_E", "SET_p95(ms)", "SET_E", "GET_p95(ms)", "GET_E",
-                "APPEND_QPS", "APPEND_ERR", "APPEND_p95(ms)", "APPEND_E"
+                "APPEND_QPS", "APPEND_ERR", "APPEND_p95(ms)", "APPEND_E",
+                "PFADD_S_QPS", "PFADD_S_E", "PFADD_D_QPS", "PFADD_D_E", "PFCOUNT_QPS", "PFCOUNT_E",
+                "PFADD_S_p95(ms)", "PFADD_S_E2", "PFADD_D_p95(ms)", "PFADD_D_E2"
         );
         sb.append(header).append('\n');
         sb.append(repeat('-', header.length())).append('\n');
@@ -503,12 +788,21 @@ public final class YierdisBench {
             String setQps = r.setThroughput == null ? "-" : DF.format(r.setThroughput.qps);
             String appendQps = r.appendThroughput == null ? "-" : DF.format(r.appendThroughput.qps);
             String getQps = r.getThroughput == null ? "-" : DF.format(r.getThroughput.qps);
+            String pfaddSparseQps = r.pfaddSparseThroughput == null ? "-" : DF.format(r.pfaddSparseThroughput.qps);
+            String pfaddDenseQps = r.pfaddDenseThroughput == null ? "-" : DF.format(r.pfaddDenseThroughput.qps);
+            String pfcountQps = r.pfcountThroughput == null ? "-" : DF.format(r.pfcountThroughput.qps);
             String setErr = r.setThroughput == null ? "-" : Long.toString(r.setThroughput.errors);
             String appendErr = r.appendThroughput == null ? "-" : Long.toString(r.appendThroughput.errors);
             String getErr = r.getThroughput == null ? "-" : Long.toString(r.getThroughput.errors);
+            String pfaddSparseErr = r.pfaddSparseThroughput == null ? "-" : Long.toString(r.pfaddSparseThroughput.errors);
+            String pfaddDenseErr = r.pfaddDenseThroughput == null ? "-" : Long.toString(r.pfaddDenseThroughput.errors);
+            String pfcountErr = r.pfcountThroughput == null ? "-" : Long.toString(r.pfcountThroughput.errors);
             if (skipLatency) {
-                sb.append(String.format("%-8s | %12s | %8s | %12s | %8s | %12s | %8s",
-                        r.backend, setQps, setErr, getQps, getErr, appendQps, appendErr))
+                sb.append(String.format(
+                                "%-8s | %12s | %8s | %12s | %8s | %12s | %8s | %16s | %8s | %16s | %8s | %12s | %8s",
+                                r.backend, setQps, setErr, getQps, getErr, appendQps, appendErr,
+                                pfaddSparseQps, pfaddSparseErr, pfaddDenseQps, pfaddDenseErr, pfcountQps, pfcountErr
+                        ))
                         .append('\n');
                 continue;
             }
@@ -520,11 +814,17 @@ public final class YierdisBench {
             String setLatErr = r.setLatency == null ? "-" : Long.toString(r.setLatency.errors);
             String appendLatErr = r.appendLatency == null ? "-" : Long.toString(r.appendLatency.errors);
             String getLatErr = r.getLatency == null ? "-" : Long.toString(r.getLatency.errors);
+            String pfaddSparseP95 = r.pfaddSparseLatency == null ? "-" : DF.format(r.pfaddSparseLatency.stats.p95Millis());
+            String pfaddDenseP95 = r.pfaddDenseLatency == null ? "-" : DF.format(r.pfaddDenseLatency.stats.p95Millis());
+            String pfaddSparseLatErr = r.pfaddSparseLatency == null ? "-" : Long.toString(r.pfaddSparseLatency.errors);
+            String pfaddDenseLatErr = r.pfaddDenseLatency == null ? "-" : Long.toString(r.pfaddDenseLatency.errors);
             sb.append(String.format(
-                    "%-8s | %12s | %8s | %12s | %8s | %14s | %8s | %14s | %8s | %14s | %8s | %12s | %8s | %14s | %8s",
+                    "%-8s | %12s | %8s | %12s | %8s | %14s | %8s | %14s | %8s | %14s | %8s | %12s | %8s | %14s | %8s | %16s | %8s | %16s | %8s | %12s | %8s | %18s | %10s | %18s | %10s",
                     r.backend, setQps, setErr, getQps, getErr,
                     pingP95, pingErr, setP95, setLatErr, getP95, getLatErr,
-                    appendQps, appendErr, appendP95, appendLatErr
+                    appendQps, appendErr, appendP95, appendLatErr,
+                    pfaddSparseQps, pfaddSparseErr, pfaddDenseQps, pfaddDenseErr, pfcountQps, pfcountErr,
+                    pfaddSparseP95, pfaddSparseLatErr, pfaddDenseP95, pfaddDenseLatErr
             )).append('\n');
         }
         return sb.toString();
@@ -536,6 +836,273 @@ public final class YierdisBench {
                 println(line);
             }
         }
+    }
+
+    static NativeEvalReport runNativeEval(int iterations) {
+        int n = effectiveNativeEvalIterations(iterations);
+        return new NativeEvalReport(
+                runNativeAllocateFree(n),
+                runNativeResolve(n),
+                runNativeRealloc(n),
+                runNativePin(n),
+                runNativeMetadata(),
+                runNativeQuarantine(n),
+                runNativeSmallObjectChurn(n),
+                runNativeDefragImpact(n)
+        );
+    }
+
+    static String renderNativeEvalReport(NativeEvalReport report) {
+        Objects.requireNonNull(report, "report");
+        StringBuilder sb = new StringBuilder();
+
+        sb.append("[native-allocator] allocate/free\n");
+        appendTableHeader(sb, String.format("%-9s | %8s | %10s | %12s | %11s",
+                "class", "bytes", "ops", "alloc_us", "free_us"));
+        for (NativeSizeClassResult r : report.sizeClasses) {
+            sb.append(String.format("%-9s | %8d | %10d | %12s | %11s",
+                    r.label, r.bytes, r.ops, DF.format(r.allocMicros), DF.format(r.freeMicros))).append('\n');
+        }
+
+        sb.append("\n[native-allocator] resolve/close\n");
+        appendTableHeader(sb, String.format("%10s | %16s", "ops", "resolve_close_us"));
+        sb.append(String.format("%10d | %16s", report.resolve.ops, DF.format(report.resolve.resolveCloseMicros))).append('\n');
+
+        sb.append("\n[native-allocator] realloc\n");
+        appendTableHeader(sb, String.format("%10s | %8s | %8s | %10s", "ops", "in_place", "moved", "avg_us"));
+        sb.append(String.format("%10d | %8d | %8d | %10s",
+                report.realloc.ops, report.realloc.inPlace, report.realloc.moved, DF.format(report.realloc.avgMicros))).append('\n');
+
+        sb.append("\n[native-allocator] pin/unpin\n");
+        appendTableHeader(sb, String.format("%10s | %13s", "ops", "pin_unpin_us"));
+        sb.append(String.format("%10d | %13s", report.pin.ops, DF.format(report.pin.pinUnpinMicros))).append('\n');
+
+        sb.append("\n[native-allocator] object-table metadata\n");
+        appendTableHeader(sb, String.format("%-7s | %11s | %21s | %12s",
+                "value", "value_bytes", "metadata_bytes_per_obj", "metadata_pct"));
+        for (NativeMetadataResult r : report.metadata) {
+            sb.append(String.format("%-7s | %11d | %21s | %12s",
+                    r.label, r.valueBytes, DF.format(r.metadataBytesPerObject), DF.format(r.metadataPercent))).append('\n');
+        }
+
+        sb.append("\n[native-allocator] quarantine/epoch churn\n");
+        appendTableHeader(sb, String.format("%14s | %19s", "retained_bytes", "retained_pct_reserved"));
+        sb.append(String.format("%14d | %16s",
+                report.quarantine.retainedBytes, DF.format(report.quarantine.retainedPercentOfReserved))).append('\n');
+
+        sb.append("\n[native-allocator] small-object churn\n");
+        appendTableHeader(sb, String.format("%10s | %14s | %10s", "ops", "avg_us_per_op", "p99_us"));
+        sb.append(String.format("%10d | %14s | %10s",
+                report.churn.ops, DF.format(report.churn.avgMicros), DF.format(report.churn.p99Micros))).append('\n');
+
+        sb.append("\n[native-allocator] defrag p99 impact\n");
+        appendTableHeader(sb, String.format("%15s | %14s | %10s | %13s",
+                "disabled_p99_us", "enabled_p99_us", "impact_pct", "moved_objects"));
+        sb.append(String.format("%15s | %14s | %10s | %13d",
+                DF.format(report.defragImpact.disabledP99Micros),
+                DF.format(report.defragImpact.enabledP99Micros),
+                DF.format(report.defragImpact.impactPercent),
+                report.defragImpact.movedObjects)).append('\n');
+        return sb.toString();
+    }
+
+    private static void printNativeEvalReport(NativeEvalReport report) {
+        for (String line : renderNativeEvalReport(report).split("\n", -1)) {
+            if (!line.isEmpty()) {
+                println(line);
+            }
+        }
+    }
+
+    private static void appendTableHeader(StringBuilder sb, String header) {
+        sb.append(header).append('\n');
+        sb.append(repeat('-', header.length())).append('\n');
+    }
+
+    private static List<NativeSizeClassResult> runNativeAllocateFree(int iterations) {
+        int[] sizes = {64, 256, 4096, 65_536};
+        String[] labels = {"small-64", "small-256", "medium-4k", "large-64k"};
+        List<NativeSizeClassResult> results = new ArrayList<>(sizes.length);
+        for (int i = 0; i < sizes.length; i++) {
+            try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("bench-alloc-" + labels[i]);
+                 NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, NATIVE_ALLOCATOR_MAX_SLOTS)) {
+                long allocNanos = 0L;
+                long freeNanos = 0L;
+                for (int j = 0; j < iterations; j++) {
+                    long t0 = System.nanoTime();
+                    NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, sizes[i]);
+                    allocNanos += System.nanoTime() - t0;
+                    long t1 = System.nanoTime();
+                    allocator.free(handle);
+                    freeNanos += System.nanoTime() - t1;
+                }
+                results.add(new NativeSizeClassResult(
+                        labels[i],
+                        sizes[i],
+                        iterations,
+                        microsPerOp(allocNanos, iterations),
+                        microsPerOp(freeNanos, iterations)
+                ));
+            }
+        }
+        return results;
+    }
+
+    private static NativeResolveResult runNativeResolve(int iterations) {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("bench-resolve");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, NATIVE_ALLOCATOR_MAX_SLOTS)) {
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 256);
+            long nanos = 0L;
+            for (int i = 0; i < iterations; i++) {
+                long t0 = System.nanoTime();
+                try (NativeObjectView ignored = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                    // close cost is part of the stable handle access path.
+                }
+                nanos += System.nanoTime() - t0;
+            }
+            allocator.free(handle);
+            return new NativeResolveResult(iterations, microsPerOp(nanos, iterations));
+        }
+    }
+
+    private static NativeReallocResult runNativeRealloc(int iterations) {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("bench-realloc");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, NATIVE_ALLOCATOR_MAX_SLOTS)) {
+            int inPlace = 0;
+            int moved = 0;
+            long nanos = 0L;
+            for (int i = 0; i < iterations; i++) {
+                NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 64);
+                int targetSize = (i & 1) == 0 ? 32 : 4096;
+                long beforeInPlace = allocator.stats().reallocInPlaceCount();
+                long beforeMoved = allocator.stats().reallocMovedCount();
+                long t0 = System.nanoTime();
+                handle = allocator.realloc(handle, targetSize, NativeReallocPolicy.PRESERVE_PREFIX);
+                nanos += System.nanoTime() - t0;
+                NativeAllocatorStats stats = allocator.stats();
+                inPlace += (int) (stats.reallocInPlaceCount() - beforeInPlace);
+                moved += (int) (stats.reallocMovedCount() - beforeMoved);
+                allocator.free(handle);
+            }
+            return new NativeReallocResult(iterations, inPlace, moved, microsPerOp(nanos, iterations));
+        }
+    }
+
+    private static NativePinResult runNativePin(int iterations) {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("bench-pin");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, NATIVE_ALLOCATOR_MAX_SLOTS)) {
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 256);
+            long nanos = 0L;
+            for (int i = 0; i < iterations; i++) {
+                long t0 = System.nanoTime();
+                allocator.pin(handle);
+                allocator.unpin(handle);
+                nanos += System.nanoTime() - t0;
+            }
+            allocator.free(handle);
+            return new NativePinResult(iterations, microsPerOp(nanos, iterations));
+        }
+    }
+
+    private static List<NativeMetadataResult> runNativeMetadata() {
+        return List.of(
+                metadataResult("small", 64),
+                metadataResult("medium", 4096)
+        );
+    }
+
+    private static NativeMetadataResult metadataResult(String label, int valueBytes) {
+        double metadataBytes = YierdisNativeObjectTable.META_BYTES;
+        double pct = valueBytes <= 0 ? 0.0 : (metadataBytes * 100.0) / (metadataBytes + valueBytes);
+        return new NativeMetadataResult(label, valueBytes, metadataBytes, pct);
+    }
+
+    private static NativeQuarantineResult runNativeQuarantine(int iterations) {
+        int n = Math.max(1, Math.min(iterations, 4096));
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("bench-quarantine");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, NATIVE_ALLOCATOR_MAX_SLOTS)) {
+            try (NativeEpochScope ignored = allocator.beginEpoch(NativeEpochKind.SCAN)) {
+                for (int i = 0; i < n; i++) {
+                    NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 64);
+                    allocator.free(handle);
+                }
+                NativeAllocatorStats stats = allocator.stats();
+                long reserved = Math.max(1L, stats.reservedBytes());
+                return new NativeQuarantineResult(stats.quarantineBytes(), stats.quarantineBytes() * 100.0 / reserved);
+            }
+        }
+    }
+
+    private static NativeChurnResult runNativeSmallObjectChurn(int iterations) {
+        int n = Math.max(1, iterations);
+        long[] samples = new long[n];
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("bench-churn");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, NATIVE_ALLOCATOR_MAX_SLOTS)) {
+            for (int i = 0; i < n; i++) {
+                long t0 = System.nanoTime();
+                NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 64);
+                allocator.free(handle);
+                samples[i] = System.nanoTime() - t0;
+            }
+        }
+        long sum = 0L;
+        for (long sample : samples) {
+            sum += sample;
+        }
+        Arrays.sort(samples);
+        return new NativeChurnResult(n, microsPerOp(sum, n), samples[Math.max(0, (int) Math.round(0.99 * (n - 1)))] / 1_000.0);
+    }
+
+    private static NativeDefragImpactResult runNativeDefragImpact(int iterations) {
+        int n = Math.max(8, Math.min(iterations, 2048));
+        long[] disabled = new long[n];
+        long[] enabled = new long[n];
+        long movedObjects = 0L;
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("bench-defrag");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, NATIVE_ALLOCATOR_MAX_SLOTS)) {
+            NativeHandle[] handles = new NativeHandle[n];
+            for (int i = 0; i < n; i++) {
+                handles[i] = allocator.allocate(NativeObjectKind.STRING_BYTES, 128);
+            }
+            for (int i = 0; i < n; i++) {
+                long t0 = System.nanoTime();
+                try (NativeObjectView ignored = allocator.resolve(handles[i], NativeAccessMode.READ_ONLY)) {
+                    // bounded synthetic baseline
+                }
+                disabled[i] = System.nanoTime() - t0;
+            }
+            for (int i = 0; i < n; i++) {
+                long t0 = System.nanoTime();
+                if ((i & 15) == 0) {
+                    movedObjects += allocator.defragCycle(new NativeDefragOptions(4096, 4, TimeUnit.MILLISECONDS.toNanos(1))).movedObjects();
+                }
+                try (NativeObjectView ignored = allocator.resolve(handles[i], NativeAccessMode.READ_ONLY)) {
+                    // includes intermittent defragCycle cost.
+                }
+                enabled[i] = System.nanoTime() - t0;
+            }
+        }
+        Arrays.sort(disabled);
+        Arrays.sort(enabled);
+        double disabledP99 = percentileMicros(disabled, 0.99);
+        double enabledP99 = percentileMicros(enabled, 0.99);
+        double impact = disabledP99 <= 0.0 ? 0.0 : ((enabledP99 - disabledP99) * 100.0) / disabledP99;
+        return new NativeDefragImpactResult(disabledP99, enabledP99, impact, movedObjects);
+    }
+
+    private static double percentileMicros(long[] sortedNanos, double percentile) {
+        if (sortedNanos.length == 0) {
+            return 0.0;
+        }
+        int index = Math.max(0, Math.min(sortedNanos.length - 1, (int) Math.round(percentile * (sortedNanos.length - 1))));
+        return sortedNanos[index] / 1_000.0;
+    }
+
+    private static double microsPerOp(long nanos, long ops) {
+        if (ops <= 0) {
+            return 0.0;
+        }
+        return (nanos / 1_000.0) / ops;
     }
 
     private static String repeat(char c, int n) {
@@ -574,6 +1141,16 @@ public final class YierdisBench {
                         && reply.integer() != null
                         && reply.integer() >= 0L
                         && (expectedDataSize <= 0 || reply.integer() >= expectedDataSize);
+            case PFADD_SPARSE:
+            case PFADD_DENSE:
+                return reply.kind() == RespClientCodec.RespReply.Kind.INTEGER
+                        && reply.integer() != null
+                        && reply.integer() >= 0L
+                        && reply.integer() <= 1L;
+            case PFCOUNT:
+                return reply.kind() == RespClientCodec.RespReply.Kind.INTEGER
+                        && reply.integer() != null
+                        && reply.integer() >= 0L;
             case GET_RANDOM:
                 if (reply.isNull()) {
                     return true;
@@ -599,7 +1176,10 @@ public final class YierdisBench {
         SET_RANDOM,
         SET_SEQUENTIAL,
         APPEND,
-        GET_RANDOM
+        GET_RANDOM,
+        PFADD_SPARSE,
+        PFADD_DENSE,
+        PFCOUNT
     }
 
     static final class BenchConfig {
@@ -626,6 +1206,9 @@ public final class YierdisBench {
         final boolean skipPrefill;
         final boolean skipLatency;
         final boolean strictReplies;
+        final boolean skipNativeDefragCompare;
+        final boolean nativeEval;
+        final int nativeEvalIterations;
 
         private BenchConfig(
                 boolean noStartServer,
@@ -647,7 +1230,10 @@ public final class YierdisBench {
                 int latencyClients,
                 boolean skipPrefill,
                 boolean skipLatency,
-                boolean strictReplies
+                boolean strictReplies,
+                boolean skipNativeDefragCompare,
+                boolean nativeEval,
+                int nativeEvalIterations
         ) {
             this.noStartServer = noStartServer;
             this.serverJar = serverJar;
@@ -669,6 +1255,9 @@ public final class YierdisBench {
             this.skipPrefill = skipPrefill;
             this.skipLatency = skipLatency;
             this.strictReplies = strictReplies;
+            this.skipNativeDefragCompare = skipNativeDefragCompare;
+            this.nativeEval = nativeEval;
+            this.nativeEvalIterations = nativeEvalIterations;
         }
 
         static BenchConfig from(YierdisBenchArgs args, YierdisBenchServerArgs baseServerArgs) {
@@ -677,6 +1266,9 @@ public final class YierdisBench {
 
             if (args.serverJar != null && !Files.isRegularFile(args.serverJar)) {
                 throw new IllegalArgumentException("serverJar 不存在: " + args.serverJar.toAbsolutePath());
+            }
+            if (args.nativeEval) {
+                effectiveNativeEvalIterations(args.nativeEvalIterations);
             }
 
             List<String> backends = args.noStartServer ? List.of("external") : DEFAULT_BACKENDS;
@@ -701,7 +1293,10 @@ public final class YierdisBench {
                     args.latencyClients,
                     args.skipPrefill,
                     args.skipLatency,
-                    args.strictReplies
+                    args.strictReplies,
+                    args.skipNativeDefragCompare,
+                    args.nativeEval,
+                    args.nativeEvalIterations
             );
         }
     }
@@ -830,6 +1425,9 @@ public final class YierdisBench {
                      BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
                     try (RespCommandWriter writer = new RespCommandWriter(out)) {
                         byte[] keyBuf = new byte[9]; // "k" + 8 digits
+                        byte[] hllSparseKeyBuf = new byte[HLL_SPARSE_KEY_PREFIX.length + HLL_FIXED_DIGITS];
+                        byte[] hllDenseKeyBuf = new byte[HLL_DENSE_KEY_PREFIX.length + HLL_FIXED_DIGITS];
+                        byte[] hllElementBuf = new byte[HLL_ELEMENT_PREFIX.length + HLL_FIXED_DIGITS + 1 + HLL_FIXED_DIGITS];
 
                         int remaining = requests;
                         int seq = seqStartIndex;
@@ -837,20 +1435,40 @@ public final class YierdisBench {
                             int batch = Math.min(pipeline, remaining);
 
                             for (int i = 0; i < batch; i++) {
+                                int opIndex = requests - remaining + i;
                                 int keyIndex = workload == Workload.SET_SEQUENTIAL
                                         ? seq++ % keyspace
                                         : rnd.nextInt(keyspace);
-                                writeKey(keyBuf, keyIndex);
                                 switch (workload) {
                                     case SET_RANDOM:
+                                        writeKey(keyBuf, keyIndex);
+                                        writer.writeSet(keyBuf, value);
+                                        break;
                                     case SET_SEQUENTIAL:
+                                        writeKey(keyBuf, keyIndex);
                                         writer.writeSet(keyBuf, value);
                                         break;
                                     case APPEND:
+                                        writeKey(keyBuf, keyIndex);
                                         writer.writeAppend(keyBuf, value);
                                         break;
                                     case GET_RANDOM:
+                                        writeKey(keyBuf, keyIndex);
                                         writer.writeGet(keyBuf);
+                                        break;
+                                    case PFADD_SPARSE:
+                                        writeHllKey(hllSparseKeyBuf, HLL_SPARSE_KEY_PREFIX, keyIndex);
+                                        writeHllElement(hllElementBuf, keyIndex, opIndex);
+                                        writer.writePfadd(hllSparseKeyBuf, hllElementBuf);
+                                        break;
+                                    case PFADD_DENSE:
+                                        writeDenseHllKey(hllDenseKeyBuf, keyIndex);
+                                        writeHllElement(hllElementBuf, keyIndex, opIndex);
+                                        writer.writePfadd(hllDenseKeyBuf, hllElementBuf);
+                                        break;
+                                    case PFCOUNT:
+                                        writeDenseHllKey(hllDenseKeyBuf, keyIndex);
+                                        writer.writePfcount(hllDenseKeyBuf);
                                         break;
                                     case PING:
                                         writer.writePing();
@@ -914,6 +1532,9 @@ public final class YierdisBench {
             int recorded = 0;
             SplittableRandom rnd = new SplittableRandom(System.nanoTime() ^ Thread.currentThread().getId());
             byte[] keyBuf = new byte[9];
+            byte[] hllSparseKeyBuf = new byte[HLL_SPARSE_KEY_PREFIX.length + HLL_FIXED_DIGITS];
+            byte[] hllDenseKeyBuf = new byte[HLL_DENSE_KEY_PREFIX.length + HLL_FIXED_DIGITS];
+            byte[] hllElementBuf = new byte[HLL_ELEMENT_PREFIX.length + HLL_FIXED_DIGITS + 1 + HLL_FIXED_DIGITS];
 
             try (Socket socket = new Socket()) {
                 socket.setTcpNoDelay(true);
@@ -923,7 +1544,6 @@ public final class YierdisBench {
                     try (RespCommandWriter writer = new RespCommandWriter(out)) {
                         for (int i = 0; i < requests; i++) {
                             int keyIndex = rnd.nextInt(keyspace);
-                            writeKey(keyBuf, keyIndex);
 
                             long t0 = System.nanoTime();
                             switch (workload) {
@@ -931,13 +1551,30 @@ public final class YierdisBench {
                                     writer.writePing();
                                     break;
                                 case SET_RANDOM:
+                                    writeKey(keyBuf, keyIndex);
                                     writer.writeSet(keyBuf, value);
                                     break;
                                 case APPEND:
+                                    writeKey(keyBuf, keyIndex);
                                     writer.writeAppend(keyBuf, value);
                                     break;
                                 case GET_RANDOM:
+                                    writeKey(keyBuf, keyIndex);
                                     writer.writeGet(keyBuf);
+                                    break;
+                                case PFADD_SPARSE:
+                                    writeHllKey(hllSparseKeyBuf, HLL_SPARSE_KEY_PREFIX, keyIndex);
+                                    writeHllElement(hllElementBuf, keyIndex, i);
+                                    writer.writePfadd(hllSparseKeyBuf, hllElementBuf);
+                                    break;
+                                case PFADD_DENSE:
+                                    writeDenseHllKey(hllDenseKeyBuf, keyIndex);
+                                    writeHllElement(hllElementBuf, keyIndex, i);
+                                    writer.writePfadd(hllDenseKeyBuf, hllElementBuf);
+                                    break;
+                                case PFCOUNT:
+                                    writeDenseHllKey(hllDenseKeyBuf, keyIndex);
+                                    writer.writePfcount(hllDenseKeyBuf);
                                     break;
                                 default:
                                     throw new IllegalStateException("unexpected workload: " + workload);
@@ -969,6 +1606,9 @@ public final class YierdisBench {
         private static final byte[] CMD_GET = "GET".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] CMD_SET = "SET".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] CMD_APPEND = "APPEND".getBytes(StandardCharsets.US_ASCII);
+        private static final byte[] CMD_PFADD = "PFADD".getBytes(StandardCharsets.US_ASCII);
+        private static final byte[] CMD_PFCOUNT = "PFCOUNT".getBytes(StandardCharsets.US_ASCII);
+        private static final byte[] CMD_PFMERGE = "PFMERGE".getBytes(StandardCharsets.US_ASCII);
         private static final byte[] FRAME_PING = RespClientCodec.encodeCommand(List.of(CMD_PING));
 
         private final OutputStream out;
@@ -992,6 +1632,18 @@ public final class YierdisBench {
 
         void writeAppend(byte[] key, byte[] value) throws IOException {
             writeFrame(requestArgs.with(CMD_APPEND, key, value));
+        }
+
+        void writePfadd(byte[] key, byte[] element) throws IOException {
+            writeFrame(requestArgs.with(CMD_PFADD, key, element));
+        }
+
+        void writePfcount(byte[] key) throws IOException {
+            writeFrame(requestArgs.with(CMD_PFCOUNT, key));
+        }
+
+        void writePfmerge(byte[] destKey, byte[] sourceKey) throws IOException {
+            writeFrame(requestArgs.with(CMD_PFMERGE, destKey, sourceKey));
         }
 
         private void writeFrame(List<byte[]> args) throws IOException {
@@ -1187,14 +1839,162 @@ public final class YierdisBench {
         ThroughputResult setThroughput;
         ThroughputResult appendThroughput;
         ThroughputResult getThroughput;
+        ThroughputResult pfaddSparseThroughput;
+        ThroughputResult pfaddDenseThroughput;
+        ThroughputResult pfcountThroughput;
         LatencyResult pingLatency;
         LatencyResult setLatency;
         LatencyResult appendLatency;
         LatencyResult getLatency;
+        LatencyResult pfaddSparseLatency;
+        LatencyResult pfaddDenseLatency;
 
         BackendResult(String backend, int port) {
             this.backend = backend;
             this.port = port;
+        }
+    }
+
+    static final class DbDefragComparisonResult {
+        final LatencyResult disabled;
+        final LatencyResult enabled;
+        final double impactPercent;
+
+        DbDefragComparisonResult(LatencyResult disabled, LatencyResult enabled, double impactPercent) {
+            this.disabled = Objects.requireNonNull(disabled, "disabled");
+            this.enabled = Objects.requireNonNull(enabled, "enabled");
+            this.impactPercent = impactPercent;
+        }
+    }
+
+    static final class NativeEvalReport {
+        final List<NativeSizeClassResult> sizeClasses;
+        final NativeResolveResult resolve;
+        final NativeReallocResult realloc;
+        final NativePinResult pin;
+        final List<NativeMetadataResult> metadata;
+        final NativeQuarantineResult quarantine;
+        final NativeChurnResult churn;
+        final NativeDefragImpactResult defragImpact;
+
+        NativeEvalReport(
+                List<NativeSizeClassResult> sizeClasses,
+                NativeResolveResult resolve,
+                NativeReallocResult realloc,
+                NativePinResult pin,
+                List<NativeMetadataResult> metadata,
+                NativeQuarantineResult quarantine,
+                NativeChurnResult churn,
+                NativeDefragImpactResult defragImpact
+        ) {
+            this.sizeClasses = Objects.requireNonNull(sizeClasses, "sizeClasses");
+            this.resolve = Objects.requireNonNull(resolve, "resolve");
+            this.realloc = Objects.requireNonNull(realloc, "realloc");
+            this.pin = Objects.requireNonNull(pin, "pin");
+            this.metadata = Objects.requireNonNull(metadata, "metadata");
+            this.quarantine = Objects.requireNonNull(quarantine, "quarantine");
+            this.churn = Objects.requireNonNull(churn, "churn");
+            this.defragImpact = Objects.requireNonNull(defragImpact, "defragImpact");
+        }
+    }
+
+    static final class NativeSizeClassResult {
+        final String label;
+        final int bytes;
+        final int ops;
+        final double allocMicros;
+        final double freeMicros;
+
+        NativeSizeClassResult(String label, int bytes, int ops, double allocMicros, double freeMicros) {
+            this.label = label;
+            this.bytes = bytes;
+            this.ops = ops;
+            this.allocMicros = allocMicros;
+            this.freeMicros = freeMicros;
+        }
+    }
+
+    static final class NativeResolveResult {
+        final int ops;
+        final double resolveCloseMicros;
+
+        NativeResolveResult(int ops, double resolveCloseMicros) {
+            this.ops = ops;
+            this.resolveCloseMicros = resolveCloseMicros;
+        }
+    }
+
+    static final class NativeReallocResult {
+        final int ops;
+        final int inPlace;
+        final int moved;
+        final double avgMicros;
+
+        NativeReallocResult(int ops, int inPlace, int moved, double avgMicros) {
+            this.ops = ops;
+            this.inPlace = inPlace;
+            this.moved = moved;
+            this.avgMicros = avgMicros;
+        }
+    }
+
+    static final class NativePinResult {
+        final int ops;
+        final double pinUnpinMicros;
+
+        NativePinResult(int ops, double pinUnpinMicros) {
+            this.ops = ops;
+            this.pinUnpinMicros = pinUnpinMicros;
+        }
+    }
+
+    static final class NativeMetadataResult {
+        final String label;
+        final int valueBytes;
+        final double metadataBytesPerObject;
+        final double metadataPercent;
+
+        NativeMetadataResult(String label, int valueBytes, double metadataBytesPerObject, double metadataPercent) {
+            this.label = label;
+            this.valueBytes = valueBytes;
+            this.metadataBytesPerObject = metadataBytesPerObject;
+            this.metadataPercent = metadataPercent;
+        }
+    }
+
+    static final class NativeQuarantineResult {
+        final long retainedBytes;
+        final double retainedPercentOfReserved;
+
+        NativeQuarantineResult(long retainedBytes, double retainedPercentOfReserved) {
+            this.retainedBytes = retainedBytes;
+            this.retainedPercentOfReserved = retainedPercentOfReserved;
+        }
+    }
+
+    static final class NativeChurnResult {
+        final int ops;
+        final double avgMicros;
+        final double p99Micros;
+
+        NativeChurnResult(int ops, double avgMicros, double p99Micros) {
+            this.ops = ops;
+            this.avgMicros = avgMicros;
+            this.p99Micros = p99Micros;
+        }
+    }
+
+    static final class NativeDefragImpactResult {
+        final double disabledP99Micros;
+        final double enabledP99Micros;
+        final double impactPercent;
+        final long movedObjects;
+
+        NativeDefragImpactResult(double disabledP99Micros, double enabledP99Micros, double impactPercent, long movedObjects) {
+            this.disabledP99Micros = disabledP99Micros;
+            this.enabledP99Micros = enabledP99Micros;
+            this.impactPercent = impactPercent;
+            this.movedObjects = movedObjects;
         }
     }
 
@@ -1205,6 +2005,46 @@ public final class YierdisBench {
         for (int i = 8; i >= 1; i--) {
             int digit = x % 10;
             out[i] = (byte) ('0' + digit);
+            x /= 10;
+        }
+    }
+
+    private static byte[] hllElement(String prefix, int keyIndex, int opIndex) {
+        return (prefix + ':' + keyIndex + ':' + opIndex).getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] hllKey(String prefix, int keyIndex) {
+        return ("hll:" + prefix + ':' + keyIndex).getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static int effectiveNativeEvalIterations(int requestedIterations) {
+        if (requestedIterations <= 0) {
+            throw new IllegalArgumentException("nativeEvalIterations must be > 0");
+        }
+        return Math.max(8, requestedIterations);
+    }
+
+    private static void writeHllKey(byte[] out, byte[] prefix, int keyIndex) {
+        System.arraycopy(prefix, 0, out, 0, prefix.length);
+        writeFixedDigits(out, prefix.length, keyIndex);
+    }
+
+    static void writeDenseHllKey(byte[] out, int keyIndex) {
+        writeHllKey(out, HLL_DENSE_KEY_PREFIX, keyIndex);
+    }
+
+    private static void writeHllElement(byte[] out, int keyIndex, int opIndex) {
+        System.arraycopy(HLL_ELEMENT_PREFIX, 0, out, 0, HLL_ELEMENT_PREFIX.length);
+        int offset = HLL_ELEMENT_PREFIX.length;
+        writeFixedDigits(out, offset, keyIndex);
+        out[offset + HLL_FIXED_DIGITS] = ':';
+        writeFixedDigits(out, offset + HLL_FIXED_DIGITS + 1, opIndex);
+    }
+
+    private static void writeFixedDigits(byte[] out, int offset, int value) {
+        int x = Math.floorMod(value, 100_000_000);
+        for (int i = offset + HLL_FIXED_DIGITS - 1; i >= offset; i--) {
+            out[i] = (byte) ('0' + (x % 10));
             x /= 10;
         }
     }

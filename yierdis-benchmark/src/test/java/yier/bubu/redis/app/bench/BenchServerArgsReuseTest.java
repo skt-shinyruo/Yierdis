@@ -36,6 +36,10 @@ public class BenchServerArgsReuseTest {
                 "--executorSchedulingPolicy", "GLOBAL",
                 "--maxmemoryScope", "Per_Db",
                 "--maxmemoryPolicy", "ALLKEYS-LRU",
+                "--nativeDefragEnabled",
+                "--nativeDefragMaxMoveBytes", "1024",
+                "--nativeDefragMaxObjects", "7",
+                "--nativeDefragTimeLimitMillis", "3",
                 "--keysTimeBudgetMillis", "0",
                 "--keysMaxResults", "0"
         );
@@ -90,6 +94,10 @@ public class BenchServerArgsReuseTest {
             assertArgValue(actual, "--executorSchedulingPolicy", "global");
             assertArgValue(actual, "--maxmemoryScope", "per-db");
             assertArgValue(actual, "--maxmemoryPolicy", "allkeys-lru");
+            assertArgValue(actual, "--nativeDefragMaxMoveBytes", "1024");
+            assertArgValue(actual, "--nativeDefragMaxObjects", "7");
+            assertArgValue(actual, "--nativeDefragTimeLimitMillis", "3");
+            Assert.assertTrue(actual.contains("--nativeDefragEnabled"));
             Assert.assertTrue(actual.contains("--noCleanup"));
             Assert.assertFalse(actual.contains("--offheapBackend"));
             Assert.assertFalse(actual.contains("--offheapMaxBytes"));

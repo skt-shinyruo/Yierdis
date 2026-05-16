@@ -76,6 +76,15 @@ public final class YierdisBenchArgs {
     @Option(names = "--strictReplies", description = "Enable minimal reply semantic validation.")
     public boolean strictReplies;
 
+    @Option(names = "--skipNativeDefragCompare", description = "Skip focused DB native defrag disabled/enabled p99 comparison.")
+    public boolean skipNativeDefragCompare;
+
+    @Option(names = "--nativeEval", description = "Run in-process native allocator evaluation and do not start or connect to a server.")
+    public boolean nativeEval;
+
+    @Option(names = "--nativeEvalIterations", defaultValue = "10000", description = "Iterations per native allocator evaluation scenario.")
+    public int nativeEvalIterations = 10_000;
+
     @Unmatched
     public List<String> serverArgs = new ArrayList<>();
 }
