@@ -865,6 +865,185 @@ public class YierdisStableNativeAllocatorTest {
     }
 
     @Test
+    public void deterministicAllocatorFuzzCoversEpochPinDefragAndStaleHandles() {
+        YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-fuzz");
+        try {
+            try (YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 96)) {
+                class LiveObject {
+                    NativeHandle handle;
+                    int size;
+                    byte expectedFirstByte;
+                    boolean pinned;
+
+                    LiveObject(NativeHandle handle, int size, byte expectedFirstByte) {
+                        this.handle = handle;
+                        this.size = size;
+                        this.expectedFirstByte = expectedFirstByte;
+                    }
+                }
+
+                Random random = new Random(0x7a11c0deL);
+                List<LiveObject> live = new ArrayList<>();
+                List<NativeEpochScope> epochs = new ArrayList<>();
+                List<NativeHandle> staleHandles = new ArrayList<>();
+                NativeEpochKind[] epochKinds = {
+                        NativeEpochKind.SCAN,
+                        NativeEpochKind.SNAPSHOT,
+                        NativeEpochKind.DEFRAG
+                };
+
+                try {
+                    for (int i = 0; i < 240; i++) {
+                        int op = live.isEmpty() ? 0 : random.nextInt(100);
+                        if (op < 22) {
+                            int size = 1 + random.nextInt(96);
+                            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, size);
+                            byte firstByte = (byte) (0x40 + (i & 0x3f));
+                            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                                Assert.assertEquals(size, view.size());
+                                view.setByte(0, firstByte);
+                                Assert.assertEquals(firstByte, view.getByte(0));
+                            }
+                            live.add(new LiveObject(handle, size, firstByte));
+                        } else if (op < 38) {
+                            LiveObject object = live.get(random.nextInt(live.size()));
+                            try (NativeObjectView view = allocator.resolve(object.handle, NativeAccessMode.READ_ONLY)) {
+                                Assert.assertEquals(object.size, view.size());
+                                Assert.assertEquals(object.expectedFirstByte, view.getByte(0));
+                            }
+                            if (random.nextBoolean()) {
+                                byte firstByte = (byte) (0x40 + (i & 0x3f));
+                                try (NativeObjectView view = allocator.resolve(object.handle, NativeAccessMode.READ_WRITE)) {
+                                    view.setByte(0, firstByte);
+                                    Assert.assertEquals(firstByte, view.getByte(0));
+                                }
+                                object.expectedFirstByte = firstByte;
+                            }
+                        } else if (op < 52) {
+                            LiveObject object = live.get(random.nextInt(live.size()));
+                            if (!object.pinned) {
+                                int newSize = 1 + random.nextInt(128);
+                                NativeHandle resized = allocator.realloc(
+                                        object.handle,
+                                        newSize,
+                                        NativeReallocPolicy.PRESERVE_PREFIX
+                                );
+                                Assert.assertEquals(object.handle, resized);
+                                object.size = newSize;
+                                try (NativeObjectView view = allocator.resolve(object.handle, NativeAccessMode.READ_ONLY)) {
+                                    Assert.assertEquals(newSize, view.size());
+                                    Assert.assertEquals(object.expectedFirstByte, view.getByte(0));
+                                }
+                            }
+                        } else if (op < 62) {
+                            LiveObject object = live.get(random.nextInt(live.size()));
+                            if (object.pinned) {
+                                allocator.unpin(object.handle);
+                                object.pinned = false;
+                            } else {
+                                allocator.pin(object.handle);
+                                object.pinned = true;
+                            }
+                        } else if (op < 72) {
+                            if (epochs.isEmpty() || random.nextBoolean()) {
+                                epochs.add(allocator.beginEpoch(epochKinds[random.nextInt(epochKinds.length)]));
+                            } else {
+                                epochs.remove(random.nextInt(epochs.size())).close();
+                            }
+                        } else if (op < 86) {
+                            LiveObject object = live.get(random.nextInt(live.size()));
+                            if (random.nextBoolean()) {
+                                NativeDefragResult result = allocator.defragOne(object.handle, 128);
+                                if (object.pinned) {
+                                    Assert.assertTrue(result.skippedPinned());
+                                }
+                            } else {
+                                allocator.defragCycle(new NativeDefragOptions(256, 8, Long.MAX_VALUE));
+                            }
+                            try (NativeObjectView view = allocator.resolve(object.handle, NativeAccessMode.READ_ONLY)) {
+                                Assert.assertEquals(object.expectedFirstByte, view.getByte(0));
+                            }
+                        } else {
+                            int index = random.nextInt(live.size());
+                            LiveObject object = live.get(index);
+                            if (!object.pinned) {
+                                allocator.free(object.handle);
+                                live.remove(index);
+                                staleHandles.add(object.handle);
+                                try {
+                                    allocator.resolve(object.handle, NativeAccessMode.READ_ONLY);
+                                    Assert.fail("expected stale or quarantined handle after fuzz free");
+                                } catch (StaleNativeHandleException expected) {
+                                    Assert.assertTrue(
+                                            expected.getMessage().contains("stale native handle")
+                                                    || expected.getMessage().contains("quarantined")
+                                    );
+                                }
+                            }
+                        }
+
+                        if (!staleHandles.isEmpty() && random.nextInt(4) == 0) {
+                            NativeHandle stale = staleHandles.get(random.nextInt(staleHandles.size()));
+                            try {
+                                allocator.resolve(stale, NativeAccessMode.READ_ONLY);
+                                Assert.fail("expected stale handle injection to be rejected");
+                            } catch (StaleNativeHandleException expected) {
+                                Assert.assertTrue(
+                                        expected.getMessage().contains("stale native handle")
+                                                || expected.getMessage().contains("quarantined")
+                                );
+                            }
+                        }
+                    }
+                } finally {
+                    for (NativeEpochScope epoch : epochs) {
+                        epoch.close();
+                    }
+                    epochs.clear();
+
+                    for (LiveObject object : live) {
+                        if (object.pinned) {
+                            allocator.unpin(object.handle);
+                            object.pinned = false;
+                        }
+                    }
+                    for (LiveObject object : live) {
+                        allocator.free(object.handle);
+                    }
+                    live.clear();
+                }
+
+                allocator.defragCycle(new NativeDefragOptions(0, 0, Long.MAX_VALUE));
+
+                NativeAllocatorStats stats = allocator.stats();
+                Assert.assertEquals(0L, stats.logicalUsedBytes());
+                Assert.assertEquals(0L, stats.reservedBytes());
+                Assert.assertEquals(0L, stats.liveObjects());
+                Assert.assertTrue(stats.staleHandleDetections() > 0L);
+                Assert.assertTrue(stats.defragSkippedPinnedObjects() > 0L);
+                Assert.assertTrue(stats.allocationLatencyHistogram().allocationCount() > 0L);
+            }
+
+            Assert.assertEquals(0L, runtime.usedBytes());
+        } finally {
+            runtime.close();
+        }
+
+        try (YierdisFfmMemoryRuntime oomRuntime = new YierdisFfmMemoryRuntime("stable-fuzz-oom");
+             YierdisStableNativeAllocator oomAllocator = new YierdisStableNativeAllocator(oomRuntime, 1)) {
+            NativeHandle only = oomAllocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+            try {
+                oomAllocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+                Assert.fail("expected deterministic slot-limit OOM");
+            } catch (NativeMemoryException expected) {
+                Assert.assertTrue(expected.getMessage().contains("slot limit"));
+            } finally {
+                oomAllocator.free(only);
+            }
+        }
+    }
+
+    @Test
     public void preservePrefixGrowsWithinCapacityAfterShrinkWithoutMove() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
