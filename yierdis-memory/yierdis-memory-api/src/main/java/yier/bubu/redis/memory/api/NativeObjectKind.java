@@ -6,6 +6,7 @@ public enum NativeObjectKind {
     ENTRY_RECORD(1, NativeHandleDomain.ENTRY_OBJECT),
     KEY_BYTES(1, NativeHandleDomain.KEY_BYTES),
     LIST_NODE(2, NativeHandleDomain.TYPE_ROOT),
+    LIST_QUICKLIST_NODE(6, NativeHandleDomain.TYPE_ROOT),
     HASH_NODE(3, NativeHandleDomain.TYPE_ROOT),
     SET_NODE(4, NativeHandleDomain.TYPE_ROOT),
     ZSET_NODE(5, NativeHandleDomain.TYPE_ROOT),

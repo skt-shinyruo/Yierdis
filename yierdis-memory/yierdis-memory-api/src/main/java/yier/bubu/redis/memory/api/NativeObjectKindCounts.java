@@ -8,6 +8,7 @@ public record NativeObjectKindCounts(
         long entryRecordObjects,
         long keyByteObjects,
         long listNodeObjects,
+        long listQuicklistNodeObjects,
         long hashNodeObjects,
         long setNodeObjects,
         long zsetNodeObjects,
@@ -20,6 +21,7 @@ public record NativeObjectKindCounts(
         requireNonNegative(entryRecordObjects, "entryRecordObjects");
         requireNonNegative(keyByteObjects, "keyByteObjects");
         requireNonNegative(listNodeObjects, "listNodeObjects");
+        requireNonNegative(listQuicklistNodeObjects, "listQuicklistNodeObjects");
         requireNonNegative(hashNodeObjects, "hashNodeObjects");
         requireNonNegative(setNodeObjects, "setNodeObjects");
         requireNonNegative(zsetNodeObjects, "zsetNodeObjects");
@@ -28,7 +30,7 @@ public record NativeObjectKindCounts(
     }
 
     public static NativeObjectKindCounts empty() {
-        return new NativeObjectKindCounts(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        return new NativeObjectKindCounts(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     public long count(NativeObjectKind kind) {
@@ -39,6 +41,7 @@ public record NativeObjectKindCounts(
             case ENTRY_RECORD -> entryRecordObjects;
             case KEY_BYTES -> keyByteObjects;
             case LIST_NODE -> listNodeObjects;
+            case LIST_QUICKLIST_NODE -> listQuicklistNodeObjects;
             case HASH_NODE -> hashNodeObjects;
             case SET_NODE -> setNodeObjects;
             case ZSET_NODE -> zsetNodeObjects;
