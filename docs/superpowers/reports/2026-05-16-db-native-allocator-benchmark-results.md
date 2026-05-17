@@ -84,6 +84,28 @@ Key output:
 - PFCOUNT QPS `9018.415`, errors `0`
 - DB native defrag APPEND p99: disabled `10.459 ms`, enabled `8.266 ms`, impact `-20.966%`, enabled errors `0`
 
-## Baseline note
+## Baseline/current comparison status
 
-I also tried a pre-migration baseline server from commit `79228e3`, but in this environment it returned `-ERR internal error` even for minimal `SET`, `PFADD`, and `APPEND` probes, so I did not use it as a comparable quantitative baseline.
+Track 1 adds an explicit jar-only comparison mode to `yierdis-benchmark`. Example invocation:
+
+```bash
+java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar \
+  --comparisonMode \
+  --baselineServerJar artifacts/baseline-79228e3/yierdis-server-main-0.1.0-SNAPSHOT.jar \
+  --currentServerJar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
+  --portBase 17378 \
+  --skipLatency
+```
+
+This example shows the comparison wiring; it is not the full raw-number reproduction command for the benchmark output above.
+
+The comparison report records:
+
+- baseline/current jar paths
+- attempted baseline/current launch commands
+- side labels
+- comparable deltas only when both sides completed cleanly
+- `non-comparable` status when either side fails or is only partially measured
+- an environment caveat when jar paths cannot be tied to exact commits
+
+Current caveat: the pre-migration baseline server previously probed from commit `79228e3` returned `-ERR internal error` for minimal `SET`, `PFADD`, and `APPEND` probes in this environment. Until that baseline jar completes the same RESP workload shape cleanly, raw current-branch benchmark numbers in this report are not a trustworthy before/after comparison.
