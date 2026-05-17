@@ -204,7 +204,7 @@ Expected: PASS.
 **Files:**
 - Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/NativeStorageRegressionTest.java`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add a new test named `repeatedNativeShutdownCleanupReleasesKeysStringsCollectionsAndQuarantine`.
 
@@ -252,7 +252,7 @@ public void repeatedNativeShutdownCleanupReleasesKeysStringsCollectionsAndQuaran
 
 Expected initial failure: either missing extracted helper from Task 1 if this task is attempted independently, or a real cleanup failure if repeated shutdown leaks exist.
 
-- [ ] **Step 2: Run the focused failing test**
+- [x] **Step 2: Run the focused failing test**
 
 Run:
 
@@ -262,17 +262,17 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: FAIL before implementation is complete or PASS only if the behavior is already correctly covered by extracted helpers and existing code.
 
-- [ ] **Step 3: Implement minimal support**
+- [x] **Step 3: Implement minimal support**
 
 If Task 1 helpers are not present, add only the minimal `createNativeRegressionDb` and `assertNativeDbEmpty` helpers shown in Task 1. Do not duplicate helper logic. Do not change storage semantics unless the failing assertion identifies a genuine leak.
 
 If a cleanup assertion fails, inspect the specific nonzero counter and fix the narrow release path responsible for it. Keep fixes within native key/value/root cleanup paths; do not mask leaks by weakening assertions.
 
-- [ ] **Step 4: Review cleanup boundaries**
+- [x] **Step 4: Review cleanup boundaries**
 
 Verify that the test covers both explicit delete cleanup and `db.shutdown()` cleanup. Ensure `NativeEpochScope` is closed before zero-after-epoch assertions and that `runtime.usedBytes()` is asserted after shutdown for every cycle.
 
-- [ ] **Step 5: Run verification**
+- [x] **Step 5: Run verification**
 
 Run:
 
