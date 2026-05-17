@@ -291,7 +291,7 @@ Expected: PASS.
 **Files:**
 - Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/YierdisDbDefragMaintenanceTest.java`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add a new test named `repeatedDefragMaintenanceReportsStableBoundedMetrics`.
 
@@ -344,7 +344,7 @@ public void repeatedDefragMaintenanceReportsStableBoundedMetrics() {
 
 Expected initial failure: compile failure for missing `populateDefragMetricFixture`.
 
-- [ ] **Step 2: Run the focused failing test**
+- [x] **Step 2: Run the focused failing test**
 
 Run:
 
@@ -354,7 +354,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: FAIL before fixture helper is implemented.
 
-- [ ] **Step 3: Implement the fixture helper**
+- [x] **Step 3: Implement the fixture helper**
 
 Add:
 
@@ -371,7 +371,7 @@ private static void populateDefragMetricFixture(YierdisDb db, int cycle) {
 
 Do not assert exact moved bytes across cycles. It is acceptable to assert exact per-kind object counts because this fixture owns the objects and uses fresh runtimes.
 
-- [ ] **Step 4: Review metric stability**
+- [x] **Step 4: Review metric stability**
 
 Confirm the test compares:
 
@@ -381,7 +381,7 @@ Confirm the test compares:
 - object counts before and after defrag
 - fresh runtime cleanup to zero after every cycle
 
-- [ ] **Step 5: Run verification**
+- [x] **Step 5: Run verification**
 
 Run:
 

@@ -144,6 +144,58 @@ public class YierdisDbDefragMaintenanceTest {
         }
     }
 
+    @Test
+    public void repeatedDefragMaintenanceReportsStableBoundedMetrics() {
+        Long expectedMovedObjects = null;
+        Long expectedKeyCount = null;
+        Long expectedStringCount = null;
+
+        for (int cycle = 0; cycle < 4; cycle++) {
+            try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db-defrag-stable-repeat-" + cycle)) {
+                YierdisDb db = createDefragEnabledDb(runtime, new NativeDefragOptions(1_000_000L, 1_000L, Long.MAX_VALUE));
+                db.bindToCurrentThread();
+                try {
+                    populateDefragMetricFixture(db, cycle);
+                    NativeAllocatorStats before = db.keyLifecycle().nativeAllocator().stats();
+
+                    db.defragMaintenance();
+
+                    YierdisMemoryStats afterMemory = db.memory().memoryStats();
+                    NativeAllocatorStats afterAllocator = db.keyLifecycle().nativeAllocator().stats();
+                    Assert.assertTrue(afterMemory.nativeDefragLastMovedObjects() > 0L);
+                    Assert.assertTrue(afterMemory.nativeDefragLastMovedBytes() > 0L);
+                    Assert.assertTrue(afterMemory.nativeDefragMovedBytes() >= afterMemory.nativeDefragLastMovedBytes());
+                    Assert.assertEquals(afterAllocator.quarantinedObjects(), afterMemory.nativeDefragQuarantinedObjects());
+                    Assert.assertEquals(afterAllocator.quarantineBytes(), afterMemory.nativeDefragQuarantineBytes());
+                    Assert.assertEquals(before.objectCount(NativeObjectKind.KEY_BYTES), afterAllocator.objectCount(NativeObjectKind.KEY_BYTES));
+                    Assert.assertEquals(before.objectCount(NativeObjectKind.STRING_BYTES), afterAllocator.objectCount(NativeObjectKind.STRING_BYTES));
+
+                    if (expectedMovedObjects == null) {
+                        expectedMovedObjects = afterMemory.nativeDefragLastMovedObjects();
+                        expectedKeyCount = afterAllocator.objectCount(NativeObjectKind.KEY_BYTES);
+                        expectedStringCount = afterAllocator.objectCount(NativeObjectKind.STRING_BYTES);
+                    } else {
+                        Assert.assertEquals(expectedMovedObjects.longValue(), afterMemory.nativeDefragLastMovedObjects());
+                        Assert.assertEquals(expectedKeyCount.longValue(), afterAllocator.objectCount(NativeObjectKind.KEY_BYTES));
+                        Assert.assertEquals(expectedStringCount.longValue(), afterAllocator.objectCount(NativeObjectKind.STRING_BYTES));
+                    }
+                } finally {
+                    db.shutdown();
+                }
+                Assert.assertEquals(0L, runtime.usedBytes());
+            }
+        }
+    }
+
+    private static void populateDefragMetricFixture(YierdisDb db, int cycle) {
+        Assert.assertTrue(db.writes().strings().setString(b("stable:string:0"), b("hello-" + cycle), SetMode.NORMAL, null).value());
+        Assert.assertTrue(db.writes().strings().setString(b("stable:string:1"), b("world-" + cycle), SetMode.NORMAL, null).value());
+        Assert.assertEquals(Long.valueOf(1L), db.writes().lists().rpush(b("stable:list"), List.of(b("a"))).value());
+        Assert.assertEquals(Long.valueOf(1L), db.writes().hashes().hset(b("stable:hash"), List.of(b("f"), b("v"))).value());
+        Assert.assertEquals(Long.valueOf(1L), db.writes().sets().sadd(b("stable:set"), List.of(b("m"))).value());
+        Assert.assertEquals(Long.valueOf(1L), db.writes().zsets().zadd(b("stable:zset"), List.of(b("1"), b("m"))).value());
+    }
+
     private static YierdisDb createDefragEnabledDb(YierdisFfmMemoryRuntime runtime, NativeDefragOptions options) {
         return YierdisDb.createWithSharedFfmRuntime(
                 runtime,
