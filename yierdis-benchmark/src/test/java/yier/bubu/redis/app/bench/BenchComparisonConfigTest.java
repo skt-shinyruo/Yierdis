@@ -73,6 +73,21 @@ public class BenchComparisonConfigTest {
     }
 
     @Test
+    public void comparisonModeRejectsNativeEval() throws Exception {
+        Path baselineJar = regularTempJar("baseline");
+        Path currentJar = regularTempJar("current");
+
+        IllegalArgumentException rejected = assertRejects(
+                "--comparisonMode",
+                "--baselineServerJar", baselineJar.toString(),
+                "--currentServerJar", currentJar.toString(),
+                "--nativeEval"
+        );
+
+        Assert.assertTrue(rejected.getMessage().contains("nativeEval"));
+    }
+
+    @Test
     public void comparisonModeRejectsMissingOrNonRegularJarPathsBeforeLaunch() throws Exception {
         Path currentJar = regularTempJar("current");
         Path missingBaseline = Files.createTempDirectory("missing-baseline-").resolve("server.jar");

@@ -1543,6 +1543,9 @@ public final class YierdisBench {
                 if (args.noStartServer) {
                     throw new IllegalArgumentException("comparisonMode 不支持 noStartServer");
                 }
+                if (args.nativeEval) {
+                    throw new IllegalArgumentException("comparisonMode 不支持 nativeEval");
+                }
                 if (baselineServerJar == null) {
                     throw new IllegalArgumentException("comparisonMode 需要 baselineServerJar");
                 }
