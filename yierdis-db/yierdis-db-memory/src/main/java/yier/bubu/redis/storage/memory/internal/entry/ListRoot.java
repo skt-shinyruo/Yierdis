@@ -1,6 +1,7 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
 import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
@@ -64,7 +65,7 @@ public final class ListRoot implements TypeRoot {
 
     public synchronized ValueHandle create() {
         ensureOpen();
-        return lists.create(this::newListValue);
+        return lists.create(rootHandle -> newListValue(rootHandle));
     }
 
     public synchronized ValueHandle store(ListValue value) {
@@ -159,8 +160,8 @@ public final class ListRoot implements TypeRoot {
         return lists.require(handle);
     }
 
-    private ListValue newListValue() {
-        return runtime == null ? new ListValue() : new ListValue(runtime);
+    private ListValue newListValue(NativeHandle rootHandle) {
+        return runtime == null ? new ListValue() : new ListValue(runtime, lists.allocator(), rootHandle);
     }
 
     private void ensureOpen() {

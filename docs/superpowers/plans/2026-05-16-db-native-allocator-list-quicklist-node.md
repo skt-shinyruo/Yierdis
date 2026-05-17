@@ -121,13 +121,13 @@ Expected: PASS.
 - Test: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/value/ListValueTest.java`
 - Test: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/ListRootTest.java`
 
-- [ ] **Step 1: Write failing list allocation tests first**
+- [x] **Step 1: Write failing list allocation tests first**
   - Add a focused test proving packed FFM mode does not allocate `LIST_QUICKLIST_NODE`.
   - Add a focused test proving conversion to FFM quicklist mode allocates one `LIST_QUICKLIST_NODE` per `FfmListNode`.
   - Add a focused test proving adding a new FFM quicklist node increments `LIST_QUICKLIST_NODE`, not `LIST_NODE`.
   - Prefer existing reflection helpers in `ListValueTest` for node count only; expose package-private diagnostics only if reflection becomes brittle.
 
-- [ ] **Step 2: Run the focused failing list tests**
+- [x] **Step 2: Run the focused failing list tests**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest -Dsurefire.failIfNoSpecifiedTests=false test
@@ -135,13 +135,13 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: FAIL before implementation because FFM quicklist nodes do not allocate native records.
 
-- [ ] **Step 3: Wire allocator and root handle into FFM list values**
+- [x] **Step 3: Wire allocator and root handle into FFM list values**
   - Update `ListRoot` so `NativeCollectionRootTable.create(...)` can create a `ListValue` with the just-allocated root handle.
   - Keep `LIST_NODE` root allocation in `NativeCollectionRootTable` unchanged.
   - If needed, extend `NativeCollectionRootTable` with a handle-aware adapter factory instead of leaking root table internals.
   - Keep the no-runtime `ListValue()` path unchanged for heap-only list behavior.
 
-- [ ] **Step 4: Add the native node record layout in `ListValue`**
+- [x] **Step 4: Add the native node record layout in `ListValue`**
   - Use a fixed-size 48-byte little-endian record matching the spec:
     - `ownerRootRawHandle` at offset `0`.
     - `prevNodeRawHandle` at offset `8`, or `0`.
@@ -153,20 +153,20 @@ Expected: FAIL before implementation because FFM quicklist nodes do not allocate
     - `reserved` at offset `44`.
   - Store only metadata and links here. Do not move or count listpack/blob payload bytes as `LIST_QUICKLIST_NODE` bytes.
 
-- [ ] **Step 5: Allocate one native record per FFM quicklist node**
+- [x] **Step 5: Allocate one native record per FFM quicklist node**
   - Update `FfmListNode` to cache its `NativeHandle` and payload `YierdisFfmListpack`.
   - Allocate `NativeObjectKind.LIST_QUICKLIST_NODE` when creating an FFM quicklist node.
   - If native allocation succeeds but payload creation fails, free the node record before rethrowing.
   - Write owner root handle and current metadata after node creation and after mutations.
   - Resolve the native record per operation; do not cache `NativeObjectView`, spans, physical addresses, or payload addresses.
 
-- [ ] **Step 6: Maintain links and metadata during list mutations**
+- [x] **Step 6: Maintain links and metadata during list mutations**
   - Update previous/next raw handle fields whenever nodes are added, removed, restored after a failed merge, or merged.
   - Update `entryCount` and `encodedBytes` after `addFirst`, `addLast`, `removeFirst`, `removeLast`, and `appendAll`.
   - Validate owner root as `LIST_NODE` before trusting an internal node when practical within current locking.
   - Treat Java `ArrayDeque<FfmListNode>` as an adapter index only; allocator liveness remains authoritative.
 
-- [ ] **Step 7: Run focused list tests**
+- [x] **Step 7: Run focused list tests**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest -Dsurefire.failIfNoSpecifiedTests=false test
@@ -174,7 +174,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: PASS.
 
-- [ ] **Step 8: Main-agent review and commit**
+- [x] **Step 8: Main-agent review and commit**
   - Main agent reviews the diff for root-kind preservation, payload ownership boundaries, and stale `NativeObjectView` caching.
   - Commit only this task's changes if execution mode includes commits.
 
