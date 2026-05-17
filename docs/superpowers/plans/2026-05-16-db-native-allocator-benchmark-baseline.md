@@ -240,7 +240,7 @@ try {
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=BenchComparisonConfigTest,BenchServerArgsReuseTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=BenchComparisonConfigTest,BenchServerArgsReuseTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: FAIL. The failure should include compile errors such as `cannot find symbol` for `comparisonMode`, `baselineServerJar`, `currentServerJar`, or `commandLine()`.
@@ -414,7 +414,7 @@ List<String> cmd = commandLine();
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=BenchComparisonConfigTest,BenchServerArgsReuseTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=BenchComparisonConfigTest,BenchServerArgsReuseTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
@@ -613,7 +613,7 @@ public class YierdisBenchComparisonRenderTest {
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=YierdisBenchComparisonRenderTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=YierdisBenchComparisonRenderTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: FAIL with compile errors for `ComparisonResult`, `ComparisonSideResult`, or `renderComparison`.
@@ -855,7 +855,7 @@ private static String deltaPct(Double baseline, Double current) {
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=YierdisBenchComparisonRenderTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=YierdisBenchComparisonRenderTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
@@ -1042,7 +1042,7 @@ public class YierdisBenchComparisonExecutionTest {
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=YierdisBenchComparisonExecutionTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=YierdisBenchComparisonExecutionTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: FAIL with compile errors for `ComparisonSideContext`, `comparisonSideContext`, `comparisonSideHasAnyMeasurements`, `comparisonSideHasRequiredMeasurements`, `comparisonSideHasBenchmarkErrors`, or `comparisonSideCanBeCompared`.
@@ -1424,7 +1424,7 @@ private static void printComparison(ComparisonResult result) {
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=YierdisBenchComparisonExecutionTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=YierdisBenchComparisonExecutionTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
@@ -1434,7 +1434,7 @@ Expected: PASS.
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=BenchComparisonConfigTest,BenchServerArgsReuseTest,YierdisBenchComparisonRenderTest,YierdisBenchComparisonExecutionTest,YierdisBenchSummaryFormatTest,NativeEvalFormatTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=BenchComparisonConfigTest,BenchServerArgsReuseTest,YierdisBenchComparisonRenderTest,YierdisBenchComparisonExecutionTest,YierdisBenchSummaryFormatTest,NativeEvalFormatTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
