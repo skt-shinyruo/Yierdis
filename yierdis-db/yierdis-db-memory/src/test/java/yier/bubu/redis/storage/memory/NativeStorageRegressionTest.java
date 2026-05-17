@@ -121,6 +121,52 @@ public class NativeStorageRegressionTest {
     }
 
     @Test
+    public void repeatedNativeShutdownCleanupReleasesKeysStringsCollectionsAndQuarantine() {
+        for (int cycle = 0; cycle < 6; cycle++) {
+            try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-shutdown-cleanup-repeat-" + cycle)) {
+                YierdisDb db = createNativeRegressionDb(runtime, 0, MaxmemoryPolicy.NOEVICTION);
+                db.bindToCurrentThread();
+                try {
+                    Assert.assertTrue(db.writes().strings().setString(
+                            b("cleanup:string:" + cycle),
+                            b("value"),
+                            SetMode.NORMAL,
+                            null
+                    ).value());
+                    writeOneOfEachCollection(db);
+                    assertCollectionRootCounts(db, 1L);
+
+                    try (NativeEpochScope epoch = db.keyLifecycle().nativeAllocator().beginEpoch(NativeEpochKind.SNAPSHOT)) {
+                        Assert.assertEquals(
+                                Long.valueOf(1L),
+                                db.writes().keyspace().del(List.of(b("cleanup:string:" + cycle))).value()
+                        );
+                        YierdisMemoryStats during = db.memory().memoryStats();
+                        Assert.assertTrue(during.nativeDefragQuarantinedObjects() > 0L);
+                        Assert.assertTrue(during.nativeDefragQuarantineBytes() > 0L);
+                    }
+
+                    YierdisMemoryStats afterEpoch = db.memory().memoryStats();
+                    Assert.assertEquals(0L, afterEpoch.nativeDefragQuarantinedObjects());
+                    Assert.assertEquals(0L, afterEpoch.nativeDefragQuarantineBytes());
+
+                    Assert.assertEquals(Long.valueOf(4L), db.writes().keyspace().del(List.of(
+                            b("list"),
+                            b("hash"),
+                            b("set"),
+                            b("zset")
+                    )).value());
+                    assertCollectionRootCounts(db, 0L);
+                    assertNativeDbEmpty(db);
+                } finally {
+                    db.shutdown();
+                }
+                Assert.assertEquals("cycle " + cycle + " leaked runtime bytes", 0L, runtime.usedBytes());
+            }
+        }
+    }
+
+    @Test
     public void deleteUsesEntryMetadataInsteadOfCompatibilityObjectEstimate() {
         YierdisDb db = new YierdisDb();
         try {
