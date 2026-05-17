@@ -270,19 +270,19 @@ The main agent reviews for duplicated drift-prone explanations, reruns verificat
 - Modify as needed: `docs/project-docs/client-and-bench-internals.md`
 - Modify as needed: `docs/project-docs/testing-and-debugging.md`
 
-- [ ] **Step 1: Dispatch a fresh subagent for Task 4**
+- [x] **Step 1: Dispatch a fresh subagent for Task 4**
 
 Ask the subagent to update only benchmark/report wording. The subagent must not rerun benchmarks and must not edit benchmark code or Maven configuration.
 
-- [ ] **Step 2: Preserve Track 1 comparison caveat**
+- [x] **Step 2: Preserve Track 1 comparison caveat**
 
 Ensure benchmark docs separate current branch RESP benchmark output, allocator micro/eval output, DB native defrag comparison output, and baseline/current comparison status. Keep the caveat that baseline/current deltas are non-comparable unless both baseline and current complete the same workload shape.
 
-- [ ] **Step 3: Remove overconfident before/after wording**
+- [x] **Step 3: Remove overconfident before/after wording**
 
 Update any wording that calls numbers a trustworthy before/after comparison without naming clean baseline and current runs. Keep useful current metrics and explain failures such as `ERR internal error` as comparability blockers when present.
 
-- [ ] **Step 4: Verify Task 4 docs**
+- [x] **Step 4: Verify Task 4 docs**
 
 Run:
 
@@ -294,7 +294,7 @@ git status --short
 
 Expected: benchmark matches preserve the Track 1 caveat; no uncaveated before/after performance claim remains in current-state docs or reports; `git diff --check` prints no errors; `git status --short` lists only intended benchmark/report wording changes.
 
-- [ ] **Step 5: Main agent review and commit**
+- [x] **Step 5: Main agent review and commit**
 
 The main agent reviews for overstated benchmark confidence, reruns verification, and commits this task before starting Task 5.
 

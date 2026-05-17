@@ -3,6 +3,8 @@
 Date: 2026-05-16
 Branch commit: `9b9f58c`
 
+This report keeps current-branch allocator micro/eval output, current-branch RESP benchmark output, current-branch DB native defrag comparison output, and baseline/current comparison status separate. It does not record a trustworthy before/after performance delta; only a clean baseline/current comparison where both sides complete the same RESP workload shape may produce comparable deltas.
+
 ## Verification
 
 Full repo verification already passed on this worktree:
