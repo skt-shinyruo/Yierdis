@@ -106,6 +106,8 @@ bench 模块不是 JMH，也不是进程内 microbenchmark。
 - 通过真实 TCP 和 RESP 跑一组可重复的 workload
 - 输出吞吐和延迟结果
 
+如果使用 baseline/current comparison mode，bench 只有在 baseline 和 current 都完成同一组 RESP workload shape 时才输出可比较 delta；任一侧启动失败、协议错误、workload 部分失败或返回 `ERR internal error`，都应记录为 `non-comparable`，不能当作可信的 before/after 结论。
+
 这点非常重要，因为它说明 benchmark 的关注点是：
 
 - request path

@@ -304,6 +304,8 @@ SKIP_BUILD=1 ./scripts/smoke.sh
 
 这个脚本适合做“可重复压测”或 request-path 回归对比。
 
+作为 baseline/current 对比使用时，只有两边完成同一组 RESP workload shape 的 clean run，结果才适合解读为 before/after delta；如果任一侧出现启动失败、协议错误、部分 workload 失败或 `ERR internal error`，应把这次结果标成 `non-comparable`。
+
 最简单的运行方式：
 
 ```bash
