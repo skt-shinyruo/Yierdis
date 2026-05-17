@@ -187,26 +187,26 @@ Expected: PASS.
 - Modify: `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ListValue.java`
 - Modify: `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/ListRoot.java`
 
-- [ ] **Step 1: Write failing free-order and release tests first**
+- [x] **Step 1: Write failing free-order and release tests first**
   - Test popping an element that empties an FFM quicklist node frees exactly that node's `LIST_QUICKLIST_NODE` record.
   - Test first-node and last-node merge cases free the discarded node record and preserve element order.
   - Test `ListRoot.release(handle)` frees all internal `LIST_QUICKLIST_NODE` records before freeing the root `LIST_NODE` record.
   - Test close/clear paths leave both `LIST_NODE` and `LIST_QUICKLIST_NODE` counts at zero.
 
-- [ ] **Step 2: Write failing stale-handle and slot-reuse tests**
+- [x] **Step 2: Write failing stale-handle and slot-reuse tests**
   - Capture an internal quicklist node handle through a package-private diagnostic method or test-only reflection.
   - Remove the node and assert allocator resolution fails with stale-handle semantics.
   - Allocate another node after removal and assert the old handle cannot observe the new node.
   - Keep tests list-focused; do not add hash/set/zset coverage in this task.
 
-- [ ] **Step 3: Write failing defrag-style movement test**
+- [x] **Step 3: Write failing defrag-style movement test**
   - Create an FFM quicklist with at least one native node record.
   - Capture the internal node handle.
   - Call `NativeAllocator.defragOne(handle, maxMoveBytes)` with enough move budget.
   - Assert the handle raw value is still valid and list operations still read/write correctly after resolving the moved record again.
   - Assert payload bytes are not treated as allocator objects in this split.
 
-- [ ] **Step 4: Run the focused failing tests**
+- [x] **Step 4: Run the focused failing tests**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest,CollectionRootTest -Dsurefire.failIfNoSpecifiedTests=false test
@@ -214,7 +214,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: FAIL until free order, stale handling, and defrag-safe resolution are complete.
 
-- [ ] **Step 5: Implement free-order hardening**
+- [x] **Step 5: Implement free-order hardening**
   - When removing a node, unlink it from the Java quicklist structure first.
   - Update neighboring native link fields while they are still live.
   - Close/free the node payload through `YierdisFfmListpack.close()`.
@@ -222,12 +222,12 @@ Expected: FAIL until free order, stale handling, and defrag-safe resolution are 
   - Free the `LIST_QUICKLIST_NODE` record through `NativeAllocator.free(...)`.
   - If payload close fails during list release, still attempt to free the native node record and attach suppressed failures consistently with `NativeCollectionRootTable.release(...)`.
 
-- [ ] **Step 6: Implement stale-handle authority checks**
+- [x] **Step 6: Implement stale-handle authority checks**
   - Resolve the internal node handle before reading or mutating native metadata.
   - Do not allow an old `FfmListNode` adapter reference to make a freed node usable.
   - Ensure wrong-generation, freed, wrong-domain, and wrong-kind internal handles fail through allocator stale-handle validation.
 
-- [ ] **Step 7: Run focused and regression list tests**
+- [x] **Step 7: Run focused and regression list tests**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest,CollectionRootTest -Dsurefire.failIfNoSpecifiedTests=false test
@@ -235,7 +235,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: PASS.
 
-- [ ] **Step 8: Main-agent review and commit**
+- [x] **Step 8: Main-agent review and commit**
   - Main agent reviews the diff for double-free risks, suppressed failure behavior, and accidental payload accounting.
   - Commit only this task's changes if execution mode includes commits.
 
