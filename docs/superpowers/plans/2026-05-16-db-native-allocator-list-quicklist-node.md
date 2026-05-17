@@ -294,7 +294,7 @@ Expected: PASS if traversal is deferred.
 **Files:**
 - No source changes expected.
 
-- [ ] **Step 1: Run memory API focused tests**
+- [x] **Step 1: Run memory API focused tests**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-api -Dtest=NativeAllocatorContractTest test
@@ -302,7 +302,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: PASS.
 
-- [ ] **Step 2: Run memory FFM allocator tests**
+- [x] **Step 2: Run memory FFM allocator tests**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-ffm -am -Dtest=YierdisStableNativeAllocatorTest -Dsurefire.failIfNoSpecifiedTests=false test
@@ -310,7 +310,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: PASS.
 
-- [ ] **Step 3: Run DB list and graph focused tests**
+- [x] **Step 3: Run DB list and graph focused tests**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest,CollectionRootTest,YierdisDbNativeHandleGraphTest -Dsurefire.failIfNoSpecifiedTests=false test
@@ -318,7 +318,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: PASS.
 
-- [ ] **Step 4: Run a broader DB memory module verification**
+- [x] **Step 4: Run a broader DB memory module verification**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am test
@@ -326,7 +326,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: PASS.
 
-- [ ] **Step 5: Main-agent final review**
+- [x] **Step 5: Main-agent final review**
   - Confirm the diff does not edit source/tests outside this plan's scope.
   - Confirm no hash/set/zset internals, key bytes, DB defrag maintenance policy, scan/snapshot epoch policy, benchmarks, parent roadmap, spec, or `yierdis.md` were changed.
   - Confirm `LIST_NODE` remains root-only and `LIST_QUICKLIST_NODE` remains internal quicklist-node-only.
