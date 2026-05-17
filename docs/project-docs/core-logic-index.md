@@ -1600,7 +1600,7 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 - `EntryTable` 是 key directory 指向的 entry 存储表。
 - `EntryRecord` 保存 `ValueType`、`ValueEncoding`、`ValueHandle`、`expireAtMillis`、LRU clock 等 metadata。
 - `EntryHandle` 包装 `ENTRY_RECORD` 类型的 `NativeHandle`，不是 physical address。
-- `ValueHandle` 包装 string/list/hash/set/zset 等 value/root 相关 `NativeHandle` raw value；string value handle 当前是 allocator-backed `STRING_BYTES` stable handle，collection root handles 仍是 type-root-owned/root-local identity，不是 object table slot。
+- `ValueHandle` 包装 string/list/hash/set/zset 等 value/root 相关 `NativeHandle` raw value；string value handle 是 allocator-backed `STRING_BYTES` stable handle，collection root handles 是 allocator-backed `LIST_NODE` / `HASH_NODE` / `SET_NODE` / `ZSET_NODE` root records。
 - entry metadata 使用 `YierdisStableNativeAllocator` 保存为 56 bytes native `ENTRY_RECORD`，避免所有 key metadata 都落在 Java object 上。
 - `EntryTable` 读写 entry 时通过 allocator resolve 得到短生命周期 `NativeObjectView`，关闭 view 后释放 pin。
 
@@ -1619,8 +1619,8 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 - 每个 type root 管理一种 logical type 的 payload map：`ValueHandle -> actual value`。
 - root 提供类型内操作、encoding 查询、estimated bytes、native bytes、release 和 clear。
 - `StringRoot` 管理 allocator-backed `STRING_BYTES` payload，并支持 append、ensureLength、byteAt、setByteAt、slice/copy。
-- collection roots 包装 `ListValue/HashValue/SetValue/ZSetValue`，并给 ops 提供同步的类型化方法。
-- type roots 会给 `ValueHandle` 写入对应 `NativeObjectKind`，但当前集合 payload adapter 的控制结构仍主要由 root 自己管理，不等于整个集合对象已经完全交给 stable allocator，也不能把任意 `ValueHandle` 直接交给 allocator resolve。
+- collection roots 用 allocator-backed root records 挂住 `ListValue/HashValue/SetValue/ZSetValue` adapter，并给 ops 提供同步的类型化方法。
+- `LIST_QUICKLIST_NODE` metadata records 也进入 stable allocator；list payload bytes 以及 hash/set/zset internals 仍主要由 adapter 或 legacy FFM structure 拥有。不能把任意集合内部 identity 当作 allocator object resolve；完整边界见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 关键边界：
 
@@ -1661,7 +1661,7 @@ server-only 的 `HELLO/INFO/STATS` 不在这里，而是在 `ServerCommandModule
 - 用 epoch/quarantine 保护 freed 或 moved block，避免读者仍可见时释放。
 - 用 generation、domain/kind 校验和 slot lifecycle 防 stale handle、double-free、wrong-kind 和 ABA 风险。
 - 支持 `realloc` 的 in-place resize、move 扩容和失败回滚。
-- 支持 active defrag，移动 unpinned object 时只发布 object table 新 location，DB graph 不需要重写 handle。
+- 支持 active defrag，移动 unpinned allocator-backed object 时只发布 object table 新 location，DB graph 不需要重写 handle；adapter-owned payload bytes 不在这条 DB defrag 移动范围内。
 - 暴露 fragmentation、page counts、object kind counts、quarantine bytes、stale/double-free、realloc、defrag 和 allocation latency 指标。
 
 完整语义见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。

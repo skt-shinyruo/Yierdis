@@ -267,7 +267,7 @@ object table 是 active defrag 和 stale handle 防护的关键 indirection：DB
 
 ### active defrag
 
-主动碎片整理。allocator 选择未 pin 且在预算内的对象，分配新 block，复制旧数据，校验后在 object table 中发布新 location。由于 DB 层只保存 stable handle，所以对象移动不需要重写 `NativeKeyDirectory`、`EntryTable` 或 type root 里的引用。
+主动碎片整理。allocator 选择未 pin 且在预算内的 allocator-backed 对象，分配新 block，复制旧数据，校验后在 object table 中发布新 location。由于 DB 层只保存 stable handle，所以 `KEY_BYTES`、`ENTRY_RECORD`、`STRING_BYTES`、集合 root record 和 `LIST_QUICKLIST_NODE` metadata record 移动时不需要重写 `NativeKeyDirectory`、`EntryTable` 或 type root 里的引用；adapter-owned payload bytes 不在 DB defrag 移动范围内。
 
 ## Data Model
 
@@ -290,7 +290,7 @@ DB native key graph 的 entry metadata。它持有：
 
 ### `ValueHandle`
 
-value/root 侧 `NativeHandle` raw value 的 DB 包装。string 使用 `STRING_BYTES` kind，集合 root 使用对应 `LIST_NODE`、`HASH_NODE`、`SET_NODE`、`ZSET_NODE` kind。它给 `EntryRecord` 一个稳定 payload identity，但不意味着所有集合控制结构都完全 native 化，也不意味着每个 `ValueHandle` 都是 object-table-backed allocator handle。
+value/root 侧 `NativeHandle` raw value 的 DB 包装。string 使用 allocator-backed `STRING_BYTES` kind，集合 root 使用 allocator-backed `LIST_NODE`、`HASH_NODE`、`SET_NODE`、`ZSET_NODE` kind。它给 `EntryRecord` 一个稳定 payload identity，但不意味着所有集合控制结构都完全 native 化：`LIST_QUICKLIST_NODE` metadata records 已进入 allocator，list payload bytes 以及 hash/set/zset internals 仍由 adapter 或 legacy FFM structure 拥有。
 
 ### `ValueType`
 
