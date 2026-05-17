@@ -444,7 +444,7 @@ key lifecycle 负责 keyspace、entry table、TTL 和 value root 的一致性。
 
 `EntryRecord` 保存的是元数据：key identity、`ValueHandle`、type、encoding、expire time、估算字节数和访问元数据。真实字符串 payload 在 `StringRoot` 里，通过 `ValueHandle` 访问。
 
-`EntryHandle` 和 `ValueHandle` 都是 `NativeHandle` raw value 的 Java record 包装。`EntryHandle` 只能包装 `ENTRY_RECORD`，`EntryTable` 通过 stable allocator resolve handle 后读写 56 bytes native entry metadata。`ValueHandle` 使用 string/list/hash/set/zset 对应的 native kind，给 type root payload 一个稳定 identity；当前多数 value handle 由 root 自己解析，不能当成 object table slot 使用。
+`EntryHandle` 和 `ValueHandle` 都是 `NativeHandle` raw value 的 Java record 包装。`EntryHandle` 只能包装 allocator-backed `ENTRY_RECORD`，`EntryTable` 通过 stable allocator resolve handle 后读写 56 bytes native entry metadata。`ValueHandle` 使用 string/list/hash/set/zset 对应的 native kind：string 指向 `STRING_BYTES`，collection root 指向 `LIST_NODE` / `HASH_NODE` / `SET_NODE` / `ZSET_NODE` root record。`LIST_QUICKLIST_NODE` metadata 也进入 allocator；list payload bytes 以及 hash/set/zset internals 仍由 adapter 或 legacy FFM structures 拥有。
 
 这意味着主链路里传递的是 handle，不是 physical address。allocator 如果通过 `realloc` 或 active defrag 移动 entry record，只更新 object table；`NativeKeyDirectory` 和 `EntryRecord` 里的 handle 不需要重写。更底层的 object table、pin/quarantine 和 defrag 协议见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 

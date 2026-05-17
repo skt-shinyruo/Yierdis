@@ -357,11 +357,11 @@ EntryRecord
   ValueType + ValueEncoding + ValueHandle(raw NativeHandle) + TTL/accounting/access metadata
 
 TypeRoot
-  ValueHandle -> payload adapter / off-heap bytes
+  ValueHandle -> allocator-backed root/string object -> payload adapter / off-heap bytes
 ```
 
 `EntryHandle` 要求 handle kind 是 `ENTRY_RECORD`，并且由 stable allocator object table 背书；`ValueHandle` 按 string/list/hash/set/zset
-写入对应 `NativeObjectKind`，但当前多数 value handle 是 type-root-owned identity。allocator 可以移动 entry record 的 physical block，DB graph 仍然保存同一个 stable handle。
+写入对应 `NativeObjectKind`。string 使用 allocator-backed `STRING_BYTES`，集合 root 使用 allocator-backed `LIST_NODE` / `HASH_NODE` / `SET_NODE` / `ZSET_NODE` root records；`LIST_QUICKLIST_NODE` metadata records 也进入 allocator。集合 payload bytes 和 hash/set/zset internals 仍有 adapter-owned / legacy FFM-owned 边界，不能把任意集合内部 identity 当作 allocator object resolve。allocator 可以移动这些 allocator-backed objects 的 physical block，DB graph 仍然保存同一个 stable handle。
 
 这层细节在命令语义里通常不可见，但它解释了为什么 `MEMORY`、`OBJECT ENCODING`、TTL、delete 和 active defrag 都必须以 entry metadata 和 stable handle 为准。完整 allocator 语义见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 

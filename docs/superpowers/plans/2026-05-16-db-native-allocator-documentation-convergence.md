@@ -235,19 +235,19 @@ The main agent reviews the diff for overbroad collection claims and uncaveated d
 - Modify as needed: `docs/project-docs/configuration-and-operations.md`
 - Modify as needed: `docs/project-docs/operation-test-coverage-matrix.md`
 
-- [ ] **Step 1: Dispatch a fresh subagent for Task 3**
+- [x] **Step 1: Dispatch a fresh subagent for Task 3**
 
 Ask the subagent to update concise current-state docs and navigation docs only. The subagent should prefer linking or pointing to reference docs over duplicating long ownership explanations.
 
-- [ ] **Step 2: Align summary docs**
+- [x] **Step 2: Align summary docs**
 
 Update concise summaries so they agree with Task 2 on `KEY_BYTES`, `ENTRY_RECORD`, `STRING_BYTES`, collection root records, `LIST_QUICKLIST_NODE`, remaining adapter-owned payload boundaries, DB defrag maintenance, and scan/snapshot copied output.
 
-- [ ] **Step 3: Align navigation and operational docs**
+- [x] **Step 3: Align navigation and operational docs**
 
 Update navigation/testing/configuration docs only where stale wording appears. Make links point readers to `native-allocator-and-handles.md`, `db-internals.md`, or `ffm-usage.md` for current allocator ownership details.
 
-- [ ] **Step 4: Verify Task 3 docs**
+- [x] **Step 4: Verify Task 3 docs**
 
 Run:
 
@@ -259,7 +259,7 @@ git status --short
 
 Expected: remaining `docs/project-docs` matches are current-state accurate, explicitly transitional, or links into the reference docs; `git diff --check` prints no errors; `git status --short` lists only intended project-doc changes for this task.
 
-- [ ] **Step 5: Main agent review and commit**
+- [x] **Step 5: Main agent review and commit**
 
 The main agent reviews for duplicated drift-prone explanations, reruns verification, and commits this task before starting Task 4.
 
