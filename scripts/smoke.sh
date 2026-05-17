@@ -12,6 +12,7 @@ HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-16379}"
 SERVER_LOG="${SERVER_LOG:-$ROOT_DIR/.tmp-smoke-server.log}"
 READY_TIMEOUT_SEC="${READY_TIMEOUT_SEC:-30}"
+ALLOCATOR_SMOKE="${ALLOCATOR_SMOKE:-0}"
 
 # Bench smoke (keep tiny; correctness only)
 KEYSPACE="${KEYSPACE:-10}"
@@ -115,6 +116,24 @@ main() {
     local value
     value="$(timeout 10s java -jar "$client_jar" --host "$HOST" --port "$PORT" GET smoke:key)"
     [[ "$value" == "smoke:value" ]] || die "Java CLI GET smoke:key 返回异常：$value"
+  fi
+
+  if [[ "$ALLOCATOR_SMOKE" == "1" ]]; then
+    printf "[smoke] allocator-sensitive command path\n"
+    if redis_cli_available; then
+      timeout 10s redis-cli -h "$HOST" -p "$PORT" SET smoke:native:string smoke-value
+      timeout 10s redis-cli -h "$HOST" -p "$PORT" APPEND smoke:native:string -tail
+      local native_value
+      native_value="$(timeout 10s redis-cli -h "$HOST" -p "$PORT" GET smoke:native:string)"
+      [[ "$native_value" == "smoke-value-tail" ]] || die "allocator GET smoke:native:string 返回异常：$native_value"
+      timeout 10s redis-cli -h "$HOST" -p "$PORT" LPUSH smoke:native:list a
+      timeout 10s redis-cli -h "$HOST" -p "$PORT" HSET smoke:native:hash f v
+      timeout 10s redis-cli -h "$HOST" -p "$PORT" SADD smoke:native:set m
+      timeout 10s redis-cli -h "$HOST" -p "$PORT" ZADD smoke:native:zset 1 m
+      timeout 10s redis-cli -h "$HOST" -p "$PORT" DEL smoke:native:string smoke:native:list smoke:native:hash smoke:native:set smoke:native:zset
+    else
+      printf "[smoke] allocator path skipped: redis-cli unavailable and Java CLI fallback only covers scalar commands\n"
+    fi
   fi
 
   printf "[smoke] bench（connect-only + strictReplies）\n"

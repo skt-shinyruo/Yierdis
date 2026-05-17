@@ -491,7 +491,7 @@ Expected: PASS.
 - Modify: `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/SmokeScriptContractTest.java`
 - Modify only if required: `scripts/bench.sh`
 
-- [ ] **Step 1: Write the failing script contract test**
+- [x] **Step 1: Write the failing script contract test**
 
 Extend `SmokeScriptContractTest` with a contract that reads `scripts/smoke.sh` and asserts the allocator smoke mode exists and is opt-in:
 
@@ -520,7 +520,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: FAIL before `scripts/smoke.sh` has the opt-in allocator path.
 
-- [ ] **Step 2: Implement the smoke mode**
+- [x] **Step 2: Implement the smoke mode**
 
 In `scripts/smoke.sh`, add an opt-in variable near the smoke config:
 
@@ -552,7 +552,7 @@ After the existing PING/SET/GET block and before the bench invocation, add alloc
 
 Keep the existing tiny bench invocation. Do not add a new script unless the implementation review proves `scripts/smoke.sh` cannot reasonably host the mode.
 
-- [ ] **Step 3: Review script behavior**
+- [x] **Step 3: Review script behavior**
 
 Check that:
 
@@ -562,7 +562,7 @@ Check that:
 - no new benchmark launcher or framework is introduced
 - `scripts/bench.sh` remains unchanged unless a pass-through bug blocks this mode
 
-- [ ] **Step 4: Run script verification**
+- [x] **Step 4: Run script verification**
 
 Build jars first if needed:
 
