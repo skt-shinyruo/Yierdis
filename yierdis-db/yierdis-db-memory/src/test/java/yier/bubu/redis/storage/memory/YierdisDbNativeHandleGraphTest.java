@@ -7,6 +7,7 @@ import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 
@@ -52,6 +53,52 @@ public class YierdisDbNativeHandleGraphTest {
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.HASH_NODE));
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.SET_NODE));
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.ZSET_NODE));
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void visitorEnumeratesListRootOnlyWhenListHasAllocatorBackedQuicklistNodes() {
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
+                0,
+                MaxmemoryPolicy.NOEVICTION,
+                1,
+                1,
+                1
+        );
+        try {
+            db.bindToCurrentThread();
+            List<byte[]> values = new ArrayList<>();
+            values.add(new byte[4096]);
+            values.add(new byte[4096]);
+            values.add(new byte[4096]);
+            Assert.assertEquals(Long.valueOf(3L), db.writes().lists().rpush(b("list"), values).value());
+            Assert.assertEquals(3L,
+                    db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+
+            // Internal quicklist node traversal is intentionally deferred: graph and list internals
+            // currently cross package boundaries, and Task 4 does not broaden the internal handle API.
+            // Task 3 list tests cover quicklist node allocation, liveness, release, and movement.
+            List<YierdisDbNativeHandleGraph.Role> roles = new ArrayList<>();
+            EnumMap<NativeObjectKind, Integer> kindCounts = new EnumMap<>(NativeObjectKind.class);
+
+            YierdisDbNativeHandleGraph.visitReachable(db.keyLifecycle(), (role, handle, record) -> {
+                roles.add(role);
+                kindCounts.merge(nativeKind(handle), 1, Integer::sum);
+                Assert.assertNotNull(record);
+            });
+
+            Assert.assertEquals(List.of(
+                    YierdisDbNativeHandleGraph.Role.KEY_BYTES,
+                    YierdisDbNativeHandleGraph.Role.ENTRY_RECORD,
+                    YierdisDbNativeHandleGraph.Role.COLLECTION_ROOT
+            ), roles);
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.KEY_BYTES));
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.ENTRY_RECORD));
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.LIST_NODE));
+            Assert.assertFalse(kindCounts.containsKey(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertFalse(kindCounts.containsKey(NativeObjectKind.STRING_BYTES));
         } finally {
             db.shutdown();
         }

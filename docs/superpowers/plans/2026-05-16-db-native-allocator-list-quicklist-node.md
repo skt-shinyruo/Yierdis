@@ -247,7 +247,7 @@ Expected: PASS.
 - Optional Modify: `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/ListRoot.java`
 - Optional Modify: `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ListValue.java`
 
-- [ ] **Step 1: Make the traversal decision before editing graph code**
+- [x] **Step 1: Make the traversal decision before editing graph code**
   - Add the traversal hook only if `YierdisDbNativeHandleGraph` can reach live list internal node handles with a small, package-private API that does not expose payload bytes, memory segments, physical addresses, or blob offsets.
   - If the hook requires broad DB lifecycle changes, keep graph traversal root-only for this split.
   - Record the decision in test names/comments only where necessary; do not edit the parent roadmap or spec.
@@ -271,13 +271,13 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: PASS if the hook was added.
 
-- [ ] **Step 2B: If deferring traversal, write explicit root-only tests/docs in tests**
+- [x] **Step 2B: If deferring traversal, write explicit root-only tests/docs in tests**
   - Keep `YierdisDbNativeHandleGraph.Role` unchanged.
   - Add or adjust `YierdisDbNativeHandleGraphTest` to assert list roots are still visited as `COLLECTION_ROOT`.
   - Add a concise test comment explaining that internal quicklist node traversal is intentionally deferred because this split only added allocator-visible internal records.
   - Ensure list-focused tests from Task 3 cover internal handle allocation, liveness, and release despite graph deferral.
 
-- [ ] **Step 3B: Run the root-only graph test**
+- [x] **Step 3B: Run the root-only graph test**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=YierdisDbNativeHandleGraphTest,ListValueTest,ListRootTest -Dsurefire.failIfNoSpecifiedTests=false test
@@ -285,7 +285,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: PASS if traversal is deferred.
 
-- [ ] **Step 5: Main-agent review and commit**
+- [x] **Step 5: Main-agent review and commit**
   - Main agent verifies the graph decision stayed bounded.
   - Commit only this task's changes if execution mode includes commits.
 
