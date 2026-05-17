@@ -303,11 +303,11 @@ The main agent reviews for overstated benchmark confidence, reruns verification,
 **Files:**
 - Modify as needed: any file already listed in this plan except `docs/superpowers/specs/2026-05-16-db-native-allocator-follow-up-roadmap-design.md` and `yierdis.md`
 
-- [ ] **Step 1: Dispatch a fresh subagent for Task 5**
+- [x] **Step 1: Dispatch a fresh subagent for Task 5**
 
 Ask the subagent to rerun all stale phrase audits, classify every remaining match, and make only small closure edits where a current-state contradiction remains.
 
-- [ ] **Step 2: Run all stale phrase audits**
+- [x] **Step 2: Run all stale phrase audits**
 
 Run:
 
@@ -321,11 +321,11 @@ rg -n "benchmark|baseline|current|non-comparable|before/after|ERR internal error
 
 Expected: remaining matches are either accurate current reference text, explicitly historical/spec text, or explicitly labeled future work boundaries.
 
-- [ ] **Step 3: Apply closure edits only for current-state contradictions**
+- [x] **Step 3: Apply closure edits only for current-state contradictions**
 
 If a remaining current-state contradiction appears, edit the smallest relevant current-state doc to resolve it. Do not rewrite historical specs or plans merely because their old context contains stale phrases.
 
-- [ ] **Step 4: Verify Task 5 docs**
+- [x] **Step 4: Verify Task 5 docs**
 
 Run:
 
@@ -336,7 +336,7 @@ git status --short
 
 Expected: `git diff --check` prints no errors; `git status --short` lists only intended closure edits.
 
-- [ ] **Step 5: Main agent review and commit**
+- [x] **Step 5: Main agent review and commit**
 
 The main agent reviews the final classification, confirms any remaining stale-looking phrases are historical or future-context only, reruns verification, and commits this task before starting Task 6.
 
