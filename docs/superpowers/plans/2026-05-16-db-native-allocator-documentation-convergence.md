@@ -345,11 +345,11 @@ The main agent reviews the final classification, confirms any remaining stale-lo
 **Files:**
 - Modify: no files expected
 
-- [ ] **Step 1: Dispatch a fresh subagent for Task 6**
+- [x] **Step 1: Dispatch a fresh subagent for Task 6**
 
 Ask the subagent to run final docs-only verification and report results. The subagent must not edit files.
 
-- [ ] **Step 2: Run full stale phrase audit**
+- [x] **Step 2: Run full stale phrase audit**
 
 Run:
 
@@ -363,7 +363,7 @@ rg -n "benchmark|baseline|current|non-comparable|before/after|ERR internal error
 
 Expected: no remaining current-state contradictions. Remaining matches are classified as accurate current reference text, historical/spec text with clear context, or explicitly labeled future work boundaries.
 
-- [ ] **Step 3: Run final whitespace and status checks**
+- [x] **Step 3: Run final whitespace and status checks**
 
 Run:
 
@@ -374,7 +374,7 @@ git status --short
 
 Expected: `git diff --check` prints no errors. `git status --short` is clean after the final task commit.
 
-- [ ] **Step 4: Main agent final review**
+- [x] **Step 4: Main agent final review**
 
 The main agent confirms:
 
@@ -384,6 +384,6 @@ The main agent confirms:
 - stale phrase audit classifications match the rules in this plan
 - all task commits are present and reviewed
 
-- [ ] **Step 5: Main agent final plan commit**
+- [x] **Step 5: Main agent final plan commit**
 
 The main agent marks Task 6 complete in this plan and commits the plan-only final verification update.
