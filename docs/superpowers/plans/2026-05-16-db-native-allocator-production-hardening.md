@@ -72,7 +72,7 @@ For scripts that run Java, use the same `JAVA_HOME` and `PATH` assignment before
 **Files:**
 - Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/NativeStorageRegressionTest.java`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add a new test named `repeatedDeterministicMixedNativeDbChurnReleasesRuntimeEveryCycle`.
 
@@ -99,7 +99,7 @@ public void repeatedDeterministicMixedNativeDbChurnReleasesRuntimeEveryCycle() {
 
 Expected initial failure: compile failure for missing helpers such as `createNativeRegressionDb`, `runDeterministicMixedNativeDbChurn`, or `assertNativeDbEmpty`.
 
-- [ ] **Step 2: Run the focused failing test**
+- [x] **Step 2: Run the focused failing test**
 
 Run:
 
@@ -109,7 +109,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: FAIL before implementation, either because helpers do not exist or because the single-cycle code has not yet been extracted.
 
-- [ ] **Step 3: Implement the helper extraction**
+- [x] **Step 3: Implement the helper extraction**
 
 Extract the mixed churn body into:
 
@@ -175,7 +175,7 @@ private static void assertNativeDbEmpty(YierdisDb db) {
 
 Keep the original `deterministicMixedNativeDbChurnPreservesResultsAndReleasesRuntime` test by changing it to call the helper once. This preserves focused single-cycle coverage while adding repeated soak coverage.
 
-- [ ] **Step 4: Review assertions for boundedness**
+- [x] **Step 4: Review assertions for boundedness**
 
 Check that the new repeated test:
 
@@ -185,12 +185,12 @@ Check that the new repeated test:
 - does not assert exact global counters such as total defrag moved bytes across all cycles
 - does not sleep or depend on wall-clock timing
 
-- [ ] **Step 5: Run verification**
+- [x] **Step 5: Run verification**
 
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=NativeStorageRegressionTest#deterministicMixedNativeDbChurnPreservesResultsAndReleasesRuntime,repeatedDeterministicMixedNativeDbChurnReleasesRuntimeEveryCycle -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=NativeStorageRegressionTest#deterministicMixedNativeDbChurnPreservesResultsAndReleasesRuntime+repeatedDeterministicMixedNativeDbChurnReleasesRuntimeEveryCycle -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
@@ -277,7 +277,7 @@ Verify that the test covers both explicit delete cleanup and `db.shutdown()` cle
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=NativeStorageRegressionTest#productionCollectionRootsUseSharedNativeAllocatorAndReleaseAfterDeleteAndShutdown,repeatedNativeShutdownCleanupReleasesKeysStringsCollectionsAndQuarantine,snapshotEpochDelaysStringReleaseUntilClosed -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=NativeStorageRegressionTest#productionCollectionRootsUseSharedNativeAllocatorAndReleaseAfterDeleteAndShutdown+repeatedNativeShutdownCleanupReleasesKeysStringsCollectionsAndQuarantine+snapshotEpochDelaysStringReleaseUntilClosed -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
@@ -475,7 +475,7 @@ Ensure the test:
 Run:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=NativeStorageRegressionTest#nativeAllocatorCleanupRemainsStableUnderNarrowMaxmemory,nativeDbChurnKeepsReporterAndRuntimeAccountingConsistent -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=NativeStorageRegressionTest#nativeAllocatorCleanupRemainsStableUnderNarrowMaxmemory+nativeDbChurnKeepsReporterAndRuntimeAccountingConsistent -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
