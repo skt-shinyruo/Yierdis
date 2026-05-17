@@ -1080,7 +1080,7 @@ region 的 `span(offset, length)` 返回的是切片 view；`close()` 会关闭�
 - resolve view 时 pin 对象，close view 时 unpin
 - epoch / quarantine，避免读者仍可见时释放 moved 或 freed block
 - `realloc` 的原地调整、可移动扩容和失败回滚
-- active defrag，通过更新 object table 的物理 block 移动对象
+- active defrag，通过更新 object table 的物理 block 移动 allocator-backed object
 - allocator metrics，包括 fragmentation、page counts、object kind counts、quarantine bytes 和 allocation latency
 
 完整语义见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
@@ -1091,7 +1091,7 @@ DB 层不会把 Java 对象直接塞进 native memory，而是用 handle 串起�
 
 - `KeyHandle` 表示 key identity
 - `EntryHandle` 包装 `ENTRY_RECORD` 类型的 `NativeHandle`
-- `ValueHandle` 包装 string/list/hash/set/zset 等 value/root 相关 typed `NativeHandle` raw value；string `ValueHandle` 是 allocator-backed stable handle，集合 roots 的 `ValueHandle` 仍是 type-root-owned identity，不保证都能直接由 stable allocator resolve
+- `ValueHandle` 包装 string/list/hash/set/zset 等 value/root 相关 typed `NativeHandle` raw value；string payload 和 collection root records 都是 allocator-backed stable handle
 - `YierdisFfmBytesRef` 表示一段 off-heap bytes
 
 `NativeKeyDirectory` 是 key -> `EntryHandle` 的权威目录。它的 table 数组仍在 heap，但 key bytes 是 stable allocator 的 `KEY_BYTES` 对象。插入新 key 时，directory 会分配 `NativeObjectKind.KEY_BYTES` 并写入 key bytes；删除 key 时，会释放对应 allocator handle。
@@ -1167,19 +1167,20 @@ HLL 逻辑上复用 string 存储路径，因此 HLL bytes 也落在 `StringRoot
 
 List / Hash / Set / ZSet 的 root 负责 `ValueHandle` -> value adapter：
 
-- `ListRoot` 管理 `ListValue`
-- `HashRoot` 管理 `HashValue`
-- `SetRoot` 管理 `SetValue`
-- `ZSetRoot` 管理 `ZSetValue`
+- `ListRoot` 通过 allocator-backed `LIST_NODE` root record 管理 `ListValue`
+- `HashRoot` 通过 allocator-backed `HASH_NODE` root record 管理 `HashValue`
+- `SetRoot` 通过 allocator-backed `SET_NODE` root record 管理 `SetValue`
+- `ZSetRoot` 通过 allocator-backed `ZSET_NODE` root record 管理 `ZSetValue`
 
 adapter 内部再使用 FFM-backed primitive：
 
+- `LIST_QUICKLIST_NODE`：FFM list quicklist node metadata record，进入 stable allocator 并单独计数
 - `YierdisFfmListpack`：entry bytes 存在 blob store，外层 entry list 仍是 heap `ArrayList`
 - `YierdisFfmByteMap`：member / field bytes 存在 blob store，table 索引数组仍在 heap
 - `YierdisFfmIntSet`：整数集合是更纯的 native long array
 - `YierdisFfmZSet`：zset member bytes 存在 blob store，排序列表和分数仍主要在 heap
 
-所以这里的原则是：把大块或重复的 bytes 尽量移到 off-heap，把复杂控制结构保留在 heap，以降低实现复杂度。
+所以这里的原则是：root records 和 list quicklist metadata 先进入 stable allocator；payload bytes 以及 hash/set/zset internals 仍由 adapter 或 legacy FFM structures 拥有。当前 graph traversal 对 list internals 只做 root-only 边界处理，不表示所有 collection internals 都已经 nativeized。
 
 ### 字符串路径：FFM 如何进入 `SET` / `GET`
 
@@ -1448,10 +1449,12 @@ adapter，但 key 的 canonical metadata 在 `EntryTable`，value identity 是
 
 - `EntryTable` 的 entry record 来自 stable native allocator，`EntryHandle` 是 `ENTRY_RECORD` native handle 的 Java record 包装
 - `NativeKeyDirectory` 的 key bytes 是 stable allocator `KEY_BYTES` 对象，table 数组仍在 heap
+- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 的 root records 是 allocator-backed `LIST_NODE` / `HASH_NODE` / `SET_NODE` / `ZSET_NODE`
+- `LIST_QUICKLIST_NODE` 是 allocator-backed list quicklist metadata record，和 list payload bytes 分开计数
 - `YierdisFfmExpireIndex` 的 `states` / `hashes` / `expireAt` 在 native memory，但 `refs[]` 仍在 heap
 - `YierdisFfmZSet` 的 member bytes 在 native blob store，但 `ordered` 和 `Entry.score` 仍在 heap
 - `StringRoot` 的 payload 已由 DB 级 shared `NativeAllocator` 管理，kind 为 `STRING_BYTES`。`ValueHandle` 对 string 来说是 stable allocator handle；append/ensureLength 使用 allocator realloc 保持 handle 不变。`slice` 对外仍返回 `OffHeapSlice` 接口，但当前会先复制 native `STRING_BYTES` 到 heap-backed `OffHeapSlice`，不会暴露可逃逸的 allocator view。
-- `HashRoot` / `ListRoot` / `SetRoot` / `ZSetRoot` 的 handle table 仍在 heap，`ValueHandle` 使用对应 type-root kind，payload 通过各 value adapter 进入 FFM-backed 结构；这些 `ValueHandle` 不能被随意拿去 stable allocator resolve
+- collection payload bytes 通过各 value adapter 进入 FFM-backed 结构；hash/set/zset internals 和 list payload bytes 仍不是 stable allocator object
 - `YierdisFfmByteMap` 的 table 索引数组本身仍在 heap，只是 key bytes 放在 off-heap
 - `YierdisFfmListpack` 本身是 `ArrayList<YierdisFfmBytesRef>`，真正 off-heap 的是 entry bytes
 
@@ -1464,7 +1467,7 @@ adapter，但 key 的 canonical metadata 在 `EntryTable`，value identity 是
 
 - 关键字节数据大量 off-heap 化
 - 部分索引元数据 off-heap 化
-- key、entry metadata 和 value payload 都通过 64-bit handle 串起来；entry metadata 已进入 stable allocator，部分 type-root payload table 仍保留 heap 控制结构
+- key bytes、entry metadata、string bytes 和 collection root records 都通过 64-bit handle 串起来；部分 type-root payload table 仍保留 heap 控制结构
 - 但并不是“整个 DB 内部结构完全 native 化”
 
 ### 为什么这里可以放心使用 `Arena.ofConfined()`
@@ -1501,17 +1504,17 @@ FFM 内存不是一个“统计旁路”，而是明确进入内存治理体系�
 
 这里的 `directNativeBytes()` 不是简单取 `memoryRuntime.usedBytes()`，而是把 DB 可解释的 native 结构逐项汇总：
 
-- 共享 `NativeAllocator.stats().logicalUsedBytes()`，覆盖 allocator-backed `ENTRY_RECORD` 和 `STRING_BYTES`
+- 共享 `NativeAllocator.stats().logicalUsedBytes()`，覆盖 allocator-backed `KEY_BYTES`、`ENTRY_RECORD`、`STRING_BYTES`、collection root records 和 `LIST_QUICKLIST_NODE` metadata records
 - `YierdisFfmExpireIndex.nativeBytes()`
-- `NativeKeyDirectory.nativeBytes()`
-- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` root native bytes
+- `NativeKeyDirectory.nativeBytes()`，用于 directory 自身非 allocator table/side metadata；生产 key bytes 已在 allocator stats 中
+- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` adapter/payload native byte estimates；root records 和 `LIST_QUICKLIST_NODE` metadata 已在 allocator stats 中
 
 这意味着 maxmemory 统计的是业务上可解释的 live data / metadata，而不是把 slab 内部暂时空闲但尚未关闭的 reserved bytes 全部算成用户数据。
 
 这意味着：
 
 - off-heap bytes 会影响 maxmemory
-- allocator-backed entry/string、expires、native key directory 和 type root 的 native bytes 不会被忽略
+- allocator-backed key/entry/string、collection root records、list quicklist metadata、expires、native key directory 和 type root 的 native bytes 不会被忽略
 - delete、expire 和 eviction 释放记账优先读 `EntryRecord`，避免依赖旧对象容器里的估算值
 
 在实例级 `maxmemoryScope=global` 时，还要避免多 DB 共享 runtime / allocator 导致 off-heap
@@ -1643,11 +1646,11 @@ usage；只是单 DB 的 `offHeapIncludedInMaxmemory` 在 global coordinator 存
 Yierdis 当前对 FFM 的使用方式可以概括为：
 
 - 用 `YierdisFfmMemoryRuntime` 统一承载实例级 native memory
-- 用 stable native allocator、`EntryTable` 和 64-bit `NativeHandle` 承载 entry metadata
+- 用 stable native allocator、`EntryTable` 和 64-bit `NativeHandle` 承载 key bytes、entry metadata、string bytes、collection root records 和 list quicklist metadata
 - 用 `NativeKeyDirectory` 把 key bytes 映射到 entry handle
 - 用 `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 承载各类型 payload
 - 用 `EntryRecord`、`ValueHandle` 和 `TypeRoot` 作为 DB hot path 的权威状态
-- 用 `BlobStore + BytesRef + KeyHandle` 路径承载 native key directory、TTL 索引和复合结构成员 bytes
+- 用 `BlobStore + BytesRef + KeyHandle` 路径承载 TTL 索引引用和仍属 adapter-owned 的复合结构成员 bytes
 - 用 `OffHeapSlice` / `YierdisFfmBytesRefSlice` 给读路径提供尽量少拷贝的输出接口
 - 用单线程 owner model 约束 `Arena.ofConfined()` 的访问纪律
 - 用 runtime accounting、memory reporter、allocator stats 和 shutdown leak check 把 FFM 内存纳入 maxmemory 与资源回收体系
@@ -1668,7 +1671,7 @@ Yierdis 当前对 FFM 的使用方式可以概括为：
 - stable-handle `realloc`，包括 prefix preservation、in-place resize、move rollback
 - `EntryHandle` / `ValueHandle` 的 `NativeHandle` 包装语义
 - pin / epoch quarantine，保护 freed 或 moved physical block
-- active defrag，通过更新 allocator metadata 移动对象，DB graph 不需要重写引用
+- active defrag，通过更新 allocator metadata 移动 allocator-backed objects，DB graph 不需要重写引用；legacy payload bytes 不在 DB defrag 移动范围内
 - allocator stats：logical/reserved/committed/free、fragmentation、page counts、object kind counts、quarantine bytes、pin/stale/double-free/realloc/defrag counters 和 allocation latency buckets
 
 allocator 仍然把 physical address packing 作为私有实现细节。DB hot path 只能在一次有界操作里 resolve handle，及时关闭 resolved view，不能持久化 allocator-private page id、offset、span 或 raw memory address。

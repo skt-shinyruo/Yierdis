@@ -61,12 +61,13 @@ bits 3..0    flags       4 bits
 - `HASH_NODE`
 - `SET_NODE`
 - `ZSET_NODE`
+- `LIST_QUICKLIST_NODE`
 - `INDEX_NODE`
 - `METADATA_RECORD`
 
 `NativeHandle.of(...)` 会校验 domain/kind 是否匹配、slot/generation/flags 是否在位宽范围内。`EntryHandle` 只允许包装 `ENTRY_RECORD` handle；`ValueHandle` 可以包装不同 value/root 相关 domain，但调用方需要在边界处校验 domain。
 
-注意：当前 `EntryHandle` 和 string `ValueHandle` 是 object-table-backed allocator handle。`EntryHandle` 包装 `ENTRY_RECORD`；string `ValueHandle` 包装 `STRING_BYTES`。集合 roots 的 `ValueHandle` 仍然是 root-local typed identity，除非对应 root 明确迁移到 `NativeAllocator`，不能把任意集合 `ValueHandle` 直接拿去 `NativeAllocator.resolve(...)`。
+注意：当前 `EntryHandle`、key bytes、string payload 和集合 root record 都是 object-table-backed allocator handle。`EntryHandle` 包装 `ENTRY_RECORD`；key bytes 使用 `KEY_BYTES`；string `ValueHandle` 包装 `STRING_BYTES`；集合 root `ValueHandle` 包装 `LIST_NODE` / `HASH_NODE` / `SET_NODE` / `ZSET_NODE`。但集合内部 payload 仍有边界：list quicklist 节点 metadata 以 `LIST_QUICKLIST_NODE` 记录进入 allocator，payload bytes 以及 hash/set/zset 内部结构仍由 adapter 或 legacy FFM 结构拥有，不能把任意集合内部 identity 当作 allocator object resolve。
 
 ## Object table
 
@@ -245,7 +246,7 @@ epoch reclaim 规则是：只要存在 epoch 小于等于 retired epoch，就不
 
 ## Active defrag
 
-active defrag 的基本目标是移动 live object，释放旧 block 或让旧 block 在 epoch 安全后释放。DB 层只保存 stable handle，所以对象移动不需要全量扫描 DB 引用并重写地址。
+active defrag 的基本目标是移动 allocator-backed live object，释放旧 block 或让旧 block 在 epoch 安全后释放。DB 层只保存 stable handle，所以 `KEY_BYTES`、`ENTRY_RECORD`、`STRING_BYTES`、集合 root record 和 `LIST_QUICKLIST_NODE` metadata record 这类 allocator object 移动时不需要全量扫描 DB 引用并重写地址。它不会移动 adapter-owned payload bytes，也不会整理仍由 legacy FFM 结构拥有的 hash/set/zset internals。
 
 单对象移动协议：
 
@@ -324,9 +325,9 @@ kind   = ENTRY_RECORD
 
 `StringRoot` 已迁移到 `NativeAllocator`：`store` 分配 `STRING_BYTES`，`append`/`ensureLength` 通过 `realloc(..., PRESERVE_PREFIX)` 保持 stable handle，`slice`/`copy`/byte access 只在方法内部短暂 resolve `NativeObjectView`，`release` 调用 allocator free。
 
-集合 roots 仍各自拥有 payload adapter 管理结构；它们的 `ValueHandle` 负责给 `EntryRecord` 一个稳定、带 domain/kind 的引用形状，并继续包装 `ListValue` / `HashValue` / `SetValue` / `ZSetValue`。
+集合 root record 已迁移到 `NativeAllocator`：`ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 分别分配 `LIST_NODE` / `HASH_NODE` / `SET_NODE` / `ZSET_NODE`，并把 allocator-backed `ValueHandle` 写入 `EntryRecord`。这些 root record 保存 root adapter identity，用来进入各自的 payload implementation。
 
-因此，string `ValueHandle.slotId()` 是 `YierdisNativeObjectTable` slot；集合 root 的 `ValueHandle.slotId()` 仍是对应 root 的局部 identity。后续如果把某类集合 payload 也迁入 stable allocator，需要在该 root 内明确完成 allocate / resolve / free 协议，并补齐对应测试。
+集合 payload 仍是分阶段迁移边界：`LIST_QUICKLIST_NODE` 是 allocator-backed list quicklist metadata record，并作为 list internal metadata 单独计数；list payload bytes 以及 hash/set/zset internals 仍由 root adapter 或 legacy FFM structures 拥有。图遍历在当前 split 下只把 list internals 当作 root-only traversal 边界，不表示所有 collection internals 都已经 nativeized。后续如果把某类集合 payload 也迁入 stable allocator，需要在该 root 内明确完成 allocate / resolve / free 协议，并补齐对应测试。
 
 ### key graph
 
@@ -343,10 +344,11 @@ EntryRecord
   ValueType + ValueEncoding + ValueHandle(raw NativeHandle) + TTL/LRU/accounting
 
 TypeRoot
-  ValueHandle -> allocator-backed string bytes / collection payload adapter
+  ValueHandle -> allocator-backed string bytes / allocator-backed collection root record
+  collection root record -> adapter-owned or legacy FFM-owned payload internals
 ```
 
-关键变化是：entry metadata 进入 production stable allocator，DB 层不保存 entry slot 的物理地址。
+关键变化是：key bytes、entry metadata、string bytes 和 collection root records 进入 production stable allocator，DB 层不保存 allocator object 的物理地址。
 
 ## Metrics
 

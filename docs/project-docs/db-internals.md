@@ -125,15 +125,15 @@ TypeRoot
   ValueHandle -> payload
 ```
 
-这里的 handle 都是 64-bit identity，不是 native 物理地址。`EntryHandle` 包装
+这里的 handle 都是 64-bit identity，不是 native 物理地址。`NativeKeyDirectory` 拥有 allocator-backed `KEY_BYTES`；`EntryHandle` 包装
 `ENTRY_RECORD` 类型的 object-table-backed `NativeHandle`，`EntryTable` 通过 allocator resolve handle 后才读写
 entry metadata。`ValueHandle` 也包装 `NativeHandle` raw value，用 string/list/hash/set/zset
-对应的 kind 给 type root payload 一个稳定引用形状；当前 string `ValueHandle.slotId()` 是 allocator object-table slot，collection roots 的 `ValueHandle.slotId()` 仍是 type root 局部 identity。
+对应的 kind 给 type root payload 一个稳定引用形状；当前 string payload 和 collection root records 都是 allocator-backed object。
 
 ### `NativeKeyDirectory`
 
-`NativeKeyDirectory` 是 key 目录。它保存 key bytes，并把 key 映射到
-`EntryHandle`。它不理解 value 类型，不负责释放 payload，也不直接维护 TTL 语义。
+`NativeKeyDirectory` 是 key 目录。它把 key bytes 保存为 allocator-backed `KEY_BYTES` object，并把 key 映射到
+`EntryHandle`。删除 key 时，directory 释放对应 `KEY_BYTES` allocator handle。它不理解 value 类型，不负责释放 payload，也不直接维护 TTL 语义。
 
 它提供给上层的能力包括：
 
@@ -172,7 +172,7 @@ EntryTable.get/replace
 ```
 
 因此 active defrag 移动 entry record 时，只需要更新 allocator object table 中的 physical
-block。`NativeKeyDirectory` 和 DB graph 里保存的 `EntryHandle` 不需要重写。
+block。`NativeKeyDirectory` 和 DB graph 里保存的 `EntryHandle` 不需要重写。同一原则也适用于 `KEY_BYTES`、`STRING_BYTES`、collection root records 和 `LIST_QUICKLIST_NODE` metadata records；defrag 不移动 adapter-owned payload bytes 或 legacy FFM-owned collection internals。
 
 ### Type Root
 
@@ -197,10 +197,11 @@ root 的职责是：
 当前 type roots 的实现边界是：
 
 - `StringRoot` payload 由 DB 级共享 `NativeAllocator` 以 `STRING_BYTES` 管理；string `ValueHandle` 是 allocator-backed stable handle。
-- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 用对应 `LIST_NODE` / `HASH_NODE` /
-  `SET_NODE` / `ZSET_NODE` kind 构造 `ValueHandle`，内部 payload adapter 仍管理自己的 heap
-  控制结构和 FFM-backed bytes。
-- `ValueHandle` 提供统一 raw identity，但不表示所有集合控制结构都已经完全 native 化，也不表示每个 value handle 都能通过 stable allocator resolve。
+- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 用对应 allocator-backed `LIST_NODE` / `HASH_NODE` /
+  `SET_NODE` / `ZSET_NODE` root record 构造 `ValueHandle`。root record 保存 adapter identity，DB graph 通过它进入 payload implementation。
+- `ListRoot` 的 FFM quicklist 节点 metadata 还有 allocator-backed `LIST_QUICKLIST_NODE` records，并作为 list internal metadata 单独计数。
+- 剩余 payload bytes、list entry bytes 以及 hash/set/zset internals 仍由 root adapter 或 legacy FFM structures 拥有；当前 split 下，graph traversal 对 list internals 只做 root-only 边界处理。
+- `ValueHandle` 提供统一 raw identity，但不表示所有 collection payload bytes 或 internal nodes 都已经完全 native 化。
 
 stable allocator、object table、pin/quarantine、`realloc` 和 defrag 的完整语义见
 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
@@ -310,7 +311,9 @@ StringCommands
 - `TYPE` 读 `EntryRecord.type()`
 - `OBJECT ENCODING` 读 `EntryRecord.encoding()`
 - `MEMORY USAGE` 结合 entry metadata 和 root estimated bytes
-- `SCAN` 通过 key lifecycle cursor 遍历 key directory
+- `SCAN` 通过 key lifecycle cursor 遍历 key directory，并在 bounded scan epoch 内解析需要的 handle；对外返回 copied key bytes，不暴露 stable physical address 或长生命周期 `NativeObjectView`
+
+`SNAPSHOT` 类路径同样只在 bounded epoch 内 resolve allocator handle，输出前复制需要的 bytes；command、scan、snapshot 和 defrag epoch 共同保护已释放或已移动 object 的 quarantine/reclaim 时机。
 
 ## 写路径
 
