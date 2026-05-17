@@ -113,11 +113,11 @@ Expected rules:
 - Read: `docs/project-docs/ffm-usage.md`
 - Read: `docs/superpowers/reports/2026-05-16-db-native-allocator-benchmark-results.md`
 
-- [ ] **Step 1: Dispatch a fresh subagent for Task 1**
+- [x] **Step 1: Dispatch a fresh subagent for Task 1**
 
 Ask the subagent to run the audit commands from "Audit Commands And Classification Rules" and return a concise classification table. The subagent must not edit files.
 
-- [ ] **Step 2: Run key-byte audit**
+- [x] **Step 2: Run key-byte audit**
 
 Run:
 
@@ -127,7 +127,7 @@ rg -n "key bytes.*blob|blob-store-owned|still.*key bytes|migrate key bytes|KEY_B
 
 Expected: matches are classified as current reference text, stale current-state text, historical/spec text, or future work boundary. Any current-state claim that key bytes remain blob-store-owned or will migrate later is marked for update in Tasks 2 or 3.
 
-- [ ] **Step 3: Run collection audit**
+- [x] **Step 3: Run collection audit**
 
 Run:
 
@@ -137,7 +137,7 @@ rg -n "collection roots|collection root|root-local|adapter-owned|payload adapter
 
 Expected: current-state docs distinguish allocator-backed root records and `LIST_QUICKLIST_NODE` metadata from remaining adapter-owned internals and payload bytes. Broad current-state claims that all collection internals are adapter-owned are marked for update.
 
-- [ ] **Step 4: Run defrag audit**
+- [x] **Step 4: Run defrag audit**
 
 Run:
 
@@ -147,7 +147,7 @@ rg -n "defrag|active defrag|defragMaintenance|legacy.*payload|blob-store|listpac
 
 Expected: current-state docs restrict DB defrag to allocator-backed stable-handle movement. Any claim that DB defrag compacts all DB native memory or legacy adapter payloads is marked for update.
 
-- [ ] **Step 5: Run scan/snapshot audit**
+- [x] **Step 5: Run scan/snapshot audit**
 
 Run:
 
@@ -157,7 +157,7 @@ rg -n "epoch|SNAPSHOT|SCAN|snapshot|scan.*copy|physical address|NativeObjectView
 
 Expected: current-state docs describe bounded handle resolution, copied output, and epoch/quarantine safety. Any claim that scan/snapshot exposes stable native physical addresses is marked for update.
 
-- [ ] **Step 6: Run benchmark audit**
+- [x] **Step 6: Run benchmark audit**
 
 Run:
 
@@ -167,7 +167,7 @@ rg -n "benchmark|baseline|current|non-comparable|before/after|ERR internal error
 
 Expected: benchmark docs separate allocator micro/eval output, current branch RESP benchmark output, DB native defrag comparison output, and baseline/current comparison caveats. Any uncaveated before/after performance claim is marked for update.
 
-- [ ] **Step 7: Main agent review and commit**
+- [x] **Step 7: Main agent review and commit**
 
 The main agent reviews the subagent's classification, confirms no project docs changed, marks Task 1 complete in this plan, and commits the plan-only progress change before starting Task 2.
 
