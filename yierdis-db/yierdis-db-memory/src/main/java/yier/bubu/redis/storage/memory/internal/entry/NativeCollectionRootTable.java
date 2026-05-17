@@ -11,6 +11,7 @@ import yier.bubu.redis.storage.memory.internal.value.YierdisValue;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.ToLongFunction;
 
@@ -41,11 +42,16 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
 
     ValueHandle create(Supplier<? extends T> adapterFactory) {
         Objects.requireNonNull(adapterFactory, "adapterFactory");
+        return create(ignored -> adapterFactory.get());
+    }
+
+    ValueHandle create(Function<NativeHandle, ? extends T> adapterFactory) {
+        Objects.requireNonNull(adapterFactory, "adapterFactory");
         NativeHandle nativeHandle = allocator.allocate(kind, ROOT_RECORD_BYTES);
         T adapter = null;
         try {
             writeRootRecord(nativeHandle);
-            adapter = adapterFactory.get();
+            adapter = adapterFactory.apply(nativeHandle);
             adapters.put(nativeHandle.raw(), adapter);
             return ValueHandle.fromNativeHandle(nativeHandle);
         } catch (RuntimeException | Error e) {

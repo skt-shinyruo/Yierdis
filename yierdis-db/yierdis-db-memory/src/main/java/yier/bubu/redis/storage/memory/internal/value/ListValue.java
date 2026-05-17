@@ -11,21 +11,38 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBlobStore;
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmListpack;
+import yier.bubu.redis.memory.api.NativeAccessMode;
+import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 public final class ListValue implements YierdisValue {
     // Redis stores small lists in a compact encoding and upgrades to quicklist as needed.
     // We approximate that behavior by using a small ring-buffer for packed lists and upgrading
     // to a quicklist-like deque of nodes once size/element thresholds are crossed.
     private static final int QUICKLIST_NODE_MAX_BYTES = YierdisEncodingThresholds.LIST_MAX_LISTPACK_BYTES;
+    private static final int QUICKLIST_NODE_RECORD_BYTES = 48;
+    private static final int QUICKLIST_NODE_OWNER_ROOT_OFFSET = 0;
+    private static final int QUICKLIST_NODE_PREV_OFFSET = 8;
+    private static final int QUICKLIST_NODE_NEXT_OFFSET = 16;
+    private static final int QUICKLIST_NODE_PAYLOAD_REF_OFFSET = 24;
+    private static final int QUICKLIST_NODE_ENTRY_COUNT_OFFSET = 32;
+    private static final int QUICKLIST_NODE_ENCODED_BYTES_OFFSET = 36;
+    private static final int QUICKLIST_NODE_FLAGS_OFFSET = 40;
+    private static final int QUICKLIST_NODE_RESERVED_OFFSET = 44;
 
     private final YierdisFfmMemoryRuntime memoryRuntime;
     private final YierdisFfmBlobStore ffmBlobStore;
+    private final NativeAllocator nativeAllocator;
+    private final NativeHandle rootHandle;
 
     private YierdisListpack listpack;
     private ArrayDeque<ListNode> quicklist;
@@ -39,12 +56,24 @@ public final class ListValue implements YierdisValue {
     public ListValue() {
         this.memoryRuntime = null;
         this.ffmBlobStore = null;
+        this.nativeAllocator = null;
+        this.rootHandle = null;
         this.listpack = new YierdisListpack();
     }
 
     public ListValue(YierdisFfmMemoryRuntime memoryRuntime) {
-        this.memoryRuntime = memoryRuntime;
+        throw new UnsupportedOperationException("FFM ListValue requires ListRoot native allocator ownership");
+    }
+
+    public ListValue(YierdisFfmMemoryRuntime memoryRuntime, NativeAllocator nativeAllocator, NativeHandle rootHandle) {
+        this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
         this.ffmBlobStore = new YierdisFfmBlobStore(memoryRuntime, "list");
+        this.nativeAllocator = Objects.requireNonNull(nativeAllocator, "nativeAllocator");
+        this.rootHandle = Objects.requireNonNull(rootHandle, "rootHandle");
+        if (rootHandle.domain() != NativeObjectKind.LIST_NODE.domain()
+                || rootHandle.kindCode() != NativeObjectKind.LIST_NODE.code()) {
+            throw new IllegalArgumentException("rootHandle must be a LIST_NODE handle: " + rootHandle.raw());
+        }
         this.listpackFfm = new YierdisFfmListpack(ffmBlobStore);
     }
 
@@ -59,6 +88,14 @@ public final class ListValue implements YierdisValue {
             return quicklistFfm != null ? ValueEncoding.LIST_QUICKLIST : ValueEncoding.LIST_PACKED;
         }
         return quicklist != null ? ValueEncoding.LIST_QUICKLIST : ValueEncoding.LIST_PACKED;
+    }
+
+    static int quicklistNodeMaxBytesForTesting() {
+        return QUICKLIST_NODE_MAX_BYTES;
+    }
+
+    int quicklistNodeCountForTesting() {
+        return quicklistFfm == null ? 0 : quicklistFfm.size();
     }
 
     public int size() {
@@ -189,7 +226,6 @@ public final class ListValue implements YierdisValue {
                         break;
                     }
                     byte[] v = qlPollFirstFfm();
-                    totalSize--;
                     out.add(v);
                     continue;
                 }
@@ -236,7 +272,6 @@ public final class ListValue implements YierdisValue {
                         break;
                     }
                     byte[] v = qlPollLastFfm();
-                    totalSize--;
                     out.add(v);
                     continue;
                 }
@@ -533,23 +568,40 @@ public final class ListValue implements YierdisValue {
         }
 
         ArrayDeque<FfmListNode> out = new ArrayDeque<>();
-        FfmListNode node = new FfmListNode(ffmBlobStore);
-        YierdisFfmListpack.Cursor c = listpackFfm.cursor();
-        while (c.next()) {
-            int entryBytes = entryEncodedBytes(c.isNull() ? -1 : c.length());
-            if (!node.canAddEntry(entryBytes)) {
-                out.addLast(node);
-                node = new FfmListNode(ffmBlobStore);
+        FfmListNode node = null;
+        try {
+            node = newFfmListNode();
+            YierdisFfmListpack.Cursor c = listpackFfm.cursor();
+            while (c.next()) {
+                int entryBytes = entryEncodedBytes(c.isNull() ? -1 : c.length());
+                if (!node.canAddEntry(entryBytes)) {
+                    out.addLast(node);
+                    node = newFfmListNode();
+                }
+                node.addLast(c.toByteArray());
             }
-            node.addLast(c.toByteArray());
-        }
-        if (!node.isEmpty()) {
-            out.addLast(node);
-        }
+            if (!node.isEmpty()) {
+                out.addLast(node);
+            } else {
+                try {
+                    node.close();
+                } finally {
+                    node = null;
+                }
+            }
 
-        listpackFfm.close();
-        listpackFfm = null;
-        quicklistFfm = out;
+            refreshFfmNodeMetadataLinks(out);
+            YierdisFfmListpack packed = listpackFfm;
+            packed.close();
+            listpackFfm = null;
+            quicklistFfm = out;
+        } catch (RuntimeException | Error e) {
+            closeFfmNodes(out, e);
+            if (node != null) {
+                closeFfmNode(node, e);
+            }
+            throw e;
+        }
     }
 
     private void qlAddFirst(byte[] v) {
@@ -662,20 +714,22 @@ public final class ListValue implements YierdisValue {
 
     private void qlAddFirstFfm(byte[] v) {
         if (quicklistFfm.isEmpty() || !quicklistFfm.peekFirst().canAdd(v)) {
-            quicklistFfm.addFirst(new FfmListNode(ffmBlobStore));
+            quicklistFfm.addFirst(newFfmListNode());
         }
         FfmListNode n = quicklistFfm.peekFirst();
         n.addFirst(v);
         totalSize++;
+        refreshFfmNodeMetadataLinks();
     }
 
     private void qlAddLastFfm(byte[] v) {
         if (quicklistFfm.isEmpty() || !quicklistFfm.peekLast().canAdd(v)) {
-            quicklistFfm.addLast(new FfmListNode(ffmBlobStore));
+            quicklistFfm.addLast(newFfmListNode());
         }
         FfmListNode n = quicklistFfm.peekLast();
         n.addLast(v);
         totalSize++;
+        refreshFfmNodeMetadataLinks();
     }
 
     private byte[] qlPollFirstFfm() {
@@ -684,12 +738,27 @@ public final class ListValue implements YierdisValue {
         }
         FfmListNode n = quicklistFfm.peekFirst();
         byte[] v = n.removeFirst();
+        totalSize--;
+        FfmListNode removedNode = null;
+        Throwable failure = null;
         if (n.isEmpty()) {
-            quicklistFfm.removeFirst();
-            n.close();
+            removedNode = quicklistFfm.removeFirst();
         }
-        maybeMergeFirstTwoFfm();
-        return v;
+        try {
+            if (removedNode != null) {
+                refreshFfmNodeMetadataLinks();
+            }
+            maybeMergeFirstTwoFfm();
+            refreshFfmNodeMetadataLinks();
+            return v;
+        } catch (RuntimeException | Error e) {
+            failure = e;
+            throw e;
+        } finally {
+            if (removedNode != null) {
+                closeRemovedFfmNode(removedNode, failure);
+            }
+        }
     }
 
     private byte[] qlPollLastFfm() {
@@ -698,66 +767,145 @@ public final class ListValue implements YierdisValue {
         }
         FfmListNode n = quicklistFfm.peekLast();
         byte[] v = n.removeLast();
+        totalSize--;
+        FfmListNode removedNode = null;
+        Throwable failure = null;
         if (n.isEmpty()) {
-            quicklistFfm.removeLast();
-            n.close();
+            removedNode = quicklistFfm.removeLast();
         }
-        maybeMergeLastTwoFfm();
-        return v;
+        try {
+            if (removedNode != null) {
+                refreshFfmNodeMetadataLinks();
+            }
+            maybeMergeLastTwoFfm();
+            refreshFfmNodeMetadataLinks();
+            return v;
+        } catch (RuntimeException | Error e) {
+            failure = e;
+            throw e;
+        } finally {
+            if (removedNode != null) {
+                closeRemovedFfmNode(removedNode, failure);
+            }
+        }
     }
 
     private void maybeMergeFirstTwoFfm() {
         if (quicklistFfm.size() < 2) {
             return;
         }
-        FfmListNode first = quicklistFfm.pollFirst();
-        FfmListNode second = quicklistFfm.pollFirst();
-        if (first == null || second == null) {
-            if (second != null) {
-                quicklistFfm.addFirst(second);
-            }
-            if (first != null) {
-                quicklistFfm.addFirst(first);
-            }
-            return;
-        }
-
+        FfmListNode first = quicklistFfm.peekFirst();
+        FfmListNode second = secondFfmNodeFromFirst();
         if (first.canAppendAll(second)) {
             first.appendAll(second);
-            second.close();
-            quicklistFfm.addFirst(first);
+            quicklistFfm.remove(second);
+            Throwable failure = null;
+            try {
+                refreshFfmNodeMetadataLinks();
+            } catch (RuntimeException | Error e) {
+                failure = e;
+                throw e;
+            } finally {
+                closeRemovedFfmNode(second, failure);
+            }
             return;
         }
-
-        quicklistFfm.addFirst(second);
-        quicklistFfm.addFirst(first);
+        refreshFfmNodeMetadataLinks();
     }
 
     private void maybeMergeLastTwoFfm() {
         if (quicklistFfm.size() < 2) {
             return;
         }
-        FfmListNode last = quicklistFfm.pollLast();
-        FfmListNode prev = quicklistFfm.pollLast();
-        if (last == null || prev == null) {
-            if (prev != null) {
-                quicklistFfm.addLast(prev);
-            }
-            if (last != null) {
-                quicklistFfm.addLast(last);
-            }
-            return;
-        }
-
+        FfmListNode last = quicklistFfm.peekLast();
+        FfmListNode prev = secondFfmNodeFromLast();
         if (prev.canAppendAll(last)) {
             prev.appendAll(last);
-            last.close();
-            quicklistFfm.addLast(prev);
+            quicklistFfm.remove(last);
+            Throwable failure = null;
+            try {
+                refreshFfmNodeMetadataLinks();
+            } catch (RuntimeException | Error e) {
+                failure = e;
+                throw e;
+            } finally {
+                closeRemovedFfmNode(last, failure);
+            }
             return;
         }
+        refreshFfmNodeMetadataLinks();
+    }
 
-        quicklistFfm.addLast(prev);
-        quicklistFfm.addLast(last);
+    private FfmListNode newFfmListNode() {
+        return new FfmListNode(ffmBlobStore, nativeAllocator, rootHandle);
+    }
+
+    private void refreshFfmNodeMetadataLinks() {
+        refreshFfmNodeMetadataLinks(quicklistFfm);
+    }
+
+    private void refreshFfmNodeMetadataLinks(ArrayDeque<FfmListNode> nodes) {
+        if (nodes == null || nodes.isEmpty()) {
+            return;
+        }
+        FfmListNode prev = null;
+        for (FfmListNode node : nodes) {
+            if (prev != null) {
+                prev.writeMetadata(prev.prevRawDuringRefresh, node.rawHandle());
+            }
+            node.prevRawDuringRefresh = prev == null ? 0L : prev.rawHandle();
+            prev = node;
+        }
+        if (prev != null) {
+            prev.writeMetadata(prev.prevRawDuringRefresh, 0L);
+        }
+    }
+
+    private FfmListNode secondFfmNodeFromFirst() {
+        java.util.Iterator<FfmListNode> iterator = quicklistFfm.iterator();
+        iterator.next();
+        return iterator.next();
+    }
+
+    private FfmListNode secondFfmNodeFromLast() {
+        java.util.Iterator<FfmListNode> iterator = quicklistFfm.descendingIterator();
+        iterator.next();
+        return iterator.next();
+    }
+
+    private static void closeFfmNodes(ArrayDeque<FfmListNode> nodes, Throwable failure) {
+        for (FfmListNode node : nodes) {
+            closeFfmNode(node, failure);
+        }
+        nodes.clear();
+    }
+
+    private static void closeFfmNode(FfmListNode node, Throwable failure) {
+        try {
+            node.close();
+        } catch (RuntimeException | Error closeFailure) {
+            failure.addSuppressed(closeFailure);
+        }
+    }
+
+    private static void closeRemovedFfmNode(FfmListNode node, Throwable failure) {
+        try {
+            node.close();
+        } catch (RuntimeException | Error closeFailure) {
+            if (failure != null) {
+                failure.addSuppressed(closeFailure);
+                return;
+            }
+            throw closeFailure;
+        }
+    }
+
+    private static RuntimeException addFailure(RuntimeException failure, RuntimeException next) {
+        if (failure == null) {
+            return next;
+        }
+        failure.addSuppressed(next);
+        return failure;
     }
 
     private static final class ListNode {
@@ -832,10 +980,50 @@ public final class ListValue implements YierdisValue {
     }
 
     private static final class FfmListNode implements AutoCloseable {
+        private final NativeAllocator allocator;
+        private final NativeHandle rootHandle;
+        private final NativeHandle nodeHandle;
         private final YierdisFfmListpack listpack;
+        private long prevRawDuringRefresh;
+        private boolean payloadClosed;
+        private boolean nodeFreed;
 
-        private FfmListNode(YierdisFfmBlobStore blobStore) {
-            this.listpack = new YierdisFfmListpack(blobStore);
+        private FfmListNode(YierdisFfmBlobStore blobStore, NativeAllocator allocator, NativeHandle rootHandle) {
+            this.allocator = Objects.requireNonNull(allocator, "allocator");
+            this.rootHandle = Objects.requireNonNull(rootHandle, "rootHandle");
+            NativeHandle allocated = this.allocator.allocate(
+                    NativeObjectKind.LIST_QUICKLIST_NODE,
+                    QUICKLIST_NODE_RECORD_BYTES
+            );
+            try {
+                this.listpack = new YierdisFfmListpack(blobStore);
+            } catch (RuntimeException | Error e) {
+                try {
+                    this.allocator.free(allocated);
+                } catch (RuntimeException freeFailure) {
+                    e.addSuppressed(freeFailure);
+                }
+                throw e;
+            }
+            this.nodeHandle = allocated;
+            this.nodeFreed = false;
+            try {
+                writeMetadata(0L, 0L);
+            } catch (RuntimeException | Error e) {
+                try {
+                    this.listpack.close();
+                    this.payloadClosed = true;
+                } catch (RuntimeException | Error closeFailure) {
+                    e.addSuppressed(closeFailure);
+                }
+                try {
+                    this.allocator.free(allocated);
+                    this.nodeFreed = true;
+                } catch (RuntimeException freeFailure) {
+                    e.addSuppressed(freeFailure);
+                }
+                throw e;
+            }
         }
 
         boolean isEmpty() {
@@ -887,15 +1075,92 @@ public final class ListValue implements YierdisValue {
             if (other == null || other.isEmpty()) {
                 return;
             }
+            int appended = 0;
             YierdisFfmListpack.Cursor c = other.listpack.cursor();
-            while (c.next()) {
-                listpack.addLast(c.toByteArray());
+            try {
+                while (c.next()) {
+                    listpack.addLast(c.toByteArray());
+                    appended++;
+                }
+            } catch (RuntimeException | Error e) {
+                while (appended > 0) {
+                    try {
+                        listpack.removeLast();
+                    } catch (RuntimeException rollbackFailure) {
+                        e.addSuppressed(rollbackFailure);
+                        break;
+                    }
+                    appended--;
+                }
+                throw e;
+            }
+        }
+
+        long rawHandle() {
+            return nodeHandle == null ? 0L : nodeHandle.raw();
+        }
+
+        void writeMetadata(long prevRaw, long nextRaw) {
+            validateOwnerRoot();
+            try (NativeObjectView view = allocator.resolve(nodeHandle, NativeAccessMode.READ_WRITE)) {
+                setLong(view, QUICKLIST_NODE_OWNER_ROOT_OFFSET, rootHandle.raw());
+                setLong(view, QUICKLIST_NODE_PREV_OFFSET, prevRaw);
+                setLong(view, QUICKLIST_NODE_NEXT_OFFSET, nextRaw);
+                setLong(view, QUICKLIST_NODE_PAYLOAD_REF_OFFSET, 0L);
+                setInt(view, QUICKLIST_NODE_ENTRY_COUNT_OFFSET, listpack.size());
+                setInt(view, QUICKLIST_NODE_ENCODED_BYTES_OFFSET, listpack.encodedBytes());
+                setInt(view, QUICKLIST_NODE_FLAGS_OFFSET, 0);
+                setInt(view, QUICKLIST_NODE_RESERVED_OFFSET, 0);
+            }
+        }
+
+        private void validateOwnerRoot() {
+            try (NativeObjectView ignored = allocator.resolve(rootHandle, NativeAccessMode.READ_ONLY)) {
+                // Allocator resolution validates root handle liveness; constructor validates LIST_NODE kind.
             }
         }
 
         @Override
         public void close() {
-            listpack.close();
+            if (payloadClosed && nodeFreed) {
+                return;
+            }
+            RuntimeException failure = null;
+            if (!payloadClosed) {
+                try {
+                    listpack.close();
+                    payloadClosed = true;
+                } catch (RuntimeException e) {
+                    failure = e;
+                }
+            }
+            if (allocator != null && nodeHandle != null && !nodeFreed) {
+                try {
+                    allocator.free(nodeHandle);
+                    nodeFreed = true;
+                } catch (RuntimeException e) {
+                    if (failure == null) {
+                        failure = e;
+                    } else {
+                        failure.addSuppressed(e);
+                    }
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
+    }
+
+    private static void setLong(NativeObjectView view, int offset, long value) {
+        for (int i = 0; i < Long.BYTES; i++) {
+            view.setByte(offset + i, (byte) (value >>> (i * 8)));
+        }
+    }
+
+    private static void setInt(NativeObjectView view, int offset, int value) {
+        for (int i = 0; i < Integer.BYTES; i++) {
+            view.setByte(offset + i, (byte) (value >>> (i * 8)));
         }
     }
 
@@ -927,10 +1192,20 @@ public final class ListValue implements YierdisValue {
                 listpackFfm = null;
             }
             if (quicklistFfm != null) {
-                for (FfmListNode n : quicklistFfm) {
-                    n.close();
+                RuntimeException failure = null;
+                java.util.Iterator<FfmListNode> iterator = quicklistFfm.iterator();
+                while (iterator.hasNext()) {
+                    FfmListNode n = iterator.next();
+                    try {
+                        n.close();
+                        iterator.remove();
+                    } catch (RuntimeException e) {
+                        failure = addFailure(failure, e);
+                    }
                 }
-                quicklistFfm.clear();
+                if (failure != null) {
+                    throw failure;
+                }
                 quicklistFfm = null;
             }
         }
