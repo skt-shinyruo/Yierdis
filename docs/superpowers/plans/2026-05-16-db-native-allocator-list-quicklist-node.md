@@ -74,14 +74,14 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 - Modify: `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java`
 - Test: `yierdis-memory/yierdis-memory-api/src/test/java/yier/bubu/redis/memory/api/NativeAllocatorContractTest.java`
 
-- [ ] **Step 1: Write the failing API test first**
+- [x] **Step 1: Write the failing API test first**
   - Extend `NativeAllocatorContractTest.statsRecordExposesProductionAllocatorCounters` or add a focused test.
   - Assert `NativeObjectKindCounts` has a separate `listQuicklistNodeObjects` value.
   - Assert `stats.objectCount(NativeObjectKind.LIST_NODE)` still returns the root count.
   - Assert `stats.objectCount(NativeObjectKind.LIST_QUICKLIST_NODE)` returns only the quicklist internal count.
   - Do not alter hash/set/zset expectations except for constructor argument position updates caused by the new record field.
 
-- [ ] **Step 2: Run the focused failing API test**
+- [x] **Step 2: Run the focused failing API test**
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-api -Dtest=NativeAllocatorContractTest test
@@ -89,27 +89,27 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: FAIL before implementation because `LIST_QUICKLIST_NODE` and/or `listQuicklistNodeObjects` do not exist.
 
-- [ ] **Step 3: Implement the object kind and stats record changes**
+- [x] **Step 3: Implement the object kind and stats record changes**
   - Add `LIST_QUICKLIST_NODE` to `NativeObjectKind`.
   - Use the `TYPE_ROOT` domain unless the implementation first introduces a narrower compatible domain; do not reuse the `LIST_NODE` code/domain tuple.
   - Add `listQuicklistNodeObjects` to `NativeObjectKindCounts`.
   - Update `NativeObjectKindCounts.empty()`, compact constructor validation, and `count(...)`.
   - Update all direct `NativeObjectKindCounts` constructor call sites.
 
-- [ ] **Step 4: Implement allocator-side counting**
+- [x] **Step 4: Implement allocator-side counting**
   - In `YierdisStableNativeAllocator.objectKindCounts()`, add a separate local counter for `LIST_QUICKLIST_NODE`.
   - Increment it only when the live allocation kind is `LIST_QUICKLIST_NODE`.
   - Keep `LIST_NODE` counting unchanged and root-only.
 
-- [ ] **Step 5: Run the API and allocator stats checks**
+- [x] **Step 5: Run the API and allocator stats checks**
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-api,yierdis-memory/yierdis-memory-ffm -am -Dtest=NativeAllocatorContractTest,YierdisStableNativeAllocatorTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-api,yierdis-memory/yierdis-memory-ffm -am -Dtest=NativeAllocatorContractTest,YierdisStableNativeAllocatorTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
 
-- [ ] **Step 6: Main-agent review and commit**
+- [x] **Step 6: Main-agent review and commit**
   - Main agent reviews the diff for accidental `LIST_NODE` behavior changes.
   - Commit only this task's changes if execution mode includes commits.
 
@@ -130,7 +130,7 @@ Expected: PASS.
 - [ ] **Step 2: Run the focused failing list tests**
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: FAIL before implementation because FFM quicklist nodes do not allocate native records.
@@ -169,7 +169,7 @@ Expected: FAIL before implementation because FFM quicklist nodes do not allocate
 - [ ] **Step 7: Run focused list tests**
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
@@ -209,7 +209,7 @@ Expected: PASS.
 - [ ] **Step 4: Run the focused failing tests**
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest,CollectionRootTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest,CollectionRootTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: FAIL until free order, stale handling, and defrag-safe resolution are complete.
@@ -230,7 +230,7 @@ Expected: FAIL until free order, stale handling, and defrag-safe resolution are 
 - [ ] **Step 7: Run focused and regression list tests**
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest,CollectionRootTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest,CollectionRootTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
@@ -266,7 +266,7 @@ Expected: PASS.
 - [ ] **Step 4A: Run the graph hook test**
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=YierdisDbNativeHandleGraphTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=YierdisDbNativeHandleGraphTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS if the hook was added.
@@ -280,7 +280,7 @@ Expected: PASS if the hook was added.
 - [ ] **Step 3B: Run the root-only graph test**
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=YierdisDbNativeHandleGraphTest,ListValueTest,ListRootTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=YierdisDbNativeHandleGraphTest,ListValueTest,ListRootTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS if traversal is deferred.
@@ -305,7 +305,7 @@ Expected: PASS.
 - [ ] **Step 2: Run memory FFM allocator tests**
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-ffm -am -Dtest=YierdisStableNativeAllocatorTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-ffm -am -Dtest=YierdisStableNativeAllocatorTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.
@@ -313,7 +313,7 @@ Expected: PASS.
 - [ ] **Step 3: Run DB list and graph focused tests**
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest,CollectionRootTest,YierdisDbNativeHandleGraphTest test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=ListValueTest,ListRootTest,CollectionRootTest,YierdisDbNativeHandleGraphTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: PASS.

@@ -575,6 +575,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         long entryRecords = 0;
         long keyBytes = 0;
         long listNodes = 0;
+        long listQuicklistNodes = 0;
         long hashNodes = 0;
         long setNodes = 0;
         long zsetNodes = 0;
@@ -594,6 +595,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                 case ENTRY_RECORD -> entryRecords++;
                 case KEY_BYTES -> keyBytes++;
                 case LIST_NODE -> listNodes++;
+                case LIST_QUICKLIST_NODE -> listQuicklistNodes++;
                 case HASH_NODE -> hashNodes++;
                 case SET_NODE -> setNodes++;
                 case ZSET_NODE -> zsetNodes++;
@@ -607,6 +609,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                 entryRecords,
                 keyBytes,
                 listNodes,
+                listQuicklistNodes,
                 hashNodes,
                 setNodes,
                 zsetNodes,

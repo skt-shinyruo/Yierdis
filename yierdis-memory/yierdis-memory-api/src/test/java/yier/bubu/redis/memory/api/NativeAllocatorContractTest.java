@@ -55,7 +55,8 @@ public class NativeAllocatorContractTest {
                 7,
                 8,
                 9,
-                10
+                10,
+                11
         );
         NativeAllocationLatencyHistogram histogram = new NativeAllocationLatencyHistogram(
                 20,
@@ -106,6 +107,9 @@ public class NativeAllocatorContractTest {
         Assert.assertEquals(16L, stats.defragReclaimedPages());
         Assert.assertEquals(2L, stats.objectCount(NativeObjectKind.STRING_BYTES));
         Assert.assertEquals(3L, stats.objectCount(NativeObjectKind.ENTRY_RECORD));
+        Assert.assertEquals(5L, stats.objectCount(NativeObjectKind.LIST_NODE));
+        Assert.assertEquals(6L, stats.objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+        Assert.assertEquals(6L, stats.objectKindCounts().listQuicklistNodeObjects());
         Assert.assertEquals(20L, stats.allocationLatencyHistogram().allocationCount());
         Assert.assertEquals(10_000L, stats.allocationLatencyHistogram().totalNanos());
     }
