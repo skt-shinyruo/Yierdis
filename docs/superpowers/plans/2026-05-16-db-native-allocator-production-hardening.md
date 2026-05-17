@@ -593,7 +593,7 @@ Expected: PASS with server startup, PING/SET/GET, allocator-sensitive command pa
 **Files:**
 - Verify only; no edits expected.
 
-- [ ] **Step 1: Run focused DB memory tests**
+- [x] **Step 1: Run focused DB memory tests**
 
 Run:
 
@@ -603,7 +603,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: PASS.
 
-- [ ] **Step 2: Run focused allocator tests**
+- [x] **Step 2: Run focused allocator tests**
 
 Run:
 
@@ -613,7 +613,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: PASS.
 
-- [ ] **Step 3: Run smoke mode**
+- [x] **Step 3: Run smoke mode**
 
 Run the smoke script contract test:
 
@@ -629,7 +629,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: PASS.
 
-- [ ] **Step 4: Run formatting and protected-file checks**
+- [x] **Step 4: Run formatting and protected-file checks**
 
 Run:
 
@@ -650,13 +650,13 @@ Expected:
 
 ## Final Review Checklist
 
-- [ ] Repeated native churn runs are deterministic and bounded.
-- [ ] Native runtime bytes return to zero after every DB shutdown cycle.
-- [ ] Key bytes, string bytes, entry records, and collection root native object counts return to zero after cleanup.
-- [ ] Scan/snapshot epoch quarantine is asserted during the epoch and released after scope close.
-- [ ] Defrag metrics are checked with positive/relative/bounded assertions rather than brittle global totals.
-- [ ] Maxmemory coverage is narrow and validates cleanup/accounting without changing policy semantics.
-- [ ] Smoke mode reuses `scripts/smoke.sh` and existing tiny bench behavior.
-- [ ] `scripts/bench.sh` is not turned into a new framework.
-- [ ] Parent roadmap spec is unchanged.
-- [ ] `yierdis.md` is unchanged, unstaged, and uncommitted.
+- [x] Repeated native churn runs are deterministic and bounded.
+- [x] Native runtime bytes return to zero after every DB shutdown cycle.
+- [x] Key bytes, string bytes, entry records, and collection root native object counts return to zero after cleanup.
+- [x] Scan/snapshot epoch quarantine is asserted during the epoch and released after scope close.
+- [x] Defrag metrics are checked with positive/relative/bounded assertions rather than brittle global totals.
+- [x] Maxmemory coverage is narrow and validates cleanup/accounting without changing policy semantics.
+- [x] Smoke mode reuses `scripts/smoke.sh` and existing tiny bench behavior.
+- [x] `scripts/bench.sh` is not turned into a new framework.
+- [x] Parent roadmap spec is unchanged.
+- [x] `yierdis.md` is unchanged, unstaged, and uncommitted.
