@@ -34,6 +34,15 @@ public final class YierdisBenchArgs {
     @Option(names = "--serverJar", description = "Path to yierdis server jar (only used when starting server).")
     public Path serverJar;
 
+    @Option(names = "--comparisonMode", description = "Run a jar-only baseline/current comparison.")
+    public boolean comparisonMode;
+
+    @Option(names = "--baselineServerJar", description = "Path to the baseline server jar used in comparison mode.")
+    public Path baselineServerJar;
+
+    @Option(names = "--currentServerJar", description = "Path to the current server jar used in comparison mode.")
+    public Path currentServerJar;
+
     @Option(names = "--javaCmd", defaultValue = "java", description = "Java command used to start server (only used when starting server).")
     public String javaCmd = "java";
 

@@ -78,16 +78,20 @@ public class BenchServerArgsReuseTest {
                 logFile
         );
 
+        List<String> expected = new ArrayList<>();
+        expected.add("-Xms4g");
+        expected.add("-Xmx4g");
+        expected.add("-XX:MaxDirectMemorySize=6g");
+        expected.add("-jar");
+        expected.add(fakeJar.toAbsolutePath().toString());
+        expected.addAll(serverArgsForRun.toArgv());
+        List<String> commandLine = new ArrayList<>();
+        commandLine.add(script.toAbsolutePath().toString());
+        commandLine.addAll(expected);
+        Assert.assertEquals(commandLine, process.commandLine());
+
         try {
             process.start();
-
-            List<String> expected = new ArrayList<>();
-            expected.add("-Xms4g");
-            expected.add("-Xmx4g");
-            expected.add("-XX:MaxDirectMemorySize=6g");
-            expected.add("-jar");
-            expected.add(fakeJar.toAbsolutePath().toString());
-            expected.addAll(serverArgsForRun.toArgv());
 
             List<String> actual = waitForLines(logFile, expected.size());
             Assert.assertEquals(expected, actual);

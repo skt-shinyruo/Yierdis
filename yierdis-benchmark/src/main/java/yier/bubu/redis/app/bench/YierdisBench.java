@@ -443,6 +443,14 @@ public final class YierdisBench {
         }
     }
 
+    private static Path requireRegularFile(Path path, String optionName) {
+        Objects.requireNonNull(path, optionName);
+        if (!Files.isRegularFile(path)) {
+            throw new IllegalArgumentException(optionName + " 不存在: " + path.toAbsolutePath());
+        }
+        return path;
+    }
+
     private static boolean waitReady(String host, int port, int timeoutMillis) {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         while (System.nanoTime() < deadline) {
@@ -1185,6 +1193,9 @@ public final class YierdisBench {
     static final class BenchConfig {
         final boolean noStartServer;
         final Path serverJar;
+        final boolean comparisonMode;
+        final Path baselineServerJar;
+        final Path currentServerJar;
         final List<String> backends;
         final String host;
         final int portBase;
@@ -1213,6 +1224,9 @@ public final class YierdisBench {
         private BenchConfig(
                 boolean noStartServer,
                 Path serverJar,
+                boolean comparisonMode,
+                Path baselineServerJar,
+                Path currentServerJar,
                 List<String> backends,
                 String host,
                 int portBase,
@@ -1237,6 +1251,9 @@ public final class YierdisBench {
         ) {
             this.noStartServer = noStartServer;
             this.serverJar = serverJar;
+            this.comparisonMode = comparisonMode;
+            this.baselineServerJar = baselineServerJar;
+            this.currentServerJar = currentServerJar;
             this.backends = backends;
             this.host = host;
             this.portBase = portBase;
@@ -1264,18 +1281,42 @@ public final class YierdisBench {
             Objects.requireNonNull(args, "args");
             Objects.requireNonNull(baseServerArgs, "baseServerArgs");
 
-            if (args.serverJar != null && !Files.isRegularFile(args.serverJar)) {
-                throw new IllegalArgumentException("serverJar 不存在: " + args.serverJar.toAbsolutePath());
+            Path serverJar = args.serverJar;
+            Path baselineServerJar = args.baselineServerJar;
+            Path currentServerJar = args.currentServerJar;
+
+            if (args.comparisonMode) {
+                if (serverJar != null) {
+                    throw new IllegalArgumentException("comparisonMode 不支持 serverJar");
+                }
+                if (args.noStartServer) {
+                    throw new IllegalArgumentException("comparisonMode 不支持 noStartServer");
+                }
+                if (baselineServerJar == null) {
+                    throw new IllegalArgumentException("comparisonMode 需要 baselineServerJar");
+                }
+                if (currentServerJar == null) {
+                    throw new IllegalArgumentException("comparisonMode 需要 currentServerJar");
+                }
+                baselineServerJar = requireRegularFile(baselineServerJar, "baselineServerJar");
+                currentServerJar = requireRegularFile(currentServerJar, "currentServerJar");
+            } else if (serverJar != null) {
+                serverJar = requireRegularFile(serverJar, "serverJar");
             }
             if (args.nativeEval) {
                 effectiveNativeEvalIterations(args.nativeEvalIterations);
             }
 
-            List<String> backends = args.noStartServer ? List.of("external") : DEFAULT_BACKENDS;
+            List<String> backends = args.comparisonMode
+                    ? List.of("baseline", "current")
+                    : (args.noStartServer ? List.of("external") : DEFAULT_BACKENDS);
 
             return new BenchConfig(
                     args.noStartServer,
-                    args.serverJar,
+                    serverJar,
+                    args.comparisonMode,
+                    baselineServerJar,
+                    currentServerJar,
                     backends,
                     args.host,
                     args.portBase,
@@ -1294,7 +1335,7 @@ public final class YierdisBench {
                     args.skipPrefill,
                     args.skipLatency,
                     args.strictReplies,
-                    args.skipNativeDefragCompare,
+                    args.comparisonMode || args.skipNativeDefragCompare,
                     args.nativeEval,
                     args.nativeEvalIterations
             );
@@ -1336,6 +1377,13 @@ public final class YierdisBench {
             }
             Files.createDirectories(logFile.getParent());
 
+            ProcessBuilder pb = new ProcessBuilder(commandLine());
+            pb.redirectErrorStream(true);
+            pb.redirectOutput(logFile.toFile());
+            process = pb.start();
+        }
+
+        List<String> commandLine() {
             List<String> cmd = new ArrayList<>();
             cmd.add(javaCmd);
             cmd.add("-Xms" + xms);
@@ -1344,11 +1392,7 @@ public final class YierdisBench {
             cmd.add("-jar");
             cmd.add(serverJar.toAbsolutePath().toString());
             cmd.addAll(serverArgs.toArgv());
-
-            ProcessBuilder pb = new ProcessBuilder(cmd);
-            pb.redirectErrorStream(true);
-            pb.redirectOutput(logFile.toFile());
-            process = pb.start();
+            return cmd;
         }
 
         void stop() {
