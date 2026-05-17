@@ -19,13 +19,13 @@ Status values:
 
 ### APPEND
 
-- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr`.
+- **Command layer**: `covered` - `StringCommandTest#stringCommandsCoverBinarySafeSetGetStrlenAndAppend`.
 - **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
 - **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootOverwriteReusesSpareCapacityForShorterValue`.
 
 ### BITCOUNT
 
-- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#bitmapTemplateCoversMutationReadsAndByteRanges` and `BitmapCommandTest#bitcountRangeFollowsRedisByteRangeRules`.
+- **Command layer**: `covered` - `BitmapCommandTest#bitcountRangeFollowsRedisByteRangeRules`.
 - **DB API**: `covered` - `StringDirectOpsTest#bitcountSupportsWholeStringRangesMissingKeysTtlAndWrongType`.
 - **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootEnsureLengthSupportsBitmapStyleGrowthWithZeroFill`.
 
@@ -43,7 +43,7 @@ Status values:
 
 ### DECR
 
-- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr`.
+- **Command layer**: `covered` - `StringCommandTest#counterCommandsCoverIncrDecrAndInvalidInteger`.
 - **DB API**: `covered-by-shared-test` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries` covers `StringWriteOps.incrBy`.
 - **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootStoresIntegerLikeBytesAsRawNativeBytes`.
 
@@ -97,13 +97,13 @@ Status values:
 
 ### GET
 
-- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr`.
+- **Command layer**: `covered` - `StringCommandTest#stringCommandsCoverBinarySafeSetGetStrlenAndAppend`.
 - **DB API**: `covered` - `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit`.
 - **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootOverwritesWithoutReintroducingHeapPayloads`.
 
 ### GETBIT
 
-- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#bitmapTemplateCoversMutationReadsAndByteRanges`.
+- **Command layer**: `covered` - `BitmapCommandTest#getbitSetbitBasicSemantics`.
 - **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
 - **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootEnsureLengthSupportsBitmapStyleGrowthWithZeroFill`.
 
@@ -151,7 +151,7 @@ Status values:
 
 ### INCR
 
-- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr` and `CommandProcessorTest#incrWorksAfterAppendWhenRawStringHasSpareCapacity`.
+- **Command layer**: `covered` - `StringCommandTest#counterCommandsCoverIncrDecrAndInvalidInteger` and `CommandProcessorTest#incrWorksAfterAppendWhenRawStringHasSpareCapacity`.
 - **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
 - **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootStoresIntegerLikeBytesAsRawNativeBytes`.
 
@@ -289,13 +289,13 @@ Status values:
 
 ### SET
 
-- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr`, `CommandProcessorTest#setNxReturnsNilWhenKeyExists`, and `Milestone1CompatTest#setGetAndKeepTtlBehaveAsExpected`.
+- **Command layer**: `covered` - `StringCommandTest#stringCommandsCoverBinarySafeSetGetStrlenAndAppend`, `StringCommandTest#setOptionsCoverNxXxGetAndTtlModes`, `CommandProcessorTest#setNxReturnsNilWhenKeyExists`, and `Milestone1CompatTest#setGetAndKeepTtlBehaveAsExpected`.
 - **DB API**: `covered` - `StringDirectOpsTest#setCoversByteArraySliceModesReturnOldTtlAndMemoryLimit`.
 - **Native internals**: `covered` - `StringRootTest#stringRootOverwritesWithoutReintroducingHeapPayloads`.
 
 ### SETBIT
 
-- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#bitmapTemplateCoversMutationReadsAndByteRanges`.
+- **Command layer**: `covered` - `BitmapCommandTest#getbitSetbitBasicSemantics` and `BitmapCommandTest#setbitZeroFillsGrownBytesWithinCapacity`.
 - **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
 - **Native internals**: `covered` - `StringRootTest#stringRootEnsureLengthSupportsBitmapStyleGrowthWithZeroFill`.
 
@@ -325,7 +325,7 @@ Status values:
 
 ### STRLEN
 
-- **Command layer**: `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr`.
+- **Command layer**: `covered` - `StringCommandTest#stringCommandsCoverBinarySafeSetGetStrlenAndAppend`.
 - **DB API**: `covered` - `NativeStorageRegressionTest#stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries`.
 - **Native internals**: `covered-by-shared-test` - `StringRootTest#stringRootOverwritesWithoutReintroducingHeapPayloads`.
 
@@ -420,7 +420,7 @@ Status values:
 - **Command variant**: `SCAN / COUNT` - `covered` - `ScanCursorContractTest#countAndMatchNeverDeadlockEvenWhenNoKeyMatches`.
 - **Command variant**: `SCAN / invalid cursor` - `covered` - `CommandVariantCoverageTest#scanVariantsCoverInvalidCursorAndDuplicateOptions`.
 - **Command variant**: `SCAN / duplicate option` - `covered` - `CommandVariantCoverageTest#scanVariantsCoverInvalidCursorAndDuplicateOptions`.
-- **Command variant**: `SET / plain` - `covered` - `StringBitmapOperationCoverageTest#stringTemplateCoversBinarySafeSetGetStrlenAppendIncrAndDecr`.
+- **Command variant**: `SET / plain` - `covered` - `StringCommandTest#stringCommandsCoverBinarySafeSetGetStrlenAndAppend`.
 - **Command variant**: `SET / NX` - `covered` - `CommandProcessorTest#setNxReturnsNilWhenKeyExists`.
 - **Command variant**: `SET / XX` - `covered` - `CommandVariantCoverageTest#setVariantsCoverXxPxExatPxatAndConflicts`.
 - **Command variant**: `SET / GET` - `covered` - `Milestone1CompatTest#setGetAndKeepTtlBehaveAsExpected`.
@@ -430,9 +430,9 @@ Status values:
 - **Command variant**: `SET / PXAT` - `covered` - `CommandVariantCoverageTest#setVariantsCoverXxPxExatPxatAndConflicts`.
 - **Command variant**: `SET / KEEPTTL` - `covered` - `Milestone1CompatTest#setGetAndKeepTtlBehaveAsExpected`.
 - **Command variant**: `SET / conflicts` - `covered` - `Milestone1CompatTest#setRejectsConflictingModeOptions`.
-- **Command variant**: `BITCOUNT / full string` - `covered` - `StringBitmapOperationCoverageTest#bitmapTemplateCoversMutationReadsAndByteRanges`.
-- **Command variant**: `BITCOUNT / positive byte range` - `covered` - `StringBitmapOperationCoverageTest#bitmapTemplateCoversMutationReadsAndByteRanges`.
-- **Command variant**: `BITCOUNT / negative byte range` - `covered` - `StringBitmapOperationCoverageTest#bitmapTemplateCoversMutationReadsAndByteRanges`.
+- **Command variant**: `BITCOUNT / full string` - `covered` - `BitmapCommandTest#bitcountRangeFollowsRedisByteRangeRules`.
+- **Command variant**: `BITCOUNT / positive byte range` - `covered` - `BitmapCommandTest#bitcountRangeFollowsRedisByteRangeRules`.
+- **Command variant**: `BITCOUNT / negative byte range` - `covered` - `BitmapCommandTest#bitcountRangeFollowsRedisByteRangeRules`.
 - **Command variant**: `BITCOUNT / invalid bounds` - `covered` - `CommandVariantCoverageTest#bitcountInvalidBoundsRejectNonIntegerRanges`.
 - **Command variant**: `LPOP / single pop` - `covered` - `ListCommandTest#lpopRpopCountVariantsAndDeleteWhenEmpty`.
 - **Command variant**: `LPOP / counted pop` - `covered` - `ListCommandTest#lpopRpopCountVariantsAndDeleteWhenEmpty`.

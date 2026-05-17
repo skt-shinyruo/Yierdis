@@ -72,7 +72,7 @@
 
 ```bash
 mvn -pl yierdis-tests/yierdis-integration-tests,yierdis-server/yierdis-server-main -am \
-  -Dtest=OperationCoverageMatrixTest,ServerOperationCoverageMatrixTest,StringBitmapOperationCoverageTest \
+  -Dtest=OperationCoverageMatrixTest,ServerOperationCoverageMatrixTest,StringCommandTest,BitmapCommandTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
