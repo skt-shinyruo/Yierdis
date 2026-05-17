@@ -108,22 +108,30 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
             return;
         }
         NativeHandle nativeHandle = requireNativeHandle(handle);
-        T removed = adapters.remove(nativeHandle.raw());
-        if (removed == null) {
+        T adapter = adapters.get(nativeHandle.raw());
+        if (adapter == null) {
             return;
         }
         RuntimeException failure = null;
+        boolean adapterClosed = false;
+        boolean rootFreed = false;
         try {
-            removed.close();
+            adapter.close();
+            adapterClosed = true;
         } catch (RuntimeException e) {
             failure = addFailure(failure, e);
         }
         try {
             allocator.free(nativeHandle);
+            rootFreed = true;
         } catch (StaleNativeHandleException ignored) {
             // The allocator, not the adapter table, owns liveness. External free leaves the adapter stale.
+            rootFreed = true;
         } catch (RuntimeException e) {
             failure = addFailure(failure, e);
+        }
+        if (adapterClosed && rootFreed) {
+            adapters.remove(nativeHandle.raw());
         }
         if (failure != null) {
             throw failure;

@@ -4,11 +4,22 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
+import yier.bubu.redis.memory.api.NativeDefragReport;
+import yier.bubu.redis.memory.api.NativeDefragResult;
+import yier.bubu.redis.memory.api.NativeEpochKind;
+import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.NativeObjectView;
+import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.api.ValueType;
+import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
+import yier.bubu.redis.storage.memory.internal.value.YierdisValue;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -61,6 +72,74 @@ public class CollectionRootTest {
             assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.HASH_NODE, hash.create(), hash::contains, hash::size);
             assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.SET_NODE, set.create(), set::contains, set::size);
             assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.ZSET_NODE, zset.create(), zset::contains, zset::size);
+        }
+    }
+
+    @Test
+    public void collectionRootReleaseKeepsAdapterRetryableButFreesRootWhenAdapterCloseFails() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root-release-retry");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32)) {
+            NativeCollectionRootTable<ThrowOnceListValue> table = new NativeCollectionRootTable<>(
+                    allocator,
+                    NativeObjectKind.LIST_NODE,
+                    "list",
+                    false
+            );
+            ThrowOnceListValue value = new ThrowOnceListValue();
+            ValueHandle handle = table.create(rootHandle -> value);
+
+            try {
+                table.release(handle);
+                Assert.fail("expected injected close failure");
+            } catch (IllegalStateException expected) {
+                Assert.assertTrue(expected.getMessage().contains("injected close failure"));
+            }
+
+            Assert.assertFalse(table.contains(handle));
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
+            Assert.assertEquals(1, value.closeCalls());
+            assertStale(allocator, handle.nativeHandle());
+
+            table.release(handle);
+
+            Assert.assertFalse(table.contains(handle));
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
+            Assert.assertEquals(2, value.closeCalls());
+            assertStale(allocator, handle.nativeHandle());
+        }
+    }
+
+    @Test
+    public void collectionRootReleaseKeepsAdapterRetryableWhenRootNativeFreeFails() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root-release-free-retry");
+             FailOnceFreeAllocator allocator = new FailOnceFreeAllocator(runtime, 32)) {
+            NativeCollectionRootTable<CountingListValue> table = new NativeCollectionRootTable<>(
+                    allocator,
+                    NativeObjectKind.LIST_NODE,
+                    "list",
+                    false
+            );
+            CountingListValue value = new CountingListValue();
+            ValueHandle handle = table.create(rootHandle -> {
+                allocator.failNextFree(rootHandle);
+                return value;
+            });
+
+            try {
+                table.release(handle);
+                Assert.fail("expected injected root free failure");
+            } catch (IllegalStateException expected) {
+                Assert.assertTrue(expected.getMessage().contains("injected root free failure"));
+            }
+
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
+            Assert.assertEquals(1, value.closeCalls());
+
+            table.release(handle);
+
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
+            Assert.assertEquals(2, value.closeCalls());
+            assertStale(allocator, handle.nativeHandle());
         }
     }
 
@@ -136,5 +215,130 @@ public class CollectionRootTest {
     @FunctionalInterface
     private interface RootSize {
         int size(ValueHandle handle);
+    }
+
+    private static final class FailOnceFreeAllocator implements NativeAllocator {
+        private final NativeAllocator delegate;
+        private long failedRawHandle;
+        private boolean armed;
+
+        private FailOnceFreeAllocator(YierdisFfmMemoryRuntime runtime, int maxSlots) {
+            this.delegate = new YierdisStableNativeAllocator(runtime, maxSlots);
+        }
+
+        private void failNextFree(NativeHandle handle) {
+            failedRawHandle = handle.raw();
+            armed = true;
+        }
+
+        @Override
+        public NativeHandle allocate(NativeObjectKind kind, int size) {
+            return delegate.allocate(kind, size);
+        }
+
+        @Override
+        public NativeHandle realloc(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
+            return delegate.realloc(handle, newSize, policy);
+        }
+
+        @Override
+        public void free(NativeHandle handle) {
+            if (armed && handle.raw() == failedRawHandle) {
+                armed = false;
+                throw new IllegalStateException("injected root free failure");
+            }
+            delegate.free(handle);
+        }
+
+        @Override
+        public void pin(NativeHandle handle) {
+            delegate.pin(handle);
+        }
+
+        @Override
+        public void unpin(NativeHandle handle) {
+            delegate.unpin(handle);
+        }
+
+        @Override
+        public NativeEpochScope beginEpoch(NativeEpochKind kind) {
+            return delegate.beginEpoch(kind);
+        }
+
+        @Override
+        public NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode) {
+            return delegate.resolve(handle, mode);
+        }
+
+        @Override
+        public NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes) {
+            return delegate.defragOne(handle, maxMoveBytes);
+        }
+
+        @Override
+        public NativeDefragReport defragCycle(NativeDefragOptions options) {
+            return delegate.defragCycle(options);
+        }
+
+        @Override
+        public NativeAllocatorStats stats() {
+            return delegate.stats();
+        }
+
+        @Override
+        public void close() {
+            delegate.close();
+        }
+    }
+
+    private static final class CountingListValue implements YierdisValue {
+        private int closeCalls;
+
+        @Override
+        public ValueType type() {
+            return ValueType.LIST;
+        }
+
+        @Override
+        public ValueEncoding encoding() {
+            return ValueEncoding.LIST_PACKED;
+        }
+
+        @Override
+        public void close() {
+            closeCalls++;
+        }
+
+        int closeCalls() {
+            return closeCalls;
+        }
+    }
+
+    private static final class ThrowOnceListValue implements YierdisValue {
+        private boolean fail = true;
+        private int closeCalls;
+
+        @Override
+        public ValueType type() {
+            return ValueType.LIST;
+        }
+
+        @Override
+        public ValueEncoding encoding() {
+            return ValueEncoding.LIST_PACKED;
+        }
+
+        @Override
+        public void close() {
+            closeCalls++;
+            if (fail) {
+                fail = false;
+                throw new IllegalStateException("injected close failure");
+            }
+        }
+
+        int closeCalls() {
+            return closeCalls;
+        }
     }
 }

@@ -17,10 +17,15 @@ import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 public class ListValueTest {
     @Test
@@ -110,6 +115,202 @@ public class ListValueTest {
             root.lpop(handle, 1);
             Assert.assertEquals(2, root.size(handle));
             Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+        }
+    }
+
+    @Test
+    public void poppingElementThatEmptiesFfmQuicklistNodeFreesExactlyThatNodeRecord() {
+        int elementBytes = ListValue.quicklistNodeMaxBytesForTesting();
+        byte[] a = filledValue('a', elementBytes);
+        byte[] b = filledValue('b', elementBytes);
+        byte[] c = filledValue('c', elementBytes);
+
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-pop-free-node");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             ListRoot root = new ListRoot(runtime, allocator)) {
+            ValueHandle handle = root.create();
+            root.rpush(handle, List.of(a, b, c));
+            List<Long> nodeHandles = quicklistNodeHandles(root, handle);
+            Assert.assertEquals(3, nodeHandles.size());
+
+            Assert.assertArrayEquals(a, root.lpop(handle, 1).get(0));
+
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            assertStale(allocator, nodeHandles.get(0));
+            assertLive(allocator, nodeHandles.get(1));
+            assertLive(allocator, nodeHandles.get(2));
+            List<byte[]> remaining = readRange(root, handle, 0, -1);
+            Assert.assertArrayEquals(b, remaining.get(0));
+            Assert.assertArrayEquals(c, remaining.get(1));
+        }
+    }
+
+    @Test
+    public void firstNodeMergeFreesDiscardedQuicklistNodeAndPreservesOrder() {
+        int maxBytes = ListValue.quicklistNodeMaxBytesForTesting();
+        int elementBytes = elementBytesSoTwoFitThreeDoNot(maxBytes);
+        byte[] a = filledValue('a', elementBytes);
+        byte[] b = filledValue('b', elementBytes);
+        byte[] c = filledValue('c', elementBytes);
+
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-first-merge-free");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             ListRoot root = new ListRoot(runtime, allocator)) {
+            ValueHandle handle = root.create();
+            root.rpush(handle, List.of(a, b, c));
+            List<Long> nodeHandles = quicklistNodeHandles(root, handle);
+            Assert.assertEquals(2, nodeHandles.size());
+
+            Assert.assertArrayEquals(a, root.lpop(handle, 1).get(0));
+
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            assertLive(allocator, nodeHandles.get(0));
+            assertStale(allocator, nodeHandles.get(1));
+            List<byte[]> remaining = readRange(root, handle, 0, -1);
+            Assert.assertEquals(2, remaining.size());
+            Assert.assertArrayEquals(b, remaining.get(0));
+            Assert.assertArrayEquals(c, remaining.get(1));
+        }
+    }
+
+    @Test
+    public void lastNodeMergeFreesDiscardedQuicklistNodeAndPreservesOrder() {
+        int maxBytes = ListValue.quicklistNodeMaxBytesForTesting();
+        int elementBytes = elementBytesSoTwoFitThreeDoNot(maxBytes);
+        byte[] a = filledValue('a', elementBytes);
+        byte[] b = filledValue('b', elementBytes);
+        byte[] c = filledValue('c', elementBytes);
+
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-last-merge-free");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             ListRoot root = new ListRoot(runtime, allocator)) {
+            ValueHandle handle = root.create();
+            root.lpush(handle, List.of(c, b, a));
+            List<Long> nodeHandles = quicklistNodeHandles(root, handle);
+            Assert.assertEquals(2, nodeHandles.size());
+
+            Assert.assertArrayEquals(c, root.rpop(handle, 1).get(0));
+
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            assertLive(allocator, nodeHandles.get(0));
+            assertStale(allocator, nodeHandles.get(1));
+            List<byte[]> remaining = readRange(root, handle, 0, -1);
+            Assert.assertEquals(2, remaining.size());
+            Assert.assertArrayEquals(a, remaining.get(0));
+            Assert.assertArrayEquals(b, remaining.get(1));
+        }
+    }
+
+    @Test
+    public void removedQuicklistNodeHandleAndAdapterStayStaleAfterSlotReuse() throws Exception {
+        int elementBytes = ListValue.quicklistNodeMaxBytesForTesting();
+        byte[] a = filledValue('a', elementBytes);
+        byte[] b = filledValue('b', elementBytes);
+        byte[] c = filledValue('c', elementBytes);
+        byte[] d = filledValue('d', elementBytes);
+
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-stale-node");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 5);
+             ListRoot root = new ListRoot(runtime, allocator)) {
+            ValueHandle handle = root.create();
+            root.rpush(handle, List.of(a, b, c));
+            Object staleAdapter = firstQuicklistNodeAdapter(root, handle);
+            long staleHandle = rawQuicklistNodeHandle(staleAdapter);
+            NativeHandle staleNativeHandle = NativeHandle.fromRaw(staleHandle);
+
+            root.lpop(handle, 1);
+            assertStale(allocator, staleHandle);
+
+            root.create();
+            root.rpush(handle, List.of(d));
+
+            long reusedHandle = quicklistNodeHandles(root, handle).stream()
+                    .filter(raw -> NativeHandle.fromRaw(raw).slotId() == staleNativeHandle.slotId())
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("expected freed quicklist node slot to be reused"));
+            NativeHandle reusedNativeHandle = NativeHandle.fromRaw(reusedHandle);
+            Assert.assertEquals(staleNativeHandle.slotId(), reusedNativeHandle.slotId());
+            Assert.assertNotEquals(staleNativeHandle.raw(), reusedNativeHandle.raw());
+            Assert.assertNotEquals(staleNativeHandle.generation(), reusedNativeHandle.generation());
+            assertLive(allocator, reusedHandle);
+            assertStale(allocator, staleHandle);
+            assertStaleAdapterFailsThroughAllocator(staleAdapter);
+        }
+    }
+
+    @Test
+    public void corruptedQuicklistNodeAdapterHandleFailsNativeValidationBeforePayloadRead() throws Exception {
+        int elementBytes = ListValue.quicklistNodeMaxBytesForTesting();
+        byte[] a = filledValue('a', elementBytes);
+        byte[] b = filledValue('b', elementBytes);
+        byte[] c = filledValue('c', elementBytes);
+
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-corrupt-node-handle");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             ListRoot root = new ListRoot(runtime, allocator)) {
+            ValueHandle handle = root.create();
+            root.rpush(handle, List.of(a, b, c));
+            Object staleAdapter = firstQuicklistNodeAdapter(root, handle);
+            long staleHandle = rawQuicklistNodeHandle(staleAdapter);
+
+            root.lpop(handle, 1);
+            assertStale(allocator, staleHandle);
+
+            NativeHandle wrongKindHandle = NativeHandle.of(
+                    NativeObjectKind.HASH_NODE.domain(),
+                    NativeObjectKind.HASH_NODE,
+                    NativeHandle.fromRaw(staleHandle).slotId(),
+                    NativeHandle.fromRaw(staleHandle).generation(),
+                    NativeHandle.fromRaw(staleHandle).flags()
+            );
+            setQuicklistNodeHandle(staleAdapter, wrongKindHandle);
+            assertCorruptedAdapterFailsNativeValidation(staleAdapter);
+
+            NativeHandle wrongDomainHandle = NativeHandle.of(
+                    NativeObjectKind.ENTRY_RECORD.domain(),
+                    NativeObjectKind.ENTRY_RECORD,
+                    NativeHandle.fromRaw(staleHandle).slotId(),
+                    NativeHandle.fromRaw(staleHandle).generation(),
+                    NativeHandle.fromRaw(staleHandle).flags()
+            );
+            setQuicklistNodeHandle(staleAdapter, wrongDomainHandle);
+            assertCorruptedAdapterFailsNativeValidation(staleAdapter);
+        }
+    }
+
+    @Test
+    public void defragMovesQuicklistNodeRecordWithoutChangingHandleOrTreatingPayloadAsAllocatorObject() {
+        int maxBytes = ListValue.quicklistNodeMaxBytesForTesting();
+        int elementBytes = elementBytesSoTwoFitThreeDoNot(maxBytes);
+        byte[] a = filledValue('a', elementBytes);
+        byte[] b = filledValue('b', elementBytes);
+        byte[] c = filledValue('c', elementBytes);
+        byte[] d = filledValue('d', elementBytes);
+
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-defrag-node");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             ListRoot root = new ListRoot(runtime, allocator)) {
+            ValueHandle handle = root.create();
+            root.rpush(handle, List.of(a, b, c));
+            long nodeHandleRaw = quicklistNodeHandles(root, handle).get(0);
+
+            NativeDefragResult result = allocator.defragOne(NativeHandle.fromRaw(nodeHandleRaw), 48);
+
+            Assert.assertTrue(result.moved());
+            Assert.assertEquals(48L, result.movedBytes());
+            assertLive(allocator, nodeHandleRaw);
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.STRING_BYTES));
+
+            root.rpush(handle, List.of(d));
+
+            List<byte[]> values = readRange(root, handle, 0, -1);
+            Assert.assertEquals(4, values.size());
+            Assert.assertArrayEquals(a, values.get(0));
+            Assert.assertArrayEquals(b, values.get(1));
+            Assert.assertArrayEquals(c, values.get(2));
+            Assert.assertArrayEquals(d, values.get(3));
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
         }
     }
 
@@ -251,6 +452,12 @@ public class ListValueTest {
         return value.getBytes(StandardCharsets.US_ASCII);
     }
 
+    private static byte[] filledValue(char value, int length) {
+        byte[] out = new byte[length];
+        Arrays.fill(out, (byte) value);
+        return out;
+    }
+
     private static List<byte[]> readRange(ListRoot root, ValueHandle handle, int start, int stop) {
         List<byte[]> out = new ArrayList<>();
         root.rangeInto(handle, start, stop, new BulkStringSink() {
@@ -281,6 +488,95 @@ public class ListValueTest {
             }
         });
         return out;
+    }
+
+    private static List<Long> quicklistNodeHandles(ListRoot root, ValueHandle handle) {
+        ArrayDeque<?> quicklist = quicklist(root, handle);
+        List<Long> out = new ArrayList<>();
+        for (Object node : quicklist) {
+            out.add(rawQuicklistNodeHandle(node));
+        }
+        return out;
+    }
+
+    private static Object firstQuicklistNodeAdapter(ListRoot root, ValueHandle handle) {
+        return quicklist(root, handle).peekFirst();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ArrayDeque<?> quicklist(ListRoot root, ValueHandle handle) {
+        try {
+            Field listsField = ListRoot.class.getDeclaredField("lists");
+            listsField.setAccessible(true);
+            Object lists = listsField.get(root);
+            Field adaptersField = lists.getClass().getDeclaredField("adapters");
+            adaptersField.setAccessible(true);
+            Map<Long, ListValue> adapters = (Map<Long, ListValue>) adaptersField.get(lists);
+            ListValue value = adapters.get(handle.raw());
+            Field quicklistField = ListValue.class.getDeclaredField("quicklistFfm");
+            quicklistField.setAccessible(true);
+            return (ArrayDeque<?>) quicklistField.get(value);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static long rawQuicklistNodeHandle(Object node) {
+        try {
+            Method rawHandle = node.getClass().getDeclaredMethod("rawHandle");
+            rawHandle.setAccessible(true);
+            return (Long) rawHandle.invoke(node);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static void setQuicklistNodeHandle(Object node, NativeHandle handle) {
+        try {
+            Field nodeHandle = node.getClass().getDeclaredField("nodeHandle");
+            nodeHandle.setAccessible(true);
+            nodeHandle.set(node, handle);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static void assertStaleAdapterFailsThroughAllocator(Object staleAdapter) throws Exception {
+        Method removeFirst = staleAdapter.getClass().getDeclaredMethod("removeFirst");
+        removeFirst.setAccessible(true);
+        try {
+            removeFirst.invoke(staleAdapter);
+            Assert.fail("expected stale native handle");
+        } catch (InvocationTargetException e) {
+            Assert.assertTrue("expected stale native handle but got " + e.getCause(),
+                    e.getCause() instanceof StaleNativeHandleException);
+        }
+    }
+
+    private static void assertCorruptedAdapterFailsNativeValidation(Object staleAdapter) throws Exception {
+        Method removeFirst = staleAdapter.getClass().getDeclaredMethod("removeFirst");
+        removeFirst.setAccessible(true);
+        try {
+            removeFirst.invoke(staleAdapter);
+            Assert.fail("expected native handle validation failure");
+        } catch (InvocationTargetException e) {
+            Assert.assertTrue("expected native validation failure but got " + e.getCause(),
+                    e.getCause() instanceof NativeMemoryException);
+            Assert.assertTrue(e.getCause().getMessage().contains("LIST_QUICKLIST_NODE"));
+        }
+    }
+
+    private static void assertLive(NativeAllocator allocator, long handleRaw) {
+        allocator.resolve(NativeHandle.fromRaw(handleRaw), NativeAccessMode.READ_ONLY).close();
+    }
+
+    private static void assertStale(NativeAllocator allocator, long handleRaw) {
+        try {
+            allocator.resolve(NativeHandle.fromRaw(handleRaw), NativeAccessMode.READ_ONLY).close();
+            Assert.fail("expected stale native handle");
+        } catch (StaleNativeHandleException expected) {
+            // expected
+        }
     }
 
     private static int encodedListpackEntryBytes(int rawLen) {

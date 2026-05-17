@@ -14,6 +14,7 @@ import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmListpack;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
@@ -982,8 +983,8 @@ public final class ListValue implements YierdisValue {
     private static final class FfmListNode implements AutoCloseable {
         private final NativeAllocator allocator;
         private final NativeHandle rootHandle;
-        private final NativeHandle nodeHandle;
-        private final YierdisFfmListpack listpack;
+        private NativeHandle nodeHandle;
+        private YierdisFfmListpack listpack;
         private long prevRawDuringRefresh;
         private boolean payloadClosed;
         private boolean nodeFreed;
@@ -1027,11 +1028,11 @@ public final class ListValue implements YierdisValue {
         }
 
         boolean isEmpty() {
-            return listpack.isEmpty();
+            return liveListpack().isEmpty();
         }
 
         YierdisFfmListpack.Cursor cursor() {
-            return listpack.cursor();
+            return liveListpack().cursor();
         }
 
         boolean canAdd(byte[] v) {
@@ -1042,33 +1043,34 @@ public final class ListValue implements YierdisValue {
             if (entryBytes < 0) {
                 throw new IllegalArgumentException("entryBytes must be >= 0");
             }
-            if (listpack.isEmpty()) {
+            YierdisFfmListpack current = liveListpack();
+            if (current.isEmpty()) {
                 return true;
             }
-            return listpack.encodedBytes() + entryBytes <= QUICKLIST_NODE_MAX_BYTES;
+            return current.encodedBytes() + entryBytes <= QUICKLIST_NODE_MAX_BYTES;
         }
 
         void addFirst(byte[] v) {
-            listpack.addFirst(v);
+            liveListpack().addFirst(v);
         }
 
         void addLast(byte[] v) {
-            listpack.addLast(v);
+            liveListpack().addLast(v);
         }
 
         byte[] removeFirst() {
-            return listpack.removeFirst();
+            return liveListpack().removeFirst();
         }
 
         byte[] removeLast() {
-            return listpack.removeLast();
+            return liveListpack().removeLast();
         }
 
         boolean canAppendAll(FfmListNode other) {
             if (other == null || other.isEmpty()) {
                 return true;
             }
-            return this.listpack.encodedBytes() + other.listpack.encodedBytes() <= QUICKLIST_NODE_MAX_BYTES;
+            return this.liveListpack().encodedBytes() + other.liveListpack().encodedBytes() <= QUICKLIST_NODE_MAX_BYTES;
         }
 
         void appendAll(FfmListNode other) {
@@ -1076,16 +1078,17 @@ public final class ListValue implements YierdisValue {
                 return;
             }
             int appended = 0;
-            YierdisFfmListpack.Cursor c = other.listpack.cursor();
+            YierdisFfmListpack current = liveListpack();
+            YierdisFfmListpack.Cursor c = other.cursor();
             try {
                 while (c.next()) {
-                    listpack.addLast(c.toByteArray());
+                    current.addLast(c.toByteArray());
                     appended++;
                 }
             } catch (RuntimeException | Error e) {
                 while (appended > 0) {
                     try {
-                        listpack.removeLast();
+                        current.removeLast();
                     } catch (RuntimeException rollbackFailure) {
                         e.addSuppressed(rollbackFailure);
                         break;
@@ -1102,15 +1105,37 @@ public final class ListValue implements YierdisValue {
 
         void writeMetadata(long prevRaw, long nextRaw) {
             validateOwnerRoot();
+            YierdisFfmListpack current = liveListpack();
             try (NativeObjectView view = allocator.resolve(nodeHandle, NativeAccessMode.READ_WRITE)) {
                 setLong(view, QUICKLIST_NODE_OWNER_ROOT_OFFSET, rootHandle.raw());
                 setLong(view, QUICKLIST_NODE_PREV_OFFSET, prevRaw);
                 setLong(view, QUICKLIST_NODE_NEXT_OFFSET, nextRaw);
                 setLong(view, QUICKLIST_NODE_PAYLOAD_REF_OFFSET, 0L);
-                setInt(view, QUICKLIST_NODE_ENTRY_COUNT_OFFSET, listpack.size());
-                setInt(view, QUICKLIST_NODE_ENCODED_BYTES_OFFSET, listpack.encodedBytes());
+                setInt(view, QUICKLIST_NODE_ENTRY_COUNT_OFFSET, current.size());
+                setInt(view, QUICKLIST_NODE_ENCODED_BYTES_OFFSET, current.encodedBytes());
                 setInt(view, QUICKLIST_NODE_FLAGS_OFFSET, 0);
                 setInt(view, QUICKLIST_NODE_RESERVED_OFFSET, 0);
+            }
+        }
+
+        private YierdisFfmListpack liveListpack() {
+            validateLiveNode();
+            return listpack;
+        }
+
+        private void validateLiveNode() {
+            validateNodeHandleKind();
+            try (NativeObjectView ignored = allocator.resolve(nodeHandle, NativeAccessMode.READ_ONLY)) {
+                // Allocator resolution validates quicklist node handle liveness and generation.
+            }
+        }
+
+        private void validateNodeHandleKind() {
+            if (nodeHandle != null
+                    && (nodeHandle.domain() != NativeObjectKind.LIST_QUICKLIST_NODE.domain()
+                    || nodeHandle.kindCode() != NativeObjectKind.LIST_QUICKLIST_NODE.code())) {
+                throw new NativeMemoryException("LIST_QUICKLIST_NODE handle expected: "
+                        + nodeHandle.raw());
             }
         }
 
@@ -1130,6 +1155,7 @@ public final class ListValue implements YierdisValue {
                 try {
                     listpack.close();
                     payloadClosed = true;
+                    listpack = null;
                 } catch (RuntimeException e) {
                     failure = e;
                 }
@@ -1138,6 +1164,7 @@ public final class ListValue implements YierdisValue {
                 try {
                     allocator.free(nodeHandle);
                     nodeFreed = true;
+                    nodeHandle = null;
                 } catch (RuntimeException e) {
                     if (failure == null) {
                         failure = e;
