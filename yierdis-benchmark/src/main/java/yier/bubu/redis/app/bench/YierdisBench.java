@@ -138,6 +138,25 @@ public final class YierdisBench {
             return;
         }
 
+        if (config.comparisonMode) {
+            Path runDir = Files.createTempDirectory(Path.of(".").toAbsolutePath().normalize(), ".bench-java.");
+            println("YierdisBench（baseline/current comparison）");
+            println("运行目录: " + runDir);
+            println("baselineServerJar: " + config.baselineServerJar);
+            println("currentServerJar : " + config.currentServerJar);
+            println("");
+            printBudgetHint(config);
+            println("");
+            ComparisonResult comparison = runComparison(config, runDir);
+            println("");
+            println("============================================================");
+            println("基线对比汇总（吞吐越大越好；延迟越小越好）");
+            printComparison(comparison);
+            println("");
+            println("完成。");
+            return;
+        }
+
         Path serverJar = null;
         if (!config.noStartServer) {
             serverJar = config.serverJar != null ? config.serverJar : findServerJar();
@@ -197,197 +216,7 @@ public final class YierdisBench {
                     println("服务就绪，启动耗时: " + Duration.between(startedAt, Instant.now()).toMillis() + " ms");
                 }
 
-                if (!config.skipPrefill) {
-                    println("");
-                    println("[1/3] 预置数据（SET keyspace=" + config.keyspace + "，dataSize=" + config.dataSize + "，pipeline=" + config.pipeline + "）");
-                    ThroughputResult prefill = runThroughput(
-                            config.host,
-                            port,
-                            Workload.SET_SEQUENTIAL,
-                            config.keyspace,
-                            config.clients,
-                            config.pipeline,
-                            config.keyspace,
-                            config.dataSize,
-                            config.strictReplies
-                    );
-                    println("预置完成: " + prefill);
-                }
-
-                println("");
-                println("[2/3] 吞吐压测（requests=" + config.requests + "，clients=" + config.clients + "，pipeline=" + config.pipeline + "）");
-                ThroughputResult setQps = runThroughput(
-                        config.host,
-                        port,
-                        Workload.SET_RANDOM,
-                        config.requests,
-                        config.clients,
-                        config.pipeline,
-                        config.keyspace,
-                        config.dataSize,
-                        config.strictReplies
-                );
-                ThroughputResult getQps = runThroughput(
-                        config.host,
-                        port,
-                        Workload.GET_RANDOM,
-                        config.requests,
-                        config.clients,
-                        config.pipeline,
-                        config.keyspace,
-                        config.dataSize,
-                        config.strictReplies
-                );
-                backendResult.setThroughput = setQps;
-                backendResult.getThroughput = getQps;
-                println("SET: " + setQps);
-                println("GET: " + getQps);
-
-                if (!config.skipLatency) {
-                    println("");
-                    println("[3/3] 延迟压测（pipeline=1，requests=" + config.latencyRequests + "，clients=" + config.latencyClients + "）");
-                    LatencyResult pingLat = runLatency(
-                            config.host,
-                            port,
-                            Workload.PING,
-                            config.latencyRequests,
-                            config.latencyClients,
-                            config.keyspace,
-                            config.dataSize,
-                            config.strictReplies
-                    );
-                    LatencyResult setLat = runLatency(
-                            config.host,
-                            port,
-                            Workload.SET_RANDOM,
-                            config.latencyRequests,
-                            config.latencyClients,
-                            config.keyspace,
-                            config.dataSize,
-                            config.strictReplies
-                    );
-                    LatencyResult getLat = runLatency(
-                            config.host,
-                            port,
-                            Workload.GET_RANDOM,
-                            config.latencyRequests,
-                            config.latencyClients,
-                            config.keyspace,
-                            config.dataSize,
-                            config.strictReplies
-                    );
-                    backendResult.pingLatency = pingLat;
-                    backendResult.setLatency = setLat;
-                    backendResult.getLatency = getLat;
-                    println("PING: " + pingLat);
-                    println("SET : " + setLat);
-                    println("GET : " + getLat);
-                }
-
-                println("");
-                println("[APPEND] 追加写入压测");
-                if (!config.skipLatency) {
-                    LatencyResult appendLat = runLatency(
-                            config.host,
-                            port,
-                            Workload.APPEND,
-                            config.latencyRequests,
-                            config.latencyClients,
-                            config.keyspace,
-                            config.dataSize,
-                            config.strictReplies
-                    );
-                    backendResult.appendLatency = appendLat;
-                    println("APPEND: " + appendLat);
-                }
-                ThroughputResult appendQps = runThroughput(
-                        config.host,
-                        port,
-                        Workload.APPEND,
-                        config.requests,
-                        config.clients,
-                        config.pipeline,
-                        config.keyspace,
-                        config.dataSize,
-                        config.strictReplies
-                );
-                backendResult.appendThroughput = appendQps;
-                println("APPEND throughput: " + appendQps);
-
-                println("");
-                println("[HLL] PFADD/PFCOUNT sparse/dense 压测");
-                int hllDenseKeyspace = Math.max(1, Math.min(config.keyspace, Math.min(config.requests, 4096)));
-                ThroughputResult pfaddSparseQps = runThroughput(
-                        config.host,
-                        port,
-                        Workload.PFADD_SPARSE,
-                        config.requests,
-                        config.clients,
-                        config.pipeline,
-                        config.keyspace,
-                        config.dataSize,
-                        config.strictReplies
-                );
-                prefillDenseHll(
-                        config.host,
-                        port,
-                        hllDenseKeyspace,
-                        config.pipeline
-                );
-                ThroughputResult pfaddDenseQps = runThroughput(
-                        config.host,
-                        port,
-                        Workload.PFADD_DENSE,
-                        config.requests,
-                        config.clients,
-                        config.pipeline,
-                        hllDenseKeyspace,
-                        config.dataSize,
-                        config.strictReplies
-                );
-                ThroughputResult pfcountQps = runThroughput(
-                        config.host,
-                        port,
-                        Workload.PFCOUNT,
-                        config.requests,
-                        config.clients,
-                        config.pipeline,
-                        hllDenseKeyspace,
-                        config.dataSize,
-                        config.strictReplies
-                );
-                backendResult.pfaddSparseThroughput = pfaddSparseQps;
-                backendResult.pfaddDenseThroughput = pfaddDenseQps;
-                backendResult.pfcountThroughput = pfcountQps;
-                println("PFADD sparse throughput: " + pfaddSparseQps);
-                println("PFADD dense throughput : " + pfaddDenseQps);
-                println("PFCOUNT throughput     : " + pfcountQps);
-                if (!config.skipLatency) {
-                    LatencyResult pfaddSparseLat = runLatency(
-                            config.host,
-                            port,
-                            Workload.PFADD_SPARSE,
-                            config.latencyRequests,
-                            config.latencyClients,
-                            config.keyspace,
-                            config.dataSize,
-                            config.strictReplies
-                    );
-                    LatencyResult pfaddDenseLat = runLatency(
-                            config.host,
-                            port,
-                            Workload.PFADD_DENSE,
-                            config.latencyRequests,
-                            config.latencyClients,
-                            hllDenseKeyspace,
-                            config.dataSize,
-                            config.strictReplies
-                    );
-                    backendResult.pfaddSparseLatency = pfaddSparseLat;
-                    backendResult.pfaddDenseLatency = pfaddDenseLat;
-                    println("PFADD sparse latency   : " + pfaddSparseLat);
-                    println("PFADD dense latency    : " + pfaddDenseLat);
-                }
+                runMainRespWorkloads(config, port, backendResult);
             } finally {
                 if (server != null) {
                     server.stop();
@@ -476,6 +305,200 @@ public final class YierdisBench {
             }
         }
         return false;
+    }
+
+    private static void runMainRespWorkloads(BenchConfig config, int port, BackendResult backendResult) throws Exception {
+        if (!config.skipPrefill) {
+            println("");
+            println("[1/3] 预置数据（SET keyspace=" + config.keyspace + "，dataSize=" + config.dataSize + "，pipeline=" + config.pipeline + "）");
+            ThroughputResult prefill = runThroughput(
+                    config.host,
+                    port,
+                    Workload.SET_SEQUENTIAL,
+                    config.keyspace,
+                    config.clients,
+                    config.pipeline,
+                    config.keyspace,
+                    config.dataSize,
+                    config.strictReplies
+            );
+            println("预置完成: " + prefill);
+        }
+
+        println("");
+        println("[2/3] 吞吐压测（requests=" + config.requests + "，clients=" + config.clients + "，pipeline=" + config.pipeline + "）");
+        ThroughputResult setQps = runThroughput(
+                config.host,
+                port,
+                Workload.SET_RANDOM,
+                config.requests,
+                config.clients,
+                config.pipeline,
+                config.keyspace,
+                config.dataSize,
+                config.strictReplies
+        );
+        ThroughputResult getQps = runThroughput(
+                config.host,
+                port,
+                Workload.GET_RANDOM,
+                config.requests,
+                config.clients,
+                config.pipeline,
+                config.keyspace,
+                config.dataSize,
+                config.strictReplies
+        );
+        backendResult.setThroughput = setQps;
+        backendResult.getThroughput = getQps;
+        println("SET: " + setQps);
+        println("GET: " + getQps);
+
+        if (!config.skipLatency) {
+            println("");
+            println("[3/3] 延迟压测（pipeline=1，requests=" + config.latencyRequests + "，clients=" + config.latencyClients + "）");
+            LatencyResult pingLat = runLatency(
+                    config.host,
+                    port,
+                    Workload.PING,
+                    config.latencyRequests,
+                    config.latencyClients,
+                    config.keyspace,
+                    config.dataSize,
+                    config.strictReplies
+            );
+            LatencyResult setLat = runLatency(
+                    config.host,
+                    port,
+                    Workload.SET_RANDOM,
+                    config.latencyRequests,
+                    config.latencyClients,
+                    config.keyspace,
+                    config.dataSize,
+                    config.strictReplies
+            );
+            LatencyResult getLat = runLatency(
+                    config.host,
+                    port,
+                    Workload.GET_RANDOM,
+                    config.latencyRequests,
+                    config.latencyClients,
+                    config.keyspace,
+                    config.dataSize,
+                    config.strictReplies
+            );
+            backendResult.pingLatency = pingLat;
+            backendResult.setLatency = setLat;
+            backendResult.getLatency = getLat;
+            println("PING: " + pingLat);
+            println("SET : " + setLat);
+            println("GET : " + getLat);
+        }
+
+        println("");
+        println("[APPEND] 追加写入压测");
+        if (!config.skipLatency) {
+            LatencyResult appendLat = runLatency(
+                    config.host,
+                    port,
+                    Workload.APPEND,
+                    config.latencyRequests,
+                    config.latencyClients,
+                    config.keyspace,
+                    config.dataSize,
+                    config.strictReplies
+            );
+            backendResult.appendLatency = appendLat;
+            println("APPEND: " + appendLat);
+        }
+        ThroughputResult appendQps = runThroughput(
+                config.host,
+                port,
+                Workload.APPEND,
+                config.requests,
+                config.clients,
+                config.pipeline,
+                config.keyspace,
+                config.dataSize,
+                config.strictReplies
+        );
+        backendResult.appendThroughput = appendQps;
+        println("APPEND throughput: " + appendQps);
+
+        println("");
+        println("[HLL] PFADD/PFCOUNT sparse/dense 压测");
+        int hllDenseKeyspace = Math.max(1, Math.min(config.keyspace, Math.min(config.requests, 4096)));
+        ThroughputResult pfaddSparseQps = runThroughput(
+                config.host,
+                port,
+                Workload.PFADD_SPARSE,
+                config.requests,
+                config.clients,
+                config.pipeline,
+                config.keyspace,
+                config.dataSize,
+                config.strictReplies
+        );
+        prefillDenseHll(
+                config.host,
+                port,
+                hllDenseKeyspace,
+                config.pipeline
+        );
+        ThroughputResult pfaddDenseQps = runThroughput(
+                config.host,
+                port,
+                Workload.PFADD_DENSE,
+                config.requests,
+                config.clients,
+                config.pipeline,
+                hllDenseKeyspace,
+                config.dataSize,
+                config.strictReplies
+        );
+        ThroughputResult pfcountQps = runThroughput(
+                config.host,
+                port,
+                Workload.PFCOUNT,
+                config.requests,
+                config.clients,
+                config.pipeline,
+                hllDenseKeyspace,
+                config.dataSize,
+                config.strictReplies
+        );
+        backendResult.pfaddSparseThroughput = pfaddSparseQps;
+        backendResult.pfaddDenseThroughput = pfaddDenseQps;
+        backendResult.pfcountThroughput = pfcountQps;
+        println("PFADD sparse throughput: " + pfaddSparseQps);
+        println("PFADD dense throughput : " + pfaddDenseQps);
+        println("PFCOUNT throughput     : " + pfcountQps);
+        if (!config.skipLatency) {
+            LatencyResult pfaddSparseLat = runLatency(
+                    config.host,
+                    port,
+                    Workload.PFADD_SPARSE,
+                    config.latencyRequests,
+                    config.latencyClients,
+                    config.keyspace,
+                    config.dataSize,
+                    config.strictReplies
+            );
+            LatencyResult pfaddDenseLat = runLatency(
+                    config.host,
+                    port,
+                    Workload.PFADD_DENSE,
+                    config.latencyRequests,
+                    config.latencyClients,
+                    hllDenseKeyspace,
+                    config.dataSize,
+                    config.strictReplies
+            );
+            backendResult.pfaddSparseLatency = pfaddSparseLat;
+            backendResult.pfaddDenseLatency = pfaddDenseLat;
+            println("PFADD sparse latency   : " + pfaddSparseLat);
+            println("PFADD dense latency    : " + pfaddDenseLat);
+        }
     }
 
     private static ThroughputResult runThroughput(
@@ -661,6 +684,97 @@ public final class YierdisBench {
             }
         } catch (IOException e) {
             throw new IllegalStateException("dense HLL prefill failed", e);
+        }
+    }
+
+    private static ComparisonResult runComparison(BenchConfig config, Path runDir) {
+        ComparisonSideResult baseline = runComparisonSide(
+                config,
+                comparisonSideContext(config, "baseline", config.baselineServerJar, 0, runDir),
+                "unknown"
+        );
+        ComparisonSideResult current = runComparisonSide(
+                config,
+                comparisonSideContext(config, "current", config.currentServerJar, 1, runDir),
+                "unknown"
+        );
+        String caveat = "commit labels unavailable for supplied artifacts unless the operator ties the jar paths to commits externally";
+        if (!baseline.comparable() || !current.comparable()) {
+            caveat = "comparison is environment-limited because at least one side failed or was only partially measured";
+        }
+        return new ComparisonResult(baseline, current, config.skipLatency, caveat);
+    }
+
+    private static ComparisonSideResult runComparisonSide(
+            BenchConfig config,
+            ComparisonSideContext context,
+            String commitLabel
+    ) {
+        BackendResult backendResult = new BackendResult(context.label, context.port);
+        ServerProcess server = new ServerProcess(
+                config.javaCmd,
+                context.jarPath,
+                config.serverXms,
+                config.serverXmx,
+                config.serverMaxDirectMemory,
+                context.serverArgs,
+                context.logFile
+        );
+        Instant startedAt = Instant.now();
+        try {
+            println("============================================================");
+            println("comparison side: " + context.label + "  port=" + context.port);
+            println("jar: " + context.jarPath);
+            println("日志: " + context.logFile);
+            server.start();
+            if (!waitReady(config.host, context.port, READY_TIMEOUT_MILLIS)) {
+                throw new IllegalStateException("服务未就绪，请检查日志: " + context.logFile);
+            }
+            println("服务就绪，启动耗时: " + Duration.between(startedAt, Instant.now()).toMillis() + " ms");
+            runMainRespWorkloads(config, context.port, backendResult);
+            if (!comparisonSideCanBeCompared(backendResult, config.skipLatency)) {
+                return ComparisonSideResult.failure(
+                        context.label,
+                        context.jarPath,
+                        context.commandLine,
+                        commitLabel,
+                        backendResult,
+                        !comparisonSideHasRequiredMeasurements(backendResult, config.skipLatency),
+                        comparisonSideHasBenchmarkErrors(backendResult, config.skipLatency)
+                                ? "comparison side recorded protocol/reply errors"
+                                : "comparison side is missing required measurements"
+                );
+            }
+            return ComparisonSideResult.success(
+                    context.label,
+                    context.jarPath,
+                    context.commandLine,
+                    commitLabel,
+                    backendResult
+            );
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            return ComparisonSideResult.failure(
+                    context.label,
+                    context.jarPath,
+                    context.commandLine,
+                    commitLabel,
+                    backendResult,
+                    comparisonSideHasAnyMeasurements(backendResult),
+                    failureSummary(failure)
+            );
+        } catch (Exception failure) {
+            return ComparisonSideResult.failure(
+                    context.label,
+                    context.jarPath,
+                    context.commandLine,
+                    commitLabel,
+                    backendResult,
+                    comparisonSideHasAnyMeasurements(backendResult),
+                    failureSummary(failure)
+            );
+        } finally {
+            server.stop();
         }
     }
 
@@ -969,6 +1083,14 @@ public final class YierdisBench {
 
     private static void printSummary(List<BackendResult> results, boolean skipLatency) {
         for (String line : renderSummary(results, skipLatency).split("\n", -1)) {
+            if (!line.isEmpty()) {
+                println(line);
+            }
+        }
+    }
+
+    private static void printComparison(ComparisonResult result) {
+        for (String line : renderComparison(result).split("\n", -1)) {
             if (!line.isEmpty()) {
                 println(line);
             }
@@ -1562,6 +1684,137 @@ public final class YierdisBench {
             }
             return "ok";
         }
+    }
+
+    static final class ComparisonSideContext {
+        final String label;
+        final Path jarPath;
+        final int port;
+        final Path logFile;
+        final YierdisBenchServerArgs serverArgs;
+        final List<String> commandLine;
+
+        ComparisonSideContext(
+                String label,
+                Path jarPath,
+                int port,
+                Path logFile,
+                YierdisBenchServerArgs serverArgs,
+                List<String> commandLine
+        ) {
+            this.label = Objects.requireNonNull(label, "label");
+            this.jarPath = Objects.requireNonNull(jarPath, "jarPath");
+            this.port = port;
+            this.logFile = Objects.requireNonNull(logFile, "logFile");
+            this.serverArgs = Objects.requireNonNull(serverArgs, "serverArgs");
+            this.commandLine = List.copyOf(commandLine);
+        }
+    }
+
+    static ComparisonSideContext comparisonSideContext(
+            BenchConfig config,
+            String label,
+            Path jarPath,
+            int sideIndex,
+            Path runDir
+    ) {
+        YierdisBenchServerArgs serverArgsForRun = config.baseServerArgs.copy();
+        serverArgsForRun.port = config.portBase + sideIndex;
+        serverArgsForRun.normalizeAndValidate();
+        Path logFile = runDir.resolve("server-" + label + ".log");
+        ServerProcess server = new ServerProcess(
+                config.javaCmd,
+                jarPath,
+                config.serverXms,
+                config.serverXmx,
+                config.serverMaxDirectMemory,
+                serverArgsForRun,
+                logFile
+        );
+        return new ComparisonSideContext(
+                label,
+                jarPath,
+                serverArgsForRun.port,
+                logFile,
+                serverArgsForRun,
+                server.commandLine()
+        );
+    }
+
+    static boolean comparisonSideHasRequiredMeasurements(BackendResult result, boolean skipLatency) {
+        if (result == null) {
+            return false;
+        }
+        if (result.setThroughput == null
+                || result.getThroughput == null
+                || result.appendThroughput == null
+                || result.pfaddSparseThroughput == null
+                || result.pfaddDenseThroughput == null
+                || result.pfcountThroughput == null) {
+            return false;
+        }
+        if (skipLatency) {
+            return true;
+        }
+        return result.pingLatency != null
+                && result.setLatency != null
+                && result.getLatency != null
+                && result.appendLatency != null
+                && result.pfaddSparseLatency != null
+                && result.pfaddDenseLatency != null;
+    }
+
+    static boolean comparisonSideHasBenchmarkErrors(BackendResult result, boolean skipLatency) {
+        if (result == null) {
+            return true;
+        }
+        return (result.setThroughput != null && result.setThroughput.errors > 0)
+                || (result.getThroughput != null && result.getThroughput.errors > 0)
+                || (result.appendThroughput != null && result.appendThroughput.errors > 0)
+                || (result.pfaddSparseThroughput != null && result.pfaddSparseThroughput.errors > 0)
+                || (result.pfaddDenseThroughput != null && result.pfaddDenseThroughput.errors > 0)
+                || (result.pfcountThroughput != null && result.pfcountThroughput.errors > 0)
+                || (!skipLatency && result.pingLatency != null && result.pingLatency.errors > 0)
+                || (!skipLatency && result.setLatency != null && result.setLatency.errors > 0)
+                || (!skipLatency && result.getLatency != null && result.getLatency.errors > 0)
+                || (!skipLatency && result.appendLatency != null && result.appendLatency.errors > 0)
+                || (!skipLatency && result.pfaddSparseLatency != null && result.pfaddSparseLatency.errors > 0)
+                || (!skipLatency && result.pfaddDenseLatency != null && result.pfaddDenseLatency.errors > 0);
+    }
+
+    static boolean comparisonSideCanBeCompared(BackendResult result, boolean skipLatency) {
+        return comparisonSideHasRequiredMeasurements(result, skipLatency)
+                && !comparisonSideHasBenchmarkErrors(result, skipLatency);
+    }
+
+    static boolean comparisonSideHasAnyMeasurements(BackendResult result) {
+        if (result == null) {
+            return false;
+        }
+        return result.setThroughput != null
+                || result.getThroughput != null
+                || result.appendThroughput != null
+                || result.pfaddSparseThroughput != null
+                || result.pfaddDenseThroughput != null
+                || result.pfcountThroughput != null
+                || result.pingLatency != null
+                || result.setLatency != null
+                || result.getLatency != null
+                || result.appendLatency != null
+                || result.pfaddSparseLatency != null
+                || result.pfaddDenseLatency != null;
+    }
+
+    private static String failureSummary(Throwable failure) {
+        Throwable root = failure;
+        while (root.getCause() != null) {
+            root = root.getCause();
+        }
+        String message = root.getMessage();
+        if (message == null || message.isBlank()) {
+            message = root.getClass().getSimpleName();
+        }
+        return message;
     }
 
     static final class ServerProcess {
