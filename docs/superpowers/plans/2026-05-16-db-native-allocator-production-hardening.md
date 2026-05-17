@@ -400,7 +400,7 @@ Expected: PASS.
 **Files:**
 - Modify: `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/NativeStorageRegressionTest.java`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add a new test named `nativeAllocatorCleanupRemainsStableUnderNarrowMaxmemory`.
 
@@ -445,7 +445,7 @@ public void nativeAllocatorCleanupRemainsStableUnderNarrowMaxmemory() {
 
 Expected initial failure: possible behavior failure if maxmemory accounting rejects too early, leaks after delete, or helper extraction is missing.
 
-- [ ] **Step 2: Run the focused failing test**
+- [x] **Step 2: Run the focused failing test**
 
 Run:
 
@@ -455,13 +455,13 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 Expected: FAIL before helpers exist or PASS if current behavior already satisfies the regression.
 
-- [ ] **Step 3: Implement minimal code changes**
+- [x] **Step 3: Implement minimal code changes**
 
 Prefer test-only changes. If production code must change, only fix native cleanup/accounting defects directly exposed by this test. Do not change maxmemory admission semantics unless the current behavior violates existing maxmemory contracts.
 
 If `setString` throws instead of returning `false` under `NOEVICTION`, catch the existing project-specific memory exception type used by maxmemory code and break the loop only after asserting at least one write was accepted.
 
-- [ ] **Step 4: Review maxmemory assertions**
+- [x] **Step 4: Review maxmemory assertions**
 
 Ensure the test:
 
@@ -470,7 +470,7 @@ Ensure the test:
 - asserts cleanup after delete and after shutdown
 - avoids exact total byte values other than the configured upper bound
 
-- [ ] **Step 5: Run verification**
+- [x] **Step 5: Run verification**
 
 Run:
 

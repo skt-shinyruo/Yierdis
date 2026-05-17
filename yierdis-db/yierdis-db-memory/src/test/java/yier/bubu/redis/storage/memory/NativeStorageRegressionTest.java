@@ -17,6 +17,7 @@ import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
+import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
@@ -518,6 +519,53 @@ public class NativeStorageRegressionTest {
                 db.shutdown();
             }
             Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
+    @Test
+    public void nativeAllocatorCleanupRemainsStableUnderNarrowMaxmemory() {
+        for (int cycle = 0; cycle < 4; cycle++) {
+            try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-maxmemory-repeat-" + cycle)) {
+                YierdisDb db = createNativeRegressionDb(runtime, 4096L, MaxmemoryPolicy.NOEVICTION);
+                db.bindToCurrentThread();
+                List<byte[]> written = new ArrayList<>();
+                try {
+                    for (int i = 0; i < 16; i++) {
+                        byte[] key = b("maxmemory:" + cycle + ":" + i);
+                        byte[] value = b("value-" + i + "-native-maxmemory");
+                        boolean accepted;
+                        try {
+                            accepted = db.writes().strings().setString(key, value, SetMode.NORMAL, null).value();
+                        } catch (YierdisCommandException e) {
+                            Assert.assertTrue(e.getMessage().contains("OOM"));
+                            Assert.assertTrue(
+                                    "expected at least one accepted write before maxmemory rejection",
+                                    written.size() > 0
+                            );
+                            break;
+                        }
+                        if (!accepted) {
+                            break;
+                        }
+                        written.add(key);
+                        assertMemoryStatsCoherent(db);
+                        Assert.assertTrue(db.usedBytesForMaxmemory() <= 4096L);
+                    }
+
+                    Assert.assertTrue("expected at least one accepted write", written.size() > 0);
+                    NativeAllocatorStats populated = db.keyLifecycle().nativeAllocator().stats();
+                    Assert.assertEquals(db.size(), populated.objectCount(NativeObjectKind.KEY_BYTES));
+                    Assert.assertEquals(db.size(), populated.objectCount(NativeObjectKind.STRING_BYTES));
+                    Assert.assertEquals(db.size(), populated.objectCount(NativeObjectKind.ENTRY_RECORD));
+                    Assert.assertTrue(populated.logicalUsedBytes() > 0L);
+
+                    Assert.assertEquals(Long.valueOf(written.size()), db.writes().keyspace().del(written).value());
+                    assertNativeDbEmpty(db);
+                } finally {
+                    db.shutdown();
+                }
+                Assert.assertEquals(0L, runtime.usedBytes());
+            }
         }
     }
 
