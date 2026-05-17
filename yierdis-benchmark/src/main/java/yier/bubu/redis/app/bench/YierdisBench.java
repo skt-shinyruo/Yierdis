@@ -773,6 +773,135 @@ public final class YierdisBench {
         }
     }
 
+    static String renderComparison(ComparisonResult result) {
+        Objects.requireNonNull(result, "result");
+        StringBuilder sb = new StringBuilder();
+
+        sb.append("[comparison]\n");
+        sb.append("status: ").append(result.comparable() ? "comparable" : "non-comparable").append('\n');
+        sb.append("environment: ").append(result.environmentCaveat).append('\n');
+        appendComparisonProvenance(sb, "baseline", result.baseline);
+        appendComparisonProvenance(sb, "current", result.current);
+        sb.append('\n');
+
+        String header = result.skipLatency
+                ? String.format(
+                "%-8s | %-14s | %12s | %13s | %12s | %13s | %12s | %13s | %16s | %17s | %16s | %17s | %12s | %13s",
+                "side", "status", "SET_QPS", "SET_delta_pct", "GET_QPS", "GET_delta_pct",
+                "APPEND_QPS", "APPEND_delta", "PFADD_S_QPS", "PFADD_S_delta",
+                "PFADD_D_QPS", "PFADD_D_delta", "PFCOUNT_QPS", "PFCOUNT_delta"
+        )
+                : String.format(
+                "%-8s | %-14s | %12s | %13s | %12s | %13s | %14s | %14s | %14s | %14s | %14s | %14s | %12s | %13s | %14s | %14s | %16s | %17s | %16s | %17s | %12s | %13s | %18s | %18s | %18s | %18s",
+                "side", "status", "SET_QPS", "SET_delta_pct", "GET_QPS", "GET_delta_pct",
+                "PING_p95(ms)", "PING_delta_pct", "SET_p95(ms)", "SET_lat_delta", "GET_p95(ms)", "GET_lat_delta",
+                "APPEND_QPS", "APPEND_delta", "APPEND_p95(ms)", "APPEND_lat_delta",
+                "PFADD_S_QPS", "PFADD_S_delta", "PFADD_D_QPS", "PFADD_D_delta", "PFCOUNT_QPS", "PFCOUNT_delta",
+                "PFADD_S_p95(ms)", "PFADD_S_lat_delta", "PFADD_D_p95(ms)", "PFADD_D_lat_delta"
+        );
+        appendTableHeader(sb, header);
+        appendComparisonRow(sb, result.baseline, result.baseline, result.comparable(), result.skipLatency);
+        appendComparisonRow(sb, result.current, result.baseline, result.comparable(), result.skipLatency);
+
+        if (!result.comparable()) {
+            sb.append("baseline status: ").append(result.baseline.statusLabel()).append('\n');
+            sb.append("current status: ").append(result.current.statusLabel()).append('\n');
+        }
+        if (!result.baseline.comparable()) {
+            sb.append("baseline failure: ").append(result.baseline.failureMessage).append('\n');
+        }
+        if (!result.current.comparable()) {
+            sb.append("current failure: ").append(result.current.failureMessage).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private static void appendComparisonProvenance(StringBuilder sb, String prefix, ComparisonSideResult side) {
+        sb.append(prefix).append(" jar: ").append(side.jarPath.toAbsolutePath()).append('\n');
+        sb.append(prefix).append(" command: ").append(String.join(" ", side.commandLine)).append('\n');
+        sb.append(prefix).append(" commit: ").append(side.commitLabel).append('\n');
+    }
+
+    private static void appendComparisonRow(
+            StringBuilder sb,
+            ComparisonSideResult side,
+            ComparisonSideResult baseline,
+            boolean comparable,
+            boolean skipLatency
+    ) {
+        BackendResult r = side.result;
+        BackendResult b = baseline.result;
+        String setQps = throughputQps(r.setThroughput);
+        String getQps = throughputQps(r.getThroughput);
+        String appendQps = throughputQps(r.appendThroughput);
+        String pfaddSparseQps = throughputQps(r.pfaddSparseThroughput);
+        String pfaddDenseQps = throughputQps(r.pfaddDenseThroughput);
+        String pfcountQps = throughputQps(r.pfcountThroughput);
+
+        boolean showDelta = comparable && side != baseline;
+        String setDelta = showDelta ? deltaPct(b.setThroughput == null ? null : b.setThroughput.qps, r.setThroughput == null ? null : r.setThroughput.qps) : "-";
+        String getDelta = showDelta ? deltaPct(b.getThroughput == null ? null : b.getThroughput.qps, r.getThroughput == null ? null : r.getThroughput.qps) : "-";
+        String appendDelta = showDelta ? deltaPct(b.appendThroughput == null ? null : b.appendThroughput.qps, r.appendThroughput == null ? null : r.appendThroughput.qps) : "-";
+        String pfaddSparseDelta = showDelta ? deltaPct(b.pfaddSparseThroughput == null ? null : b.pfaddSparseThroughput.qps, r.pfaddSparseThroughput == null ? null : r.pfaddSparseThroughput.qps) : "-";
+        String pfaddDenseDelta = showDelta ? deltaPct(b.pfaddDenseThroughput == null ? null : b.pfaddDenseThroughput.qps, r.pfaddDenseThroughput == null ? null : r.pfaddDenseThroughput.qps) : "-";
+        String pfcountDelta = showDelta ? deltaPct(b.pfcountThroughput == null ? null : b.pfcountThroughput.qps, r.pfcountThroughput == null ? null : r.pfcountThroughput.qps) : "-";
+
+        if (skipLatency) {
+            sb.append(String.format(
+                    "%-8s | %-14s | %12s | %13s | %12s | %13s | %12s | %13s | %16s | %17s | %16s | %17s | %12s | %13s",
+                    side.label, side.statusLabel(), setQps, comparisonDelta(setDelta, comparable, showDelta), getQps, comparisonDelta(getDelta, comparable, showDelta),
+                    appendQps, comparisonDelta(appendDelta, comparable, showDelta), pfaddSparseQps, comparisonDelta(pfaddSparseDelta, comparable, showDelta),
+                    pfaddDenseQps, comparisonDelta(pfaddDenseDelta, comparable, showDelta), pfcountQps, comparisonDelta(pfcountDelta, comparable, showDelta)
+            )).append('\n');
+            return;
+        }
+
+        String pingP95 = latencyP95(r.pingLatency);
+        String setP95 = latencyP95(r.setLatency);
+        String getP95 = latencyP95(r.getLatency);
+        String appendP95 = latencyP95(r.appendLatency);
+        String pfaddSparseP95 = latencyP95(r.pfaddSparseLatency);
+        String pfaddDenseP95 = latencyP95(r.pfaddDenseLatency);
+        String pingDelta = showDelta ? deltaPct(b.pingLatency == null ? null : b.pingLatency.stats.p95Millis(), r.pingLatency == null ? null : r.pingLatency.stats.p95Millis()) : "-";
+        String setLatDelta = showDelta ? deltaPct(b.setLatency == null ? null : b.setLatency.stats.p95Millis(), r.setLatency == null ? null : r.setLatency.stats.p95Millis()) : "-";
+        String getLatDelta = showDelta ? deltaPct(b.getLatency == null ? null : b.getLatency.stats.p95Millis(), r.getLatency == null ? null : r.getLatency.stats.p95Millis()) : "-";
+        String appendLatDelta = showDelta ? deltaPct(b.appendLatency == null ? null : b.appendLatency.stats.p95Millis(), r.appendLatency == null ? null : r.appendLatency.stats.p95Millis()) : "-";
+        String pfaddSparseLatDelta = showDelta ? deltaPct(b.pfaddSparseLatency == null ? null : b.pfaddSparseLatency.stats.p95Millis(), r.pfaddSparseLatency == null ? null : r.pfaddSparseLatency.stats.p95Millis()) : "-";
+        String pfaddDenseLatDelta = showDelta ? deltaPct(b.pfaddDenseLatency == null ? null : b.pfaddDenseLatency.stats.p95Millis(), r.pfaddDenseLatency == null ? null : r.pfaddDenseLatency.stats.p95Millis()) : "-";
+
+        sb.append(String.format(
+                "%-8s | %-14s | %12s | %13s | %12s | %13s | %14s | %14s | %14s | %14s | %14s | %14s | %12s | %13s | %14s | %14s | %16s | %17s | %16s | %17s | %12s | %13s | %18s | %18s | %18s | %18s",
+                side.label, side.statusLabel(), setQps, comparisonDelta(setDelta, comparable, showDelta), getQps, comparisonDelta(getDelta, comparable, showDelta),
+                pingP95, comparisonDelta(pingDelta, comparable, showDelta), setP95, comparisonDelta(setLatDelta, comparable, showDelta), getP95, comparisonDelta(getLatDelta, comparable, showDelta),
+                appendQps, comparisonDelta(appendDelta, comparable, showDelta), appendP95, comparisonDelta(appendLatDelta, comparable, showDelta),
+                pfaddSparseQps, comparisonDelta(pfaddSparseDelta, comparable, showDelta), pfaddDenseQps, comparisonDelta(pfaddDenseDelta, comparable, showDelta), pfcountQps, comparisonDelta(pfcountDelta, comparable, showDelta),
+                pfaddSparseP95, comparisonDelta(pfaddSparseLatDelta, comparable, showDelta), pfaddDenseP95, comparisonDelta(pfaddDenseLatDelta, comparable, showDelta)
+        )).append('\n');
+    }
+
+    private static String throughputQps(ThroughputResult result) {
+        return result == null ? "-" : DF.format(result.qps);
+    }
+
+    private static String latencyP95(LatencyResult result) {
+        return result == null ? "-" : DF.format(result.stats.p95Millis());
+    }
+
+    private static String comparisonDelta(String delta, boolean comparable, boolean showDelta) {
+        if (!comparable) {
+            return "n/a";
+        }
+        return showDelta ? delta : "-";
+    }
+
+    private static String deltaPct(Double baseline, Double current) {
+        if (baseline == null || current == null || baseline == 0.0) {
+            return "n/a";
+        }
+        double pct = ((current - baseline) * 100.0) / baseline;
+        return (pct >= 0.0 ? "+" : "") + DF.format(pct) + "%";
+    }
+
     static String renderSummary(List<BackendResult> results, boolean skipLatency) {
         StringBuilder sb = new StringBuilder();
         String header = skipLatency
@@ -1339,6 +1468,99 @@ public final class YierdisBench {
                     args.nativeEval,
                     args.nativeEvalIterations
             );
+        }
+    }
+
+    static final class ComparisonResult {
+        final ComparisonSideResult baseline;
+        final ComparisonSideResult current;
+        final boolean skipLatency;
+        final String environmentCaveat;
+
+        ComparisonResult(
+                ComparisonSideResult baseline,
+                ComparisonSideResult current,
+                boolean skipLatency,
+                String environmentCaveat
+        ) {
+            this.baseline = Objects.requireNonNull(baseline, "baseline");
+            this.current = Objects.requireNonNull(current, "current");
+            this.skipLatency = skipLatency;
+            this.environmentCaveat = Objects.requireNonNull(environmentCaveat, "environmentCaveat");
+        }
+
+        boolean comparable() {
+            return baseline.comparable() && current.comparable();
+        }
+    }
+
+    static final class ComparisonSideResult {
+        final String label;
+        final Path jarPath;
+        final List<String> commandLine;
+        final String commitLabel;
+        final BackendResult result;
+        final boolean failed;
+        final boolean partial;
+        final String failureMessage;
+
+        private ComparisonSideResult(
+                String label,
+                Path jarPath,
+                List<String> commandLine,
+                String commitLabel,
+                BackendResult result,
+                boolean failed,
+                boolean partial,
+                String failureMessage
+        ) {
+            this.label = Objects.requireNonNull(label, "label");
+            this.jarPath = Objects.requireNonNull(jarPath, "jarPath");
+            this.commandLine = List.copyOf(commandLine);
+            this.commitLabel = Objects.requireNonNull(commitLabel, "commitLabel");
+            this.result = Objects.requireNonNull(result, "result");
+            this.failed = failed;
+            this.partial = partial;
+            this.failureMessage = failureMessage == null ? "" : failureMessage;
+        }
+
+        static ComparisonSideResult success(
+                String label,
+                Path jarPath,
+                List<String> commandLine,
+                String commitLabel,
+                BackendResult result
+        ) {
+            return new ComparisonSideResult(label, jarPath, commandLine, commitLabel, result, false, false, "");
+        }
+
+        static ComparisonSideResult failure(
+                String label,
+                Path jarPath,
+                List<String> commandLine,
+                String commitLabel,
+                BackendResult result,
+                boolean partial,
+                String failureMessage
+        ) {
+            return new ComparisonSideResult(label, jarPath, commandLine, commitLabel, result, true, partial, failureMessage);
+        }
+
+        boolean comparable() {
+            return !failed && !partial;
+        }
+
+        String statusLabel() {
+            if (failed && partial) {
+                return "failed-partial";
+            }
+            if (failed) {
+                return "failed";
+            }
+            if (partial) {
+                return "partial";
+            }
+            return "ok";
         }
     }
 
