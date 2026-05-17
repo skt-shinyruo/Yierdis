@@ -178,19 +178,19 @@ The main agent reviews the subagent's classification, confirms no project docs c
 - Modify: `docs/project-docs/db-internals.md`
 - Modify: `docs/project-docs/ffm-usage.md`
 
-- [ ] **Step 1: Dispatch a fresh subagent for Task 2**
+- [x] **Step 1: Dispatch a fresh subagent for Task 2**
 
 Ask the subagent to update only the three reference docs listed above. The subagent must use Task 1 classifications and must not edit historical specs, the parent roadmap spec, or `yierdis.md`.
 
-- [ ] **Step 2: Update key-byte reference wording**
+- [x] **Step 2: Update key-byte reference wording**
 
 Ensure the reference docs say production key bytes are allocator-backed `KEY_BYTES` objects owned by `NativeKeyDirectory`, and that key deletion frees the allocator handle. Remove or relabel any current-state wording that says key bytes are still blob-store-owned or waiting for migration.
 
-- [ ] **Step 3: Update entry and string reference wording**
+- [x] **Step 3: Update entry and string reference wording**
 
 Ensure the reference docs consistently say `EntryTable` stores allocator-backed `ENTRY_RECORD` metadata and string values use allocator-backed `STRING_BYTES` handles. Avoid implying string output exposes long-lived allocator views.
 
-- [ ] **Step 4: Update collection boundary reference wording**
+- [x] **Step 4: Update collection boundary reference wording**
 
 Ensure the reference docs distinguish:
 
@@ -199,11 +199,11 @@ Ensure the reference docs distinguish:
 - retained root adapters used to operate on payloads
 - remaining payload bytes and hash/set/zset internals that stay adapter-owned or legacy FFM-owned
 
-- [ ] **Step 5: Update defrag and scan/snapshot reference wording**
+- [x] **Step 5: Update defrag and scan/snapshot reference wording**
 
 Ensure DB defrag is described as maintenance over allocator-backed stable handles only. Ensure scan/snapshot wording describes bounded `NativeObjectView` resolution, copied output, and command/scan/snapshot/defrag epoch scopes.
 
-- [ ] **Step 6: Verify Task 2 docs**
+- [x] **Step 6: Verify Task 2 docs**
 
 Run:
 
@@ -215,7 +215,7 @@ git status --short
 
 Expected: matches in the three reference docs are current-state accurate or explicitly transitional; `git diff --check` prints no errors; `git status --short` lists only the intended reference doc changes.
 
-- [ ] **Step 7: Main agent review and commit**
+- [x] **Step 7: Main agent review and commit**
 
 The main agent reviews the diff for overbroad collection claims and uncaveated defrag/scan wording, reruns the verification commands, and commits this task before starting Task 3.
 
