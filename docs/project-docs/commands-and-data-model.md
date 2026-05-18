@@ -156,13 +156,13 @@ HLL 也没有独立 `ValueType`。命令层有 `HllCommands`，DB 层有 `Yierdi
 源码入口：
 
 - [`YierdisFastCommandProcessor.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java)
-- [`CommandRegistry.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandRegistry.java)
+- [`CommandRegistry.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java)
 - [`CommandSpec.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java)
 - [`ArgReader.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ArgReader.java)
 - [`CommandArity.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandArity.java)
 - [`CommandParsers.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandParsers.java)
 - [`CommandParseError.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandParseError.java)
-- [`CommandContext.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandContext.java)
+- [`CommandContext.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandContext.java)
 - [`CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
 - [`DefaultCommandModules.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/DefaultCommandModules.java)
 
