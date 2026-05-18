@@ -2,16 +2,16 @@
 
 一个使用 Java + Netty 实现的单机内存 KV 服务端，目标是参考 Redis 的设计与实现方式做一个类似的项目。
 
-对外 TCP 协议使用 Redis RESP。RESP2 是默认兼容目标，`HELLO 3` 可协商基础 RESP3 回包；项目仍然不是 Redis 的 drop-in replacement。
+对外 TCP 协议使用 Redis RESP。RESP2 是默认兼容目标，`HELLO 3` 可协商基础 RESP3 回包；当前版本仍然不是 Redis 的 drop-in replacement。
 
 ## 定位与兼容性边界（重要）
 
 Yierdis 的目标是：用 Java 参考 Redis 的思路实现一个类似的项目。项目内置 CLI 主要用于本地调试/验证（最小命令集、协议、背压、淘汰等机制）。
 
-但它不是 Redis 的 drop-in replacement（README 明确将不少能力定义为 out-of-scope），并且即便是已实现命令，也有不少“刻意简化/最小子集”的语义差异（例如 TTL 清理、`KEYS` glob 覆盖范围、事务边界行为等）。
+但当前版本还不是 Redis 的 drop-in replacement，并且即便是已实现命令，也有不少“刻意简化/最小子集”的语义差异（例如 TTL 清理、`KEYS` glob 覆盖范围、事务边界行为等）。
 
 - **包含（In scope）**：单机内存版数据结构、基础命令子集、TTL（惰性删除 + 轻量后台清理）、maxmemory（简化的估算 + 近似淘汰）、最小事务子集（`MULTI/EXEC/DISCARD`）、Redis RESP 兼容协议入口（RESP2 默认，`HELLO 3` 基础 RESP3 协商）、`INFO/STATS/MEMORY STATS` 可观测性
-- **不包含（Out of scope）**：AOF/RDB 持久化、复制/集群、Lua、ACL/TLS、PubSub/订阅模式、完整的模块化运维能力
+- **当前尚未实现，属于后续规划方向**：AOF/RDB 持久化、复制/集群、Lua、ACL/TLS、PubSub/订阅模式、完整的 Redis 生态兼容和模块化运维能力
 
 ## 环境
 
@@ -27,50 +27,20 @@ mvn -DskipTests package
 
 ## 初学者导读
 
-如果你是第一次进入这个仓库，建议不要一上来就直接读所有源码。更好的顺序是先通过 `docs/` 里的导览文档建立整体心智模型，再回头看具体实现。
+如果你是第一次进入这个仓库，先读 `docs/project-docs/readme.md`。那是完整的代码库文档地图，会按不同目标给出阅读路径：
 
-推荐阅读顺序：
+- 先理解项目定位和能力边界
+- 跟一条请求从 RESP 走到 DB 再写回
+- 查协议、命令、DB、执行器、native memory 等专题
+- 准备改代码并选择测试范围
 
-1. `docs/project-docs/project-introduction.md`
-2. `docs/project-docs/project-overview.md`
-3. `docs/project-docs/request-execution-flow.md`
-4. `docs/project-docs/main-path-walkthrough.md`
-5. `docs/project-docs/core-logic-index.md`
-6. `docs/project-docs/protocol-reference.md`
-7. `docs/project-docs/commands-and-data-model.md`
-8. `docs/project-docs/db-internals.md`
-9. `docs/project-docs/executor-and-backpressure.md`
-10. `docs/project-docs/bytes-and-fast-paths.md`
-11. `docs/project-docs/configuration-and-operations.md`
-12. `docs/project-docs/client-and-bench-internals.md`
-13. `docs/project-docs/testing-and-debugging.md`
-14. `docs/project-docs/glossary.md`
-15. `docs/project-docs/module-architecture.md`
-16. `docs/project-docs/development-navigation.md`
+推荐第一轮阅读：
 
-这组文档分别覆盖：
-
-- 项目详细介绍：这个项目为什么存在、适合用什么心态理解、相比普通 KV 服务有意思在哪里
-- 项目定位：这个项目想解决什么问题，不想解决什么问题
-- 请求执行链：一条请求从 Netty 收包到 DB 读写、回包写出是怎么流动的
-- 主链源码导读：把启动、协议适配、执行器、命令分发和 `SET` 写路径按类和方法串起来
-- 核心逻辑索引：把核心类、核心方法、职责和边界集中成速查表
-- 协议细节：RESP 请求/回包、inline command、`HELLO 3` 协商、协议上限和错误断连策略
-- 命令与数据模型：命令家族怎么注册、逻辑类型和内部编码怎么对应、HLL 为什么复用 string
-- DB 内核：`YierdisDb`、key lifecycle、mutation executor、memory ledger、TTL、maxmemory 在单 DB 内部如何协作
-- 执行器与背压：入队、预算、GLOBAL/FAIR 调度、drain loop、autoRead 控制和 global recovery 怎么配合
-- bytes 抽象与 fast-path：`BytesView/BytesSlice/BytesSink` 为什么存在，以及它们如何连接协议、写回和 off-heap
-- 配置与运维：启动参数怎么进入 runtime、背压、慢客户端保护和淘汰怎么工作，`INFO/STATS/MEMORY STATS` 看什么
-- client/bench 内部实现：CLI、Netty client、bench 和脚本如何沿真实协议路径验证和压测 server
-- 测试与调试：测试如何按层组织、脚本怎么用、遇到协议/背压/事务/内存问题先看哪里
-- 术语表：把 `ExecutionRequest`、`ReplyWriter`、owner thread、keyspace、`maxmemory` 等高频概念集中解释
-- 模块架构：各 Maven 模块负责什么、为什么这样拆、哪些依赖方向被明确禁止
-- 开发导航：如果你准备改 `SET`、新增命令、改协议、看事务或背压，该先从哪些文件开始
-
-如果你对 FFM / off-heap 本身还不熟，建议再配合阅读：
-
-- `docs/project-docs/ffm-usage.md`（合并了 JDK FFM 入门和 Yierdis 实际落点）
-- `docs/project-docs/offheap-copy-behavior.md`
+1. `docs/project-docs/readme.md`
+2. `docs/project-docs/project-introduction.md`
+3. `docs/project-docs/project-overview.md`
+4. `docs/project-docs/request-execution-flow.md`
+5. `docs/project-docs/main-path-walkthrough.md`
 
 ## 开发者：模块边界（契约 / 组装）
 
@@ -128,7 +98,7 @@ printf '*2\r\n$3\r\nGET\r\n$1\r\na\r\n' | nc 127.0.0.1 6378
 - RESP2 是默认返回格式；`HELLO 3` 后同一连接会切到 RESP3 基础回包。
 - malformed RESP 会先写协议错误，再关闭连接，避免请求/回包错位。
 - server command execution write-back still uses ReplyWriter 作为语义 authority；RESP 实现只负责把这些语义写回编码成线上 bytes。
-- 命令语义是 Redis 风格最小子集，并不承诺完整 Redis 生态兼容。
+- 命令语义当前仍是 Redis 风格最小子集，完整 Redis 生态兼容属于后续演进目标。
 
 ## 客户端（CLI）
 
@@ -262,7 +232,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 
 ## 说明
 
-- 这是一个 **单机内存版** 实现：不包含 AOF/RDB 持久化、复制、集群、Lua、ACL、TLS 等复杂功能。
+- 这是一个 **单机内存版** 实现：当前尚未实现 AOF/RDB 持久化、复制、集群、Lua、ACL、TLS 等复杂功能，这些属于后续规划方向。
 - 事务仅支持最小子集：`MULTI/EXEC/DISCARD`（不包含 WATCH 等）。
 - 协议层为 Redis RESP；RESP2 是默认目标，RESP3 可通过 `HELLO 3` 基础协商。协议错误会返回错误并关闭连接。
 - TTL 采用“访问时惰性删除”，并带一个轻量级后台清理任务（可关）。

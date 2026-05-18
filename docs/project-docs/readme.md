@@ -1,102 +1,40 @@
 # Codebase Guide
 
-本文是 Yierdis 代码库的导航页，目标不是替代 `README.md`，而是把“这个项目是什么、请求怎么跑、模块怎么拆、改需求时该看哪里”整理成一组更适合读代码时查阅的文档。
+本文是 Yierdis 的代码库文档地图。它不替代仓库根部的 `README.md`，而是帮助你根据目标选择阅读路径：先理解项目、跟一次请求、查某个专题、准备改代码，或定位核心类。
 
-如果你是第一次进入仓库，建议按下面顺序阅读：
+## 先选你的阅读路径
+
+| 目标 | 建议路径 |
+| --- | --- |
+| 第一次了解项目 | `project-introduction.md` -> `project-overview.md` -> `request-execution-flow.md` |
+| 跟一条请求读源码 | `request-execution-flow.md` -> `main-path-walkthrough.md` -> `core-logic-index.md` |
+| 理解协议和命令 | `protocol-reference.md` -> `commands-and-data-model.md` -> `operation-test-coverage-matrix.md` |
+| 理解 DB 和内存 | `db-internals.md` -> `native-memory-runtime.md` -> `native-allocator-and-handles.md` |
+| 准备改代码 | `development-navigation.md` -> `testing-and-debugging.md` -> 对应专题文档 |
+
+## 文档分层
+
+- 入口导读: [`readme.md`](./readme.md), [`project-introduction.md`](./project-introduction.md), [`project-overview.md`](./project-overview.md)。负责建立入口地图、项目定位、能力边界和第一轮阅读顺序。
+- 系统主线: [`request-execution-flow.md`](./request-execution-flow.md), [`main-path-walkthrough.md`](./main-path-walkthrough.md), [`module-architecture.md`](./module-architecture.md)。负责串起请求执行链、源码主路径和 Maven 模块边界。
+- 专题手册: [`protocol-reference.md`](./protocol-reference.md), [`commands-and-data-model.md`](./commands-and-data-model.md), [`db-internals.md`](./db-internals.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md), [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md), [`configuration-and-operations.md`](./configuration-and-operations.md), [`client-and-bench-internals.md`](./client-and-bench-internals.md), [`ffm-usage.md`](./ffm-usage.md), [`ffm-primer.md`](./ffm-primer.md), [`native-memory-runtime.md`](./native-memory-runtime.md), [`native-allocator-and-handles.md`](./native-allocator-and-handles.md), [`offheap-copy-behavior.md`](./offheap-copy-behavior.md)。负责按协议、命令、DB、执行器、bytes、配置、客户端和 native memory 等主题提供深入说明。
+- 开发导航: [`development-navigation.md`](./development-navigation.md), [`testing-and-debugging.md`](./testing-and-debugging.md), [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md)。负责把常见改动类型、排障路径和命令覆盖矩阵连接到具体测试范围。
+- 参考资料: [`core-logic-index.md`](./core-logic-index.md), [`glossary.md`](./glossary.md)。负责集中索引核心类、核心方法和高频术语，方便读源码时快速定位。
+
+## 推荐第一轮阅读
 
 1. [`project-introduction.md`](./project-introduction.md)
 2. [`project-overview.md`](./project-overview.md)
 3. [`request-execution-flow.md`](./request-execution-flow.md)
 4. [`main-path-walkthrough.md`](./main-path-walkthrough.md)
-5. [`core-logic-index.md`](./core-logic-index.md)
-6. [`protocol-reference.md`](./protocol-reference.md)
-7. [`commands-and-data-model.md`](./commands-and-data-model.md)
-8. [`db-internals.md`](./db-internals.md)
-9. [`executor-and-backpressure.md`](./executor-and-backpressure.md)
-10. [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)
-11. [`configuration-and-operations.md`](./configuration-and-operations.md)
-12. [`client-and-bench-internals.md`](./client-and-bench-internals.md)
-13. [`testing-and-debugging.md`](./testing-and-debugging.md)
-14. [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)
-15. [`glossary.md`](./glossary.md)
-16. [`module-architecture.md`](./module-architecture.md)
-17. [`development-navigation.md`](./development-navigation.md)
+5. [`protocol-reference.md`](./protocol-reference.md)
+6. [`commands-and-data-model.md`](./commands-and-data-model.md)
+7. [`db-internals.md`](./db-internals.md)
+8. [`executor-and-backpressure.md`](./executor-and-backpressure.md)
+9. [`testing-and-debugging.md`](./testing-and-debugging.md)
+10. [`development-navigation.md`](./development-navigation.md)
 
-## 文档分工
+## 维护者提示
 
-### 代码库导览
-
-- [`project-introduction.md`](./project-introduction.md)
-  面向第一次进入仓库的读者，先从“项目为什么存在、想解决什么问题、为什么这样设计”建立整体认知。
-- [`project-overview.md`](./project-overview.md)
-  说明项目定位、能力边界、主要模块和代码入口，回答“这个项目到底在做什么”。
-- [`request-execution-flow.md`](./request-execution-flow.md)
-  说明从 Netty 收包到命令执行、DB 读写、回包写出的主链路，并用 `PING` 和 `SET` 做例子。
-- [`main-path-walkthrough.md`](./main-path-walkthrough.md)
-  按源码阅读顺序，把 `YierdisServerBootstrap -> CommandExecutor -> YierdisEngine -> YierdisFastCommandProcessor -> YierdisStringOps` 这条主链逐段串起来。
-- [`core-logic-index.md`](./core-logic-index.md)
-  集中索引当前代码里的核心类、核心方法、职责和边界，适合读源码或改代码前快速定位。
-- [`db-internals.md`](./db-internals.md)
-  专门展开 `YierdisDb`、key lifecycle、mutation executor、memory ledger、TTL 和 maxmemory 在单 DB 内核里是如何协作的。
-- [`executor-and-backpressure.md`](./executor-and-backpressure.md)
-  专门展开执行器、队列预算、GLOBAL/FAIR 调度、连接级背压、输出缓冲背压和 global recovery 的内部机制。
-- [`module-architecture.md`](./module-architecture.md)
-  说明 Maven 模块的职责、依赖方向和架构护栏，回答“哪些模块能依赖哪些模块”。
-- [`development-navigation.md`](./development-navigation.md)
-  面向改代码时的实际任务，回答“我要改 `SET` / 新增命令 / 改协议 / 看背压，该从哪几个文件开始”。
-
-### 协议与数据
-
-- [`protocol-reference.md`](./protocol-reference.md)
-  说明 RESP request/reply、inline command、`HELLO 3`、协议错误断连和协议上限。
-- [`commands-and-data-model.md`](./commands-and-data-model.md)
-  说明命令模块怎么注册、命令家族怎么分、逻辑类型和内部编码怎么对应，以及 HLL 为什么复用 string。
-- [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)
-  说明 `BytesView`、`BytesSlice`、`BytesSink`、`DirectBytesSink` 为什么存在，以及它们如何连接 protocol、reply 写回和 off-heap fast-path。
-- [`glossary.md`](./glossary.md)
-  把仓库里反复出现的术语集中解释，帮助你把 protocol、command、db、runtime 这些层次对齐。
-
-### 运行与贡献
-
-- [`configuration-and-operations.md`](./configuration-and-operations.md)
-  说明启动参数如何流入 runtime config，以及背压、慢客户端保护、淘汰、maintenance、观测命令在运行时是怎么工作的。
-- [`client-and-bench-internals.md`](./client-and-bench-internals.md)
-  说明 CLI、Netty client、bench、smoke/bench 脚本是如何沿着真实协议路径工作和验证 server 的。
-- [`testing-and-debugging.md`](./testing-and-debugging.md)
-  说明测试如何按层组织、改不同类型代码该跑哪些测试，以及常见故障应从哪一层排起。
-
-### 现有 FFM / Off-Heap 文档
-
-- [`ffm-usage.md`](./ffm-usage.md)
-  合并说明 JDK FFM 本身的入门心智模型，以及 FFM 在 Yierdis 里的实际落点和生命周期组装。
-- [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)
-  专门说明生产级 stable native allocator、`NativeHandle` 位布局、object table、pin/quarantine、`realloc`、active defrag、DB handle 迁移和 allocator metrics。
-- [`offheap-copy-behavior.md`](./offheap-copy-behavior.md)
-  说明 heap / off-heap / direct buffer 之间哪些路径会发生拷贝。
-
-## 这组文档的边界
-
-- 快速启动、常用命令和脚本入口，仍建议先看仓库根部的 `README.md`。
-- 本组文档会把协议、编码、配置和测试背后的代码逻辑讲得更细，但不替代 README 的“先跑起来”角色。
-- FFM / native memory 的底层细节，仍以现有 `docs/project-docs/ffm-usage.md`、`docs/project-docs/native-allocator-and-handles.md` 和 `docs/project-docs/offheap-copy-behavior.md` 为主。
-- 本组文档重点覆盖代码结构、执行流程、模块边界、协议细节、数据模型、DB 内核、执行器/背压、bytes 抽象、运行时配置和开发导航。
-
-## 推荐阅读方式
-
-- 如果你只想快速判断项目定位，先看 [`project-overview.md`](./project-overview.md)。
-- 如果你还没建立“这个项目为什么值得读”的整体印象，先看 [`project-introduction.md`](./project-introduction.md)。
-- 如果你准备跟踪一次请求的完整路径，先看 [`request-execution-flow.md`](./request-execution-flow.md)。
-- 如果你想开始一边看文档一边跟源码，接着看 [`main-path-walkthrough.md`](./main-path-walkthrough.md)。
-- 如果你想快速定位所有核心类、核心方法和边界，接着看 [`core-logic-index.md`](./core-logic-index.md)。
-- 如果你还没真正看懂线上协议长什么样，接着看 [`protocol-reference.md`](./protocol-reference.md)。
-- 如果你想把命令实现和内部编码对应起来，再看 [`commands-and-data-model.md`](./commands-and-data-model.md)。
-- 如果你想继续看单 DB 内核内部怎么协作，再看 [`db-internals.md`](./db-internals.md)。
-- 如果你想把执行器、队列预算和背压细节讲清楚，再看 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
-- 如果你想理解 bytes 抽象为什么是协议层和 off-heap 之间的关键接缝，再看 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
-- 如果你准备启动、调参、看观测指标，看 [`configuration-and-operations.md`](./configuration-and-operations.md)。
-- 如果你想知道 CLI、client 和 bench 是怎么沿真实协议路径工作的，看 [`client-and-bench-internals.md`](./client-and-bench-internals.md)。
-- 如果你准备改完代码以后验证或排障，看 [`testing-and-debugging.md`](./testing-and-debugging.md)。
-- 如果你要改 native allocator、stable handle、object table、entry/value handle 或 active defrag，看 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
-- 如果你总是被类名和术语绊住，随手配合 [`glossary.md`](./glossary.md) 一起看。
-- 如果你准备改模块边界或新增依赖，先看 [`module-architecture.md`](./module-architecture.md)。
-- 如果你已经准备动手改代码，直接看 [`development-navigation.md`](./development-navigation.md)。
+- [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) 会被测试解析，改格式前需要同步更新对应测试。
+- native-memory 事实应在 [`native-memory-runtime.md`](./native-memory-runtime.md), [`native-allocator-and-handles.md`](./native-allocator-and-handles.md), [`db-internals.md`](./db-internals.md) 之间保持一致。
+- 根部 `README.md` 应保持 quick-start 页面定位，不要扩张成内部实现手册。
