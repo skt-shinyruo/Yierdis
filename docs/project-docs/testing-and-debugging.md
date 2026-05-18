@@ -1,418 +1,169 @@
 # Testing And Debugging
 
-本文不是简单列一串测试文件，而是想回答一个更实用的问题：
+本文说明 Yierdis 测试如何分层，以及不同改动和故障应该先跑哪些测试、先看哪一层。
 
-- 改某块代码以后，到底应该跑哪些测试？
-- 出问题时，应该先从哪一层往下排？
-
-## 测试分层心智模型
-
-这个仓库的测试大致可以按“离线上协议有多近”分成 6 层。
-
-### 1. 参数与边界层
-
-目标是保证 CLI、契约和架构护栏不漂移。
-
-代表测试：
-
-- `YierdisServerArgsTest`
-- `ServerConfigArgsTest`
-- `ArchitectureBoundaryTest`
-- `ArchitecturePolicyResourceTest`
-- `RespBoundaryGuardTest`
-
-这层很适合抓：
-
-- 参数名变更
-- README / 文档契约漂移
-- 模块边界被偷偷破坏
-- retired protocol 依赖回到 production source
-
-### 2. 协议 codec / parser 层
-
-目标是保证 RESP request/reply 的编码、解析和协议上限稳定。
-
-代表测试：
-
-- `RespClientCodecTest`
-- `RespRequestDecoderTest`
-- `RespReplyWriterTest`
-- `RespReplyWriterFactoryTest`
-- `RespProtocolVersionTest`
-- `RespProtocolLimitsTest`
-
-如果你改的是：
-
-- RESP request frame
-- inline command 解析
-- RESP2 / RESP3 reply
-- decoder 错误和断连策略
-
-这层是第一站。
-
-### 3. 命令处理器层
-
-目标是验证命令注册、参数校验、错误语义和事务队列行为。
-
-代表测试：
-
-- `CommandProcessorTest`
-- `CommandErrorTest`
-- `TransactionCommandTest`
-- `YierdisFastCommandProcessorModuleTest`
-- `YierdisFastCommandProcessorRegistrationTest`
-
-这层最适合命令开发者，因为它不需要起 Netty server 就能把大部分行为跑清楚。
-
-#### 操作覆盖矩阵
-
-`docs/project-docs/operation-test-coverage-matrix.md` 是命令、DB API、native 内部结构三层测试覆盖的索引。新增命令或新增 server-only 命令时，先补矩阵行，再补对应测试；否则 `OperationCoverageMatrixTest` 或 `ServerOperationCoverageMatrixTest` 会失败。
-
-常用 guard：
+所有 Maven/Java 命令都使用 JDK 25。非交互 shell 中使用这个前缀：
 
 ```bash
-mvn -pl yierdis-tests/yierdis-integration-tests,yierdis-server/yierdis-server-main -am \
-  -Dtest=OperationCoverageMatrixTest,ServerOperationCoverageMatrixTest,StringCommandTest,BitmapCommandTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn ...
 ```
 
-### 4. DB / 数据结构层
+## 测试分层
 
-目标是验证 native entry/root、类型 payload adapter、TTL、maxmemory 和内存估算。
+Yierdis 的测试大致分成七层：
 
-代表测试：
+| 层 | 主要目的 | 常见测试 |
+| --- | --- | --- |
+| API contract | 稳定接口和边界语义 | `ExecutionRequestContractTest`, `CommandContractTest`, `DbEngineFactoryPolicyContractTest` |
+| command / integration | 命令参数、回包、Redis 兼容语义 | `CommandProcessorTest`, `StringCommandTest`, `CommandErrorTest`, `CommandVariantCoverageTest` |
+| DB direct ops | 绕开 command 层验证 DB API | `StringDirectOpsTest`, `CollectionDirectOpsTest`, `TtlLifecycleDirectOpsTest` |
+| native/internal | handle、allocator、keyspace、root/value、ledger | `NativeHandleTest`, `YierdisStableNativeAllocatorTest`, `StringRootTest`, `MemoryLedgerContractTest` |
+| executor / server | owner thread、队列、背压、Netty 适配 | `CommandExecutorTest`, `CommandExecutorBackpressureTest`, `RespProtocolIntegrationTest` |
+| CLI / bench | 客户端、脚本和 benchmark 输出契约 | `YierdisClientTest`, `BenchScriptContractTest`, `YierdisBenchSummaryFormatTest` |
+| architecture / docs guard | 模块边界和覆盖矩阵 | `ArchitectureDependencyRuleTest`, `RespBoundaryGuardTest`, `OperationCoverageMatrixTest` |
 
-- `NativeHandleTest`
-- `NativeAllocatorContractTest`
-- `YierdisNativeObjectTableTest`
-- `YierdisNativePageAllocatorTest`
-- `YierdisStableNativeAllocatorTest`
-- `NativeKeyDirectoryTest`
-- `EntryTableContractTest`
-- `EntryHandleContractTest`
-- `ValueHandleContractTest`
-- `StringRootTest`
-- `SetCommandTest`
-- `HashCommandTest`
-- `ListCommandTest`
-- `ZSetCommandTest`
-- `HllCommandTest`
-- `ExpireSemanticsTest`
-- `MaxmemoryEvictionTest`
-- `OffHeapStringStorageTest`
-- `HashValueTest`
-- `ListValueTest`
-- `ZSetValueTest`
+查找入口：开发路径看 [`development-navigation.md`](./development-navigation.md)，源码职责看 [`core-logic-index.md`](./core-logic-index.md)，覆盖状态看 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md)。
 
-如果你改的是：
+## 改协议时
 
-- stable native allocator / `NativeHandle`
-- object table、pin/quarantine、epoch、`realloc` 或 active defrag
-- `EntryHandle` / `ValueHandle` 语义
-- 内部编码升级
-- TTL 语义
-- maxmemory / eviction
-- FFM/off-heap 行为
-
-这一层最关键。
-
-### 5. Server 集成层
-
-目标是验证 pipeline、执行器、背压和真正的 socket 行为。
-
-代表测试：
-
-- `YierdisServerBootstrapCommandWiringTest`
-- `RespProtocolIntegrationTest`
-- `RespHandshakeIntegrationTest`
-- `RespProtocolErrorIntegrationTest`
-- `CommandExecutorTest`
-- `CommandExecutorBackpressureTest`
-- `CommandExecutorFairSchedulingTest`
-- `TransactionQueueCleanupTest`
-
-如果你改的是：
-
-- Netty pipeline
-- `NettyExecutionConnection`
-- backpressure / queue reject
-- protocol error 回包
-
-一定要回到这一层。
-
-### 6. Client / Bench / 工具层
-
-目标是保证仓库附带的工具也跟着协议和参数一起保持一致。
-
-代表测试：
-
-- `YierdisClientTest`
-- `TransactionQueueLimitTest`
-- `BenchServerArgsReuseTest`
-- `RespCommandWriterTest`
-- `SmokeScriptContractTest`
-- `BenchScriptContractTest`
-
-这层经常被忽略，但如果你改了协议或参数，工具层其实很容易先坏。
-
-## 常见改动应该跑什么
-
-### 改协议
-
-至少看这些：
-
-- `RespClientCodecTest`
-- `RespRequestDecoderTest`
-- `RespReplyWriterTest`
-- `RespHandshakeIntegrationTest`
-- `RespProtocolErrorIntegrationTest`
-
-常用命令：
+先跑最窄协议测试：
 
 ```bash
-mvn -pl yierdis-networking/yierdis-networking-resp,yierdis-networking/yierdis-networking-netty,yierdis-server/yierdis-server-main -am \
-  -Dtest=RespClientCodecTest,RespRequestDecoderTest,RespReplyWriterTest,RespHandshakeIntegrationTest,RespProtocolErrorIntegrationTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-networking/yierdis-networking-netty,yierdis-networking/yierdis-networking-resp -am -Dtest=RespRequestDecoderTest,RespExecutionAdapterTest,RespReplyWriterTest test
 ```
 
-### 改某个命令家族
-
-建议顺序：
-
-1. 先跑对应 `*CommandTest`
-2. 再跑 `CommandErrorTest`
-3. 如果命令跟事务或连接态有关，再跑 `TransactionCommandTest`
-
-例如改 zset：
+再跑 server 协议集成：
 
 ```bash
-mvn -pl yierdis-tests/yierdis-integration-tests -am \
-  -Dtest=ZSetCommandTest,CommandErrorTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-main -am -Dtest=RespProtocolIntegrationTest,RespProtocolErrorIntegrationTest,RespHandshakeIntegrationTest test
 ```
 
-### 改内部编码或内存逻辑
+排障顺序：`RespRequestDecoder` 看线上 bytes 是否被正确切成 request，`RespCommandAdapter` / `RespExecutionAdapter` 看是否正确变成 `ExecutionRequest`，`RespReplyWriter` 看 reply 语义是否被正确编码。
 
-建议至少跑：
+## 改命令时
 
-- 对应值类测试
-- `MemoryStatsCommandTest`
-- `MaxmemoryEvictionTest`
-- 相关 off-heap / FFM 测试
-
-例如改 string / off-heap：
+先跑命令家族测试和错误测试。例如 string / bitmap：
 
 ```bash
-mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-integration-tests -am \
-  -Dtest=OffHeapStringStorageTest,MemoryStatsCommandTest,MaxmemoryEvictionTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests -am -Dtest=StringCommandTest,BitmapCommandTest,CommandErrorTest,CommandVariantCoverageTest test
 ```
 
-### 改 stable native allocator 或 DB handle
-
-如果改的是 `NativeHandle` 位布局、`NativeAllocator` API、object table 状态机、page / size-class、pin/quarantine、epoch、`realloc`、active defrag、`EntryHandle` / `ValueHandle` 或 `EntryTable` native record，至少跑：
+新增命令或新增 option/subcommand 时，还要跑矩阵 guard：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-api,yierdis-memory/yierdis-memory-ffm,yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-architecture-tests -am test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests,yierdis-server/yierdis-server-main -am -Dtest=OperationCoverageMatrixTest,ServerOperationCoverageMatrixTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-最窄的关注点可以拆成：
+排障顺序：先看 `CommandRegistry` 是否注册，`CommandSpec` arity/key metadata 是否正确，再看 `YierdisFastCommandProcessor` 是否进入事务队列、错误路径或实际 handler。
 
-- `NativeHandleTest`：64-bit handle 编解码和 domain/kind 校验。
-- `NativeAllocatorContractTest`：allocator API record、defrag report、epoch kind 和异常 contract。
-- `YierdisNativeObjectTableTest`：slot lifecycle、generation、quarantine、wrong-kind/domain 和 stale handle。
-- `YierdisNativePageAllocatorTest`：64 KiB page、small size class、medium/large span 和 page accounting。
-- `YierdisStableNativeAllocatorTest`：resolve view pin、free quarantine、epoch-safe reclaim、`realloc` 回滚、active defrag、metrics 和 stress。
-- `EntryHandleContractTest` / `ValueHandleContractTest` / `EntryTableContractTest`：DB handle 包装和 native `ENTRY_RECORD` 读写。
+## 改 DB 或数据结构时
 
-### 改启动参数、背压、pipeline
-
-建议至少跑：
-
-- `ServerConfigArgsTest`
-- `YierdisServerBootstrapCommandWiringTest`
-- `CommandExecutorBackpressureTest`
-- `CommandExecutorTest`
+先跑 direct ops，确认不依赖命令解析也能复现：
 
 ```bash
-mvn -pl yierdis-server/yierdis-server-main,yierdis-server/yierdis-server-executor -am \
-  -Dtest=ServerConfigArgsTest,YierdisServerBootstrapCommandWiringTest,CommandExecutorBackpressureTest,CommandExecutorTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory -am -Dtest=StringDirectOpsTest,CollectionDirectOpsTest,TtlLifecycleDirectOpsTest,NativeStorageRegressionTest test
 ```
 
-### 不确定改动影响面时
-
-最简单的保底方式仍然是：
+再跑相关命令家族，确认回包语义没有偏移：
 
 ```bash
-mvn test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests -am -Dtest=StringCommandTest,ListCommandTest,HashCommandTest,SetCommandTest,ZSetCommandTest,HllCommandTest test
 ```
 
-仓库要求 JDK 25。
+排障顺序：`DbEngine` capability view -> family ops -> `YierdisDbMutationExecutor` -> key lifecycle -> root/value 结构。DB 读写细节看 [`db-internals.md`](./db-internals.md)。
 
-## 外部客户端兼容 smoke
+## 改 native memory 时
 
-Yierdis 的公开协议是 RESP，所以可以用常见 Redis 客户端做基础 smoke：
+先跑 allocator / handle contract：
 
 ```bash
-redis-cli -p 6378 PING
-redis-cli -p 6378 SET smoke:key smoke:value
-redis-cli -p 6378 GET smoke:key
-redis-cli -p 6378 HELLO 3
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-api,yierdis-memory/yierdis-memory-ffm -am -Dtest=NativeHandleTest,YierdisNativeObjectTableTest,YierdisStableNativeAllocatorTest test
 ```
 
-也可以用 Jedis、Lettuce、go-redis 做最小连接检查，重点放在基础 RESP2 命令和 `HELLO 3` 协商上。这个项目不是 Redis drop-in replacement，因此 smoke 应聚焦已实现命令，不应把完整 Redis 客户端测试套件当作必须通过的目标。
-
-## 最实用的两个脚本
-
-### `scripts/smoke.sh`
-
-这个脚本适合做“最小真实路径回归”：
-
-1. 构建 server / client / bench jar
-2. 拉起一个真实 server
-3. 优先用 `redis-cli` 发 `PING` / `SET` / `GET`
-4. 如果本机没有 `redis-cli`，回退到 Java CLI
-5. 再用 bench 工具做一个很小的 correctness smoke
-
-默认日志会写到：
-
-```text
-.tmp-smoke-server.log
-```
-
-常见用法：
+再跑 DB native path：
 
 ```bash
-./scripts/smoke.sh
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-integration-tests -am -Dtest=EntryHandleContractTest,ValueHandleContractTest,KeyHandleContractTest,NativeStorageRegressionTest,OffHeapLeakRegressionTest test
 ```
 
-如果你刚刚已经打好了包，可以跳过构建：
+排障顺序：`NativeHandle` bit layout -> object table generation -> stable allocator pin/quarantine/epoch -> DB handle wrappers -> keyspace/root/value release。详细背景看 [`ffm-primer.md`](./ffm-primer.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`native-memory-runtime.md`](./native-memory-runtime.md)。
+
+## 改 executor / backpressure 时
+
+先跑 executor 单元测试：
 
 ```bash
-SKIP_BUILD=1 ./scripts/smoke.sh
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-executor -am -Dtest=CommandExecutorTest,CommandExecutorBackpressureTest,CommandExecutorFairSchedulingTest,ExecutionConnectionContextTest test
 ```
 
-常见调参项：
-
-- `HOST` / `PORT`
-- `SERVER_LOG`
-- `READY_TIMEOUT_SEC`
-- `REQUESTS` / `CLIENTS` / `PIPELINE`
-
-### `scripts/bench.sh`
-
-这个脚本适合做“可重复压测”或 request-path 回归对比。
-
-作为 baseline/current 对比使用时，只有两边完成同一组 RESP workload shape 的 clean run，结果才适合解读为 before/after delta；如果任一侧出现启动失败、协议错误、部分 workload 失败或 `ERR internal error`，应把这次结果标成 `non-comparable`。
-
-最简单的运行方式：
+再跑 server 组装和 Netty 适配：
 
 ```bash
-./scripts/bench.sh
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-main -am -Dtest=YierdisServerBootstrapCommandWiringTest,NettyExecutionAdapterIntegrationTest,ClosingSkipSideEffectsIntegrationTest test
 ```
 
-常见调参项：
+排障顺序：submitter 接收请求 -> backlog budget -> scheduling policy -> drain loop -> execution support -> IO adapter 写回。详细模型看 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
 
-- `REQUESTS`
-- `CLIENTS`
-- `PIPELINE`
-- `DATA_SIZE`
-- `KEYSPACE`
-- `LATENCY_REQUESTS`
-- `LATENCY_CLIENTS`
-- `XMS` / `XMX` / `MAX_DIRECT_MEMORY`
-- `SKIP_PREFILL`
-- `SKIP_LATENCY`
-- `MAXMEMORY_BYTES`
-- `MAXMEMORY_POLICY`
-- `MAXMEMORY_SAMPLES`
-- `SERVER_ARGS_EXTRA`
-- `BENCH_ARGS_EXTRA`
+## 改 CLI / bench 时
 
-`SERVER_ARGS_EXTRA` 先经过 `YierdisBenchServerArgs` 解析，只能使用 bench launch 模型已声明的 server 参数；client idle/output-buffer 慢客户端保护这类 server-only 参数需要直接启动 server 验证。
-
-例如：
+CLI 先跑：
 
 ```bash
-REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-cli -am -Dtest=YierdisClientTest,MaxmemoryScopeTest,TransactionQueueLimitTest test
 ```
 
-## 排障时应该先看哪里
+bench 先跑：
 
-### 症状 1：收到 `-ERR Protocol error`
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=BenchScriptContractTest,SmokeScriptContractTest,YierdisBenchSummaryFormatTest,YierdisBenchComparisonRenderTest test
+```
 
-先看：
+排障顺序：`InlineCommandParser` -> client codec -> script contract -> benchmark args -> summary/comparison renderer。详细入口看 [`client-and-bench-internals.md`](./client-and-bench-internals.md)。
 
-- `RespRequestDecoder`
-- `RespProtocolErrorReplyHandler`
-- `RespProtocolErrorIntegrationTest`
-- `RespRequestDecoderTest`
+## operation coverage matrix
 
-重点确认：
+[`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) 是测试覆盖索引，也是 guard tests 的输入文件。它被 `OperationCoverageMatrixTest` 和 `ServerOperationCoverageMatrixTest` 解析，修改时必须保持这些规则：
 
-- RESP array / bulk length 是否正确
-- inline command 是否超过上限
-- bulk string 是否完整带 `\r\n`
-- 错误后连接是否按预期关闭
+- command heading 必须是 `### UPPERCASECOMMAND`。
+- 三层状态行必须保持 ``- **Command layer**: `status` - detail``、``- **DB API**: `status` - detail``、``- **Native internals**: `status` - detail``。
+- option/subcommand 覆盖行必须保持 ``- **Command variant**: `variant` - `status` - detail``。
+- 状态只能是 `covered`、`covered-by-shared-test`、`missing`、`not-applicable`。
+- `covered` 和 `covered-by-shared-test` 必须包含 `FileName#methodName` 证据。
+- `## Option And Subcommand Inventory`、`## DB API Inventory`、`## Native/Internal Inventory`、`## Current Gap Queue` 这些 heading 不能改名。
 
-### 症状 2：收到 `ERR busy queue_full` 或 `ERR busy bytes_budget`
+矩阵 guard 命令：
 
-先看：
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests,yierdis-server/yierdis-server-main -am -Dtest=OperationCoverageMatrixTest,ServerOperationCoverageMatrixTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
 
-- `YierdisFastCommandHandler`
-- `CommandExecutor`
-- `CommandExecutorBackpressureTest`
-- `STATS`
+## 常见故障入口
 
-重点确认：
+| 现象 | 先看哪里 | 常用测试 |
+| --- | --- | --- |
+| unknown command 或 arity 不对 | `CommandRegistry`, `CommandSpec`, command handler | `CommandRegistryGuardTest`, `CommandErrorTest` |
+| 事务里行为不同 | `YierdisFastCommandProcessor`, `TransactionState` | `TransactionCommandTest`, `TransactionQueueCleanupTest` |
+| RESP 回包形状不对 | `ReplyWriter`, `RespReplyWriter` | `RespReplyWriterTest`, `RespProtocolIntegrationTest` |
+| TTL 不准或过期 key 仍可见 | `YierdisExpireIndex`, lifecycle cleanup | `TtlLifecycleDirectOpsTest`, `ExpireIndexTest` |
+| maxmemory 多回包或错误回包 | `YierdisDbMemoryLedger`, mutation executor | `MaxmemoryEvictionTest`, `MaxmemoryDoubleReplyRegressionTest` |
+| off-heap 泄漏 | root/value release, blob store, native handle graph | `OffHeapLeakRegressionTest`, `NativeStorageRegressionTest` |
+| executor 卡住或背压不恢复 | submitter、drain loop、connection context | `CommandExecutorBackpressureTest`, `CommandExecutorFairSchedulingTest` |
+| docs matrix guard 失败 | matrix heading、row shape、evidence | `OperationCoverageMatrixTest`, `ServerOperationCoverageMatrixTest` |
 
-- 全局队列是不是已经满了
-- queued-bytes 预算是不是耗尽了
-- 连接是否已经被 executor 关闭 `autoRead`
+## 最小验证组合
 
-### 症状 3：`EXECABORT` 或连接关闭后事务内存不释放
+小文档改动：
 
-先看：
+```bash
+git diff --check -- docs/project-docs/development-navigation.md docs/project-docs/testing-and-debugging.md docs/project-docs/operation-test-coverage-matrix.md docs/project-docs/core-logic-index.md docs/project-docs/glossary.md
+```
 
-- `TransactionCommands`
-- `NettyExecutionConnection`
-- `TransactionQueueCleanupTest`
-- `TransactionCommandTest`
+命令或矩阵改动：
 
-重点确认：
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests,yierdis-server/yierdis-server-main -am -Dtest=OperationCoverageMatrixTest,ServerOperationCoverageMatrixTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
 
-- 入队阶段是否触发命令数或 bytes 上限
-- 连接关闭时是否正确丢弃了事务状态
+DB/native 语义改动：目标 direct ops 测试 + 相关命令家族测试 + 矩阵 guard。
 
-### 症状 4：`WRONGTYPE`、`ERR syntax error`、`value is not an integer`
-
-先看：
-
-- 对应 `*Commands.java`
-- `CommandErrorTest`
-- 对应命令家族测试
-
-这类问题大多数不是 executor 或协议问题，而是：
-
-- arity 校验
-- option 解析
-- 类型断言
-
-### 症状 5：编码和内存观测不符合预期
-
-先看：
-
-- `YierdisDbIntrospection`
-- `EntryRecord`
-- `StringRoot` / `HashRoot` / `ListRoot` / `SetRoot` / `ZSetRoot`
-- `HashValue` / `ListValue` / `SetValue` / `ZSetValue`
-- `NativeKeyDirectoryTest` / `EntryTableContractTest` / `StringRootTest`
-- `MemoryStatsCommandTest`
-- 对应值类测试
-
-然后配合实际命令观察：
-
-- `OBJECT ENCODING key`
-- `MEMORY USAGE key`
-- `MEMORY STATS`
+executor/server 改动：executor 单元测试 + server main 集成测试 + 相关协议测试。

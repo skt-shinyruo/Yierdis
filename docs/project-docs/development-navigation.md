@@ -1,415 +1,250 @@
 # Development Navigation
 
-本文不是再讲一遍架构，而是直接回答一个更实际的问题：
+本文按常见改动类型回答一个实际问题：我要改某类需求时，应该先打开哪些文件，沿哪条链继续追。
 
-“如果我要改某一类需求，应该先打开哪些文件，沿着哪条链往下追？”
+先把三份导航放在手边：测试选择看 [`testing-and-debugging.md`](./testing-and-debugging.md)，覆盖状态看 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md)，源码职责索引看 [`core-logic-index.md`](./core-logic-index.md)。
 
-## 先记住 4 条工作规则
+## 工作规则
 
-### 1. 改命令语义，先看命令层，再追到 DB 能力边界
+1. 先定改动边界。协议、command、DB、executor、runtime、native memory 不要混在一次小改里处理。
+2. 先找最近的测试，再改实现。命令语义优先看 integration tests，DB 语义优先看 direct ops tests，native memory 优先看 internal contract tests。
+3. 命令层不要绕过 `DbEngine` / `DbReads` / `DbWrites` 直接依赖 `YierdisDb`。
+4. RESP DTO 不进入 command 层；进入 command 层前必须变成 `ExecutionRequest`。
+5. 写路径必须经过 mutation executor、memory ledger、TTL/key lifecycle，不要直接改 root/value 结构。
+6. 新命令、新 DB API、新 native/internal 结构要同步更新 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md)。
 
-不要一上来就冲进 `YierdisDb` 大类。更高效的顺序通常是：
+## 改协议
 
-1. 命令注册和参数解析
-2. `DbReads` / `DbWrites`
-3. 对应的 `*Ops`
-4. 必要时再看 `YierdisDb` 和底层 value 结构
+先打开：
 
-### 2. 改 server 行为，优先停留在 `yierdis-server-main`
+- [`RespRequestDecoder.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java)
+- [`RespCommandAdapter.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java)
+- [`RespExecutionAdapter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespExecutionAdapter.java)
+- [`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java)
+- [`NettyExecutionIoAdapter.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java)
 
-除非你确认要变的是 transport-agnostic 的 core 能力，否则不要为了省事把 server 细节塞进 core。
+继续追：
 
-### 3. 改协议，只走 protocol 车道和 server 适配层
+- 请求边界看 [`protocol-reference.md`](./protocol-reference.md) 和 [`request-execution-flow.md`](./request-execution-flow.md)。
+- bytes 零拷贝和 materialize 边界看 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
+- 如果是 `HELLO 2/3` 或回包类型差异，继续看 `RespReplyWriterFactory`、`ServerSession` 和 `RespHandshakeIntegrationTest`。
 
-如果问题是 request / reply 格式、编解码、decoder 行为，不要去改 `yierdis-command-builtin` 或 `yierdis-db-memory`。
+测试优先级：
 
-### 4. 先找最接近的测试，再改实现
+- `RespRequestDecoderTest`
+- `RespExecutionAdapterTest`
+- `RespReplyWriterTest`
+- `RespProtocolIntegrationTest`
+- `RespProtocolErrorIntegrationTest`
+- `RespHandshakeIntegrationTest`
 
-Yierdis 有不少针对行为回归、边界和架构的测试。先找最接近的测试，往往比先看实现更省时间。
+## 新增或修改命令
 
-## 任务 1：改 `SET` 语义
+先打开：
 
-这是最典型的一类需求。
+- [`CommandSpec.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java)
+- [`CommandRegistry.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java)
+- [`YierdisFastCommandProcessor.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java)
+- [`CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
+- 对应家族的 `*Commands.java`
+- 需要 server 观测或握手状态时，再看 [`ServerCommandModule.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerCommandModule.java)
 
-### 先看哪里
+继续追：
 
-- `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMemoryLedger.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
+- 命令设计和数据模型看 [`commands-and-data-model.md`](./commands-and-data-model.md)。
+- 主请求链看 [`request-execution-flow.md`](./request-execution-flow.md)。
+- 新增 command heading、option/subcommand 行、DB API 行时同步矩阵：[`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md)。
 
-### 如果只是加一个 `SET` 选项
+测试优先级：
 
-先判断这个选项属于哪一类：
+- 对应家族测试，例如 `StringCommandTest`、`ListCommandTest`、`HashCommandTest`、`SetCommandTest`、`ZSetCommandTest`、`HllCommandTest`
+- `CommandErrorTest`
+- `CommandVariantCoverageTest`
+- `CommandRegistryGuardTest`
+- `OperationCoverageMatrixTest`
+- server-only 命令再跑 `ServerOperationCoverageMatrixTest` 和 `YierdisServerBootstrapCommandWiringTest`
 
-- 模式类：类似 `NX/XX`
-- 过期类：类似 `EX/PX/EXAT/PXAT/KEEPTTL`
-- 返回值类：类似 `GET`
-- 真正影响 DB 写语义的类
+## 改 string / bitmap / HLL
 
-对应的改法一般是：
+先打开：
 
-1. 先改测试
-2. 在 `StringCommands.set(...)` 里解析新选项
-3. 必要时扩 `SetMode` 或 `ExpireOption`
-4. 如果会改变 DB 写入语义，再改 `YierdisStringOps.set(...)`
-5. 如果会影响 TTL / 生命周期，再继续看 `YierdisDbKeyLifecycle`
+- string/bitmap command：对应 `StringCommands`
+- HLL command：对应 `HllCommands`
+- API：`StringReadOps`、`StringWriteOps`、`HllReadOps`、`HllWriteOps`
+- DB 实现：`YierdisStringOps`、HLL 相关 ops
+- 内部结构：`StringRoot`、`YierdisHyperLogLog`
 
-参数形状和错误文案尽量先落在 command API parser 上，而不是在 handler 里散写：
+继续追：
 
-- `ArgReader` 负责按 argv bytes 读取参数和解析整数
-- `CommandArity` / `CommandParsers` 负责 arity 与常见参数形状
-- `CommandParseError` 负责 Redis 风格错误文案
+- string、bitmap、HLL 的关系看 [`commands-and-data-model.md`](./commands-and-data-model.md)。
+- bytes view、slice 和 fast path 看 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
+- native/off-heap 存储边界看 [`native-memory-runtime.md`](./native-memory-runtime.md) 和 [`offheap-copy-behavior.md`](./offheap-copy-behavior.md)。
 
-这样普通执行和 `MULTI` 入队前校验会自然复用同一套规则。
+测试优先级：
 
-### 初学者最好先建立的 `SET` 代码心智模型
+- `StringCommandTest`
+- `BitmapCommandTest`
+- `HllCommandTest`
+- `StringDirectOpsTest`
+- `NativeStorageRegressionTest`
+- `StringRootTest`
+- `YierdisHyperLogLogTest`
 
-可以先把 `SET` 看成 5 层协作：
+## 改 list / hash / set / zset
 
-1. `StringCommands.set(...)`
-   负责“读懂用户输入”
-2. `CommandSupport`
-   负责“按当前连接路由到正确 DB”
-3. `StringWriteOps`
-   负责“定义命令层眼里的 string 写能力”
-4. `YierdisStringOps.set(...)`
-   负责“把 string 写语义落成真正 mutation”
-5. `YierdisDbMutationExecutor + YierdisDbKeyLifecycle`
-   负责“让 mutation 在内存记账、TTL 和 key 生命周期保护下执行”
+先打开：
 
-如果你先把这 5 层分清，再去改 `SET` 选项，通常不会一下子掉进 `YierdisDb` 的大类里迷路。
+- 对应 command 家族：`ListCommands`、`HashCommands`、`SetCommands`、`ZSetCommands`
+- API：`ListReadOps` / `ListWriteOps` 等同名 family ops
+- DB 实现：对应 `Yierdis*Ops`
+- root/value：`ListRoot`、`HashRoot`、`SetRoot`、`ZSetRoot`、`ListValue`、`HashValue`、`SetValue`、`ZSetValue`
 
-### 建议先看的测试
+继续追：
 
-- `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandProcessorTest.java`
-- `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/Milestone1CompatTest.java`
-- `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/CommandErrorTest.java`
+- 逻辑类型、内部编码、wrong-type 语义看 [`commands-and-data-model.md`](./commands-and-data-model.md)。
+- DB object graph 和 lifecycle 看 [`db-internals.md`](./db-internals.md)。
+- native value 存储和 copy 行为看 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
-读测试时推荐的顺序是：
+测试优先级：
 
-1. 先看正常路径
-2. 再看冲突选项和错误信息
-3. 最后看 TTL / maxmemory / wrong-type 的边界行为
+- `ListCommandTest`
+- `HashCommandTest`
+- `SetCommandTest`
+- `ZSetCommandTest`
+- `CollectionDirectOpsTest`
+- `ListRootTest`
+- `CollectionRootTest`
+- `ListValueTest`
+- `HashValueTest`
+- `SetValueTest`
+- `ZSetValueTest`
 
-## 任务 2：新增一个简单命令
+## 改 keyspace / TTL / maxmemory
 
-### 先判断命令属于哪一层
+先打开：
 
-如果命令是 transport-agnostic 的，通常放 `yierdis-command-builtin`。
+- `KeyspaceReadOps`、`KeyspaceWriteOps`
+- `TtlReadOps`、`TtlWriteOps`
+- `MemoryOps`
+- `YierdisDbKeyLifecycle`
+- `YierdisExpireIndex`、`YierdisHeapExpireIndex`、`YierdisFfmExpireIndex`
+- `YierdisDbMutationExecutor`
+- `YierdisDbMemoryLedger`
+- maxmemory coordinator / governor 相关类
 
-例如：
+继续追：
+
+- key lifecycle、TTL、maxmemory 主线看 [`db-internals.md`](./db-internals.md)。
+- 运行配置和线上语义看 [`configuration-and-operations.md`](./configuration-and-operations.md)。
+- native keyspace 和 expires 看 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
-- 连接类命令
-- 纯命令层 / DB 层命令
-- 不依赖 server 运行时观测和构建信息的命令
+测试优先级：
 
-如果命令明显依赖 server 观测或构建信息，通常放 `server`。
-
-例如：
-
-- `HELLO`
-- `INFO`
-- `STATS`
-
-### 新增 transport-agnostic 命令的常见入口
-
-- 对应的 `*Commands.java`
-- `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/DefaultCommandModules.java`
-- `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java`
-
-对初学者来说，一个“简单命令”的最小逻辑通常只有三步：
-
-1. 在对应 `*Commands.java` 的 `register(...)` 里注册 `CommandSpec<T>` 需要的 descriptor、parser 和 handler
-2. 写一个 typed handler，参数来自 parser 结果；简单命令也可以直接用 `ExecutionRequest`
-3. 用 `ctx.out()` 回包
-
-### 新增 server-facing 命令的常见入口
-
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerCommandModule.java`
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyServerInfoProvider.java`
-
-如果你拿不准命令该放哪层，可以先问自己：
-
-- 这个命令离开 Netty server / runtime observability 还能成立吗？
-
-如果答案是“能”，通常优先放 `yierdis-command-builtin`。
-如果答案是“不能”，通常放 `server`。
-
-### 如果命令需要读 DB
-
-先看当前 `yierdis-db-api` 是否已经有需要的能力接口。
-
-最常用入口：
-
-- `yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/DbReads.java`
-- `yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/KeyspaceReadOps.java`
-- `yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/MemoryOps.java`
-
-如果接口已经有能力，就直接从命令层通过 `support.dbReads(ctx)` 调。
-
-如果没有，就按下面顺序加：
-
-1. 先加 `yierdis-db-api` 接口
-2. 再加 `yierdis-db-memory` 实现
-3. 再回到命令层调用
-
-不要在 `yierdis-command-builtin` 里直接 import `YierdisDb`。
-
-初学者这里最容易犯的错是：
-
-- 看到 `YierdisDb` 里已经有方法，就直接去命令层调 `YierdisDb`
-
-但这个项目故意要求你先经过 `yierdis-db-api`，原因是：
-
-- 命令层依赖的是能力边界
-- 不是某个具体实现类的私有方法
-
-### 建议先看的测试
-
-- `yierdis-command/yierdis-command-core/src/test/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessorModuleTest.java`
-- `yierdis-command/yierdis-command-core/src/test/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessorRegistrationTest.java`
-- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java`
-
-## 任务 3：改协议
-
-### request 侧
-
-先看：
-
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java`
-- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespClientCodec.java`
-
-### protocol -> execution bridge
-
-只看：
-
-- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespExecutionAdapter.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`
-
-这里是 protocol DTO 转成 `ExecutionRequest` 的唯一桥；Netty handler 只负责调用纯 adapter。
-
-### reply 侧
-
-先看：
-
-- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java`
-- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespClientCodec.java`
-
-### 需要特别注意
-
-- 不要让 server/core 直接构造 protocol reply model
-- 回包语义 authority 仍然应该是 `ReplyWriter`
-
-相关护栏测试：
-
-- `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/resp/RespBoundaryGuardTest.java`
-
-## 任务 4：改多 DB、连接态或事务
-
-### 会话状态入口
-
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionConnection.java`
-- `yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java`
-- `yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandContext.java`
-
-新的执行契约源码都在 `yierdis-server-api`，旧 `core-contract` artifact 已退休。
-
-### 路由入口
-
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
-- `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java`
-- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
-
-### 事务判定入口
-
-- `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
-
-如果你要改的是：
-
-- `SELECT`
-- `MULTI/EXEC/DISCARD`
-- 事务队列容量和快照行为
-- close-after-reply 之后的命令跳过策略
-
-这些文件基本都绕不过去。
-
-### 初学者理解事务的最短路径
-
-如果你只想先搞懂事务是怎么工作的，建议只盯住这 3 个点：
-
-1. `EngineSession`
-   保存事务队列和 `dbIndex`
-2. `YierdisFastCommandProcessor`
-   决定命令是立刻执行还是 `QUEUED`
-3. `TransactionCommandTest`
-   验证 `MULTI/EXEC/DISCARD` 的真实行为
-
-先把这三点读通，再回头看其它连接态细节。
-
-## 任务 5：改 TTL、maxmemory、off-heap
-
-### TTL / 生命周期
-
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/expire/YierdisDbExpirationManager.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/expire/YierdisTtlOps.java`
-
-### memory accounting / eviction
-
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMemoryLedger.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMaxmemorySupport.java`
-- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisGlobalMaxmemoryGovernor.java`
-- `yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/MaxmemoryCoordinator.java`
-- `yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/MaxmemoryParticipant.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/DbMemoryAccounting.java`
-
-### off-heap / FFM
-
-- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/OffHeapAllocator.java`
-- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/OffHeapBuf.java`
-- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/OffHeapSlice.java`
-- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeHandle.java`
-- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeAllocator.java`
-- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeAllocatorStats.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmMemoryRuntime.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativePageAllocator.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeEpochManager.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryTable.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryRecord.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryHandle.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/ValueHandle.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmExpireIndex.java`
-- `docs/project-docs/ffm-usage.md`
-- `docs/project-docs/native-allocator-and-handles.md`
-- `docs/project-docs/offheap-copy-behavior.md`
-
-`yierdis-memory-api` 是 off-heap 和 stable native allocator contract 的模块兼容面；包名是 `yier.bubu.redis.memory.api`。需要这些 contract 的生产代码应直接依赖 `yierdis-memory-api`。`yierdis-command-builtin` 不直接 import 这些类型，它只接收 DB/API 边界转换后的命令错误。
-
-如果你改的是 allocator API、`NativeHandle` 位布局、object table、pin/quarantine、`realloc`、active defrag 或 `EntryHandle` / `ValueHandle` 迁移，先读 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。这些改动的关键判断是：DB 层只能保存 stable handle，不能保存 allocator-private physical address；对象移动只能通过 object table 发布新 location。
-
-### 建议先看的测试
-
-- `yierdis-memory/yierdis-memory-api/src/test/java/yier/bubu/redis/memory/api/OffHeapContractsSmokeTest.java`
-- `yierdis-memory/yierdis-memory-api/src/test/java/yier/bubu/redis/memory/api/NativeHandleTest.java`
-- `yierdis-memory/yierdis-memory-api/src/test/java/yier/bubu/redis/memory/api/NativeAllocatorContractTest.java`
-- `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTableTest.java`
-- `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/YierdisNativePageAllocatorTest.java`
-- `yierdis-memory/yierdis-memory-ffm/src/test/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocatorTest.java`
-- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/OffHeapStringStorageTest.java`
-- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/UnsafeOffHeapDbSmokeTest.java`
-- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/EntryHandleContractTest.java`
-- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/ValueHandleContractTest.java`
-- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/internal/entry/EntryTableContractTest.java`
-- `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/runtime/GlobalMaxmemoryLruAcrossDbsTest.java`
-- `yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TtlMaxmemoryTest.java`
-
-## 任务 6：改执行器、队列、背压
-
-### 总入口
-
-- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
-
-### 提交路径
-
-- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorSubmitter.java`
-
-### drain 路径
-
-- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorDrainLoop.java`
-- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java`
-
-### 通用背压算法
-
-- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorBackpressureController.java`
-
-### FAIR 调度状态
-
-- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorTaskQueue.java`
-- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorKeyState.java`
-- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutorKeyStateProvider.java`
-- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutionConnectionContext.java`
-
-### 建议先看的测试
-
-- `yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorTest.java`
-- `yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorBackpressureTest.java`
-- `yierdis-server/yierdis-server-executor/src/test/java/yier/bubu/redis/execution/executor/CommandExecutorFairSchedulingTest.java`
-
-### 初学者理解背压的最短路径
-
-如果你第一次看这部分，建议不要一上来同时读 5 个类。
-
-更好的顺序是：
-
-1. `CommandExecutor`
-   先看有哪些协作者被组装起来
-2. `CommandExecutorSubmitter`
-   再看入队失败和进入背压的条件
-3. `CommandExecutorDrainLoop`
-   再看执行后如何释放预算和恢复连接
-4. `ExecutorBackpressureController`
-   最后再看通用的 enter / exit / recovery 逻辑
-
-这样更容易看清“发现压力”和“恢复压力”分别发生在哪。
-
-## 任务 7：改 INFO / STATS / 可观测性
-
-### server-facing 命令入口
-
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerCommandModule.java`
-
-### 数据汇总和输出
-
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyServerInfoProvider.java`
-- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceObservability.java`
-
-如果你改的是：
-
-- `INFO`
-- `INFO yierdis`
-- `STATS`
-- keyspace / memory 统计
-
-通常就是从这组文件开始。
-
-## 推荐的最小工作流
-
-如果你已经明确要改一个需求，建议用下面的最小工作流：
-
-1. 先找到最贴近的测试
-2. 确认它属于 protocol / command / db / server 哪一层
-3. 只沿这条链往下追到第一个真正改状态的点
-4. 修改实现
-5. 先跑最窄测试，再跑更大范围
-
-如果你是初学者，建议在第 3 步里再加一个小动作：
-
-- 先写一句话描述“真正改状态的第一个点在哪”
-
-例如：
-
-- `SET`：真正改状态的第一个点是 `YierdisStringOps.set(...)`
-- RESP bulk frame：真正改状态的第一个点是 `RespRequestDecoder.decode(...)`
-- 事务排队：真正改状态的第一个点是 `connection.session().transaction().tryEnqueue(...)`
-
-这会强迫你先找到正确入口，再开始改。
-
-## 新人最值得先收藏的文件
-
-- `README.md`
-- `docs/project-docs/request-execution-flow.md`
-- `docs/project-docs/module-architecture.md`
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
-- `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
-- `yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java`
-
-如果你能对这几个文件建立稳定地图，后续改需求就不会再靠猜。
+- `TtlLifecycleDirectOpsTest`
+- `ExpireIndexTest`
+- `ExpireIndexContractTest`
+- `TtlMaxmemoryTest`
+- `MaxmemoryEvictionTest`
+- `MutationExecutorReservationTest`
+- `YierdisGlobalMaxmemoryGovernorTest`
+- `GlobalMaxmemoryLruAcrossDbsTest`
+
+## 改 native memory
+
+先打开：
+
+- [`NativeHandle.java`](../../yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeHandle.java)
+- [`YierdisNativeObjectTable.java`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java)
+- [`YierdisStableNativeAllocator.java`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java)
+- `EntryHandle`、`ValueHandle`、`KeyHandle`
+- `YierdisFfmBlobStore`、`YierdisFfmKeyspace`
+- `YierdisDbNativeHandleGraph`
+
+继续追：
+
+- JDK FFM 基础看 [`ffm-primer.md`](./ffm-primer.md)。
+- 当前生产 native-memory 路线看 [`ffm-usage.md`](./ffm-usage.md) 和 [`native-memory-runtime.md`](./native-memory-runtime.md)。
+- handle、object table、pin、quarantine、active defrag 看 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
+
+测试优先级：
+
+- `NativeHandleTest`
+- `YierdisNativeObjectTableTest`
+- `YierdisStableNativeAllocatorTest`
+- `EntryHandleContractTest`
+- `ValueHandleContractTest`
+- `KeyHandleContractTest`
+- `YierdisDbNativeHandleGraphTest`
+- `OffHeapLeakRegressionTest`
+
+## 改 executor / backpressure
+
+先打开：
+
+- [`CommandExecutor.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java)
+- [`CommandExecutorSubmitter.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorSubmitter.java)
+- [`CommandExecutorDrainLoop.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorDrainLoop.java)
+- [`CommandExecutorExecutionSupport.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java)
+- [`CommandExecutorConfigs.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/CommandExecutorConfigs.java)
+
+继续追：
+
+- 执行线程、队列、调度、公平性和背压看 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
+- 请求主链和 owner thread 看 [`request-execution-flow.md`](./request-execution-flow.md)。
+- runtime 配置入口看 [`configuration-and-operations.md`](./configuration-and-operations.md)。
+
+测试优先级：
+
+- `CommandExecutorTest`
+- `CommandExecutorBackpressureTest`
+- `CommandExecutorFairSchedulingTest`
+- `ExecutionConnectionContextTest`
+- `YierdisServerBootstrapCommandWiringTest`
+- `NettyExecutionAdapterIntegrationTest`
+
+## 改 INFO / STATS / observability
+
+先打开：
+
+- [`ServerCommandModule.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerCommandModule.java)
+- [`NettyServerInfoProvider.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyServerInfoProvider.java)
+- [`YierdisInstanceObservability.java`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceObservability.java)
+- [`YierdisDbMemoryReporter.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java)
+- `CommandExecutor` stats accessors
+
+继续追：
+
+- 可观测命令和配置含义看 [`configuration-and-operations.md`](./configuration-and-operations.md)。
+- memory / object introspection 看 [`db-internals.md`](./db-internals.md)。
+- server 组装边界看 [`module-architecture.md`](./module-architecture.md)。
+
+测试优先级：
+
+- `YierdisServerBootstrapCommandWiringTest`
+- `MemoryStatsCommandTest`
+- `YierdisDbMemoryReporterTest`
+- `YierdisDbIntrospectionTest`
+- `ServerOperationCoverageMatrixTest`
+
+## 推荐最小工作流
+
+1. 在 [`core-logic-index.md`](./core-logic-index.md) 找到目标类的职责和边界。
+2. 在 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) 找最近的 command / DB API / native evidence。
+3. 先补或调整最窄测试，再改实现。
+4. 跑目标家族测试。
+5. 跑矩阵 guard：`OperationCoverageMatrixTest` 和必要时的 `ServerOperationCoverageMatrixTest`。
+6. 跑 `git diff --check -- <changed files>`，确认文档和代码没有 whitespace 问题。
+
+## 新人先收藏的文件
+
+- [`project-overview.md`](./project-overview.md)
+- [`module-architecture.md`](./module-architecture.md)
+- [`main-path-walkthrough.md`](./main-path-walkthrough.md)
+- [`request-execution-flow.md`](./request-execution-flow.md)
+- [`commands-and-data-model.md`](./commands-and-data-model.md)
+- [`db-internals.md`](./db-internals.md)
+- [`executor-and-backpressure.md`](./executor-and-backpressure.md)
+- [`native-memory-runtime.md`](./native-memory-runtime.md)
+- [`testing-and-debugging.md`](./testing-and-debugging.md)
+- [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md)
+- [`glossary.md`](./glossary.md)

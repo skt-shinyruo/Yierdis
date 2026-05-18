@@ -1,13 +1,22 @@
 # Operation Test Coverage Matrix
 
-This document is the operation coverage inventory for command behavior, DB API behavior, and native/internal storage behavior.
+本文是 Yierdis 操作覆盖清单，按 command layer、DB API、native/internal 三层记录每个已注册命令和关键内部结构的测试证据。
 
-Status values:
+本文件会被 `OperationCoverageMatrixTest` 和 `ServerOperationCoverageMatrixTest` 解析。修改时必须保持 command heading、status row、variant row 和 inventory table 的格式稳定；新增命令、option/subcommand、DB API 或 native/internal 结构时，同步补充对应行和 `FileName#methodName` 证据。
 
-- `covered`: this layer has direct, named coverage for the operation.
-- `covered-by-shared-test`: this layer is exercised through a broader cross-layer test, but does not yet have a dedicated narrow test.
-- `missing`: this layer needs a direct test or a more explicit shared test reference.
-- `not-applicable`: this operation does not touch that layer.
+状态值：
+
+- `covered`：该层有直接、命名的测试证据。
+- `covered-by-shared-test`：该层由跨层或家族测试覆盖，但还没有更窄的专门测试。
+- `missing`：该层缺少直接测试，或缺少清晰的共享测试证据。
+- `not-applicable`：该操作不触达这一层。
+
+解析约束：
+
+- command heading 必须保持 `### UPPERCASECOMMAND`。
+- 三层状态行必须保持 ``- **Command layer**: `status` - detail``、``- **DB API**: `status` - detail``、``- **Native internals**: `status` - detail``。
+- variant 行必须保持 ``- **Command variant**: `variant` - `status` - detail``。
+- `covered` 和 `covered-by-shared-test` 的 detail 必须包含至少一个 `FileName#methodName`。
 
 ## Command Layer Coverage
 
@@ -592,5 +601,7 @@ Status values:
 
 ## Current Gap Queue
 
-1. Expand command option rows into one narrow test per option group where current rows rely on shared family tests, especially score-range syntax and SCAN option duplication.
-2. Keep adding direct DB API and native/internal rows whenever new public API methods or native structures are introduced.
+1. 将仍依赖共享家族测试的 option/subcommand 行继续拆成更窄测试，优先关注 score-range syntax、`SCAN` option duplication 和 server-only command variants。
+2. 新增 public DB API method 时，同步补充 `## DB API Inventory` 行，并为 `covered` 或 `covered-by-shared-test` 写入 `FileName#methodName` 证据。
+3. 新增 native/internal structure、handle、allocator responsibility、root/value encoding 或 memory accounting path 时，同步补充 `## Native/Internal Inventory` 行。
+4. 新增默认命令或 server-only 命令时，先补 `### COMMAND` heading，再补三层状态行和必要的 `## Option And Subcommand Inventory` / `## Option And Subcommand Coverage` 行。

@@ -1,356 +1,181 @@
 # Glossary
 
-本文把仓库里反复出现、但对初学者不够直观的词汇集中解释一下。读源码时如果遇到某个名词总觉得“好像懂，但又不确定”，可以先回来看这里。
+本文解释 Yierdis 文档和源码里反复出现的术语。每个术语都尽量指向最相关的专题文档。
 
 ## Request / Reply Path
 
 ### `ExecutionRequest`
 
-执行层看到的“命令请求”抽象。它本质上是 argv 风格视图，命令层通过它读取：
+命令执行层看到的 argv bytes 视图。它提供 `argc()`、参数长度、null 判断和复制读取能力，但不暴露 RESP DTO。详见 [`protocol-reference.md`](./protocol-reference.md)。
 
-- `argc`
-- 某个参数是不是 `null`
-- 某个参数的长度和字节内容
+### `ByteArrayExecutionRequest`
 
-它不是协议 DTO。协议层必须先经过 `RespCommandAdapter` / `RespExecutionAdapter` 才会变成 `ExecutionRequest`。
-
-### `ExecutionRecord`
-
-用于记录“执行过的命令快照”的对象，主要给事务回放和变更事件使用。可以把它理解成“附带 DB index 的命令归档条目”。
+以 heap `byte[]` 保存参数的 `ExecutionRequest` 实现。测试、事务 replay 和部分适配路径会使用它。详见 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
 
 ### `ReplyWriter`
 
-server 命令写回的单一语义出口。命令处理器和命令模块不会自己拼 RESP 字节，而是统一调用：
-
-- `simpleString`
-- `bulkString`
-- `integer`
-- `arrayHeader`
-- `mapHeader`
-- `error`
-
-然后由具体协议实现把这些语义编码成线上格式。
+命令层唯一的回包语义出口。handler 只调用 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`error` 等语义方法，不拼 RESP bytes。详见 [`commands-and-data-model.md`](./commands-and-data-model.md)。
 
 ### `RespReplyWriter`
 
-`ReplyWriter` 在 RESP 下的具体实现。它负责把 reply 变成：
-
-- RESP2 默认回包，例如 `+OK`、bulk string、array、error
-- `HELLO 3` 后的基础 RESP3 回包，例如 map、null、bool、double
-
-### protocol DTO
-
-指协议层专用的数据对象，例如 `RespCommandRequest`。它只描述“协议长什么样”，不直接参与命令执行。
-
-### RESP3 negotiated reply
-
-指连接执行 `HELLO 3` 后启用的基础 RESP3 回包形态，例如 map、null、bool、double。命令层仍只调用 `ReplyWriter` 语义 API。
+`ReplyWriter` 的 RESP 实现，负责把语义回包编码成 RESP2 或基础 RESP3 bytes。详见 [`protocol-reference.md`](./protocol-reference.md)。
 
 ## Command Layer
 
-### `CommandContext`
+### `CommandSpec`
 
-命令执行时随请求一起传下去的上下文。它通常提供：
-
-- `ReplyWriter`
-- 当前连接会话
-- 当前 DB index 提供者
-
-可以把它理解成“执行本次命令所需的环境对象”。
+命令定义单元，包含名称、arity、key metadata、handler 和 `MULTI` 限制。新增命令时它是注册表里的核心对象。详见 [`commands-and-data-model.md`](./commands-and-data-model.md)。
 
 ### `CommandRegistry`
 
-命令名到 `CommandSpec` 的注册表。`YierdisFastCommandProcessor` 在构造阶段先注册 `TransactionCommands`，再把注入的命令模块注册到这里；生产默认命令来自 `DefaultCommandModules`。
+命令名到 `CommandSpec` 的注册表。`YierdisFastCommandProcessor` 通过它做 unknown command 判断和分发。详见 [`core-logic-index.md`](./core-logic-index.md)。
 
-### `CommandDescriptor`
+### `CommandContext`
 
-命令元数据，包含 arity 和 key 位置信息。`COMMAND INFO` 的很多数据就来自这里。
+单次命令执行的上下文，携带 `ReplyWriter`、`ServerSession`、当前 DB 路由和 mutation outcome。它把 handler 和执行环境连接起来。
 
-### `CommandSupport`
+### command variant
 
-命令实现的公共工具箱。它帮各个 `*Commands` 类做：
+同一个 command 的 option、subcommand 或重要语义分支，例如 `SET / NX`、`SCAN / MATCH`、`MEMORY / STATS`。这些分支需要在 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) 中登记。
 
-- 取参数
-- 解析整数
-- 拿到 `DbReads/DbWrites`
-- 复用 scratch buffer
-
-### `ArgReader`
-
-命令 parser 读取 `ExecutionRequest` argv 的轻量包装。它负责 ASCII option 比较、整数解析和常见正数/非负数校验，避免每个命令 handler 重复写参数读取逻辑。
-
-### `CommandArity` / `CommandParsers`
-
-命令参数形状的统一表达。`CommandArity` 描述 exact/min/range/one-of/pair-tail 规则，`CommandParsers` 把这些规则变成 `CommandParser<T>`，供 `CommandSpec<T>` 在普通执行和事务入队前共同使用。
-
-### `CommandParseError`
-
-命令 parser 的错误模型。它把 wrong arity、syntax、integer out of range 和自定义错误集中映射成 Redis 风格 reply 文案。
-
-### `MutationOutcome`
-
-DB 写操作返回的“真实变更”标记，区分 value changed 和 TTL changed。命令层把它记录到 `CommandContext`，`YierdisFastCommandProcessor` 再用它决定是否发 `YierdisChangeEvent`。
-
-### `BulkStringSink`
-
-DB/value 层流式输出 bulk string 的中立端口。集合读结果通过 `BulkStringSequence` 或 `BulkStringMapPairs` 写到 sink，命令层再用 `BulkStringReplyAdapter` 接到 `ReplyWriter`。
-
-### `YierdisFastCommandProcessor`
-
-server 侧真正执行命令的处理器。它负责：
-
-- 做早期参数和空值校验
-- 处理事务队列逻辑
-- 根据命令名找到 handler
-- 捕获 `WRONGTYPE` / command error / OOM 等异常
-- 通过 `ReplyWriter` 写回结果
-
-## DB / Runtime
+## Engine / Runtime
 
 ### `DbEngine`
 
-命令层看到的数据库能力视图。它通常再拆成：
-
-- `DbReads`
-- `DbWrites`
-- `memory()`
-- 其他按能力分组的接口
-
-它的存在是为了让命令层依赖“能力边界”，而不是直接依赖 `YierdisDb` 实现类。
+DB 的能力聚合接口，提供 `reads()`、`writes()`、`expiration()`、`memory()`、`lifecycle()`。command 层依赖它，而不是依赖 `YierdisDb` internal。详见 [`db-internals.md`](./db-internals.md)。
 
 ### `YierdisDb`
 
-单个逻辑 DB 的状态 owner。它不是一个“大 Map 类”，而是把：
-
-- keyspace
-- expire index
-- 各种 `*Ops`
-- memory ledger
-- mutation executor
-
-这些协作者组织在一起的核心对象。
+单个 in-memory DB 的具体实现，拥有 keyspace、TTL、root/value、memory ledger 和 mutation executor。它属于 DB internal，不是 command 层 API。
 
 ### `YierdisInstance`
 
-实例级资源 owner。它关心的是：
-
-- 一共有几个逻辑 DB
-- FFM runtime 怎么分配
-- maxmemory 是全局还是 per-db
-- 对外暴露哪些 runtime seam
-
-不要把它和单个 `YierdisDb` 混为一谈。
+runtime 中的多 DB 容器，负责 DB 生命周期、owner thread 绑定、resources 和 close 顺序。详见 [`request-execution-flow.md`](./request-execution-flow.md)。
 
 ### owner thread
 
-真正允许访问 DB 状态的那条线程。在 server 里，这通常就是 command executor 的执行线程。
-
-这个概念非常关键，因为它解释了为什么：
-
-- Netty 可以多线程收包
-- 但 DB 仍然保持单线程命令语义
-
-### runtime seam
-
-指 runtime 层暴露给 server 的那条“受控接缝”。比如 owner-thread 绑定、maintenance 调度、关闭过程，不希望 server 直接向下转型或内联细节，而是通过 runtime seam 协作。
-
-### `NettyExecutionConnection`
-
-连接级状态总入口。它把下面这些连接态放在一起：
-
-- session
-- transaction queue
-- pending / pendingBytes
-- closing 标记
-- backpressure 相关状态
-
-如果你在查 `SELECT`、`MULTI` 或背压，几乎一定会碰到它。
+唯一允许访问 DB 的命令执行线程。Netty I/O 线程只提交请求，真正读写 DB 发生在 owner thread 上。详见 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
 
 ### maintenance tick
 
-后台周期性维护动作，目前最典型的是过期清理。虽然定时器由 worker event loop 触发，但真正执行 cleanup 的地方仍然回到 owner thread。
+runtime 周期任务入口，用于驱动过期清理、defrag 等后台维护动作。它必须尊重 owner thread 和配置预算。详见 [`configuration-and-operations.md`](./configuration-and-operations.md)。
 
-## Keyspace / TTL / Memory
+## DB / Keyspace / TTL
 
 ### keyspace
 
-主索引现在由 `NativeKeyDirectory` 承担，也就是“key 到 `EntryHandle`”的映射。`EntryHandle` 包装 `ENTRY_RECORD` native handle，再进入 `EntryTable` 取得 native `EntryRecord`，读写一个 key 时，绝大多数路径都会先碰到这组结构。
+DB 内 key 到 entry handle/record 的索引结构。heap 路径和 FFM 路径分别有不同实现，但对上层暴露同一类查找、scan、删除语义。
 
 ### expire index
 
-记录“key 到过期时间”的辅助索引。它不存真正的 value，只负责 TTL 相关的元数据。
-
-### `KeyHandle`
-
-DB 内部对 key 的句柄化表示。它用于把 key 的生命周期、内存统计和索引更新放在更稳定的内部抽象上，而不是到处传裸 `byte[]`。
-
-### `YierdisDbKeyLifecycle`
-
-围绕 key 生命周期的协作者。它负责处理：
-
-- 取仍未过期的 `EntryRecord`
-- 判断和删除过期 key
-- 更新 expire 元数据
-- 触摸访问时间
-
-### `YierdisDbMutationExecutor`
-
-DB 内部受控写路径的执行器。很多写命令不会直接改状态，而是先构造 mutation plan，再通过它执行，以便统一处理内存预算和副作用。
+key 到过期时间的索引。它和 keyspace 共享 key/handle 生命周期，负责 TTL 查询、过期清理和相关内存记账。
 
 ### maxmemory
 
-实例或 DB 的最大内存预算。超过预算时：
-
-- `noeviction` 会报错
-- `allkeys-random` / `allkeys-lru` 会尝试淘汰
-
-它是当前项目唯一公开的 native-memory 预算入口。
-
-### `MaxmemoryCoordinator`
-
-global maxmemory scope 下的实例级协调者。DB 写入前调用 `prepareWrite(...)`，coordinator 可以跨 DB cleanup/evict，并提供跨 DB 可比较的 LRU clock。
-
-### `MaxmemoryParticipant`
-
-参与 global maxmemory 的单 DB 视图。它报告本 DB usage、key 数、候选 victim，并负责真正删除被 coordinator 选中的 key。
-
-### backpressure
-
-当执行器队列或单连接 pending 达到阈值时，server 暂停继续从 socket 读请求的机制。最直接的表现通常是：
-
-- channel `autoRead=false`
-- `ERR busy ...`
+运行时内存上限和驱逐策略的统称。写路径会在 mutation 前估算、预留、必要时驱逐，失败时要 rollback，避免半写入。
 
 ### retained bytes
 
-协议请求在被解码成 argv 后，逻辑上“保留下来”的参数字节数估计。它主要用于排队、事务队列和预算控制，而不是给业务代码直接使用。
-
-### `YierdisMemoryStats`
-
-`MEMORY STATS` 的字段模型。它提供 maxmemory 用量、reservation、off-heap usage、key/expire 数、rehash 状态和总体估算，目标是可解释而不是精确 JVM heap measurement。
-
-### `NativeHandle`
-
-allocator 和 DB memory 层之间的 64-bit stable handle。它不是 physical address，而是：
-
-- domain
-- kind
-- slot id
-- generation
-- flags
-
-DB 层可以长期保存 handle；allocator 内部可以改变 object table 中的 physical block。generation 用来防止释放后的旧 handle 命中复用后的新对象。
-
-### object table
-
-`YierdisNativeObjectTable`，负责把 `NativeHandle.slotId()` 映射到对象 metadata。metadata 记录 address、size、capacity、domain/kind、generation、pin count、state、alloc/free epoch 等信息。
-
-object table 是 active defrag 和 stale handle 防护的关键 indirection：DB graph 保存 handle，不保存 physical address；对象移动时更新 object table，而不是重写 DB 里的所有引用。
-
-### stable native allocator
-
-`YierdisStableNativeAllocator`。它实现 `NativeAllocator`，返回 stable `NativeHandle`，并用 `YierdisNativePageAllocator` 和 object table 管理真实 FFM block。
-
-它负责 allocate、resolve、free、`realloc`、pin/unpin、epoch、quarantine、active defrag 和 allocator stats。
-
-### pin
-
-对象级读写保护。`NativeAllocator.resolve(...)` 返回 `NativeObjectView` 时会 pin 对象；view close 时 unpin。pinned 对象不能被 defrag 移动，free 时也不能立即回收 physical block。
-
-### quarantine
-
-延迟释放区。对象已经 free 或旧 block 已经被 move 替换，但仍可能被 active view 或 epoch 看到时，会进入 quarantine。等 pin count 为 0 且 epoch 安全后，allocator 才真正释放 block 或 slot。
-
-### native epoch
-
-批量读或维护操作的安全边界。当前 epoch kind 包括 command、scan、snapshot 和 defrag。只要有 active epoch 可能观察到 retired block，allocator 就不会回收对应 quarantine memory。
-
-### active defrag
-
-主动碎片整理。allocator 选择未 pin 且在预算内的 allocator-backed 对象，分配新 block，复制旧数据，校验后在 object table 中发布新 location。由于 DB 层只保存 stable handle，所以 `KEY_BYTES`、`ENTRY_RECORD`、`STRING_BYTES`、集合 root record 和 `LIST_QUICKLIST_NODE` metadata record 移动时不需要重写 `NativeKeyDirectory`、`EntryTable` 或 type root 里的引用；adapter-owned payload bytes 不在 DB defrag 移动范围内。
+对象当前持有、仍需计入生命周期或 maxmemory 的字节数。它不一定等同于本次写入的参数大小，因为 native spare capacity、root metadata、TTL metadata 都可能参与计算。
 
 ## Data Model
 
-### `EntryRecord`
+### value type
 
-DB native key graph 的 entry metadata。它持有：
+用户可见的逻辑类型，例如 string、list、hash、set、zset。`TYPE` 命令返回的是这类语义。
 
-- `ValueType`
-- `ValueEncoding`
-- `ValueHandle`
-- expireAt
-- 估算字节数
-- LRU / LFU 相关字段
+### value encoding
 
-真实 payload 由对应的 `TypeRoot` 通过 `ValueHandle` 管理。
-
-### `EntryHandle`
-
-`ENTRY_RECORD` 类型 `NativeHandle` 的 DB 包装。它只表示 stable entry identity，不表示 physical slot 或 raw native address。`EntryTable` 用它 resolve native 56 bytes `EntryRecord`。
-
-### `ValueHandle`
-
-value/root 侧 `NativeHandle` raw value 的 DB 包装。string 使用 allocator-backed `STRING_BYTES` kind，集合 root 使用 allocator-backed `LIST_NODE`、`HASH_NODE`、`SET_NODE`、`ZSET_NODE` kind。它给 `EntryRecord` 一个稳定 payload identity，但不意味着所有集合控制结构都完全 native 化：`LIST_QUICKLIST_NODE` metadata records 已进入 allocator，list payload bytes 以及 hash/set/zset internals 仍由 adapter 或 legacy FFM structure 拥有。
-
-### `ValueType`
-
-逻辑类型枚举。当前只有：
-
-- `STRING`
-- `LIST`
-- `SET`
-- `HASH`
-- `ZSET`
-
-### `ValueEncoding`
-
-内部编码枚举，用来表达某个逻辑类型此刻的具体表示方式，例如：
-
-- `STRING_INT`
-- `HASH_PACKED`
-- `SET_INTSET`
-- `ZSET_SKIPLIST`
-
-### listpack
-
-紧凑编码的统称。在这个项目里，hash/list/zset 的“小对象模式”都会尽量往 listpack 风格靠拢。
-
-### quicklist
-
-list 的“大对象模式”。可以把它理解成“多个紧凑节点串起来”，避免一个大列表永远用单块结构表示。
-
-### intset
-
-set 的整数紧凑编码。只在成员都是整数、且规模不大时使用。
-
-### skiplist
-
-zset 的有序大对象编码，用来支持按 score 有序访问和范围查询。
+内部编码，例如 raw string、integer-like string、packed hash、intset、skiplist。`OBJECT ENCODING` 关注的是这个层面。
 
 ### HLL string
 
-虽然有 `PFADD/PFCOUNT/PFMERGE`，但 HLL 在底层并不是独立 `ValueType`，而是“具有特定 header 和 payload 的 string”。
+HyperLogLog 在 Yierdis 中不是独立 `ValueType`，而是带特定 header/payload 的 string 语义值。相关命令是 `PFADD`、`PFCOUNT`、`PFMERGE`。
+
+### root / value
+
+root 是 entry record 指向的 family root，例如 `StringRoot`、`ListRoot`；value 是集合内部编码对象，例如 `ListValue`、`HashValue`、`SetValue`、`ZSetValue`。详见 [`db-internals.md`](./db-internals.md)。
+
+## Executor / Backpressure
+
+### backpressure
+
+当 executor backlog、连接队列或输出缓冲超过预算时，系统暂停或限制继续接收请求的机制。目的是保护 owner thread 和内存预算。详见 [`executor-and-backpressure.md`](./executor-and-backpressure.md)。
+
+### backlog budget
+
+executor 用来限制待执行请求数量或字节数的预算。提交路径会根据预算决定接受、拒绝或触发背压。
+
+### drain loop
+
+owner thread 上从队列取任务并执行的循环。它受 drain budget 和 scheduling policy 控制。
+
+### scheduling policy
+
+executor 在多连接之间选择任务的策略，目前文档中常见的是 `GLOBAL` 和 `FAIR`。
+
+## Bytes
+
+### `BytesView`
+
+只读 bytes 视图，可以来自 heap byte[] 或 off-heap/native memory。它避免在读路径上过早 materialize。
+
+### `BytesSlice`
+
+带 offset/length 的 bytes 片段，常用于写路径把参数或 native slice 传给 DB。
+
+### materialize
+
+把 view/slice 复制成新的 heap byte[]。有些协议回包、测试断言或跨生命周期保存必须 materialize，但 hot path 会尽量避免。
 
 ## FFM / Native Memory
 
-### FFM runtime
+### FFM
 
-这里通常指 `YierdisFfmMemoryRuntime` 一类对象，也就是整个 native-memory 路径的底座。项目当前统一使用 JDK 25 `java.lang.foreign`。
+JDK 25 `java.lang.foreign` API。Yierdis 的 native-memory runtime、blob store、keyspace、allocator 都建立在这个基础上。入门看 [`ffm-primer.md`](./ffm-primer.md)。
 
-### blob store
+### `EntryHandle`
 
-在 FFM 路径中，用来存放变长 bytes 的 off-heap 容器。hash/list/set/zset 等值类会用它来保存成员或元素内容，而不是把所有数据都塞进 heap `byte[]`。
+DB entry 的稳定句柄包装。它把 native raw handle 放进 DB entry domain/kind 语义里，避免误用其他 native handle。
 
-### off-heap
+### `ValueHandle`
 
-指不在 JVM heap 里的那部分内存。这个项目默认会把很多内部结构放到 FFM/off-heap 路径中，但观测、预算和编码语义仍然尽量保持统一。
+DB value/root 的稳定句柄包装，包含 null sentinel 约定。它常用于 entry record 指向具体 value/root。
 
-## 读代码时怎么用这份术语表
+### `NativeHandle`
 
-一个实用方法是：
+native allocator 的 packed handle，包含 domain、kind、slot/generation 等字段。它不是裸地址。详见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
-1. 看到类名先判断它属于 protocol、command、db、runtime 还是 memory
-2. 再用这份术语表给它贴一个角色标签
-3. 最后再读它的实现细节
+### object table
 
-这样会比“直接逐行啃源码”轻松很多。
+native allocator 中记录对象 metadata、generation、pin 状态和 quarantine 状态的表。它负责 stale handle 和 wrong kind/domain 检查。
+
+### stable native allocator
+
+提供稳定 handle、resolve view、realloc、epoch、pin/quarantine 和 active defrag 的 allocator。对象移动时 handle 保持稳定。
+
+### pin
+
+临时固定 native 对象，保证 view 使用期间对象不会被释放或移动。pin 期间 free 会进入 quarantine。
+
+### quarantine
+
+已请求释放但因为 pin 或 epoch 仍不能复用的对象/slot 暂存区。解除保护后才能真正回收。
+
+### active defrag
+
+在预算内移动可移动 native 对象、减少碎片并更新 object table metadata 的维护动作。详见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
+
+## Testing
+
+### operation coverage matrix
+
+[`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) 中的命令、DB API 和 native/internal 覆盖索引。`OperationCoverageMatrixTest` 和 `ServerOperationCoverageMatrixTest` 会解析它，防止新增能力没有测试证据。
+
+### matrix guard
+
+专门验证 matrix heading、状态词、证据引用、DB API inventory 和 native/internal inventory 的测试组合。修改矩阵时必须运行。
+
+### architecture guard
+
+保护模块依赖方向和边界的测试，例如 RESP DTO 不能进入 command 层、command 层不能依赖 DB internal。
