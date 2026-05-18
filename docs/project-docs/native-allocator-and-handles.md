@@ -1,30 +1,30 @@
 # Native Allocator And Handles
 
-本文记录当前生产 native allocator、stable handle、object table、DB memory handle 迁移和 active defrag 的实现语义。它补充 [`ffm-usage.md`](./ffm-usage.md)：`ffm-usage.md` 负责解释 JDK FFM 和项目整体 native memory 路径，本文专门解释 production allocator 这层。
+本文解释 production stable native allocator、handle ABI、object table、pin/epoch/quarantine、active defrag，以及 DB handle 语义。它接在 [`native-memory-runtime.md`](./native-memory-runtime.md) 后面：runtime 管 region 和 FFM lifetime，allocator 管稳定对象身份和可移动 native block。
 
 ## 为什么需要 stable handle
 
-DB 层不能把 native 物理地址当作长期引用保存。物理地址一旦被 `realloc`、碎片整理或 page allocator 复用改变，旧地址就可能变成悬空引用，甚至误读到另一个对象。
+DB 层不能把 native physical address 当作长期引用保存。physical address 可能因为 `realloc`、active defrag、page reuse 或 release 失效；旧地址一旦被继续使用，就可能读到悬空 memory 或另一个对象。
 
-当前设计把跨层引用统一收口成 64-bit `NativeHandle`：
+Yierdis 用 64-bit `NativeHandle` 作为跨层 ABI：
 
 ```text
-DB / type root / entry metadata
-  保存 stable NativeHandle raw value
+DB / key directory / entry table / type roots
+  store NativeHandle raw values
 
 YierdisStableNativeAllocator
-  用 handle.slotId() 查 object table
-  再解析到当前 physical block
+  decode domain/kind/slot/generation
+  resolve through YierdisNativeObjectTable
 
 YierdisNativePageAllocator
-  管理真实 FFM page / span / offset
+  manage actual FFM-backed physical blocks
 ```
 
-因此 handle 是跨层 ABI，物理 page id、page offset、region、span 和 packed address 都是 allocator 私有实现细节。DB hot path 只能在一次有界操作内 resolve handle，不能缓存 native address。
+所以 stable handles are not raw physical addresses。handle 是稳定 identity；physical packed address、page id、page offset、region 和 span 都是 allocator 私有细节。DB hot path 只能在一次有界操作里 resolve handle，不能缓存 resolved address 或长期持有 `NativeObjectView`。
 
-## `NativeHandle` 位布局
+## NativeHandle 位布局
 
-`NativeHandle` 是一个 64-bit raw value。`0` 是 null handle，非零 handle 不能使用 reserved domain。
+`NativeHandle` 是一个 64-bit raw value。`0` 表示 null handle；非零 handle 不能使用 reserved domain。
 
 ```text
 bits 63..60  domain      4 bits
@@ -34,29 +34,19 @@ bits 15..4   generation 12 bits
 bits 3..0    flags       4 bits
 ```
 
-字段语义：
+字段含义：
 
 - `domain`：大类边界，来自 `NativeHandleDomain`。
 - `kind`：domain 内对象种类，来自 `NativeObjectKind.code()`。
-- `slotId`：object table slot，最大 40-bit 编号空间。
-- `generation`：slot 复用代数，防止旧 handle 命中新对象。
-- `flags`：预留给 allocator 内部或未来 ABI 扩展。
+- `slotId`：object table slot，不是地址。
+- `generation`：slot 复用代数，降低 stale handle 命中新对象的风险。
+- `flags`：预留给 allocator 内部或未来 ABI。
 
-当前 domain 包括：
+当前重要 kind 包括：
 
-- `STORAGE_OBJECT`
-- `ENTRY_OBJECT`
 - `KEY_BYTES`
-- `TYPE_ROOT`
-- `INDEX_NODE`
-- `ALLOCATOR_METADATA`
-
-当前 object kind 包括：
-
-- `GENERIC`
-- `STRING_BYTES`
 - `ENTRY_RECORD`
-- `KEY_BYTES`
+- `STRING_BYTES`
 - `LIST_NODE`
 - `HASH_NODE`
 - `SET_NODE`
@@ -65,17 +55,15 @@ bits 3..0    flags       4 bits
 - `INDEX_NODE`
 - `METADATA_RECORD`
 
-`NativeHandle.of(...)` 会校验 domain/kind 是否匹配、slot/generation/flags 是否在位宽范围内。`EntryHandle` 只允许包装 `ENTRY_RECORD` handle；`ValueHandle` 可以包装不同 value/root 相关 domain，但调用方需要在边界处校验 domain。
-
-注意：当前 `EntryHandle`、key bytes、string payload 和集合 root record 都是 object-table-backed allocator handle。`EntryHandle` 包装 `ENTRY_RECORD`；key bytes 使用 `KEY_BYTES`；string `ValueHandle` 包装 `STRING_BYTES`；集合 root `ValueHandle` 包装 `LIST_NODE` / `HASH_NODE` / `SET_NODE` / `ZSET_NODE`。但集合内部 payload 仍有边界：list quicklist 节点 metadata 以 `LIST_QUICKLIST_NODE` 记录进入 allocator，payload bytes 以及 hash/set/zset 内部结构仍由 adapter 或 legacy FFM 结构拥有，不能把任意集合内部 identity 当作 allocator object resolve。
+`NativeHandle.of(...)` 会检查 domain/kind 是否匹配，以及 slot/generation/flags 是否在位宽范围内。`EntryHandle` 只允许包装 `ENTRY_RECORD`；`ValueHandle` 可以包装 string 或 collection root 相关 native handle，但调用边界必须校验 domain/kind。
 
 ## Object table
 
-`YierdisNativeObjectTable` 是 handle 到对象 metadata 的权威表。每个 slot 使用 72 bytes metadata，记录：
+`YierdisNativeObjectTable` 是 handle 到对象 metadata 的权威表。每个 slot 记录：
 
 - physical packed address
 - logical size
-- allocation capacity
+- capacity
 - segment id
 - page class
 - generation
@@ -88,11 +76,9 @@ bits 3..0    flags       4 bits
 - free epoch
 - state
 
-slot 初始 generation 是 `1`。释放 slot 时 generation 递增；如果 generation 达到 12-bit 最大值，slot 被 retired，不再进入 free list。这样可以降低 generation wrap 后 ABA 命中的风险。
+slot 初始 generation 为 `1`。释放 slot 时 generation 递增；generation 达到 12-bit 最大值后，slot 会 retired，不再回到 free list，避免 wrap 后旧 handle 命中新对象。
 
-### 状态机
-
-object table 当前状态包括：
+对象状态包括：
 
 ```text
 FREE
@@ -103,46 +89,19 @@ FREED_QUARANTINED
 CORRUPT
 ```
 
-正常路径：
+常见约束：
 
-```text
-FREE -> ALLOCATED
-ALLOCATED -> PINNED
-PINNED -> ALLOCATED
-ALLOCATED -> MOVING
-MOVING -> ALLOCATED
-ALLOCATED -> FREED_QUARANTINED
-PINNED -> FREED_QUARANTINED
-FREED_QUARANTINED -> FREE
-ALLOCATED -> FREE
-```
+- `resolve` 只接受 live handle。
+- null handle、unknown slot、generation mismatch 会触发 stale handle 语义。
+- domain/kind mismatch 是错误，不能把 entry handle 当 string handle 用。
+- moving 状态只属于 allocator move/defrag 协议。
+- quarantined slot 在 pin 或 epoch 未安全前不能回收。
 
-关键约束：
+## Page 和 size class
 
-- `resolve` 只能接受 live handle，默认不能访问 quarantined slot。
-- stale slot、generation mismatch、null handle、unknown slot 会抛 `StaleNativeHandleException`。
-- domain/kind mismatch 会抛 native memory 异常，防止把 entry handle 当成 string 或 index handle 使用。
-- moving 状态只能由 defrag move 协议进入；发布成功后回到 allocated，失败时 abort 回到 allocated。
-- quarantined slot 在 pin 或 epoch 未安全前不能回收到 free list。
+`YierdisNativePageAllocator` 管真实 FFM-backed block。它向 `YierdisFfmMemoryRuntime` 申请 region，并把 region 切成 page 或 span。
 
-## Page / size-class allocator
-
-真实内存由 `YierdisNativePageAllocator` 管理。它把 FFM region 抽象成 `YierdisNativeBlock`，block 记录：
-
-- owning allocator
-- backing region
-- region offset
-- requested bytes
-- capacity
-- page id
-- page offset
-- page count
-- page class
-- small size class
-
-page 大小固定为 64 KiB。
-
-小对象使用 size class，共 23 档：
+page 大小固定为 64 KiB。小对象按 size class 分配，当前档位包括：
 
 ```text
 16, 24, 32, 48, 64, 96, 128, 192,
@@ -151,208 +110,185 @@ page 大小固定为 64 KiB。
 24576, 32768
 ```
 
-请求大小不超过 32768 bytes 时走 small page。每个 small page 只服务一个 size class，free offsets 进入页内 free list。
-
-超过 32768 bytes 时走 span：
+请求大小不超过 32768 bytes 时走 small page；每个 small page 只服务一个 size class。更大的对象走 span：
 
 - `MEDIUM_SPAN`：请求大小不超过 1 MiB。
 - `LARGE_SPAN`：请求大小超过 1 MiB。
 
-span 按 64 KiB page 数向上取整分配。释放 span 会关闭对应 FFM region 并回收 committed/used accounting；small page 释放 block 时只把 offset 放回页内 free list。
-
-当前 packed address 是 allocator 私有格式：
+packed address 当前是 allocator 私有格式：
 
 ```text
 packedAddress = (pageId << 32) | unsigned(pageOffset)
 ```
 
-外部代码不能解析或持久化这个值。
+外部代码不能解析、保存或比较它来表达对象 identity。
 
 ## Stable allocator API
 
-`NativeAllocator` 是 allocator API 边界，当前生产实现是 `YierdisStableNativeAllocator`。
+生产实现是 `YierdisStableNativeAllocator`，实现 `NativeAllocator`。
 
-核心方法：
+核心 API：
 
-- `allocate(kind, size)`：分配对象并返回 stable `NativeHandle`。
-- `realloc(handle, newSize, policy)`：调整对象逻辑大小。
-- `free(handle)`：释放对象；必要时进入 quarantine。
-- `pin(handle)` / `unpin(handle)`：显式 pin 对象。
+- `allocate(kind, size)`：分配 native object，返回 stable `NativeHandle`。
+- `resolve(handle, mode)`：返回短生命周期 `NativeObjectView`。
+- `realloc(handle, newSize, policy)`：调整对象大小，handle 不变。
+- `free(handle)`：释放对象，必要时进入 quarantine。
+- `pin(handle)` / `unpin(handle)`：显式 pin。
 - `beginEpoch(kind)`：打开 command、scan、snapshot 或 defrag epoch。
-- `resolve(handle, mode)`：返回有界 `NativeObjectView`。
-- `defragOne(handle, maxMoveBytes)`：尝试移动单个对象。
-- `defragCycle(options)`：按预算执行一轮 active defrag。
-- `stats()`：返回 allocator 统计。
+- `defragOne(handle, maxMoveBytes)`：按预算尝试移动一个对象。
+- `defragCycle(options)`：按对象数、bytes、时间预算运行 active defrag。
+- `stats()`：导出 allocator stats。
 
-`NativeObjectView` 是短生命周期视图。`resolve` 会 pin 对象；`view.close()` 会 unpin。读写通过 `getByte`、`setByte`、`getBytes`、`setBytes` 进行，所有 offset 都按对象 logical size 做边界检查。`READ_ONLY` 视图禁止写入。
+`NativeObjectView` 是 resolve 后的短生命周期访问视图。resolve 会 pin 对象；`view.close()` 会 unpin。view 读写方法按 logical size 检查 offset，`READ_ONLY` mode 禁止写。
 
-调用约束：
+调用规则：
 
-- resolve 后必须关闭 view。
+- resolve 后必须 close view。
 - 不允许缓存 view 背后的 physical address。
-- pinned 对象不能被 moving realloc 或 defrag 移动。
-- stale handle、double free、kind/domain mismatch 都应该在 allocator 层被发现。
+- pinned 对象不能被 moving realloc 或 active defrag 移动。
+- double free、stale handle、kind/domain mismatch 都应在 allocator 层 fail fast。
 
-## `realloc` 语义
+## realloc 语义
 
-`realloc` 的输入是 stable handle，不会返回新 handle；成功后同一个 handle 解析到新的 size/capacity/location。
+`realloc` 输入 stable handle，成功后仍返回同一个 identity。它改变的是 object table 中的 logical size、capacity 和 physical location。
 
-路径分三类：
+主要路径：
 
-1. 新大小小于等于当前 capacity：只更新 object table size，计为 in-place realloc。
-2. 新大小超过当前 capacity 且 policy 是 `NO_MOVE`：抛异常，不改变原对象。
-3. 新大小超过当前 capacity 且 policy 允许移动：分配新 block，复制旧 size 前缀，发布新 location，旧 block 进入 epoch-safe 释放路径。
+1. `newSize <= capacity`：只更新 logical size，计为 in-place realloc。
+2. `newSize > capacity` 且 policy 是 `NO_MOVE`：失败，不改变原对象。
+3. `newSize > capacity` 且 policy 允许移动：分配新 block，复制旧 size 前缀，发布新 location，旧 block 进入 epoch-safe release。
 
 失败回滚规则：
 
-- 新 block 分配后，如果复制或 metadata 更新失败，新 block 会关闭。
-- object table 发布前失败时，handle 仍指向旧 block。
-- 发布后才切换 `allocation.current`。
-- 旧 block 不会过早释放；如果 epoch 不安全，进入 retained moved blocks。
+- 新 block 分配后，如果复制或 metadata 更新失败，新 block 会释放。
+- object table 发布前失败，handle 仍指向旧 block。
+- 发布后才切换 allocator allocation state。
+- 旧 block 不会过早释放；epoch 不安全时进入 retained moved blocks。
 
-这使 `realloc` 接近小事务：要么完整成功，要么保持原对象可访问。
+这让 `realloc` 对 DB 来说像一次小事务：成功后 handle 解析到新位置，失败后旧对象仍可访问。
 
-## Pin / epoch / quarantine
+## pin / epoch / quarantine
 
-allocator 用两层保护解决“正在读的对象不能被释放”：
+allocator 用两层机制避免过早回收：
 
-- `pinCount`：单个对象级别，主要来自 resolved view。
-- `NativeEpochScope`：批量读或维护操作级别，分 command、scan、snapshot、defrag。
+- `pinCount`：对象级保护，来自 resolved view 或显式 pin。
+- `NativeEpochScope`：批量操作保护，当前 epoch kind 包括 command、scan、snapshot 和 defrag。
 
-释放对象时：
+free 路径：
 
 ```text
 free(handle)
-  -> 如果 pinCount > 0 或存在阻止回收的 active epoch
-       object table 标记 FREED_QUARANTINED
-       allocation 标记 quarantined
-  -> 否则立即 release slot 和 physical block
+  if pinCount > 0 or active epoch may still observe it
+    mark FREED_QUARANTINED
+    retain physical block / slot
+  else
+    release physical block and slot
 ```
 
-移动对象时：
+move 路径：
 
 ```text
-old block retired
-  -> 如果 epoch 安全，立即关闭 old block
-  -> 否则进入 retained moved blocks
+publish new location
+retire old block
+if epoch safe
+  release old block
+else
+  keep retained moved block
 ```
 
-epoch reclaim 规则是：只要存在 epoch 小于等于 retired epoch，就不能回收这批 retired memory。epoch scope 关闭时 allocator 会尝试 `reclaimEligibleQuarantine()`。
+epoch reclaim 规则是：只要存在可能观察 retired memory 的 active epoch，相关 quarantined memory 就不能释放。epoch scope 关闭时，allocator 会尝试 reclaim eligible quarantine。
 
-这样可以同时避免两类错误：
+这套机制覆盖两类风险：active view 还在读写时不能释放；scan/snapshot/maintenance 这类批量边界还没结束时不能回收 retired block。
 
-- 太早释放：读者还持有 view 或 epoch 时访问悬空 memory。
-- 太晚释放：已安全的 quarantined object / moved block 长期占用 native memory。
+## active defrag
 
-## Active defrag
+active defrag 的目标是移动 allocator-backed live object，减少碎片或释放旧 block，同时保持 DB graph 中的 handle 不变。
 
-active defrag 的基本目标是移动 allocator-backed live object，释放旧 block 或让旧 block 在 epoch 安全后释放。DB 层只保存 stable handle，所以 `KEY_BYTES`、`ENTRY_RECORD`、`STRING_BYTES`、集合 root record 和 `LIST_QUICKLIST_NODE` metadata record 这类 allocator object 移动时不需要全量扫描 DB 引用并重写地址。它不会移动 adapter-owned payload bytes，也不会整理仍由 legacy FFM 结构拥有的 hash/set/zset internals。
+可以移动的对象包括：
+
+- `KEY_BYTES`
+- `ENTRY_RECORD`
+- `STRING_BYTES`
+- collection root records：`LIST_NODE`、`HASH_NODE`、`SET_NODE`、`ZSET_NODE`
+- list quicklist metadata records：`LIST_QUICKLIST_NODE`
+
+不能过度声称的边界：
+
+- active defrag 不移动 adapter-owned payload bytes。
+- active defrag 不整理仍由 legacy FFM structures 拥有的 hash/set/zset internals。
+- collection root record 可移动，不等于所有 collection internal nodes/payload bytes 都已经 fully nativeized。
 
 单对象移动协议：
 
 ```text
 beginMove(handle)
-  要求对象是 ALLOCATED 且 pinCount == 0
-  object table 状态改成 MOVING
+  require ALLOCATED and pinCount == 0
+  mark MOVING
 
 allocate target block
-copyPrefix(old, target, size)
-validate(handle, sourceMeta, target)
+copy old bytes to target
+validate source metadata and target
 
-publishMoved(handle, size, targetCapacity, targetAddress, targetPageClass)
-  object table 改成新 address/capacity/page class
-  状态回到 ALLOCATED
+publishMoved(...)
+  update object table location/capacity/page class
+  mark ALLOCATED
 
-old block 进入 epoch-safe reclaim
+retire old block through epoch-safe reclaim
 ```
 
-失败协议：
+如果 publish 前失败，allocator abort move、释放 target，handle 继续指向旧 block。`defragCycle` 由 `NativeDefragOptions` 控制 `maxMoveBytes`、`maxObjects` 和 `timeBudgetNanos`，报告 moved、skipped pinned、skipped budget、failed moves 等统计。
 
-```text
-如果 publish 前失败：
-  abortMove(handle)
-  target block close
-  handle 继续指向 old block
+## DB memory handle 迁移
 
-如果 validation 失败：
-  同样 abort，旧对象保持可读写
-```
-
-`defragOne` 会检查 `maxMoveBytes` 和 pin count。`defragCycle` 使用 `NativeDefragOptions` 控制：
-
-- `maxMoveBytes`
-- `maxObjects`
-- `timeBudgetNanos`
-
-报告字段包括 scanned objects、moved objects、moved bytes、skipped pinned、skipped budget、failed moves 和预算停止原因。
-
-## DB memory 层迁移
-
-### `EntryHandle`
-
-`EntryHandle` 现在只是 `NativeHandle` raw value 的类型包装。它要求 handle 必须是：
-
-```text
-domain = ENTRY_OBJECT
-kind   = ENTRY_RECORD
-```
-
-`EntryTable` 用 `NativeAllocator.allocate(ENTRY_RECORD, 56)` 分配 entry metadata。entry record 的 native layout 是：
-
-```text
-0   key handle identity   8 bytes
-8   value handle raw      8 bytes
-16  key hash              4 bytes
-20  value type ordinal    4 bytes
-24  value encoding ordinal 4 bytes
-28  flags                 4 bytes
-32  expireAtMillis        8 bytes
-40  version               8 bytes
-48  LRU/LFU               8 bytes
-```
-
-读写 entry 时，`EntryTable` resolve `ENTRY_RECORD` handle，得到 `NativeObjectView`，按固定 offset 读写字段。释放 entry 时调用 allocator free。
-
-### `ValueHandle`
-
-`ValueHandle` 也是 `NativeHandle` raw value 包装，但承载的是 value/root 侧引用：
-
-- string 使用 `STRING_BYTES` kind。
-- list 使用 `LIST_NODE` kind。
-- hash 使用 `HASH_NODE` kind。
-- set 使用 `SET_NODE` kind。
-- zset 使用 `ZSET_NODE` kind。
-
-`StringRoot` 已迁移到 `NativeAllocator`：`store` 分配 `STRING_BYTES`，`append`/`ensureLength` 通过 `realloc(..., PRESERVE_PREFIX)` 保持 stable handle，`slice`/`copy`/byte access 只在方法内部短暂 resolve `NativeObjectView`，`release` 调用 allocator free。
-
-集合 root record 已迁移到 `NativeAllocator`：`ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 分别分配 `LIST_NODE` / `HASH_NODE` / `SET_NODE` / `ZSET_NODE`，并把 allocator-backed `ValueHandle` 写入 `EntryRecord`。这些 root record 保存 root adapter identity，用来进入各自的 payload implementation。
-
-集合 payload 仍是分阶段迁移边界：`LIST_QUICKLIST_NODE` 是 allocator-backed list quicklist metadata record，并作为 list internal metadata 单独计数；list payload bytes 以及 hash/set/zset internals 仍由 root adapter 或 legacy FFM structures 拥有。图遍历在当前 split 下只把 list internals 当作 root-only traversal 边界，不表示所有 collection internals 都已经 nativeized。后续如果把某类集合 payload 也迁入 stable allocator，需要在该 root 内明确完成 allocate / resolve / free 协议，并补齐对应测试。
-
-### key graph
-
-主图现在可以理解为：
+DB memory graph 当前按 stable handle 组织：
 
 ```text
 NativeKeyDirectory
-  key bytes -> EntryHandle(raw NativeHandle)
+  key bytes: KEY_BYTES
+  maps to EntryHandle
 
 EntryTable
-  EntryHandle -> native ENTRY_RECORD
+  EntryHandle -> ENTRY_RECORD
 
 EntryRecord
-  ValueType + ValueEncoding + ValueHandle(raw NativeHandle) + TTL/LRU/accounting
+  stores ValueHandle raw
 
-TypeRoot
-  ValueHandle -> allocator-backed string bytes / allocator-backed collection root record
-  collection root record -> adapter-owned or legacy FFM-owned payload internals
+Type roots
+  STRING_BYTES or collection root records
 ```
 
-关键变化是：key bytes、entry metadata、string bytes 和 collection root records 进入 production stable allocator，DB 层不保存 allocator object 的物理地址。
+`NativeKeyDirectory` 用 allocator 分配 `KEY_BYTES` 并写入 key bytes。目录 table、hashes、states 仍是 heap arrays；key bytes object 才是 native allocator 对象。
 
-## Metrics
+`EntryTable` 用 `ENTRY_RECORD` 保存 entry metadata。entry record layout 是固定 56 bytes：
 
-`NativeAllocatorStats` 暴露以下观测面：
+```text
+0   key handle identity      8 bytes
+8   value handle raw         8 bytes
+16  key hash                 4 bytes
+20  value type ordinal       4 bytes
+24  value encoding ordinal   4 bytes
+28  flags                    4 bytes
+32  expireAtMillis           8 bytes
+40  version                  8 bytes
+48  LRU/LFU                  8 bytes
+```
+
+`StringRoot` 使用 `STRING_BYTES`。`set` 分配新 object，`append` / growth 通过 `realloc(..., PRESERVE_PREFIX)` 保持 handle 稳定，读写时短暂 resolve `NativeObjectView`。
+
+collection root records 使用：
+
+- list：`LIST_NODE`
+- hash：`HASH_NODE`
+- set：`SET_NODE`
+- zset：`ZSET_NODE`
+
+`NativeCollectionRootTable` 为 root record 分配 8 bytes，写入自己的 handle raw value，并用 `Map<Long, adapter>` 把 stable native root identity 映射到当前 Java adapter。root record 进入 allocator stats 和 defrag；adapter-owned payload bytes 仍按各类型实现管理。
+
+list quicklist metadata records 使用 `LIST_QUICKLIST_NODE` 进入 allocator。这里仍要区分 metadata record 和 payload bytes：metadata nativeized 不代表 list entry payload 或所有 collection internals 都已经 nativeized。
+
+## metrics
+
+`NativeAllocatorStats` 暴露 allocator 观测面，包括：
 
 - logical used bytes
 - reserved bytes
@@ -362,53 +298,55 @@ TypeRoot
 - external fragmentation bytes
 - small / medium / large free bytes
 - live small pages
-- live medium span pages
-- live large span pages
-- free pages
+- live medium / large span pages
 - live objects
 - pinned objects
 - quarantined objects
 - quarantine bytes
 - stale handle detections
 - double free detections
-- realloc in-place count
-- realloc moved count
+- realloc in-place / moved count
 - defrag moved bytes
 - defrag skipped pinned objects
 - defrag reclaimed pages
 - object kind counts
 - allocation latency histogram
 
-几个口径需要区分：
+几个口径要分清：
 
-- `logicalUsedBytes`：对象请求的逻辑 size 总和。
-- `reservedBytes`：当前 live block 和 retained moved block 的 capacity 总和。
-- `committedBytes`：page allocator 当前实际向 runtime 申请的 native bytes。
+- `logicalUsedBytes`：对象请求的 logical size 总和。
+- `reservedBytes`：live block 和 retained moved block 的 capacity 总和。
+- `committedBytes`：page allocator 当前向 runtime 申请的 native bytes。
 - `internalFragmentationBytes`：reserved 与 logical 的差。
-- `externalFragmentationBytes`：page allocator free bytes 扣除 retained moved block bytes 后的可复用空闲。
+- `externalFragmentationBytes`：page allocator 可复用空闲。
 - `quarantineBytes`：freed quarantined object 和 moved old block 仍占用的 bytes。
 
-## 测试覆盖
+## 推荐源码和测试
 
-allocator 相关测试分布在三层：
+推荐源码：
 
-- `yierdis-memory-api`
-  - `NativeHandleTest`
-  - `NativeAllocatorContractTest`
-- `yierdis-memory-ffm`
-  - `YierdisNativeObjectTableTest`
-  - `YierdisNativePageAllocatorTest`
-  - `YierdisStableNativeAllocatorTest`
-- `yierdis-db-memory`
-  - `EntryHandleContractTest`
-  - `ValueHandleContractTest`
-  - `EntryTableContractTest`
-  - `NativeStorageRegressionTest`
-  - `YierdisDbMemoryReporterTest`
-  - `NativeKeyDirectoryTest`
+- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeHandle.java`
+- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeObjectKind.java`
+- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeAllocator.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativePageAllocator.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryTable.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/NativeCollectionRootTable.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ListValue.java`
 
-改 allocator API、object table、pin/quarantine、realloc、defrag 或 DB handle 迁移时，至少跑：
+推荐测试：
 
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-memory/yierdis-memory-api,yierdis-memory/yierdis-memory-ffm,yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-architecture-tests -am test
-```
+- `NativeHandleTest`
+- `NativeAllocatorContractTest`
+- `YierdisNativeObjectTableTest`
+- `YierdisNativePageAllocatorTest`
+- `YierdisStableNativeAllocatorTest`
+- `EntryHandleContractTest`
+- `ValueHandleContractTest`
+- `EntryTableContractTest`
+- `NativeStorageRegressionTest`
+- `YierdisDbMemoryReporterTest`
+- `NativeKeyDirectoryTest`
