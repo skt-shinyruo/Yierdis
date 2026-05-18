@@ -6,7 +6,7 @@
 
 `yierdis-cli` 和 `yierdis-benchmark` 不是进程内 DB 调试入口。它们都通过真实 TCP、真实 RESP frame 和 `yierdis-networking-resp` 的 client codec 工作，因此更接近外部使用者视角。
 
-CLI 负责人工交互和轻量验证；benchmark 负责固定 workload shape 下的吞吐、延迟和 correctness smoke。比较 benchmark 结果时必须保证 workload shape 一致，例如相同的 `requests`、`clients`、`pipeline`、`keyspace`、`dataSize`、server jar、JVM 参数和 server 启动参数。baseline/current 任一侧启动失败、协议错误、返回错误或缺少必要测量时，输出应视为 `non-comparable`，不能当成可信性能结论。
+CLI 负责人工交互和轻量验证；benchmark 负责固定 workload shape 下的吞吐、延迟和 correctness smoke。比较 benchmark 结果时必须保证 workload shape 一致，例如相同的 `requests`、`clients`、`pipeline`、`keyspace`、`dataSize`，并保持可比的运行环境、JVM 参数和 server 启动参数。comparison mode 会刻意使用 baseline/current 两个 jar；它们应是操作者想比较且可识别来源的 artifacts。baseline/current 任一侧启动失败、协议错误、返回错误或缺少必要测量时，输出应视为 `non-comparable`，不能当成可信性能结论。
 
 ## yierdis-cli
 
