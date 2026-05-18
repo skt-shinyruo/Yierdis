@@ -1,295 +1,124 @@
 # Project Overview
 
-本文从代码出发，说明 Yierdis 是什么，不是什么，以及读代码时最先应该建立哪些整体认知。
+本文从代码和运行时边界出发，说明 Yierdis 当前是什么、有哪些模块、一次请求会经过哪些层，以及读源码时先打开哪些文件。
+
+## 当前定位
 
-如果你还没有建立对项目整体目标、设计取舍和阅读姿势的第一印象，建议先看 [`project-introduction.md`](./project-introduction.md)。
+Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 KV server。它对外暴露 Redis RESP TCP 协议，RESP2 是默认 wire target，`HELLO 3` 可以协商基础 RESP3 replies；对内把网络、协议、执行、命令、DB、memory runtime 和启动装配拆成独立模块。
 
-## 一句话定位
+读源码时最重要的定位是：它不是 Redis drop-in replacement，而是一个刻意限定在单机内存边界内的 Redis 风格系统实现。代码重点不是“兼容所有 Redis 行为”，而是展示一次请求如何穿过 RESP/Netty、执行器、命令处理器、DB 能力接口和 native-memory-backed 数据结构。
 
-Yierdis 是一个使用 Java 25 + Netty + JDK FFM 实现的单机内存 KV 服务端。它的目标不是做 Redis 的 drop-in replacement，而是参考 Redis 的设计与实现方式，做一个“Redis 风格”的教学 /实验 /工程化实现。
+## 能力边界
 
-更准确地说，它同时在做四件事：
+当前已经覆盖的能力包括 Redis 风格数据族、TTL、maxmemory、approximate eviction、minimal transactions、backpressure、observability 和 native-memory-backed paths。
 
-- 实现一个 Redis RESP TCP 服务端入口
-- 实现一套 Redis 风格但刻意简化的命令层
-- 实现一个支持多逻辑 DB、TTL、maxmemory、近似淘汰的数据引擎
-- 用 JDK 25 `java.lang.foreign` FFM API 承载默认的 native-memory 路径
+当前没有覆盖的能力包括 AOF/RDB、replication/cluster、Lua、ACL/TLS、PubSub 和 full Redis ecosystem compatibility。看到客户端兼容、协议协商或 Redis 风格命令时，都要把它理解为“当前子集”，而不是完整 Redis 兼容承诺。
 
-## 它不是什么
+## 技术栈和运行时特征
 
-Yierdis 已经把 Redis RESP 作为公开 TCP 协议，但不打算覆盖 Redis 的完整能力面。代码和 `README.md` 都清楚地把很多复杂能力排除在范围之外。
+技术栈主线很短：
 
-当前明确不做的内容包括：
+- Java 25：语言版本和 `java.lang.foreign` FFM API 的运行前提。
+- Netty：TCP server、channel pipeline、I/O 线程和 write-back。
+- RESP：请求解码、reply 编码和 RESP2/基础 RESP3 wire model。
+- Maven multi-module：用模块边界隔离 common、memory、networking、server、command、DB、CLI、benchmark 和 tests。
 
-- AOF / RDB 持久化
-- 复制 / 集群
-- Lua
-- ACL / TLS
-- PubSub
-- 完整的 Redis 生态兼容
+运行时主线也很明确：
 
-因此，理解这个项目时更合适的心态是：
+- Netty I/O 线程负责收包、解码、提交和写回，不直接修改 DB。
+- `CommandExecutor` 负责排队、背压预算和 owner-thread 命令执行。
+- engine 和 command processor 负责把统一执行请求路由到命令实现。
+- DB 层通过能力接口暴露读写语义，内存实现持有 keyspace、expires、数据族和内存账本。
+- JDK FFM runtime 支撑默认 native-memory path，并参与 maxmemory 相关约束。
 
-- 把它当成一个“Redis 风格系统的实现练习与工程化样本”
-- 而不是把它当成“Java 版 Redis”
+## 模块总览
 
-## 技术和运行时特征
+| 模块区域 | 主要职责 |
+| --- | --- |
+| `yierdis-common/yierdis-common-bytes` | 共享 byte/key 工具、字节视图和底层数据转换。 |
+| `yierdis-memory/yierdis-memory-api` | memory 抽象、handle 和访问边界。 |
+| `yierdis-memory/yierdis-memory-ffm` | JDK FFM allocator/runtime、native segment 管理和 stable handle 支撑。 |
+| `yierdis-networking/yierdis-networking-resp` | RESP request/reply model、`RespCommandRequest`、`RespExecutionAdapter`、`RespReplyWriter`。 |
+| `yierdis-networking/yierdis-networking-netty` | Netty decoder、channel handler、protocol error 和 TCP write-back。 |
+| `yierdis-server/yierdis-server-api` | `ExecutionRequest`、`ByteArrayExecutionRequest`、`ReplyWriter` 等执行层公共契约。 |
+| `yierdis-server/yierdis-server-core` | engine、execution context 和 server-side command dispatch glue。 |
+| `yierdis-server/yierdis-server-executor` | `CommandExecutor`、队列、背压和执行线程模型。 |
+| `yierdis-server/yierdis-server-runtime` | `YierdisInstance`、多 DB 装配、runtime config、maxmemory governor 和 maintenance。 |
+| `yierdis-server/yierdis-server-main` | `main()`、CLI 参数、server bootstrap、Netty pipeline 装配。 |
+| `yierdis-command/yierdis-command-api` | 命令接口、metadata、参数和结果契约。 |
+| `yierdis-command/yierdis-command-core` | command registry、command processor、分发和通用校验。 |
+| `yierdis-command/yierdis-command-builtin` | Redis 风格内置命令实现。 |
+| `yierdis-db/yierdis-db-api` | DB 能力接口、reads/writes view 和数据层契约。 |
+| `yierdis-db/yierdis-db-memory` | 单机内存 DB、数据族 ops、TTL、maxmemory、native-backed keyspace/value paths。 |
+| `yierdis-cli` | 项目自带 RESP 客户端入口。 |
+| `yierdis-benchmark` | 基准压测入口和请求生成。 |
+| `yierdis-tests/yierdis-integration-tests`、`yierdis-tests/yierdis-architecture-tests`、`yierdis-db/yierdis-db-testkit` | 端到端行为、架构边界和 DB 级测试支撑。 |
 
-项目当前最重要的技术特征有四个：
+更完整的模块依赖方向看 [`module-architecture.md`](./module-architecture.md)。
 
-### 1. Redis RESP public protocol
+## 请求主链概览
 
-Yierdis exposes Redis RESP as its public TCP protocol. RESP2 is the default compatibility target for redis-cli, Jedis, Lettuce, and go-redis. RESP3 is available for basic negotiated replies through HELLO 3.
+一次 RESP 请求的主链可以先按这些术语记：
 
-这意味着：
+```text
+Netty inbound bytes
+  -> RespCommandRequest
+  -> RespExecutionAdapter
+  -> ByteArrayExecutionRequest
+  -> ExecutionRequest
+  -> CommandExecutor
+  -> engine
+  -> command processor
+  -> DB
+  -> ReplyWriter
+  -> RespReplyWriter
+  -> Netty write-back
+```
 
-- 服务端协议层和命令层是解耦的
-- 内置 CLI、bench、测试工具都围绕 RESP 工作
-- 可以用 Redis 客户端做基础连接和命令烟测，但命令语义仍是项目实现的最小子集
+这条链的边界含义是：
 
-### 2. 命令执行保持单线程语义
+- `RespCommandRequest` 表示协议层解出的命令请求。
+- `RespExecutionAdapter` 把 RESP 请求转成执行层能理解的请求。
+- `ByteArrayExecutionRequest` 是以字节参数承载命令的执行请求实现。
+- `ExecutionRequest` 是 server/command 层之间的统一请求契约。
+- `CommandExecutor` 把请求从 I/O 线程切到执行线程，并施加队列和背压约束。
+- engine 持有执行上下文和命令入口，command processor 做命令解析、校验和分发。
+- DB 通过 API 暴露读写能力，具体内存实现完成 key 和 value 操作。
+- `ReplyWriter` 是命令层写 reply 的抽象，`RespReplyWriter` 把抽象 reply 编成 RESP，最后由 Netty write-back 发回客户端。
 
-Netty I/O 线程只负责收包和入队，真正访问 DB 的是单独的 command executor 线程。这是项目用来保持“Redis 风格单线程命令语义”的核心做法。
+逐行追请求时看 [`request-execution-flow.md`](./request-execution-flow.md)。
 
-因此你看到的不是“整个 server 单线程”，而是：
+## 数据和内存主线
 
-- I/O 层多线程或单线程都可以
-- DB 访问只在 owner thread 上发生
+数据层不要先想成一个大 `Map`。更准确的模型是：DB owner 负责 keyspace、expires、数据族 ops、memory ledger 和 lifecycle，而 native memory runtime 负责 backing storage、stable handle 和资源边界。
 
-### 3. 默认把 FFM 当作统一的 native-memory substrate
+主线可以这样拆：
 
-这个项目对 FFM 的使用重点不是调用 native function，而是把它当成统一的 off-heap 存储底座来承载：
+- `YierdisInstance` 决定逻辑 DB 数量、FFM runtime scope 和 maxmemory scope。
+- `YierdisDb` 是单个 DB 的状态 owner 和统一入口。
+- keyspace 和 expires 记录 key 到 entry/expire metadata 的映射。
+- string、list、hash、set、zset、HLL、bitmap 相关 ops 分别处理数据族语义和内部编码。
+- memory API/FFM 层提供 stable native handle，避免 DB 层直接保存可移动的 physical address。
+- maxmemory 和 approximate eviction 通过账本、协调器和策略把内存预算反馈到写路径。
 
-- keyspace
-- expires
-- string / hash / list / set / zset / HLL 的部分内部结构
+DB 内部读 [`db-internals.md`](./db-internals.md)，FFM runtime 和 native-memory-backed 路径读 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
-如果你已经看过 `docs/project-docs/ffm-usage.md`，会发现这里的核心关键词是：
+## 最先打开的源码文件
 
-- `YierdisFfmMemoryRuntime`
-- `YierdisStableNativeAllocator`
-- `NativeHandle`
-- `YierdisNativeObjectTable`
-- `NativeKeyDirectory`
-- `EntryTable`
-- `EntryRecord`
-- `StringRoot` / `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot`
-- `YierdisFfmExpireIndex`
-
-更底层的 allocator 细节在 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)：DB 层保存 stable handle，不保存 native physical address；entry metadata 通过 object table 做 indirection，所以 `realloc` 和 active defrag 可以移动对象而不重写 DB graph。
-
-### 4. 不只是实现命令，还在复刻 Redis 风格内部编码
-
-Yierdis 的实现重点不仅是“命令能跑通”，还包括 Redis 风格的内部表示和升级路径。例如：
-
-- string：`int` / `embstr` / `raw`
-- hash：packed / hashtable
-- list：listpack / quicklist 风格
-- set：intset / hashtable
-- zset：packed / skiplist 风格
-
-这也是为什么很多代码会比“普通 KV 服务”更像数据库内核，而不是应用层 CRUD。
-
-## 代码级主视角
-
-如果你只保留一张脑图，建议记成下面四层：
-
-### 1. protocol lane
-
-负责“线上长什么样”：
-
-- RESP request model
-- RESP client codec / reply writer
-- Netty decoder / adapter / protocol-error handler
-
-### 2. core lane
-
-负责“命令和 DB 怎么对话”：
-
-- `ExecutionRequest`
-- `ReplyWriter`
-- `DbEngine`
-- `DbReads` / `DbWrites`
-- 命令注册和命令处理器
-
-### 3. runtime / memory / executor
-
-负责“实例怎么活、线程怎么协作、内存怎么约束”：
-
-- 多 DB 组装
-- owner thread 生命周期
-- maxmemory 协调
-- 有界队列和背压
-
-### 4. server shell
-
-负责把上面几层真的拼起来：
-
-- 参数解析
-- Netty pipeline
-- 协议请求适配成 `ExecutionRequest`
-- command executor 绑定到 runtime seam
-
-## 从 `main()` 到一个可工作的 server
-
-如果你是初学者，最值得先建立的一条具体代码逻辑是：
-
-- `YierdisServer.main(...)` 不是自己启动 Netty，而是先把“启动需要的依赖”整理好
-- `YierdisServerBootstrap.start(...)` 才是真正的组装中心
-
-这条启动链的代码逻辑可以概括成：
-
-1. `YierdisServer` 解析 CLI 参数，拿到 `ServerConfig`
-2. 启动前调用 `ForeignMemoryAutoModules.ensureFfmAvailable()`，确保当前 JVM 支持 `java.lang.foreign`
-3. `YierdisServerBootstrap` 把 `ServerConfig` 转成 runtime config
-4. 基于 runtime config 创建 `YierdisInstance`
-5. 基于 instance 和 server 观测信息创建 `DefaultYierdisEngine`
-6. 基于 engine 创建 `CommandExecutor`
-7. 启动 executor，把 DB 绑定到 executor 线程
-8. 创建 Netty 的 boss / worker group 和 channel pipeline
-9. `bind(port)` 后进入正常工作状态
-
-初学者可以把这条链理解为：
-
-- `YierdisServer` 负责“进程入口和错误处理”
-- `YierdisServerBootstrap` 负责“真正把所有零件接起来”
-
-这也是为什么想读懂“项目怎么跑起来”，通常先打开这两个文件就够了。
-
-## `YierdisInstance` 在启动里到底做了什么
-
-`YierdisInstance` 容易被误解成“DB 本身”，但它更像一个实例级装配器。
-
-它真正做的事情包括：
-
-- 决定逻辑 DB 数量
-- 创建实例级的 `YierdisFfmMemoryRuntime`
-- 根据 `maxmemoryScope` 决定 DB 是共享一个 runtime，还是每个 DB 各自持有 runtime
-- `per-db` scope 下把 `maxmemoryBytes` 按 DB 数量分摊，`global` scope 下保留实例级总预算
-- 为每个 DB 创建 `RuntimeDbEngine`
-- 在需要时创建全局 `YierdisGlobalMaxmemoryGovernor`
-- 给各个 DB 挂上 `MaxmemoryCoordinator`
-- 暴露 `engine(int)` 和 `engines()` 这种能力视图
-
-换句话说：
-
-- `YierdisDb` 关心“单个 DB 里的数据和策略”
-- `YierdisInstance` 关心“整个实例有几个 DB，它们的资源怎么统一管理”
-
-这对初学者很重要，因为它解释了为什么“多 DB”和“单 DB 内部数据结构”是分开放在不同模块和类里的。
-
-## `YierdisDb` 不是一个大 Map，而是一个协作者集合
-
-很多人第一次看到 `YierdisDb` 会以为它就是一个“大而全”的数据库类。实际上它更像一个状态 owner，加上一组高密度协作者。
-
-在构造阶段，`YierdisDb` 会把下面这些东西拼起来：
-
-- `NativeKeyDirectory` / `EntryTable`：负责 key -> stable `EntryHandle` -> native `EntryRecord` 的主索引
-- expires：负责 key -> expireAt 的过期索引
-- `YierdisStringOps`
-- `YierdisHashOps`
-- `YierdisListOps`
-- `YierdisSetOps`
-- `YierdisZSetOps`
-- `YierdisHllOps`
-- `YierdisTtlOps`
-- `YierdisKeyspaceOps`
-- `YierdisDbMemoryLedger`
-- `YierdisDbMutationExecutor`
-- `YierdisDbKeyLifecycle`
-
-这里最值得记住的一个思路是：
-
-- `YierdisDb` 不是把所有逻辑都直接写在自己里面
-- 它更多是在做“对象图的 owner 和统一入口”
-
-这也是为什么你在追踪一个具体命令时，最后常常会落到某个 `*Ops` 类，而不是一直停在 `YierdisDb` 本体里。
-
-## `DbEngine` 视角为什么存在
-
-初学者读命令层时，经常会问：
-
-- 既然最后还是 `YierdisDb` 在干活，为什么不让命令层直接调用 `YierdisDb`？
-
-答案是：项目故意把命令层依赖降到了 `DbEngine -> DbReads/DbWrites` 这个能力边界。
-
-这带来三件事：
-
-- 命令层只依赖“能做什么”，不依赖“怎么做”
-- `YierdisDb` 可以继续拆内部协作者，而命令层不必跟着改
-- 多 DB 路由只需要返回不同的 `DbEngine` 视图，而不是让命令层认识不同实现类
-
-如果你是初学者，可以把它理解成：
-
-- `DbEngine` 是 command 层看到的“数据库控制面板”
-- `YierdisDb` 是这块控制面板背后的真正机器
-
-## 推荐带着问题读代码
-
-对于初学者，比起“把所有文件看一遍”，更有效的方法是带着下面这些问题读：
-
-- server 是在哪一步把 DB、命令层和 Netty 拼起来的？
-- 一条请求为什么不会直接在 I/O 线程里改 DB？
-- 为什么 `StringCommands` 调的是 `DbWrites`，而不是 `YierdisDb`？
-- `YierdisDb` 里的 keyspace、expires、memory ledger 各自负责什么？
-- 多 DB 是怎么从连接态一路传到 DB 路由的？
-
-如果你已经准备顺着一条真实请求往下追，下一篇应该看 [`request-execution-flow.md`](./request-execution-flow.md)。
-
-## 主要入口
-
-如果你第一次读代码，最值得先打开的入口如下：
-
-### 进程和启动入口
+第一次读源码可以先打开这些入口，建立从启动到请求再到 DB 的最短路径：
 
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java`
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
-
-### 请求主链路入口
-
 - `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`
-- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java`
-
-### 命令处理主入口
-
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespCommandRequest.java`
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespExecutionAdapter.java`
+- `yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java`
 - `yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java`
 - `yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java`
-
-### DB 主入口
-
+- `yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java`
 - `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
-
-### runtime 主入口
-
 - `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
 
-## 已有文档如何配合阅读
+## 接下来读什么
 
-- 想先理解“项目在业务和系统层面是什么”，继续读本文即可。
-- 想先从更完整的项目背景和设计取舍开始，看 [`project-introduction.md`](./project-introduction.md)。
-- 想沿着一次请求走到底，看 [`request-execution-flow.md`](./request-execution-flow.md)。
-- 想先把线上协议和回包格式讲清楚，看 [`protocol-reference.md`](./protocol-reference.md)。
-- 想把命令层和内部编码对应起来，看 [`commands-and-data-model.md`](./commands-and-data-model.md)。
-- 想知道启动参数、观测命令和运行时护栏怎么工作，看 [`configuration-and-operations.md`](./configuration-and-operations.md)。
-- 想知道该跑哪些测试、怎么排障，看 [`testing-and-debugging.md`](./testing-and-debugging.md)。
-- 想理解模块边界和依赖方向，看 [`module-architecture.md`](./module-architecture.md)。
-- 想知道改需求时该从哪几个文件下手，看 [`development-navigation.md`](./development-navigation.md)。
-- 想理解 FFM / off-heap 的底层路径，看现有的 `docs/project-docs/ffm-usage.md` 与 `docs/project-docs/offheap-copy-behavior.md`。
-
-## 建议的第一轮阅读顺序
-
-1. `README.md`
-2. `docs/project-docs/project-introduction.md`
-3. `docs/project-docs/project-overview.md`
-4. `docs/project-docs/request-execution-flow.md`
-5. `docs/project-docs/main-path-walkthrough.md`
-6. `docs/project-docs/protocol-reference.md`
-7. `docs/project-docs/commands-and-data-model.md`
-8. `docs/project-docs/configuration-and-operations.md`
-9. `docs/project-docs/testing-and-debugging.md`
-10. `docs/project-docs/glossary.md`
-11. `docs/project-docs/module-architecture.md`
-12. `docs/project-docs/development-navigation.md`
-
-如果只是想快速知道“这个仓库值不值得继续深入”，读完本文通常已经够了。
+读模块边界和依赖方向看 [`module-architecture.md`](./module-architecture.md)；跟一次请求看 [`request-execution-flow.md`](./request-execution-flow.md)；深入 DB 读 [`db-internals.md`](./db-internals.md)；理解 native-memory runtime 读 [`native-memory-runtime.md`](./native-memory-runtime.md)。
