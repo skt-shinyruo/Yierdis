@@ -75,23 +75,19 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
 
         ByteBuf out = ctx.alloc().buffer();
         try {
-            ReplyWriter writer = newReplyWriter(out, ctx);
+            NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
+            if (connection != null && connection.markClosing()) {
+                safeDisableAutoRead(ctx);
+            }
+
+            ReplyWriter writer = newReplyWriter(out, connection);
             if (protocolError) {
                 // 回包的 message 净化/限长由协议层 writer SSOT 统一处理，handler 不做重复净化避免漂移。
                 writer.protocolError(rawMessage);
             } else {
-                // 标记该连接进入 closing：避免 internal error 触发 close 后，已入队命令仍在 executor 中继续执行产生副作用。
-                NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
-                if (connection != null && connection.markClosing()) {
-                    safeDisableAutoRead(ctx);
-                }
                 writer.internalError("ERR internal error");
             }
-            if (protocolError) {
-                ctx.writeAndFlush(out);
-            } else {
-                ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
-            }
+            ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
             out = null;
         } finally {
             if (out != null) {
@@ -100,8 +96,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         }
     }
 
-    private ReplyWriter newReplyWriter(ByteBuf out, ChannelHandlerContext ctx) {
-        NettyExecutionConnection connection = ctx == null ? null : NettyExecutionConnection.get(ctx.channel());
+    private ReplyWriter newReplyWriter(ByteBuf out, NettyExecutionConnection connection) {
         return connection == null
                 ? replyWriterFactory.newWriter(new NettyByteBufSink(out))
                 : replyWriterFactory.newWriter(connection.session(), new NettyByteBufSink(out));
