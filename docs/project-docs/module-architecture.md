@@ -1,53 +1,45 @@
 # Module Architecture
 
-本文说明 Yierdis 的 Maven 模块是怎么拆的、依赖方向是什么、以及代码层和测试层如何一起守住这些边界。
+本文说明 Yierdis 的 Maven 模块和依赖方向。重点不是列目录，而是说明哪些模块拥有协议、命令、执行、DB、memory 和组装职责。
 
-## 一眼看懂的依赖关系
+## 一眼看懂的依赖方向
 
-可以先把项目看成几组核心关系：
+```text
+yierdis-common-bytes
+  -> yierdis-networking-resp
+  -> yierdis-networking-netty
+  -> yierdis-server-api
+  -> yierdis-db-api
 
-![Yierdis module dependency architecture](./assets/module-architecture.svg)
+yierdis-memory-api
+  -> yierdis-memory-ffm
+  -> yierdis-db-memory
 
-- `yierdis-common-bytes` 是公共 bytes 抽象，被 memory、db、execution 和 protocol 复用
-- `yierdis-memory-api` 提供 off-heap 和 stable native allocator contract，`yierdis-memory-ffm` 是它的 JDK 25 FFM backend
-- `yierdis-db-api` 定义 DB 能力边界，`yierdis-db-memory` 提供具体存储实现
-- `yierdis-server-api` 定义执行契约，`yierdis-server-core` 和 `yierdis-server-executor` 依赖它
-- `yierdis-command-api` 定义命令注册契约，`yierdis-command-core` 和 `yierdis-command-builtin` 依赖它
-- `yierdis-networking-resp` 负责 RESP limits、request model、reply writer、execution adapter 和 client codec
-- `yierdis-networking-netty` 负责 Netty 适配，同时承载 `yier.bubu.redis.bytes.netty.*` 和 `yier.bubu.redis.protocol.resp.netty.*`
-- `yierdis-server-main` 是最外层组装模块，把 server / command / db / networking / runtime 拼起来
-- `yierdis-cli` 和 `yierdis-benchmark` 主要依赖 RESP codec 和外部 TCP 路径，而不是 server 内核
+yierdis-networking-resp
+  -> yierdis-networking-netty
+  -> yierdis-server-main
 
-理解这些关系时，最重要的判断不是“谁依赖谁”本身，而是“谁负责线上协议、谁负责执行契约、谁负责 DB、谁负责最后的组装”。
+yierdis-server-api
+  -> yierdis-server-core
+  -> yierdis-server-executor
+  -> yierdis-server-main
 
-## Package Ownership
+yierdis-command-api
+  -> yierdis-command-core
+  -> yierdis-command-builtin
 
-Java package names mirror module ownership. Active production package families are:
+yierdis-db-api
+  -> yierdis-db-memory
 
-- `yier.bubu.redis.app.server`
-- `yier.bubu.redis.app.client`
-- `yier.bubu.redis.app.bench`
-- `yier.bubu.redis.execution.api`
-- `yier.bubu.redis.execution.engine`
-- `yier.bubu.redis.execution.executor`
-- `yier.bubu.redis.bytes`
-- `yier.bubu.redis.bytes.netty`
-- `yier.bubu.redis.storage.api`
-- `yier.bubu.redis.storage.api.result`
-- `yier.bubu.redis.storage.memory`
-- `yier.bubu.redis.command.api`
-- `yier.bubu.redis.command.kernel`
-- `yier.bubu.redis.command.defaults`
-- `yier.bubu.redis.runtime.api`
-- `yier.bubu.redis.runtime.embedded`
-- `yier.bubu.redis.memory.api`
-- `yier.bubu.redis.memory.foreign`
-- `yier.bubu.redis.protocol.resp`
-- `yier.bubu.redis.protocol.resp.netty`
+yierdis-server-main
+  -> 组装 command / DB / protocol / executor / runtime
+```
+
+这条方向图说明：上层依赖能力接口，下层提供实现，最外层只负责装配。
 
 ## 聚合模块
 
-下面几个模块主要是 parent / aggregator，本身不是运行时代码：
+这些模块主要是 parent / aggregator，本身不承担运行时语义：
 
 - `yierdis-parent`
 - `yierdis-common`
@@ -57,31 +49,13 @@ Java package names mirror module ownership. Active production package families a
 - `yierdis-command`
 - `yierdis-db`
 
-它们的作用主要是：
-
-- 统一模块结构
-- 统一版本和构建配置
-- 让依赖分组更容易理解
+它们的作用是统一版本、统一构建配置、统一模块分组。
 
 ## bytes 基础层
 
-### `yierdis-common-bytes`
+`yierdis-common-bytes` 提供中立 bytes 抽象，被 protocol、server 和 memory 共享。
 
-提供中立的 bytes 抽象，被 protocol 和 core 两边共享。
-
-它的角色是：
-
-- 避免上层逻辑过早绑定到 Netty
-- 为 `BytesView`、`BytesSlice`、`BytesSink` 这类接口提供公共基础
-
-### `yierdis-networking-netty`
-
-负责把中立的 bytes 抽象接到 Netty，同时承载 `yier.bubu.redis.bytes.netty.*` 和 `yier.bubu.redis.protocol.resp.netty.*`。
-
-它存在的意义是：
-
-- Netty 适配层集中
-- core / protocol 的非 Netty 代码不需要知道 `ByteBuf`
+`yierdis-networking-netty` 则把这些抽象接到 Netty，集中处理 `ByteBuf` 相关适配。这样上层代码就不必把 Netty 当成核心依赖。
 
 ## memory 车道
 
@@ -89,166 +63,88 @@ memory 车道负责 native memory contract 和 FFM backend，不拥有 DB 语义
 
 ### `yierdis-memory-api`
 
-这个模块定义两组能力：
+这里定义的是能力接口，不是具体分配器实现：
 
-- 连续 bytes off-heap contract：`OffHeapAllocator`、`OffHeapBuf`、`OffHeapSlice`
-- stable native object allocator contract：`NativeHandle`、`NativeAllocator`、`NativeObjectView`、`NativeAllocatorStats`、`NativeDefrag*`、`NativeEpoch*`
-
-`NativeHandle` 是跨 DB memory 层的 64-bit stable identity，包含 domain、kind、slot id、generation 和 flags。它不是 physical address。
-
-### `yierdis-memory-ffm`
-
-这个模块提供 JDK FFM backend：
-
-- `YierdisFfmMemoryRuntime` 管理 FFM region 和 runtime accounting
-- `YierdisStableNativeAllocator` / `YierdisNativeObjectTable` / `YierdisNativePageAllocator` 服务可移动 native object；DB key bytes、entry records、string payload、collection root records 和 `LIST_QUICKLIST_NODE` metadata records 使用 stable handles，HLL 复用 string payload
-- `YierdisForeignOffHeapAllocator` / `YierdisFfmSlabAllocator` 保留为 legacy / transitional `OffHeapAllocator` / `OffHeapBuf` 连续 bytes buffer 入口
-- `YierdisNativeEpochManager` 和 quarantine 保护 active read / scan / snapshot / defrag
-
-DB implementation 可以依赖 memory API 和 FFM backend；command、protocol 和 server API 不能直接依赖这些 allocator 实现细节。
-
-完整 allocator 语义见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
+- `OffHeapAllocator`
+- `OffHeapBuf`
+- `NativeHandle`
+- `NativeAllocator`
+- `NativeDefrag*`
+- `NativeEpoch*`
 
 ## protocol 车道
 
-protocol 车道只负责“线上协议长什么样”，不负责命令执行语义。
+protocol owns wire shape and reply encoding, not DB semantics.
 
 ### `yierdis-networking-resp`
 
-放 RESP 的 Netty-free 内容，主要包名为 `yier.bubu.redis.protocol.resp.*`：
-
-- `RespProtocolLimits`
-- `RespProtocolVersion`
-- `RespCommandRequest`
-- `RespExecutionAdapter`
-- `RespReplyWriter` / `RespReplyWriterFactory`
-- `RespClientCodec`
-
-它可以依赖 `yierdis-common-bytes` 和 `yierdis-server-api`，但不依赖 command、storage、runtime、server/app 或 Netty。
+这个模块只描述 RESP 的请求、回包和客户端 codec。它可以依赖 bytes 和 server API，但不能反向依赖 command、storage 或 server-main 的组装逻辑。
 
 ### `yierdis-networking-netty`
 
-负责 `yier.bubu.redis.protocol.resp.netty.*`：
+这个模块只负责把 RESP 放进 Netty pipeline。它能看到 `RespRequestDecoder`、`RespCommandAdapter` 这类适配器，但不能拥有命令语义或 DB 访问逻辑。
 
-- `RespRequestDecoder`
-- `RespCommandAdapter`
-- `RespProtocolError`
-- `RespProtocolErrorReplyHandler`
+## execution 和 server 车道
 
-它是 protocol 车道中唯一真正碰 Netty 的模块。它只把 Netty pipeline 接到 RESP model / adapter，不拥有命令解析、DB 访问或 runtime 组装。
+`yierdis-server-api` 定义执行契约，例如 `ExecutionRequest`、`ReplyWriter` 和 `Session`。它是 command 和 protocol 之间的稳定接口层。
 
-## core 车道
+`yierdis-server-core` 提供 `DefaultYierdisEngine` 之类的执行入口。
 
-core 车道负责“命令和 DB 怎么对话”，而不是“线上怎么发包”。
+`yierdis-server-executor` 负责队列、预算、背压和 owner thread 调度。
 
-### `yierdis-server-api`
+`yierdis-server-main` 负责最终组装，是真正的 composition root。
 
-这是执行契约层，放的是 transport-agnostic 的命令执行语义对象（包名为 `yier.bubu.redis.execution.api.*`），例如：
+server-main owns final assembly.
 
-- `ExecutionRequest`
-- `ExecutionRecord`
-- `ReplyWriter`
-- `Session`
+## command 车道
 
-它的作用是把命令执行从 protocol DTO 里抽出来。
+command owns parsing and command semantics, not Netty.
+
+### `yierdis-command-core`
+
+这里放命令注册、查表、解析和分发的核心实现。它应该只看执行契约和 DB 能力接口，不应该知道 Netty pipeline。
+
+### `yierdis-command-builtin`
+
+这里放内建命令实现，例如 `StringCommands`。它们实现的是命令语义，不是协议编码；真正的 DB 写入会通过 `DbWrites` 进入 `YierdisStringOps` 和 `YierdisDbMutationExecutor`。
+
+## DB 车道
+
+DB owns storage behavior, not RESP.
 
 ### `yierdis-db-api`
 
-这是 command-facing DB 能力边界，包名为 `yier.bubu.redis.storage.api.*` 和 `yier.bubu.redis.storage.api.result.*`，放的是：
+这个模块提供 `DbEngine`、`DbReads`、`DbWrites`、`KeyHandle` 等能力接口。命令层通过这些接口读写数据，而不是直接摸 storage implementation。
 
-- `DbEngine`
-- `DbReads`
-- `DbWrites`
-- `MemoryOps`
-- `KeyHandle`
-- 各种 `*ReadOps` / `*WriteOps`
-- `BulkStringValue` / `BulkStringSequence` / `BulkStringMapPairs`
-- `MaxmemoryCoordinator` / `MaxmemoryParticipant` / `RuntimeDbEngine`
+### `yierdis-db-memory`
 
-它的意义是：
+这里实现真实存储、TTL、memory ledger、key lifecycle 和 native-backed payload 管理。它负责 storage behavior，但不负责网络协议。
 
-- 命令层只依赖稳定的能力接口
-- 不直接依赖 `YierdisDb` 具体实现
-- TTL / maxmemory 等 storage pressure path 可以通过 API 级 `KeyHandle` 表达 key identity
-- 集合读结果可以通过 result sink 流式写回，不需要命令层知道具体 value/off-heap 结构
-- runtime 可以通过 maxmemory SPI 协调多个 DB，而不是依赖 storage implementation
+## CLI 和 benchmark
 
-### `yierdis-server-runtime-api`
+`yierdis-cli` 和 `yierdis-benchmark` 都是外部消费者，主要通过 RESP codec 和 TCP 连接和服务端交互。
 
-这是 embedded runtime contract 边界，包名为 `yier.bubu.redis.runtime.api.*`，放的是：
+它们不该绕过 server 内核去碰 DB，否则就失去验证真实 request path 的意义。
 
-- `YierdisInstanceConfig`
-- `YierdisChangeEvent`
-- `YierdisChangeSink`
+## architecture tests
 
-它的意义是：
+architecture tests protect dependency direction.
 
-- server / embedded users 直接依赖实例配置 API
-- command / storage implementation 通过 `runtime.api` 中的 change-tracking SPI 协作
-- runtime API 源码只由 `yierdis-server-runtime-api` 拥有
+它们主要防几类退化：
 
-## server 组装层
+- command 模块不能直接依赖 storage implementation
+- storage 不能反向依赖 command / server
+- server-main 可以组装各层，但其它层不能依赖 app server
+- RESP 仍然是唯一 active public protocol lane
 
-`yierdis-server-main` 是 application composition root。它负责：
+## 改模块边界前先看什么
 
-- 参数解析
-- 创建 DB/runtime/executor
-- 注册 command modules
-- 创建 `RespReplyWriterFactory`
-- 组装 Netty pipeline
+如果要改依赖方向，先读这几类文件：
 
-请求主链路可以压成：
+- [`module-architecture.svg`](./assets/module-architecture.svg)
+- [`core-logic-index.md`](./core-logic-index.md)
+- [`glossary.md`](./glossary.md)
+- [`native-memory-runtime.md`](./native-memory-runtime.md)
+- [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)
 
-```text
-RESP bytes
-  -> RespRequestDecoder
-  -> RespCommandAdapter
-  -> YierdisFastCommandHandler
-  -> CommandExecutor
-  -> YierdisEngine
-  -> YierdisFastCommandProcessor
-  -> ReplyWriter
-  -> RespReplyWriter
-```
-
-## CLI / Benchmark
-
-`yierdis-cli` 和 `yierdis-benchmark` 都是外部 TCP 消费者：
-
-- CLI 使用 `RespClientCodec` 做一问一答请求
-- benchmark 使用 RESP writer / reader 跑吞吐和延迟 workload
-- smoke 脚本优先用 `redis-cli`，本机没有时回退到 Java CLI
-
-这两个模块不能绕过 server 内核直接访问 DB，否则就失去了验证真实 request path 的意义。
-
-## 架构护栏
-
-架构测试主要守住几类边界：
-
-- command 模块不直接依赖 storage implementation
-- storage implementation 不反向依赖 command/server
-- server-main 作为组装层可以依赖各层，但其它层不能依赖 app server
-- RESP 是唯一 active public protocol lane
-- retired protocol 模块和包名不能回到 production source / Maven graph
-
-代表测试：
-
-- `ArchitectureBoundaryTest`
-- `ArchitecturePolicyResourceTest`
-- `RespBoundaryGuardTest`
-
-如果你改模块边界，先跑：
-
-```bash
-mvn -pl yierdis-tests/yierdis-architecture-tests -am test -Dsurefire.failIfNoSpecifiedTests=false
-```
-
-## 一句话总结
-
-Yierdis 的模块设计重点，不是“按包名分目录”，而是：
-
-- protocol 负责线上 RESP
-- execution API 负责命令语义契约
-- command / DB 通过能力接口协作
-- server-main 负责最终组装
-- architecture tests 把这些依赖方向固定住
+再去看 architecture tests，确认边界约束没有被破坏。
