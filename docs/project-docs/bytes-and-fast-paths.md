@@ -16,7 +16,7 @@ Yierdis 的 bytes 抽象不是为了把 `byte[]` 包一层对象，而是为了�
 
 Yierdis 选择中立 bytes 层：
 
-- lookup 用短生命周期只读 view，不要求 canonical heap key copy。
+- lookup API 用短生命周期只读 view 表达输入；当前 DB lifecycle 边界仍会 materialize heap key copy。
 - 写入值用 slice，把“读取”和“写出”能力同时交给 DB。
 - reply 用 sink，把协议编码和 Netty `ByteBuf` 解耦。
 - direct/off-heap 优化只在实现支持时启用，不污染 API 默认语义。
@@ -50,9 +50,11 @@ reply 编码方向相反。`RespReplyWriter.bulkString(BytesSlice)` 先写 RESP 
 
 ## DB lookup 和写路径如何使用 bytes
 
-DB API 的很多 read ops 接受 `BytesView`，例如 `StringReadOps`、`TtlReadOps`、`KeyspaceReadOps`、`MemoryOps`。这样 lookup 可以直接读取请求级 view，不要求先生成 canonical heap key。
+DB API 的很多 read ops 接受 `BytesView`，例如 `StringReadOps`、`TtlReadOps`、`KeyspaceReadOps`、`MemoryOps`。这让 command/DB contract 保持 Netty-free，也给未来 direct lookup 优化留出接口空间。
 
-`NativeKeyDirectory` 和 `YierdisDbKeyLifecycle` 通过 `BytesView` 做 key hash、equals 和 key handle lookup。只有新 key 持久化、SCAN 输出、snapshot 输出或显式 introspection 需要把 bytes 变成持久形状或返回形状时，才复制。
+当前实现里，`YierdisDbKeyLifecycle` 在 `BytesView` 进入 key directory 前会调用 `YierdisDb.toByteArray(keyView)` materialize 一个 heap `byte[]`。这是因为 `NativeKeyDirectory` 的 lookup API 当前是 `byte[]` based，例如 `get(byte[])`、`getKeyHandle(byte[])` 和 `compute(byte[], ...)`。这份 heap copy 是今天的 ownership/lifetime 边界，不应该写成“lookup 已经避免 heap key 生成”。
+
+新 key 持久化会把 key bytes 存成 allocator-backed `KEY_BYTES`；SCAN、snapshot 和显式 introspection 仍会为了输出或诊断生成 heap copy。这些复制点和 lifecycle 边界 copy 一样，都是有意的 lifetime/ownership 边界。
 
 写路径中，`StringWriteOps.set(...)`、`append(...)` 和 HLL 内部逻辑接收 `BytesSlice`。这让 command 层把 value 作为 slice 交给 DB，由 `StringRoot` 或对应 type root 决定写入 allocator-backed `STRING_BYTES`、collection payload、adapter-owned bytes 或必要 fallback。slice 的重点是延后复制决策，而不是承诺零拷贝持久化。
 
@@ -81,7 +83,7 @@ CommandExecutorDrainLoop
 
 fast path 主要出现在这些地方：
 
-- key lookup 只需要 `BytesView`，避免为了查询生成新 heap key。
+- API 边界使用 `BytesView`，让 command/DB contract 不依赖 Netty，并为后续 direct lookup 优化保留形状；当前 DB lifecycle lookup 仍会 materialize heap `byte[]`。
 - `BytesSlice.writeTo(BytesSink)` 可以把 value 直接流式写出。
 - `DirectBytesSink` 暴露 writer cursor 和 memory address，支持 direct/off-heap aware 写入。
 - `NettyByteBufSink.unwrap()` 允许 adapter 边界在必要时使用 `ByteBuf` 能力。
@@ -90,6 +92,7 @@ fast path 主要出现在这些地方：
 fallback 也同样重要。以下 heap materialization 是有意的：
 
 - protocol adaptation snapshots：`RespCommandRequest` / `ExecutionRequest` 需要稳定 argv 跨过 decoder 生命周期和 executor queue。
+- DB lifecycle lookup：当前 `YierdisDbKeyLifecycle` 用 `YierdisDb.toByteArray(...)` 把 `BytesView` 转成 heap `byte[]`，再进入 `NativeKeyDirectory`。
 - transaction replay：事务队列需要保存可重放的 `ByteArrayExecutionRequest` / `ExecutionRecord`，不能引用短生命周期 frame。
 - explicit introspection：`SCAN`、snapshot、`MEMORY` / object 类输出需要构造返回值或诊断对象，不能把 native view 泄漏给调用方。
 - tests：测试经常用 heap arrays 和 recording sinks 断言内容，这是可读性和确定性的取舍。

@@ -74,7 +74,7 @@ Type root
 type roots 管真实 payload：
 
 - `StringRoot` 创建、读取、修改和释放 string bytes，当前 string payload 是 allocator-backed object。
-- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 通过 root record 保存 adapter identity，并用 `ValueHandle` 找回 payload implementation。
+- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 的 allocator-backed root record 提供稳定 root identity 和 validation；`NativeCollectionRootTable` 再用 native handle raw value 映射到 Java adapter，从而通过 `ValueHandle` 找回 payload implementation。
 - `ListRoot` 的 quicklist 节点 metadata 有 allocator-backed `LIST_QUICKLIST_NODE` records。
 - collection payload bytes、list entry bytes 以及 hash/set/zset 内部结构仍可能由 adapter 或 legacy FFM structures 拥有；active defrag 不移动 adapter-owned payload bytes，也不把任意 collection internal identity 当作 allocator object resolve。
 
@@ -190,11 +190,10 @@ global maxmemory scope 下，ledger 把预算准备委托给 instance 级 `Yierd
 `MEMORY USAGE` / `MEMORY STATS` 汇总的是 explainable estimate，不是 JVM instrumentation object graph。来源包括：
 
 - ledger used/reserved bytes
-- allocator/off-heap usage
-- `EntryTable` native bytes
-- `NativeKeyDirectory` native bytes
-- expire index native bytes
-- type root native bytes / estimated bytes
+- `NativeAllocatorStats` / allocator off-heap usage
+- allocator-backed `ENTRY_RECORD` 和 `KEY_BYTES`，主要通过 allocator stats 体现，而不是作为 `EntryTable` / `NativeKeyDirectory` 的独立重复加项
+- expire index/native adapter estimates where applicable
+- type root estimated bytes
 - key count、expire count、rehash 状态
 
 `YierdisMemoryStats` 里容易混淆的字段：
