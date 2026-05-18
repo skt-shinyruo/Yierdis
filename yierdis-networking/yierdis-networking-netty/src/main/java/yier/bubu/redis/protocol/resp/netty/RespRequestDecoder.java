@@ -16,15 +16,13 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
 
     private enum State {
         READ_COMMAND,
-        DISCARD_TO_LF
+        CLOSING
     }
 
     private final int maxBulkBytes;
     private final int maxArgs;
     private final int maxInlineBytes;
-    private final int maxDiscardBytes;
     private State state = State.READ_COMMAND;
-    private int discardedBytes;
 
     public RespRequestDecoder(int maxBulkBytes, int maxArgs, int maxInlineBytes) {
         this(maxBulkBytes, maxArgs, maxInlineBytes, Math.max(1024, maxBulkBytes + maxInlineBytes));
@@ -34,7 +32,6 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
         this.maxBulkBytes = Math.max(0, maxBulkBytes);
         this.maxArgs = Math.max(0, maxArgs);
         this.maxInlineBytes = Math.max(0, maxInlineBytes);
-        this.maxDiscardBytes = Math.max(0, maxDiscardBytes);
     }
 
     @Override
@@ -42,14 +39,11 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
         if (ctx == null || in == null || out == null) {
             return;
         }
+        if (state == State.CLOSING) {
+            in.readerIndex(in.writerIndex());
+            return;
+        }
         for (; ; ) {
-            if (state == State.DISCARD_TO_LF) {
-                if (!discardToLf(ctx, in)) {
-                    return;
-                }
-                state = State.READ_COMMAND;
-                continue;
-            }
             if (!in.isReadable()) {
                 return;
             }
@@ -62,6 +56,11 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
                 return;
             }
             if (result == ParseResult.ERROR) {
+                if (shouldCloseAfterReply(out)) {
+                    state = State.CLOSING;
+                    in.readerIndex(in.writerIndex());
+                    return;
+                }
                 continue;
             }
         }
@@ -104,20 +103,20 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
             }
             if (in.getByte(bulkLineStart) != BULK) {
                 emitProtocolError(out, "ERR Protocol error: expected '$', got other", true);
-                state = State.DISCARD_TO_LF;
+                state = State.CLOSING;
                 return ParseResult.ERROR;
             }
 
             Long lenValue = parseInteger(in, bulkLineStart + 1, bulkLf - 1);
             if (lenValue == null || lenValue < 0 || lenValue > Integer.MAX_VALUE) {
                 emitProtocolError(out, "ERR Protocol error: invalid bulk length", true);
-                state = State.DISCARD_TO_LF;
+                state = State.CLOSING;
                 return ParseResult.ERROR;
             }
             int len = lenValue.intValue();
             if (maxBulkBytes > 0 && len > maxBulkBytes) {
                 emitProtocolError(out, "ERR Protocol error: invalid bulk length", true);
-                state = State.DISCARD_TO_LF;
+                state = State.CLOSING;
                 return ParseResult.ERROR;
             }
             if (in.readableBytes() < len + 2) {
@@ -130,7 +129,7 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
             byte lfByte = in.readByte();
             if (cr != CR || lfByte != LF) {
                 emitProtocolError(out, "ERR Protocol error: invalid bulk string terminator", true);
-                state = State.DISCARD_TO_LF;
+                state = State.CLOSING;
                 return ParseResult.ERROR;
             }
             argv[i] = arg;
@@ -162,12 +161,14 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
             InlineCommandParser.Decoded decoded = InlineCommandParser.parseUnlimited(line, 0, line.length);
             if (maxArgs > 0 && decoded.argc() > maxArgs) {
                 emitProtocolError(out, "ERR Protocol error: too many arguments", true);
+                state = State.CLOSING;
                 return ParseResult.ERROR;
             }
             out.add(RespCommandRequest.wrapReadOnly(decoded.copyArgs(), decoded.retainedBytes()));
             return ParseResult.EMITTED;
         } catch (IllegalArgumentException e) {
             emitProtocolError(out, "ERR Protocol error: invalid inline command", true);
+            state = State.CLOSING;
             return ParseResult.ERROR;
         }
     }
@@ -182,7 +183,7 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
             if (maxInlineBytes > 0 && in.readableBytes() > maxInlineBytes) {
                 emitProtocolError(out, errorMessage, true);
                 in.readerIndex(in.writerIndex());
-                state = State.DISCARD_TO_LF;
+                state = State.CLOSING;
                 return -1;
             }
             return Integer.MIN_VALUE;
@@ -191,6 +192,7 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
         if (maxInlineBytes > 0 && lfDistance + 1 > maxInlineBytes) {
             in.readerIndex(start + lfDistance + 1);
             emitProtocolError(out, errorMessage, true);
+            state = State.CLOSING;
             return -1;
         }
 
@@ -198,33 +200,11 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
         if (lf == start || in.getByte(lf - 1) != CR) {
             in.readerIndex(lf + 1);
             emitProtocolError(out, errorMessage, true);
+            state = State.CLOSING;
             return -1;
         }
         in.readerIndex(lf + 1);
         return lf;
-    }
-
-    private boolean discardToLf(ChannelHandlerContext ctx, ByteBuf in) {
-        int start = in.readerIndex();
-        int end = in.writerIndex();
-        for (int i = start; i < end; i++) {
-            if (in.getByte(i) == LF) {
-                in.readerIndex(i + 1);
-                discardedBytes = 0;
-                return true;
-            }
-        }
-
-        int readable = in.readableBytes();
-        if (readable > 0) {
-            in.readerIndex(end);
-            discardedBytes += readable;
-            if (maxDiscardBytes > 0 && discardedBytes > maxDiscardBytes) {
-                ctx.close();
-                return false;
-            }
-        }
-        return false;
     }
 
     private static Long parseInteger(ByteBuf in, int start, int endExclusive) {
@@ -275,6 +255,14 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
 
     private static void emitProtocolError(List<Object> out, String message, boolean closeAfterReply) {
         out.add(new RespProtocolError(message, closeAfterReply));
+    }
+
+    private static boolean shouldCloseAfterReply(List<Object> out) {
+        if (out == null || out.isEmpty()) {
+            return false;
+        }
+        Object last = out.get(out.size() - 1);
+        return last instanceof RespProtocolError error && error.closeAfterReply();
     }
 
     private enum ParseResult {

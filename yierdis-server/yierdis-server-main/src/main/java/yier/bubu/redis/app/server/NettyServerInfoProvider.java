@@ -46,6 +46,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     private static final byte[] KEY_CHANNELS_AUTOREAD_DISABLED = ascii("channels_autoread_disabled");
     private static final byte[] KEY_SUBMIT_ACCEPTED_TOTAL = ascii("submit_accepted_total");
     private static final byte[] KEY_SUBMIT_REJECTED_NOT_RUNNING_TOTAL = ascii("submit_rejected_not_running_total");
+    private static final byte[] KEY_SUBMIT_REJECTED_CLOSING_TOTAL = ascii("submit_rejected_closing_total");
     private static final byte[] KEY_SUBMIT_REJECTED_QUEUE_FULL_TOTAL = ascii("submit_rejected_queue_full_total");
     private static final byte[] KEY_SUBMIT_REJECTED_BYTES_BUDGET_TOTAL = ascii("submit_rejected_bytes_budget_total");
     private static final byte[] KEY_SUBMIT_REJECTED_OFFER_FAILED_TOTAL = ascii("submit_rejected_offer_failed_total");
@@ -123,7 +124,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         CommandExecutor.StatsSnapshot s = ex.statsSnapshot();
         ConnectionStatsView stats = connectionStats(ctx);
 
-        int pairs = 15 + (stats == null ? 0 : 11);
+        int pairs = 16 + (stats == null ? 0 : 11);
         writeHeader(out, pairs);
 
         writePair(out, KEY_QUEUED_TASKS, s.queuedTasks());
@@ -131,6 +132,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_CHANNELS_AUTOREAD_DISABLED, s.channelsAutoReadDisabled());
         writePair(out, KEY_SUBMIT_ACCEPTED_TOTAL, s.submitAccepted());
         writePair(out, KEY_SUBMIT_REJECTED_NOT_RUNNING_TOTAL, s.submitRejectedNotRunning());
+        writePair(out, KEY_SUBMIT_REJECTED_CLOSING_TOTAL, s.submitRejectedClosing());
         writePair(out, KEY_SUBMIT_REJECTED_QUEUE_FULL_TOTAL, s.submitRejectedQueueFull());
         writePair(out, KEY_SUBMIT_REJECTED_BYTES_BUDGET_TOTAL, s.submitRejectedBytesBudget());
         writePair(out, KEY_SUBMIT_REJECTED_OFFER_FAILED_TOTAL, s.submitRejectedOfferFailed());

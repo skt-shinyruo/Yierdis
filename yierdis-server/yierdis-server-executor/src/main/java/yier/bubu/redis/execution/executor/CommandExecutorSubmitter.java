@@ -15,6 +15,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
     private final BooleanSupplier running;
     private final LongAdder submitAccepted = new LongAdder();
     private final LongAdder submitRejectedNotRunning = new LongAdder();
+    private final LongAdder submitRejectedClosing = new LongAdder();
     private final LongAdder submitRejectedQueueFull = new LongAdder();
     private final LongAdder submitRejectedBytesBudget = new LongAdder();
     private final LongAdder submitRejectedOfferFailed = new LongAdder();
@@ -45,6 +46,11 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
             context.recordCommandRejected();
             submitRejectedNotRunning.increment();
             return CommandExecutor.SubmitRejectReason.NOT_RUNNING;
+        }
+        if (context.isClosing()) {
+            context.recordCommandRejected();
+            submitRejectedClosing.increment();
+            return CommandExecutor.SubmitRejectReason.CONNECTION_CLOSING;
         }
 
         if (backlogBudget.isGlobalBackpressureHigh()) {
@@ -116,6 +122,10 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
 
     long submitRejectedNotRunning() {
         return submitRejectedNotRunning.sum();
+    }
+
+    long submitRejectedClosing() {
+        return submitRejectedClosing.sum();
     }
 
     long submitRejectedQueueFull() {

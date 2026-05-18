@@ -65,8 +65,29 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                         config.protocolMaxLineBytes()
                 ))
                 .addLast("respCommandAdapter", new RespCommandAdapter())
-                .addLast("respProtocolErrorReply", new RespProtocolErrorReplyHandler(replyWriterFactory))
+                .addLast("respProtocolErrorReply", new RespProtocolErrorReplyHandler(
+                        replyWriterFactory,
+                        YierdisServerChannelInitializer::markProtocolErrorClosing
+                ))
                 .addLast("commandHandler", new YierdisFastCommandHandler(executor, replyWriterFactory));
+    }
+
+    private static void markProtocolErrorClosing(io.netty.channel.ChannelHandlerContext ctx) {
+        if (ctx == null) {
+            return;
+        }
+        NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
+        if (connection != null && connection.markClosing()) {
+            safeSetAutoRead(ctx, false);
+        }
+    }
+
+    private static void safeSetAutoRead(io.netty.channel.ChannelHandlerContext ctx, boolean enabled) {
+        try {
+            ctx.channel().config().setAutoRead(enabled);
+        } catch (Throwable ignored) {
+            // ignore
+        }
     }
 
     /**

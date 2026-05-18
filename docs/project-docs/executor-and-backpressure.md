@@ -38,15 +38,16 @@ RespRequestDecoder
 `CommandExecutorSubmitter` 的顺序很重要：
 
 1. 检查 executor 是否 running。
-2. 根据全局 backlog、连接 pending count、连接 pending bytes 必要时关闭该连接 `autoRead`。
-3. 调用 `ExecutorBacklogBudget.tryReserveSlot()` 预留 queue slot。
-4. 从 `ExecutionRequest.retainedBytes()` 计算 retained bytes。
-5. 调用 `tryReserveQueuedBytes(retainedBytes)` 预留 queued bytes。
-6. 向 `ExecutorTaskQueue.offer(...)` 投递 `CommandExecutorTask`。
-7. 在 `ExecutionConnectionContext.recordCommandEnqueued(...)` 增加 pending 和 pendingBytes。
-8. 再次评估连接和全局背压，调度 drain loop。
+2. 检查连接是否已经 `closing`；已 closing 的连接在任何 queue slot / bytes budget 预留前直接拒绝。
+3. 根据全局 backlog、连接 pending count、连接 pending bytes 必要时关闭该连接 `autoRead`。
+4. 调用 `ExecutorBacklogBudget.tryReserveSlot()` 预留 queue slot。
+5. 从 `ExecutionRequest.retainedBytes()` 计算 retained bytes。
+6. 调用 `tryReserveQueuedBytes(retainedBytes)` 预留 queued bytes。
+7. 向 `ExecutorTaskQueue.offer(...)` 投递 `CommandExecutorTask`。
+8. 在 `ExecutionConnectionContext.recordCommandEnqueued(...)` 增加 pending 和 pendingBytes。
+9. 再次评估连接和全局背压，调度 drain loop。
 
-失败时不会默默丢请求。`trySubmit(...)` 返回 reject reason，Netty handler 回 `ERR busy <reason>`，当前 reason 包括 `not_running`、`queue_full`、`bytes_budget`、`offer_failed`。
+失败时不会默默丢请求。`trySubmit(...)` 返回 reject reason，Netty handler 回 `ERR busy <reason>`，当前 reason 包括 `not_running`、`queue_full`、`bytes_budget`、`offer_failed`。`connection_closing` 也是 reject reason，但 handler 只清理 request，不再对已经 closing 的连接追加 busy reply。
 
 ## backlog budget
 

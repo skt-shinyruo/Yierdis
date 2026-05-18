@@ -14,6 +14,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
     private final Runnable bindToCurrentThread;
     public enum SubmitRejectReason {
         NOT_RUNNING("not_running"),
+        CONNECTION_CLOSING("connection_closing"),
         QUEUE_FULL("queue_full"),
         BYTES_BUDGET("bytes_budget"),
         OFFER_FAILED("offer_failed");
@@ -185,6 +186,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
                 backpressureController.keysAutoReadDisabledCount(),
                 submitter.submitAccepted(),
                 submitter.submitRejectedNotRunning(),
+                submitter.submitRejectedClosing(),
                 submitter.submitRejectedQueueFull(),
                 submitter.submitRejectedBytesBudget(),
                 submitter.submitRejectedOfferFailed(),
@@ -258,6 +260,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
             int channelsAutoReadDisabled,
             long submitAccepted,
             long submitRejectedNotRunning,
+            long submitRejectedClosing,
             long submitRejectedQueueFull,
             long submitRejectedBytesBudget,
             long submitRejectedOfferFailed,

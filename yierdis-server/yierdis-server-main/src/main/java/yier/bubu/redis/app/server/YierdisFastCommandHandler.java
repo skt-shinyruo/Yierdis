@@ -36,6 +36,10 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         if (reject == null) {
             return;
         }
+        if (reject == CommandExecutor.SubmitRejectReason.CONNECTION_CLOSING) {
+            msg.close();
+            return;
+        }
 
         ByteBuf out = ctx.alloc().buffer();
         try {

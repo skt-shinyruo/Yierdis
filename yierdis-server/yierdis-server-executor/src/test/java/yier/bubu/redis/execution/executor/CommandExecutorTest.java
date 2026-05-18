@@ -268,6 +268,49 @@ public class CommandExecutorTest {
     }
 
     @Test
+    public void executorRejectsAlreadyClosingConnectionBeforeReservingBacklogBudget() {
+        RecordingIoAdapter io = new RecordingIoAdapter();
+        ManualOwnerExecutor ownerExecutor = ExecutorCoreTestSupport.manualOwnerExecutor();
+
+        CommandExecutionEngine engine = ExecutorCoreTestSupport.simpleCommandEngine();
+        CommandExecutor<TestConnection> executor = new CommandExecutor<>(
+                () -> {},
+                engine,
+                ownerExecutor,
+                ExecutorCoreTestSupport.simpleReplyWriterFactory(),
+                io,
+                new CommandExecutorConfig(4, 64, 8, 4, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        ExecutorCoreTestSupport.startExecutor(executor, ownerExecutor);
+
+        TestConnection connection = ExecutorCoreTestSupport.newConnection("c-1");
+        Assert.assertTrue(connection.markClosing());
+
+        TrackingExecutionRequest rejected = TrackingExecutionRequest.ofUtf8("PING");
+        Assert.assertEquals(CommandExecutor.SubmitRejectReason.CONNECTION_CLOSING, executor.trySubmit(connection, rejected));
+
+        ExecutionConnectionContext.ConnectionStatsSnapshot connectionStats = connection.context().statsSnapshot();
+        Assert.assertEquals(0, rejected.closeCalls());
+        Assert.assertEquals(0, ownerExecutor.pendingTasks());
+        Assert.assertEquals(0, connectionStats.pending());
+        Assert.assertEquals(0L, connectionStats.pendingBytes());
+        Assert.assertEquals(0L, connectionStats.commandsEnqueued());
+        Assert.assertEquals(0L, connectionStats.commandsExecuted());
+        Assert.assertEquals(1L, connectionStats.commandsRejected());
+        Assert.assertEquals(0L, connectionStats.commandsSkippedClosing());
+
+        CommandExecutor.StatsSnapshot stats = executor.statsSnapshot();
+        Assert.assertEquals(0L, stats.submitAccepted());
+        Assert.assertEquals(1L, stats.submitRejectedClosing());
+        Assert.assertEquals(0, stats.queuedTasks());
+        Assert.assertEquals(0L, stats.queuedBytes());
+        Assert.assertEquals(0L, stats.commandsSkippedClosing());
+
+        executor.close();
+        rejected.close();
+    }
+
+    @Test
     public void startWaitsForOwnerThreadBindingBeforeReturning() throws Exception {
         ExecutorService ownerExecutor = Executors.newSingleThreadExecutor();
         CountDownLatch bindStarted = new CountDownLatch(1);

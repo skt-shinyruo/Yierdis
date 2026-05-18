@@ -289,10 +289,11 @@ busy 可诊断性（排障）：
 
 - 当投递被拒绝时，server 会返回错误（`message` 以 `ERR busy <reason>` 开头；`reason` 用于人类排障）：
   - `not_running`：执行器未启动或正在关闭
+  - `connection_closing`：连接已进入 closing；该类拒绝只清理请求，不再额外写 busy 回复
   - `queue_full`：全局队列已满
   - `bytes_budget`：全局 queued-bytes 预算耗尽
   - `offer_failed`：入队失败（通常是竞态/关闭路径）
-- `STATS` 会输出对应计数器，便于定位 busy 的主因（例如 `submit_rejected_queue_full_total` 等）。
+- `STATS` 会输出对应计数器，便于定位 busy 的主因（例如 `submit_rejected_queue_full_total`、`submit_rejected_closing_total` 等）。
 
 ## Native Memory
 

@@ -96,7 +96,7 @@ ERR busy bytes_budget
 ERR busy not_running
 ```
 
-`STATS` 是排查入口。重点看 `queued_tasks`、`queued_bytes`、`submit_rejected_queue_full_total`、`submit_rejected_bytes_budget_total`、`backpressure_enter_total`、`backpressure_exit_total`，以及当前连接的 `conn_pending`、`conn_pending_bytes`、`conn_autoread_disabled_by_executor` 和 `conn_commands_rejected`。
+连接已经进入 closing 时，提交层会在预留 queue slot / bytes budget 前拒绝，计入 `submit_rejected_closing_total`；该路径不会再额外写 `ERR busy`。`STATS` 是排查入口。重点看 `queued_tasks`、`queued_bytes`、`submit_rejected_queue_full_total`、`submit_rejected_bytes_budget_total`、`submit_rejected_closing_total`、`backpressure_enter_total`、`backpressure_exit_total`，以及当前连接的 `conn_pending`、`conn_pending_bytes`、`conn_autoread_disabled_by_executor` 和 `conn_commands_rejected`。
 
 ## transaction 保护
 

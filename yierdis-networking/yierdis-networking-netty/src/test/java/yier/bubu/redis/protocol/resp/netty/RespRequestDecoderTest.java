@@ -97,7 +97,7 @@ public class RespRequestDecoderTest {
     }
 
     @Test
-    public void protocolErrorResyncsAtNextCommand() {
+    public void protocolErrorDropsPipelinedCommandsInSameRead() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(4, 16, 1024));
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(
@@ -106,8 +106,6 @@ public class RespRequestDecoderTest {
             )));
 
             Assert.assertTrue(ch.readInbound() instanceof RespProtocolError);
-            RespCommandRequest req = ch.readInbound();
-            Assert.assertArrayEquals(bytes("PING"), req.readOnlyArg(0));
             Assert.assertNull(ch.readInbound());
         } finally {
             ch.finishAndReleaseAll();
