@@ -1,231 +1,118 @@
 # Bytes And Fast Paths
 
-本文解释 Yierdis 里一组很容易被忽略、但实际上非常核心的基础抽象：
-
-- `BytesSource`
-- `BytesView`
-- `BytesSlice`
-- `BytesSink`
-- `DirectBytesSink`
-
-如果你第一次看到这些接口，最容易误解成“只是为了包装 `byte[]`”。实际上它们存在的价值远不止这一点。
+本文解释 Yierdis 为什么有一套独立于 Netty 和 DB 的 bytes 抽象，以及这些抽象如何减少无意义复制。
 
 ## 先记住一句话
 
-这套 bytes 抽象的目标不是“把 Java bytes 面向对象化”，而是：
+Yierdis 的 bytes 抽象不是为了把 `byte[]` 包一层对象，而是为了让 protocol、execution、DB、off-heap value 和 Netty write-back 共享一套 Netty-free contract；能流式写出时不强制 heap copy，必须 materialize 时又把复制边界写清楚。
 
-- 让 protocol、DB、off-heap 和 Netty 写出路径共享一套 Netty-free 接口
-- 在需要的时候又能保留 direct/off-heap fast-path
+## 为什么不是直接传 byte[]
 
-## 为什么需要单独一层 bytes 抽象
+直接传 `byte[]` 有两个问题。
 
-如果没有这层抽象，代码会很快滑向两种坏结果：
+第一，所有上层都会默认“我拥有这段数组”。这会让协议 decode、transaction replay、DB lookup、DB persistence 和 tests 混在同一种形状里，最后只能靠防御性 copy 保安全。
 
-第一种：
+第二，`byte[]` 表达不了 direct/off-heap source 或 Netty output buffer 的能力。即使下游可以按地址、按 slice 或按 sink 流式处理，上游也已经把数据收缩成 heap array。
 
-- protocol 和 DB 层都直接依赖 Netty `ByteBuf`
+Yierdis 选择中立 bytes 层：
 
-第二种：
+- lookup 用短生命周期只读 view，不要求 canonical heap key copy。
+- 写入值用 slice，把“读取”和“写出”能力同时交给 DB。
+- reply 用 sink，把协议编码和 Netty `ByteBuf` 解耦。
+- direct/off-heap 优化只在实现支持时启用，不污染 API 默认语义。
 
-- 所有路径都退化成 `byte[]`，为了安全和兼容不断复制
+## 核心接口
 
-Yierdis 选择的是中间路线：
+`BytesSource` 是最小随机访问只读接口，只要求 `getByte(index)` 和 `getBytes(index, dst, dstOff, len)`。它还可选暴露 `hasMemoryAddress()` / `memoryAddress()`，用于实现知道自己有稳定地址时提供 fast path。
 
-- 上层尽量依赖中立接口
-- 需要优化时，再由实现暴露更低层能力
+`BytesView` 在 `BytesSource` 上增加 `length()`，主要用于 key 等请求级 lookup 输入。接口注释明确要求它是短生命周期对象，不应被直接存入 DB。
 
-## 五个核心接口分别做什么
+`BytesSlice` 继承 `BytesView`，再增加 `writeTo(BytesSink out)`。它既能被随机读取，也能把自己流式写给 sink，是 string value、bulk reply 和 off-heap slice 的关键形状。
 
-### `BytesSource`
+`BytesSink` 是最小写接口，只承诺 `writeBytes(byte[], off, len)`。协议编码器、reply writer 和测试 sink 都可以依赖它。
 
-最底层的随机访问只读接口。
+`DirectBytesSink` 扩展 `BytesSink`，暴露 `ensureWritable(len)`、`writerIndex()`、`writerIndex(int)`、`hasMemoryAddress()` 和 `memoryAddress()`。只有需要 direct/off-heap fast path 的实现才依赖这些增强能力。
 
-它只承诺两件事：
+`NettyByteBufSink` 位于 Netty adapter 层，把 `ByteBuf` 包成 `DirectBytesSink`，并保留 `unwrap()`。上层仍看到 bytes contract；当下游确实是 direct `ByteBuf` 时，slice 实现可以利用 writer index 或 memory address。
 
-- `getByte(index)`
-- `getBytes(index, dst, dstOff, len)`
+`BulkStringSink` 是 storage API 里的协议无关 bulk string 输出端口，支持 `bulkString(byte[])`、`bulkString(byte[], off, len)`、`bulkString(BytesSlice)`、`bulkStringLongAscii(long)` 和 null bulk。list/hash/set/zset range 这类 DB 读路径用它向 reply 层流式发元素。
 
-并且可选地支持：
+## 协议层如何使用 bytes
 
-- `hasMemoryAddress()`
-- `memoryAddress()`
+RESP decode 后的协议对象是 `RespCommandRequest`。它内部保存 `byte[][] argv` 和 `retainedBytes`，提供两种构造：
 
-也就是说，它不仅能表示 heap bytes，也能表示拥有稳定内存地址的 off-heap/source。
+- `copyOf(List<byte[]>)`：复制输入，适合外部 list ownership 不明确的路径。
+- `wrapReadOnly(byte[][], retainedBytes)`：包装已经 owned 的 argv，调用方之后必须按只读约定处理。
 
-### `BytesView`
+Netty decoder 在 bulk/inline 命令完整后构造 `RespCommandRequest`，`RespCommandAdapter` 再把它转成 execution 层的 `ExecutionRequest`。这里的 heap materialization 是有意的 protocol adaptation snapshot：请求跨过 Netty decoder 生命周期后，需要一份稳定 argv 和 retained bytes，供 executor 排队、budget 和 transaction 逻辑使用。
 
-在 `BytesSource` 之上补了：
+reply 编码方向相反。`RespReplyWriter.bulkString(BytesSlice)` 先写 RESP bulk header，再调用 `BytesSlice.writeTo(out)` 把内容写入 `BytesSink`。当 `out` 是 `NettyByteBufSink` / `DirectBytesSink` 时，底层可以减少中间 `byte[]`。
 
-- `length()`
+## DB lookup 和写路径如何使用 bytes
 
-它适合表示：
+DB API 的很多 read ops 接受 `BytesView`，例如 `StringReadOps`、`TtlReadOps`、`KeyspaceReadOps`、`MemoryOps`。这样 lookup 可以直接读取请求级 view，不要求先生成 canonical heap key。
 
-- key lookup 输入
-- 短生命周期的只读字节视图
+`NativeKeyDirectory` 和 `YierdisDbKeyLifecycle` 通过 `BytesView` 做 key hash、equals 和 key handle lookup。只有新 key 持久化、SCAN 输出、snapshot 输出或显式 introspection 需要把 bytes 变成持久形状或返回形状时，才复制。
 
-源码注释已经写得很明确：
+写路径中，`StringWriteOps.set(...)`、`append(...)` 和 HLL 内部逻辑接收 `BytesSlice`。这让 command 层把 value 作为 slice 交给 DB，由 `StringRoot` 或对应 type root 决定写入 allocator-backed `STRING_BYTES`、collection payload、adapter-owned bytes 或必要 fallback。slice 的重点是延后复制决策，而不是承诺零拷贝持久化。
 
-- 它主要用于请求级 lookup 输入
-- 不应该被直接存进 DB
+集合读路径大量使用 `BulkStringSink`。`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE` 等可以逐项 emit 到 sink，避免先组装完整 `List<byte[]>` 再交给协议层。
 
-### `BytesSlice`
+## ReplyWriter 和 Netty 写回
 
-它是在 `BytesView` 基础上再加：
+execution 层使用 `ReplyWriterFactory` 为每条命令创建 `ReplyWriter`。Netty adapter 分配 `ByteBuf`，再用 `NettyByteBufSink` 包装给 RESP writer。
 
-- `writeTo(BytesSink out)`
+写回路径大致是：
 
-这让一段 bytes 不只可以“被读”，还可以“被流式写出”。
+```text
+CommandExecutorDrainLoop
+  -> ioAdapter.allocateOutput(...)
+  -> ReplyWriterFactory
+  -> RespReplyWriter
+  -> BytesSink / DirectBytesSink
+  -> NettyByteBufSink
+  -> ByteBuf
+  -> channel.write(...)
+```
 
-这正是 server reply fast-path 需要的能力。
+`ReplyWriter.bulkString(BytesSlice)` 和 `BulkStringSink.bulkString(BytesSlice)` 是关键入口。heap `byte[]` 仍然可用，但不是唯一形状；off-heap string、collection range 和 computed ASCII number 都可以按更合适的方式写出。
 
-### `BytesSink`
+## fast path 和 fallback
 
-最小写入接口：
+fast path 主要出现在这些地方：
 
-- `writeBytes(byte[], off, len)`
+- key lookup 只需要 `BytesView`，避免为了查询生成新 heap key。
+- `BytesSlice.writeTo(BytesSink)` 可以把 value 直接流式写出。
+- `DirectBytesSink` 暴露 writer cursor 和 memory address，支持 direct/off-heap aware 写入。
+- `NettyByteBufSink.unwrap()` 允许 adapter 边界在必要时使用 `ByteBuf` 能力。
+- `BulkStringSink` 让 collection range 边遍历边输出。
 
-它是最通用的输出口，协议编码器和写回路径都可以依赖它，而不必知道底层是不是 Netty。
+fallback 也同样重要。以下 heap materialization 是有意的：
 
-### `DirectBytesSink`
+- protocol adaptation snapshots：`RespCommandRequest` / `ExecutionRequest` 需要稳定 argv 跨过 decoder 生命周期和 executor queue。
+- transaction replay：事务队列需要保存可重放的 `ByteArrayExecutionRequest` / `ExecutionRecord`，不能引用短生命周期 frame。
+- explicit introspection：`SCAN`、snapshot、`MEMORY` / object 类输出需要构造返回值或诊断对象，不能把 native view 泄漏给调用方。
+- tests：测试经常用 heap arrays 和 recording sinks 断言内容，这是可读性和确定性的取舍。
+- unavoidable fallback paths：JSON/base64/escape、legacy collection internals、adapter-owned payload、短生命周期输入持久化、需要排序/聚合的结果，都可能必须复制。
 
-这是 `BytesSink` 的增强版本，额外暴露：
+判断一条路径是否合理，不是看它有没有复制，而是看复制是否发生在 ownership、lifetime 或格式转换真正需要的位置。
 
-- `ensureWritable(len)`
-- `writerIndex()`
-- `writerIndex(int)`
-- `hasMemoryAddress()`
-- `memoryAddress()`
+## 和 native memory 的关系
 
-这一步的意义是：
+bytes 抽象不是 native allocator。它只描述“如何读一段 bytes”和“如何把一段 bytes 写给 sink”。native object 的 lifetime、stable handle、pin、epoch、quarantine、`realloc` 和 active defrag 仍属于 allocator 文档，见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
-- 普通路径仍然只需要 `BytesSink`
-- 真正想走 direct/off-heap fast-path 的路径，可以检测并利用更强能力
+当前 allocator-backed facts 要分清：
 
-## 这套抽象在哪些地方最重要
+- `NativeKeyDirectory` 持久化 key bytes 为 allocator-backed `KEY_BYTES`。
+- `StringRoot` 持久化 string payload 为 allocator-backed `STRING_BYTES`。
+- entry metadata、collection root records 和部分 list quicklist metadata 是 allocator-backed objects。
+- collection payload internals 仍可能由 adapter 或 legacy FFM structures 拥有。
 
-### 1. DB 读路径里的 key lookup
+因此 `BytesView` / `BytesSlice` 可以帮助 native 和 heap 路径共享 API，但它们本身不保证数据 off-heap，也不保证零拷贝。它们保证的是短生命周期 view、流式写出和 adapter 边界清晰。
 
-很多 DB 接口不是收 `byte[]`，而是收 `BytesView`，例如：
+## 推荐源码和测试
 
-- `StringReadOps`
-- `TtlReadOps`
-- `MemoryOps`
-- `KeyspaceReadOps`
-
-这意味着：
-
-- lookup 不要求调用方一定先拷成新的 `byte[]`
-- key 可以以 view 的形式被读取和比较
-
-`YierdisDbKeyLifecycle`、`YierdisKeyspaceOps`、`YierdisTtlOps` 这一类代码都大量依赖 `BytesView`。
-
-### 2. string 写路径
-
-`StringWriteOps.set(...)` 和 `append(...)` 依赖的是：
-
-- `BytesSlice`
-
-这说明写入值时，系统不要求调用方必须先把内容变成一个持久化 heap 副本。
-
-更准确地说：
-
-- command 层把值作为 slice 交进来
-- DB 内核再决定是否复制、复制到哪里、是否走 off-heap
-
-### 3. reply 写回路径
-
-`ReplyWriter.bulkString(BytesSlice slice)` 是这套设计的另一个关键点。
-
-这让 server 在写回 bulk string 时，可以：
-
-- 不必先把所有数据组装成一个新的 heap `byte[]`
-- 而是尽量按 slice 流式写出
-
-### 4. protocol codec
-
-`RespReplyWriter.bulkString(BytesSlice slice)` 会利用这套抽象做：
-
-- RESP bulk string 长度 header
-- `BytesSlice.writeTo(out)` 流式写出
-- 通过 `DirectBytesSink` / `NettyByteBufSink` 保持 fast-path
-
-所以 bytes 抽象不仅存在于 DB，也直接参与协议编码。
-
-## `NettyByteBufSink` 为什么关键
-
-`NettyByteBufSink` 是 bytes 抽象接上 Netty 的桥。
-
-它把 `ByteBuf` 包成一个 `DirectBytesSink`，让上层仍然只看到：
-
-- `BytesSink`
-- `DirectBytesSink`
-
-而不是直接看到 Netty。
-
-这样做有两个结果：
-
-1. `ReplyWriterFactory` 和协议编码器可以保持 Netty-free 接口风格
-2. 当下游真的是 `ByteBuf` 时，又能通过 `hasMemoryAddress()/memoryAddress()` 等能力走 fast-path
-
-这也是为什么 server-app 的 `NettyExecutionIoAdapter` 会把 `ByteBuf` 包成：
-
-- `new NettyByteBufSink(out)`
-
-## fast-path 到底体现在哪里
-
-这套设计里最值得注意的不是“接口名”，而是它让哪些路径有机会避免额外复制。
-
-### 情况 1：只是 lookup
-
-如果只是拿 key 做读取、TTL、memory introspection：
-
-- `BytesView` 就足够了
-- 可以避免无意义的中间复制
-
-### 情况 2：reply bulk string 无需 escape
-
-如果 reply 的内容是合法 UTF-8，且不需要 JSON escape：
-
-- `BytesSlice.writeTo(out)` 可以直接写给 sink
-
-这时协议层不必先拼一个完整临时字符串副本。
-
-### 情况 3：下游是 direct / off-heap sink
-
-如果 sink 还是 `DirectBytesSink`，并且底层有稳定内存地址：
-
-- slice 实现就有机会进一步走 address-aware fast-path
-
-### 情况 4：必须退化
-
-并不是所有路径都能零拷贝。
-
-例如：
-
-- 需要 JSON escape
-- 需要 base64
-- 需要把短生命周期输入持久化进 DB
-
-这些情况下仍然会复制，但复制发生的位置和时机被控制得更清楚。
-
-## 这套抽象和 off-heap 文档的关系
-
-本文解释的是：
-
-- 接口边界和 fast-path 结构
-
-而真正讨论“哪些路径发生复制、哪些路径 stay off-heap”的文档仍然是：
-
-- [`offheap-copy-behavior.md`](./offheap-copy-behavior.md)
-
-可以这样理解两篇的关系：
-
-- 本文解释“为什么有 `BytesView/BytesSlice/BytesSink`”
-- `offheap-copy-behavior.md` 解释“具体哪条路径会拷贝”
-
-## 在源码里该先看哪里
-
-推荐顺序：
+推荐源码顺序：
 
 1. `BytesSource`
 2. `BytesView`
@@ -233,30 +120,19 @@ Yierdis 选择的是中间路线：
 4. `BytesSink`
 5. `DirectBytesSink`
 6. `NettyByteBufSink`
+7. `RespCommandRequest`
+8. `RespCommandAdapter`
+9. `RespReplyWriter`
+10. `BulkStringSink`
+11. `YierdisDbKeyLifecycle`
+12. `StringRoot` 和 collection type roots
 
-然后再看这几个消费方：
+推荐测试：
 
-- `YierdisDbKeyLifecycle`
-- `YierdisStringOps`
-- `RespReplyWriter`
-- `NettyExecutionIoAdapter`
-
-## 最值得看的测试
-
-- `RespReplyWriterTest`
-  看 `BytesSlice` 在 reply 写回里的 chunked/fast-path 行为
-- `OffHeapContractsSmokeTest`
-  看 `OffHeapSlice` 如何建立在中立 `BytesSlice` 之上
-- `OffHeapBytesViewTtlRegressionTest`
-  看 `BytesView` 在 TTL 路径里的实际意义
-- `NativeKeyDirectoryTest`
-  看 native key bytes、`KeyHandle` 和 `EntryHandle` 如何参与当前主索引路径
-
-## 一句话总结
-
-Yierdis 的 bytes 抽象层本质上是在做一件事：
-
-- 上层逻辑尽量不依赖 Netty
-- 下层实现又不放弃 direct/off-heap fast-path
-
-它看起来小，但其实正好卡在 protocol、DB、reply 写回和 off-heap 之间，是整套系统非常关键的基础设施。
+- `RespReplyWriterTest`：`BytesSlice` reply 写回和 chunked/fast-path 行为。
+- `RespRequestDecoderTest`：`RespCommandRequest` decode、retained bytes 和 adapter 边界。
+- `ExecutionRequestContractTest`：heap snapshot request contract。
+- `OffHeapContractsSmokeTest`：off-heap slice 如何挂在中立 bytes API 上。
+- `OffHeapBytesViewTtlRegressionTest`：`BytesView` 在 TTL lookup 路径中的意义。
+- `OffHeapCollectionReadStreamingTest`：collection 通过 `BulkStringSink` 流式输出。
+- `NativeKeyDirectoryTest`：native key bytes、`KeyHandle` 和 `EntryHandle` 的 lookup/storage contract。

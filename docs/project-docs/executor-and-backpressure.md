@@ -1,428 +1,184 @@
 # Executor And Backpressure
 
-本文专门解释 Yierdis 的执行器和背压机制。
-
-如果你已经看过：
-
-- [`request-execution-flow.md`](./request-execution-flow.md)
-- [`main-path-walkthrough.md`](./main-path-walkthrough.md)
-- [`configuration-and-operations.md`](./configuration-and-operations.md)
-
-那么这篇文档会把“请求如何入队、如何被调度、什么时候拒绝、什么时候关闭 `autoRead`、什么时候恢复，以及慢客户端输出缓冲怎么触发传输层背压”这条内部机制讲细。
+本文解释命令为什么不直接在 I/O 线程里执行，以及 executor 如何用队列、预算、调度和 Netty 读写控制保护系统。
 
 ## 先记住一句话
 
-Yierdis 不是“收到请求就立刻执行”的 server。
+Yierdis 把“收包”和“执行命令”分开：Netty I/O 线程只解析并提交请求，`CommandExecutor` 在 owner executor 线程里串行执行 DB 访问；队列容量、queued bytes、连接 pending、全局 backlog 水位、Netty output writability 和 `autoRead` 一起形成背压。
 
-它的核心模型是：
+## 主要对象
 
-![Command executor and backpressure](./assets/executor-backpressure.svg)
+执行器链路的核心对象是：
 
-- I/O 线程负责收包和提交
-- command executor 线程负责串行执行
-- backlog budget 和 backpressure 负责防止系统无界积压
-- Netty outbound buffer 也会参与背压，防止慢读客户端无限堆积待写数据
+- `CommandExecutor`：总装配层，持有 budget、task queue、submitter、drain loop、execution support 和 backpressure controller。
+- `CommandExecutorSubmitter`：提交入口，负责 fail-fast reject、预算 reserve、连接 pending 统计和调度 drain。
+- `ExecutorBacklogBudget`：全局 backlog 预算，限制 queue capacity 和 queued bytes，并给全局背压提供高低水位。
+- `ExecutorTaskQueue`：调度队列，支持 `GLOBAL` 和 `FAIR`。
+- `CommandExecutorDrainLoop`：cooperative drain loop，真正 poll task 并执行命令。
+- `CommandExecutorExecutionSupport`：把 executor 任务接到 `CommandExecutionEngine`、`ReplyWriterFactory` 和 I/O adapter。
+- `ExecutorBackpressureController`：统一执行 `autoRead` disable/enable 和 global recovery。
+- `ExecutionConnectionContext`：每个连接的 executor 状态，包括 pending count、pending bytes、closing、fair queue state 和统计。
+- `NettyExecutionConnection`：Netty channel 到 executor connection 的 adapter，挂载 `EngineSession` 和 `ExecutionConnectionContext`。
 
-## 主角有哪些
+Netty 侧还有 `YierdisFastCommandHandler` 和 `YierdisServerChannelInitializer.WriteBufferBackpressureHandler`：前者把 decoded request 交给 executor，后者把 channel writability 变化反馈给 executor。
 
-这条机制里的核心对象有 9 个：
+## 提交路径
+
+请求提交主线是：
 
 ```text
-YierdisServerChannelInitializer.WriteBufferBackpressureHandler
-YierdisFastCommandHandler
-CommandExecutor
-  -> CommandExecutorSubmitter
-  -> ExecutorBacklogBudget
-  -> ExecutorTaskQueue
-  -> CommandExecutorDrainLoop
-  -> CommandExecutorExecutionSupport
-  -> ExecutorBackpressureController
+RespRequestDecoder
+  -> RespCommandRequest
+  -> RespCommandAdapter / ExecutionRequest
+  -> YierdisFastCommandHandler.channelRead0(...)
+  -> CommandExecutor.trySubmit(connection, request)
+  -> CommandExecutorSubmitter.trySubmit(...)
 ```
 
-另外还有一个经常被忽略但很关键的连接态根对象：
+`CommandExecutorSubmitter` 的顺序很重要：
 
-- `NettyExecutionConnection`
+1. 检查 executor 是否 running。
+2. 根据全局 backlog、连接 pending count、连接 pending bytes 必要时关闭该连接 `autoRead`。
+3. 调用 `ExecutorBacklogBudget.tryReserveSlot()` 预留 queue slot。
+4. 从 `ExecutionRequest.retainedBytes()` 计算 retained bytes。
+5. 调用 `tryReserveQueuedBytes(retainedBytes)` 预留 queued bytes。
+6. 向 `ExecutorTaskQueue.offer(...)` 投递 `CommandExecutorTask`。
+7. 在 `ExecutionConnectionContext.recordCommandEnqueued(...)` 增加 pending 和 pendingBytes。
+8. 再次评估连接和全局背压，调度 drain loop。
 
-它承载：
+失败时不会默默丢请求。`trySubmit(...)` 返回 reject reason，Netty handler 回 `ERR busy <reason>`，当前 reason 包括 `not_running`、`queue_full`、`bytes_budget`、`offer_failed`。
 
-- session
-- pending / pendingBytes
-- closing 标记
-- backpressure 统计
-- fair scheduling 所需的 queue state
+## backlog budget
 
-## `CommandExecutor` 是总控台
+`ExecutorBacklogBudget` 是全局预算，不按连接拆分。它维护：
 
-`CommandExecutor` 自己并不把所有逻辑写死在一个方法里，而是像总控台一样把几个子组件接起来：
+- `queueCapacity`：queued task 硬上限。
+- `queueMaxBytes`：queued retained bytes 硬上限，`0` 表示不启用 bytes cap。
+- `queuedTasks`：当前已 reserve 但未释放的任务数。
+- `queuedBytes`：当前已 reserve 的 retained bytes。
 
-- `ExecutorBacklogBudget`
-- `ExecutorTaskQueue`
-- `ExecutorBackpressureController`
-- `CommandExecutorSubmitter`
-- `CommandExecutorDrainLoop`
-- `CommandExecutorExecutionSupport`
+提交时先 reserve slot，再 reserve queued bytes，offer 失败或后续异常会回滚已 reserve 的预算。命令执行完成后，`CommandExecutorExecutionSupport` 释放 slot 和 queued bytes，并减少连接 pending 状态。
 
-所以理解它时，最好不要把它看成“一个大执行函数”，而是看成：
+全局背压水位由 budget 根据硬上限推导：
 
-- 负责装配提交、调度、回包、预算和背压的一层协调器
+- `globalBackpressureHighWatermark`：默认约为 queue capacity 的 75%。
+- `globalBackpressureLowWatermark`：默认约为 high 的一半。
+- `globalBackpressureBytesHighWatermark`：启用 `queueMaxBytes` 时默认约为 bytes cap 的 75%。
+- `globalBackpressureBytesLowWatermark`：默认约为 bytes high 的一半。
 
-## 请求是怎么被提交进来的
+高低水位提供 hysteresis，避免 `autoRead` 在边界附近频繁开关。
 
-提交入口在：
+## GLOBAL 和 FAIR 调度
 
-- `YierdisFastCommandHandler.channelRead0(...)`
+`ExecutorTaskQueue` 只负责排队和 poll，不理解命令语义。
 
-这层只做一件事：
+`GLOBAL` 策略使用单个 `ArrayBlockingQueue`，所有连接共享 FIFO backlog。这条路径简单，适合把 executor 看成一个全局串行队列。
 
-- 把 `ExecutionRequest` 交给 `CommandExecutor.trySubmit(...)`
+`FAIR` 策略给每个连接一条本地 queue，并用 `activeKeys` 做 round-robin。`ExecutionConnectionContext.queueState()` 保存该连接的 local queue 和 `scheduled` flag；`scheduled` 防止同一连接被重复放进 active set。生产 key 是 `NettyExecutionConnection`，测试可以用轻量 key state provider。
 
-如果提交失败，handler 立刻回：
+`FAIR` 的目标不是让命令并发执行，而是在多连接竞争时避免某个连接长期霸占 drain loop。
 
-- `ERR busy queue_full`
-- `ERR busy bytes_budget`
-- `ERR busy not_running`
-- `ERR busy offer_failed`
+## drain loop
 
-也就是说，拒绝策略不是“默默丢请求”，而是 fail-fast。
+提交成功只代表任务进队列。真正执行发生在 `CommandExecutorDrainLoop`。
 
-## `CommandExecutorSubmitter` 真正在做什么
-
-提交逻辑主要在 `CommandExecutorSubmitter.trySubmit(...)`。
-
-这条路径可以记成：
-
-1. 检查 executor 是否仍在运行
-2. 读取当前连接的 `pending` 和 `pendingBytes`
-3. 必要时先触发连接级 `autoRead` 关闭
-4. 尝试向全局 backlog 预留一个 slot
-5. 计算 `retainedBytes`
-6. 尝试预留 queued-bytes 预算
-7. 向 `ExecutorTaskQueue` 投递任务
-8. 更新连接统计和背压状态
-9. 调度 drain loop
-
-### 为什么要先 reserve 再 offer
-
-顺序不是随便写的。
-
-如果不先 reserve：
-
-- queue slot 和 bytes 预算就无法形成一致约束
-- 失败时也很难知道该回滚哪一部分状态
-
-正确顺序必须是：
-
-- 先试图占预算
-- 成功后再把任务真正放进队列
-- 任一阶段失败都回滚
-
-## backlog budget 负责什么
-
-`ExecutorBacklogBudget` 负责全局预算，不区分连接。
-
-它维护两种硬约束：
-
-- 任务条数
-- queued bytes
-
-### 它内部维护哪些状态
-
-- `queuedTasks`
-- `queuedBytes`
-
-以及四个由 capacity/maxBytes 推导出来的全局背压水位：
-
-- `globalBackpressureHighWatermark`
-- `globalBackpressureLowWatermark`
-- `globalBackpressureBytesHighWatermark`
-- `globalBackpressureBytesLowWatermark`
-
-### 为什么这里也有高低水位
-
-因为全局背压和单连接背压一样，都需要滞回。
-
-如果只用一个阈值：
-
-- 一旦稍微高于阈值就关闭
-- 稍微低于阈值又开启
-
-系统会很容易在边界附近抖动。
-
-## 调度策略：`GLOBAL` 和 `FAIR`
-
-`ExecutorTaskQueue` 是“只管排队、不管语义”的调度组件。
-
-当前有两种策略：
-
-### `GLOBAL`
-
-- 单个全局 FIFO 队列
-
-特点：
-
-- 简单
-- 更接近“所有连接共享一个全局 backlog”
-
-### `FAIR`
-
-- 每个连接一个本地队列
-- 活跃连接放进 `activeKeys`
-- drain 时 round-robin 轮转
-
-特点：
-
-- 避免单连接长期霸占执行器
-- 更适合多连接竞争下的公平性
-
-### `NettyExecutionConnection` 在这里为什么重要
-
-因为 fair scheduling 需要每个连接都带一份调度状态。
-
-这份状态不放在 protocol DTO，也不放在 session 本体，而是放在：
-
-- `NettyExecutionConnection.context().queueState()`
-
-这也是 `NettyExecutionConnection` 作为“连接态根对象”的一个关键作用。
-
-`ExecutorTaskQueue` 通过两个小接口拿到这份状态：
-
-- `ExecutorKeyState<T>`
-  保存 per-key local queue 和 `scheduled` flag。queue 里是该连接自己的待执行 task；
-  `scheduled` 防止同一个连接被重复放进 `activeKeys`。
-- `ExecutorKeyStateProvider<K, T>`
-  根据调度 key 取得或创建 state。生产路径的 key 是 `NettyExecutionConnection`，状态最终挂在
-  `ExecutionConnectionContext` 上；测试可以用 `constant(...)` 提供轻量 state。
-
-这层接口让 FAIR 算法保持 transport-neutral。它只知道“某个 key 有本地队列和是否已被调度”，
-不知道 Netty channel、session、DB index 或命令语义。
-
-## `CommandExecutorDrainLoop` 是真正执行命令的地方
-
-提交成功并不代表命令已经执行。真正执行发生在：
-
-- `CommandExecutorDrainLoop`
-
-### drain tick 做什么
-
-每次 tick 会不断 poll task，并在下面两个预算之一打满时停下：
+每次 drain tick 会不断 poll task，直到队列暂时为空，或者命中两个 cooperative budget 之一：
 
 - `maxDrainCommands`
 - `drainTimeLimitNanos`
 
-这意味着：
+单个 task 执行的大致顺序是：
 
-- drain 不是“把队列一次性跑空”
-- 它是 cooperative 的
+1. 检查连接是否 active / closing。
+2. 为 reply 分配 output buffer。
+3. 创建 `ReplyWriter`。
+4. 调用 `CommandExecutorExecutionSupport.execute(...)`。
+5. 将 reply 写入 channel。
+6. 如需 close-after-reply，flush 后关闭连接。
+7. finally 中释放 request、backlog budget 和 connection pending 状态。
 
-这样做的目的，是让同一 executor 上的其他任务也有机会被调度，例如：
+drain loop 使用 batched flush：单条命令通常只 `write`，tick 结束时统一 flush，减少高频命令下的 flush 次数。
 
-- maintenance
-- 其他排队命令
+## 执行支持和回包写出
 
-### `executeOne(...)` 做什么
+`CommandExecutorExecutionSupport` 是 executor 与 command engine 的连接层。它负责：
 
-单个任务执行时，大致顺序是：
+- 通过 I/O adapter 检查 channel active/writable、分配 output、write/flush/close。
+- 通过 `ReplyWriterFactory` 创建 `ReplyWriter`。
+- 从 `ExecutionConnection` 获取 `EngineSession`。
+- 调用 `CommandExecutionEngine.execute(session, request, writer)`。
+- 命令结束后释放 `ExecutorBacklogBudget` 中的 slot/queued bytes。
+- 更新 `ExecutionConnectionContext.recordCommandFinished(...)`。
+- 在连接 pending、本地 bytes 和全局 backlog 都恢复后尝试恢复 `autoRead`。
 
-1. 检查 channel 是否 active / closing
-2. 为这条命令分配 output buffer
-3. 创建 `ReplyWriter`
-4. 调用 `executionSupport.execute(...)`
-5. 把 reply 写入 channel
-6. 如果需要 `close-after-reply`，flush 后关连接
-7. 最终释放 request 并归还预算
+`NettyExecutionConnection` 把 Netty `Channel`、`EngineSession` 和 `ExecutionConnectionContext` 绑在一起。事务、连接统计和 close-after-reply 都通过这个 connection root 传递，executor core 因此不需要直接依赖 Netty class。
 
-### 为什么最后统一 flush
+## 背压来源
 
-drain loop 使用了 `NettyReplyFlushBatch` 做 flush coalescing：
+背压有四类来源。
 
-- 单条命令只 `write`
-- tick 结束时统一 `flushAll()`
+第一类是 queue capacity。`queuedTasks >= queueCapacity` 时提交失败为 `queue_full`，并关闭当前连接 `autoRead`。
 
-这让执行器在高频命令下减少 flush 次数。
+第二类是 queued bytes。`queueMaxBytes > 0` 且 reserve 后会超过上限时，提交失败为 `bytes_budget`，并关闭当前连接 `autoRead`。
 
-## `CommandExecutorExecutionSupport` 为什么存在
+第三类是 per-connection pending 状态。`ExecutionConnectionContext.pending()` 达到 `backpressureHighWatermark`，或 `pendingBytes()` 达到 `backpressureBytesHighWatermark`，该连接会被 executor 关闭 `autoRead`；恢复需要 pending 回落到 `backpressureLowWatermark`，pending bytes 回落到 `backpressureBytesLowWatermark`。
 
-这个类的职责是把“执行器视角”和“engine / command 层视角”接起来。
+第四类是 Netty output writability。server 配置 `client-output-buffer-limit-bytes` 后，Netty channel 有 `WriteBufferWaterMark`。channel 变为不可写时，`WriteBufferBackpressureHandler` 调用 `CommandExecutor.onTransportUnwritable(...)`，executor 关闭该连接 `autoRead`；持续不可写超过 `client-output-buffer-over-limit-millis` 时，server 会关闭慢客户端。channel 恢复可写时，`onTransportWritable(...)` 调回 owner executor，由 execution support 统一判断是否恢复输入。
 
-它负责：
+这四类背压最终都收敛到 `ExecutorBackpressureController.disableAutoRead(...)`，避免不同路径各自操作 Netty `autoRead`。
 
-- 通过 transport adapter 创建 `ReplyWriter`
-- 从 connection 上取 `EngineSession`
-- 调用 `CommandExecutionEngine.execute(...)`
-- 在命令结束后归还 backlog 预算
-- 在条件满足时恢复 `autoRead`
+## global recovery
 
-也就是说：
+`ExecutorBackpressureController` 记录哪些连接是被 executor 关闭输入的。全局 backlog 恢复到低水位后，它不会无条件打开所有连接，而是做 best-effort recovery：
 
-- drain loop 负责调度和生命周期
-- execution support 负责把一次执行真正落成“命令 + 回包”
+1. 遍历 `keysWithAutoReadDisabled`。
+2. 跳过 inactive 或 closing 连接。
+3. 检查该连接自身 pending count 是否低于 low watermark。
+4. 检查 pending bytes 是否低于 bytes low watermark。
+5. 检查 transport 是否 writable。
+6. 条件全部满足才 clear executor-disabled flag 并 enable `autoRead`。
 
-## 背压是怎么工作的
+因此 global recovery 是“全局压力恢复 + 连接本地压力恢复 + Netty 可写”三者共同决定。
 
-Yierdis 的背压不是只有一种，而是四类因素一起作用。
+## maintenance task
 
-### 1. 单连接 pending 条数
+`CommandExecutor.executeMaintenance(...)` 把 maintenance task 投递到同一个 owner executor。这样 expired cleanup、maxmemory enforcement 和 runtime maintenance 不会绕过 DB owner-thread 约束。
 
-当连接自己的：
+server 侧的 task 通常来自 `YierdisInstanceMaintenance`，它只委托 `YierdisInstanceRuntimeAccess.maintenanceTick()`。bootstrap 决定什么时候调度 tick，runtime 决定 tick 做什么，DB 仍只在 owner thread 上被访问。
 
-- `pending >= backpressureHighWatermark`
+## 统计和观测
 
-就会尝试关闭该连接的 `autoRead`。
+executor 热路径用 `LongAdder` 和 connection context 记录观测值：
 
-恢复条件则是：
+- submit accepted/rejected：`submitAccepted`、`submitRejectedQueueFull`、`submitRejectedBytesBudget`、`submitRejectedNotRunning`、`submitRejectedOfferFailed`
+- 执行结果：`commandsExecuted`、`commandsSkippedClosing`、`closeAfterReply`
+- backlog：`queuedTasks`、`queuedBytes`
+- 背压：`channelsAutoReadDisabled`、`backpressureEnter`、`backpressureExit`
+- drain budget：`drainLimitedByMaxCommands`、`drainLimitedByTimeBudget`
+- connection stats：pending、pendingBytes、closing、inputDisabledByExecutor、commandsEnqueued、commandsRejected
 
-- `pending <= backpressureLowWatermark`
+这些数据进入 `CommandExecutor.StatsSnapshot`、`ExecutionConnectionContext.ConnectionStatsSnapshot`，再被 `STATS` / `INFO yierdis` 等观测命令使用。
 
-### 2. 单连接 pending bytes
+## 推荐源码和测试
 
-如果开启了 bytes 水位：
-
-- `pendingBytes >= backpressureBytesHighWatermark`
-
-也会触发 `autoRead` 关闭。
-
-恢复条件则是：
-
-- `pendingBytes <= backpressureBytesLowWatermark`
-
-### 3. 全局 backlog 高水位
-
-如果 `ExecutorBacklogBudget` 判断：
-
-- 全局 queued tasks 或 queued bytes 已经达到高水位
-
-也会触发更广义的 backpressure，并在预算恢复后做 global recovery。
-
-### 4. Netty 输出缓冲不可写
-
-如果 `--client-output-buffer-limit-bytes` 大于 `0`，`YierdisServerChannelInitializer` 会设置 Netty `WriteBufferWaterMark`。当 channel 变成不可写时：
-
-- `WriteBufferBackpressureHandler` 调用 `executor.onTransportUnwritable(...)`
-- 连接会进入传输层背压，避免继续读入更多请求
-- 如果 channel 持续不可写超过 `--client-output-buffer-over-limit-millis`，server 会关闭这个慢客户端
-
-当 channel 恢复可写时，handler 会取消慢客户端关闭任务，并交给 executor 重新评估是否可以恢复 `autoRead`。这条路径和 executor pending/backlog 背压共享恢复判断，不绕开连接本地状态。
-
-## `ExecutorBackpressureController` 负责什么
-
-这个类不是去决定“什么时候该背压”，而是负责：
-
-- 记录哪些连接是被 executor 关掉 `autoRead` 的
-- 封装 enable/disable 的统一动作
-- 在全局压力恢复后做 best-effort 扫描恢复
-
-这是一个重要分工：
-
-- submitter / executionSupport 决定何时进入或退出背压
-- controller 负责把这些决策转成一致动作
-
-### 它为什么是 Netty-free 的
-
-因为它依赖的是接口：
-
-- `ExecutorBackpressureIo`
-- `ExecutorBackpressureRuntime`
-- `ExecutorBackpressureObserver`
-
-真正的 Netty 行为由 `CommandExecutor` 在装配时提供。
-
-这样做的好处是：
-
-- 算法和 I/O 副作用解耦
-- 核心控制逻辑更容易测试和复用
-
-### global recovery 是怎么做的
-
-当全局 backlog 恢复到低水位以下，controller 会：
-
-1. 遍历 `keysWithAutoReadDisabled`
-2. 跳过 inactive 或 closing 连接
-3. 检查该连接自身的 pending 和 pendingBytes 是否也已回落
-4. 满足条件才重新启用 `autoRead`
-
-这说明 global recovery 不是“预算恢复了就全部放开”，而是：
-
-- 全局条件和连接本地条件都要满足
-
-## maintenance 为什么也走执行器
-
-`CommandExecutor.executeMaintenance(...)` 会把 maintenance task 提交到同一个 executor 上执行。
-
-这意味着：
-
-- cleanup / maxmemory enforcement 不会绕过 owner thread
-- 不会额外引入第二条直接操作 DB 的线程
-
-这和 DB 的 owner-thread 约束是严格一致的。
-
-server 侧传入的 maintenance task 通常来自 `YierdisInstanceMaintenance`。它是 runtime 层的
-Netty-free wrapper，只做一件事：把一次 tick 委托给 `YierdisInstanceRuntimeAccess.maintenanceTick()`。
-这样 bootstrap 只负责“什么时候调度 tick”，过期清理和 maxmemory enforcement 的策略仍留在 runtime
-模块里；embedded 用户也可以复用同一个入口，但必须保证 instance 已经绑定到当前 owner thread。
-
-## 统计和观测从哪来
-
-执行器热路径维护了大量 `LongAdder` 计数器，例如：
-
-- `submitAccepted`
-- `submitRejectedQueueFull`
-- `submitRejectedBytesBudget`
-- `commandsExecuted`
-- `commandsSkippedClosing`
-- `backpressureEnter`
-- `backpressureExit`
-- `drainLimitedByMaxCommands`
-- `drainLimitedByTimeBudget`
-
-连接本地统计则放在 `NettyExecutionConnection` 里。
-
-最终这些会被：
-
-- `STATS`
-- `INFO yierdis`
-
-暴露出来。
-
-## 对照源码时推荐看的顺序
+推荐源码顺序：
 
 1. `CommandExecutor`
-   看总装和参数校验
 2. `CommandExecutorSubmitter`
-   看请求如何进入系统
 3. `ExecutorBacklogBudget`
-   看全局预算和水位
 4. `ExecutorTaskQueue`
-   看 GLOBAL/FAIR 调度
 5. `CommandExecutorDrainLoop`
-   看 cooperative drain
 6. `CommandExecutorExecutionSupport`
-   看命令执行和预算释放
 7. `ExecutorBackpressureController`
-   看 autoRead enter/exit/global recovery
-8. `YierdisServerChannelInitializer`
-   看 Netty write buffer watermark、慢客户端关闭和 idle timeout
+8. `ExecutionConnectionContext`
 9. `NettyExecutionConnection`
-   看连接级统计和调度状态
+10. `YierdisServerChannelInitializer`
 
-## 最值得看的测试
+推荐测试：
 
-- `CommandExecutorTest`
-  看执行器主流程
-- `CommandExecutorBackpressureTest`
-  看 `queue_full`、autoRead enter/exit 和 global recovery
-- `CommandExecutorFairSchedulingTest`
-  看 fair scheduling 行为
-- `YierdisServerBootstrapCommandWiringTest`
-  看 runtime config 如何把这些机制接进 server，包括 output buffer watermark 和 idle timeout
-
-## 一句话总结
-
-Yierdis 的执行器不是一个“单线程 while-loop”，而是：
-
-- 用 submitter 做 fail-fast 提交
-- 用 budget 做全局约束
-- 用 task queue 做调度
-- 用 drain loop 做 cooperative 执行
-- 用 backpressure controller 做连接级和全局恢复
-
-这几层协作起来，才让它既保留了 Redis 风格单线程语义，又不会在压力下无界积压。
+- `CommandExecutorTest`：执行器主流程。
+- `CommandExecutorBackpressureTest`：queue full、bytes budget、`autoRead` enter/exit 和 global recovery。
+- `CommandExecutorFairSchedulingTest`：`GLOBAL` / `FAIR` 调度差异。
+- `ExecutionConnectionContextTest`：连接 pending、pending bytes 和状态统计。
+- `NettyExecutionAdapterIntegrationTest`：Netty adapter 到 executor request/reply 的边界。
+- `YierdisServerBootstrapCommandWiringTest`：server 配置如何接入 output buffer watermark、idle timeout 和 executor。
