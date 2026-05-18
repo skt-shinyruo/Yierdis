@@ -3,10 +3,9 @@ package yier.bubu.redis.protocol.resp.netty;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ByteToMessageDecoder;
+import yier.bubu.redis.protocol.resp.InlineCommandParser;
 import yier.bubu.redis.protocol.resp.RespCommandRequest;
 
-import java.io.ByteArrayOutputStream;
-import java.util.ArrayList;
 import java.util.List;
 
 public final class RespRequestDecoder extends ByteToMessageDecoder {
@@ -158,16 +157,14 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
         }
 
         try {
-            byte[][] argv = parseInlineArgs(in, lineStart, lineEnd);
-            if (maxArgs > 0 && argv.length > maxArgs) {
+            byte[] line = new byte[lineEnd - lineStart];
+            in.getBytes(lineStart, line);
+            InlineCommandParser.Decoded decoded = InlineCommandParser.parseUnlimited(line, 0, line.length);
+            if (maxArgs > 0 && decoded.argc() > maxArgs) {
                 emitProtocolError(out, "ERR Protocol error: too many arguments", true);
                 return ParseResult.ERROR;
             }
-            int retainedBytes = 0;
-            for (byte[] arg : argv) {
-                retainedBytes = saturatedAdd(retainedBytes, arg.length);
-            }
-            out.add(RespCommandRequest.wrapReadOnly(argv, retainedBytes));
+            out.add(RespCommandRequest.wrapReadOnly(decoded.copyArgs(), decoded.retainedBytes()));
             return ParseResult.EMITTED;
         } catch (IllegalArgumentException e) {
             emitProtocolError(out, "ERR Protocol error: invalid inline command", true);
@@ -265,65 +262,6 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
             }
         }
         return true;
-    }
-
-    private static byte[][] parseInlineArgs(ByteBuf in, int start, int endExclusive) {
-        ArrayList<byte[]> args = new ArrayList<>();
-        int i = start;
-        while (i < endExclusive) {
-            while (i < endExclusive && isWhitespace(in.getByte(i))) {
-                i++;
-            }
-            if (i >= endExclusive) {
-                break;
-            }
-
-            ByteArrayOutputStream arg = new ByteArrayOutputStream();
-            byte quote = 0;
-            if (in.getByte(i) == '"' || in.getByte(i) == '\'') {
-                quote = in.getByte(i++);
-            }
-
-            while (i < endExclusive) {
-                byte ch = in.getByte(i++);
-                if (quote == 0 && isWhitespace(ch)) {
-                    break;
-                }
-                if (quote != 0 && ch == quote) {
-                    if (i < endExclusive && !isWhitespace(in.getByte(i))) {
-                        throw new IllegalArgumentException("inline quote must end token");
-                    }
-                    break;
-                }
-                if (ch == '\\' && quote != '\'') {
-                    if (i >= endExclusive) {
-                        throw new IllegalArgumentException("unterminated escape");
-                    }
-                    ch = decodeEscape(in.getByte(i++));
-                }
-                arg.write(ch);
-            }
-
-            if (quote != 0) {
-                int prev = i - 1;
-                if (prev < start || in.getByte(prev) != quote) {
-                    throw new IllegalArgumentException("unterminated quote");
-                }
-            }
-            args.add(arg.toByteArray());
-        }
-        return args.toArray(new byte[0][]);
-    }
-
-    private static byte decodeEscape(byte ch) {
-        return switch (ch) {
-            case 'n' -> (byte) '\n';
-            case 'r' -> (byte) '\r';
-            case 't' -> (byte) '\t';
-            case 'b' -> (byte) '\b';
-            case 'a' -> 7;
-            default -> ch;
-        };
     }
 
     private static boolean isWhitespace(byte ch) {

@@ -42,7 +42,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 
 ## InlineCommandParser
 
-`InlineCommandParser` 是 Redis `sdssplitargs` 风格的 inline command parser，不是简单 `split(" ")`。
+`InlineCommandParser` 是 Redis `sdssplitargs` 风格的 inline command parser，不是简单 `split(" ")`。实现位于 `yierdis-networking-resp`，CLI REPL 和服务端 inline command 解码共用同一套规则。
 
 它支持：
 
@@ -53,7 +53,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 - 双引号内 `\xHH` 十六进制字节。
 - `maxArgs` 上限，超出时报 `Protocol error: array length too large`。
 
-`parse(...)` 返回 `Decoded`，其中保存一块 decoded byte buffer，以及每个 argv 的 offset/length。`splitUtf8(...)` 是 CLI REPL 使用的便利方法，会把 Java `String` 先编码成 UTF-8，再复制出每个 argv。
+`parse(...)` 返回 `Decoded`，其中保存一块 decoded byte buffer，以及每个 argv 的 offset/length。`splitUtf8(...)` 是 CLI REPL 使用的便利方法，会把 Java `String` 先编码成 UTF-8，再复制出每个 argv。服务端 decoder 使用显式的 `parseUnlimited(...)`，解析后再按连接配置返回更精确的参数数量错误。
 
 这个 parser 也解释了为什么 CLI REPL 可以输入带空格或二进制转义的参数，例如：
 
@@ -219,7 +219,7 @@ REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 - `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisCli.java`
 - `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisCliArgs.java`
 - `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisClient.java`
-- `yierdis-cli/src/main/java/yier/bubu/redis/app/client/InlineCommandParser.java`
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/InlineCommandParser.java`
 - `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespClientCodec.java`
 - `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBench.java`
 - `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBenchArgs.java`
@@ -230,7 +230,7 @@ REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 推荐测试：
 
 - `YierdisClientTest`：client 连接、超时、desync 防护和 RESP 使用方式。
-- `YierdisCli` / `InlineCommandParser` 当前主要通过源码和 CLI 路径测试间接覆盖；补 parser 行为时应优先补专门的 parser 单测。
+- `InlineCommandParserTest`：CLI / server 共用 inline command parser 行为。
 - `RespClientCodecTest`：RESP request 编码和 reply 解析。
 - `RespCommandWriterTest`：benchmark request writer 和 RESP codec 复用。
 - `BenchServerArgsReuseTest`：bench server launch argv 归一化和复制。

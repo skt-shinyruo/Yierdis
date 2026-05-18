@@ -65,6 +65,23 @@ public class RespRequestDecoderTest {
     }
 
     @Test
+    public void decodesInlineHexEscapesLikeCli() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024));
+        try {
+            Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("SET \"a\\x20b\" \"\\x41\"\r\n", StandardCharsets.US_ASCII)));
+
+            RespCommandRequest req = ch.readInbound();
+            Assert.assertEquals(3, req.argc());
+            Assert.assertArrayEquals(bytes("SET"), req.readOnlyArg(0));
+            Assert.assertArrayEquals(bytes("a b"), req.readOnlyArg(1));
+            Assert.assertArrayEquals(bytes("A"), req.readOnlyArg(2));
+            Assert.assertEquals(7, req.retainedBytes());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void emitsProtocolErrorForOversizedBulk() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(2, 16, 1024));
         try {
