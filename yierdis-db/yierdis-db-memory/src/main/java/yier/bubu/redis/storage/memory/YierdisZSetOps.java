@@ -14,6 +14,7 @@ import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
+import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.List;
 import java.util.Objects;
@@ -278,7 +279,19 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         if (existing.type() != ValueType.ZSET) {
             return 0L;
         }
-        return YierdisDbMemoryEstimator.sumZSetMemberByteLengths(scoreMemberPairs);
+        long upperBound = YierdisDbMemoryEstimator.estimateZSetWriteUpperBound(0, scoreMemberPairs);
+        ValueHandle handle = existing.valueHandle();
+        if (zsetRoot.encoding(handle) == ValueEncoding.ZSET_PACKED) {
+            upperBound = addSaturating(upperBound, zsetRoot.estimatedBytes(handle));
+        }
+        return upperBound;
+    }
+
+    private static long addSaturating(long left, long right) {
+        if (left < 0 || right < 0 || Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     private EntryRecord liveZSetRecord(byte[] keyBytes) {

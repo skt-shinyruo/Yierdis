@@ -80,9 +80,10 @@ public final class YierdisDbMemoryEstimator {
 
     static long estimateZSetWriteUpperBound(int keyLength, List<byte[]> scoreMemberPairs) {
         int memberCount = scoreMemberPairs == null ? 0 : scoreMemberPairs.size() / 2;
+        long memberBytes = sumZSetMemberByteLengths(scoreMemberPairs);
         return estimateCollectionWriteUpperBound(
                 keyLength,
-                sumZSetMemberByteLengths(scoreMemberPairs),
+                Math.multiplyExact(memberBytes, 2L),
                 Math.multiplyExact((long) memberCount, ZSET_MEMBER_OVERHEAD_BYTES_ESTIMATE)
         );
     }

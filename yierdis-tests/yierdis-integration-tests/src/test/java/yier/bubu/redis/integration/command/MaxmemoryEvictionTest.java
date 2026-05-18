@@ -5,6 +5,7 @@ import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.storage.memory.YierdisDb;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
+import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
@@ -13,6 +14,7 @@ import yier.bubu.redis.testutil.ReplyNull;
 import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import static yier.bubu.redis.testutil.TestBytes.b;
@@ -56,27 +58,40 @@ public class MaxmemoryEvictionTest {
     }
 
     @Test
-    public void noevictionAllowsCollectionWritesWhenHeadroomMatchesRealDelta() {
-        assertCollectionWriteSucceedsAtRealDelta(
+    public void noevictionCollectionGrowthUsesRealBoundedMaxmemory() {
+        byte[] listValue = repeat((byte) 'x', 256);
+        byte[] hashValue = repeat((byte) 'v', 256);
+        byte[] setMember = repeat((byte) 'm', 256);
+        byte[] zsetMember = repeat((byte) 'z', 256);
+
+        assertCollectionWriteUsesRealBoundedMaxmemory(
                 db -> db.writes().lists().rpush(b("l"), List.of(b("a"), b("b"), b("c"), b("d"))).value(),
-                db -> db.writes().lists().lpush(b("l"), List.of(repeat((byte) 'x', 24))).value(),
-                List.of(b("LPUSH"), b("l"), repeat((byte) 'x', 24))
+                db -> db.writes().lists().lpush(b("l"), List.of(listValue)).value(),
+                List.of(b("LPUSH"), b("l"), listValue)
         );
-        assertCollectionWriteSucceedsAtRealDelta(
+        assertCollectionWriteUsesRealBoundedMaxmemory(
                 db -> db.writes().hashes().hset(b("h"), List.of(b("f1"), b("v1"), b("f2"), b("v2"))).value(),
-                db -> db.writes().hashes().hset(b("h"), List.of(b("f3"), repeat((byte) 'v', 24))).value(),
-                List.of(b("HSET"), b("h"), b("f3"), repeat((byte) 'v', 24))
+                db -> db.writes().hashes().hset(b("h"), List.of(b("f3"), hashValue)).value(),
+                List.of(b("HSET"), b("h"), b("f3"), hashValue)
         );
-        assertCollectionWriteSucceedsAtRealDelta(
+        assertCollectionWriteUsesRealBoundedMaxmemory(
                 db -> db.writes().sets().sadd(b("s"), List.of(b("alpha"), b("beta"), b("gamma"))).value(),
-                db -> db.writes().sets().sadd(b("s"), List.of(repeat((byte) 'm', 24))).value(),
-                List.of(b("SADD"), b("s"), repeat((byte) 'm', 24))
+                db -> db.writes().sets().sadd(b("s"), List.of(setMember)).value(),
+                List.of(b("SADD"), b("s"), setMember)
         );
-        assertCollectionWriteSucceedsAtRealDelta(
+        assertCollectionWriteUsesRealBoundedMaxmemory(
                 db -> db.writes().zsets().zadd(b("z"), List.of(b("1"), b("alpha"), b("2"), b("beta"), b("3"), b("gamma"))).value(),
-                db -> db.writes().zsets().zadd(b("z"), List.of(b("4"), repeat((byte) 'z', 24))).value(),
-                List.of(b("ZADD"), b("z"), b("4"), repeat((byte) 'z', 24))
+                db -> db.writes().zsets().zadd(b("z"), List.of(b("4"), zsetMember)).value(),
+                List.of(b("ZADD"), b("z"), b("4"), zsetMember)
         );
+    }
+
+    @Test
+    public void boundedFixtureUsesConfiguredMaxmemoryForLedgerAndStats() {
+        try (DbFixture fixture = new DbFixture(1234)) {
+            Assert.assertEquals(1234, fixture.db.memoryLedger().limitBytes());
+            Assert.assertEquals(1234, fixture.db.memory().memoryStats().maxmemoryBytes());
+        }
     }
 
     @Test
@@ -186,30 +201,83 @@ public class MaxmemoryEvictionTest {
         return out;
     }
 
-    private static void assertCollectionWriteSucceedsAtRealDelta(
+    private static void assertCollectionWriteUsesRealBoundedMaxmemory(
             DbMutation setup,
             DbMutation measuredWrite,
             List<byte[]> commandWrite
     ) {
         long usedBefore;
         long actualDelta;
+        long usedAfter;
         try (DbFixture measured = new DbFixture(0)) {
             setup.apply(measured.db);
             usedBefore = measured.db.estimatedUsedBytes();
             measuredWrite.apply(measured.db);
-            actualDelta = measured.db.estimatedUsedBytes() - usedBefore;
+            usedAfter = measured.db.estimatedUsedBytes();
+            actualDelta = usedAfter - usedBefore;
         }
 
         Assert.assertTrue("actual delta must be positive for this regression harness", actualDelta > 0);
+        String commandName = commandName(commandWrite);
+        long acceptedLimit = minimumAcceptedLimit(setup, commandWrite, usedAfter);
+        AttemptResult accepted = attemptCollectionWrite(acceptedLimit, setup, commandWrite);
+        Assert.assertEquals(commandName, AttemptOutcome.ACCEPTED, accepted.outcome());
+        Assert.assertEquals(commandName, usedBefore, accepted.usedBefore());
+        Assert.assertEquals(commandName, usedAfter, accepted.usedAfter());
+        Assert.assertTrue(commandName + " accepted at limit " + acceptedLimit
+                        + " but used " + accepted.usedAfter(),
+                accepted.usedAfter() <= acceptedLimit);
 
-        try (DbFixture bounded = new DbFixture(usedBefore + actualDelta)) {
-            setup.apply(bounded.db);
-            bounded.setMaxmemory(usedBefore + actualDelta);
+        AttemptResult rejected = attemptCollectionWrite(acceptedLimit - 1, setup, commandWrite);
+        Assert.assertEquals(commandName, AttemptOutcome.COMMAND_REJECTED, rejected.outcome());
+        Assert.assertEquals(commandName, usedBefore, rejected.usedBefore());
+        Assert.assertEquals(commandName + " rejected write must not mutate", usedBefore, rejected.usedAfter());
+    }
 
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(bounded.db);
+    private static String commandName(List<byte[]> commandWrite) {
+        if (commandWrite == null || commandWrite.isEmpty() || commandWrite.get(0) == null) {
+            return "<unknown>";
+        }
+        return new String(commandWrite.get(0), StandardCharsets.UTF_8);
+    }
+
+    private static long minimumAcceptedLimit(DbMutation setup, List<byte[]> commandWrite, long seedLimit) {
+        long high = Math.max(1L, seedLimit);
+        while (attemptCollectionWrite(high, setup, commandWrite).outcome() != AttemptOutcome.ACCEPTED) {
+            high = Math.multiplyExact(high, 2L);
+        }
+
+        long low = 0L;
+        while (low + 1 < high) {
+            long mid = low + (high - low) / 2;
+            if (attemptCollectionWrite(mid, setup, commandWrite).outcome() == AttemptOutcome.ACCEPTED) {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        return high;
+    }
+
+    private static AttemptResult attemptCollectionWrite(long maxmemoryBytes, DbMutation setup, List<byte[]> commandWrite) {
+        try (DbFixture fixture = new DbFixture(maxmemoryBytes)) {
+            try {
+                setup.apply(fixture.db);
+            } catch (YierdisCommandException e) {
+                Assert.assertEquals(MaxmemoryErrors.OOM_ERR, e.getMessage());
+                return new AttemptResult(AttemptOutcome.SETUP_REJECTED, -1L, -1L);
+            }
+
+            long usedBefore = fixture.db.estimatedUsedBytes();
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(fixture.db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 ReplyObject reply = client.execute(commandWrite);
-                Assert.assertFalse(reply instanceof ReplyError);
+                long usedAfter = fixture.db.estimatedUsedBytes();
+                if (reply instanceof ReplyError err) {
+                    Assert.assertEquals(MaxmemoryErrors.OOM_ERR, err.message());
+                    return new AttemptResult(AttemptOutcome.COMMAND_REJECTED, usedBefore, usedAfter);
+                }
+                return new AttemptResult(AttemptOutcome.ACCEPTED, usedBefore, usedAfter);
             }
         }
     }
@@ -228,22 +296,21 @@ public class MaxmemoryEvictionTest {
         void apply(YierdisDb db);
     }
 
+    private enum AttemptOutcome {
+        SETUP_REJECTED,
+        COMMAND_REJECTED,
+        ACCEPTED
+    }
+
+    private record AttemptResult(AttemptOutcome outcome, long usedBefore, long usedAfter) {
+    }
+
     private static final class DbFixture implements AutoCloseable {
         private final YierdisDb db;
 
         private DbFixture(long maxmemoryBytes) {
-            this.db = new YierdisDb(null, 0, "noeviction", 5, 5, 5);
+            this.db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
             this.db.bindToCurrentThread();
-        }
-
-        private void setMaxmemory(long maxmemoryBytes) {
-            try {
-                java.lang.reflect.Field field = YierdisDb.class.getDeclaredField("maxmemoryBytes");
-                field.setAccessible(true);
-                field.setLong(db, maxmemoryBytes);
-            } catch (ReflectiveOperationException e) {
-                throw new AssertionError("failed to set maxmemoryBytes for test", e);
-            }
         }
 
         @Override

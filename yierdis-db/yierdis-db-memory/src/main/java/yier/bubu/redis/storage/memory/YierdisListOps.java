@@ -196,7 +196,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
         if (existing.type() != ValueType.LIST) {
             return 0L;
         }
-        return YierdisDbMemoryEstimator.sumByteLengths(values);
+        return estimateListWriteUpperBound(0, values);
     }
 
     private EntryRecord liveListRecord(byte[] keyBytes) {

@@ -187,7 +187,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         if (existing.type() != ValueType.HASH) {
             return 0L;
         }
-        return YierdisDbMemoryEstimator.sumByteLengths(fieldValuePairs);
+        return estimateHashWriteUpperBound(0, fieldValuePairs);
     }
 
     private EntryRecord liveHashRecord(byte[] keyBytes) {

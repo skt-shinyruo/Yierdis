@@ -183,7 +183,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
         if (existing.type() != ValueType.SET) {
             return 0L;
         }
-        return YierdisDbMemoryEstimator.sumByteLengths(members);
+        return YierdisDbMemoryEstimator.estimateSetWriteUpperBound(0, members);
     }
 
     private EntryRecord liveSetRecord(byte[] keyBytes) {
