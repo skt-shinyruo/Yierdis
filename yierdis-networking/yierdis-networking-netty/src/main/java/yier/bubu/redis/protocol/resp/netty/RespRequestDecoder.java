@@ -5,6 +5,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ByteToMessageDecoder;
 import yier.bubu.redis.protocol.resp.InlineCommandParser;
 import yier.bubu.redis.protocol.resp.RespCommandRequest;
+import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
 import java.util.List;
 
@@ -25,7 +26,7 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
     private State state = State.READ_COMMAND;
 
     public RespRequestDecoder(int maxBulkBytes, int maxArgs, int maxInlineBytes) {
-        this(maxBulkBytes, maxArgs, maxInlineBytes, Math.max(1024, maxBulkBytes + maxInlineBytes));
+        this(maxBulkBytes, maxArgs, maxInlineBytes, safeDiscardBytes(maxBulkBytes, maxInlineBytes));
     }
 
     public RespRequestDecoder(int maxBulkBytes, int maxArgs, int maxInlineBytes, int maxDiscardBytes) {
@@ -77,7 +78,7 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
         }
 
         Long argcValue = parseInteger(in, lineStart + 1, lf - 1);
-        if (argcValue == null || argcValue < 0 || argcValue > Integer.MAX_VALUE) {
+        if (argcValue == null || argcValue < 0 || argcValue > RespProtocolLimits.MAX_ARGS) {
             emitProtocolError(out, "ERR Protocol error: invalid multibulk length", true);
             return ParseResult.ERROR;
         }
@@ -108,7 +109,7 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
             }
 
             Long lenValue = parseInteger(in, bulkLineStart + 1, bulkLf - 1);
-            if (lenValue == null || lenValue < 0 || lenValue > Integer.MAX_VALUE) {
+            if (lenValue == null || lenValue < 0 || lenValue > RespProtocolLimits.MAX_BULK_BYTES) {
                 emitProtocolError(out, "ERR Protocol error: invalid bulk length", true);
                 state = State.CLOSING;
                 return ParseResult.ERROR;
@@ -119,7 +120,8 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
                 state = State.CLOSING;
                 return ParseResult.ERROR;
             }
-            if (in.readableBytes() < len + 2) {
+            long requiredBytes = (long) len + 2L;
+            if (in.readableBytes() < requiredBytes) {
                 return ParseResult.NEED_MORE;
             }
 
@@ -251,6 +253,11 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
     private static int saturatedAdd(int current, int len) {
         long next = (long) Math.max(0, current) + Math.max(0, len);
         return next >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) next;
+    }
+
+    private static int safeDiscardBytes(int maxBulkBytes, int maxInlineBytes) {
+        long sum = (long) Math.max(0, maxBulkBytes) + Math.max(0, maxInlineBytes);
+        return sum >= Integer.MAX_VALUE ? Integer.MAX_VALUE : Math.max(1024, (int) sum);
     }
 
     private static void emitProtocolError(List<Object> out, String message, boolean closeAfterReply) {

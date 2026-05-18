@@ -97,6 +97,34 @@ public class RespRequestDecoderTest {
     }
 
     @Test
+    public void rejectsBulkLengthAboveHardLimitBeforeAllocatingBody() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(Integer.MAX_VALUE, 16, 1024));
+        try {
+            Object msg = writeInboundAndReadFirst(ch, "*1\r\n$" + Integer.MAX_VALUE + "\r\n");
+
+            Assert.assertTrue(msg instanceof RespProtocolError);
+            Assert.assertTrue(((RespProtocolError) msg).closeAfterReply());
+            Assert.assertNull(ch.readInbound());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void rejectsArrayLengthAboveHardLimitBeforeAllocatingArgv() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, Integer.MAX_VALUE, 1024));
+        try {
+            Object msg = writeInboundAndReadFirst(ch, "*" + Integer.MAX_VALUE + "\r\n");
+
+            Assert.assertTrue(msg instanceof RespProtocolError);
+            Assert.assertTrue(((RespProtocolError) msg).closeAfterReply());
+            Assert.assertNull(ch.readInbound());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void protocolErrorDropsPipelinedCommandsInSameRead() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(4, 16, 1024));
         try {
@@ -137,5 +165,14 @@ public class RespRequestDecoderTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static Object writeInboundAndReadFirst(EmbeddedChannel ch, String payload) {
+        try {
+            Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(payload, StandardCharsets.US_ASCII)));
+        } catch (OutOfMemoryError e) {
+            Assert.fail("decoder attempted to allocate from an invalid RESP length: " + e.getMessage());
+        }
+        return ch.readInbound();
     }
 }

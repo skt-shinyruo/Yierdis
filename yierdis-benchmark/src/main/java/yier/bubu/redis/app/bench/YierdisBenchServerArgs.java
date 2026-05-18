@@ -229,8 +229,14 @@ public final class YierdisBenchServerArgs {
         if (protocolMaxBulkBytes <= 0) {
             throw new IllegalArgumentException("protocolMaxBulkBytes must be > 0");
         }
+        if (protocolMaxBulkBytes > RespProtocolLimits.MAX_BULK_BYTES) {
+            throw new IllegalArgumentException("protocolMaxBulkBytes must be <= " + RespProtocolLimits.MAX_BULK_BYTES);
+        }
         if (protocolMaxArgs <= 0) {
             throw new IllegalArgumentException("protocolMaxArgs must be > 0");
+        }
+        if (protocolMaxArgs > RespProtocolLimits.MAX_ARGS) {
+            throw new IllegalArgumentException("protocolMaxArgs must be <= " + RespProtocolLimits.MAX_ARGS);
         }
         if (protocolMaxLineBytes <= 0) {
             throw new IllegalArgumentException("protocolMaxLineBytes must be > 0");

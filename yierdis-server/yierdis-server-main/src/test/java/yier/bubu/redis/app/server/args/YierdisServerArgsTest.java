@@ -183,6 +183,15 @@ public class YierdisServerArgsTest {
     }
 
     @Test
+    public void protocolLimitsRejectValuesAboveDecoderSafeMaximum() {
+        YierdisServerArgs bulkArgs = parse("--protocolMaxBulkBytes", Integer.toString(Integer.MAX_VALUE));
+        assertThrows(IllegalArgumentException.class, bulkArgs::normalizeAndValidate);
+
+        YierdisServerArgs argcArgs = parse("--protocolMaxArgs", Integer.toString(Integer.MAX_VALUE));
+        assertThrows(IllegalArgumentException.class, argcArgs::normalizeAndValidate);
+    }
+
+    @Test
     public void normalizeAcceptsCorePolicyUnderscoreAliases() {
         YierdisServerArgs args = parse("--maxmemoryPolicy", "ALLKEYS_RANDOM");
 
