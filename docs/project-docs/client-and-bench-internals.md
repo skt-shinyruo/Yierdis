@@ -1,294 +1,241 @@
 # Client And Bench Internals
 
-本文解释两个经常被当成“配套工具”的模块：
-
-- `yierdis-cli`
-- `yierdis-benchmark`
-
-它们看起来像外围工具，但实际上很重要，因为它们直接体现了：
-
-- RESP 是如何被消费的
-- 仓库作者自己是如何验证 server 行为和请求路径的
+本文解释项目内置 CLI、Netty client、benchmark 和 smoke/bench 脚本如何沿真实 RESP 路径工作。
 
 ## 先记住一句话
 
-client 和 bench 不是直接嵌进 DB 内部的调试入口，而是：
+`yierdis-cli` 和 `yierdis-benchmark` 不是进程内 DB 调试入口。它们都通过真实 TCP、真实 RESP frame 和 `yierdis-networking-resp` 的 client codec 工作，因此更接近外部使用者视角。
 
-- 走真实 TCP
-- 走真实 RESP
-- 尽量复用 `yierdis-networking-resp` 的编码/解析组件
+CLI 负责人工交互和轻量验证；benchmark 负责固定 workload shape 下的吞吐、延迟和 correctness smoke。比较 benchmark 结果时必须保证 workload shape 一致，例如相同的 `requests`、`clients`、`pipeline`、`keyspace`、`dataSize`、server jar、JVM 参数和 server 启动参数。baseline/current 任一侧启动失败、协议错误、返回错误或缺少必要测量时，输出应视为 `non-comparable`，不能当成可信性能结论。
 
-这让它们更接近“真实外部使用者”，而不是“进程内私有测试钩子”。
+## yierdis-cli
 
-## `yierdis-cli` 在做什么
+入口是 `YierdisCli.main(...)`，参数模型是 `YierdisCliArgs`。默认连接 `127.0.0.1:6378`，常用参数与根 `README.md` 一致：
 
-client 模块主要有四个角色：
+- `--host <host>`
+- `--port <port>`
+- `--timeoutMillis <ms>`
+- `--hex`
 
-- `YierdisCli`
-- `YierdisCliArgs`
-- `YierdisClient`
-- `InlineCommandParser`
+单次命令模式：
 
-协议读写由 `RespClientCodec` 完成。
+```bash
+java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar PING
+java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar SET a 1
+java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar GET a
+```
 
-## CLI 的主链
+`YierdisCli` 用 picocli 解析选项，并通过 `cmd.setStopAtPositional(true)` 让第一个位置参数之后都成为命令 argv。单次命令会把每个字符串按 UTF-8 转成 `byte[]`，调用 `YierdisClient.execute(...)`，再按 Redis CLI 风格打印 reply。返回值是错误 reply 时进程退出码为 `1`，成功为 `0`。
 
-命令行入口是：
+REPL 模式：
 
-- `YierdisCli.main(...)`
+```bash
+java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
+```
 
-大致流程是：
+没有位置参数时进入 `yierdis> ` 提示符。空行跳过，输入 `quit` 或 `exit` 时 best-effort 发送 `QUIT` 后退出。每一行通过 `InlineCommandParser.splitUtf8(...)` 转成 argv，再走同一个 `YierdisClient.execute(...)` 路径。`--hex` 只影响非 UTF-8 bulk string 的展示；协议内容不变。
 
-1. 用 `YierdisCliArgs` 解析 host/port/timeout/hex 等参数
-2. 建立 `YierdisClient.connect(...)`
-3. 如果是单次命令执行，则直接把命令编码后发出
-4. 如果没有位置参数，则进入 REPL
-5. REPL 中每一行通过 `InlineCommandParser` 解析成 argv
-6. reply 按 Redis 风格打印；`--hex` 只影响非 UTF-8 bulk string 的展示
+源码入口：
 
-这说明 CLI 本身非常薄：
+- `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisCli.java`
+- `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisCliArgs.java`
 
-- 参数解析和交互控制在 CLI
-- 真正的协议通信在 `YierdisClient`
+## InlineCommandParser
 
-## `InlineCommandParser` 的角色
-
-这个类实现的是 Redis `sdssplitargs` 风格的输入解析。
+`InlineCommandParser` 是 Redis `sdssplitargs` 风格的 inline command parser，不是简单 `split(" ")`。
 
 它支持：
 
-- 空白分隔
-- 单引号
-- 双引号
-- 反斜杠转义
-- `\\xHH` 十六进制转义
+- space / tab 空白分隔。
+- 单引号，单引号内只特殊处理 `\\'`。
+- 双引号。
+- 双引号内反斜杠转义：`\n`、`\r`、`\t`、`\b`、`\a` 和默认保留字符。
+- 双引号内 `\xHH` 十六进制字节。
+- `maxArgs` 上限，超出时报 `Protocol error: array length too large`。
 
-所以 CLI 在交互模式下并不是简单 `split(" ")`，而是刻意做成更接近 Redis CLI 输入体验。
+`parse(...)` 返回 `Decoded`，其中保存一块 decoded byte buffer，以及每个 argv 的 offset/length。`splitUtf8(...)` 是 CLI REPL 使用的便利方法，会把 Java `String` 先编码成 UTF-8，再复制出每个 argv。
 
-## `YierdisClient` 的内部模型
+这个 parser 也解释了为什么 CLI REPL 可以输入带空格或二进制转义的参数，例如：
 
-`YierdisClient` 是一个基于 blocking socket 的客户端，并且故意保持了非常简单的请求模型：
+```text
+SET "hello key" "line\nvalue"
+SET raw "\x00\x01"
+```
 
-- 1-at-a-time request/response
-- 不做 pipelining
+## YierdisClient
 
-### 执行请求
+`YierdisClient` 是 blocking socket client，故意保持简单的一问一答模型：
 
-`execute(List<byte[]> args, timeoutMillis)` 的逻辑很有代表性：
+- `connect(host, port)` 创建 `Socket`，启用 `TCP_NODELAY`，连接超时固定 `5000` ms。
+- `execute(List<byte[]> args, timeoutMillis)` 要求 timeout 大于 `0`。
+- `requestLock` 保证同一个 client 实例一次只发一个请求。
+- 每次请求前设置 socket read timeout。
+- 用 `RespClientCodec.writeCommand(...)` 写 RESP request，flush 后用 `RespClientCodec.readReply(...)` 读一个 reply。
 
-1. 检查 client 是否已关闭
-2. 在 `requestLock` 下保证一次只发一条请求
-3. 使用 `RespClientCodec.writeCommand(...)` 生成 RESP request
-4. 写入 socket output stream
-5. 用 `RespClientCodec.readReply(...)` 读取一个 response
-6. 超时或解析失败则主动关闭连接，避免 response pairing 失步
+它不做 pipelining。原因是 CLI 需要清晰的请求/回包 pairing，而不是最大吞吐。
 
-### 为什么超时后要关连接
+超时或解析失败会关闭连接。这是有意设计：RESP reply 是 FIFO，如果一个请求超时但连接保留，迟到 reply 可能被下一条请求读到，造成 desync。关闭连接比尝试“跳过未知 reply”更可靠。
 
-因为它采用的是严格 FIFO 的一问一答模型。
+`executeUtf8(...)` 只是把 `List<String>` 转成 UTF-8 bytes 后复用 `execute(...)`。
 
-如果一条请求超时，但连接仍然保留：
+源码入口：
 
-- 迟到的 reply 可能会被下一条请求错配
+- `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisClient.java`
+- `yierdis-cli/src/test/java/yier/bubu/redis/app/client/YierdisClientTest.java`
 
-所以 client 明确选择：
+## RespClientCodec
 
-- 发生 timeout 或 parse failure 就关闭连接，防止 desync
+`RespClientCodec` 位于 `yierdis-networking-resp`，不依赖 Netty。CLI 和 benchmark 都复用它。
 
-这是一种很保守但很清晰的协议消费策略。
+写请求：
 
-## `yierdis-benchmark` 在做什么
+- `encodeCommand(List<byte[]> args)` 返回完整 RESP frame bytes。
+- `writeCommand(OutputStream out, List<byte[]> args)` 写 RESP array，每个 argv 写成 bulk string。
+- `null` argv 会按空 bulk string 写出。
+- 数字写出复用 `ThreadLocal<byte[]> INT_BUF`，减少临时分配。
 
-bench 模块不是 JMH，也不是进程内 microbenchmark。
+读回包：
 
-它的定位更接近：
+- `readReply(InputStream in, int maxBulkBytes)` 支持 RESP simple string、error、integer、bulk string、array 和 RESP3 null `_`。
+- bulk string 会检查 `maxBulkBytes`，超过时报错。
+- array 递归读取子 reply。
+- 返回 `RespReply` record，包含 `kind`、`text`、`bytes`、`integer` 和 `values`，并对 bytes/list 做防御性复制。
 
-- 通过真实 TCP 和 RESP 跑一组可重复的 workload
-- 输出吞吐和延迟结果
+这个 codec 是 client-side 工具路径的事实标准：CLI 用它做单请求通信，benchmark 用它写 workload frame 和读 reply。
 
-如果使用 baseline/current comparison mode，bench 只有在 baseline 和 current 都完成同一组 RESP workload shape 时才输出可比较 delta；任一侧启动失败、协议错误、workload 部分失败或返回 `ERR internal error`，都应记录为 `non-comparable`，不能当作可信的 before/after 结论。
+## yierdis-benchmark
 
-这点非常重要，因为它说明 benchmark 的关注点是：
+`yierdis-benchmark` 是真实协议路径 benchmark，不是 JMH microbenchmark，也不是直接调用 DB API。
 
-- request path
-- protocol path
-- server child process 启动参数
-
-而不是单个 Java 方法的纳秒级 microbenchmark。
-
-## `YierdisBench` 的总体结构
-
-可以把它记成下面几层：
+入口是 `YierdisBench.main(...)`。流程是：
 
 ```text
 YierdisBenchArgs
-  -> parse bench-local server launch argv
-  -> BenchConfig
+  -> parse unmatched server args into YierdisBenchServerArgs
+  -> normalizeAndValidate()
+  -> BenchConfig.from(...)
   -> optional ServerProcess
   -> ThroughputWorker / LatencyWorker
   -> RespCommandWriter + RespClientCodec
-  -> summary output
+  -> summary / comparison output
 ```
 
-## bench 为什么有自己的 server launch argv 模型
+`YierdisBenchArgs` 定义 bench 自己的参数，例如 `--host`、`--portBase`、`--noStartServer`、`--serverJar`、comparison mode、server JVM 参数、`--keyspace`、`--dataSize`、`--requests`、`--clients`、`--pipeline`、latency 参数、`--skipPrefill`、`--skipLatency`、`--strictReplies` 和 native eval 参数。`@Unmatched serverArgs` 接住 `--` 后的 server 启动参数。
 
-`YierdisBench` 在处理 bench 自己的参数之后，还会：
+`YierdisBenchServerArgs` 是 bench-local server launch argv 模型。它覆盖 port、DB 数量、cleanup、executor/backpressure、transaction queue、protocol limits、maxmemory、eviction、expire cleanup、native defrag 和 `KEYS` budget。它会归一化 `executorSchedulingPolicy`、`maxmemoryScope` 和 `maxmemoryPolicy`，再由 `toArgv()` 生成子进程 server 参数。
 
-1. 再创建一个 `YierdisBenchServerArgs`
-2. 解析用户附带的 server 参数
-3. 调 `normalizeAndValidate()`
-4. 通过 `BenchConfig.from(...)` 保存成启动 server child process 的基础配置
+重要 caveat：bench launch argv model 不是完整 server args model。`SERVER_ARGS_EXTRA` 会先通过 `YierdisBenchServerArgs` 的 picocli parser，再由 `toArgv()` 传给 server child process；当前不包含 server-only 的 `--client-idle-timeout-millis`、`--client-output-buffer-limit-bytes`、`--client-output-buffer-over-limit-millis`。要验证慢客户端保护，应直接启动 server，或先扩展 bench model。
 
-这意味着：
+## ServerProcess
 
-- bench 不依赖 server runtime config
-- 它只维护启动子进程所需的 argv 归一化模型
+非 `--noStartServer` 模式下，benchmark 会启动真实 server 子进程。`ServerProcess` 负责：
 
-这样做的好处是：
+- 拼 `java` 命令。
+- 加上 `-Xms`、`-Xmx`、`-XX:MaxDirectMemorySize`。
+- 加上 `-jar <serverJar>`。
+- 加上 `YierdisBenchServerArgs.toArgv()` 生成的 server argv。
+- 将 stdout/stderr 重定向到 log file。
+- 停止时先 `destroy()`，超时后 `destroyForcibly()`。
 
-- bench 不再通过共享参数模块形成隐藏依赖桥
-- server runtime config 可以留在 `yierdis-server-main`
+这意味着 benchmark 的默认模式会覆盖真实进程启动、真实 Netty server、真实 RESP decode/execute/reply 路径。`--noStartServer` 则连接已有 server，适合手工启动特殊参数后跑同一 workload。
 
-## `ServerProcess` 做什么
+comparison mode 会分别启动 baseline/current jar。只有双方完成同一组必要测量且没有 workload/protocol/reply errors 时，结果才标记 comparable；否则 summary 里会标记 `non-comparable`。
 
-如果不是 connect-only 模式，bench 会启动一个真实的 server 子进程。
+## workload workers
 
-`ServerProcess` 负责：
-
-- 拼 JVM 参数
-- 拼 `-jar` 和 server argv
-- 启动子进程
-- 输出日志到文件
-- 停止子进程
-
-这里的 server argv 来自：
-
-- `YierdisBenchServerArgs.toArgv()`
-
-也就是说，bench 不是随便拼字符串，而是从自己的 launch argv 模型生成稳定参数。
-
-## workload 是怎么跑的
-
-当前 benchmark workload 主要有：
+当前 workload 包括：
 
 - `PING`
 - `SET_RANDOM`
 - `SET_SEQUENTIAL`
+- `APPEND`
 - `GET_RANDOM`
+- `PFADD_SPARSE`
+- `PFADD_DENSE`
+- `PFCOUNT`
 
-bench 会区分两类 worker：
+`ThroughputWorker` 面向吞吐：
 
-### `ThroughputWorker`
+- 每个 worker 建立自己的 socket。
+- 使用 `BufferedOutputStream` / `BufferedInputStream`。
+- 支持 pipeline：一批写出多个 request，flush 后按同样数量读 reply。
+- 用 `SplittableRandom` 在 keyspace 内选 key。
+- 返回 `WorkerCounter(ops, errors)`。
 
-特点：
+`LatencyWorker` 面向单请求往返延迟：
 
-- 支持 pipeline
-- 一批写出后批量读回 reply
-- 用于测吞吐
+- pipeline 固定等价于 `1`。
+- 每次写一条、flush、读一条。
+- 用 `System.nanoTime()` 记录每个 request round trip。
+- 返回 samples 和 errors，主线程再算分位数。
 
-### `LatencyWorker`
+`RespCommandWriter` 是 workload 写出热点。它预置常用命令字节和 `PING` frame，复用 `MutableRequestArgs` 这个 `AbstractList<byte[]>`，再调用 `RespClientCodec.writeCommand(...)`。这样既保留真实 RESP request 编码路径，又减少每条命令额外创建 list 的成本。
 
-特点：
+## strict reply validation
 
-- pipeline = 1
-- 一次写一条，一次收一条
-- 记录单次请求往返耗时
+`--strictReplies` 开启最小语义校验。未开启时，worker 主要区分正常 reply 和 RESP error reply；开启后会进一步验证 workload 对应的基本语义：
 
-### `RespCommandWriter`
+- `PING` 必须是 `PONG`。
+- `SET_RANDOM` / `SET_SEQUENTIAL` 必须是 `OK`。
+- `APPEND` 必须是非负 integer，且通常不小于写入 value size。
+- `PFADD_*` 必须是 `0` 或 `1`。
+- `PFCOUNT` 必须是非负 integer。
+- `GET_RANDOM` 可以是 null bulk；如果是 bulk string，长度要匹配 `dataSize`。
 
-这是 bench 最值得注意的内部组件之一。
+strict reply validation 让 benchmark 兼有 correctness smoke 的作用。若 strict 校验失败，worker 会计入 errors；comparison mode 下这类 errors 会让结果不可比较。
 
-它不会每次都走最重的高层路径，而是：
+## smoke.sh 和 bench.sh
 
-- 预置 `PING/GET/SET` 命令字节
-- 复用 `MutableRequestArgs`
-- 复用 `intBuf`
-- 通过 `RespClientCodec.writeCommand(...)` 写 RESP frame
+`scripts/smoke.sh` 是最小端到端健康检查：
 
-这说明 bench 很关心：
+- 默认先 `mvn -q -DskipTests package`，可用 `SKIP_BUILD=1` 跳过。
+- 启动 server jar 到 `HOST:PORT`，默认 `127.0.0.1:16379`。
+- 用 `READY_TIMEOUT_SEC` 控制 readiness 等待。
+- 如果本机有 `redis-cli`，用它跑 `PING/SET/GET`；否则回退到项目 Java CLI。
+- 可用 `ALLOCATOR_SMOKE=1` 额外跑 allocator-sensitive 命令路径。
+- 最后用 benchmark 的 `--noStartServer --strictReplies --skipLatency` 跑很小的 correctness smoke。
 
-- request 写出路径本身的分配成本
+`scripts/bench.sh` 是压测外壳：
 
-## strict reply validation 是什么
+- 默认构建 server/bench jar。
+- 通过环境变量组装 bench 参数：`HOST`、`PORT_BASE`、`KEYSPACE`、`DATA_SIZE`、`REQUESTS`、`CLIENTS`、`PIPELINE`、`LATENCY_REQUESTS`、`LATENCY_CLIENTS`。
+- 通过 `XMS`、`XMX`、`MAX_DIRECT_MEMORY` 控制 server child process JVM。
+- 通过 `MAXMEMORY_BYTES`、`MAXMEMORY_POLICY`、`MAXMEMORY_SAMPLES` 和 `SERVER_ARGS_EXTRA` 追加 bench model 支持的 server args。
+- 通过 `BENCH_ARGS_EXTRA` 和 `BENCH_JVM_OPTS` 控制 benchmark 进程本身。
 
-bench 可以开启：
+典型命令：
 
-- `--strictReplies`
+```bash
+./scripts/smoke.sh
+REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
+```
 
-这时它不仅看“有没有回包”，还会做最小语义校验，例如：
+再次强调：`SERVER_ARGS_EXTRA` 不是无限制透传。它会被 shell split 后交给 `YierdisBenchServerArgs` 解析；bench model 未声明的 server-only 参数会解析失败。
 
-- `GET` reply 是否真的匹配预期大小
-- `PING` / `SET` reply 是否是合法 RESP simple string
-- null bulk 和 bulk string 是否按 workload 预期出现
+## 推荐源码和测试
 
-这让 bench 不只是性能工具，也兼带一层 correctness smoke。
+推荐源码：
 
-## `scripts/smoke.sh` 和 `scripts/bench.sh` 的角色
+- `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisCli.java`
+- `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisCliArgs.java`
+- `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisClient.java`
+- `yierdis-cli/src/main/java/yier/bubu/redis/app/client/InlineCommandParser.java`
+- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespClientCodec.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBench.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBenchArgs.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBenchServerArgs.java`
+- `scripts/smoke.sh`
+- `scripts/bench.sh`
 
-仓库根目录两个脚本其实是这条工具链的外壳：
+推荐测试：
 
-### `scripts/smoke.sh`
-
-适合做：
-
-- server jar / client jar / bench jar 是否都能正常工作
-- server 启动后 `redis-cli` 是否能连；如果本机没有 `redis-cli`，回退到 Java CLI
-- bench strictReplies correctness smoke 是否通过
-- 通过 `READY_TIMEOUT_SEC` 调整 server readiness 等待时间
-
-### `scripts/bench.sh`
-
-适合做：
-
-- 一键启动 RESP benchmark
-- 透传 JVM 参数
-- 透传 bench server launch argv 模型支持的 server 参数
-- 透传 bench 额外参数
-- 复现实验环境
-
-这里的“server 参数”不是直接无限制转发给 `yierdis-server-main`。`SERVER_ARGS_EXTRA` 会先进入 `YierdisBenchServerArgs` 的 picocli parser，再由 `toArgv()` 生成子进程 argv；因此它只支持 bench launch 模型里声明过的参数。当前 bench 模型覆盖 port、DB 数量、cleanup、executor/backpressure、transaction queue、protocol limits、maxmemory、KEYS budget 等参数，但不包含 server-only 的 client idle/output-buffer 慢客户端保护参数。需要验证这类 server-only 参数时，应直接启动 server 或先扩展 bench launch argv 模型。
-
-所以脚本层不是另起一套实现，而是把：
-
-- `yierdis-server-main`
-- `yierdis-cli`
-- `yierdis-benchmark`
-
-三者拼成一条可复用的工作流。
-
-## 最值得看的测试
-
-- `YierdisClientTest`
-  看 client 的连接、超时、desync 防护和 RESP 使用方式。
-- `RespClientCodecTest`
-  看 RESP request 编码和 reply 解析。
-- `TransactionQueueLimitTest`
-  看 client 视角下事务队列限制如何体现。
-- `MaxmemoryScopeTest`
-  看 client 视角下全局/per-db 预算行为。
-- `RespCommandWriterTest`
-  看 bench request writer 如何复用 RESP codec，并关注分配成本。
-- `BenchServerArgsReuseTest`
-  看 bench 的 server launch argv 复制和归一化如何保持与 server 参数对齐。
-- `YierdisBenchSummaryFormatTest`
-  看 bench 输出格式是否稳定。
-
-## 对照源码时推荐看的顺序
-
-1. `YierdisCli`
-2. `InlineCommandParser`
-3. `YierdisClient`
-4. `RespClientCodec`
-5. `YierdisBenchArgs`
-6. `YierdisBench`
-7. `scripts/smoke.sh`
-8. `scripts/bench.sh`
-
-## 一句话总结
-
-client 和 bench 看起来是外围工具，但它们其实是：
-
-- RESP 的第一批消费者
-- request-path 和运维脚本的真实验证者
-
-如果你想知道“作者自己是怎么和这个 server 交互、验证和压测的”，这两个模块就是最直接的答案。
+- `YierdisClientTest`：client 连接、超时、desync 防护和 RESP 使用方式。
+- `YierdisCli` / `InlineCommandParser` 当前主要通过源码和 CLI 路径测试间接覆盖；补 parser 行为时应优先补专门的 parser 单测。
+- `RespClientCodecTest`：RESP request 编码和 reply 解析。
+- `RespCommandWriterTest`：benchmark request writer 和 RESP codec 复用。
+- `BenchServerArgsReuseTest`：bench server launch argv 归一化和复制。
+- `YierdisBenchSummaryFormatTest`：summary 输出稳定性。
+- `YierdisBenchComparisonRenderTest`：comparison / non-comparable 输出。
+- `SmokeScriptContractTest`：`scripts/smoke.sh` readiness 和 allocator smoke contract。
+- `BenchScriptContractTest`：`scripts/bench.sh` 环境变量 contract。
+- `MaxmemoryScopeTest` 和 `TransactionQueueLimitTest`：从 client 视角覆盖 server 参数影响。
