@@ -4,38 +4,54 @@
 
 ## 一眼看懂的依赖方向
 
+下面的箭头表示 Maven 依赖方向：左侧模块依赖右侧模块。
+
 ```text
-yierdis-common-bytes
-  -> yierdis-networking-resp
+yierdis-server-main
   -> yierdis-networking-netty
+  -> yierdis-networking-resp
+  -> yierdis-server-core
+  -> yierdis-server-executor
+  -> yierdis-command-builtin
+  -> yierdis-db-memory
+  -> yierdis-server-runtime
+
+yierdis-networking-netty
+  -> yierdis-networking-resp
+  -> yierdis-common-bytes
+
+yierdis-networking-resp
+  -> yierdis-common-bytes
+  -> yierdis-server-api
+
+yierdis-server-core
+  -> yierdis-server-api
+  -> yierdis-command-core
+  -> yierdis-db-api
+
+yierdis-server-executor
+  -> yierdis-server-api
+
+yierdis-command-builtin
+  -> yierdis-command-core
+  -> yierdis-command-api
   -> yierdis-server-api
   -> yierdis-db-api
 
-yierdis-memory-api
+yierdis-command-core
+  -> yierdis-command-api
+  -> yierdis-server-api
+
+yierdis-db-memory
+  -> yierdis-db-api
+  -> yierdis-memory-api
   -> yierdis-memory-ffm
-  -> yierdis-db-memory
 
-yierdis-networking-resp
-  -> yierdis-networking-netty
-  -> yierdis-server-main
-
-yierdis-server-api
-  -> yierdis-server-core
-  -> yierdis-server-executor
-  -> yierdis-server-main
-
-yierdis-command-api
-  -> yierdis-command-core
-  -> yierdis-command-builtin
-
-yierdis-db-api
-  -> yierdis-db-memory
-
-yierdis-server-main
-  -> 组装 command / DB / protocol / executor / runtime
+yierdis-memory-ffm
+  -> yierdis-memory-api
 ```
 
-这条方向图说明：上层依赖能力接口，下层提供实现，最外层只负责装配。
+这条方向图说明：实现模块依赖 API 模块，适配模块依赖协议和 bytes 基础层，最外层 `yierdis-server-main` 依赖各车道完成最终组装。
 
 ## 聚合模块
 

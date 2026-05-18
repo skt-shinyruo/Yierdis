@@ -93,8 +93,8 @@ pipeline 的关键点是 `RespRequestDecoder` 和 `RespCommandAdapter`。它们�
 它们的职责很窄：
 
 - decoder 识别 RESP 帧
-- adapter 把协议请求转成 `ByteArrayExecutionRequest`
-- execution adapter 统一输出 `ExecutionRequest`
+- `RespCommandAdapter.channelRead(...)` 接收 `RespCommandRequest` 后调用 `RespExecutionAdapter.toExecutionRequest(...)`
+- `RespExecutionAdapter.toExecutionRequest(...)` 返回的具体对象是 `ByteArrayExecutionRequest`，对外类型是 `ExecutionRequest`
 
 这一步之后，协议层就不再继续往里走。
 
@@ -121,7 +121,7 @@ pipeline 的关键点是 `RespRequestDecoder` 和 `RespCommandAdapter`。它们�
 
 ## 8. PING 路径
 
-先看 [`StringCommands.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java) 之外的连接命令实现，重点确认 `PING` 走的是最短链路。
+先看 [`CoreConnectionCommands.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/connection/CoreConnectionCommands.java)。`PING` 在这里注册并实现，属于 transport-neutral 的连接命令。
 
 如果只追主路径，`PING` 的重点是：
 
