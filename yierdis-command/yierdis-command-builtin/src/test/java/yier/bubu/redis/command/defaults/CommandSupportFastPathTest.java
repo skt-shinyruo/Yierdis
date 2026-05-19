@@ -3,8 +3,8 @@ package yier.bubu.redis.command.defaults;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.api.YierdisDbRouter;
+import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ServerSession;
 import yier.bubu.redis.storage.api.DbEngine;
 
 import java.lang.reflect.InvocationHandler;
@@ -14,7 +14,7 @@ import java.nio.charset.StandardCharsets;
 public class CommandSupportFastPathTest {
     private static final YierdisDbRouter TEST_ROUTER = new YierdisDbRouter() {
         @Override
-        public DbEngine dbFor(ServerSession session) {
+        public DbEngine dbFor(DbIndexSession session) {
             return null;
         }
 

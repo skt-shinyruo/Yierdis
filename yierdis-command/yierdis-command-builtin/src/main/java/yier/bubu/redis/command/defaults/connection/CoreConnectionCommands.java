@@ -99,7 +99,7 @@ public final class CoreConnectionCommands {
             return;
         }
 
-        ctx.session().setDbIndex(dbIndex);
+        ctx.dbIndexSession().setDbIndex(dbIndex);
         out.simpleString("OK");
     }
 
@@ -124,7 +124,7 @@ public final class CoreConnectionCommands {
                 CommandSupport.wrongArity(out, "client|setname");
                 return;
             }
-            ctx.session().setClientName(CommandSupport.utf8(request, 2));
+            ctx.clientMetadataSession().setClientName(CommandSupport.utf8(request, 2));
             out.simpleString("OK");
             return;
         }
@@ -133,7 +133,7 @@ public final class CoreConnectionCommands {
                 CommandSupport.wrongArity(out, "client|getname");
                 return;
             }
-            String name = ctx.session().clientName();
+            String name = ctx.clientMetadataSession().clientName();
             if (name == null) {
                 out.nullValue();
             } else {

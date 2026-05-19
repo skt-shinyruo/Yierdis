@@ -3,15 +3,11 @@ package yier.bubu.redis.protocol.resp;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
-import yier.bubu.redis.execution.api.ConnectionStatsView;
-import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
 import yier.bubu.redis.execution.api.ReplyWriter;
-import yier.bubu.redis.execution.api.ServerSession;
-import yier.bubu.redis.execution.api.TransactionState;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 
 public class RespReplyWriterFactoryTest {
     @Test
@@ -51,144 +47,16 @@ public class RespReplyWriterFactoryTest {
         Assert.assertEquals(":1\r\n", sink.utf8());
     }
 
-    private static ServerSession serverSession(int respVersion) {
+    private static ProtocolNegotiationSession serverSession(int respVersion) {
         return new MutableSession(respVersion);
     }
 
-    private static final class MutableSession implements ServerSession {
+    private static final class MutableSession implements ProtocolNegotiationSession {
         private int respVersion;
 
         private MutableSession(int respVersion) {
             this.respVersion = respVersion;
         }
-
-            private final TransactionState transaction = new TransactionState() {
-                @Override
-                public boolean active() {
-                    return false;
-                }
-
-                @Override
-                public void begin() {
-                }
-
-                @Override
-                public void discard() {
-                }
-
-                @Override
-                public void enqueue(ExecutionRequest request) {
-                }
-
-                @Override
-                public int size() {
-                    return 0;
-                }
-
-                @Override
-                public List<ExecutionRequest> drain() {
-                    return List.of();
-                }
-            };
-
-            private final ConnectionStatsView stats = new ConnectionStatsView() {
-                @Override
-                public int pending() {
-                    return 0;
-                }
-
-                @Override
-                public long pendingBytes() {
-                    return 0;
-                }
-
-                @Override
-                public boolean inputDisabledByExecutor() {
-                    return false;
-                }
-
-                @Override
-                public boolean closing() {
-                    return false;
-                }
-
-                @Override
-                public long commandsEnqueued() {
-                    return 0;
-                }
-
-                @Override
-                public long commandsExecuted() {
-                    return 0;
-                }
-
-                @Override
-                public long commandsRejected() {
-                    return 0;
-                }
-
-                @Override
-                public long commandsSkippedClosing() {
-                    return 0;
-                }
-
-                @Override
-                public long closeAfterReply() {
-                    return 0;
-                }
-
-                @Override
-                public long backpressureEnter() {
-                    return 0;
-                }
-
-                @Override
-                public long backpressureExit() {
-                    return 0;
-                }
-            };
-
-            @Override
-            public int dbIndex() {
-                return 0;
-            }
-
-            @Override
-            public void setDbIndex(int dbIndex) {
-            }
-
-            @Override
-            public long clientId() {
-                return 1L;
-            }
-
-            @Override
-            public String clientName() {
-                return null;
-            }
-
-            @Override
-            public void setClientName(String clientName) {
-            }
-
-            @Override
-            public boolean authenticated() {
-                return false;
-            }
-
-            @Override
-            public void setAuthenticated(boolean authenticated) {
-            }
-
-            @Override
-            public TransactionState transaction() {
-                return transaction;
-            }
-
-            @Override
-            public ConnectionStatsView connectionStats() {
-                return stats;
-            }
 
             @Override
             public int respVersion() {

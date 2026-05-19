@@ -89,7 +89,7 @@ public final class YierdisFastCommandProcessor {
             return;
         }
 
-        TransactionState tx = ctx.session().transaction();
+        TransactionState tx = ctx.transactionSession().transaction();
         if (tx.active()) {
             boolean isMulti = asciiEqualsIgnoreCase(request, 0, "MULTI");
             boolean isExec = asciiEqualsIgnoreCase(request, 0, "EXEC");
@@ -140,7 +140,7 @@ public final class YierdisFastCommandProcessor {
             // 变更事件：仅在命令执行成功后触发；仅当本次命令产生“真实变更”（Keyspace/Value/TTL 元数据）时 emit。
             // 该判定由 DB/ops 层在真实写入点打点，命令层仅按事实 gate emit，避免“写命令名单”漂移。
             if (sinkEnabled && changed) {
-                int dbIndex = Math.max(0, ctx.session().dbIndex());
+                int dbIndex = Math.max(0, ctx.dbIndexSession().dbIndex());
                 try {
                     changeSink.onChange(new YierdisChangeEvent(new ExecutionRecord(dbIndex, request)));
                 } catch (Throwable ignored) {

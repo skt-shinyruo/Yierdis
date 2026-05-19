@@ -12,7 +12,7 @@ import yier.bubu.redis.command.defaults.list.ListCommands;
 import yier.bubu.redis.command.defaults.set.SetCommands;
 import yier.bubu.redis.command.defaults.string.StringCommands;
 import yier.bubu.redis.command.defaults.zset.ZSetCommands;
-import yier.bubu.redis.execution.api.ServerSession;
+import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.storage.api.DbEngine;
 
 import java.util.Objects;
@@ -60,7 +60,7 @@ public final class DefaultCommandModules {
         DbEngine fixed = Objects.requireNonNull(engine, "engine");
         return new YierdisDbRouter() {
             @Override
-            public DbEngine dbFor(ServerSession session) {
+            public DbEngine dbFor(DbIndexSession session) {
                 return fixed;
             }
 

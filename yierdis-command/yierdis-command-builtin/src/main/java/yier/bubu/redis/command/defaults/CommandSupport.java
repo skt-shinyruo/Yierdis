@@ -13,9 +13,9 @@ import yier.bubu.redis.storage.api.DbWrites;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReplyWriter;
-import yier.bubu.redis.execution.api.ServerSession;
 
 import java.nio.charset.StandardCharsets;
 import java.util.AbstractList;
@@ -57,7 +57,7 @@ public final class CommandSupport {
 
     public DbEngine db(CommandContext ctx) {
         java.util.Objects.requireNonNull(ctx, "ctx");
-        return dbRouter.dbFor(ctx.session());
+        return dbRouter.dbFor(ctx.dbIndexSession());
     }
 
     public DbReads dbReads(CommandContext ctx) {
@@ -138,7 +138,7 @@ public final class CommandSupport {
         DbEngine fixed = java.util.Objects.requireNonNull(engine, "engine");
         return new YierdisDbRouter() {
             @Override
-            public DbEngine dbFor(ServerSession session) {
+            public DbEngine dbFor(DbIndexSession session) {
                 return fixed;
             }
 

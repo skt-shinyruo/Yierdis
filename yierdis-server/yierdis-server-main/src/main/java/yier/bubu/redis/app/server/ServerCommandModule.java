@@ -61,7 +61,7 @@ final class ServerCommandModule implements CommandModule {
 
     private void hello(ExecutionRequest request, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        int requested = ctx.session().respVersion();
+        int requested = ctx.protocolNegotiationSession().respVersion();
         int i = 1;
         if (request.argc() >= 2) {
             String version = CommandSupport.utf8(request, 1);
@@ -78,7 +78,7 @@ final class ServerCommandModule implements CommandModule {
         }
         while (i < request.argc()) {
             if (CommandSupport.asciiEqualsIgnoreCase(request, i, "SETNAME") && i + 1 < request.argc()) {
-                ctx.session().setClientName(CommandSupport.utf8(request, i + 1));
+                ctx.clientMetadataSession().setClientName(CommandSupport.utf8(request, i + 1));
                 i += 2;
                 continue;
             }
@@ -89,14 +89,14 @@ final class ServerCommandModule implements CommandModule {
             out.error("ERR syntax error");
             return;
         }
-        ctx.session().setRespVersion(requested);
+        ctx.protocolNegotiationSession().setRespVersion(requested);
         out.mapHeader(5);
         out.bulkString(HELLO_SERVER_KEY);
         out.bulkString(HELLO_SERVER_VALUE);
         out.bulkString(HELLO_VERSION_KEY);
         out.bulkString(HELLO_VERSION_VALUE);
         out.bulkString(HELLO_PROTO_KEY);
-        out.integer(ctx.session().respVersion());
+        out.integer(ctx.protocolNegotiationSession().respVersion());
         out.bulkString(HELLO_MODE_KEY);
         out.bulkString(HELLO_MODE_VALUE);
         out.bulkString(HELLO_ROLE_KEY);

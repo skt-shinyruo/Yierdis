@@ -12,8 +12,13 @@
  *     <li>ReplyWriter - API. Audience: command handlers, engine, protocol adapters, server reply implementations, tests.</li>
  *     <li>ReplyWriterFactory - API. Audience: executor, server/protocol adapter composition, tests.</li>
  *     <li>Session - API. Audience: executor, engine, server session implementations, tests.</li>
- *     <li>ServerSession - API. Audience: engine/session implementations and command handlers needing server-scoped state.</li>
- *     <li>DbIndexProvider - compatibility/deprecated. Audience: legacy embedders only; command routing uses ServerSession.</li>
+ *     <li>DbIndexSession - API. Audience: DB routing and SELECT command handlers.</li>
+ *     <li>ClientMetadataSession - API. Audience: CLIENT, AUTH, and server HELLO command handlers.</li>
+ *     <li>TransactionSession - API. Audience: transaction command handlers and command processor queueing.</li>
+ *     <li>ConnectionStatsSession - API. Audience: server INFO/STATS views.</li>
+ *     <li>ProtocolNegotiationSession - API. Audience: protocol reply writers and HELLO command handlers.</li>
+ *     <li>ServerSession - API. Audience: compatibility aggregate and engine/session implementations.</li>
+ *     <li>DbIndexProvider - compatibility/deprecated. Audience: legacy embedders only; command routing uses DbIndexSession.</li>
  *     <li>ConnectionStatsView - API. Audience: server INFO/STATS views, executor/server observability, tests.</li>
  *     <li>TransactionState - API. Audience: command transaction handlers, engine sessions, server sessions, tests.</li>
  *     <li>CommandContext - API. Audience: engine and command handlers; executor/server must not construct it directly.</li>

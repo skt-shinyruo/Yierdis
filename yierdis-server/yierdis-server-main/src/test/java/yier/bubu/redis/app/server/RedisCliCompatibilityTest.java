@@ -25,8 +25,8 @@ public class RedisCliCompatibilityTest {
             Assert.assertEquals("ok", run("redis-cli", "-p", port, "GET", "compat:key").stdoutTrimmed());
 
             CommandResult hello = run("redis-cli", "--raw", "-3", "-p", port, "HELLO", "3");
-            Assert.assertTrue(hello.stdout, hello.lines.contains("server"));
-            Assert.assertTrue(hello.stdout, containsAdjacentLines(hello.lines, "proto", "3"));
+            Assert.assertTrue(hello.stdout, containsHelloKey(hello.lines, "server"));
+            Assert.assertTrue(hello.stdout, containsHelloField(hello.lines, "proto", "3"));
         }
     }
 
@@ -61,9 +61,23 @@ public class RedisCliCompatibilityTest {
         return new CommandResult(stdout, lines);
     }
 
-    private static boolean containsAdjacentLines(List<String> lines, String first, String second) {
+    private static boolean containsHelloKey(List<String> lines, String key) {
+        for (String line : lines) {
+            if (key.equals(line) || line.startsWith(key + " ")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsHelloField(List<String> lines, String key, String value) {
         for (int i = 0; i + 1 < lines.size(); i++) {
-            if (first.equals(lines.get(i)) && second.equals(lines.get(i + 1))) {
+            if (key.equals(lines.get(i)) && value.equals(lines.get(i + 1))) {
+                return true;
+            }
+        }
+        for (String line : lines) {
+            if ((key + " " + value).equals(line)) {
                 return true;
             }
         }

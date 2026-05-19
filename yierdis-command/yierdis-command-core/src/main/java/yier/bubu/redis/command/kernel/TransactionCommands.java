@@ -15,7 +15,7 @@ import java.util.Objects;
  * Redis 事务命令（最小实现）：MULTI/EXEC/DISCARD。
  * <p>
  * 设计约束：
- * - 连接级状态通过 ServerSession 暴露，避免 core 依赖 server/Netty
+ * - 连接级事务状态通过 TransactionSession 暴露，避免 core 依赖 server/Netty
  * - MULTI 态下，普通命令由 {@link YierdisFastCommandProcessor} 负责入队并返回 QUEUED
  */
 final class TransactionCommands implements CommandModule {
@@ -90,7 +90,7 @@ final class TransactionCommands implements CommandModule {
     }
 
     private TransactionState tx(CommandContext ctx) {
-        return ctx.session().transaction();
+        return ctx.transactionSession().transaction();
     }
 
     private static void wrongArity(ReplyWriter out, String cmdLower) {

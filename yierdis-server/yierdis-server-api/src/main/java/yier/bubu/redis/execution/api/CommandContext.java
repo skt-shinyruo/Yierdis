@@ -31,6 +31,26 @@ public final class CommandContext {
         return session;
     }
 
+    public DbIndexSession dbIndexSession() {
+        return session;
+    }
+
+    public ClientMetadataSession clientMetadataSession() {
+        return session;
+    }
+
+    public TransactionSession transactionSession() {
+        return session;
+    }
+
+    public ConnectionStatsSession connectionStatsSession() {
+        return session;
+    }
+
+    public ProtocolNegotiationSession protocolNegotiationSession() {
+        return session;
+    }
+
     public ReplyWriter out() {
         return out;
     }

@@ -1001,6 +1001,102 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void serverSessionProtocolNegotiationMustBeSplitFromGeneralSessionState() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
+        Path apiPackage = repoRoot.resolve(
+                "yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api"
+        ).normalize();
+
+        Path serverSessionFile = apiPackage.resolve("ServerSession.java");
+        Path dbIndexSessionFile = apiPackage.resolve("DbIndexSession.java");
+        Path clientMetadataSessionFile = apiPackage.resolve("ClientMetadataSession.java");
+        Path transactionSessionFile = apiPackage.resolve("TransactionSession.java");
+        Path connectionStatsSessionFile = apiPackage.resolve("ConnectionStatsSession.java");
+        Path protocolNegotiationSessionFile = apiPackage.resolve("ProtocolNegotiationSession.java");
+        for (Path required : List.of(
+                serverSessionFile,
+                dbIndexSessionFile,
+                clientMetadataSessionFile,
+                transactionSessionFile,
+                connectionStatsSessionFile,
+                protocolNegotiationSessionFile
+        )) {
+            Assert.assertTrue("缺少拆分后的 session 能力接口: " + relativePath(repoRoot, required), Files.isRegularFile(required));
+        }
+
+        String serverSession = Files.readString(serverSessionFile, StandardCharsets.UTF_8);
+        String normalizedServerSession = serverSession.replaceAll("\\s+", " ");
+        Assert.assertTrue(
+                "ServerSession should remain only as a compatibility aggregate over narrower session capabilities",
+                normalizedServerSession.contains(
+                        "interface ServerSession extends DbIndexSession, ClientMetadataSession, TransactionSession, ConnectionStatsSession, ProtocolNegotiationSession"
+                )
+        );
+        for (String directMethod : List.of(
+                "dbIndex()",
+                "setDbIndex(",
+                "clientName()",
+                "setClientName(",
+                "authenticated()",
+                "setAuthenticated(",
+                "transaction()",
+                "connectionStats()",
+                "respVersion()",
+                "setRespVersion("
+        )) {
+            Assert.assertFalse(
+                    "ServerSession must not directly redeclare split capability method " + directMethod,
+                    serverSession.contains(directMethod)
+            );
+        }
+
+        String protocolNegotiationSession = Files.readString(protocolNegotiationSessionFile, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "ProtocolNegotiationSession must own RESP version reads",
+                protocolNegotiationSession.contains("int respVersion()")
+        );
+        Assert.assertTrue(
+                "ProtocolNegotiationSession must own RESP version writes",
+                protocolNegotiationSession.contains("void setRespVersion(int respVersion)")
+        );
+        for (String forbiddenState : List.of(
+                "dbIndex()",
+                "setDbIndex(",
+                "clientName()",
+                "setClientName(",
+                "authenticated()",
+                "setAuthenticated(",
+                "transaction()",
+                "connectionStats()"
+        )) {
+            Assert.assertFalse(
+                    "ProtocolNegotiationSession must not mix ordinary session state method " + forbiddenState,
+                    protocolNegotiationSession.contains(forbiddenState)
+            );
+        }
+
+        String dbIndexSession = Files.readString(dbIndexSessionFile, StandardCharsets.UTF_8);
+        Assert.assertTrue("DbIndexSession must own DB index reads", dbIndexSession.contains("int dbIndex()"));
+        Assert.assertTrue("DbIndexSession must own DB index writes", dbIndexSession.contains("void setDbIndex(int dbIndex)"));
+        Assert.assertFalse("DbIndexSession must not own RESP version", dbIndexSession.contains("respVersion("));
+
+        Path respFactoryFile = repoRoot.resolve(
+                "yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriterFactory.java"
+        ).normalize();
+        Assert.assertTrue("缺少 RespReplyWriterFactory.java", Files.isRegularFile(respFactoryFile));
+        String respFactory = Files.readString(respFactoryFile, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "RESP writer factory should depend on ProtocolNegotiationSession, not the full ServerSession",
+                respFactory.contains("ProtocolNegotiationSession")
+        );
+        Assert.assertFalse(
+                "RESP writer factory must not require full ServerSession just to read RESP version",
+                respFactory.contains("import yier.bubu.redis.execution.api.ServerSession;")
+        );
+    }
+
+    @Test
     public void memoryApiMustRemainNeutralContractModule() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);

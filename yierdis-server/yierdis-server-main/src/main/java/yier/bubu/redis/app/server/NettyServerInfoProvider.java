@@ -348,7 +348,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         if (ctx == null) {
             return null;
         }
-        return ctx.session().connectionStats();
+        return ctx.connectionStatsSession().connectionStats();
     }
 
     private static void writeHeader(ReplyWriter out, int pairs) {
