@@ -4,16 +4,8 @@ import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.execution.api.CommandContext;
-import yier.bubu.redis.execution.api.ExecutionRecord;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReplyWriter;
-import yier.bubu.redis.execution.api.TransactionState;
-import yier.bubu.redis.storage.api.DbChangeContext;
-import yier.bubu.redis.storage.api.DbChangeListener;
-import yier.bubu.redis.storage.api.WrongTypeException;
-import yier.bubu.redis.storage.api.YierdisCommandException;
-import yier.bubu.redis.runtime.api.YierdisChangeEvent;
-import yier.bubu.redis.runtime.api.YierdisChangeEventBridge;
 import yier.bubu.redis.runtime.api.YierdisChangeSink;
 
 import java.util.ArrayList;
@@ -29,31 +21,31 @@ public final class YierdisFastCommandProcessor {
     private static final String NULL_BULK_STRING_ERR = "ERR Protocol error: null bulk string";
 
     private final CommandRegistry registry;
-    private final YierdisChangeSink changeSink;
-    private final DbChangeListener changeListener;
+    private final TransactionQueuePolicy transactionQueuePolicy = new TransactionQueuePolicy();
+    private final CommandChangeEmitter changeEmitter;
+    private final CommandExceptionTranslator exceptionTranslator = new CommandExceptionTranslator();
 
     public YierdisFastCommandProcessor(CommandModule... modules) {
-        this(YierdisChangeSink.NOOP, modules);
+        this(CommandChangeEmitter.noop(), modules);
     }
 
     public YierdisFastCommandProcessor(YierdisCommandProcessorOptions options, CommandModule... modules) {
-        this(changeSink(options), modules);
+        this(CommandChangeEmitter.fromOptions(options), modules);
     }
 
     public YierdisFastCommandProcessor(
             YierdisCommandProcessorOptions options,
             Iterable<? extends CommandModule> modules
     ) {
-        this(changeSink(options), toArray(modules));
+        this(CommandChangeEmitter.fromOptions(options), toArray(modules));
     }
 
     public YierdisFastCommandProcessor(YierdisChangeSink changeSink, Iterable<? extends CommandModule> modules) {
-        this(changeSink, toArray(modules));
+        this(CommandChangeEmitter.fromSink(changeSink), toArray(modules));
     }
 
-    private YierdisFastCommandProcessor(YierdisChangeSink changeSink, CommandModule[] modules) {
-        this.changeSink = changeSink == null ? YierdisChangeSink.NOOP : changeSink;
-        this.changeListener = YierdisChangeEventBridge.forSink(this.changeSink);
+    private YierdisFastCommandProcessor(CommandChangeEmitter changeEmitter, CommandModule[] modules) {
+        this.changeEmitter = Objects.requireNonNull(changeEmitter, "changeEmitter");
         CommandRegistry registry = new CommandRegistry();
         new TransactionCommands(this).register(registry);
         registerExtraModules(registry, modules);
@@ -76,8 +68,8 @@ public final class YierdisFastCommandProcessor {
 
         // Reject null bulk strings early to avoid NPEs deeper in the DB and data structures.
         // We only allow a null bulk string for PING/ECHO's single message argument (argv[1]).
-        boolean allowNullMessage = asciiEqualsIgnoreCase(request, 0, "PING")
-                || asciiEqualsIgnoreCase(request, 0, "ECHO");
+        boolean allowNullMessage = CommandRequestSupport.asciiEqualsIgnoreCase(request, 0, "PING")
+                || CommandRequestSupport.asciiEqualsIgnoreCase(request, 0, "ECHO");
         for (int i = 1; i < argc; i++) {
             if (!request.isNull(i)) {
                 continue;
@@ -89,71 +81,18 @@ public final class YierdisFastCommandProcessor {
             return;
         }
 
-        TransactionState tx = ctx.transactionSession().transaction();
-        if (tx.active()) {
-            boolean isMulti = asciiEqualsIgnoreCase(request, 0, "MULTI");
-            boolean isExec = asciiEqualsIgnoreCase(request, 0, "EXEC");
-            boolean isDiscard = asciiEqualsIgnoreCase(request, 0, "DISCARD");
-            if (!isMulti && !isExec && !isDiscard) {
-                CommandSpec<?> spec = registry.spec(request);
-                if (spec == null) {
-                    tx.markAborted();
-                    out.error(unknownCommandMessage(request));
-                    return;
-                }
-                String disallowedInMultiError = spec.disallowedInMultiError();
-                if (disallowedInMultiError != null) {
-                    tx.markAborted();
-                    out.error(disallowedInMultiError);
-                    return;
-                }
-                if (!validateBeforeQueue(spec, request, tx, out)) {
-                    return;
-                }
-                String enqueueErr = tx.tryEnqueue(request);
-                if (enqueueErr != null) {
-                    out.error(enqueueErr);
-                    return;
-                }
-                out.simpleString("QUEUED");
-                return;
-            }
+        if (transactionQueuePolicy.queueIfNeeded(request, ctx, registry)) {
+            return;
         }
 
-        try {
+        exceptionTranslator.run(out, () -> {
             CommandSpec<?> spec = registry.spec(request);
             if (spec == null) {
-                out.error(unknownCommandMessage(request));
+                out.error(CommandRequestSupport.unknownCommandMessage(request));
                 return;
             }
-            boolean sinkEnabled = changeSink != YierdisChangeSink.NOOP;
-            ctx.clearMutationOutcome();
-            if (sinkEnabled) {
-                try (DbChangeContext.Scope ignored = DbChangeContext.open(changeListener)) {
-                    executeSpec(spec, request, ctx);
-                }
-            } else {
-                executeSpec(spec, request, ctx);
-            }
-            boolean changed = ctx.changedAny();
-
-            // 变更事件：仅在命令执行成功后触发；仅当本次命令产生“真实变更”（Keyspace/Value/TTL 元数据）时 emit。
-            // 该判定由 DB/ops 层在真实写入点打点，命令层仅按事实 gate emit，避免“写命令名单”漂移。
-            if (sinkEnabled && changed) {
-                int dbIndex = Math.max(0, ctx.dbIndexSession().dbIndex());
-                try {
-                    changeSink.onChange(new YierdisChangeEvent(new ExecutionRecord(dbIndex, request)));
-                } catch (Throwable ignored) {
-                    // best-effort: 事件消费失败不应影响主命令执行路径
-                }
-            }
-        } catch (WrongTypeException e) {
-            out.error(e.getMessage());
-        } catch (YierdisCommandException e) {
-            out.error(e.getMessage());
-        } catch (IllegalArgumentException e) {
-            out.error("ERR " + e.getMessage());
-        }
+            changeEmitter.execute(request, ctx, () -> executeSpec(spec, request, ctx));
+        });
     }
 
     private void executeSpec(CommandSpec<?> spec, ExecutionRequest request, CommandContext ctx) {
@@ -169,36 +108,6 @@ public final class YierdisFastCommandProcessor {
         spec.executeParsed(parsed, ctx);
     }
 
-    private boolean validateBeforeQueue(CommandSpec<?> spec, ExecutionRequest request, TransactionState tx, ReplyWriter out) {
-        CommandParseResult<?> parsed = spec.parse(request);
-        if (parsed.ok()) {
-            return true;
-        }
-        tx.markAborted();
-        out.error(parsed.error().toReplyMessage());
-        return false;
-    }
-
-    private static String unknownCommandMessage(ExecutionRequest request) {
-        if (request == null || request.argc() <= 0 || request.isNull(0) || request.len(0) <= 0) {
-            return "ERR unknown command";
-        }
-        int len = request.len(0);
-        int printable = 0;
-        for (int i = 0; i < len; i++) {
-            int b = request.byteAt(0, i) & 0xFF;
-            if (b >= 0x20 && b <= 0x7E && b != '\'' && b != '\\') {
-                printable++;
-            }
-        }
-        if (printable == len && len <= 64) {
-            byte[] name = request.readOnlyByteArray(0);
-            String s = name == null ? "" : new String(name, java.nio.charset.StandardCharsets.US_ASCII);
-            return "ERR unknown command '" + s + "'";
-        }
-        return "ERR unknown command";
-    }
-
     private static void registerExtraModules(CommandRegistry registry, CommandModule... extraModules) {
         if (extraModules == null || extraModules.length == 0) {
             return;
@@ -211,33 +120,6 @@ public final class YierdisFastCommandProcessor {
         }
     }
 
-    private static boolean asciiEqualsIgnoreCase(ExecutionRequest request, int argIndex, String literal) {
-        if (literal == null) {
-            return false;
-        }
-        if (request.isNull(argIndex)) {
-            return false;
-        }
-        int len = request.len(argIndex);
-        if (len != literal.length()) {
-            return false;
-        }
-        for (int i = 0; i < len; i++) {
-            int b = request.byteAt(argIndex, i) & 0xFF;
-            int c = literal.charAt(i);
-            if (b >= 'A' && b <= 'Z') {
-                b |= 0x20;
-            }
-            if (c >= 'A' && c <= 'Z') {
-                c |= 0x20;
-            }
-            if (b != c) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     private static CommandModule[] toArray(Iterable<? extends CommandModule> modules) {
         if (modules == null) {
             return new CommandModule[0];
@@ -247,10 +129,6 @@ public final class YierdisFastCommandProcessor {
             collected.add(module);
         }
         return collected.toArray(new CommandModule[0]);
-    }
-
-    private static YierdisChangeSink changeSink(YierdisCommandProcessorOptions options) {
-        return options == null ? YierdisChangeSink.NOOP : options.changeSink();
     }
 
 }

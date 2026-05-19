@@ -67,7 +67,7 @@
 | --- | --- | --- | --- |
 | [`CommandSpec`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java) | 命令元数据、arity、handler、MULTI 限制 | factory / accessor methods | [`commands-and-data-model.md`](./commands-and-data-model.md) |
 | [`CommandRegistry`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java) | command name 到 `CommandSpec` 的注册表 | `register(...)`, `spec(...)`, `upperNamesSorted()` | [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) |
-| [`YierdisFastCommandProcessor`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java) | empty/unknown command、事务队列、handler 调用、change event gate | `execute(...)` | [`request-execution-flow.md`](./request-execution-flow.md) |
+| [`YierdisFastCommandProcessor`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java) | empty/unknown command、命令查表、解析执行主流程；事务入队、异常翻译和 change event gate 委托给 command-kernel 小组件 | `execute(...)` | [`request-execution-flow.md`](./request-execution-flow.md) |
 | [`DefaultCommandModules`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/DefaultCommandModules.java) | transport-neutral 默认命令模块集合 | `create(...)` | [`module-architecture.md`](./module-architecture.md) |
 | [`CommandSupport`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java) | 参数读取、DB routing、常用 reply/error helper | helper methods | [`commands-and-data-model.md`](./commands-and-data-model.md) |
 
