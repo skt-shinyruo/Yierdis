@@ -56,7 +56,7 @@ ExecutionRequest
 - 当前 DB index provider；
 - 可通过上下文取得的 DB runtime 能力。
 
-`ReplyWriter` 是命令层唯一的回包出口。命令 handler 写的是 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`mapHeader`、`nullValue`、`error` 等语义，不写 `+OK\r\n`、`$-1\r\n` 这类协议字节。RESP2 / RESP3 的差异由协议 writer 根据连接版本处理。
+`RedisReplyWriter` 是命令层唯一的 Redis reply 语义模型；现有执行边界继续暴露兼容别名 `ReplyWriter`。命令 handler 写的是 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`mapHeader`、`nullValue`、`error` 等 Redis reply 形状，不写 `+OK\r\n`、`$-1\r\n` 这类协议字节。RESP2 / RESP3 的差异由协议 writer 根据连接版本处理。
 
 `CommandSupport` 是内置命令的公共工具箱。它帮助各个 `*Commands` 类读取参数、解析整数、取得 `DbReads` / `DbWrites` / `DbEngine`、复用 scratch buffer，并把 DB 返回的 bulk-string 序列适配到 `ReplyWriter`。
 

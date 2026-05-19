@@ -82,7 +82,7 @@ HELLO 3 SETNAME <name>
 
 ## ReplyWriter 到 RESP 回包
 
-`ReplyWriter` 是回包语义的权威来源。命令实现调用 `simpleString`、`integer`、`bulkString`、`arrayHeader`、`mapHeader`、`nullValue`、`error` 等语义 API；RESP writer 只负责把这些语义形状编码成线上 bytes。
+`RedisReplyWriter` 是 Redis command reply model 的权威来源；`ReplyWriter` 保留为执行边界上的兼容别名。命令实现调用 `simpleString`、`integer`、`bulkString`、`arrayHeader`、`mapHeader`、`nullValue`、`error` 等语义 API；RESP writer 只负责把这些 Redis reply 形状编码成线上 bytes。
 
 RESP2 下的典型映射是：
 

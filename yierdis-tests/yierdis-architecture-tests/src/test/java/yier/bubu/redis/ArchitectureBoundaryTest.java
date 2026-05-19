@@ -935,7 +935,8 @@ public class ArchitectureBoundaryTest {
                 "ByteArrayExecutionRequest - API",
                 "ExecutionRecord - API",
                 "ReplySink - API",
-                "ReplyWriter - API",
+                "RedisReplyWriter - API",
+                "ReplyWriter - compatibility alias",
                 "ReplyWriterFactory - API",
                 "Session - API",
                 "ServerSession - API",
@@ -995,6 +996,84 @@ public class ArchitectureBoundaryTest {
         if (!offenders.isEmpty()) {
             Assert.fail(
                     "检测到 yierdis-server-api 依赖协议、命令实现、存储实现、运行时实现、应用或 Netty：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void replyWriterMustBeDocumentedAsRedisReplyModelAndKeepProtocolOutOfCommand() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
+        Path apiPackage = repoRoot.resolve(
+                "yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api"
+        ).normalize();
+
+        Path redisReplyWriterFile = apiPackage.resolve("RedisReplyWriter.java");
+        Assert.assertTrue(
+                "ReplyWriter's Redis/RESP-shaped contract must live behind an explicitly named RedisReplyWriter API",
+                Files.isRegularFile(redisReplyWriterFile)
+        );
+
+        String redisReplyWriter = Files.readString(redisReplyWriterFile, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "RedisReplyWriter must be documented as a Redis command reply model, not a generic protocol abstraction",
+                redisReplyWriter.contains("Redis command reply model")
+        );
+        Assert.assertTrue(
+                "RedisReplyWriter must own RESP3/Redis-shaped aggregate reply methods",
+                redisReplyWriter.contains("void mapHeader(int pairs)")
+                        && redisReplyWriter.contains("void setHeader(int count)")
+                        && redisReplyWriter.contains("void pushHeader(int count)")
+                        && redisReplyWriter.contains("void attributeHeader(int pairs)")
+        );
+        Assert.assertTrue(
+                "RedisReplyWriter must own RESP3/Redis-shaped scalar reply methods",
+                redisReplyWriter.contains("void verbatimString(String format, byte[] data)")
+                        && redisReplyWriter.contains("void blobError(String message)")
+        );
+        Assert.assertFalse(
+                "RedisReplyWriter must not claim to be protocol-agnostic",
+                redisReplyWriter.contains("Protocol-agnostic") || redisReplyWriter.contains("protocol-agnostic")
+        );
+
+        Path replyWriterFile = apiPackage.resolve("ReplyWriter.java");
+        Assert.assertTrue("缺少 ReplyWriter.java", Files.isRegularFile(replyWriterFile));
+        String replyWriter = Files.readString(replyWriterFile, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "ReplyWriter should remain as a compatibility alias over the more explicit RedisReplyWriter boundary",
+                replyWriter.contains("interface ReplyWriter extends RedisReplyWriter")
+        );
+        Assert.assertFalse(
+                "ReplyWriter must not continue describing itself as protocol-agnostic",
+                replyWriter.contains("Protocol-agnostic") || replyWriter.contains("protocol-agnostic")
+        );
+
+        Path packageInfo = apiPackage.resolve("package-info.java");
+        Assert.assertTrue("缺少 package-info.java", Files.isRegularFile(packageInfo));
+        String packageInfoText = Files.readString(packageInfo, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "package-info.java must classify RedisReplyWriter as an API",
+                packageInfoText.contains("RedisReplyWriter - API")
+        );
+        Assert.assertTrue(
+                "package-info.java must state that ReplyWriter is a compatibility alias",
+                packageInfoText.contains("ReplyWriter - compatibility alias")
+        );
+        Assert.assertFalse(
+                "execution API package docs must not claim ReplyWriter is protocol-agnostic",
+                packageInfoText.contains("ReplyWriter") && packageInfoText.contains("protocol-agnostic")
+        );
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = 0;
+        scanned += scanForForbiddenText(repoRoot, commandApiMain(repoRoot), offenders, "import yier.bubu.redis.protocol.");
+        scanned += scanForForbiddenText(repoRoot, commandKernelMain(repoRoot), offenders, "import yier.bubu.redis.protocol.");
+        scanned += scanForForbiddenText(repoRoot, commandDefaultsMain(repoRoot), offenders, "import yier.bubu.redis.protocol.");
+        Assert.assertTrue("架构护栏扫描未扫描到任何 command Java 文件", scanned > 0);
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 command 层直接 import protocol 包；Redis reply model 必须通过 server-api 边界暴露：\n"
                             + String.join("\n", offenders)
             );
         }

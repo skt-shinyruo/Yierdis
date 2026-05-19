@@ -14,7 +14,7 @@
 
 ### `ReplyWriter`
 
-命令层唯一的回包语义出口。handler 只调用 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`error` 等语义方法，不拼 RESP bytes。详见 [`commands-and-data-model.md`](./commands-and-data-model.md)。
+命令层唯一的 Redis reply 语义出口，当前是 `RedisReplyWriter` 的兼容别名。handler 只调用 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`mapHeader`、`error` 等 Redis reply 语义方法，不拼 RESP bytes。详见 [`commands-and-data-model.md`](./commands-and-data-model.md)。
 
 ### `RespReplyWriter`
 
