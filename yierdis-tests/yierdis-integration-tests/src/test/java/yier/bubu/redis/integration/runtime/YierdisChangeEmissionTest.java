@@ -111,6 +111,20 @@ public class YierdisChangeEmissionTest {
 
                 Assert.assertEquals(1, events.size());
                 Assert.assertEquals("SET", arg(events.get(0), 0));
+
+                events.clear();
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(cmd("MULTI"))).value());
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(cmd("GET", "k"))).value());
+                Assert.assertEquals("QUEUED", ((ReplySimpleString) client.execute(cmd("SET", "k", "v2"))).value());
+
+                ReplyArray execWriteLast = (ReplyArray) client.execute(cmd("EXEC"));
+                Assert.assertNotNull(execWriteLast.values());
+                Assert.assertEquals(2, execWriteLast.values().size());
+
+                Assert.assertEquals(1, events.size());
+                Assert.assertEquals("SET", arg(events.get(0), 0));
+                Assert.assertEquals("k", arg(events.get(0), 1));
+                Assert.assertEquals("v2", arg(events.get(0), 2));
             }
         });
     }

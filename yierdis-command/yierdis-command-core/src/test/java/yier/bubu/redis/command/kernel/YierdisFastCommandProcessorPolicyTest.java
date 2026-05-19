@@ -129,6 +129,85 @@ public class YierdisFastCommandProcessorPolicyTest {
         Assert.assertEquals(1, events.size());
     }
 
+    @Test
+    public void execReplayEmitsQueuedMutationWithoutEmittingExec() {
+        ArrayList<YierdisChangeEvent> events = new ArrayList<>();
+        YierdisFastCommandProcessor processor = mutationAwareProcessor(events);
+        TestSession session = new TestSession();
+        CapturingReplyWriter out = new CapturingReplyWriter();
+        CommandContext ctx = new CommandContext(session, out);
+
+        processor.execute(request("MULTI"), ctx);
+
+        out.clear();
+        processor.execute(request("READONLY"), ctx);
+        Assert.assertEquals("QUEUED", out.simpleString());
+
+        out.clear();
+        processor.execute(request("MUTATE"), ctx);
+        Assert.assertEquals("QUEUED", out.simpleString());
+
+        out.clear();
+        processor.execute(request("EXEC"), ctx);
+
+        Assert.assertEquals(Integer.valueOf(2), out.arrayHeader());
+        Assert.assertEquals("MUTATE", out.simpleString());
+        Assert.assertEquals(1, events.size());
+        Assert.assertEquals("MUTATE", arg(events.get(0), 0));
+    }
+
+    @Test
+    public void execReplayDoesNotCarryMutationOutcomeIntoFollowingReadOnlyCommand() {
+        ArrayList<YierdisChangeEvent> events = new ArrayList<>();
+        YierdisFastCommandProcessor processor = mutationAwareProcessor(events);
+        TestSession session = new TestSession();
+        CapturingReplyWriter out = new CapturingReplyWriter();
+        CommandContext ctx = new CommandContext(session, out);
+
+        processor.execute(request("MULTI"), ctx);
+
+        out.clear();
+        processor.execute(request("MUTATE"), ctx);
+        Assert.assertEquals("QUEUED", out.simpleString());
+
+        out.clear();
+        processor.execute(request("READONLY"), ctx);
+        Assert.assertEquals("QUEUED", out.simpleString());
+
+        out.clear();
+        processor.execute(request("EXEC"), ctx);
+
+        Assert.assertEquals(Integer.valueOf(2), out.arrayHeader());
+        Assert.assertEquals("READONLY", out.simpleString());
+        Assert.assertEquals(1, events.size());
+        Assert.assertEquals("MUTATE", arg(events.get(0), 0));
+    }
+
+    private static YierdisFastCommandProcessor mutationAwareProcessor(ArrayList<YierdisChangeEvent> events) {
+        return new YierdisFastCommandProcessor(
+                YierdisCommandProcessorOptions.builder()
+                        .changeSink(events::add)
+                        .build(),
+                registration -> {
+                    registration.register(
+                            "READONLY",
+                            CommandDescriptor.of(1, 0, 0, 0),
+                            CommandParsers.exactRequest(1, "readonly"),
+                            (request, ctx) -> ctx.out().simpleString("READONLY")
+                    );
+                    registration.register(
+                            "MUTATE",
+                            CommandDescriptor.of(1, 0, 0, 0),
+                            CommandParsers.exactRequest(1, "mutate"),
+                            (request, ctx) -> {
+                                ctx.recordMutation(true, false);
+                                ctx.out().simpleString("MUTATE");
+                            }
+                    );
+                }
+        );
+    }
+
     private static ExecutionRequest request(String command, String... args) {
         return ByteArrayExecutionRequest.fromUtf8(command, List.of(args));
     }
@@ -263,6 +342,10 @@ public class YierdisFastCommandProcessorPolicyTest {
 
         private String error() {
             return error;
+        }
+
+        private Integer arrayHeader() {
+            return arrayHeader;
         }
 
         @Override
