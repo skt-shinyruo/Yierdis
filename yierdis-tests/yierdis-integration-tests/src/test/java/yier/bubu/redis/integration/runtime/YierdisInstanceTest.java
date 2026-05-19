@@ -18,6 +18,8 @@ import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MemoryOps;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
+import yier.bubu.redis.runtime.api.YierdisChangeEvent;
+import yier.bubu.redis.runtime.api.YierdisChangeKind;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceMaintenance;
@@ -179,6 +181,26 @@ public class YierdisInstanceTest {
     }
 
     @Test
+    public void maintenanceTickEmitsSyntheticDeleteForExpiredKeys() {
+        List<YierdisChangeEvent> events = new ArrayList<>();
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .changeSink(events::add)
+                .build();
+
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
+            instance.bindToCurrentThread();
+            Assert.assertTrue(instance.engine(0).writes().strings().setString(b("maintenance-expired"), b("v"), SetMode.NORMAL, null).value());
+            Assert.assertTrue(instance.engine(0).writes().ttl().pexpire(view(b("maintenance-expired")), 1L).value());
+            events.clear();
+
+            sleepPastTtl();
+            new YierdisInstanceMaintenance(instance).maintenanceTick();
+
+            assertSyntheticDelete(events, "maintenance-expired", YierdisChangeKind.EXPIRED);
+        }
+    }
+
+    @Test
     public void maxmemoryPolicyBuilderUsesDomainEnumAndKeepsStringCompatibility() {
         YierdisInstanceConfig typed = YierdisInstanceConfig.builder()
                 .maxmemoryPolicy(MaxmemoryPolicy.ALLKEYS_LRU)
@@ -206,6 +228,42 @@ public class YierdisInstanceTest {
             return Long.MAX_VALUE;
         }
         return left + right;
+    }
+
+    private static void assertSyntheticDelete(List<YierdisChangeEvent> events, String key, YierdisChangeKind kind) {
+        Assert.assertEquals(1, events.size());
+        YierdisChangeEvent event = events.get(0);
+        Assert.assertTrue(event.synthetic());
+        Assert.assertEquals(kind, event.kind());
+        Assert.assertEquals("DEL", arg(event, 0));
+        Assert.assertEquals(key, arg(event, 1));
+    }
+
+    private static String arg(YierdisChangeEvent event, int index) {
+        return new String(event.request().toByteArray(index), java.nio.charset.StandardCharsets.US_ASCII);
+    }
+
+    private static yier.bubu.redis.bytes.BytesView view(byte[] data) {
+        return new yier.bubu.redis.bytes.BytesView() {
+            @Override
+            public int length() {
+                return data.length;
+            }
+
+            @Override
+            public byte getByte(int index) {
+                return data[index];
+            }
+        };
+    }
+
+    private static void sleepPastTtl() {
+        try {
+            Thread.sleep(20L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Assert.fail("interrupted while waiting for TTL to pass");
+        }
     }
 
     @Test

@@ -5,6 +5,9 @@ import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
+import yier.bubu.redis.storage.api.DbChange;
+import yier.bubu.redis.storage.api.DbChangeContext;
+import yier.bubu.redis.storage.api.DbChangeKind;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
@@ -43,6 +46,7 @@ public final class YierdisDbKeyLifecycle {
     private final ZSetRoot zsetRoot;
     private final LongSupplier lruClockSupplier;
     private final LongConsumer adjustUsedBytesCallback;
+    private final int dbIndex;
 
     YierdisDbKeyLifecycle(
             YierdisExpireIndex expires,
@@ -59,6 +63,40 @@ public final class YierdisDbKeyLifecycle {
             LongSupplier lruClockSupplier,
             LongConsumer adjustUsedBytesCallback
     ) {
+        this(
+                expires,
+                offHeapAllocator,
+                nativeAllocator,
+                memoryRuntime,
+                entryTable,
+                keyDirectory,
+                stringRoot,
+                listRoot,
+                hashRoot,
+                setRoot,
+                zsetRoot,
+                lruClockSupplier,
+                adjustUsedBytesCallback,
+                0
+        );
+    }
+
+    YierdisDbKeyLifecycle(
+            YierdisExpireIndex expires,
+            OffHeapAllocator offHeapAllocator,
+            NativeAllocator nativeAllocator,
+            YierdisFfmMemoryRuntime memoryRuntime,
+            EntryTable entryTable,
+            NativeKeyDirectory keyDirectory,
+            StringRoot stringRoot,
+            ListRoot listRoot,
+            HashRoot hashRoot,
+            SetRoot setRoot,
+            ZSetRoot zsetRoot,
+            LongSupplier lruClockSupplier,
+            LongConsumer adjustUsedBytesCallback,
+            int dbIndex
+    ) {
         this.expires = Objects.requireNonNull(expires, "expires");
         this.offHeapAllocator = offHeapAllocator;
         this.nativeAllocator = java.util.Objects.requireNonNull(nativeAllocator, "nativeAllocator");
@@ -72,6 +110,7 @@ public final class YierdisDbKeyLifecycle {
         this.zsetRoot = Objects.requireNonNull(zsetRoot, "zsetRoot");
         this.lruClockSupplier = Objects.requireNonNull(lruClockSupplier, "lruClockSupplier");
         this.adjustUsedBytesCallback = Objects.requireNonNull(adjustUsedBytesCallback, "adjustUsedBytesCallback");
+        this.dbIndex = Math.max(0, dbIndex);
     }
 
     public OffHeapAllocator offHeapAllocator() {
@@ -384,13 +423,36 @@ public final class YierdisDbKeyLifecycle {
         if (expireAtMillis == null || expireAtMillis > nowMillis) {
             return false;
         }
+        byte[] keyBytes = keyBytes(keyHandle);
         long removalBytes = estimatedBytesForRemoval(keyHandle, record);
         removeExpireIndexOnly(keyHandle);
         if (removeEntry(keyHandle, record)) {
             adjustUsedBytesCallback.accept(-removalBytes);
+            emitSyntheticDelete(keyBytes, DbChangeKind.EXPIRED);
             return true;
         }
         return false;
+    }
+
+    public void emitSyntheticDelete(KeyHandle keyHandle, DbChangeKind kind) {
+        if (keyHandle == null || kind == null) {
+            return;
+        }
+        emitSyntheticDelete(keyBytes(keyHandle), kind);
+    }
+
+    public void emitSyntheticDelete(byte[] keyBytes, DbChangeKind kind) {
+        if (keyBytes == null || kind == null) {
+            return;
+        }
+        DbChangeContext.emit(DbChange.syntheticDelete(dbIndex, kind, keyBytes));
+    }
+
+    public byte[] copyKeyBytes(KeyHandle keyHandle) {
+        if (keyHandle == null) {
+            return null;
+        }
+        return keyBytes(keyHandle);
     }
 
     public boolean isKeyExpired(KeyHandle keyHandle, long nowMillis) {

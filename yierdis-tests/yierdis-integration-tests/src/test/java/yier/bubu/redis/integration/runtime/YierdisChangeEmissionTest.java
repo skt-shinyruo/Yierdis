@@ -8,6 +8,7 @@ import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ServerSession;
 import yier.bubu.redis.execution.api.TransactionState;
+import yier.bubu.redis.runtime.api.YierdisChangeKind;
 import yier.bubu.redis.runtime.api.YierdisChangeEvent;
 import yier.bubu.redis.runtime.api.YierdisChangeSink;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -156,8 +157,81 @@ public class YierdisChangeEmissionTest {
         });
     }
 
+    @Test
+    public void passiveExpirationEmitsSyntheticDeleteForReadPath() {
+        forEachDb(db -> {
+            List<YierdisChangeEvent> events = new ArrayList<>();
+            YierdisChangeSink sink = events::add;
+
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDbWithChangeSink(db, sink);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                Assert.assertTrue(client.execute(cmd("SET", "expiring", "v", "PX", "1")) instanceof ReplySimpleString);
+                events.clear();
+
+                sleepPastTtl();
+
+                ReplyObject get = client.execute(cmd("GET", "expiring"));
+                Assert.assertTrue(get instanceof ReplyNull);
+                assertSyntheticDelete(events, "expiring", YierdisChangeKind.EXPIRED);
+            }
+        });
+    }
+
+    @Test
+    public void passiveExpirationEmitsSyntheticDeleteForKeyspaceReadsAndDel() {
+        forEachDb(db -> {
+            List<YierdisChangeEvent> events = new ArrayList<>();
+            YierdisChangeSink sink = events::add;
+
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDbWithChangeSink(db, sink);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                Assert.assertTrue(client.execute(cmd("SET", "exists-expired", "v", "PX", "1")) instanceof ReplySimpleString);
+                events.clear();
+                sleepPastTtl();
+                ReplyObject exists = client.execute(cmd("EXISTS", "exists-expired"));
+                Assert.assertTrue(exists instanceof ReplyInteger);
+                Assert.assertEquals(0, ((ReplyInteger) exists).value());
+                assertSyntheticDelete(events, "exists-expired", YierdisChangeKind.EXPIRED);
+
+                Assert.assertTrue(client.execute(cmd("SET", "ttl-expired", "v", "PX", "1")) instanceof ReplySimpleString);
+                events.clear();
+                sleepPastTtl();
+                ReplyObject ttl = client.execute(cmd("TTL", "ttl-expired"));
+                Assert.assertTrue(ttl instanceof ReplyInteger);
+                Assert.assertEquals(-2, ((ReplyInteger) ttl).value());
+                assertSyntheticDelete(events, "ttl-expired", YierdisChangeKind.EXPIRED);
+
+                Assert.assertTrue(client.execute(cmd("SET", "del-expired", "v", "PX", "1")) instanceof ReplySimpleString);
+                events.clear();
+                sleepPastTtl();
+                ReplyObject del = client.execute(cmd("DEL", "del-expired"));
+                Assert.assertTrue(del instanceof ReplyInteger);
+                Assert.assertEquals(0, ((ReplyInteger) del).value());
+                assertSyntheticDelete(events, "del-expired", YierdisChangeKind.EXPIRED);
+            }
+        });
+    }
+
     private static String arg(YierdisChangeEvent event, int index) {
         return new String(event.request().toByteArray(index), StandardCharsets.US_ASCII);
+    }
+
+    private static void assertSyntheticDelete(List<YierdisChangeEvent> events, String key, YierdisChangeKind kind) {
+        Assert.assertEquals(1, events.size());
+        YierdisChangeEvent event = events.get(0);
+        Assert.assertTrue(event.synthetic());
+        Assert.assertEquals(kind, event.kind());
+        Assert.assertEquals("DEL", arg(event, 0));
+        Assert.assertEquals(key, arg(event, 1));
+    }
+
+    private static void sleepPastTtl() {
+        try {
+            Thread.sleep(20L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Assert.fail("interrupted while waiting for TTL to pass");
+        }
     }
 
     private static final class TestSession implements ServerSession {

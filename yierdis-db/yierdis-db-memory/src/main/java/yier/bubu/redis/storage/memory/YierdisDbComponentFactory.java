@@ -82,7 +82,8 @@ public final class YierdisDbComponentFactory {
                 storage.setRoot,
                 storage.zsetRoot,
                 owner::nextLruClock,
-                owner::adjustUsedBytes
+                owner::adjustUsedBytes,
+                owner.dbIndex()
         );
         YierdisDbInternals internals = new YierdisDbRuntimeInternals(
                 owner::checkThread,
@@ -141,6 +142,8 @@ public final class YierdisDbComponentFactory {
     }
 
     interface OwnerCallbacks {
+        int dbIndex();
+
         YierdisDb db();
 
         void checkThread();

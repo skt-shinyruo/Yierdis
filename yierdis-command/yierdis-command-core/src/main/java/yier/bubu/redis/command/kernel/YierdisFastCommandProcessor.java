@@ -8,9 +8,12 @@ import yier.bubu.redis.execution.api.ExecutionRecord;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReplyWriter;
 import yier.bubu.redis.execution.api.TransactionState;
+import yier.bubu.redis.storage.api.DbChangeContext;
+import yier.bubu.redis.storage.api.DbChangeListener;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.runtime.api.YierdisChangeEvent;
+import yier.bubu.redis.runtime.api.YierdisChangeEventBridge;
 import yier.bubu.redis.runtime.api.YierdisChangeSink;
 
 import java.util.ArrayList;
@@ -27,9 +30,21 @@ public final class YierdisFastCommandProcessor {
 
     private final CommandRegistry registry;
     private final YierdisChangeSink changeSink;
+    private final DbChangeListener changeListener;
 
     public YierdisFastCommandProcessor(CommandModule... modules) {
         this(YierdisChangeSink.NOOP, modules);
+    }
+
+    public YierdisFastCommandProcessor(YierdisCommandProcessorOptions options, CommandModule... modules) {
+        this(changeSink(options), modules);
+    }
+
+    public YierdisFastCommandProcessor(
+            YierdisCommandProcessorOptions options,
+            Iterable<? extends CommandModule> modules
+    ) {
+        this(changeSink(options), toArray(modules));
     }
 
     public YierdisFastCommandProcessor(YierdisChangeSink changeSink, Iterable<? extends CommandModule> modules) {
@@ -38,6 +53,7 @@ public final class YierdisFastCommandProcessor {
 
     private YierdisFastCommandProcessor(YierdisChangeSink changeSink, CommandModule[] modules) {
         this.changeSink = changeSink == null ? YierdisChangeSink.NOOP : changeSink;
+        this.changeListener = YierdisChangeEventBridge.forSink(this.changeSink);
         CommandRegistry registry = new CommandRegistry();
         new TransactionCommands(this).register(registry);
         registerExtraModules(registry, modules);
@@ -112,7 +128,13 @@ public final class YierdisFastCommandProcessor {
             }
             boolean sinkEnabled = changeSink != YierdisChangeSink.NOOP;
             ctx.clearMutationOutcome();
-            executeSpec(spec, request, ctx);
+            if (sinkEnabled) {
+                try (DbChangeContext.Scope ignored = DbChangeContext.open(changeListener)) {
+                    executeSpec(spec, request, ctx);
+                }
+            } else {
+                executeSpec(spec, request, ctx);
+            }
             boolean changed = ctx.changedAny();
 
             // 变更事件：仅在命令执行成功后触发；仅当本次命令产生“真实变更”（Keyspace/Value/TTL 元数据）时 emit。
@@ -225,6 +247,10 @@ public final class YierdisFastCommandProcessor {
             collected.add(module);
         }
         return collected.toArray(new CommandModule[0]);
+    }
+
+    private static YierdisChangeSink changeSink(YierdisCommandProcessorOptions options) {
+        return options == null ? YierdisChangeSink.NOOP : options.changeSink();
     }
 
 }

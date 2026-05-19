@@ -1,5 +1,7 @@
 package yier.bubu.redis.runtime.embedded;
 
+import yier.bubu.redis.storage.api.DbChangeContext;
+import yier.bubu.redis.storage.api.DbChangeListener;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
@@ -13,9 +15,11 @@ import java.util.Objects;
  */
 public final class YierdisInstanceRuntimeAccess implements AutoCloseable {
     private final YierdisInstance instance;
+    private final DbChangeListener changeListener;
 
     YierdisInstanceRuntimeAccess(YierdisInstance instance) {
         this.instance = Objects.requireNonNull(instance, "instance");
+        this.changeListener = instance.changeListener();
     }
 
     /**
@@ -37,6 +41,17 @@ public final class YierdisInstanceRuntimeAccess implements AutoCloseable {
             return;
         }
 
+        if (changeListener != DbChangeListener.NOOP) {
+            try (DbChangeContext.Scope ignored = DbChangeContext.open(changeListener)) {
+                runMaintenanceTick(config, databases);
+            }
+            return;
+        }
+
+        runMaintenanceTick(config, databases);
+    }
+
+    private void runMaintenanceTick(YierdisInstanceConfig config, int databases) {
         boolean maxmemoryEnabled = config.maxmemoryBytes() > 0;
         boolean perDb = maxmemoryEnabled && config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
         boolean global = maxmemoryEnabled && config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;

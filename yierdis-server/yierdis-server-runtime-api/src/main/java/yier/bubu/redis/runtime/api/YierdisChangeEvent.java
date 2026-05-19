@@ -17,14 +17,19 @@ import java.util.Objects;
  *   <li>保持载荷最小化：不携带 DB 内部对象引用或结构化 diff，仅记录请求快照（可重放）</li>
  * </ul>
  * <p>
- * 发射语义（命令层约定）：仅当命令执行成功，且本次命令造成 Keyspace/Value/TTL 元数据的真实变化时才应发射事件。
- * 该“真实变更”判定由 storage-api 写结果显式返回，避免依赖隐藏的线程本地状态。
+ * 发射语义：用户命令仅当命令执行成功，且本次命令造成 Keyspace/Value/TTL 元数据的真实变化时才应发射事件；
+ * DB 生命周期内部删除（过期/驱逐）应发射 synthetic 事件，并使用可重放的规范命令（例如 DEL key）表示结果。
  * <p>
  * 生命周期约束：{@link #request()} 内的参数字节被视为不可变快照；创建方应保证其不会被后续修改。
  */
-public record YierdisChangeEvent(ExecutionRecord record) {
+public record YierdisChangeEvent(ExecutionRecord record, YierdisChangeKind kind, boolean synthetic) {
+    public YierdisChangeEvent(ExecutionRecord record) {
+        this(record, YierdisChangeKind.USER_COMMAND, false);
+    }
+
     public YierdisChangeEvent {
         record = Objects.requireNonNull(record, "record");
+        kind = kind == null ? YierdisChangeKind.USER_COMMAND : kind;
     }
 
     public int dbIndex() {

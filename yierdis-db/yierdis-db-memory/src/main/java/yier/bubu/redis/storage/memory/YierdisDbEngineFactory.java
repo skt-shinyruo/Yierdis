@@ -60,7 +60,8 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
                     maxmemorySamples,
                     evictionTimeLimitMillis,
                     expireCleanupTimeLimitMillis,
-                    nativeDefragOptions
+                    nativeDefragOptions,
+                    dbIndex
             );
         }
         return YierdisDb.createWithSharedFfmRuntime(
@@ -70,7 +71,8 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
                 maxmemorySamples,
                 evictionTimeLimitMillis,
                 expireCleanupTimeLimitMillis,
-                nativeDefragOptions
+                nativeDefragOptions,
+                dbIndex
         );
     }
 }

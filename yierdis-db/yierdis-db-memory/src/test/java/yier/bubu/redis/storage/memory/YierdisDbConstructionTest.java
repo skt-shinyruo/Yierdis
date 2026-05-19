@@ -26,6 +26,9 @@ import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.api.DbChange;
+import yier.bubu.redis.storage.api.DbChangeContext;
+import yier.bubu.redis.storage.api.DbChangeKind;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.SetMode;
@@ -43,6 +46,8 @@ import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.Collections;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 public class YierdisDbConstructionTest {
     @Test
@@ -428,6 +433,28 @@ public class YierdisDbConstructionTest {
         }
     }
 
+    @Test
+    public void evictionEmitsSyntheticDeleteChange() {
+        YierdisDb db = new YierdisDb();
+        try {
+            db.bindToCurrentThread();
+            byte[] key = bytes("native-evict-event");
+            List<DbChange> changes = new ArrayList<>();
+
+            db.writes().strings().setString(key, bytes("value"), SetMode.NORMAL, null);
+            MaxmemoryCandidate candidate = db.sampleCandidate(MaxmemoryPolicy.ALLKEYS_RANDOM, System.currentTimeMillis());
+            Assert.assertNotNull(candidate);
+
+            try (DbChangeContext.Scope ignored = DbChangeContext.open(changes::add)) {
+                Assert.assertTrue(db.evict(candidate, System.currentTimeMillis()));
+            }
+
+            assertSyntheticDelete(changes, "native-evict-event", DbChangeKind.EVICTED);
+        } finally {
+            db.shutdown();
+        }
+    }
+
     private static void assertConstructsWithPolicy(String policy) {
         YierdisDb db = new YierdisDb((OffHeapAllocator) null, 0, policy, 5, 5, 5);
         try {
@@ -451,6 +478,19 @@ public class YierdisDbConstructionTest {
         } catch (IllegalArgumentException e) {
             Assert.assertTrue(e.getMessage().contains(messagePart));
         }
+    }
+
+    private static void assertSyntheticDelete(List<DbChange> changes, String key, DbChangeKind kind) {
+        Assert.assertEquals(1, changes.size());
+        DbChange change = changes.get(0);
+        Assert.assertEquals(kind, change.kind());
+        Assert.assertEquals(0, change.dbIndex());
+        Assert.assertEquals("DEL", changeArg(change, 0));
+        Assert.assertEquals(key, changeArg(change, 1));
+    }
+
+    private static String changeArg(DbChange change, int index) {
+        return new String(change.commandArgv()[index], StandardCharsets.US_ASCII);
     }
 
     private static byte[] bytes(String value) {

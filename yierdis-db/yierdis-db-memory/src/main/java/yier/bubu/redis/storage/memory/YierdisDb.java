@@ -103,6 +103,7 @@ public final class YierdisDb implements RuntimeDbEngine {
     private final YierdisKeyspaceOps keyspaceOps;
     private final YierdisDbMemoryReporter memoryReporter;
     private final YierdisDbIntrospection introspection;
+    private final int dbIndex;
 
     private final DbReads reads;
     private final DbWrites writes;
@@ -168,6 +169,31 @@ public final class YierdisDb implements RuntimeDbEngine {
         );
     }
 
+    static YierdisDb createWithSharedFfmRuntime(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions,
+            int dbIndex
+    ) {
+        return new YierdisDb(
+                memoryRuntime,
+                null,
+                false,
+                false,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions,
+                dbIndex
+        );
+    }
+
     @Deprecated
     public static YierdisDb createWithSharedFfmRuntime(
             YierdisFfmMemoryRuntime memoryRuntime,
@@ -217,6 +243,30 @@ public final class YierdisDb implements RuntimeDbEngine {
                 evictionTimeLimitMillis,
                 expireCleanupTimeLimitMillis,
                 nativeDefragOptions
+        );
+    }
+
+    static YierdisDb createWithOwnedFfmRuntime(
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions,
+            int dbIndex
+    ) {
+        return new YierdisDb(
+                null,
+                null,
+                false,
+                false,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions,
+                dbIndex
         );
     }
 
@@ -304,8 +354,42 @@ public final class YierdisDb implements RuntimeDbEngine {
             long expireCleanupTimeLimitMillis,
             NativeDefragOptions nativeDefragOptions
     ) {
+        this(
+                memoryRuntime,
+                offHeapAllocator,
+                ownsOffHeapAllocator,
+                ownsMemoryRuntime,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions,
+                0
+        );
+    }
+
+    private YierdisDb(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            OffHeapAllocator offHeapAllocator,
+            boolean ownsOffHeapAllocator,
+            boolean ownsMemoryRuntime,
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions,
+            int dbIndex
+    ) {
+        this.dbIndex = Math.max(0, dbIndex);
         YierdisDbComponents components = YierdisDbComponentFactory.create(
                 new YierdisDbComponentFactory.OwnerCallbacks() {
+                    @Override
+                    public int dbIndex() {
+                        return YierdisDb.this.dbIndex;
+                    }
+
                     @Override
                     public YierdisDb db() {
                         return YierdisDb.this;

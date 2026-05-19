@@ -1,6 +1,7 @@
 package yier.bubu.redis.execution.engine;
 
 import yier.bubu.redis.command.api.CommandModule;
+import yier.bubu.redis.command.kernel.YierdisCommandProcessorOptions;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
@@ -18,8 +19,16 @@ public final class DefaultYierdisEngine implements YierdisEngine {
     private final Runnable maintenanceTick;
 
     public DefaultYierdisEngine(Runnable maintenanceTick, CommandModule... commandModules) {
+        this(YierdisCommandProcessorOptions.DEFAULT, maintenanceTick, commandModules);
+    }
+
+    public DefaultYierdisEngine(
+            YierdisCommandProcessorOptions options,
+            Runnable maintenanceTick,
+            CommandModule... commandModules
+    ) {
         this(
-                new YierdisFastCommandProcessor(commandModules),
+                new YierdisFastCommandProcessor(options, commandModules),
                 maintenanceTick
         );
     }

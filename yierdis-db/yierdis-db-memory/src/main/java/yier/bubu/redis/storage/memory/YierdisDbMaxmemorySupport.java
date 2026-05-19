@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.api.DbChangeKind;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
@@ -196,10 +197,12 @@ public final class YierdisDbMaxmemorySupport {
     }
 
     private boolean removeRecord(KeyHandle keyHandle, EntryRecord record) {
+        byte[] keyBytes = db.keyLifecycle().copyKeyBytes(keyHandle);
         long removalBytes = db.keyLifecycle().estimatedBytesForRemoval(keyHandle, record);
         db.keyLifecycle().removeExpireIndexOnly(keyHandle);
         if (db.keyLifecycle().removeEntry(keyHandle, record)) {
             db.adjustUsedBytes(-removalBytes);
+            db.keyLifecycle().emitSyntheticDelete(keyBytes, DbChangeKind.EVICTED);
             return true;
         }
         return false;

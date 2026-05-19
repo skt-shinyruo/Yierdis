@@ -5,10 +5,15 @@ import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRecord;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.storage.api.DbChange;
+import yier.bubu.redis.storage.api.DbChangeKind;
+import yier.bubu.redis.storage.api.DbChangeListener;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 public class YierdisChangeSinkTest {
     @Test
@@ -18,10 +23,28 @@ public class YierdisChangeSinkTest {
         YierdisChangeEvent event = new YierdisChangeEvent(new ExecutionRecord(-4, request));
 
         Assert.assertEquals(0, event.dbIndex());
+        Assert.assertEquals(YierdisChangeKind.USER_COMMAND, event.kind());
+        Assert.assertFalse(event.synthetic());
         Assert.assertNotNull(event.record());
         Assert.assertArrayEquals("SET".getBytes(StandardCharsets.US_ASCII), event.request().toByteArray(0));
         Assert.assertArrayEquals("key".getBytes(StandardCharsets.US_ASCII), event.request().toByteArray(1));
         Assert.assertArrayEquals("value".getBytes(StandardCharsets.US_ASCII), event.request().toByteArray(2));
+    }
+
+    @Test
+    public void changeEventBridgeConvertsDbChangesToSyntheticEvents() {
+        List<YierdisChangeEvent> events = new ArrayList<>();
+        DbChangeListener bridge = YierdisChangeEventBridge.forSink(events::add);
+
+        bridge.onDbChange(DbChange.syntheticDelete(2, DbChangeKind.EXPIRED, bytes("dead")));
+
+        Assert.assertEquals(1, events.size());
+        YierdisChangeEvent event = events.get(0);
+        Assert.assertEquals(2, event.dbIndex());
+        Assert.assertEquals(YierdisChangeKind.EXPIRED, event.kind());
+        Assert.assertTrue(event.synthetic());
+        Assert.assertEquals("DEL", arg(event, 0));
+        Assert.assertEquals("dead", arg(event, 1));
     }
 
     @Test
@@ -58,6 +81,7 @@ public class YierdisChangeSinkTest {
         Assert.assertEquals(5, config.maxmemorySamples());
         Assert.assertEquals(5L, config.evictionTimeLimitMillis());
         Assert.assertEquals(5L, config.expireCleanupTimeLimitMillis());
+        Assert.assertSame(YierdisChangeSink.NOOP, config.changeSink());
         Assert.assertFalse(config.nativeDefragEnabled());
         Assert.assertEquals(64L * 1024L, config.nativeDefragMaxMoveBytes());
         Assert.assertEquals(64L, config.nativeDefragMaxObjects());
@@ -78,6 +102,10 @@ public class YierdisChangeSinkTest {
                 MaxmemoryPolicy.ALLKEYS_LRU,
                 YierdisInstanceConfig.builder().maxmemoryPolicy("allkeys-lru").build().maxmemoryPolicy()
         );
+        YierdisChangeSink sink = event -> {
+        };
+        Assert.assertSame(sink, YierdisInstanceConfig.builder().changeSink(sink).build().changeSink());
+        Assert.assertSame(YierdisChangeSink.NOOP, YierdisInstanceConfig.builder().changeSink(null).build().changeSink());
 
         expectIllegalArgument("maxmemoryBytes must be >= 0",
                 () -> YierdisInstanceConfig.builder().maxmemoryBytes(-1).build());
@@ -102,5 +130,13 @@ public class YierdisChangeSinkTest {
         } catch (IllegalArgumentException expected) {
             Assert.assertEquals(expectedMessage, expected.getMessage());
         }
+    }
+
+    private static String arg(YierdisChangeEvent event, int index) {
+        return new String(event.request().toByteArray(index), StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] bytes(String value) {
+        return value.getBytes(StandardCharsets.US_ASCII);
     }
 }

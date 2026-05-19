@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.api.DbChangeKind;
 
 import java.util.Objects;
 
@@ -90,10 +91,12 @@ public final class YierdisDbExpirationSupport {
     }
 
     private void removeExpiredRecord(KeyHandle keyHandle, EntryRecord record) {
+        byte[] keyBytes = db.keyLifecycle().copyKeyBytes(keyHandle);
         long removalBytes = db.keyLifecycle().estimatedBytesForRemoval(keyHandle, record);
         db.keyLifecycle().removeExpireIndexOnly(keyHandle);
         if (db.keyLifecycle().removeEntry(keyHandle, record)) {
             db.adjustUsedBytes(-removalBytes);
+            db.keyLifecycle().emitSyntheticDelete(keyBytes, DbChangeKind.EXPIRED);
         }
     }
 }

@@ -32,6 +32,10 @@
  *     <li>MemoryOps - API. Audience: server INFO/STATS adapters, runtime observability, tests.</li>
  *     <li>ExpirationManager - API. Audience: runtime maintenance and DB implementations.</li>
  *     <li>DbLifecycleOps - API. Audience: runtime lifecycle and DB implementations.</li>
+ *     <li>DbChange - SPI. Audience: storage implementations and runtime/command change-event bridges.</li>
+ *     <li>DbChangeKind - SPI. Audience: storage implementations and runtime/command change-event bridges.</li>
+ *     <li>DbChangeContext - SPI. Audience: runtime/command scoped collection of DB-internal lifecycle changes.</li>
+ *     <li>DbChangeListener - SPI. Audience: runtime/command scoped collection of DB-internal lifecycle changes.</li>
  *     <li>RuntimeDbEngine - SPI. Audience: runtime assembly and DB factories.</li>
  *     <li>DbEngineFactory - SPI. Audience: runtime assembly and storage implementations.</li>
  *     <li>MaxmemoryCoordinator - SPI. Audience: runtime maxmemory governor and participants.</li>
