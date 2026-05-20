@@ -14,6 +14,7 @@ import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyNull;
 import yier.bubu.redis.testutil.ReplySimpleString;
+import yier.bubu.redis.testutil.TestYierdisInstances;
 
 import java.util.Arrays;
 
@@ -38,7 +39,7 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
                 .evictionTimeLimitMillis(1000)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
+        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
             instance.bindToCurrentThread();
             YierdisFastCommandProcessor processor = TestCommandProcessors.forRouter(TestDbRouters.forInstance(instance));
 
@@ -88,7 +89,7 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
                 .evictionTimeLimitMillis(1000)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.createWithDefaults(probeConfig)) {
+        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(probeConfig)) {
             instance.bindToCurrentThread();
             YierdisDb db0 = (YierdisDb) instance.engine(0);
             YierdisDb db1 = (YierdisDb) instance.engine(1);

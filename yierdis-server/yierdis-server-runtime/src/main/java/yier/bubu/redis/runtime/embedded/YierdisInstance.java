@@ -2,9 +2,6 @@ package yier.bubu.redis.runtime.embedded;
 
 // YierdisInstance：提供可嵌入（embedded）的 instance API（Netty-free），负责装配多 DB、路由与资源生命周期。
 
-import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
-import yier.bubu.redis.memory.api.NativeDefragOptions;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.storage.api.DbChangeListener;
@@ -52,27 +49,6 @@ public final class YierdisInstance implements AutoCloseable {
             throw new IllegalArgumentException("engineFactory must be configured");
         }
         return create(config, engineFactory, config.engineFactoryOwnedResource());
-    }
-
-    public static YierdisInstance createWithDefaults(YierdisInstanceConfig config) {
-        Objects.requireNonNull(config, "config");
-        if (config.engineFactory() != null) {
-            return create(config);
-        }
-        boolean perDbScope = config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
-        NativeDefragOptions nativeDefragOptions = nativeDefragOptions(config);
-
-        YierdisFfmMemoryRuntime memoryRuntime = null;
-        DbEngineFactory engineFactory;
-        boolean closeMemoryRuntime = false;
-        if (perDbScope) {
-            engineFactory = new YierdisDbEngineFactory(nativeDefragOptions);
-        } else {
-            memoryRuntime = new YierdisFfmMemoryRuntime("instance");
-            engineFactory = new YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions);
-            closeMemoryRuntime = true;
-        }
-        return create(config, engineFactory, closeMemoryRuntime ? memoryRuntime : null);
     }
 
     private static YierdisInstance create(
@@ -160,17 +136,6 @@ public final class YierdisInstance implements AutoCloseable {
         List<AutoCloseable> closeables = new ArrayList<>(1);
         closeables.add(resource);
         return closeables;
-    }
-
-    private static NativeDefragOptions nativeDefragOptions(YierdisInstanceConfig config) {
-        if (!config.nativeDefragEnabled()) {
-            return null;
-        }
-        return new NativeDefragOptions(
-                config.nativeDefragMaxMoveBytes(),
-                config.nativeDefragMaxObjects(),
-                TimeUnit.MILLISECONDS.toNanos(config.nativeDefragTimeLimitMillis())
-        );
     }
 
     private static long sharedOffHeapUsedBytes(RuntimeDbEngine[] dbs) {

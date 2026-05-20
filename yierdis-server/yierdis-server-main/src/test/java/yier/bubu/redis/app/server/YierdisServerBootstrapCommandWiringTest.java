@@ -437,7 +437,7 @@ public class YierdisServerBootstrapCommandWiringTest {
         private final CommandExecutor<NettyExecutionConnection> executor;
 
         private InitializerTestEnv() {
-            this.instance = YierdisInstance.createWithDefaults(YierdisInstanceConfig.builder().build());
+            this.instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
             YierdisEngine engine = TestYierdisEngines.forInstance(instance);
             this.replyWriterFactory = new RespReplyWriterFactory();
             this.executor = new CommandExecutor<>(

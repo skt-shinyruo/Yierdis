@@ -19,22 +19,12 @@
     <dependencies>
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-db-memory</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-db-api</artifactId>
         </dependency>
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-server-runtime-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-memory-ffm</artifactId>
         </dependency>
 
         <dependency>
@@ -64,6 +54,12 @@
         <dependency>
             <groupId>yier.bubu.redis</groupId>
             <artifactId>yierdis-command-builtin</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>yier.bubu.redis</groupId>
+            <artifactId>yierdis-db-memory</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

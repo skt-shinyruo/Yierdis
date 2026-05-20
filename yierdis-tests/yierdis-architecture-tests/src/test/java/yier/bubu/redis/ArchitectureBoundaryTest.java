@@ -1823,14 +1823,17 @@ public class ArchitectureBoundaryTest {
 
         Path runtimePom = runtimeEmbeddedRoot(repoRoot).resolve("pom.xml").normalize();
         Assert.assertTrue("缺少 yierdis-server-runtime/pom.xml", Files.isRegularFile(runtimePom));
-        String runtimePomText = Files.readString(runtimePom, StandardCharsets.UTF_8);
-        Assert.assertTrue(
-                "yierdis-server-runtime must depend on yierdis-db-memory as its default embedded implementation",
-                runtimePomText.contains("<artifactId>yierdis-db-memory</artifactId>")
+        Assert.assertFalse(
+                "yierdis-server-runtime production pom must not depend on yierdis-db-memory; defaults are assembled by server-main/tests",
+                pomHasProductionDependency(runtimePom, "yierdis-db-memory")
+        );
+        Assert.assertFalse(
+                "yierdis-server-runtime production pom must not depend on yierdis-memory-ffm; defaults are assembled by server-main/tests",
+                pomHasProductionDependency(runtimePom, "yierdis-memory-ffm")
         );
         Assert.assertFalse(
                 "yierdis-server-runtime must not depend on retired yierdis-core-db",
-                runtimePomText.contains("<artifactId>yierdis-core-db</artifactId>")
+                pomHasProductionDependency(runtimePom, "yierdis-core-db")
         );
 
         Path policyFile = workspaceRoot.resolve("yierdis-tests/yierdis-architecture-tests/src/test/resources/architecture-policy.yml").normalize();
@@ -2065,10 +2068,8 @@ public class ArchitectureBoundaryTest {
                 coreRuntimePolicy.contains("allowed_dependencies:")
         );
         for (String allowedDependency : List.of(
-                "yierdis-db-memory",
                 "yierdis-db-api",
-                "yierdis-server-runtime-api",
-                "yierdis-memory-ffm"
+                "yierdis-server-runtime-api"
         )) {
             Assert.assertTrue(
                     "runtime-embedded policy must allow direct dependency " + allowedDependency,
@@ -2090,6 +2091,8 @@ public class ArchitectureBoundaryTest {
                 "yierdis-core-db",
                 "yierdis-core-engine",
                 "yierdis-server-executor",
+                "yierdis-db-memory",
+                "yierdis-memory-ffm",
                 "yierdis-networking-model",
                 "yierdis-networking-codec",
                 "yierdis-networking-netty",
@@ -2113,6 +2116,8 @@ public class ArchitectureBoundaryTest {
                 "yier.bubu.redis.command",
                 "yier.bubu.redis.execution.engine",
                 "yier.bubu.redis.execution.executor",
+                "yier.bubu.redis.storage.memory",
+                "yier.bubu.redis.memory.foreign",
                 "yier.bubu.redis.protocol",
                 "yier.bubu.redis.app.server",
                 "io.netty"
@@ -2134,10 +2139,6 @@ public class ArchitectureBoundaryTest {
                 "yierdis-server-runtime must declare yierdis-server-runtime-api directly for embedded runtime config contracts",
                 pom.contains("<artifactId>yierdis-server-runtime-api</artifactId>")
         );
-        Assert.assertTrue(
-                "yierdis-server-runtime must declare yierdis-memory-ffm directly for embedded off-heap runtime lifecycle",
-                pom.contains("<artifactId>yierdis-memory-ffm</artifactId>")
-        );
         for (String forbiddenDependency : List.of(
                 "yierdis-command-api",
                 "yierdis-command-core",
@@ -2149,6 +2150,8 @@ public class ArchitectureBoundaryTest {
                 "yierdis-core-db",
                 "yierdis-core-engine",
                 "yierdis-server-executor",
+                "yierdis-db-memory",
+                "yierdis-memory-ffm",
                 "yierdis-networking-model",
                 "yierdis-networking-codec",
                 "yierdis-networking-netty",
@@ -2173,12 +2176,16 @@ public class ArchitectureBoundaryTest {
                 "import yier.bubu.redis.command.",
                 "import yier.bubu.redis.execution.engine.",
                 "import yier.bubu.redis.execution.executor.",
+                "import yier.bubu.redis.storage.memory.",
+                "import yier.bubu.redis.memory.foreign.",
                 "import yier.bubu.redis.protocol.",
                 "import yier.bubu.redis.app.server.",
                 "import io.netty.",
                 "yier.bubu.redis.command.",
                 "yier.bubu.redis.execution.engine.",
                 "yier.bubu.redis.execution.executor.",
+                "yier.bubu.redis.storage.memory.",
+                "yier.bubu.redis.memory.foreign.",
                 "yier.bubu.redis.protocol.",
                 "yier.bubu.redis.app.server.",
                 "io.netty."
@@ -2186,7 +2193,7 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-server-runtime Java 文件", scanned > 0);
         if (!offenders.isEmpty()) {
             Assert.fail(
-                    "检测到 yierdis-server-runtime 依赖 command、engine、executor、protocol、server 或 Netty：\n"
+                    "检测到 yierdis-server-runtime 依赖 command、engine、executor、storage implementation、memory-foreign、protocol、server 或 Netty：\n"
                             + String.join("\n", offenders)
             );
         }

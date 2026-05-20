@@ -345,15 +345,15 @@ modules:
       - yier.bubu.redis.app.server
   yierdis-server-runtime:
     allowed_dependencies:
-      - yierdis-db-memory
       - yierdis-db-api
       - yierdis-server-runtime-api
-      - yierdis-memory-ffm
     forbidden_dependencies:
       - yierdis-command-api
       - yierdis-command-core
       - yierdis-command-builtin
       - yierdis-server-api
+      - yierdis-db-memory
+      - yierdis-memory-ffm
       - yierdis-core-api
       - yierdis-core-contract
       - yierdis-core-command
@@ -373,6 +373,8 @@ modules:
       - yier.bubu.redis.command
       - yier.bubu.redis.execution.engine
       - yier.bubu.redis.execution.executor
+      - yier.bubu.redis.storage.memory
+      - yier.bubu.redis.memory.foreign
       - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.app.server
       - io.netty
