@@ -54,7 +54,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         if (expireAtMillis != null) {
             upperBound += TTL_ENTRY_BYTES_ESTIMATE;
         }
-        final long finalUpperBound = upperBound;
+        final long finalUpperBound = setReservationUpperBound(keyBytes, mode, upperBound, now, keepTtl);
 
         return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
@@ -572,9 +572,54 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
+    private long setReservationUpperBound(byte[] keyBytes, SetMode mode, long newValueUpperBound, long nowMillis, boolean keepTtl) {
+        EntryRecord current = keyLifecycle.entryRecord(keyBytes);
+        if (current == null) {
+            return mode == SetMode.XX ? 0L : newValueUpperBound;
+        }
+
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+            return mode == SetMode.XX ? 0L : newValueUpperBound;
+        }
+        if (mode == SetMode.NX) {
+            return 0L;
+        }
+
+        boolean currentHasTtl = keyLifecycle.expireAtMillis(keyHandle) != null;
+        long nextEstimate = keepTtl && currentHasTtl
+                ? addSaturating(newValueUpperBound, TTL_ENTRY_BYTES_ESTIMATE)
+                : newValueUpperBound;
+        if (current.type() != ValueType.STRING || !stringRoot.contains(current.valueHandle())) {
+            return nextEstimate;
+        }
+
+        long oldEstimate = estimateRecordBytes(keyHandle, current)
+                + (keyBytes == null ? 0L : Math.max(0L, (long) keyBytes.length))
+                + Math.max(0L, (long) stringRoot.length(current.valueHandle()));
+        if (currentHasTtl) {
+            oldEstimate = addSaturating(oldEstimate, TTL_ENTRY_BYTES_ESTIMATE);
+        }
+
+        if (nextEstimate <= oldEstimate) {
+            return 0L;
+        }
+        return nextEstimate - oldEstimate;
+    }
+
     private static long stringMetadataBytes(ValueEncoding encoding) {
         return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE
                 + (encoding == ValueEncoding.STRING_INT ? Long.BYTES : 0L);
+    }
+
+    private static long addSaturating(long left, long right) {
+        if (right <= 0) {
+            return left;
+        }
+        if (Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     private KeyHandle currentKeyHandle(byte[] keyBytes, KeyHandle fallback) {

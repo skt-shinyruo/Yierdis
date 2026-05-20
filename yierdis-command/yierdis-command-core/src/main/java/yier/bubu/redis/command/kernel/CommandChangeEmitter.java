@@ -1,37 +1,29 @@
 package yier.bubu.redis.command.kernel;
 
 import yier.bubu.redis.execution.api.CommandContext;
-import yier.bubu.redis.execution.api.ExecutionRecord;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.runtime.api.YierdisChangeEvent;
-import yier.bubu.redis.runtime.api.YierdisChangeEventBridge;
-import yier.bubu.redis.runtime.api.YierdisChangeSink;
-import yier.bubu.redis.storage.api.DbChangeContext;
-import yier.bubu.redis.storage.api.DbChangeListener;
 
 import java.util.Objects;
 
 final class CommandChangeEmitter {
-    private final YierdisChangeSink sink;
-    private final DbChangeListener dbChangeListener;
+    private final CommandChangeObserver observer;
     private final boolean enabled;
 
-    private CommandChangeEmitter(YierdisChangeSink sink) {
-        this.sink = sink == null ? YierdisChangeSink.NOOP : sink;
-        this.dbChangeListener = YierdisChangeEventBridge.forSink(this.sink);
-        this.enabled = this.sink != YierdisChangeSink.NOOP;
+    private CommandChangeEmitter(CommandChangeObserver observer) {
+        this.observer = observer == null ? CommandChangeObserver.NOOP : observer;
+        this.enabled = this.observer != CommandChangeObserver.NOOP;
     }
 
     static CommandChangeEmitter noop() {
-        return new CommandChangeEmitter(YierdisChangeSink.NOOP);
+        return new CommandChangeEmitter(CommandChangeObserver.NOOP);
     }
 
     static CommandChangeEmitter fromOptions(YierdisCommandProcessorOptions options) {
-        return new CommandChangeEmitter(options == null ? YierdisChangeSink.NOOP : options.changeSink());
+        return new CommandChangeEmitter(options == null ? CommandChangeObserver.NOOP : options.changeObserver());
     }
 
-    static CommandChangeEmitter fromSink(YierdisChangeSink sink) {
-        return new CommandChangeEmitter(sink);
+    static CommandChangeEmitter fromObserver(CommandChangeObserver observer) {
+        return new CommandChangeEmitter(observer);
     }
 
     void execute(ExecutionRequest request, CommandContext ctx, Runnable action) {
@@ -41,9 +33,7 @@ final class CommandChangeEmitter {
 
         ctx.clearMutationOutcome();
         if (enabled) {
-            try (DbChangeContext.Scope ignored = DbChangeContext.open(dbChangeListener)) {
-                action.run();
-            }
+            observer.observeExecution(action);
         } else {
             action.run();
         }
@@ -56,7 +46,7 @@ final class CommandChangeEmitter {
     private void emitUserCommandChange(ExecutionRequest request, CommandContext ctx) {
         int dbIndex = Math.max(0, ctx.dbIndexSession().dbIndex());
         try {
-            sink.onChange(new YierdisChangeEvent(new ExecutionRecord(dbIndex, request)));
+            observer.onCommandChange(dbIndex, request);
         } catch (Throwable ignored) {
             // best-effort: event consumer failures must not affect command execution.
         }

@@ -1,35 +1,33 @@
 package yier.bubu.redis.command.kernel;
 
-import yier.bubu.redis.runtime.api.YierdisChangeSink;
-
 /**
  * Command processor composition options.
  */
 public final class YierdisCommandProcessorOptions {
     public static final YierdisCommandProcessorOptions DEFAULT = builder().build();
 
-    private final YierdisChangeSink changeSink;
+    private final CommandChangeObserver changeObserver;
 
     private YierdisCommandProcessorOptions(Builder builder) {
-        this.changeSink = builder.changeSink == null ? YierdisChangeSink.NOOP : builder.changeSink;
+        this.changeObserver = builder.changeObserver == null ? CommandChangeObserver.NOOP : builder.changeObserver;
     }
 
     public static Builder builder() {
         return new Builder();
     }
 
-    public YierdisChangeSink changeSink() {
-        return changeSink;
+    public CommandChangeObserver changeObserver() {
+        return changeObserver;
     }
 
     public static final class Builder {
-        private YierdisChangeSink changeSink = YierdisChangeSink.NOOP;
+        private CommandChangeObserver changeObserver = CommandChangeObserver.NOOP;
 
         private Builder() {
         }
 
-        public Builder changeSink(YierdisChangeSink changeSink) {
-            this.changeSink = changeSink == null ? YierdisChangeSink.NOOP : changeSink;
+        public Builder changeObserver(CommandChangeObserver changeObserver) {
+            this.changeObserver = changeObserver == null ? CommandChangeObserver.NOOP : changeObserver;
             return this;
         }
 

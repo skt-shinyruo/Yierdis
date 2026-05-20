@@ -3,15 +3,27 @@ package yier.bubu.redis.runtime.api;
 import yier.bubu.redis.storage.api.DbEngineFactory;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
+import java.util.Objects;
+
 public final class YierdisInstanceConfig {
     public enum MaxmemoryScope {
         PER_DB,
         GLOBAL
     }
 
+    public record EngineFactoryBinding(DbEngineFactory engineFactory, AutoCloseable ownedResource) {
+        public EngineFactoryBinding {
+            Objects.requireNonNull(engineFactory, "engineFactory");
+        }
+
+        public EngineFactoryBinding(DbEngineFactory engineFactory) {
+            this(engineFactory, null);
+        }
+    }
+
     private final int databases;
+    private final EngineFactoryBinding engineFactoryBinding;
     private final DbEngineFactory engineFactory;
-    private final AutoCloseable engineFactoryOwnedResource;
     private final YierdisChangeSink changeSink;
 
     private final long maxmemoryBytes;
@@ -27,8 +39,8 @@ public final class YierdisInstanceConfig {
 
     private YierdisInstanceConfig(Builder b) {
         this.databases = b.databases;
-        this.engineFactory = b.engineFactory;
-        this.engineFactoryOwnedResource = b.engineFactoryOwnedResource;
+        this.engineFactoryBinding = b.engineFactoryBinding;
+        this.engineFactory = b.engineFactoryBinding == null ? b.engineFactory : b.engineFactoryBinding.engineFactory();
         this.changeSink = b.changeSink == null ? YierdisChangeSink.NOOP : b.changeSink;
         this.maxmemoryBytes = b.maxmemoryBytes;
         this.maxmemoryScope = b.maxmemoryScope;
@@ -54,8 +66,8 @@ public final class YierdisInstanceConfig {
         return engineFactory;
     }
 
-    public AutoCloseable engineFactoryOwnedResource() {
-        return engineFactoryOwnedResource;
+    public EngineFactoryBinding engineFactoryBinding() {
+        return engineFactoryBinding;
     }
 
     public YierdisChangeSink changeSink() {
@@ -104,8 +116,8 @@ public final class YierdisInstanceConfig {
 
     public static final class Builder {
         private int databases = 1;
+        private EngineFactoryBinding engineFactoryBinding;
         private DbEngineFactory engineFactory;
-        private AutoCloseable engineFactoryOwnedResource;
         private YierdisChangeSink changeSink = YierdisChangeSink.NOOP;
 
         private long maxmemoryBytes;
@@ -144,11 +156,13 @@ public final class YierdisInstanceConfig {
 
         public Builder engineFactory(DbEngineFactory engineFactory) {
             this.engineFactory = engineFactory;
+            this.engineFactoryBinding = null;
             return this;
         }
 
-        public Builder engineFactoryOwnedResource(AutoCloseable engineFactoryOwnedResource) {
-            this.engineFactoryOwnedResource = engineFactoryOwnedResource;
+        public Builder engineFactoryBinding(EngineFactoryBinding engineFactoryBinding) {
+            this.engineFactoryBinding = engineFactoryBinding;
+            this.engineFactory = engineFactoryBinding == null ? null : engineFactoryBinding.engineFactory();
             return this;
         }
 
@@ -242,11 +256,19 @@ public final class YierdisInstanceConfig {
             }
             MaxmemoryScope scope = maxmemoryScope == null ? MaxmemoryScope.PER_DB : maxmemoryScope;
             MaxmemoryPolicy policy = maxmemoryPolicy == null ? MaxmemoryPolicy.NOEVICTION : maxmemoryPolicy;
+            EngineFactoryBinding binding = engineFactoryBinding;
+            if (binding == null && engineFactory != null) {
+                binding = new EngineFactoryBinding(engineFactory);
+            }
 
             Builder normalized = this;
             normalized.databases = dbs;
             normalized.maxmemoryScope = scope;
             normalized.maxmemoryPolicy = policy;
+            normalized.engineFactoryBinding = binding;
+            if (binding != null) {
+                normalized.engineFactory = binding.engineFactory();
+            }
             return new YierdisInstanceConfig(normalized);
         }
     }

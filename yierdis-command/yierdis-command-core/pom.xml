@@ -24,7 +24,7 @@
 
         <dependency>
             <groupId>yier.bubu.redis</groupId>
-            <artifactId>yierdis-server-runtime-api</artifactId>
+            <artifactId>yierdis-db-api</artifactId>
         </dependency>
 
         <dependency>

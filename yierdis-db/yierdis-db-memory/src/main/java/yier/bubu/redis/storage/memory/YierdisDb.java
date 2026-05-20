@@ -9,101 +9,41 @@ import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
-import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedgerOutOfMemoryException;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.OffHeapAllocator;
-import yier.bubu.redis.memory.api.OffHeapOutOfMemoryException;
+import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
-import yier.bubu.redis.storage.api.DbEngine;
-import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.DbWrites;
-import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.ExpirationManager;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
-import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MemoryOps;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.StringWriteOps;
 import yier.bubu.redis.storage.api.WrongTypeException;
-import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.api.result.BulkStringValue;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
 
 public final class YierdisDb implements RuntimeDbEngine {
-    private static final long TTL_ENTRY_BYTES_ESTIMATE = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
-    private static final NativeDefragReport EMPTY_NATIVE_DEFRAG_REPORT = new NativeDefragReport(
-            0L,
-            0L,
-            0L,
-            0L,
-            0L,
-            0L,
-            false,
-            false,
-            false
-    );
-
-    private final YierdisExpireIndex expires;
-    private final EntryTable entries;
-    private final NativeKeyDirectory keyDirectory;
-    private final StringRoot stringRoot;
-    private final ListRoot listRoot;
-    private final HashRoot hashRoot;
-    private final SetRoot setRoot;
-    private final ZSetRoot zsetRoot;
-    private final YierdisFfmMemoryRuntime memoryRuntime;
     final OffHeapAllocator offHeapAllocator;
-    private final YierdisDbOwnedResources resources;
-    private final boolean keysStoredOffHeap;
 
     /**
      * @deprecated Use {@link MaxmemoryErrors#OOM_ERR}.
      */
     @Deprecated
-    static final String OOM_ERR = MaxmemoryErrors.OOM_ERR;
+    static final String OOM_ERR = yier.bubu.redis.storage.api.MaxmemoryErrors.OOM_ERR;
 
-    private final long maxmemoryBytes;
-    private final MaxmemoryPolicy maxmemoryPolicy;
-    private final int maxmemorySamples;
-    private final boolean lruEnabled;
-    private final long evictionTimeLimitNanos;
-    private final long expireCleanupTimeLimitNanos;
-    private final NativeDefragOptions nativeDefragOptions;
-    private NativeDefragReport lastNativeDefragReport = EMPTY_NATIVE_DEFRAG_REPORT;
-
-    private long lruClock;
-
-    private final DbThreadGuard threadGuard = new DbThreadGuard();
-    private volatile MaxmemoryCoordinator maxmemoryCoordinator;
+    private final YierdisDbRuntimeState runtimeState;
     private final YierdisDbMemoryLedger ledger;
-    private final YierdisDbMutationExecutor mutationExecutor;
-    private final YierdisDbExpirationSupport expirationSupport;
-    private final YierdisDbMaxmemorySupport maxmemorySupport;
     private final YierdisDbKeyLifecycle keyLifecycle;
-    private final YierdisDbInternals internals;
-    private final YierdisStringOps stringOps;
-    private final YierdisHashOps hashOps;
-    private final YierdisListOps listOps;
-    private final YierdisSetOps setOps;
-    private final YierdisZSetOps zsetOps;
-    private final YierdisHllOps hllOps;
-    private final YierdisTtlOps ttlOps;
-    private final YierdisKeyspaceOps keyspaceOps;
-    private final YierdisDbMemoryReporter memoryReporter;
     private final YierdisDbIntrospection introspection;
-    private final int dbIndex;
+    private final YierdisDbDataMaintenance maintenance;
 
     private final DbReads reads;
     private final DbWrites writes;
@@ -382,59 +322,20 @@ public final class YierdisDb implements RuntimeDbEngine {
             NativeDefragOptions nativeDefragOptions,
             int dbIndex
     ) {
-        this.dbIndex = Math.max(0, dbIndex);
+        YierdisDbRuntimeState runtimeState = new YierdisDbRuntimeState(dbIndex);
         YierdisDbComponents components = YierdisDbComponentFactory.create(
                 new YierdisDbComponentFactory.OwnerCallbacks() {
                     @Override
                     public int dbIndex() {
-                        return YierdisDb.this.dbIndex;
-                    }
-
-                    @Override
-                    public YierdisDb db() {
-                        return YierdisDb.this;
+                        return runtimeState.dbIndex();
                     }
 
                     @Override
                     public void checkThread() {
-                        YierdisDb.this.checkThread();
-                    }
-
-                    @Override
-                    public void cleanupExpired() {
-                        YierdisDb.this.cleanupExpired();
-                    }
-
-                    @Override
-                    public void evictUntilUnder(long limitBytes) {
-                        YierdisDb.this.evictUntilUnder(limitBytes);
-                    }
-
-                    @Override
-                    public long usedBytesForMaxmemory() {
-                        return YierdisDb.this.usedBytesForMaxmemory();
-                    }
-
-                    @Override
-                    public MaxmemoryCoordinator maxmemoryCoordinator() {
-                        return YierdisDb.this.maxmemoryCoordinator;
-                    }
-
-                    @Override
-                    public long nextLruClock() {
-                        return YierdisDb.this.nextLruClock();
-                    }
-
-                    @Override
-                    public void adjustUsedBytes(long deltaBytes) {
-                        YierdisDb.this.adjustUsedBytes(deltaBytes);
-                    }
-
-                    @Override
-                    public NativeDefragReport lastNativeDefragReport() {
-                        return YierdisDb.this.lastNativeDefragReport();
+                        runtimeState.checkThread();
                     }
                 },
+                runtimeState,
                 memoryRuntime,
                 offHeapAllocator,
                 ownsOffHeapAllocator,
@@ -447,41 +348,12 @@ public final class YierdisDb implements RuntimeDbEngine {
                 nativeDefragOptions
         );
 
-        this.memoryRuntime = components.storage.memoryRuntime;
+        this.runtimeState = components.runtimeState;
         this.offHeapAllocator = components.storage.offHeapAllocator;
-        this.resources = components.storage.resources;
-        this.expires = components.storage.expires;
-        this.entries = components.storage.entries;
-        this.keyDirectory = components.storage.keyDirectory;
-        this.stringRoot = components.storage.stringRoot;
-        this.listRoot = components.storage.listRoot;
-        this.hashRoot = components.storage.hashRoot;
-        this.setRoot = components.storage.setRoot;
-        this.zsetRoot = components.storage.zsetRoot;
-        this.keysStoredOffHeap = components.storage.keysStoredOffHeap;
-        this.maxmemoryBytes = components.config.maxmemoryBytes;
-        this.maxmemoryPolicy = components.config.maxmemoryPolicy;
-        this.maxmemorySamples = components.config.maxmemorySamples;
-        this.lruEnabled = components.config.lruEnabled;
-        this.evictionTimeLimitNanos = components.config.evictionTimeLimitNanos;
-        this.expireCleanupTimeLimitNanos = components.config.expireCleanupTimeLimitNanos;
-        this.nativeDefragOptions = components.config.nativeDefragOptions;
         this.ledger = components.ledger;
-        this.mutationExecutor = components.mutationExecutor;
-        this.expirationSupport = components.expirationSupport;
-        this.maxmemorySupport = components.maxmemorySupport;
         this.keyLifecycle = components.keyLifecycle;
-        this.internals = components.internals;
-        this.stringOps = components.stringOps;
-        this.hashOps = components.hashOps;
-        this.listOps = components.listOps;
-        this.setOps = components.setOps;
-        this.zsetOps = components.zsetOps;
-        this.hllOps = components.hllOps;
-        this.ttlOps = components.ttlOps;
-        this.keyspaceOps = components.keyspaceOps;
-        this.memoryReporter = components.memoryReporter;
         this.introspection = components.introspection;
+        this.maintenance = components.maintenance;
         this.reads = components.reads;
         this.writes = components.writes;
         this.expirationManager = components.expirationManager;
@@ -564,23 +436,15 @@ public final class YierdisDb implements RuntimeDbEngine {
 
     @Override
     public void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
-        this.maxmemoryCoordinator = coordinator;
+        runtimeState.attachMaxmemoryCoordinator(coordinator);
     }
 
     public void adjustUsedBytes(long deltaBytes) {
-        ledger.commit(null, deltaBytes);
+        runtimeState.adjustUsedBytes(deltaBytes);
     }
 
     public void enforceMaxmemory() {
-        checkThread();
-        // Best-effort background enforcement: rely on ledger SSOT for eviction/cleanup.
-        // Note: This method intentionally does not throw on "noeviction" when already above maxmemory;
-        // writes are rejected at reserve-time when they are expected to increase memory.
-        try {
-            ledger.reserve(0);
-        } catch (MemoryLedgerOutOfMemoryException e) {
-            throw new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
-        }
+        maintenance.enforceMaxmemory();
     }
 
     @Override
@@ -590,19 +454,11 @@ public final class YierdisDb implements RuntimeDbEngine {
 
     @Override
     public void defragMaintenance() {
-        checkThread();
-        if (nativeDefragOptions == null) {
-            return;
-        }
-        lastNativeDefragReport = keyLifecycle.nativeAllocator().defragCycle(nativeDefragOptions);
+        maintenance.defragMaintenance();
     }
 
     NativeDefragReport lastNativeDefragReport() {
-        return lastNativeDefragReport;
-    }
-
-    private void evictUntilUnder(long limitBytes) {
-        maxmemorySupport.evictUntilUnder(limitBytes);
+        return runtimeState.lastNativeDefragReport();
     }
 
     static byte[] toByteArray(BytesView view) {
@@ -625,55 +481,44 @@ public final class YierdisDb implements RuntimeDbEngine {
 
     @Override
     public long usedBytesForMaxmemory() {
-        return memoryReporter.usedBytesForMaxmemory();
+        return maintenance.usedBytesForMaxmemory();
     }
 
     @Override
     public int keyCountEstimate() {
-        return memoryReporter.keyCountEstimate();
+        return maintenance.keyCountEstimate();
     }
 
     @Override
     public void cleanupExpired(long nowMillis) {
-        checkThread();
-        expirationSupport.cleanupExpired(nowMillis);
+        maintenance.cleanupExpired(nowMillis);
     }
 
     @Override
     public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
-        checkThread();
-        return maxmemorySupport.sampleCandidate(policy, nowMillis);
+        return maintenance.sampleCandidate(this, policy, nowMillis);
     }
 
     @Override
     public MaxmemoryCandidate scanBestCandidate(MaxmemoryPolicy policy, long nowMillis) {
-        checkThread();
-        return maxmemorySupport.scanBestCandidate(policy, nowMillis);
+        return maintenance.scanBestCandidate(this, policy, nowMillis);
     }
 
     @Override
     public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
-        checkThread();
-        return maxmemorySupport.evict(candidate, nowMillis);
+        return maintenance.evict(this, candidate, nowMillis);
     }
 
     long nextLruClock() {
-        if (!lruEnabled) {
-            return 0L;
-        }
-        MaxmemoryCoordinator coordinator = maxmemoryCoordinator;
-        if (coordinator != null) {
-            return coordinator.nextLruClock();
-        }
-        return ++lruClock;
+        return runtimeState.nextLruClock();
     }
 
     public void bindToCurrentThread() {
-        threadGuard.bindToCurrentThread();
+        runtimeState.bindToCurrentThread();
     }
 
     public void checkThread() {
-        threadGuard.checkThread();
+        runtimeState.checkThread();
     }
 
     public YierdisDbMemoryLedger memoryLedger() {
@@ -681,30 +526,19 @@ public final class YierdisDb implements RuntimeDbEngine {
     }
 
     public void shutdown() {
-        threadGuard.checkThreadForShutdown();
-        if (!threadGuard.tryMarkClosed()) {
-            return;
-        }
-        ledger.resetUsage();
-        resources.releaseAll(expires, entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
+        maintenance.shutdown();
     }
 
     public yier.bubu.redis.storage.api.MutationOutcome flushDb() {
-        checkThread();
-        boolean hadKeys = keyLifecycle.keyCount() != 0;
-        boolean hadTtl = expires.size() != 0;
-        resources.clearData(expires, entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
-        ledger.resetUsage();
-        return yier.bubu.redis.storage.api.MutationOutcome.of(hadKeys, hadTtl);
+        return maintenance.flushDb();
     }
 
     public int size() {
-        checkThread();
-        return keyLifecycle.keyCount();
+        return maintenance.size();
     }
 
     public long estimatedUsedBytes() {
-        return memoryReporter.estimatedUsedBytes();
+        return maintenance.estimatedUsedBytes();
     }
 
     YierdisDbIntrospection introspection() {
@@ -712,8 +546,7 @@ public final class YierdisDb implements RuntimeDbEngine {
     }
 
     public void cleanupExpired() {
-        checkThread();
-        expirationSupport.cleanupExpired();
+        maintenance.cleanupExpired();
     }
 
     boolean isKeyExpired(byte[] keyBytes, long nowMillis) {

@@ -16,6 +16,7 @@ import yier.bubu.redis.storage.api.ExpirationManager;
 import yier.bubu.redis.storage.api.MemoryOps;
 
 public final class YierdisDbComponents {
+    final YierdisDbRuntimeState runtimeState;
     final YierdisDbStorageComponents storage;
     final EntryTable entries;
     final NativeKeyDirectory keyDirectory;
@@ -41,8 +42,10 @@ public final class YierdisDbComponents {
     final ExpirationManager expirationManager;
     final MemoryOps memoryOps;
     final DbLifecycleOps lifecycleOps;
+    final YierdisDbDataMaintenance maintenance;
 
     YierdisDbComponents(
+            YierdisDbRuntimeState runtimeState,
             YierdisDbStorageComponents storage,
             EntryTable entries,
             NativeKeyDirectory keyDirectory,
@@ -67,8 +70,10 @@ public final class YierdisDbComponents {
             DbWrites writes,
             ExpirationManager expirationManager,
             MemoryOps memoryOps,
-            DbLifecycleOps lifecycleOps
+            DbLifecycleOps lifecycleOps,
+            YierdisDbDataMaintenance maintenance
     ) {
+        this.runtimeState = runtimeState;
         this.storage = storage;
         this.entries = entries;
         this.keyDirectory = keyDirectory;
@@ -94,5 +99,6 @@ public final class YierdisDbComponents {
         this.expirationManager = expirationManager;
         this.memoryOps = memoryOps;
         this.lifecycleOps = lifecycleOps;
+        this.maintenance = maintenance;
     }
 }

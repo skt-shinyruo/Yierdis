@@ -42,9 +42,11 @@ public final class HllCommands implements CommandModule {
         int elementsLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, elementsLen);
         try {
-            var result = support.dbWrites(ctx).hll().pfadd(request.readOnlyByteArray(1), support.slice());
-            support.recordMutation(ctx, result.mutationOutcome());
-            out.integer(result.value());
+            long changed = support.recordWriteValue(
+                    ctx,
+                    support.commandDb(ctx).writes().hll().pfadd(request.readOnlyByteArray(1), support.slice())
+            );
+            out.integer(changed);
         } finally {
             support.clearScratch(elementsLen);
         }
@@ -59,7 +61,7 @@ public final class HllCommands implements CommandModule {
         int len = request.argc() - 1;
         support.sliceResetFromRequest(request, 1, len);
         try {
-            out.integer(support.dbReads(ctx).hll().pfcount(support.slice()));
+            out.integer(support.commandDb(ctx).reads().hll().pfcount(support.slice()));
         } finally {
             support.clearScratch(len);
         }
@@ -74,8 +76,10 @@ public final class HllCommands implements CommandModule {
         int sourcesLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, sourcesLen);
         try {
-            var result = support.dbWrites(ctx).hll().pfmerge(request.readOnlyByteArray(1), support.slice());
-            support.recordMutation(ctx, result.mutationOutcome());
+            support.recordWriteValue(
+                    ctx,
+                    support.commandDb(ctx).writes().hll().pfmerge(request.readOnlyByteArray(1), support.slice())
+            );
         } finally {
             support.clearScratch(sourcesLen);
         }

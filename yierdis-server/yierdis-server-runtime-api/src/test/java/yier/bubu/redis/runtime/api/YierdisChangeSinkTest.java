@@ -11,6 +11,8 @@ import yier.bubu.redis.storage.api.DbChangeListener;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Method;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -121,6 +123,28 @@ public class YierdisChangeSinkTest {
                 () -> YierdisInstanceConfig.builder().nativeDefragMaxObjects(-1).build());
         expectIllegalArgument("nativeDefragTimeLimitMillis must be >= 0",
                 () -> YierdisInstanceConfig.builder().nativeDefragTimeLimitMillis(-1).build());
+    }
+
+    @Test
+    public void instanceConfigDoesNotExposeLegacyEngineFactoryOwnedResourceApi() {
+        for (Field field : YierdisInstanceConfig.class.getDeclaredFields()) {
+            Assert.assertFalse(
+                    "EngineFactoryBinding owns runtime resources now: " + field,
+                    field.getName().equals("engineFactoryOwnedResource")
+            );
+        }
+        for (Method method : YierdisInstanceConfig.class.getDeclaredMethods()) {
+            Assert.assertFalse(
+                    "EngineFactoryBinding owns runtime resources now: " + method,
+                    method.getName().equals("engineFactoryOwnedResource")
+            );
+        }
+        for (Method method : YierdisInstanceConfig.Builder.class.getDeclaredMethods()) {
+            Assert.assertFalse(
+                    "EngineFactoryBinding owns runtime resources now: " + method,
+                    method.getName().equals("engineFactoryOwnedResource")
+            );
+        }
     }
 
     private static void expectIllegalArgument(String expectedMessage, Runnable action) {

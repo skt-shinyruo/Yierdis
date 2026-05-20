@@ -68,7 +68,10 @@ public class YierdisDbArchitectureGuardTest {
     @Test
     public void maxmemoryPolicyMustUseCoreApiEnumOnly() {
         Assert.assertNull(findDeclaredClass(YierdisDb.class, "MaxmemoryPolicy"));
-        Assert.assertEquals(MaxmemoryPolicy.class, fieldType(YierdisDb.class, "maxmemoryPolicy"));
+        Assert.assertNull(
+                "YierdisDb should not own maxmemoryPolicy directly; configuration/participants own that state",
+                fieldTypeOrNull(YierdisDb.class, "maxmemoryPolicy")
+        );
         Assert.assertEquals(MaxmemoryPolicy.class, fieldType(YierdisDbConfig.class, "maxmemoryPolicy"));
         Assert.assertEquals(MaxmemoryPolicy.class, fieldType(YierdisDbMemoryLedger.class, "maxmemoryPolicy"));
         Assert.assertEquals(MaxmemoryPolicy.class, fieldType(YierdisDbMaxmemorySupport.class, "maxmemoryPolicy"));
@@ -243,6 +246,15 @@ public class YierdisDbArchitectureGuardTest {
             return field.getType();
         } catch (NoSuchFieldException e) {
             Assert.fail("missing field " + type.getName() + "." + fieldName);
+            return null;
+        }
+    }
+
+    private static Class<?> fieldTypeOrNull(Class<?> type, String fieldName) {
+        try {
+            java.lang.reflect.Field field = type.getDeclaredField(fieldName);
+            return field.getType();
+        } catch (NoSuchFieldException ignored) {
             return null;
         }
     }

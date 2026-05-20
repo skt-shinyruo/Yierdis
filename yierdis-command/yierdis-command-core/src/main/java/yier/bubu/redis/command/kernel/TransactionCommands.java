@@ -84,7 +84,7 @@ final class TransactionCommands implements CommandModule {
         out.arrayHeader(queued.size());
         for (ExecutionRequest queuedRequest : queued) {
             try (ExecutionRequest replay = queuedRequest) {
-                CommandContext replayCtx = new CommandContext(ctx.session(), out);
+                CommandContext replayCtx = new CommandContext(ctx.sessionCapabilities(), out);
                 processor.execute(replay, replayCtx);
             }
         }

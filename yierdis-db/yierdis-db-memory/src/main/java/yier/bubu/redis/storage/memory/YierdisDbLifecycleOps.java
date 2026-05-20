@@ -12,16 +12,17 @@ import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.MutationOutcome;
 
 import java.util.Objects;
+import java.util.function.Supplier;
 
 public final class YierdisDbLifecycleOps implements DbLifecycleOps {
-    private final YierdisDb db;
+    private final Supplier<MutationOutcome> flushDb;
 
-    YierdisDbLifecycleOps(YierdisDb db) {
-        this.db = Objects.requireNonNull(db, "db");
+    YierdisDbLifecycleOps(Supplier<MutationOutcome> flushDb) {
+        this.flushDb = Objects.requireNonNull(flushDb, "flushDb");
     }
 
     @Override
     public MutationOutcome flushDb() {
-        return db.flushDb();
+        return flushDb.get();
     }
 }

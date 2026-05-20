@@ -13,7 +13,6 @@ import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReplyWriter;
 import yier.bubu.redis.execution.api.ServerSession;
 import yier.bubu.redis.execution.api.TransactionState;
-import yier.bubu.redis.runtime.api.YierdisChangeEvent;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -84,11 +83,11 @@ public class YierdisFastCommandProcessorPolicyTest {
     }
 
     @Test
-    public void changeSinkReceivesUserCommandEventOnlyAfterMutationOutcome() {
-        ArrayList<YierdisChangeEvent> events = new ArrayList<>();
+    public void changeObserverReceivesUserCommandEventOnlyAfterMutationOutcome() {
+        ArrayList<String> events = new ArrayList<>();
         YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
                 YierdisCommandProcessorOptions.builder()
-                        .changeSink(events::add)
+                        .changeObserver((dbIndex, request) -> events.add(dbIndex + ":" + arg(request, 0)))
                         .build(),
                 registration -> {
                     registration.register(
@@ -120,8 +119,7 @@ public class YierdisFastCommandProcessorPolicyTest {
         processor.execute(request("MUTATE"), ctx);
         Assert.assertEquals("MUTATE", out.simpleString());
         Assert.assertEquals(1, events.size());
-        Assert.assertEquals(2, events.get(0).dbIndex());
-        Assert.assertEquals("MUTATE", arg(events.get(0), 0));
+        Assert.assertEquals("2:MUTATE", events.get(0));
 
         out.clear();
         processor.execute(request("READONLY"), ctx);
@@ -131,7 +129,7 @@ public class YierdisFastCommandProcessorPolicyTest {
 
     @Test
     public void execReplayEmitsQueuedMutationWithoutEmittingExec() {
-        ArrayList<YierdisChangeEvent> events = new ArrayList<>();
+        ArrayList<String> events = new ArrayList<>();
         YierdisFastCommandProcessor processor = mutationAwareProcessor(events);
         TestSession session = new TestSession();
         CapturingReplyWriter out = new CapturingReplyWriter();
@@ -153,12 +151,12 @@ public class YierdisFastCommandProcessorPolicyTest {
         Assert.assertEquals(Integer.valueOf(2), out.arrayHeader());
         Assert.assertEquals("MUTATE", out.simpleString());
         Assert.assertEquals(1, events.size());
-        Assert.assertEquals("MUTATE", arg(events.get(0), 0));
+        Assert.assertEquals("0:MUTATE", events.get(0));
     }
 
     @Test
     public void execReplayDoesNotCarryMutationOutcomeIntoFollowingReadOnlyCommand() {
-        ArrayList<YierdisChangeEvent> events = new ArrayList<>();
+        ArrayList<String> events = new ArrayList<>();
         YierdisFastCommandProcessor processor = mutationAwareProcessor(events);
         TestSession session = new TestSession();
         CapturingReplyWriter out = new CapturingReplyWriter();
@@ -180,13 +178,13 @@ public class YierdisFastCommandProcessorPolicyTest {
         Assert.assertEquals(Integer.valueOf(2), out.arrayHeader());
         Assert.assertEquals("READONLY", out.simpleString());
         Assert.assertEquals(1, events.size());
-        Assert.assertEquals("MUTATE", arg(events.get(0), 0));
+        Assert.assertEquals("0:MUTATE", events.get(0));
     }
 
-    private static YierdisFastCommandProcessor mutationAwareProcessor(ArrayList<YierdisChangeEvent> events) {
+    private static YierdisFastCommandProcessor mutationAwareProcessor(ArrayList<String> events) {
         return new YierdisFastCommandProcessor(
                 YierdisCommandProcessorOptions.builder()
-                        .changeSink(events::add)
+                        .changeObserver((dbIndex, request) -> events.add(dbIndex + ":" + arg(request, 0)))
                         .build(),
                 registration -> {
                     registration.register(
@@ -212,8 +210,8 @@ public class YierdisFastCommandProcessorPolicyTest {
         return ByteArrayExecutionRequest.fromUtf8(command, List.of(args));
     }
 
-    private static String arg(YierdisChangeEvent event, int index) {
-        byte[] bytes = event.request().toByteArray(index);
+    private static String arg(ExecutionRequest request, int index) {
+        byte[] bytes = request.toByteArray(index);
         return new String(bytes, StandardCharsets.US_ASCII);
     }
 

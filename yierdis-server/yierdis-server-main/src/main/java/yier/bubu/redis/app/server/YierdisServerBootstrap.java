@@ -152,7 +152,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             }
         };
         YierdisCommandProcessorOptions commandProcessorOptions = YierdisCommandProcessorOptions.builder()
-                .changeSink(instance.config().changeSink())
+                .changeObserver(RuntimeChangeSinkCommandChangeObserver.fromSink(instance.config().changeSink()))
                 .build();
         YierdisEngine commandEngine = new DefaultYierdisEngine(
                 commandProcessorOptions,
@@ -226,8 +226,10 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         }
         YierdisFfmMemoryRuntime memoryRuntime = new YierdisFfmMemoryRuntime("instance");
         instanceConfig
-                .engineFactory(new YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions))
-                .engineFactoryOwnedResource(memoryRuntime);
+                .engineFactoryBinding(new YierdisInstanceConfig.EngineFactoryBinding(
+                        new YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions),
+                        memoryRuntime
+                ));
     }
 
     private static NativeDefragOptions nativeDefragOptions(YierdisServerRuntimeConfig runtimeConfig) {

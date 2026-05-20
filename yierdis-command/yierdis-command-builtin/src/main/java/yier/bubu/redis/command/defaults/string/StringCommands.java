@@ -134,14 +134,16 @@ public final class StringCommands implements CommandModule {
 
     private void set(SetArgs args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        var result = support.dbWrites(ctx).strings().set(
-                args.key(),
-                support.argSlice(args.request(), args.valueIndex()),
-                args.mode(),
-                args.expire(),
-                args.getOld()
+        var result = support.recordStringSetResult(
+                ctx,
+                support.commandDb(ctx).writes().strings().set(
+                        args.key(),
+                        support.argSlice(args.request(), args.valueIndex()),
+                        args.mode(),
+                        args.expire(),
+                        args.getOld()
+                )
         );
-        support.recordMutation(ctx, result.mutationOutcome());
         if (!result.applied()) {
             out.bulkString((byte[]) null);
             return;
@@ -156,21 +158,23 @@ public final class StringCommands implements CommandModule {
     private void get(ArgReader args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
-        support.dbReads(ctx).strings().getStringValue(support.argView(request, 1)).writeTo(new BulkStringReplyAdapter(out));
+        support.commandDb(ctx).reads().strings().getStringValue(support.argView(request, 1)).writeTo(new BulkStringReplyAdapter(out));
     }
 
     private void strlen(ArgReader args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
-        out.integer(support.dbReads(ctx).strings().strlen(support.argView(request, 1)));
+        out.integer(support.commandDb(ctx).reads().strings().strlen(support.argView(request, 1)));
     }
 
     private void append(ArgReader args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
-        var result = support.dbWrites(ctx).strings().append(request.readOnlyByteArray(1), support.argSlice(request, 2));
-        support.recordMutation(ctx, result.mutationOutcome());
-        out.integer(result.value());
+        long length = support.recordWriteValue(
+                ctx,
+                support.commandDb(ctx).writes().strings().append(request.readOnlyByteArray(1), support.argSlice(request, 2))
+        );
+        out.integer(length);
     }
 
     private void setbit(ArgReader args, CommandContext ctx) {
@@ -188,16 +192,18 @@ public final class StringCommands implements CommandModule {
             out.error("ERR string exceeds maximum allowed size");
             return;
         }
-        var result = support.dbWrites(ctx).strings().setBit(request.readOnlyByteArray(1), offset, (int) v);
-        support.recordMutation(ctx, result.mutationOutcome());
-        out.integer(result.value());
+        int previousBit = support.recordWriteValue(
+                ctx,
+                support.commandDb(ctx).writes().strings().setBit(request.readOnlyByteArray(1), offset, (int) v)
+        );
+        out.integer(previousBit);
     }
 
     private void getbit(ArgReader args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
         long offset = CommandSupport.parseNonNegativeLong(request, 2, "offset");
-        out.integer(support.dbReads(ctx).strings().getBit(support.argView(request, 1), offset));
+        out.integer(support.commandDb(ctx).reads().strings().getBit(support.argView(request, 1), offset));
     }
 
     private void bitcount(ExecutionRequest request, CommandContext ctx) {
@@ -207,12 +213,12 @@ public final class StringCommands implements CommandModule {
             return;
         }
         if (request.argc() == 2) {
-            out.integer(support.dbReads(ctx).strings().bitcount(support.argView(request, 1)));
+            out.integer(support.commandDb(ctx).reads().strings().bitcount(support.argView(request, 1)));
             return;
         }
         long start = CommandSupport.parseLong(request, 2, "start");
         long end = CommandSupport.parseLong(request, 3, "end");
-        out.integer(support.dbReads(ctx).strings().bitcount(support.argView(request, 1), start, end));
+        out.integer(support.commandDb(ctx).reads().strings().bitcount(support.argView(request, 1), start, end));
     }
 
     private void incr(ArgReader args, CommandContext ctx) {
@@ -226,8 +232,10 @@ public final class StringCommands implements CommandModule {
     private void incrBy(ArgReader args, CommandContext ctx, long delta) {
         ReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
-        var result = support.dbWrites(ctx).strings().incrBy(request.readOnlyByteArray(1), delta);
-        support.recordMutation(ctx, result.mutationOutcome());
-        out.integer(result.value());
+        long value = support.recordWriteValue(
+                ctx,
+                support.commandDb(ctx).writes().strings().incrBy(request.readOnlyByteArray(1), delta)
+        );
+        out.integer(value);
     }
 }

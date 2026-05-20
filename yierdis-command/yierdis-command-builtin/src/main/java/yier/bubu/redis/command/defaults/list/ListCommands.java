@@ -62,11 +62,13 @@ public final class ListCommands implements CommandModule {
         int valuesLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, valuesLen);
         try {
-            var result = left
-                    ? support.dbWrites(ctx).lists().lpush(request.readOnlyByteArray(1), support.slice())
-                    : support.dbWrites(ctx).lists().rpush(request.readOnlyByteArray(1), support.slice());
-            support.recordMutation(ctx, result.mutationOutcome());
-            out.integer(result.value());
+            long length = support.recordWriteValue(
+                    ctx,
+                    left
+                            ? support.commandDb(ctx).writes().lists().lpush(request.readOnlyByteArray(1), support.slice())
+                            : support.commandDb(ctx).writes().lists().rpush(request.readOnlyByteArray(1), support.slice())
+            );
+            out.integer(length);
         } finally {
             support.clearScratch(valuesLen);
         }
@@ -82,7 +84,7 @@ public final class ListCommands implements CommandModule {
         int stop = CommandSupport.parseIntClamped(request, 3, "stop");
 
         byte[] key = request.readOnlyByteArray(1);
-        BulkStringSequence seq = support.dbReads(ctx).lists().lrange(key, start, stop);
+        BulkStringSequence seq = support.commandDb(ctx).reads().lists().lrange(key, start, stop);
         int count = seq.count();
         out.arrayHeader(count);
         if (count == 0) {
@@ -111,11 +113,13 @@ public final class ListCommands implements CommandModule {
             }
         }
 
-        var result = left
-                ? support.dbWrites(ctx).lists().lpop(request.readOnlyByteArray(1), count)
-                : support.dbWrites(ctx).lists().rpop(request.readOnlyByteArray(1), count);
-        support.recordMutation(ctx, result.mutationOutcome());
-        popResponse(out, result.value(), hasCount);
+        List<byte[]> popped = support.recordWriteValue(
+                ctx,
+                left
+                        ? support.commandDb(ctx).writes().lists().lpop(request.readOnlyByteArray(1), count)
+                        : support.commandDb(ctx).writes().lists().rpop(request.readOnlyByteArray(1), count)
+        );
+        popResponse(out, popped, hasCount);
     }
 
     private static void popResponse(ReplyWriter out, List<byte[]> popped, boolean hasCount) {

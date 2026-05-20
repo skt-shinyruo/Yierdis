@@ -47,9 +47,11 @@ public final class HashCommands implements CommandModule {
         ExecutionRequest request = args.request();
         support.sliceResetFromRequest(request, 2, pairsLen);
         try {
-            var result = support.dbWrites(ctx).hashes().hset(request.readOnlyByteArray(1), support.slice());
-            support.recordMutation(ctx, result.mutationOutcome());
-            out.integer(result.value());
+            long added = support.recordWriteValue(
+                    ctx,
+                    support.commandDb(ctx).writes().hashes().hset(request.readOnlyByteArray(1), support.slice())
+            );
+            out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
         }
@@ -61,7 +63,7 @@ public final class HashCommands implements CommandModule {
             CommandSupport.wrongArity(out, "hget");
             return;
         }
-        out.bulkString(support.dbReads(ctx).hashes().hget(request.readOnlyByteArray(1), request.readOnlyByteArray(2)));
+        out.bulkString(support.commandDb(ctx).reads().hashes().hget(request.readOnlyByteArray(1), request.readOnlyByteArray(2)));
     }
 
     private void hgetall(ExecutionRequest request, CommandContext ctx) {
@@ -72,7 +74,7 @@ public final class HashCommands implements CommandModule {
         }
 
         byte[] key = request.readOnlyByteArray(1);
-        BulkStringMapPairs pairsResult = support.dbReads(ctx).hashes().hgetall(key);
+        BulkStringMapPairs pairsResult = support.commandDb(ctx).reads().hashes().hgetall(key);
         int pairs = pairsResult.pairCount();
         out.mapHeader(pairs);
         if (pairs == 0) {
@@ -87,7 +89,7 @@ public final class HashCommands implements CommandModule {
             CommandSupport.wrongArity(out, "hlen");
             return;
         }
-        out.integer(support.dbReads(ctx).hashes().hlen(request.readOnlyByteArray(1)));
+        out.integer(support.commandDb(ctx).reads().hashes().hlen(request.readOnlyByteArray(1)));
     }
 
     private void hdel(ExecutionRequest request, CommandContext ctx) {
@@ -99,9 +101,11 @@ public final class HashCommands implements CommandModule {
         int fieldsLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, fieldsLen);
         try {
-            var result = support.dbWrites(ctx).hashes().hdel(request.readOnlyByteArray(1), support.slice());
-            support.recordMutation(ctx, result.mutationOutcome());
-            out.integer(result.value());
+            long deleted = support.recordWriteValue(
+                    ctx,
+                    support.commandDb(ctx).writes().hashes().hdel(request.readOnlyByteArray(1), support.slice())
+            );
+            out.integer(deleted);
         } finally {
             support.clearScratch(fieldsLen);
         }

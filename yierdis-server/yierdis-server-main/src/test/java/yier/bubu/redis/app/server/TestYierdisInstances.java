@@ -17,25 +17,23 @@ final class TestYierdisInstances {
             return YierdisInstance.create(config);
         }
         if (config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB) {
-            return YierdisInstance.create(configWithFactory(config, new YierdisDbEngineFactory()).build());
+            return YierdisInstance.create(copyConfig(config)
+                    .engineFactory(new YierdisDbEngineFactory())
+                    .build());
         }
 
         YierdisFfmMemoryRuntime memoryRuntime = new YierdisFfmMemoryRuntime("instance");
+        YierdisDbEngineFactory engineFactory = new YierdisDbEngineFactory(memoryRuntime);
         return YierdisInstance.create(
-                configWithFactory(config, new YierdisDbEngineFactory(memoryRuntime))
-                        .engineFactoryOwnedResource(memoryRuntime)
+                copyConfig(config)
+                        .engineFactoryBinding(new YierdisInstanceConfig.EngineFactoryBinding(engineFactory, memoryRuntime))
                         .build()
         );
     }
 
-    private static YierdisInstanceConfig.Builder configWithFactory(
-            YierdisInstanceConfig config,
-            YierdisDbEngineFactory engineFactory
-    ) {
+    private static YierdisInstanceConfig.Builder copyConfig(YierdisInstanceConfig config) {
         return YierdisInstanceConfig.builder()
                 .databases(config.databases())
-                .engineFactory(engineFactory)
-                .changeSink(config.changeSink())
                 .maxmemoryBytes(config.maxmemoryBytes())
                 .maxmemoryScope(config.maxmemoryScope())
                 .maxmemoryPolicy(config.maxmemoryPolicy())

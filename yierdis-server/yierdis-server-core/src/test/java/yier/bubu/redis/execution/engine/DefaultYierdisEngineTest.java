@@ -7,19 +7,44 @@ import yier.bubu.redis.command.api.CommandDescriptor;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.kernel.YierdisCommandProcessorOptions;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.ClientMetadataSession;
+import yier.bubu.redis.execution.api.ConnectionStatsSession;
+import yier.bubu.redis.execution.api.ConnectionStatsView;
+import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.ReplyWriter;
-import yier.bubu.redis.storage.api.DbChange;
-import yier.bubu.redis.storage.api.DbChangeContext;
-import yier.bubu.redis.storage.api.DbChangeKind;
-import yier.bubu.redis.runtime.api.YierdisChangeEvent;
-import yier.bubu.redis.runtime.api.YierdisChangeKind;
+import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
+import yier.bubu.redis.execution.api.Session;
+import yier.bubu.redis.execution.api.TransactionSession;
+import yier.bubu.redis.execution.api.TransactionState;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 public class DefaultYierdisEngineTest {
+    @Test
+    public void commandModulesDoNotReachThroughFullCommandContextSession() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("unable to locate repository root", repoRoot);
+
+        ArrayList<Path> offenders = new ArrayList<>();
+        assertNoFullSessionAccess(
+                repoRoot.resolve("yierdis-command/yierdis-command-core/src/main/java"),
+                offenders
+        );
+        assertNoFullSessionAccess(
+                repoRoot.resolve("yierdis-command/yierdis-command-builtin/src/main/java"),
+                offenders
+        );
+
+        Assert.assertTrue("ctx.session() usages must move to narrow CommandContext getters: " + offenders, offenders.isEmpty());
+    }
+
     @Test
     public void executeDelegatesThroughOwnedCommandProcessor() {
         YierdisEngine engine = new DefaultYierdisEngine(
@@ -45,24 +70,48 @@ public class DefaultYierdisEngineTest {
     }
 
     @Test
-    public void configuredChangeSinkReceivesSyntheticDbChangesFromCommandPath() {
-        ArrayList<YierdisChangeEvent> events = new ArrayList<>();
+    public void executeAcceptsNarrowCommandSessionCapabilities() {
+        YierdisEngine engine = new DefaultYierdisEngine(
+                () -> {
+                },
+                registration -> registration.register(
+                        "LOCAL",
+                        CommandDescriptor.of(1, 0, 0, 0),
+                        CommandParsers.exactRequest(1, "local"),
+                        (request, ctx) -> ctx.out().simpleString("DB_" + ctx.dbIndexSession().dbIndex())
+                )
+        );
+
+        NarrowEngineSession session = new NarrowEngineSession();
+        session.setDbIndex(7);
+        CapturingReplyWriter out = new CapturingReplyWriter();
+
+        engine.execute(
+                session,
+                ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()),
+                out
+        );
+
+        Assert.assertEquals("DB_7", out.simpleStringValue);
+        Assert.assertNull(out.errorValue);
+    }
+
+    @Test
+    public void configuredChangeObserverReceivesUserCommandChangesFromCommandPath() {
+        ArrayList<String> events = new ArrayList<>();
         YierdisEngine engine = new DefaultYierdisEngine(
                 YierdisCommandProcessorOptions.builder()
-                        .changeSink(events::add)
+                        .changeObserver((dbIndex, request) ->
+                                events.add(dbIndex + ":" + utf8(request.toByteArray(0))))
                         .build(),
                 () -> {
                 },
                 registration -> registration.register(
-                        "SYNTHETIC_READ_DELETE",
+                        "MUTATE",
                         CommandDescriptor.of(1, 0, 0, 0),
-                        CommandParsers.exactRequest(1, "synthetic_read_delete"),
+                        CommandParsers.exactRequest(1, "mutate"),
                         (request, ctx) -> {
-                            DbChangeContext.emit(DbChange.syntheticDelete(
-                                    ctx.session().dbIndex(),
-                                    DbChangeKind.EXPIRED,
-                                    "stale".getBytes(StandardCharsets.US_ASCII)
-                            ));
+                            ctx.recordMutation(true, false);
                             ctx.out().simpleString("OK");
                         }
                 )
@@ -74,22 +123,20 @@ public class DefaultYierdisEngineTest {
 
         engine.execute(
                 session,
-                ByteArrayExecutionRequest.fromUtf8("SYNTHETIC_READ_DELETE", List.of()),
+                ByteArrayExecutionRequest.fromUtf8("MUTATE", List.of()),
                 out
         );
 
         Assert.assertEquals("OK", out.simpleStringValue);
-        Assert.assertEquals(1, events.size());
-        YierdisChangeEvent event = events.get(0);
-        Assert.assertEquals(3, event.dbIndex());
-        Assert.assertEquals(YierdisChangeKind.EXPIRED, event.kind());
-        Assert.assertTrue(event.synthetic());
-        Assert.assertEquals("DEL", arg(event, 0));
-        Assert.assertEquals("stale", arg(event, 1));
+        Assert.assertEquals(List.of("3:MUTATE"), events);
+    }
+
+    private static String utf8(byte[] value) {
+        return new String(value, StandardCharsets.UTF_8);
     }
 
     @Test
-    public void executeRejectsNonServerSessionBeforeCommandModulesRun() {
+    public void executeRejectsSessionWithoutCommandCapabilitiesBeforeCommandModulesRun() {
         YierdisEngine engine = new DefaultYierdisEngine(
                 () -> {
                 },
@@ -104,13 +151,14 @@ public class DefaultYierdisEngineTest {
         CapturingReplyWriter out = new CapturingReplyWriter();
         try {
             engine.execute(
-                    null,
+                    new Session() {
+                    },
                     ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()),
                     out
             );
             Assert.fail("expected IllegalArgumentException");
         } catch (IllegalArgumentException e) {
-            Assert.assertEquals("YierdisEngine requires ServerSession", e.getMessage());
+            Assert.assertEquals("YierdisEngine requires command session capabilities", e.getMessage());
         }
 
         Assert.assertNull(out.simpleStringValue);
@@ -249,7 +297,130 @@ public class DefaultYierdisEngineTest {
         }
     }
 
-    private static String arg(YierdisChangeEvent event, int index) {
-        return new String(event.request().toByteArray(index), StandardCharsets.US_ASCII);
+    private static final class NarrowEngineSession implements DbIndexSession,
+            ClientMetadataSession,
+            TransactionSession,
+            ConnectionStatsSession,
+            ProtocolNegotiationSession {
+        private final TransactionState tx = new TransactionState() {
+            @Override
+            public boolean active() {
+                return false;
+            }
+
+            @Override
+            public void begin() {
+            }
+
+            @Override
+            public void discard() {
+            }
+
+            @Override
+            public void enqueue(yier.bubu.redis.execution.api.ExecutionRequest request) {
+            }
+
+            @Override
+            public int size() {
+                return 0;
+            }
+
+            @Override
+            public List<yier.bubu.redis.execution.api.ExecutionRequest> drain() {
+                return List.of();
+            }
+        };
+
+        private int dbIndex;
+        private String clientName;
+        private boolean authenticated;
+        private int respVersion = 2;
+
+        @Override
+        public int dbIndex() {
+            return dbIndex;
+        }
+
+        @Override
+        public void setDbIndex(int dbIndex) {
+            this.dbIndex = dbIndex;
+        }
+
+        @Override
+        public long clientId() {
+            return 1L;
+        }
+
+        @Override
+        public String clientName() {
+            return clientName;
+        }
+
+        @Override
+        public void setClientName(String clientName) {
+            this.clientName = clientName;
+        }
+
+        @Override
+        public boolean authenticated() {
+            return authenticated;
+        }
+
+        @Override
+        public void setAuthenticated(boolean authenticated) {
+            this.authenticated = authenticated;
+        }
+
+        @Override
+        public TransactionState transaction() {
+            return tx;
+        }
+
+        @Override
+        public ConnectionStatsView connectionStats() {
+            return null;
+        }
+
+        @Override
+        public int respVersion() {
+            return respVersion;
+        }
+
+        @Override
+        public void setRespVersion(int respVersion) {
+            this.respVersion = respVersion;
+        }
+    }
+
+    private static void assertNoFullSessionAccess(Path sourceRoot, List<Path> offenders) throws IOException {
+        if (!Files.isDirectory(sourceRoot)) {
+            return;
+        }
+        try (Stream<Path> files = Files.walk(sourceRoot)) {
+            files.filter(path -> path.toString().endsWith(".java"))
+                    .filter(DefaultYierdisEngineTest::containsFullSessionAccess)
+                    .map(sourceRoot::relativize)
+                    .forEach(offenders::add);
+        }
+    }
+
+    private static boolean containsFullSessionAccess(Path path) {
+        try {
+            return Files.readString(path).contains("ctx.session()");
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static Path resolveRepoRoot() {
+        Path path = Path.of("").toAbsolutePath();
+        while (path != null) {
+            if (Files.isDirectory(path.resolve("yierdis-server"))
+                    && Files.isDirectory(path.resolve("yierdis-command"))) {
+                return path;
+            }
+            path = path.getParent();
+        }
+        return null;
     }
 }

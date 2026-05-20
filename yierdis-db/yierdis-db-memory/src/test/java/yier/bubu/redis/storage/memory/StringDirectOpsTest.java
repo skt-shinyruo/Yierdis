@@ -6,6 +6,7 @@ import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.api.ExpireOption;
+import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.StringWriteOps;
@@ -104,6 +105,71 @@ public class StringDirectOpsTest {
         }
     }
 
+    @Test
+    public void noevictionAllowsSetOverwriteThatShrinksWhenUsedEqualsLimit() {
+        byte[] key = b("k");
+        byte[] largeValue = repeat((byte) 'x', 1600);
+        byte[] smallValue = b("x");
+        long maxmemoryBytes = usedAfterSet(key, largeValue);
+
+        YierdisDb db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
+        try {
+            db.bindToCurrentThread();
+
+            Assert.assertTrue(db.writes().strings().setString(key, largeValue, SetMode.NORMAL, null).value());
+            long usedBefore = db.usedBytesForMaxmemory();
+            Assert.assertEquals(maxmemoryBytes, usedBefore);
+
+            Assert.assertTrue(db.writes().strings().setString(key, smallValue, SetMode.NORMAL, null).value());
+
+            Assert.assertArrayEquals(smallValue, db.reads().strings().getStringBytes(key));
+            Assert.assertTrue("shrinking overwrite should reduce used bytes",
+                    db.usedBytesForMaxmemory() < usedBefore);
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void noevictionRejectsSetOverwriteThatWouldGrowPastLimitWithoutChangingOldValue() {
+        byte[] key = b("k");
+        byte[] oldValue = b("old");
+        byte[] largerValue = repeat((byte) 'x', 1600);
+        long usedWithOldValue = usedAfterSet(key, oldValue);
+        long maxmemoryBytes = usedWithOldValue + 1L;
+
+        YierdisDb db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
+        try {
+            db.bindToCurrentThread();
+
+            Assert.assertTrue(db.writes().strings().setString(key, oldValue, SetMode.NORMAL, null).value());
+            long usedBeforeRejectedWrite = db.usedBytesForMaxmemory();
+
+            try {
+                db.writes().strings().setString(key, largerValue, SetMode.NORMAL, null);
+                Assert.fail("expected maxmemory rejection");
+            } catch (YierdisCommandException e) {
+                Assert.assertEquals(MaxmemoryErrors.OOM_ERR, e.getMessage());
+            }
+
+            Assert.assertArrayEquals(oldValue, db.reads().strings().getStringBytes(key));
+            Assert.assertEquals(usedBeforeRejectedWrite, db.usedBytesForMaxmemory());
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    private static long usedAfterSet(byte[] key, byte[] value) {
+        YierdisDb db = new YierdisDb();
+        try {
+            db.bindToCurrentThread();
+            Assert.assertTrue(db.writes().strings().setString(key, value, SetMode.NORMAL, null).value());
+            return db.usedBytesForMaxmemory();
+        } finally {
+            db.shutdown();
+        }
+    }
+
     private static void withDb(DbConsumer consumer) {
         YierdisDb db = new YierdisDb();
         try {
@@ -112,6 +178,12 @@ public class StringDirectOpsTest {
         } finally {
             db.shutdown();
         }
+    }
+
+    private static byte[] repeat(byte value, int len) {
+        byte[] out = new byte[len];
+        java.util.Arrays.fill(out, value);
+        return out;
     }
 
     private static BytesView view(String text) {

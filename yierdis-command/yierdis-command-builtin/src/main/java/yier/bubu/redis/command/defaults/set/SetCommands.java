@@ -45,9 +45,11 @@ public final class SetCommands implements CommandModule {
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
-            var result = support.dbWrites(ctx).sets().sadd(request.readOnlyByteArray(1), support.slice());
-            support.recordMutation(ctx, result.mutationOutcome());
-            out.integer(result.value());
+            long added = support.recordWriteValue(
+                    ctx,
+                    support.commandDb(ctx).writes().sets().sadd(request.readOnlyByteArray(1), support.slice())
+            );
+            out.integer(added);
         } finally {
             support.clearScratch(membersLen);
         }
@@ -62,9 +64,11 @@ public final class SetCommands implements CommandModule {
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
-            var result = support.dbWrites(ctx).sets().srem(request.readOnlyByteArray(1), support.slice());
-            support.recordMutation(ctx, result.mutationOutcome());
-            out.integer(result.value());
+            long removed = support.recordWriteValue(
+                    ctx,
+                    support.commandDb(ctx).writes().sets().srem(request.readOnlyByteArray(1), support.slice())
+            );
+            out.integer(removed);
         } finally {
             support.clearScratch(membersLen);
         }
@@ -78,7 +82,7 @@ public final class SetCommands implements CommandModule {
         }
 
         byte[] key = request.readOnlyByteArray(1);
-        BulkStringSequence seq = support.dbReads(ctx).sets().smembers(key);
+        BulkStringSequence seq = support.commandDb(ctx).reads().sets().smembers(key);
         int count = seq.count();
         out.arrayHeader(count);
         if (count == 0) {
@@ -93,7 +97,7 @@ public final class SetCommands implements CommandModule {
             CommandSupport.wrongArity(out, "sismember");
             return;
         }
-        out.integer(support.dbReads(ctx).sets().sismember(request.readOnlyByteArray(1), request.readOnlyByteArray(2)) ? 1 : 0);
+        out.integer(support.commandDb(ctx).reads().sets().sismember(request.readOnlyByteArray(1), request.readOnlyByteArray(2)) ? 1 : 0);
     }
 
     private void scard(ExecutionRequest request, CommandContext ctx) {
@@ -102,6 +106,6 @@ public final class SetCommands implements CommandModule {
             CommandSupport.wrongArity(out, "scard");
             return;
         }
-        out.integer(support.dbReads(ctx).sets().scard(request.readOnlyByteArray(1)));
+        out.integer(support.commandDb(ctx).reads().sets().scard(request.readOnlyByteArray(1)));
     }
 }

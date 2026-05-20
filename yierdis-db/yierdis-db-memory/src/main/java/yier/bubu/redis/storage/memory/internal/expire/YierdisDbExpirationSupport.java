@@ -10,7 +10,6 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.api.DbChangeKind;
 
 import java.util.Objects;
 
@@ -18,11 +17,17 @@ public final class YierdisDbExpirationSupport {
     private static final int CLEANUP_SAMPLES_PER_LOOP = 20;
     private static final int CLEANUP_MAX_LOOPS = 16;
 
-    private final YierdisDb db;
+    private final Runnable threadChecker;
+    private final YierdisDbKeyLifecycle keyLifecycle;
     private final long expireCleanupTimeLimitNanos;
 
-    public YierdisDbExpirationSupport(YierdisDb db, long expireCleanupTimeLimitNanos) {
-        this.db = Objects.requireNonNull(db, "db");
+    public YierdisDbExpirationSupport(
+            Runnable threadChecker,
+            YierdisDbKeyLifecycle keyLifecycle,
+            long expireCleanupTimeLimitNanos
+    ) {
+        this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
+        this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.expireCleanupTimeLimitNanos = expireCleanupTimeLimitNanos;
     }
 
@@ -31,13 +36,13 @@ public final class YierdisDbExpirationSupport {
     }
 
     public void cleanupExpired(long nowMillis) {
-        db.checkThread();
+        threadChecker.run();
         long deadlineNanos = System.nanoTime() + expireCleanupTimeLimitNanos;
         long nowFixed = nowMillis <= 0 ? System.currentTimeMillis() : nowMillis;
         int loops = 0;
 
         for (; ; ) {
-            int total = db.keyLifecycle().expireCount();
+            int total = keyLifecycle.expireCount();
             if (total == 0) {
                 return;
             }
@@ -65,38 +70,27 @@ public final class YierdisDbExpirationSupport {
     private int cleanupSamples(int samples, long nowMillis) {
         int expired = 0;
         for (int i = 0; i < samples; i++) {
-            KeyHandle keyHandle = db.keyLifecycle().randomExpireKeyHandle();
+            KeyHandle keyHandle = keyLifecycle.randomExpireKeyHandle();
             if (keyHandle == null) {
                 break;
             }
 
-            Long expireAtMillis = db.keyLifecycle().expireAtMillis(keyHandle);
+            Long expireAtMillis = keyLifecycle.expireAtMillis(keyHandle);
             if (expireAtMillis == null) {
-                db.removeExpire(keyHandle);
+                keyLifecycle.removeExpire(keyHandle);
                 continue;
             }
 
-            EntryRecord record = db.keyLifecycle().entryRecord(keyHandle);
+            EntryRecord record = keyLifecycle.entryRecord(keyHandle);
             if (record == null) {
-                db.removeExpire(keyHandle);
+                keyLifecycle.removeExpire(keyHandle);
                 continue;
             }
 
-            if (expireAtMillis <= nowMillis) {
-                removeExpiredRecord(keyHandle, record);
+            if (expireAtMillis <= nowMillis && keyLifecycle.removeIfExpired(keyHandle, record, nowMillis)) {
                 expired++;
             }
         }
         return expired;
-    }
-
-    private void removeExpiredRecord(KeyHandle keyHandle, EntryRecord record) {
-        byte[] keyBytes = db.keyLifecycle().copyKeyBytes(keyHandle);
-        long removalBytes = db.keyLifecycle().estimatedBytesForRemoval(keyHandle, record);
-        db.keyLifecycle().removeExpireIndexOnly(keyHandle);
-        if (db.keyLifecycle().removeEntry(keyHandle, record)) {
-            db.adjustUsedBytes(-removalBytes);
-            db.keyLifecycle().emitSyntheticDelete(keyBytes, DbChangeKind.EXPIRED);
-        }
     }
 }

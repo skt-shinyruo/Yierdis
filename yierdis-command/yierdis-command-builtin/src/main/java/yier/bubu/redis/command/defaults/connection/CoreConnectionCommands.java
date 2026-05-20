@@ -161,7 +161,7 @@ public final class CoreConnectionCommands {
                 return;
             }
         }
-        support.recordMutation(ctx, support.db(ctx).lifecycle().flushDb());
+        support.recordMutation(ctx, support.commandDb(ctx).lifecycle().flushDb());
         out.simpleString("OK");
     }
 

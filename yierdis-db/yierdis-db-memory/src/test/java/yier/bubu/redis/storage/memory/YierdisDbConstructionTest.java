@@ -424,6 +424,7 @@ public class YierdisDbConstructionTest {
 
             MaxmemoryCandidate candidate = db.sampleCandidate(MaxmemoryPolicy.ALLKEYS_RANDOM, System.currentTimeMillis());
             Assert.assertNotNull(candidate);
+            Assert.assertSame(db, candidate.owner());
             Assert.assertTrue(db.evict(candidate, System.currentTimeMillis()));
 
             Assert.assertNull(db.keyLifecycle().entryHandle(key));
@@ -450,6 +451,25 @@ public class YierdisDbConstructionTest {
             }
 
             assertSyntheticDelete(changes, "native-evict-event", DbChangeKind.EVICTED);
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void scannedMaxmemoryCandidateIsOwnedByPublicDbAndEvictableByIt() {
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(1024 * 1024, MaxmemoryPolicy.ALLKEYS_LRU, 5, 5, 5);
+        try {
+            db.bindToCurrentThread();
+            byte[] key = bytes("public-scan-owner");
+
+            db.writes().strings().setString(key, bytes("value"), SetMode.NORMAL, null);
+            MaxmemoryCandidate candidate = db.scanBestCandidate(MaxmemoryPolicy.ALLKEYS_LRU, System.currentTimeMillis());
+
+            Assert.assertNotNull(candidate);
+            Assert.assertSame(db, candidate.owner());
+            Assert.assertTrue(db.evict(candidate, System.currentTimeMillis()));
+            Assert.assertNull(db.keyLifecycle().entryHandle(key));
         } finally {
             db.shutdown();
         }

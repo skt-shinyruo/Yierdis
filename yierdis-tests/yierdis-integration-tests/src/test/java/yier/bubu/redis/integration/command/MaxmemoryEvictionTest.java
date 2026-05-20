@@ -3,9 +3,10 @@ package yier.bubu.redis.integration.command;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
-import yier.bubu.redis.storage.memory.YierdisDb;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
+import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.memory.YierdisDb;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
@@ -39,6 +40,30 @@ public class MaxmemoryEvictionTest {
 
 	            ReplyObject getB = client.execute(List.of(b("GET"), b("b")));
 	            Assert.assertTrue(getB instanceof ReplyNull);
+            }
+        });
+    }
+
+    @Test
+    public void noevictionSetCommandAllowsOverwriteThatShrinksWhenUsedEqualsLimit() {
+        byte[] key = b("k");
+        byte[] largeValue = repeat((byte) 'x', 1600);
+        byte[] smallValue = b("x");
+        long maxmemoryBytes = usedAfterSet(key, largeValue);
+
+        forEachDbWithMaxmemory(maxmemoryBytes, "noeviction", 5, db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                Assert.assertTrue(client.execute(List.of(b("SET"), key, largeValue)) instanceof ReplySimpleString);
+                long usedBefore = db.estimatedUsedBytes();
+                Assert.assertEquals(maxmemoryBytes, usedBefore);
+
+                ReplyObject reply = client.execute(List.of(b("SET"), key, smallValue));
+
+                Assert.assertTrue(reply instanceof ReplySimpleString);
+                Assert.assertArrayEquals(smallValue, ((ReplyBulkString) client.execute(List.of(b("GET"), key))).data());
+                Assert.assertTrue("shrinking command should reduce used bytes",
+                        db.estimatedUsedBytes() < usedBefore);
             }
         });
     }
@@ -199,6 +224,13 @@ public class MaxmemoryEvictionTest {
             out[i] = b;
         }
         return out;
+    }
+
+    private static long usedAfterSet(byte[] key, byte[] value) {
+        try (DbFixture fixture = new DbFixture(0)) {
+            Assert.assertTrue(fixture.db.writes().strings().setString(key, value, SetMode.NORMAL, null).value());
+            return fixture.db.estimatedUsedBytes();
+        }
     }
 
     private static void assertCollectionWriteUsesRealBoundedMaxmemory(

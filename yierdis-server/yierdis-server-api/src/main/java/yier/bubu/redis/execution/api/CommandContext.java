@@ -10,45 +10,53 @@ import java.util.Objects;
  * server session semantics.
  */
 public final class CommandContext {
-    private ServerSession session;
+    private CommandSessionCapabilities session;
     private ReplyWriter out;
     private boolean valueChanged;
     private boolean ttlChanged;
 
     public CommandContext(ServerSession session, ReplyWriter out) {
+        this(CommandSessionCapabilities.from(session), out);
+    }
+
+    public CommandContext(CommandSessionCapabilities session, ReplyWriter out) {
         this.session = Objects.requireNonNull(session, "session");
         this.out = Objects.requireNonNull(out, "out");
     }
 
     public CommandContext reset(ServerSession session, ReplyWriter out) {
+        return reset(CommandSessionCapabilities.from(session), out);
+    }
+
+    public CommandContext reset(CommandSessionCapabilities session, ReplyWriter out) {
         this.session = Objects.requireNonNull(session, "session");
         this.out = Objects.requireNonNull(out, "out");
         clearMutationOutcome();
         return this;
     }
 
-    public ServerSession session() {
+    public CommandSessionCapabilities sessionCapabilities() {
         return session;
     }
 
     public DbIndexSession dbIndexSession() {
-        return session;
+        return session.dbIndexSession();
     }
 
     public ClientMetadataSession clientMetadataSession() {
-        return session;
+        return session.clientMetadataSession();
     }
 
     public TransactionSession transactionSession() {
-        return session;
+        return session.transactionSession();
     }
 
     public ConnectionStatsSession connectionStatsSession() {
-        return session;
+        return session.connectionStatsSession();
     }
 
     public ProtocolNegotiationSession protocolNegotiationSession() {
-        return session;
+        return session.protocolNegotiationSession();
     }
 
     public ReplyWriter out() {

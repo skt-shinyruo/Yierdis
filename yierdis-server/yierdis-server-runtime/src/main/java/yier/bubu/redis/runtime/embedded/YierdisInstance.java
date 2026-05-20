@@ -44,17 +44,19 @@ public final class YierdisInstance implements AutoCloseable {
 
     public static YierdisInstance create(YierdisInstanceConfig config) {
         Objects.requireNonNull(config, "config");
-        DbEngineFactory engineFactory = config.engineFactory();
+        YierdisInstanceConfig.EngineFactoryBinding binding = config.engineFactoryBinding();
+        DbEngineFactory engineFactory = binding == null ? config.engineFactory() : binding.engineFactory();
         if (engineFactory == null) {
             throw new IllegalArgumentException("engineFactory must be configured");
         }
-        return create(config, engineFactory, config.engineFactoryOwnedResource());
+        AutoCloseable ownedResource = binding == null ? null : binding.ownedResource();
+        return create(config, engineFactory, ownedResource);
     }
 
     private static YierdisInstance create(
             YierdisInstanceConfig config,
             DbEngineFactory engineFactory,
-            AutoCloseable engineFactoryOwnedResource
+            AutoCloseable ownedEngineFactoryResource
     ) {
         int databases = Math.max(1, config.databases());
         boolean perDbScope = config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
@@ -121,11 +123,11 @@ public final class YierdisInstance implements AutoCloseable {
 
             return new YierdisInstance(
                     config,
-                    new YierdisInstanceResources(dbs, closeables(engineFactoryOwnedResource), governor),
+                    new YierdisInstanceResources(dbs, closeables(ownedEngineFactoryResource), governor),
                     changeListener
             );
         } catch (Throwable t) {
-            throw YierdisInstanceResources.startupFailure(t, dbs, closeables(engineFactoryOwnedResource));
+            throw YierdisInstanceResources.startupFailure(t, dbs, closeables(ownedEngineFactoryResource));
         }
     }
 

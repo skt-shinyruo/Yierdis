@@ -78,7 +78,7 @@ public final class KeyCommands implements CommandModule {
             CommandSupport.wrongArity(out, "type");
             return;
         }
-        ValueType t = support.dbReads(ctx).keyspace().typeOf(support.argView(request, 1));
+        ValueType t = support.commandDb(ctx).reads().keyspace().typeOf(support.argView(request, 1));
         if (t == null) {
             out.simpleString("none");
             return;
@@ -98,7 +98,7 @@ public final class KeyCommands implements CommandModule {
                 CommandSupport.wrongArity(out, "memory");
                 return;
             }
-            long bytes = support.db(ctx).memory().memoryUsage(support.argView(request, 2));
+            long bytes = support.commandDb(ctx).memory().memoryUsage(support.argView(request, 2));
             if (bytes < 0) {
                 out.bulkString((byte[]) null);
                 return;
@@ -119,7 +119,7 @@ public final class KeyCommands implements CommandModule {
                 s = infoProvider.memoryStats(ctx);
             }
             if (s == null) {
-                s = support.db(ctx).memory().memoryStats();
+                s = support.commandDb(ctx).memory().memoryStats();
             }
             // Flat key/value pairs map naturally to RESP3 maps and RESP2 key/value arrays.
             out.mapHeader(20);
@@ -199,7 +199,7 @@ public final class KeyCommands implements CommandModule {
             out.error("ERR syntax error");
             return;
         }
-        String enc = support.db(ctx).memory().objectEncoding(support.argView(request, 2));
+        String enc = support.commandDb(ctx).memory().objectEncoding(support.argView(request, 2));
         if (enc == null) {
             out.bulkString((byte[]) null);
             return;
@@ -214,7 +214,7 @@ public final class KeyCommands implements CommandModule {
             return;
         }
         SlowCommandGovernor governor = support.slowGovernor();
-        out.bulkStringArray(support.dbReads(ctx).keyspace().keys(
+        out.bulkStringArray(support.commandDb(ctx).reads().keyspace().keys(
                 request.readOnlyByteArray(1),
                 governor.keysMaxResults(ctx),
                 governor.keysTimeBudgetNanos(ctx)
@@ -269,7 +269,7 @@ public final class KeyCommands implements CommandModule {
     private void scan(ScanArgs args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
         List<byte[]> keys = new ArrayList<>();
-        ScanCursorV2 next = support.dbReads(ctx).keyspace().scan(
+        ScanCursorV2 next = support.commandDb(ctx).reads().keyspace().scan(
                 ScanCursorV2.of(args.cursor()),
                 args.match(),
                 args.count(),
@@ -291,9 +291,11 @@ public final class KeyCommands implements CommandModule {
         int len = request.argc() - 1;
         support.sliceResetFromRequest(request, 1, len);
         try {
-            var result = support.dbWrites(ctx).keyspace().del(support.slice());
-            support.recordMutation(ctx, result.mutationOutcome());
-            out.integer(result.value());
+            long deleted = support.recordWriteValue(
+                    ctx,
+                    support.commandDb(ctx).writes().keyspace().del(support.slice())
+            );
+            out.integer(deleted);
         } finally {
             support.clearScratch(len);
         }
@@ -308,7 +310,7 @@ public final class KeyCommands implements CommandModule {
 
         long count = 0;
         for (int i = 1; i < request.argc(); i++) {
-            if (support.dbReads(ctx).keyspace().existsKey(support.argView(request, i))) {
+            if (support.commandDb(ctx).reads().keyspace().existsKey(support.argView(request, i))) {
                 count++;
             }
         }
@@ -322,9 +324,11 @@ public final class KeyCommands implements CommandModule {
             return;
         }
         long seconds = CommandSupport.parseLong(request, 2, "seconds");
-        var result = support.dbWrites(ctx).ttl().expire(support.argView(request, 1), seconds);
-        support.recordMutation(ctx, result.mutationOutcome());
-        out.integer(result.value() ? 1 : 0);
+        boolean applied = support.recordWriteValue(
+                ctx,
+                support.commandDb(ctx).writes().ttl().expire(support.argView(request, 1), seconds)
+        );
+        out.integer(applied ? 1 : 0);
     }
 
     private void pexpire(ExecutionRequest request, CommandContext ctx) {
@@ -334,9 +338,11 @@ public final class KeyCommands implements CommandModule {
             return;
         }
         long millis = CommandSupport.parseLong(request, 2, "milliseconds");
-        var result = support.dbWrites(ctx).ttl().pexpire(support.argView(request, 1), millis);
-        support.recordMutation(ctx, result.mutationOutcome());
-        out.integer(result.value() ? 1 : 0);
+        boolean applied = support.recordWriteValue(
+                ctx,
+                support.commandDb(ctx).writes().ttl().pexpire(support.argView(request, 1), millis)
+        );
+        out.integer(applied ? 1 : 0);
     }
 
     private void expireat(ExecutionRequest request, CommandContext ctx) {
@@ -346,9 +352,11 @@ public final class KeyCommands implements CommandModule {
             return;
         }
         long seconds = CommandSupport.parseLong(request, 2, "seconds");
-        var result = support.dbWrites(ctx).ttl().expireAtSeconds(support.argView(request, 1), seconds);
-        support.recordMutation(ctx, result.mutationOutcome());
-        out.integer(result.value() ? 1 : 0);
+        boolean applied = support.recordWriteValue(
+                ctx,
+                support.commandDb(ctx).writes().ttl().expireAtSeconds(support.argView(request, 1), seconds)
+        );
+        out.integer(applied ? 1 : 0);
     }
 
     private void pexpireat(ExecutionRequest request, CommandContext ctx) {
@@ -358,9 +366,11 @@ public final class KeyCommands implements CommandModule {
             return;
         }
         long millis = CommandSupport.parseLong(request, 2, "milliseconds");
-        var result = support.dbWrites(ctx).ttl().expireAtMillis(support.argView(request, 1), millis);
-        support.recordMutation(ctx, result.mutationOutcome());
-        out.integer(result.value() ? 1 : 0);
+        boolean applied = support.recordWriteValue(
+                ctx,
+                support.commandDb(ctx).writes().ttl().expireAtMillis(support.argView(request, 1), millis)
+        );
+        out.integer(applied ? 1 : 0);
     }
 
     private void persist(ExecutionRequest request, CommandContext ctx) {
@@ -369,9 +379,11 @@ public final class KeyCommands implements CommandModule {
             CommandSupport.wrongArity(out, "persist");
             return;
         }
-        var result = support.dbWrites(ctx).ttl().persist(support.argView(request, 1));
-        support.recordMutation(ctx, result.mutationOutcome());
-        out.integer(result.value() ? 1 : 0);
+        boolean applied = support.recordWriteValue(
+                ctx,
+                support.commandDb(ctx).writes().ttl().persist(support.argView(request, 1))
+        );
+        out.integer(applied ? 1 : 0);
     }
 
     private void ttl(ExecutionRequest request, CommandContext ctx) {
@@ -380,7 +392,7 @@ public final class KeyCommands implements CommandModule {
             CommandSupport.wrongArity(out, "ttl");
             return;
         }
-        out.integer(support.dbReads(ctx).ttl().ttlSeconds(support.argView(request, 1)));
+        out.integer(support.commandDb(ctx).reads().ttl().ttlSeconds(support.argView(request, 1)));
     }
 
     private void pttl(ExecutionRequest request, CommandContext ctx) {
@@ -389,6 +401,6 @@ public final class KeyCommands implements CommandModule {
             CommandSupport.wrongArity(out, "pttl");
             return;
         }
-        out.integer(support.dbReads(ctx).ttl().ttlMillis(support.argView(request, 1)));
+        out.integer(support.commandDb(ctx).reads().ttl().ttlMillis(support.argView(request, 1)));
     }
 }

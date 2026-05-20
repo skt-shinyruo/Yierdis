@@ -6,7 +6,6 @@ import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ReplyWriter;
-import yier.bubu.redis.runtime.api.YierdisChangeSink;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -38,10 +37,6 @@ public final class YierdisFastCommandProcessor {
             Iterable<? extends CommandModule> modules
     ) {
         this(CommandChangeEmitter.fromOptions(options), toArray(modules));
-    }
-
-    public YierdisFastCommandProcessor(YierdisChangeSink changeSink, Iterable<? extends CommandModule> modules) {
-        this(CommandChangeEmitter.fromSink(changeSink), toArray(modules));
     }
 
     private YierdisFastCommandProcessor(CommandChangeEmitter changeEmitter, CommandModule[] modules) {

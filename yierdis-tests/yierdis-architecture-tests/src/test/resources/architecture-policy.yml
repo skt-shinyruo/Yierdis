@@ -23,7 +23,7 @@ modules:
   yierdis-command-core:
     allowed_dependencies:
       - yierdis-command-api
-      - yierdis-server-runtime-api
+      - yierdis-db-api
     forbidden_dependencies:
       - yierdis-command-builtin
       - yierdis-core-db

@@ -8,9 +8,9 @@ import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.storage.api.DbEngine;
-import yier.bubu.redis.storage.api.DbReads;
-import yier.bubu.redis.storage.api.DbWrites;
 import yier.bubu.redis.storage.api.MutationOutcome;
+import yier.bubu.redis.storage.api.StringWriteOps;
+import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.DbIndexSession;
@@ -36,6 +36,7 @@ public final class CommandSupport {
     private byte[][] argvScratch = new byte[16][];
     private final CommandArgBytesView argView = new CommandArgBytesView();
     private final CommandArgBytesSlice argSlice = new CommandArgBytesSlice();
+    private final CommandDb commandDb = new CommandDb();
 
     CommandSupport(DbEngine engine) {
         this(singleDbRouter(engine), null, SlowCommandGovernor.DEFAULT);
@@ -55,17 +56,9 @@ public final class CommandSupport {
         this.slowGovernor = slowGovernor == null ? SlowCommandGovernor.DEFAULT : slowGovernor;
     }
 
-    public DbEngine db(CommandContext ctx) {
+    public CommandDb commandDb(CommandContext ctx) {
         java.util.Objects.requireNonNull(ctx, "ctx");
-        return dbRouter.dbFor(ctx.dbIndexSession());
-    }
-
-    public DbReads dbReads(CommandContext ctx) {
-        return db(ctx).reads();
-    }
-
-    public DbWrites dbWrites(CommandContext ctx) {
-        return db(ctx).writes();
+        return commandDb.reset(dbRouter.dbFor(ctx.dbIndexSession()));
     }
 
     public void recordMutation(CommandContext ctx, MutationOutcome outcome) {
@@ -73,6 +66,21 @@ public final class CommandSupport {
             return;
         }
         ctx.recordMutation(outcome.valueChanged(), outcome.ttlChanged());
+    }
+
+    public <T> T recordWriteValue(CommandContext ctx, WriteResult<T> result) {
+        java.util.Objects.requireNonNull(result, "result");
+        recordMutation(ctx, result.mutationOutcome());
+        return result.value();
+    }
+
+    public StringWriteOps.SetStringResult recordStringSetResult(
+            CommandContext ctx,
+            StringWriteOps.SetStringResult result
+    ) {
+        java.util.Objects.requireNonNull(result, "result");
+        recordMutation(ctx, result.mutationOutcome());
+        return result;
     }
 
     public int databases() {

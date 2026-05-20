@@ -26,8 +26,10 @@ import yier.bubu.redis.runtime.embedded.YierdisInstanceMaintenance;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceRuntimeAccess;
 import yier.bubu.redis.testutil.FastTestClient;
+import yier.bubu.redis.testutil.ReplyBulkString;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyInteger;
+import yier.bubu.redis.testutil.ReplyObject;
 import yier.bubu.redis.testutil.ReplySimpleString;
 import yier.bubu.redis.testutil.TestYierdisInstances;
 
@@ -63,6 +65,40 @@ public class YierdisInstanceTest {
                 Object reply = client.execute(Arrays.asList(b("SET"), b("k1"), value));
                 Assert.assertFalse("expected not OOM (no double-count off-heap)", reply instanceof ReplyError);
                 Assert.assertEquals("OK", ((ReplySimpleString) reply).value());
+            }
+        }
+    }
+
+    @Test
+    public void globalNoevictionSetCommandAllowsOverwriteThatShrinksWhenUsedEqualsLimit() {
+        byte[] key = b("k");
+        byte[] largeValue = new byte[1600];
+        Arrays.fill(largeValue, (byte) 'x');
+        byte[] smallValue = b("x");
+        long maxmemoryBytes = globalUsedAfterSet(key, largeValue);
+
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(1)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
+                .maxmemoryBytes(maxmemoryBytes)
+                .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
+                .build();
+
+        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+            instance.bindToCurrentThread();
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forRouter(TestDbRouters.forInstance(instance));
+            try (FastTestClient client = new FastTestClient(processor)) {
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("SET"), key, largeValue))).value());
+                long usedBefore = instance.observability().memoryStats().usedBytesForMaxmemory();
+                Assert.assertEquals(maxmemoryBytes, usedBefore);
+
+                ReplyObject reply = client.execute(Arrays.asList(b("SET"), key, smallValue));
+
+                Assert.assertFalse("shrinking overwrite must not be rejected by global noeviction", reply instanceof ReplyError);
+                Assert.assertEquals("OK", ((ReplySimpleString) reply).value());
+                Assert.assertArrayEquals(smallValue, ((ReplyBulkString) client.execute(Arrays.asList(b("GET"), key))).data());
+                Assert.assertTrue("global used bytes should shrink",
+                        instance.observability().memoryStats().usedBytesForMaxmemory() < usedBefore);
             }
         }
     }
@@ -229,6 +265,21 @@ public class YierdisInstanceTest {
             return Long.MAX_VALUE;
         }
         return left + right;
+    }
+
+    private static long globalUsedAfterSet(byte[] key, byte[] value) {
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(1)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
+                .maxmemoryBytes(1_000_000)
+                .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
+                .build();
+
+        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(config)) {
+            instance.bindToCurrentThread();
+            Assert.assertTrue(instance.engine(0).writes().strings().setString(key, value, SetMode.NORMAL, null).value());
+            return instance.observability().memoryStats().usedBytesForMaxmemory();
+        }
     }
 
     private static void assertSyntheticDelete(List<YierdisChangeEvent> events, String key, YierdisChangeKind kind) {
