@@ -17,10 +17,12 @@ Yierdis 当前 native-memory runtime 建在 JDK 25 `java.lang.foreign` 上。最
 
 ## 启动和组装
 
-instance 启动时，`YierdisInstance.create(...)` 会创建 instance-level `YierdisFfmMemoryRuntime("instance")`。随后按 maxmemory scope 选择 DB factory 组装方式：
+生产启动路径的默认 DB backend 由 `YierdisServerBootstrap` 组装，并通过 `YierdisInstanceConfig` 注入 `YierdisInstance.create(config)`。runtime 的 strict create 入口要求 `engineFactory` 非空，不再在生产入口里偷偷选择默认 DB backend。
 
-- global scope：默认 `YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions)`，多个 DB 共享 instance-level runtime，global governor 额外把 shared off-heap usage source 纳入预算。
-- per-db scope：默认 `YierdisDbEngineFactory(nativeDefragOptions)`，每个 DB storage components 在没有外部 runtime 时创建 DB-owned `YierdisFfmMemoryRuntime("db")`。
+- global scope：`YierdisServerBootstrap` 创建 instance-level `YierdisFfmMemoryRuntime("instance")` 和 `YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions)`，多个 DB 共享 instance-level runtime，global governor 额外把 shared off-heap usage source 纳入预算。这个 shared runtime 作为 factory-owned resource 交给 instance 关闭。
+- per-db scope：`YierdisServerBootstrap` 创建 `YierdisDbEngineFactory(nativeDefragOptions)`，每个 DB storage components 在没有外部 runtime 时创建 DB-owned `YierdisFfmMemoryRuntime("db")`。
+
+embedded/test 兼容路径可以显式调用 `YierdisInstance.createWithDefaults(config)` 使用同样的默认组装规则；方法名本身表明这是默认组装，而不是 strict runtime 入口的隐式行为。
 
 `YierdisDbStorageComponents.create(...)` 负责把 runtime 装配成 DB 内部结构：
 

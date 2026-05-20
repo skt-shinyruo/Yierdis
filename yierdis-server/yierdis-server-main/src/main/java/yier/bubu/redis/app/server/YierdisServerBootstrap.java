@@ -24,8 +24,11 @@ import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
 import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
+import yier.bubu.redis.memory.api.NativeDefragOptions;
+import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
+import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceMaintenance;
@@ -125,6 +128,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .nativeDefragMaxMoveBytes(runtimeConfig.nativeDefragMaxMoveBytes())
                 .nativeDefragMaxObjects(runtimeConfig.nativeDefragMaxObjects())
                 .nativeDefragTimeLimitMillis(runtimeConfig.nativeDefragTimeLimitMillis());
+        configureDefaultDbEngineFactory(instanceConfig, scope, runtimeConfig);
         instance = YierdisInstance.create(instanceConfig.build());
         YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
         Runnable maintenanceTick = new YierdisInstanceMaintenance(instance)::maintenanceTick;
@@ -208,6 +212,33 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .childHandler(new YierdisServerChannelInitializer(runtimeConfig, executor, replyWriterFactory));
 
         serverChannel = bootstrap.bind(runtimeConfig.port()).sync().channel();
+    }
+
+    private static void configureDefaultDbEngineFactory(
+            YierdisInstanceConfig.Builder instanceConfig,
+            YierdisInstanceConfig.MaxmemoryScope scope,
+            YierdisServerRuntimeConfig runtimeConfig
+    ) {
+        NativeDefragOptions nativeDefragOptions = nativeDefragOptions(runtimeConfig);
+        if (scope == YierdisInstanceConfig.MaxmemoryScope.PER_DB) {
+            instanceConfig.engineFactory(new YierdisDbEngineFactory(nativeDefragOptions));
+            return;
+        }
+        YierdisFfmMemoryRuntime memoryRuntime = new YierdisFfmMemoryRuntime("instance");
+        instanceConfig
+                .engineFactory(new YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions))
+                .engineFactoryOwnedResource(memoryRuntime);
+    }
+
+    private static NativeDefragOptions nativeDefragOptions(YierdisServerRuntimeConfig runtimeConfig) {
+        if (!runtimeConfig.nativeDefragEnabled()) {
+            return null;
+        }
+        return new NativeDefragOptions(
+                runtimeConfig.nativeDefragMaxMoveBytes(),
+                runtimeConfig.nativeDefragMaxObjects(),
+                TimeUnit.MILLISECONDS.toNanos(runtimeConfig.nativeDefragTimeLimitMillis())
+        );
     }
 
     @Override

@@ -1,9 +1,10 @@
 package yier.bubu.redis.runtime.embedded;
 
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.RuntimeDbEngine;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -11,20 +12,17 @@ import java.util.Objects;
  */
 final class YierdisInstanceResources implements AutoCloseable {
     private final RuntimeDbEngine[] dbs;
-    private final YierdisFfmMemoryRuntime memoryRuntime;
-    private final boolean closeMemoryRuntime;
+    private final List<AutoCloseable> ownedResources;
     private final YierdisGlobalMaxmemoryGovernor globalMaxmemoryGovernor;
 
     YierdisInstanceResources(
             RuntimeDbEngine[] dbs,
-            YierdisFfmMemoryRuntime memoryRuntime,
-            boolean closeMemoryRuntime,
+            List<AutoCloseable> ownedResources,
             YierdisGlobalMaxmemoryGovernor globalMaxmemoryGovernor
     ) {
         Objects.requireNonNull(dbs, "dbs");
         this.dbs = dbs.clone();
-        this.memoryRuntime = memoryRuntime;
-        this.closeMemoryRuntime = closeMemoryRuntime;
+        this.ownedResources = ownedResources == null ? List.of() : List.copyOf(ownedResources);
         this.globalMaxmemoryGovernor = globalMaxmemoryGovernor;
     }
 
@@ -46,14 +44,6 @@ final class YierdisInstanceResources implements AutoCloseable {
             out[i] = dbs[i];
         }
         return out;
-    }
-
-    YierdisFfmMemoryRuntime memoryRuntime() {
-        return memoryRuntime;
-    }
-
-    boolean closesMemoryRuntime() {
-        return closeMemoryRuntime;
     }
 
     void enforceGlobalMaxmemoryMaintenance() {
@@ -84,13 +74,7 @@ final class YierdisInstanceResources implements AutoCloseable {
             }
         }
 
-        if (closeMemoryRuntime && memoryRuntime != null) {
-            try {
-                memoryRuntime.close();
-            } catch (Throwable t) {
-                failure = recordFailure(failure, t);
-            }
-        }
+        failure = closeOwnedResources(failure);
 
         rethrowIfNeeded(failure);
     }
@@ -103,8 +87,7 @@ final class YierdisInstanceResources implements AutoCloseable {
     static RuntimeException startupFailure(
             Throwable failure,
             RuntimeDbEngine[] dbs,
-            YierdisFfmMemoryRuntime memoryRuntime,
-            boolean closeMemoryRuntime
+            List<AutoCloseable> ownedResources
     ) {
         Throwable cleanupFailure = null;
         if (dbs != null) {
@@ -119,13 +102,7 @@ final class YierdisInstanceResources implements AutoCloseable {
                 }
             }
         }
-        if (closeMemoryRuntime && memoryRuntime != null) {
-            try {
-                memoryRuntime.close();
-            } catch (Throwable t) {
-                cleanupFailure = recordFailure(cleanupFailure, t);
-            }
-        }
+        cleanupFailure = closeOwnedResources(cleanupFailure, ownedResources);
         if (cleanupFailure != null) {
             failure.addSuppressed(cleanupFailure);
         }
@@ -136,6 +113,29 @@ final class YierdisInstanceResources implements AutoCloseable {
             throw error;
         }
         return new IllegalStateException(failure);
+    }
+
+    private Throwable closeOwnedResources(Throwable failure) {
+        return closeOwnedResources(failure, ownedResources);
+    }
+
+    private static Throwable closeOwnedResources(Throwable failure, List<AutoCloseable> resources) {
+        if (resources == null || resources.isEmpty()) {
+            return failure;
+        }
+        List<AutoCloseable> reversed = new ArrayList<>(resources);
+        for (int i = reversed.size() - 1; i >= 0; i--) {
+            AutoCloseable resource = reversed.get(i);
+            if (resource == null) {
+                continue;
+            }
+            try {
+                resource.close();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+        }
+        return failure;
     }
 
     private static Throwable recordFailure(Throwable current, Throwable next) {

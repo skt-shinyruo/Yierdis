@@ -47,7 +47,7 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.create(config)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
             instance.bindToCurrentThread();
             YierdisFastCommandProcessor processor = TestCommandProcessors.forRouter(TestDbRouters.forInstance(instance));
             TestSession session = new TestSession();
@@ -75,7 +75,7 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.create(config)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
             instance.bindToCurrentThread();
             byte[] value = new byte[4_000];
             Arrays.fill(value, (byte) 'a');
@@ -104,7 +104,7 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.create(config)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
             instance.bindToCurrentThread();
             byte[] value = new byte[4_000];
             Arrays.fill(value, (byte) 'a');
@@ -136,7 +136,7 @@ public class YierdisInstanceTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.create(config)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
             instance.bindToCurrentThread();
             byte[] value = new byte[4_000];
             Arrays.fill(value, (byte) 'a');
@@ -169,7 +169,7 @@ public class YierdisInstanceTest {
                 .nativeDefragTimeLimitMillis(1000)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.create(config)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
             instance.bindToCurrentThread();
             Assert.assertTrue(instance.engine(0).writes().strings().setString(b("k"), b("value"), SetMode.NORMAL, null).value());
 
@@ -187,7 +187,7 @@ public class YierdisInstanceTest {
                 .changeSink(events::add)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.create(config)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
             instance.bindToCurrentThread();
             Assert.assertTrue(instance.engine(0).writes().strings().setString(b("maintenance-expired"), b("v"), SetMode.NORMAL, null).value());
             Assert.assertTrue(instance.engine(0).writes().ttl().pexpire(view(b("maintenance-expired")), 1L).value());
@@ -269,7 +269,7 @@ public class YierdisInstanceTest {
     @Test
     public void unboundOrCrossThreadAccessFailsFast() throws Exception {
         YierdisInstanceConfig config = YierdisInstanceConfig.builder().build();
-        try (YierdisInstance instance = YierdisInstance.create(config)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
             try {
                 instance.engine(0).memory().memoryStats();
                 Assert.fail("expected fail-fast before bind");
@@ -406,7 +406,7 @@ public class YierdisInstanceTest {
                 .maxmemoryBytes(128)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.create(config)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
             instance.bindToCurrentThread();
             new YierdisInstanceMaintenance(instance).maintenanceTick();
         }
@@ -432,7 +432,7 @@ public class YierdisInstanceTest {
                 .maxmemoryBytes(128)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.create(config)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
             instance.bindToCurrentThread();
             new YierdisInstanceMaintenance(instance).maintenanceTick();
         }
@@ -453,7 +453,7 @@ public class YierdisInstanceTest {
                 .databases(2)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.PER_DB)
                 .build();
-        try (YierdisInstance instance = YierdisInstance.create(config)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
             instance.bindToCurrentThread();
             YierdisFastCommandProcessor processor = TestCommandProcessors.forRouter(TestDbRouters.forInstance(instance));
             TestSession session = new TestSession();

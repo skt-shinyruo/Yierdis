@@ -288,6 +288,7 @@ modules:
       - yierdis-server-runtime
       - yierdis-server-runtime-api
       - yierdis-server-executor
+      - yierdis-db-memory
       - yierdis-memory-ffm
       - netty-all
       - picocli

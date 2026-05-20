@@ -36,7 +36,7 @@ JDK 25 java.lang.foreign
 当前生产路径的事实是：
 
 - 使用 JDK 25 `java.lang.foreign`。
-- instance 启动会创建 `YierdisFfmMemoryRuntime("instance")`；global maxmemory scope 下 DB factory 共享这个 runtime。
+- 生产启动由 `YierdisServerBootstrap` 选择默认 DB factory；global maxmemory scope 下它创建 `YierdisFfmMemoryRuntime("instance")` 并让 DB factory 共享这个 runtime。
 - per-DB scope 下默认 DB factory 会让每个 DB 创建和拥有自己的 runtime / allocator resources。
 - `YierdisFfmMemoryRuntime.allocateRegion(...)` 当前使用 `Arena.ofShared()`，因为 region 可能在 bootstrap 线程创建，在 DB owner thread 释放。
 - `NativeKeyDirectory` 持久化 key bytes 为 allocator-backed `KEY_BYTES` object；directory table 数组仍在 heap。

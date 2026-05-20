@@ -29,7 +29,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
-        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+        YierdisInstance instance = YierdisInstance.createWithDefaults(YierdisInstanceConfig.builder().build());
         YierdisEngine engine = TestYierdisEngines.forInstance(instance);
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
@@ -91,7 +91,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
-        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+        YierdisInstance instance = YierdisInstance.createWithDefaults(YierdisInstanceConfig.builder().build());
         YierdisEngine engine = TestYierdisEngines.forInstance(instance);
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
@@ -153,7 +153,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
-        YierdisInstance instance = YierdisInstance.create(YierdisInstanceConfig.builder().build());
+        YierdisInstance instance = YierdisInstance.createWithDefaults(YierdisInstanceConfig.builder().build());
         YierdisEngine engine = TestYierdisEngines.forInstance(instance);
         RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(

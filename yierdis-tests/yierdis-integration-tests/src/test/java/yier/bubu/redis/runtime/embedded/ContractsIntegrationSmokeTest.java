@@ -34,7 +34,7 @@ public class ContractsIntegrationSmokeTest {
                 .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.create(config)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
             instance.bindToCurrentThread();
             YierdisFastCommandProcessor processor = TestCommandProcessors.forInstance(instance);
             TestSession session = new TestSession();

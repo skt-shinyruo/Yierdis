@@ -18,6 +18,16 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public class DbEngineFactoryInjectionTest {
     @Test
+    public void createRequiresInjectedFactory() {
+        try {
+            YierdisInstance.create(YierdisInstanceConfig.builder().build());
+            Assert.fail("expected create(config) to reject missing engineFactory");
+        } catch (IllegalArgumentException e) {
+            Assert.assertTrue(e.getMessage().contains("engineFactory"));
+        }
+    }
+
+    @Test
     public void createUsesInjectedFactory() {
         AtomicInteger created = new AtomicInteger(0);
         AtomicReference<MaxmemoryPolicy> receivedPolicy = new AtomicReference<>();

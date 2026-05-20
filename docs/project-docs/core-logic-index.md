@@ -21,7 +21,7 @@
 | [`YierdisServer`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java) | 进程入口，解析 CLI，检查 FFM，可预期错误转退出码 | `main(String[] args)` | [`main-path-walkthrough.md`](./main-path-walkthrough.md) |
 | [`ServerConfig`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/ServerConfig.java) | 把 CLI 参数变成 bootstrap config | `fromArgs(String[])` | [`configuration-and-operations.md`](./configuration-and-operations.md) |
 | [`CommandExecutorConfigs`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/CommandExecutorConfigs.java) | runtime config 到 executor config 的映射 | `from(...)` | [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
-| [`YierdisServerBootstrap`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java) | composition root，组装 `YierdisInstance`、`DefaultYierdisEngine`、`CommandExecutor`、Netty pipeline | `start(...)`, `startInternal()`, `close()` | [`request-execution-flow.md`](./request-execution-flow.md) |
+| [`YierdisServerBootstrap`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java) | composition root，选择默认 `YierdisDbEngineFactory` / memory runtime，并组装 `YierdisInstance`、`DefaultYierdisEngine`、`CommandExecutor`、Netty pipeline | `start(...)`, `startInternal()`, `close()` | [`request-execution-flow.md`](./request-execution-flow.md) |
 | [`YierdisServerChannelInitializer`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java) | 组装每条连接的 Netty handler 链 | `initChannel(...)` | [`protocol-reference.md`](./protocol-reference.md) |
 
 边界：`yierdis-server-main` 可以接触 Netty、runtime、engine、executor 和 server-only command；不应该承载普通 Redis 命令语义。
@@ -30,8 +30,8 @@
 
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
 | --- | --- | --- | --- |
-| [`YierdisInstance`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java) | 多 DB 生命周期、owner thread 绑定、资源关闭 | `create(...)`, `engine(int)`, `engines()`, `bindToCurrentThread()`, `close()` | [`db-internals.md`](./db-internals.md) |
-| [`YierdisInstanceConfig`](../../yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisInstanceConfig.java) | runtime 配置对象 | builder methods | [`configuration-and-operations.md`](./configuration-and-operations.md) |
+| [`YierdisInstance`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java) | 多 DB 生命周期、owner thread 绑定、资源关闭；strict `create(config)` 要求已注入 `DbEngineFactory` | `create(...)`, `createWithDefaults(...)`, `engine(int)`, `engines()`, `bindToCurrentThread()`, `close()` | [`db-internals.md`](./db-internals.md) |
+| [`YierdisInstanceConfig`](../../yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisInstanceConfig.java) | runtime 配置对象，承载外部注入的 DB factory 和 factory-owned resource | builder methods | [`configuration-and-operations.md`](./configuration-and-operations.md) |
 | [`YierdisInstanceRuntimeAccess`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceRuntimeAccess.java) | executor 线程绑定和运行期访问面 | `bindToCurrentThread()` | [`request-execution-flow.md`](./request-execution-flow.md) |
 | [`YierdisInstanceMaintenance`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceMaintenance.java) | maintenance tick，驱动过期清理和 defrag | tick methods | [`configuration-and-operations.md`](./configuration-and-operations.md) |
 | [`YierdisInstanceObservability`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceObservability.java) | INFO / STATS 使用的实例观测快照 | snapshot methods | [`configuration-and-operations.md`](./configuration-and-operations.md) |

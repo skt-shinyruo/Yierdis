@@ -11,6 +11,7 @@ public final class YierdisInstanceConfig {
 
     private final int databases;
     private final DbEngineFactory engineFactory;
+    private final AutoCloseable engineFactoryOwnedResource;
     private final YierdisChangeSink changeSink;
 
     private final long maxmemoryBytes;
@@ -27,6 +28,7 @@ public final class YierdisInstanceConfig {
     private YierdisInstanceConfig(Builder b) {
         this.databases = b.databases;
         this.engineFactory = b.engineFactory;
+        this.engineFactoryOwnedResource = b.engineFactoryOwnedResource;
         this.changeSink = b.changeSink == null ? YierdisChangeSink.NOOP : b.changeSink;
         this.maxmemoryBytes = b.maxmemoryBytes;
         this.maxmemoryScope = b.maxmemoryScope;
@@ -50,6 +52,10 @@ public final class YierdisInstanceConfig {
 
     public DbEngineFactory engineFactory() {
         return engineFactory;
+    }
+
+    public AutoCloseable engineFactoryOwnedResource() {
+        return engineFactoryOwnedResource;
     }
 
     public YierdisChangeSink changeSink() {
@@ -99,6 +105,7 @@ public final class YierdisInstanceConfig {
     public static final class Builder {
         private int databases = 1;
         private DbEngineFactory engineFactory;
+        private AutoCloseable engineFactoryOwnedResource;
         private YierdisChangeSink changeSink = YierdisChangeSink.NOOP;
 
         private long maxmemoryBytes;
@@ -137,6 +144,11 @@ public final class YierdisInstanceConfig {
 
         public Builder engineFactory(DbEngineFactory engineFactory) {
             this.engineFactory = engineFactory;
+            return this;
+        }
+
+        public Builder engineFactoryOwnedResource(AutoCloseable engineFactoryOwnedResource) {
+            this.engineFactoryOwnedResource = engineFactoryOwnedResource;
             return this;
         }
 

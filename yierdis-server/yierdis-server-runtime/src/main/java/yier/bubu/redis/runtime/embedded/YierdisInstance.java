@@ -13,6 +13,8 @@ import yier.bubu.redis.storage.api.RuntimeDbEngine;
 import yier.bubu.redis.runtime.api.YierdisChangeEventBridge;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -45,18 +47,42 @@ public final class YierdisInstance implements AutoCloseable {
 
     public static YierdisInstance create(YierdisInstanceConfig config) {
         Objects.requireNonNull(config, "config");
-        int databases = Math.max(1, config.databases());
-        boolean perDbScope = config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
-        NativeDefragOptions nativeDefragOptions = nativeDefragOptions(config);
-        DbChangeListener changeListener = YierdisChangeEventBridge.forSink(config.changeSink());
-
-        YierdisFfmMemoryRuntime memoryRuntime = new YierdisFfmMemoryRuntime("instance");
         DbEngineFactory engineFactory = config.engineFactory();
         if (engineFactory == null) {
-            engineFactory = perDbScope
-                    ? new YierdisDbEngineFactory(nativeDefragOptions)
-                    : new YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions);
+            throw new IllegalArgumentException("engineFactory must be configured");
         }
+        return create(config, engineFactory, config.engineFactoryOwnedResource());
+    }
+
+    public static YierdisInstance createWithDefaults(YierdisInstanceConfig config) {
+        Objects.requireNonNull(config, "config");
+        if (config.engineFactory() != null) {
+            return create(config);
+        }
+        boolean perDbScope = config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
+        NativeDefragOptions nativeDefragOptions = nativeDefragOptions(config);
+
+        YierdisFfmMemoryRuntime memoryRuntime = null;
+        DbEngineFactory engineFactory;
+        boolean closeMemoryRuntime = false;
+        if (perDbScope) {
+            engineFactory = new YierdisDbEngineFactory(nativeDefragOptions);
+        } else {
+            memoryRuntime = new YierdisFfmMemoryRuntime("instance");
+            engineFactory = new YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions);
+            closeMemoryRuntime = true;
+        }
+        return create(config, engineFactory, closeMemoryRuntime ? memoryRuntime : null);
+    }
+
+    private static YierdisInstance create(
+            YierdisInstanceConfig config,
+            DbEngineFactory engineFactory,
+            AutoCloseable engineFactoryOwnedResource
+    ) {
+        int databases = Math.max(1, config.databases());
+        boolean perDbScope = config.maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.PER_DB;
+        DbChangeListener changeListener = YierdisChangeEventBridge.forSink(config.changeSink());
 
         long perDbMaxmemory = 0;
         long remainder = 0;
@@ -117,10 +143,23 @@ public final class YierdisInstance implements AutoCloseable {
                 }
             }
 
-            return new YierdisInstance(config, new YierdisInstanceResources(dbs, memoryRuntime, true, governor), changeListener);
+            return new YierdisInstance(
+                    config,
+                    new YierdisInstanceResources(dbs, closeables(engineFactoryOwnedResource), governor),
+                    changeListener
+            );
         } catch (Throwable t) {
-            throw YierdisInstanceResources.startupFailure(t, dbs, memoryRuntime, true);
+            throw YierdisInstanceResources.startupFailure(t, dbs, closeables(engineFactoryOwnedResource));
         }
+    }
+
+    private static List<AutoCloseable> closeables(AutoCloseable resource) {
+        if (resource == null) {
+            return List.of();
+        }
+        List<AutoCloseable> closeables = new ArrayList<>(1);
+        closeables.add(resource);
+        return closeables;
     }
 
     private static NativeDefragOptions nativeDefragOptions(YierdisInstanceConfig config) {
@@ -221,16 +260,8 @@ public final class YierdisInstance implements AutoCloseable {
         return resources.engine(dbIndex);
     }
 
-    YierdisFfmMemoryRuntime runtimeMemoryRuntime() {
-        return resources.memoryRuntime();
-    }
-
     DbChangeListener changeListener() {
         return changeListener;
-    }
-
-    boolean runtimeClosesMemoryRuntime() {
-        return resources.closesMemoryRuntime();
     }
 
     YierdisInstanceResources resources() {

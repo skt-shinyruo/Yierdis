@@ -38,7 +38,7 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
                 .evictionTimeLimitMillis(1000)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.create(config)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(config)) {
             instance.bindToCurrentThread();
             YierdisFastCommandProcessor processor = TestCommandProcessors.forRouter(TestDbRouters.forInstance(instance));
 
@@ -88,7 +88,7 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
                 .evictionTimeLimitMillis(1000)
                 .build();
 
-        try (YierdisInstance instance = YierdisInstance.create(probeConfig)) {
+        try (YierdisInstance instance = YierdisInstance.createWithDefaults(probeConfig)) {
             instance.bindToCurrentThread();
             YierdisDb db0 = (YierdisDb) instance.engine(0);
             YierdisDb db1 = (YierdisDb) instance.engine(1);

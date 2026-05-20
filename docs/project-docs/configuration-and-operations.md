@@ -138,10 +138,10 @@ maxmemory 参数：
 - `--maxmemorySamples`：采样数量，默认 `5`。
 - `--evictionTimeLimitMillis`：单次 eviction 时间预算，默认 `5` ms。
 
-`YierdisServerBootstrap` 把 server runtime scope 映射成 `YierdisInstanceConfig.MaxmemoryScope`。`YierdisInstance.create(...)` 的行为要区分清楚：
+`YierdisServerBootstrap` 把 server runtime scope 映射成 `YierdisInstanceConfig.MaxmemoryScope`，并在生产启动路径里选择默认 DB factory。`YierdisInstance.create(config)` 是 strict 入口，要求 `YierdisInstanceConfig` 已经注入 `engineFactory`；embedded/test 兼容默认组装需要显式调用 `YierdisInstance.createWithDefaults(config)`。
 
-- `global`：默认 factory 下所有 DB 共享一个 instance-level `YierdisFfmMemoryRuntime("instance")`。每个 DB 仍有自己的 keyspace、entry table、roots、ledger 和 allocator 视图，但 maxmemory 由 `YierdisGlobalMaxmemoryGovernor` 跨 DB 协调。governor 汇总各 DB participant usage，并通过 shared usage source 把共享 off-heap usage 按实例口径计一次。
-- `per-db`：兼容模式。`YierdisInstance` 把 `maxmemoryBytes` 按 DB 数硬分摊，整数除法后的余数按 DB 创建顺序每个 DB 多给 1 byte。默认 factory 下每个 DB 创建自己的 DB-owned `YierdisFfmMemoryRuntime("db")`，evict/reserve/memory stats 都按单 DB 预算运行。
+- `global`：server-main 默认 factory 下所有 DB 共享一个 instance-level `YierdisFfmMemoryRuntime("instance")`。每个 DB 仍有自己的 keyspace、entry table、roots、ledger 和 allocator 视图，但 maxmemory 由 `YierdisGlobalMaxmemoryGovernor` 跨 DB 协调。governor 汇总各 DB participant usage，并通过 shared usage source 把共享 off-heap usage 按实例口径计一次。
+- `per-db`：兼容模式。`YierdisInstance` 把 `maxmemoryBytes` 按 DB 数硬分摊，整数除法后的余数按 DB 创建顺序每个 DB 多给 1 byte。server-main 默认 factory 下每个 DB 创建自己的 DB-owned `YierdisFfmMemoryRuntime("db")`，evict/reserve/memory stats 都按单 DB 预算运行。
 
 `global` 是共享实例级 runtime/governor；`per-db` 是拆分预算和 runtime ownership。不要把 `ioThreads`、Netty 连接数或 DB 数误解成 maxmemory 的并发写入模型，mutation 仍经 owner thread。
 
@@ -220,7 +220,7 @@ java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SN
 - 参数校验失败：`normalizeAndValidate()` 抛 `IllegalArgumentException`，例如端口越界、watermark 非法、output buffer grace 为 `0`。
 - JDK 不满足要求：`ForeignMemoryAutoModules.ensureFfmAvailable()` 检查不到 JDK 25 FFM。
 - 端口绑定失败：Netty `bind(...)` 报错。
-- DB/native runtime 初始化失败：`YierdisInstance.create(...)` 会 best-effort 关闭已创建资源再抛出启动失败。
+- DB/native runtime 初始化失败：`YierdisInstance.create(...)` 会 best-effort 关闭已创建 DB 和 factory-owned resources 再抛出启动失败。
 
 `YierdisServerBootstrap.start(config)` 使用 `ok` 标记，启动任一步失败都会调用 `close()` 做清理。
 

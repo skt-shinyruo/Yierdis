@@ -2431,6 +2431,34 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void runtimeStrictCreateMustNotAssembleDefaultMemoryBackend() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
+
+        Path instanceFile = runtimeEmbeddedRoot(repoRoot).resolve(
+                "src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java"
+        );
+        Assert.assertTrue("缺少 YierdisInstance.java", Files.isRegularFile(instanceFile));
+
+        List<String> offenders = new ArrayList<>();
+        scanMethodForForbiddenText(
+                repoRoot,
+                instanceFile,
+                "public static YierdisInstance create(YierdisInstanceConfig config)",
+                offenders,
+                "new YierdisDbEngineFactory(",
+                "new YierdisFfmMemoryRuntime("
+        );
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到 runtime strict create(config) 仍承担默认 DB/backend 组装职责（生产默认组装应在 server-main 或显式 factory）：\n"
+                            + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
     public void serverBootstrapMustNotInlineOwnerThreadLifecycleAgain() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
@@ -2645,8 +2673,8 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 workspaceRoot.resolve("yierdis-server/yierdis-server-main/src/main/java").normalize(),
                 offenders,
-                "import yier.bubu.redis.storage.memory.",
-                "import yier.bubu.redis.storage.memory.",
+                "import yier.bubu.redis.storage.memory.internal.",
+                "import yier.bubu.redis.storage.memory.YierdisDb;",
                 "import yier.bubu.redis.storage.internal.",
                 "import yier.bubu.redis.storage.memory.memory.",
                 "new YierdisDb("
