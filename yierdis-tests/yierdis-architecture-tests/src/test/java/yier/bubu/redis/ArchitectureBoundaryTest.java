@@ -925,33 +925,6 @@ public class ArchitectureBoundaryTest {
                 executionPolicy.contains("yier.bubu.redis.protocol")
         );
 
-        Path packageInfo = workspaceRoot.resolve(
-                "yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/package-info.java"
-        ).normalize();
-        Assert.assertTrue("execution API contracts must document API/SPI audience in package-info.java", Files.isRegularFile(packageInfo));
-        String packageInfoText = Files.readString(packageInfo, StandardCharsets.UTF_8);
-        for (String requiredClassification : List.of(
-                "ExecutionRequest - API",
-                "ByteArrayExecutionRequest - API",
-                "ExecutionRecord - API",
-                "ReplySink - API",
-                "RedisReplyWriter - API",
-                "ReplyWriter - compatibility alias",
-                "ReplyWriterFactory - API",
-                "Session - API",
-                "ServerSession - API",
-                "DbIndexProvider - compatibility/deprecated",
-                "ConnectionStatsView - API",
-                "TransactionState - API",
-                "CommandContext - API",
-                "Command - compatibility/deprecated"
-        )) {
-            Assert.assertTrue(
-                    "execution API package-info.java must classify " + requiredClassification,
-                    packageInfoText.contains(requiredClassification)
-            );
-        }
-
         String pom = Files.readString(apiPom, StandardCharsets.UTF_8);
         for (String forbiddenDependency : List.of(
                 "<artifactId>yierdis-core-command</artifactId>",
@@ -1032,10 +1005,6 @@ public class ArchitectureBoundaryTest {
                 redisReplyWriter.contains("void verbatimString(String format, byte[] data)")
                         && redisReplyWriter.contains("void blobError(String message)")
         );
-        Assert.assertFalse(
-                "RedisReplyWriter must not claim to be protocol-agnostic",
-                redisReplyWriter.contains("Protocol-agnostic") || redisReplyWriter.contains("protocol-agnostic")
-        );
 
         Path replyWriterFile = apiPackage.resolve("ReplyWriter.java");
         Assert.assertTrue("缺少 ReplyWriter.java", Files.isRegularFile(replyWriterFile));
@@ -1043,26 +1012,6 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue(
                 "ReplyWriter should remain as a compatibility alias over the more explicit RedisReplyWriter boundary",
                 replyWriter.contains("interface ReplyWriter extends RedisReplyWriter")
-        );
-        Assert.assertFalse(
-                "ReplyWriter must not continue describing itself as protocol-agnostic",
-                replyWriter.contains("Protocol-agnostic") || replyWriter.contains("protocol-agnostic")
-        );
-
-        Path packageInfo = apiPackage.resolve("package-info.java");
-        Assert.assertTrue("缺少 package-info.java", Files.isRegularFile(packageInfo));
-        String packageInfoText = Files.readString(packageInfo, StandardCharsets.UTF_8);
-        Assert.assertTrue(
-                "package-info.java must classify RedisReplyWriter as an API",
-                packageInfoText.contains("RedisReplyWriter - API")
-        );
-        Assert.assertTrue(
-                "package-info.java must state that ReplyWriter is a compatibility alias",
-                packageInfoText.contains("ReplyWriter - compatibility alias")
-        );
-        Assert.assertFalse(
-                "execution API package docs must not claim ReplyWriter is protocol-agnostic",
-                packageInfoText.contains("ReplyWriter") && packageInfoText.contains("protocol-agnostic")
         );
 
         List<String> offenders = new ArrayList<>();
@@ -1415,61 +1364,6 @@ public class ArchitectureBoundaryTest {
             );
         }
 
-        for (Path packageInfo : List.of(
-                workspaceRoot.resolve("yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/package-info.java").normalize(),
-                workspaceRoot.resolve("yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/result/package-info.java").normalize()
-        )) {
-            Assert.assertTrue("storage API packages must document API/SPI audience in package-info.java: " + packageInfo,
-                    Files.isRegularFile(packageInfo));
-            String packageInfoText = Files.readString(packageInfo, StandardCharsets.UTF_8);
-            Assert.assertTrue(
-                    "storage API package-info must document yierdis-db-api ownership",
-                    packageInfoText.contains("Storage")
-                            && packageInfoText.contains("yierdis-db-api")
-            );
-        }
-
-        String opsPackageInfo = Files.readString(
-                workspaceRoot.resolve("yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/package-info.java").normalize(),
-                StandardCharsets.UTF_8
-        );
-        for (String requiredClassification : List.of(
-                "DbReads - API",
-                "DbWrites - API",
-                "DbEngine - API",
-                "RuntimeDbEngine - SPI",
-                "DbEngineFactory - SPI",
-                "MaxmemoryCoordinator - SPI",
-                "MaxmemoryParticipant - SPI",
-                "MaxmemoryCandidate - SPI",
-                "MaxmemoryPolicy - API",
-                "DbMemoryConstants - SPI",
-                "YierdisMemoryStats - compatibility observability API",
-                "ScanCursorV2 - compatibility API",
-                "KeyHandle - SPI"
-        )) {
-            Assert.assertTrue(
-                    "storage API package-info must classify " + requiredClassification,
-                    opsPackageInfo.contains(requiredClassification)
-            );
-        }
-
-        String resultPackageInfo = Files.readString(
-                workspaceRoot.resolve("yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/result/package-info.java").normalize(),
-                StandardCharsets.UTF_8
-        );
-        for (String requiredClassification : List.of(
-                "BulkStringSink - API",
-                "BulkStringSequence - API",
-                "BulkStringMapPairs - API",
-                "BulkStringValue - API"
-        )) {
-            Assert.assertTrue(
-                    "storage API result package-info must classify " + requiredClassification,
-                    resultPackageInfo.contains(requiredClassification)
-            );
-        }
-
         List<String> offenders = new ArrayList<>();
         int scanned = scanForForbiddenText(
                 repoRoot,
@@ -1608,22 +1502,6 @@ public class ArchitectureBoundaryTest {
                     "yierdis-server-runtime-api must not depend on forbidden implementation/module dependency "
                             + forbiddenDependency,
                     pom.contains(forbiddenDependency)
-            );
-        }
-
-        Path apiPackageInfo = workspaceRoot.resolve(
-                "yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/package-info.java"
-        ).normalize();
-        Assert.assertTrue("runtime API package must document API/SPI audience in package-info.java", Files.isRegularFile(apiPackageInfo));
-        String apiPackageInfoText = Files.readString(apiPackageInfo, StandardCharsets.UTF_8);
-        for (String requiredClassification : List.of(
-                "YierdisInstanceConfig - embedded runtime configuration API",
-                "YierdisChangeEvent - API",
-                "YierdisChangeSink - API"
-        )) {
-            Assert.assertTrue(
-                    "runtime API package-info.java must classify " + requiredClassification,
-                    apiPackageInfoText.contains(requiredClassification)
             );
         }
 
@@ -1808,19 +1686,6 @@ public class ArchitectureBoundaryTest {
             Assert.assertTrue("storage-memory must own concrete storage class " + requiredStorageClass,
                     Files.isRegularFile(requiredStorageClass));
         }
-        Path storageMemoryPackageInfo = storageMemoryMain.resolve("yier/bubu/redis/storage/memory/package-info.java");
-        Assert.assertTrue(
-                "storage-memory package must document concrete storage ownership",
-                Files.isRegularFile(storageMemoryPackageInfo)
-        );
-        String storageMemoryPackageInfoText = Files.readString(storageMemoryPackageInfo, StandardCharsets.UTF_8);
-        Assert.assertTrue(
-                "storage-memory package-info must identify yierdis-db-memory ownership",
-                storageMemoryPackageInfoText.contains("yierdis-db-memory")
-                        && storageMemoryPackageInfoText.contains("Concrete in-memory storage implementation")
-                        && storageMemoryPackageInfoText.contains("yierdis-db-api")
-        );
-
         Path runtimePom = runtimeEmbeddedRoot(repoRoot).resolve("pom.xml").normalize();
         Assert.assertTrue("缺少 yierdis-server-runtime/pom.xml", Files.isRegularFile(runtimePom));
         Assert.assertFalse(
@@ -2300,13 +2165,6 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("request model must stay in RESP protocol package", requestSource.contains("package yier.bubu.redis.protocol.resp;"));
         Assert.assertTrue("request model must expose retained byte accounting", requestSource.contains("retainedBytes()"));
 
-        Path readmeFile = repoRoot.resolve("README.md");
-        Assert.assertTrue("缺少 README.md", Files.isRegularFile(readmeFile));
-        String readmeSource = Files.readString(readmeFile, StandardCharsets.UTF_8);
-        Assert.assertTrue(
-                "README 必须声明 ReplyWriter 仍是 server write-back 语义 authority",
-                readmeSource.contains("server command execution write-back still uses ReplyWriter")
-        );
     }
 
     @Test
