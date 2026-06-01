@@ -50,6 +50,8 @@ public final class YierdisDbComponentFactory {
                 storage.keysStoredOffHeap,
                 storage.offHeapAllocator
         );
+        // ledger 需要在写入前触发过期清理和淘汰，但这两个组件又依赖 keyLifecycle；
+        // 因此先传入可回绑的占位回调，等组件图闭合后再绑定真实实现。
         YierdisDbMemoryBudgetCallbacks memoryBudgetCallbacks = new YierdisDbMemoryBudgetCallbacks();
         YierdisDbMemoryLedger ledger = new YierdisDbMemoryLedger(
                 config.maxmemoryBytes,
@@ -117,6 +119,7 @@ public final class YierdisDbComponentFactory {
                 config.maxmemorySamples,
                 config.evictionTimeLimitNanos
         );
+        // 只有在 expiration/maxmemory/reporter 都创建后，ledger 的预算回调才有完整目标。
         memoryBudgetCallbacks.bind(
                 () -> expirationSupport.cleanupExpired(0L),
                 maxmemorySupport::evictUntilUnder,

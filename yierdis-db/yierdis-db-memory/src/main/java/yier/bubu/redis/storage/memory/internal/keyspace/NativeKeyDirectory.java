@@ -18,6 +18,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiFunction;
 
 public final class NativeKeyDirectory implements AutoCloseable {
+    // Directory 只把 key bytes 放在 native allocator 中；探测数组留在 heap 上，tombstone 用来维持线性探测链。
     private static final float LOAD_FACTOR = 0.75f;
     private static final int MIN_CAPACITY = 16;
     private static final byte STATE_EMPTY = 0;

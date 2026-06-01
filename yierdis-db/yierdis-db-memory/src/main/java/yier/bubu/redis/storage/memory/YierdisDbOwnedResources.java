@@ -47,6 +47,7 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
             SetRoot setRoot,
             ZSetRoot zsetRoot
     ) {
+        // 尽量清完整个数据图，再统一抛出首个失败；suppressed 保留其它组件的清理异常。
         Throwable failure = null;
         if (expires != null) {
             try {
@@ -102,6 +103,7 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
     ) {
         Throwable failure = null;
         try {
+            // shutdown 先清 key/entry/ttl 图；value roots 稍后 close，确保它们还可以在 allocator 关闭前释放子对象。
             clearData(expires, entries, keyDirectory, null, null, null, null, null);
         } catch (Throwable t) {
             failure = recordFailure(failure, t);
@@ -156,6 +158,7 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
             }
         }
         try {
+            // allocator/runtime 必须最后关闭，因为上面的 table/root close 仍需要解析并释放 native handle。
             close();
         } catch (Throwable t) {
             failure = recordFailure(failure, t);

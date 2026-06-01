@@ -9,10 +9,10 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 /**
- * Enforces Redis-style "single thread DB semantics".
- * <p>
- * The DB must be explicitly bound to exactly one thread (typically the command executor thread).
- * Any access before binding or from a non-owner thread fails fast to surface misuse early.
+ * 维护 Redis 风格的单线程 DB 访问语义。
+ *
+ * <p>DB 必须显式绑定到一个 owner thread（通常是命令执行线程）。绑定前访问、跨线程访问或关闭后访问都会 fail-fast，
+ * 让调用方尽早暴露生命周期误用。</p>
  */
 public final class DbThreadGuard {
     private volatile Thread ownerThread;
@@ -61,4 +61,3 @@ public final class DbThreadGuard {
         return true;
     }
 }
-

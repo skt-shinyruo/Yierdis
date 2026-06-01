@@ -31,6 +31,7 @@ final class YierdisDbNativeHandleGraph {
         Objects.requireNonNull(lifecycle, "lifecycle");
         Objects.requireNonNull(visitor, "visitor");
         NativeAllocator allocator = lifecycle.nativeAllocator();
+        // 以 keyDirectory 为根遍历当前可达 native 对象；未从目录发布的半创建对象不会出现在这张图里。
         lifecycle.keyDirectory().forEachEntry((keyHandle, entryHandle) -> {
             EntryRecord record = lifecycle.entryTable().get(entryHandle);
             NativeHandle keyNativeHandle = KeyHandleAccess.allocatorNativeHandleOrNull(keyHandle);
@@ -74,6 +75,7 @@ final class YierdisDbNativeHandleGraph {
             EntryRecord record,
             Visitor visitor
     ) {
+        // visitor 只接收通过 allocator resolve 验证过的 handle，stale handle 会在遍历边界暴露出来。
         try (NativeObjectView ignored = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
             visitor.visit(role, handle, record);
         }

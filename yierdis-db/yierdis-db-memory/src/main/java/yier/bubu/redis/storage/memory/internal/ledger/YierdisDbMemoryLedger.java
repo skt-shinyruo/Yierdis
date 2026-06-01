@@ -71,6 +71,7 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
         MaxmemoryCoordinator coordinator = maxmemoryCoordinatorSupplier.get();
         if (coordinator != null) {
             try {
+                // coordinator 接管跨 DB/全局预算判定；本地 ledger 仍保留 reservation，保证 commit/rollback 对账。
                 coordinator.prepareWrite(estimatedExtraBytes);
             } catch (YierdisCommandException e) {
                 throw new MemoryLedgerOutOfMemoryException();
@@ -83,6 +84,7 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
         }
 
         if (limitBytes > 0) {
+            // 拒写前先跑一轮过期清理，让 lazy expire 释放出的空间参与同一次预算判定。
             cleanupExpired.run();
 
             if (estimatedExtraBytes > 0 && estimatedExtraBytes > limitBytes) {
@@ -100,6 +102,7 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
                     }
                     return NoopReservation.INSTANCE;
                 }
+                // 淘汰只把 usedBytesForMaxmemory 拉到为本次写入预留后的 limit，真实增量仍由 commit 结算。
                 evictUntilUnder.accept(limit);
                 if (usedBytesForMaxmemory.getAsLong() > limit) {
                     if (estimatedExtraBytes > 0) {

@@ -12,9 +12,9 @@ import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 
 /**
- * Internal TTL index abstraction used by {@link YierdisDb}.
- * <p>
- * Implementations are intentionally minimal and are NOT thread-safe.
+ * {@link YierdisDb} 内部使用的 TTL index 抽象。
+ *
+ * <p>实现故意保持最小边界且不保证线程安全；调用方必须在 DB owner thread 内串行访问。</p>
  */
 public interface YierdisExpireIndex {
     int size();
@@ -24,18 +24,18 @@ public interface YierdisExpireIndex {
     Long get(BytesView keyView);
 
     /**
-     * Returns the TTL timestamp for a stable {@link KeyHandle} identity, or {@code null} if absent.
-     * <p>
-     * 约束：实现不得为查找而隐式生成 canonical heap key copy。
+     * 返回稳定 {@link KeyHandle} identity 对应的 TTL timestamp；不存在时返回 {@code null}。
+     *
+     * <p>约束：实现不得为查找而隐式生成 canonical heap key copy。</p>
      */
     Long get(KeyHandle keyHandle);
 
     byte[] randomKey();
 
     /**
-     * Returns a random stable key identity handle, or {@code null} if empty.
-     * <p>
-     * 约束：实现不得为返回 handle 而隐式生成 canonical heap key copy。
+     * 返回一个随机稳定 key identity handle；index 为空时返回 {@code null}。
+     *
+     * <p>约束：实现不得为返回 handle 而隐式生成 canonical heap key copy。</p>
      */
     KeyHandle randomKeyHandle();
 
@@ -44,18 +44,18 @@ public interface YierdisExpireIndex {
     void setExpireAtMillis(byte[] keyBytes, long expireAtMillis, YierdisKeyspace<?> store);
 
     /**
-     * Sets TTL timestamp for a stable {@link KeyHandle} identity.
-     * <p>
-     * 约束：实现不得为 set 而隐式生成 canonical heap key copy。
+     * 为稳定 {@link KeyHandle} identity 设置 TTL timestamp。
+     *
+     * <p>约束：实现不得为 set 而隐式生成 canonical heap key copy。</p>
      */
     void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis);
 
     void removeExpire(byte[] keyBytes);
 
     /**
-     * Removes TTL entry for a stable {@link KeyHandle} identity.
-     * <p>
-     * 约束：实现不得为 remove 而隐式生成 canonical heap key copy。
+     * 移除稳定 {@link KeyHandle} identity 对应的 TTL entry。
+     *
+     * <p>约束：实现不得为 remove 而隐式生成 canonical heap key copy。</p>
      */
     void removeExpire(KeyHandle keyHandle);
 }

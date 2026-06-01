@@ -35,11 +35,11 @@ public interface MemoryLedger {
     }
 
     /**
-     * Finishes a reservation and applies the actual delta bytes (can be negative).
+     * 结束一次 reservation，并用真实内存增量修正账本；真实增量可以为负数。
      * <p>
-     * Contract:
-     * - {@code actualDeltaBytes} may be negative (e.g. overwrite smaller value, delete, expire cleanup).
-     * - {@code reservation.reservedBytes()} is a best-effort upper bound; implementations may choose to validate strictly or accept drift.
+     * 契约：
+     * - {@code actualDeltaBytes} 可以为负，例如覆盖为更小值、删除 key 或过期清理。
+     * - {@code reservation.reservedBytes()} 是写入前的 best-effort 上界，具体实现可选择严格校验或接受估算漂移。
      */
     void commit(MemoryReservation reservation, long actualDeltaBytes);
 

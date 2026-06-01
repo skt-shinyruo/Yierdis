@@ -359,7 +359,7 @@ public final class YierdisDb implements RuntimeDbEngine {
         this.expirationManager = components.expirationManager;
         this.memoryOps = components.memoryOps;
         this.lifecycleOps = components.lifecycleOps;
-        // Scheduling (if any) is done by the Netty event loop in YierdisServer, not by a dedicated thread.
+        // 这里不启动独立调度线程；过期清理、maxmemory 淘汰和 defrag 只会在上层 event loop/调用线程里触发。
     }
 
     private YierdisDb(

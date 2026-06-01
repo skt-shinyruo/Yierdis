@@ -15,6 +15,7 @@ import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 public final class EntryTable implements AutoCloseable {
+    // EntryRecord 在 native allocator 中使用固定 56-byte 小端布局；字段偏移一旦改变会影响已分配 entry 的解析。
     private static final int KEY_HANDLE_OFFSET = 0;
     private static final int VALUE_HANDLE_OFFSET = 8;
     private static final int KEY_HASH_OFFSET = 16;

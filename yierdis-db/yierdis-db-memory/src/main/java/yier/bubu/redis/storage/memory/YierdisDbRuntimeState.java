@@ -85,6 +85,7 @@ final class YierdisDbRuntimeState {
         if (coordinator != null) {
             return coordinator.nextLruClock();
         }
+        // 没有 coordinator 时使用本 DB 的本地递增时钟；它只保证本 DB 内 ALLKEYS_LRU 的相对访问顺序。
         return ++lruClock;
     }
 
@@ -95,6 +96,7 @@ final class YierdisDbRuntimeState {
     void enforceMaxmemory() {
         checkThread();
         try {
+            // reserve(0) 复用 ledger 的过期清理、淘汰和 OOM 映射路径，避免另起一套预算判定口径。
             ledger().reserve(0);
         } catch (MemoryLedgerOutOfMemoryException e) {
             throw new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
@@ -122,6 +124,7 @@ final class YierdisDbRuntimeState {
         if (!threadGuard.tryMarkClosed()) {
             return;
         }
+        // 先把实例标记为 closed，再释放 native 图；重复 shutdown 只能快速返回，避免二次 free 同一批 handle。
         ledger().resetUsage();
         YierdisDbStorageComponents currentStorage = storage();
         currentStorage.resources.releaseAll(

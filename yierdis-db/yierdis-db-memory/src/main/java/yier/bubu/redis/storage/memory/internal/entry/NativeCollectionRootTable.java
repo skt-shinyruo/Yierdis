@@ -125,7 +125,7 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
             allocator.free(nativeHandle);
             rootFreed = true;
         } catch (StaleNativeHandleException ignored) {
-            // The allocator, not the adapter table, owns liveness. External free leaves the adapter stale.
+            // 存活性由 allocator 判定；外部已 free 的 root 只说明 adapter 表里残留了可收敛的 stale 项。
             rootFreed = true;
         } catch (RuntimeException e) {
             failure = addFailure(failure, e);

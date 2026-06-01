@@ -27,6 +27,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 public final class YierdisDbMemoryReporter {
+    // 聚合 ledger、TTL index 和 native allocator 的观测口径；它服务 MEMORY/INFO/maxmemory，不替代 ledger 的两阶段预算账本。
     private final Runnable threadChecker;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final YierdisExpireIndex expires;
@@ -108,6 +109,7 @@ public final class YierdisDbMemoryReporter {
 
     long usedBytesForMaxmemory() {
         threadChecker.run();
+        // maxmemory 以 ledger 提交值为基线，再按当前部署模式追加 native 与 TTL index 的估算开销。
         long nativeBytes = offHeapIncludedInMaxmemorySupplier.getAsBoolean() ? nativeBytesForMaxmemory() : 0L;
         long ttlBytes = estimateTtlBytesForMaxmemory();
         long total = ledger.usedBytes() + nativeBytes;
@@ -194,6 +196,7 @@ public final class YierdisDbMemoryReporter {
     }
 
     private long estimateTtlBytesForMaxmemory() {
+        // expires index 独立于 entry ledger，只能按条目数做稳定估算，并用 saturating 语义处理溢出。
         long entryBytesEstimate = yier.bubu.redis.storage.api.DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
         if (entryBytesEstimate <= 0) {
             return 0;

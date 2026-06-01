@@ -207,6 +207,7 @@ public final class YierdisDbKeyLifecycle {
         }
         EntryRecord record = entryRecord(handle);
         if (record == null) {
+            // keyDirectory 仍指向 entryTable 中已消失的 handle 时，顺手清理悬挂映射，避免读路径反复解析同一坏引用。
             unlinkEntry(keyBytes);
             return null;
         }
@@ -234,6 +235,7 @@ public final class YierdisDbKeyLifecycle {
             return null;
         }
         long now = System.currentTimeMillis();
+        // 读路径承担 lazy expire：先尝试把过期 key 从 entry、TTL index、账本和变更流中一起收敛。
         if (removeIfExpired(keyHandle, record, now)) {
             return null;
         }
@@ -332,6 +334,7 @@ public final class YierdisDbKeyLifecycle {
         EntryHandle created = null;
         boolean inserted = false;
         try {
+            // 新 entry 先落到 entryTable，再发布到 keyDirectory；发布失败时 finally 会回收半创建的 entry/value。
             EntryHandle allocated = entryTable.allocate(newRecord);
             created = allocated;
             keyDirectory.compute(keyBytes, (key, oldHandle) -> {
@@ -365,6 +368,7 @@ public final class YierdisDbKeyLifecycle {
         }
         EntryRecord oldRecord = entryTable.get(existingHandle);
         if (oldRecord == null) {
+            // directory 有 handle 但 entryTable 已无记录时，按悬挂映射处理，避免把它误当成可更新的旧值。
             keyDirectory.remove(keyBytes, existingHandle);
             return null;
         }
@@ -423,8 +427,10 @@ public final class YierdisDbKeyLifecycle {
         if (expireAtMillis == null || expireAtMillis > nowMillis) {
             return false;
         }
+        // removeEntry 会释放 key/value handle；synthetic delete 必须先拷出稳定 key bytes。
         byte[] keyBytes = keyBytes(keyHandle);
         long removalBytes = estimatedBytesForRemoval(keyHandle, record);
+        // 先摘 TTL index，再删 entry，避免删除成功后过期扫描再次随机命中同一个 key。
         removeExpireIndexOnly(keyHandle);
         if (removeEntry(keyHandle, record)) {
             adjustUsedBytesCallback.accept(-removalBytes);
@@ -604,6 +610,7 @@ public final class YierdisDbKeyLifecycle {
         if (keyHandle == null) {
             return;
         }
+        // TTL index 是查找权威来源，EntryRecord 只镜像当前 TTL，供后续 value rewrite 和 introspection 保持同一状态。
         byte[] keyBytes = keyBytes(keyHandle);
         EntryHandle handle = keyDirectory.get(keyBytes);
         if (handle == null) {
@@ -642,6 +649,7 @@ public final class YierdisDbKeyLifecycle {
         if (keyHandle != null) {
             return keyHandle;
         }
+        // 新 key 尚未发布到 NativeKeyDirectory，只能先给 remappingFunction 一个 heap handle 作为临时 key identity。
         return KeyHandle.forHeap(keyBytes, hashBytes(keyBytes));
     }
 

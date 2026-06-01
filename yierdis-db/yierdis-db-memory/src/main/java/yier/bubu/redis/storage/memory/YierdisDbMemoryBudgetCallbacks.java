@@ -5,6 +5,8 @@ import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 
 final class YierdisDbMemoryBudgetCallbacks {
+    // 构造期打破 ledger -> expiration/maxmemory -> keyLifecycle 的依赖环；
+    // 未绑定前故意 fail-fast，防止装配顺序变动时把预算检查静默降级。
     private Runnable cleanupExpired = unboundCleanupExpired();
     private LongConsumer evictUntilUnder = unboundEvictUntilUnder();
     private LongSupplier usedBytesForMaxmemory = unboundUsedBytesForMaxmemory();

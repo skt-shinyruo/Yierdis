@@ -62,6 +62,7 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
         int maxAttempts = Math.max(64, keyLifecycle.keyCount() * 2);
         long nowMillis = System.currentTimeMillis();
         long deadline = System.nanoTime() + evictionTimeLimitNanos;
+        // 维护任务在调用线程内执行，必须同时用时间窗口和尝试次数限制淘汰循环，避免一次写入拖垮 event loop。
         while (usedBytesForMaxmemory() > limitBytes && attempts++ < maxAttempts) {
             if (System.nanoTime() >= deadline) {
                 break;
@@ -197,6 +198,7 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
         int samples = Math.max(1, maxmemorySamples);
 
         if (samples >= total) {
+            // 样本数覆盖全量时退化为完整扫描，避免随机抽样在小 keyspace 上错过最旧 key。
             final KeyHandle[] bestKeyRef = new KeyHandle[1];
             final long[] bestLruRef = new long[]{Long.MAX_VALUE};
             keyLifecycle.forEachKeyHandle((k, record) -> {
@@ -237,6 +239,7 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
     }
 
     private boolean removeRecord(KeyHandle keyHandle, EntryRecord record) {
+        // 删除 entry 会释放 key handle，事件流需要的 key bytes 必须在释放前固定下来。
         byte[] keyBytes = keyLifecycle.copyKeyBytes(keyHandle);
         long removalBytes = keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
         keyLifecycle.removeExpireIndexOnly(keyHandle);

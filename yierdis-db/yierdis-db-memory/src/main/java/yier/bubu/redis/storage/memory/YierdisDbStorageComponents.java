@@ -77,6 +77,7 @@ public final class YierdisDbStorageComponents {
         boolean resolvedOwnsAllocator = ownsOffHeapAllocator;
         boolean resolvedOwnsRuntime = ownsMemoryRuntime;
 
+        // 构造阶段只接受 FFM-backed allocator，并在缺省一侧时补齐 runtime/allocator，避免后续组件各自推断 native 运行时。
         if (resolvedRuntime == null && resolvedAllocator == null) {
             resolvedRuntime = new YierdisFfmMemoryRuntime("db");
             resolvedAllocator = new YierdisForeignOffHeapAllocator(resolvedRuntime, 0);
@@ -94,6 +95,8 @@ public final class YierdisDbStorageComponents {
             throw new IllegalArgumentException("Only the foreign off-heap allocator is supported");
         }
 
+        // Entry、key bytes、string bytes 和 collection roots 共享一个 stable allocator，
+        // 使 defrag/释放时可以按统一的 native handle 域验证对象类型与存活状态。
         NativeAllocator nativeAllocator = new YierdisStableNativeAllocator(
                 resolvedRuntime,
                 sharedNativeSlotCapacity()
