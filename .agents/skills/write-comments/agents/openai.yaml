@@ -1,4 +1,4 @@
 interface:
   display_name: "Write Comments"
-  short_description: "Write correct, low-noise code comments"
-  default_prompt: "Use $write-comments to add or review comments in this code."
+  short_description: "Write correct Chinese code comments"
+  default_prompt: "Use $write-comments to add correct Chinese source-learning comments in this code."
