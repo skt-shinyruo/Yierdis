@@ -11,6 +11,7 @@
 - 命令和数据模型：[`commands-and-data-model.md`](./commands-and-data-model.md)
 - DB 内核：[`db-internals.md`](./db-internals.md)
 - executor：[`executor-and-backpressure.md`](./executor-and-backpressure.md)
+- 代理和变更事件：[`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)
 - native memory：[`ffm-usage.md`](./ffm-usage.md)、[`native-memory-runtime.md`](./native-memory-runtime.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)
 - 测试入口：[`testing-and-debugging.md`](./testing-and-debugging.md)
 
@@ -55,6 +56,7 @@
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
 | --- | --- | --- | --- |
 | [`DefaultYierdisEngine`](../../yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java) | 将 `ExecutionRequest` 交给 command processor，维护 engine/session 边界 | `execute(...)` | [`request-execution-flow.md`](./request-execution-flow.md) |
+| [`CommandSessionCapabilities`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandSessionCapabilities.java) | 把通用 `Session` 收窄成命令需要的 DB index、client metadata、transaction、stats 和 protocol 能力 | `from(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
 | [`ServerSession`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ServerSession.java) | 连接状态：DB index、RESP version、transaction state、client metadata | session accessors | [`commands-and-data-model.md`](./commands-and-data-model.md) |
 | `TransactionState` | `MULTI/EXEC/DISCARD` 队列状态和 abort 状态 | queue/replay methods | [`commands-and-data-model.md`](./commands-and-data-model.md) |
 | `ExecutionRecord` | 记录可 replay 的命令快照，也用于 change event | constructor / accessors | [`glossary.md`](./glossary.md) |
@@ -70,8 +72,22 @@
 | [`YierdisFastCommandProcessor`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java) | empty/unknown command、命令查表、解析执行主流程；事务入队、异常翻译和 change event gate 委托给 command-kernel 小组件 | `execute(...)` | [`request-execution-flow.md`](./request-execution-flow.md) |
 | [`DefaultCommandModules`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/DefaultCommandModules.java) | transport-neutral 默认命令模块集合 | `create(...)` | [`module-architecture.md`](./module-architecture.md) |
 | [`CommandSupport`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java) | 参数读取、DB routing、常用 reply/error helper | helper methods | [`commands-and-data-model.md`](./commands-and-data-model.md) |
+| [`YierdisDbRouter`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/YierdisDbRouter.java) | 根据当前 session DB index 选择命令本次访问的 `DbEngine` | `dbFor(...)`, `databases()` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
+| [`ServerInfoProvider`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ServerInfoProvider.java) | command 层 Netty-free 的 INFO / STATS / MEMORY STATS 观测代理 | `info(...)`, `stats(...)`, `memoryStats(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
 
 边界：command 层描述 Redis 语义和回包，不直接操作 internal root/value。
+
+## 代理、桥接和变更事件
+
+| 类/模块 | 职责 | 关键入口 | 继续阅读 |
+| --- | --- | --- | --- |
+| [`CommandChangeEmitter`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandChangeEmitter.java) | 包住 command handler 执行，清理/读取 mutation outcome，只在真实变化后通知 observer | `execute(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
+| [`CommandChangeObserver`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandChangeObserver.java) | command-core 的变更观察接口，不依赖 runtime sink 或 DB change scope | `onCommandChange(...)`, `observeExecution(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
+| [`RuntimeChangeSinkCommandChangeObserver`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/RuntimeChangeSinkCommandChangeObserver.java) | server-main adapter，把 runtime `YierdisChangeSink` 接到 command observer 和 DB change scope | `fromSink(...)`, `observeExecution(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
+| [`YierdisChangeEventBridge`](../../yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeEventBridge.java) | 把 DB lifecycle 的 `DbChange` 转成 runtime `YierdisChangeEvent` | `forSink(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
+| [`DbChangeContext`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/DbChangeContext.java) | owner-thread scoped DB synthetic change emitter，用于 expire / eviction 等内部删除 | `open(...)`, `emit(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
+
+边界：当前 change event 是最小可重放事件契约，不是完整 AOF、复制协议或持久化保证。
 
 ## DB API 和 DB 内核
 

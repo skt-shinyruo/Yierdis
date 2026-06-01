@@ -4,51 +4,91 @@
 
 ## 一眼看懂的依赖方向
 
-下面的箭头表示 Maven 依赖方向：左侧模块依赖右侧模块。
+下面的箭头表示当前 POM 中的仓库内部 production 直接依赖方向：左侧模块依赖右侧模块。这里不列测试 scope 依赖，也不列 Netty、picocli、slf4j、logback、JUnit 等第三方依赖。
 
 ```text
 yierdis-server-main
-  -> yierdis-networking-netty
-  -> yierdis-networking-resp
-  -> yierdis-server-core
-  -> yierdis-server-executor
-  -> yierdis-command-builtin
+  -> yierdis-server-api
+  -> yierdis-db-api
   -> yierdis-db-memory
+  -> yierdis-command-api
+  -> yierdis-command-core
+  -> yierdis-command-builtin
+  -> yierdis-server-core
+  -> yierdis-networking-resp
+  -> yierdis-networking-netty
   -> yierdis-server-runtime
+  -> yierdis-server-runtime-api
+  -> yierdis-server-executor
+  -> yierdis-memory-ffm
+
+yierdis-server-core
+  -> yierdis-server-api
+  -> yierdis-command-api
+  -> yierdis-command-core
+
+yierdis-server-executor
+  -> yierdis-server-api
+
+yierdis-server-api
+  -> yierdis-common-bytes
+
+yierdis-server-runtime
+  -> yierdis-db-api
+  -> yierdis-server-runtime-api
+
+yierdis-server-runtime-api
+  -> yierdis-server-api
+  -> yierdis-db-api
 
 yierdis-networking-netty
-  -> yierdis-networking-resp
   -> yierdis-common-bytes
+  -> yierdis-networking-resp
 
 yierdis-networking-resp
   -> yierdis-common-bytes
   -> yierdis-server-api
 
-yierdis-server-core
-  -> yierdis-server-api
-  -> yierdis-command-core
-  -> yierdis-db-api
-
-yierdis-server-executor
-  -> yierdis-server-api
-
 yierdis-command-builtin
-  -> yierdis-command-core
   -> yierdis-command-api
   -> yierdis-server-api
   -> yierdis-db-api
+  -> yierdis-common-bytes
 
 yierdis-command-core
   -> yierdis-command-api
+  -> yierdis-db-api
+
+yierdis-command-api
   -> yierdis-server-api
+  -> yierdis-db-api
 
 yierdis-db-memory
   -> yierdis-db-api
-  -> yierdis-memory-api
+  -> yierdis-server-runtime-api
+  -> yierdis-common-bytes
   -> yierdis-memory-ffm
+  -> yierdis-memory-api
+
+yierdis-db-api
+  -> yierdis-common-bytes
+
+yierdis-db-testkit
+  -> yierdis-db-api
 
 yierdis-memory-ffm
   -> yierdis-memory-api
+
+yierdis-memory-api
+  -> yierdis-common-bytes
+
+yierdis-cli
+  -> yierdis-networking-resp
+
+yierdis-benchmark
+  -> yierdis-networking-resp
+  -> yierdis-db-api
+  -> yierdis-memory-ffm
 ```
 
 这条方向图说明：实现模块依赖 API 模块，适配模块依赖协议和 bytes 基础层，最外层 `yierdis-server-main` 依赖各车道完成最终组装。
@@ -123,6 +163,8 @@ command owns parsing and command semantics, not Netty.
 ### `yierdis-command-builtin`
 
 这里放内建命令实现，例如 `StringCommands`。它们实现的是命令语义，不是协议编码；真正的 DB 写入会通过 `DbWrites` 进入 `YierdisStringOps` 和 `YierdisDbMutationExecutor`。
+
+`yierdis-command-builtin` 不直接依赖 `yierdis-command-core`。它通过 `yierdis-command-api` 暴露 command module / command spec，最终由 `yierdis-server-main` 把 builtin module 和 command core 组装到一起。
 
 ## DB 车道
 

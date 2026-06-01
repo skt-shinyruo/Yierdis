@@ -107,7 +107,7 @@ executor 交给 engine 的只有三样东西：
 
 ## Engine 和命令分发
 
-`DefaultYierdisEngine` 是 engine 实现入口。它把外部调度合同转换成命令层可执行的上下文，再委托 `YierdisFastCommandProcessor`。
+`DefaultYierdisEngine` 是 engine 实现入口。它把外部调度合同转换成命令层可执行的上下文，再委托 `YierdisFastCommandProcessor`。转换时会通过 `CommandSessionCapabilities.from(session)` 验证 session 具备命令所需的 DB index、client metadata、transaction、connection stats 和 protocol negotiation 能力；细节见 [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)。
 
 `YierdisFastCommandProcessor` 负责：
 
@@ -115,6 +115,7 @@ executor 交给 engine 的只有三样东西：
 - 解析参数
 - 调用 command implementation
 - 把读写请求导向 `DbEngine / DbReads / DbWrites`
+- 在配置了 change observer 时，只对真实 mutation outcome 产出最小可重放 change event
 
 命令层本身不碰 Netty，只通过 DB 能力接口做真实存取。
 

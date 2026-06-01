@@ -226,6 +226,37 @@
 - `YierdisDbIntrospectionTest`
 - `ServerOperationCoverageMatrixTest`
 
+## 改代理 / 变更事件 / AOF replication 起点
+
+先打开：
+
+- [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)
+- [`CommandSessionCapabilities.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandSessionCapabilities.java)
+- [`YierdisDbRouter.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/YierdisDbRouter.java)
+- [`CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
+- [`ServerInfoProvider.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ServerInfoProvider.java)
+- [`CommandChangeEmitter.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandChangeEmitter.java)
+- [`RuntimeChangeSinkCommandChangeObserver.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/RuntimeChangeSinkCommandChangeObserver.java)
+- [`YierdisChangeEventBridge.java`](../../yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeEventBridge.java)
+- [`DbChangeContext.java`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/DbChangeContext.java)
+
+继续追：
+
+- 请求主链和 engine/session 边界看 [`request-execution-flow.md`](./request-execution-flow.md)。
+- 命令如何记录 mutation outcome 看 [`commands-and-data-model.md`](./commands-and-data-model.md)。
+- expire / eviction synthetic delete 的 DB 生命周期看 [`db-internals.md`](./db-internals.md)。
+
+测试优先级：
+
+- `YierdisFastCommandProcessorPolicyTest`
+- `YierdisFastCommandProcessorArchitectureTest`
+- `RuntimeChangeSinkCommandChangeObserverTest`
+- `YierdisChangeSinkTest`
+- `ExpireIndexTest`
+- `YierdisDbConstructionTest`
+- `YierdisServerBootstrapCommandWiringTest`
+- `MemoryStatsCommandTest`
+
 ## 推荐最小工作流
 
 1. 在 [`core-logic-index.md`](./core-logic-index.md) 找到目标类的职责和边界。
