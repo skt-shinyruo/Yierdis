@@ -1,4 +1,4 @@
-# Change Event And Proxy Logic
+# 变更事件与代理逻辑
 
 本文集中说明几条容易被读漏的代理、委托和桥接逻辑。它同时服务两类读者：
 
@@ -15,7 +15,7 @@
 | executor 到 Netty I/O adapter | [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 | command 到 `DbEngine` / typed ops facade | [`commands-and-data-model.md`](./commands-and-data-model.md), [`db-internals.md`](./db-internals.md) |
 | DB typed native handle wrapper | [`native-memory-runtime.md`](./native-memory-runtime.md), [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) |
-| FFM runtime wrapper | [`ffm-usage.md`](./ffm-usage.md), [`native-memory-runtime.md`](./native-memory-runtime.md) |
+| FFM runtime wrapper | [`native-memory-runtime.md`](./native-memory-runtime.md) |
 
 本文补齐的是四条文档里较少展开的代理链：
 

@@ -1,8 +1,8 @@
-# Development Navigation
+# 开发导航
 
 本文按常见改动类型回答一个实际问题：我要改某类需求时，应该先打开哪些文件，沿哪条链继续追。
 
-先把三份导航放在手边：测试选择看 [`testing-and-debugging.md`](./testing-and-debugging.md)，覆盖状态看 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md)，源码职责索引看 [`core-logic-index.md`](./core-logic-index.md)。
+先把两份导航放在手边：测试选择看 [`testing-and-debugging.md`](./testing-and-debugging.md)，源码职责看 [`core-logic-index.md`](./core-logic-index.md)。
 
 ## 工作规则
 
@@ -11,7 +11,7 @@
 3. 命令层不要绕过 `DbEngine` / `DbReads` / `DbWrites` 直接依赖 `YierdisDb`。
 4. RESP DTO 不进入 command 层；进入 command 层前必须变成 `ExecutionRequest`。
 5. 写路径必须经过 mutation executor、memory ledger、TTL/key lifecycle，不要直接改 root/value 结构。
-6. 新命令、新 DB API、新 native/internal 结构要同步更新 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md)。
+6. 新命令、新 DB API、新 native/internal 结构要同步补真实测试，并更新受影响的专题文档。
 
 ## 改协议
 
@@ -53,7 +53,7 @@
 
 - 命令设计和数据模型看 [`commands-and-data-model.md`](./commands-and-data-model.md)。
 - 主请求链看 [`request-execution-flow.md`](./request-execution-flow.md)。
-- 新增 command heading、option/subcommand 行、DB API 行时同步矩阵：[`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md)。
+- 新增 option/subcommand 时要补对应成功路径和错误路径测试；server-only 命令还要补 server-main 组装或协议集成测试。
 
 测试优先级：
 
@@ -61,8 +61,7 @@
 - `CommandErrorTest`
 - `CommandVariantCoverageTest`
 - `CommandRegistryGuardTest`
-- `OperationCoverageMatrixTest`
-- server-only 命令再跑 `ServerOperationCoverageMatrixTest` 和 `YierdisServerBootstrapCommandWiringTest`
+- server-only 命令再跑 `YierdisServerBootstrapCommandWiringTest` 和相关协议集成测试
 
 ## 改 string / bitmap / HLL
 
@@ -163,7 +162,7 @@
 继续追：
 
 - JDK FFM 基础看 [`ffm-primer.md`](./ffm-primer.md)。
-- 当前生产 native-memory 路线看 [`ffm-usage.md`](./ffm-usage.md) 和 [`native-memory-runtime.md`](./native-memory-runtime.md)。
+- 当前生产 native-memory 路线看 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 - handle、object table、pin、quarantine、active defrag 看 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 测试优先级：
@@ -224,7 +223,6 @@
 - `MemoryStatsCommandTest`
 - `YierdisDbMemoryReporterTest`
 - `YierdisDbIntrospectionTest`
-- `ServerOperationCoverageMatrixTest`
 
 ## 改代理 / 变更事件 / AOF replication 起点
 
@@ -260,11 +258,10 @@
 ## 推荐最小工作流
 
 1. 在 [`core-logic-index.md`](./core-logic-index.md) 找到目标类的职责和边界。
-2. 在 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) 找最近的 command / DB API / native evidence。
-3. 先补或调整最窄测试，再改实现。
-4. 跑目标家族测试。
-5. 跑矩阵 guard：`OperationCoverageMatrixTest` 和必要时的 `ServerOperationCoverageMatrixTest`。
-6. 跑 `git diff --check -- <changed files>`，确认文档和代码没有 whitespace 问题。
+2. 先补或调整最窄测试，再改实现。
+3. 跑目标家族测试。
+4. 如果改动改变了架构边界、协议语义或 native-memory 当前事实，同步更新对应专题文档。
+5. 跑 `git diff --check -- <changed files>`，确认文档和代码没有 whitespace 问题。
 
 ## 新人先收藏的文件
 
@@ -277,5 +274,4 @@
 - [`executor-and-backpressure.md`](./executor-and-backpressure.md)
 - [`native-memory-runtime.md`](./native-memory-runtime.md)
 - [`testing-and-debugging.md`](./testing-and-debugging.md)
-- [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md)
 - [`glossary.md`](./glossary.md)

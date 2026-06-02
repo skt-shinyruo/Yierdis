@@ -1,8 +1,6 @@
-# Client And Bench Internals
+# 客户端与基准测试内部
 
 本文解释项目内置 CLI、Netty client、benchmark 和 smoke/bench 脚本如何沿真实 RESP 路径工作。
-
-## 先记住一句话
 
 `yierdis-cli` 和 `yierdis-benchmark` 不是进程内 DB 调试入口。它们都通过真实 TCP、真实 RESP frame 和 `yierdis-networking-resp` 的 client codec 工作，因此更接近外部使用者视角。
 
@@ -211,31 +209,3 @@ REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 ```
 
 再次强调：`SERVER_ARGS_EXTRA` 不是无限制透传。它会被 shell split 后交给 `YierdisBenchServerArgs` 解析；bench model 未声明的 server-only 参数会解析失败。
-
-## 推荐源码和测试
-
-推荐源码：
-
-- `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisCli.java`
-- `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisCliArgs.java`
-- `yierdis-cli/src/main/java/yier/bubu/redis/app/client/YierdisClient.java`
-- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/InlineCommandParser.java`
-- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespClientCodec.java`
-- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBench.java`
-- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBenchArgs.java`
-- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBenchServerArgs.java`
-- `scripts/smoke.sh`
-- `scripts/bench.sh`
-
-推荐测试：
-
-- `YierdisClientTest`：client 连接、超时、desync 防护和 RESP 使用方式。
-- `InlineCommandParserTest`：CLI / server 共用 inline command parser 行为。
-- `RespClientCodecTest`：RESP request 编码和 reply 解析。
-- `RespCommandWriterTest`：benchmark request writer 和 RESP codec 复用。
-- `BenchServerArgsReuseTest`：bench server launch argv 归一化和复制。
-- `YierdisBenchSummaryFormatTest`：summary 输出稳定性。
-- `YierdisBenchComparisonRenderTest`：comparison / non-comparable 输出。
-- `SmokeScriptContractTest`：`scripts/smoke.sh` readiness 和 allocator smoke contract。
-- `BenchScriptContractTest`：`scripts/bench.sh` 环境变量 contract。
-- `MaxmemoryScopeTest` 和 `TransactionQueueLimitTest`：从 client 视角覆盖 server 参数影响。

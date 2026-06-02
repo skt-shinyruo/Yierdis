@@ -1,31 +1,30 @@
-# Request Execution Flow
+# 请求执行链路
 
 本文解释一条客户端请求在 Yierdis 里的运行路径：从 Netty 收到 RESP bytes，到命令进入 owner thread，再到 DB 读写和 RESP 回包写出。
 
 ## 一张主链图
 
-![Yierdis request execution flow](./assets/request-execution-flow.svg)
+```mermaid
+flowchart LR
+  client["client RESP bytes"]
+  decoder["RespRequestDecoder"]
+  request["RespCommandRequest"]
+  adapter["RespCommandAdapter + RespExecutionAdapter"]
+  execRequest["ByteArrayExecutionRequest / ExecutionRequest"]
+  handler["YierdisFastCommandHandler"]
+  executor["CommandExecutor"]
+  engine["DefaultYierdisEngine"]
+  processor["YierdisFastCommandProcessor"]
+  command["CommandSpec + command implementation"]
+  db["DbEngine / DbReads / DbWrites"]
+  memory["yierdis-db-memory"]
+  reply["ReplyWriter"]
+  respReply["RespReplyWriter"]
+  io["NettyExecutionIoAdapter"]
+  flush["transport flush"]
 
-```text
-Netty ByteBuf
-  -> RespRequestDecoder
-  -> RespCommandRequest
-  -> RespCommandAdapter
-  -> RespExecutionAdapter
-  -> ByteArrayExecutionRequest
-  -> ExecutionRequest
-  -> YierdisFastCommandHandler
-  -> CommandExecutor
-  -> DefaultYierdisEngine
-  -> YierdisFastCommandProcessor
-  -> CommandSpec<ExecutionRequest>
-  -> command implementation
-  -> DbEngine / DbReads / DbWrites
-  -> yierdis-db-memory
-  -> ReplyWriter
-  -> RespReplyWriter
-  -> NettyExecutionIoAdapter
-  -> transport flush
+  client --> decoder --> request --> adapter --> execRequest --> handler --> executor
+  executor --> engine --> processor --> command --> db --> memory --> reply --> respReply --> io --> flush
 ```
 
 这条链最重要的边界是：
@@ -173,26 +172,3 @@ Netty ByteBuf
 - runtime error：标记连接 closing，再尽快回写并关闭
 
 背压同时受单连接 pending、pending bytes、全局 queue slot、queued bytes 和 channel writability 影响。`NettyExecutionIoAdapter` 负责把 buffered reply 写回 transport，必要时触发 flush 和 close-after-reply。
-
-## 推荐源码和测试
-
-推荐先看这些文件：
-
-- [`YierdisServer.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServer.java)
-- [`YierdisServerBootstrap.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java)
-- [`YierdisServerChannelInitializer.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java)
-- [`RespRequestDecoder.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java)
-- [`RespCommandAdapter.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java)
-- [`RespExecutionAdapter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespExecutionAdapter.java)
-- [`YierdisFastCommandHandler.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java)
-- [`CommandExecutor.java`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java)
-- [`DefaultYierdisEngine.java`](../../yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java)
-- [`YierdisFastCommandProcessor.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java)
-- [`StringCommands.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/string/StringCommands.java)
-- [`YierdisStringOps.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisStringOps.java)
-- [`YierdisDbMutationExecutor.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java)
-- [`ReplyWriter.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ReplyWriter.java)
-- [`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java)
-- [`NettyExecutionIoAdapter.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java)
-
-配套测试可以从 `RespExecutionAdapterTest`、`RespRequestDecoderTest`、`CommandExecutorTest`、`DefaultYierdisEngineTest`、`CommandProcessorTest` 和 `TransactionCommandTest` 读起。

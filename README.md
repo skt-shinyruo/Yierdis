@@ -1,17 +1,8 @@
 # yierdis (Java 25 + Netty)
 
-一个使用 Java + Netty 实现的单机内存 KV 服务端，目标是参考 Redis 的设计与实现方式做一个类似的项目。
+Yierdis 是一个用 Java 25 + Netty 实现的 Redis-style 单机内存 KV server。它对外暴露 Redis RESP TCP 协议，RESP2 是默认 wire target，`HELLO 3` 可以协商基础 RESP3 replies。
 
-对外 TCP 协议使用 Redis RESP。RESP2 是默认兼容目标，`HELLO 3` 可协商基础 RESP3 回包；当前版本仍然不是 Redis 的 drop-in replacement。
-
-## 定位与兼容性边界（重要）
-
-Yierdis 的目标是：用 Java 参考 Redis 的思路实现一个类似的项目。项目内置 CLI 主要用于本地调试/验证（最小命令集、协议、背压、淘汰等机制）。
-
-但当前版本还不是 Redis 的 drop-in replacement，并且即便是已实现命令，也有不少“刻意简化/最小子集”的语义差异（例如 TTL 清理、`KEYS` glob 覆盖范围、事务边界行为等）。
-
-- **包含（In scope）**：单机内存版数据结构、基础命令子集、TTL（惰性删除 + 轻量后台清理）、maxmemory（简化的估算 + 近似淘汰）、最小事务子集（`MULTI/EXEC/DISCARD`）、Redis RESP 兼容协议入口（RESP2 默认，`HELLO 3` 基础 RESP3 协商）、`INFO/STATS/MEMORY STATS` 可观测性
-- **当前尚未实现，属于后续规划方向**：AOF/RDB 持久化、复制/集群、Lua、ACL/TLS、PubSub/订阅模式、完整的 Redis 生态兼容和模块化运维能力
+它不是 Redis drop-in replacement。当前实现重点是单机内存数据结构、基础命令子集、TTL、maxmemory、最小事务、backpressure、observability 和 JDK FFM native-memory 路径；AOF/RDB、replication/cluster、Lua、ACL/TLS、PubSub 和完整 Redis ecosystem compatibility 属于后续方向。
 
 ## 环境
 
@@ -25,40 +16,22 @@ mvn test
 mvn -DskipTests package
 ```
 
-## 初学者导读
+## 文档入口
 
-如果你是第一次进入这个仓库，先读 `docs/project-docs/readme.md`。那是完整的代码库文档地图，会按不同目标给出阅读路径：
+第一次进入代码库先读 [`docs/project-docs/readme.md`](docs/project-docs/readme.md)。那是内部文档地图，会按不同目标给出阅读路径：
 
-- 先理解项目定位和能力边界
+- 先理解项目定位、能力边界和模块结构
 - 跟一条请求从 RESP 走到 DB 再写回
 - 查协议、命令、DB、执行器、native memory 等专题
-- 准备改代码并选择测试范围
+- 准备改代码并选择验证范围
 
 推荐第一轮阅读：
 
-1. `docs/project-docs/readme.md`
-2. `docs/project-docs/project-introduction.md`
-3. `docs/project-docs/project-overview.md`
-4. `docs/project-docs/request-execution-flow.md`
-5. `docs/project-docs/main-path-walkthrough.md`
-
-## 开发者：模块边界（契约 / 组装）
-
-本项目内部模块做过一次“边界收敛”，目的是让依赖方向更清晰（执行契约在 `yierdis-server-api`，协议模型专注协议，组装在 `yierdis-server-main`）：
-
-- **执行契约（`ExecutionRequest` / `ExecutionRecord` / `ReplyWriter` / session contracts）**：统一由 `yierdis-server-api` 拥有（包名为 `yier.bubu.redis.execution.api.*`），不放在协议模块；旧的 `Command` 仅保留为兼容/废弃类型。
-- **存储能力契约（`DbEngine` / `DbReads` / `DbWrites` / `MemoryOps` / maxmemory hooks）**：统一由 `yierdis-db-api` 拥有；包名为 `yier.bubu.redis.storage.api.*` 和 `yier.bubu.redis.storage.api.result.*`。需要这些 storage contract 的模块应直接依赖 `yierdis-db-api`。
-- **运行时契约（`YierdisInstanceConfig` / `YierdisChangeEvent` / `YierdisChangeSink`）**：统一由 `yierdis-server-runtime-api` 拥有；包名为 `yier.bubu.redis.runtime.api.*`。需要这些 runtime contract 的模块应直接依赖 `yierdis-server-runtime-api`。
-- **协议模型（limits/reply tooling/client/parser model）**：位于 `yierdis-networking-resp`（包名为 `yier.bubu.redis.protocol.resp.*`）；client codec 与 reply writer 都在这个 Netty-free 模块中，server 命令写回语义仍以 `ReplyWriter` 为单一事实来源（server command execution write-back remains centralized through `ReplyWriter`）。
-- **协议请求适配**：`RespExecutionAdapter` 把 `RespCommandRequest` 适配为 `ExecutionRequest`；`RespRequestDecoder` / `RespCommandAdapter` / `RespProtocolErrorReplyHandler` 位于 `yierdis-networking-netty`；`yierdis-server-main` 只做应用组装。
-- **事务回放 / 变更事件**：连接级事务重放与 `YierdisChangeEvent` 都应复用 `ExecutionRecord` 快照，而不是重新引入新的 argv 容器或 server-local `Command` 包装。
-- **command-api/core/builtin 默认装配**：`yierdis-command-api` 暴露命令 SPI，`yierdis-command-core` 持有 registry/processor/transaction replay，`yierdis-command-builtin` 提供传输无关默认命令模块；`HELLO/INFO/STATS` 这类需要 protocol/build-info/运行时观测组装的 server-facing commands 位于 `yierdis-server-main`，而 `PING/ECHO/COMMAND/SELECT/QUIT/CLIENT/AUTH/FLUSHDB` 这类传输无关、客户端握手兼容或 DB 生命周期命令由 defaults 模块提供并在应用组合根注入。
-- **CLI 输入解析**：`InlineCommandParser` 位于 `yierdis-cli`（`yier.bubu.redis.app.client.InlineCommandParser`）。
-- **instance 暴露面**：`YierdisInstance` 仅负责 DB 生命周期、资源 ownership 与 `DbEngine` 能力视图（`engine(int)` / `engines()` 防御性拷贝），避免上层依赖 `YierdisDb` 具体实现，也不再承担 command processor 组装。
-- **runtime owner-thread seam**：server 不应再通过公开 `DbEngine` 视图做 `RuntimeDbEngine` 向下转型，也不应在 bootstrap 中内联 `bindToCurrentThread()/close()` 细节；owner-thread 维护、maintenance、关闭应通过 `yierdis-server-runtime` 提供的 runtime-local seam 协作。
-- **DB 内部协作者**：`YierdisDb` 仍然是状态 owner，但过期清理、maxmemory/淘汰这类高密度内部策略应优先收敛到 package-local collaborator，而不是继续在单个超大类中内联扩张。
-- **off-heap contract 兼容面**：`OffHeapAllocator` / `OffHeapBuf` / `OffHeapSlice` / `OffHeapOutOfMemoryException` 位于 `yierdis-memory-api`；包名为 `yier.bubu.redis.memory.api`，需要这些 contract 的模块应直接依赖 `yierdis-memory-api`。
-- **native memory 组装**：server 直接依赖 `yierdis-memory-ffm`，统一使用 JDK 25 `java.lang.foreign` FFM API；不再存在多 backend 发现/切换。
+1. [`docs/project-docs/readme.md`](docs/project-docs/readme.md)
+2. [`docs/project-docs/project-overview.md`](docs/project-docs/project-overview.md)
+3. [`docs/project-docs/request-execution-flow.md`](docs/project-docs/request-execution-flow.md)
+4. [`docs/project-docs/main-path-walkthrough.md`](docs/project-docs/main-path-walkthrough.md)
+5. [`docs/project-docs/module-architecture.md`](docs/project-docs/module-architecture.md)
 
 ## 启动
 
@@ -67,7 +40,7 @@ mvn -q -DskipTests package
 java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 6378
 ```
 
-然后可以直接用 `redis-cli` 连接：
+用 `redis-cli` 验证：
 
 ```bash
 redis-cli -p 6378 PING
@@ -76,41 +49,42 @@ redis-cli -p 6378 GET a
 redis-cli -p 6378 HELLO 3
 ```
 
-也可以使用项目内置 CLI（默认 `127.0.0.1:6378`）：
+也可以用项目内置 CLI：
 
 ```bash
 java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar PING
 java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar SET a 1
 java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar GET a
-java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar INFO
-java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar INFO yierdis
-java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar STATS
 ```
 
-也可以用 `nc` 直接发送 RESP frame（示例：`GET a`）：
+直接发送 RESP frame：
 
 ```bash
 printf '*2\r\n$3\r\nGET\r\n$1\r\na\r\n' | nc 127.0.0.1 6378
 ```
 
-说明：
+## 常用入口
 
-- RESP2 是默认返回格式；`HELLO 3` 后同一连接会切到 RESP3 基础回包。
-- malformed RESP 会先写协议错误，再关闭连接，避免请求/回包错位。
-- server command execution write-back still uses ReplyWriter 作为语义 authority；RESP 实现只负责把这些语义写回编码成线上 bytes。
-- 命令语义当前仍是 Redis 风格最小子集，完整 Redis 生态兼容属于后续演进目标。
+| 目标 | 入口 |
+| --- | --- |
+| 协议边界和 RESP 行为 | [`docs/project-docs/protocol-reference.md`](docs/project-docs/protocol-reference.md) |
+| 命令层和数据模型 | [`docs/project-docs/commands-and-data-model.md`](docs/project-docs/commands-and-data-model.md) |
+| 配置、maxmemory、backpressure 和运行场景 | [`docs/project-docs/configuration-and-operations.md`](docs/project-docs/configuration-and-operations.md) |
+| native memory 和 off-heap copy 边界 | [`docs/project-docs/native-memory-runtime.md`](docs/project-docs/native-memory-runtime.md) |
+| CLI 和 benchmark 内部实现 | [`docs/project-docs/client-and-bench-internals.md`](docs/project-docs/client-and-bench-internals.md) |
+| 改代码前的源码导航 | [`docs/project-docs/development-navigation.md`](docs/project-docs/development-navigation.md) |
+| 测试和排障路径 | [`docs/project-docs/testing-and-debugging.md`](docs/project-docs/testing-and-debugging.md) |
 
-## 客户端（CLI）
+## CLI
 
-项目内置一个极简 client/CLI，方便本地调试（默认连接 `127.0.0.1:6378`）。
+项目内置 CLI 默认连接 `127.0.0.1:6378`：
 
 ```bash
 # 单次执行
-java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar PING
-java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar SET a 1
-java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar GET a
+java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar INFO
+java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar STATS
 
-# 交互模式（输入 quit/exit 退出）
+# 交互模式，输入 quit 或 exit 退出
 java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 ```
 
@@ -119,241 +93,26 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 - `--host <host>`
 - `--port <port>`
 - `--timeoutMillis <ms>`
-- `--hex`（bulk string 中非 UTF-8 bytes 以 hex 输出）
+- `--hex`
 
-说明：
+## Benchmark 和 Smoke
 
-- client/CLI 使用 RESP；单次执行和 REPL 都走真实 TCP。
-- CLI 默认按 Redis 风格打印响应；`--hex` 仅改变 bulk string 中非 UTF-8 bytes 的展示方式（不改变协议）。
-- REPL 输入解析规则保持 sdssplitargs 风格（支持单/双引号、反斜杠转义、`\\xHH` 十六进制转义）。
-
-## 已实现命令（简化版）
-
-### 通用
-
-- `PING [message]`
-- `ECHO <message>`
-- `HELLO [2|3] [SETNAME name]`（返回 server/version/proto/mode/role；协商当前连接的 RESP version）
-- `COMMAND`（最小子集：`COMMAND`/`COMMAND COUNT`/`COMMAND INFO <name ...>`）
-- `INFO [section]`
-- `STATS`
-- `SELECT <index>`（默认支持 `0..15`；可通过 `--databases` 调整）
-- `CLIENT SETINFO ...` / `CLIENT SETNAME <name>` / `CLIENT GETNAME`（客户端握手/连接名最小兼容）
-- `AUTH ...`（未配置密码时固定返回 Redis 风格 no-password-configured 错误）
-- `QUIT`
-
-### Key/TTL
-
-- `SET key value [NX|XX] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]`
-- `GET key`
-- `DEL key [key ...]`
-- `EXISTS key [key ...]`
-- `EXPIRE key seconds`
-- `PEXPIRE key milliseconds`
-- `EXPIREAT key unix-time-seconds`
-- `PEXPIREAT key unix-time-milliseconds`
-- `PERSIST key`
-- `TTL key`
-- `PTTL key`
-- `KEYS pattern`（支持 Redis 风格最小 glob 子集：`*`/`?`/`[]` 范围与否定/反斜杠转义；按 byte 匹配）
-- `SCAN cursor [MATCH pattern] [COUNT count]`
-- `MEMORY USAGE key`
-- `MEMORY STATS`
-- `OBJECT ENCODING key`
-- `TYPE key`
-- `FLUSHDB [SYNC|ASYNC]`
-
-### String
-
-- `INCR key`
-- `DECR key`
-- `APPEND key value`
-- `STRLEN key`
-
-### Bitmap
-
-- `SETBIT key offset value`
-- `GETBIT key offset`
-- `BITCOUNT key [start end]`
-
-### HLL
-
-- `PFADD key element [element ...]`
-- `PFCOUNT key [key ...]`
-- `PFMERGE destkey sourcekey [sourcekey ...]`
-
-### List
-
-- `LPUSH key value [value ...]`
-- `RPUSH key value [value ...]`
-- `LRANGE key start stop`
-- `LPOP key [count]`
-- `RPOP key [count]`
-
-### Hash
-
-- `HSET key field value [field value ...]`
-- `HGET key field`
-- `HGETALL key`
-- `HLEN key`
-- `HDEL key field [field ...]`
-
-### Set
-
-- `SADD key member [member ...]`
-- `SREM key member [member ...]`
-- `SMEMBERS key`
-- `SISMEMBER key member`
-- `SCARD key`
-
-### ZSet
-
-- `ZADD key score member [score member ...]`
-- `ZRANGE key start stop [WITHSCORES] [REV]`
-- `ZREVRANGE key start stop [WITHSCORES]`
-- `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`
-- `ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]`
-- `ZREMRANGEBYRANK key start stop`
-- `ZREMRANGEBYSCORE key min max`
-- `ZREM key member [member ...]`
-
-### Transaction（最小子集）
-
-- `MULTI`
-- `EXEC`
-- `DISCARD`
-
-事务边界与上限（重要）：
-
-- 事务队列是连接级状态：为避免大事务/大参数导致 JVM OOM，server 提供硬上限保护：
-  - `--transactionQueueMaxCommands <n>`：事务队列最大命令数（0 表示不限制）
-  - `--transactionQueueMaxBytes <bytes>`：事务队列最大参数 bytes（按入队参数拷贝估算；0 表示不限制）
-- 当 MULTI 模式入队阶段触发上述上限时：该连接事务会被标记为 aborted；后续 `EXEC` 会返回 Redis 风格 `EXECABORT` 并丢弃队列（对齐 Redis 的“入队阶段出错 → EXEC 终止”语义）。
-
-## 说明
-
-- 这是一个 **单机内存版** 实现：当前尚未实现 AOF/RDB 持久化、复制、集群、Lua、ACL、TLS 等复杂功能，这些属于后续规划方向。
-- 事务仅支持最小子集：`MULTI/EXEC/DISCARD`（不包含 WATCH 等）。
-- 协议层为 Redis RESP；RESP2 是默认目标，RESP3 可通过 `HELLO 3` 基础协商。协议错误会返回错误并关闭连接。
-- TTL 采用“访问时惰性删除”，并带一个轻量级后台清理任务（可关）。
-
-## 内存管理（maxmemory / 淘汰，简化实现）
-
-Yierdis 提供一个“Redis 风格、但刻意简化”的 maxmemory/淘汰机制，便于本地调试与对齐思路：
-
-- `--maxmemoryBytes <bytes>`：启用最大内存预算（默认 `0` 表示不限制）。
-- `--maxmemoryScope global|per-db`：maxmemory 预算口径（默认 `global`，更贴近 Redis “全实例 maxmemory”；`per-db` 为兼容模式：将 `maxmemoryBytes` 按 DB 数量硬分摊）。
-- `--maxmemoryPolicy noeviction|allkeys-random|allkeys-lru`：淘汰策略（默认 `noeviction`）。
-  - `noeviction`：不淘汰，写入会返回 OOM 错误。
-  - `allkeys-random`：随机淘汰任意 key。
-  - `allkeys-lru`：基于采样的近似 LRU（更接近 Redis 的默认思路）。
-- `--maxmemorySamples <n>`：LRU 采样数量（默认 `5`）。
-
-示例：开启 10MB 内存预算，并使用 LRU 淘汰：
-
-```bash
-java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
-  --port 6378 \
-  --maxmemoryBytes 10485760 \
-  --maxmemoryScope global \
-  --maxmemoryPolicy allkeys-lru \
-  --maxmemorySamples 5
-```
-
-可用于观察内部编码与内存估算的命令：
-
-- `OBJECT ENCODING <key>`
-- `MEMORY USAGE <key>`
-- `MEMORY STATS`
-- `INFO` / `INFO YIERDIS` / `STATS`
-
-## 协议上限与反压（推荐）
-
-为了避免“少量大 bulk 积压导致内存驻留不可解释”的情况，server 支持按 **条数 + bytes** 做双约束：
-
-- `--protocolMaxBulkBytes <bytes>` / `--protocolMaxArgs <n>` / `--protocolMaxLineBytes <bytes>`：输入上限（DoS 防护）
-- `--executorQueueCapacity <n>`：全局执行队列条数上限（有界队列）
-- `--executorQueueMaxBytes <bytes>`：全局执行队列 bytes 上限（`0` 表示禁用）
-- `--backpressureHigh/--backpressureLow`：连接级条数背压水位线（滞回）
-- `--backpressureBytesHigh/--backpressureBytesLow`：连接级 bytes 背压水位线（滞回；`0` 表示禁用）
-- `--client-idle-timeout-millis <ms>`：读空闲连接关闭时间（默认 `300000`；`0` 表示禁用）
-- `--client-output-buffer-limit-bytes <bytes>`：慢客户端输出缓冲上限（默认 `67108864`；`0` 表示禁用）
-- `--client-output-buffer-over-limit-millis <ms>`：输出缓冲超过上限后的宽限期（默认 `10000`）
-
-开放网络环境建议（重要）：
-
-- 如果部署在公网/弱隔离环境，建议 **显式收紧** `--protocolMaxBulkBytes`（以及 `--protocolMaxArgs/--protocolMaxLineBytes`），不要依赖默认值。
-- 即便 decoder 侧已做“尽量低拷贝”的优化，大包请求仍可能导致解析与字符串驻留带来显著内存/CPU 压力；输入上限是更有效的第一道护栏。
-
-busy 可诊断性（排障）：
-
-- 当投递被拒绝时，server 会返回错误（`message` 以 `ERR busy <reason>` 开头；`reason` 用于人类排障）：
-  - `not_running`：执行器未启动或正在关闭
-  - `connection_closing`：连接已进入 closing；该类拒绝只清理请求，不再额外写 busy 回复
-  - `queue_full`：全局队列已满
-  - `bytes_budget`：全局 queued-bytes 预算耗尽
-  - `offer_failed`：入队失败（通常是竞态/关闭路径）
-- `STATS` 会输出对应计数器，便于定位 busy 的主因（例如 `submit_rejected_queue_full_total`、`submit_rejected_closing_total` 等）。
-
-## Native Memory
-
-Yierdis 现在要求使用 JDK 25，并且始终使用 `java.lang.foreign` FFM API 管理 native memory。
-
-- 没有 `--offheapBackend`
-- 没有 `--offheapMaxBytes`
-- keyspace、expires、string/hash/list/set/zset 内部结构默认都走 FFM
-- `maxmemory` 是唯一的 native-memory 预算入口
-- `global` scope 下 DB 共享实例级 FFM runtime，off-heap usage 按实例口径计入；`per-db` scope 下默认每个 DB 各自持有 runtime 和分摊后的预算
-
-构建和运行方式保持简单：
-
-```bash
-mvn test
-mvn -DskipTests package
-java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --port 6378
-```
-
-如果当前 JVM 不支持 `java.lang.foreign`，server 会在启动阶段直接报错并要求改用 JDK 25。
-
-## 压力测试（可重复）
-
-本项目没有内置 JMH，但提供一个“可重复压测脚本”用于观测 FFM-only 路径下的吞吐与延迟分位数（纯 Java 实现，不依赖
-`redis-benchmark` 等系统工具）。
-
-一键运行：
+可重复 benchmark：
 
 ```bash
 ./scripts/bench.sh
 ```
 
-### Request-Path Baseline Comparison
-
-对 request-path 优化，建议在改动前后都用同一组参数保留 `yierdis-benchmark` 的 summary 表格输出，便于直接对比吞吐和延迟：
+常用对比参数：
 
 ```bash
 REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 ```
 
-常用可调参数（环境变量）：
-
-- `PORT_BASE`：benchmark 使用的端口（默认 `16378`）
-- `REQUESTS` / `CLIENTS` / `PIPELINE`：吞吐压测参数（每种命令单独跑一次）
-- `DATA_SIZE` / `KEYSPACE`：value 大小与 keyspace
-- `XMS` / `XMX` / `MAX_DIRECT_MEMORY`：JVM 内存与 Direct Memory 上限
-- `MAXMEMORY_BYTES` / `MAXMEMORY_POLICY` / `MAXMEMORY_SAMPLES`：server maxmemory 预算和淘汰参数
-- `SKIP_PREFILL=1`：跳过预置数据（可能导致 GET 大量 miss，影响可比性）
-- `SKIP_LATENCY=1`：跳过延迟压测
-
-也可以直接运行 Java 工具查看完整参数：
-
-```bash
-java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar --help
-```
-
-## 最小 Smoke（推荐）
-
-用于快速验证“server 启动/CLI/bench strictReplies”链路：
+快速 smoke：
 
 ```bash
 ./scripts/smoke.sh
 ```
+
+完整 CLI/benchmark 内部说明见 [`docs/project-docs/client-and-bench-internals.md`](docs/project-docs/client-and-bench-internals.md)。

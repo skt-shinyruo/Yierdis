@@ -1,8 +1,6 @@
-# Off-Heap Copy Behavior
+# Off-Heap Copy 边界
 
 本文解释 heap、direct buffer、FFM native memory 之间什么时候发生 copy，什么时候只是 view 或 handle。结论不是“用了 off-heap 就零拷贝”，而是：zero-copy 是被选择出来的目标，不是所有路径的默认属性。
-
-## 先记住一句话
 
 Yierdis 的 native memory 主要降低稳态 heap 占用、改善 GC 压力并给部分 read/write-back 留出 fast path；只要接口边界要求 `byte[]`、`List<byte[]>`、`String`、snapshot 或长期 ownership，copy 仍然会发生。
 
@@ -102,25 +100,3 @@ view / handle 不是 copy：
 误读五：同侧就不会复制。
 
 off-heap 扩容、active defrag、direct write-back、heap snapshot 和 retry buffer 都可能在同一侧发生 copy。
-
-## 推荐源码和测试
-
-推荐源码：
-
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java`
-- `yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java`
-- `yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/bytes/netty/NettyByteBufSink.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/HashValue.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ffm/YierdisFfmBytesRefSlice.java`
-
-推荐测试：
-
-- `RespReplyWriterTest`
-- `OffHeapContractsSmokeTest`
-- `OffHeapBytesViewTtlRegressionTest`
-- `OffHeapCollectionReadStreamingTest`
-- `NativeKeyDirectoryTest`
-- `NativeStorageRegressionTest`

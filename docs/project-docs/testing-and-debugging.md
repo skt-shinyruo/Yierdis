@@ -1,4 +1,4 @@
-# Testing And Debugging
+# 测试与排障
 
 本文说明 Yierdis 测试如何分层，以及不同改动和故障应该先跑哪些测试、先看哪一层。
 
@@ -20,9 +20,9 @@ Yierdis 的测试大致分成七层：
 | native/internal | handle、allocator、keyspace、root/value、ledger | `NativeHandleTest`, `YierdisStableNativeAllocatorTest`, `StringRootTest`, `MemoryLedgerContractTest` |
 | executor / server | owner thread、队列、背压、Netty 适配 | `CommandExecutorTest`, `CommandExecutorBackpressureTest`, `RespProtocolIntegrationTest` |
 | CLI / bench | 客户端、脚本和 benchmark 输出契约 | `YierdisClientTest`, `BenchScriptContractTest`, `YierdisBenchSummaryFormatTest` |
-| architecture / docs guard | 模块边界和覆盖矩阵 | `ArchitectureDependencyRuleTest`, `RespBoundaryGuardTest`, `OperationCoverageMatrixTest` |
+| architecture guard | 模块边界和协议边界 | `ArchitectureDependencyRuleTest`, `RespBoundaryGuardTest` |
 
-查找入口：开发路径看 [`development-navigation.md`](./development-navigation.md)，源码职责看 [`core-logic-index.md`](./core-logic-index.md)，覆盖状态看 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md)。
+查找入口：开发路径看 [`development-navigation.md`](./development-navigation.md)，源码职责看 [`core-logic-index.md`](./core-logic-index.md)。
 
 ## 改协议时
 
@@ -48,13 +48,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests -am -Dtest=StringCommandTest,BitmapCommandTest,CommandErrorTest,CommandVariantCoverageTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-新增命令或新增 option/subcommand 时，还要跑矩阵 guard：
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests,yierdis-server/yierdis-server-main -am -Dtest=OperationCoverageMatrixTest,ServerOperationCoverageMatrixTest -Dsurefire.failIfNoSpecifiedTests=false test
-```
-
-排障顺序：先看 `CommandRegistry` 是否注册，`CommandSpec` arity/key metadata 是否正确，再看 `YierdisFastCommandProcessor` 是否进入事务队列、错误路径或实际 handler。
+新增命令或新增 option/subcommand 时，优先补最窄的命令家族测试和错误测试；server-only 命令还要补 server-main 组装或协议集成测试。排障顺序：先看 `CommandRegistry` 是否注册，`CommandSpec` arity/key metadata 是否正确，再看 `YierdisFastCommandProcessor` 是否进入事务队列、错误路径或实际 handler。
 
 ## 改 DB 或数据结构时
 
@@ -120,23 +114,6 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 排障顺序：`InlineCommandParser` -> client codec -> script contract -> benchmark args -> summary/comparison renderer。详细入口看 [`client-and-bench-internals.md`](./client-and-bench-internals.md)。
 
-## operation coverage matrix
-
-[`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) 是测试覆盖索引，也是 guard tests 的输入文件。它被 `OperationCoverageMatrixTest` 和 `ServerOperationCoverageMatrixTest` 解析，修改时必须保持这些规则：
-
-- command heading 必须是 `### UPPERCASECOMMAND`。
-- 三层状态行必须保持 ``- **Command layer**: `status` - detail``、``- **DB API**: `status` - detail``、``- **Native internals**: `status` - detail``。
-- option/subcommand 覆盖行必须保持 ``- **Command variant**: `variant` - `status` - detail``。
-- 状态只能是 `covered`、`covered-by-shared-test`、`missing`、`not-applicable`。
-- `covered` 和 `covered-by-shared-test` 必须包含 `FileName#methodName` 证据。
-- `## Option And Subcommand Inventory`、`## DB API Inventory`、`## Native/Internal Inventory`、`## Current Gap Queue` 这些 heading 不能改名。
-
-矩阵 guard 命令：
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests,yierdis-server/yierdis-server-main -am -Dtest=OperationCoverageMatrixTest,ServerOperationCoverageMatrixTest -Dsurefire.failIfNoSpecifiedTests=false test
-```
-
 ## 常见故障入口
 
 | 现象 | 先看哪里 | 常用测试 |
@@ -148,22 +125,15 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 | maxmemory 多回包或错误回包 | `YierdisDbMemoryLedger`, mutation executor | `MaxmemoryEvictionTest`, `MaxmemoryDoubleReplyRegressionTest` |
 | off-heap 泄漏 | root/value release, blob store, native handle graph | `OffHeapLeakRegressionTest`, `NativeStorageRegressionTest` |
 | executor 卡住或背压不恢复 | submitter、drain loop、connection context | `CommandExecutorBackpressureTest`, `CommandExecutorFairSchedulingTest` |
-| docs matrix guard 失败 | matrix heading、row shape、evidence | `OperationCoverageMatrixTest`, `ServerOperationCoverageMatrixTest` |
 
 ## 最小验证组合
 
 小文档改动：
 
 ```bash
-git diff --check -- docs/project-docs/development-navigation.md docs/project-docs/testing-and-debugging.md docs/project-docs/operation-test-coverage-matrix.md docs/project-docs/core-logic-index.md docs/project-docs/glossary.md
+git diff --check -- docs/project-docs README.md
 ```
 
-命令或矩阵改动：
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-tests/yierdis-integration-tests,yierdis-server/yierdis-server-main -am -Dtest=OperationCoverageMatrixTest,ServerOperationCoverageMatrixTest -Dsurefire.failIfNoSpecifiedTests=false test
-```
-
-DB/native 语义改动：目标 direct ops 测试 + 相关命令家族测试 + 矩阵 guard。
+DB/native 语义改动：目标 direct ops 测试 + 相关命令家族测试。
 
 executor/server 改动：executor 单元测试 + server main 集成测试 + 相关协议测试。

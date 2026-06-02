@@ -1,8 +1,6 @@
-# Bytes And Fast Paths
+# Bytes 抽象与 fast path
 
 本文解释 Yierdis 为什么有一套独立于 Netty 和 DB 的 bytes 抽象，以及这些抽象如何减少无意义复制。
-
-## 先记住一句话
 
 Yierdis 的 bytes 抽象不是为了把 `byte[]` 包一层对象，而是为了让 protocol、execution、DB、off-heap value 和 Netty write-back 共享一套 Netty-free contract；能流式写出时不强制 heap copy，必须 materialize 时又把复制边界写清楚。
 
@@ -112,30 +110,3 @@ bytes 抽象不是 native allocator。它只描述“如何读一段 bytes”和
 - collection payload internals 仍可能由 adapter 或 legacy FFM structures 拥有。
 
 因此 `BytesView` / `BytesSlice` 可以帮助 native 和 heap 路径共享 API，但它们本身不保证数据 off-heap，也不保证零拷贝。它们保证的是短生命周期 view、流式写出和 adapter 边界清晰。
-
-## 推荐源码和测试
-
-推荐源码顺序：
-
-1. `BytesSource`
-2. `BytesView`
-3. `BytesSlice`
-4. `BytesSink`
-5. `DirectBytesSink`
-6. `NettyByteBufSink`
-7. `RespCommandRequest`
-8. `RespCommandAdapter`
-9. `RespReplyWriter`
-10. `BulkStringSink`
-11. `YierdisDbKeyLifecycle`
-12. `StringRoot` 和 collection type roots
-
-推荐测试：
-
-- `RespReplyWriterTest`：`BytesSlice` reply 写回和 chunked/fast-path 行为。
-- `RespRequestDecoderTest`：`RespCommandRequest` decode、retained bytes 和 adapter 边界。
-- `ExecutionRequestContractTest`：heap snapshot request contract。
-- `OffHeapContractsSmokeTest`：off-heap slice 如何挂在中立 bytes API 上。
-- `OffHeapBytesViewTtlRegressionTest`：`BytesView` 在 TTL lookup 路径中的意义。
-- `OffHeapCollectionReadStreamingTest`：collection 通过 `BulkStringSink` 流式输出。
-- `NativeKeyDirectoryTest`：native key bytes、`KeyHandle` 和 `EntryHandle` 的 lookup/storage contract。

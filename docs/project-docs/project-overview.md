@@ -1,4 +1,4 @@
-# Project Overview
+# 项目总览
 
 本文从代码和运行时边界出发，说明 Yierdis 当前是什么、有哪些模块、一次请求会经过哪些层，以及读源码时先打开哪些文件。
 
@@ -7,6 +7,8 @@
 Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 KV server。它对外暴露 Redis RESP TCP 协议，RESP2 是默认 wire target，`HELLO 3` 可以协商基础 RESP3 replies；对内把网络、协议、执行、命令、DB、memory runtime 和启动装配拆成独立模块。
 
 读源码时最重要的定位是：它不是 Redis drop-in replacement，而是一个刻意限定在单机内存边界内的 Redis 风格系统实现。代码重点不是“兼容所有 Redis 行为”，而是展示一次请求如何穿过 RESP/Netty、执行器、命令处理器、DB 能力接口和 native-memory-backed 数据结构。
+
+它也不是普通 `Map` 服务。普通 `Map` 只能解释 key/value 存取，解释不了 RESP wire format、连接级 session、事务 replay、TTL 和 maxmemory 的写路径约束、reply writer 语义、owner thread、backpressure、native handle lifetime 和 introspection。读代码时应该把它看成一个边界清楚的系统样本：网络、协议、执行、命令、DB、memory runtime 和启动组装各有自己的职责。
 
 ## 能力边界
 
@@ -30,6 +32,12 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 - engine 和 command processor 负责把统一执行请求路由到命令实现。
 - DB 层通过能力接口暴露读写语义，内存实现持有 keyspace、expires、数据族和内存账本。
 - JDK FFM runtime 支撑默认 native-memory path，并参与 maxmemory 相关约束。
+
+读源码前先建立三条心智模型：
+
+- 请求不是“方法调用”，而是一段从 RESP bytes 到 `ExecutionRequest`、executor、command handler、DB、`ReplyWriter` 再回到 RESP bytes 的链路。
+- DB 不是一张大表，而是 keyspace、entry metadata、value roots、TTL index、memory ledger 和 native handles 共同维护的生命周期边界。
+- native memory 不是旁路优化，而是当前默认数据路径的一部分；但它不等于零拷贝，copy 边界需要按接口 ownership 和 lifetime 判断。
 
 ## 模块总览
 

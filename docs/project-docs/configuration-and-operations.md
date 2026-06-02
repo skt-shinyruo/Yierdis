@@ -1,4 +1,4 @@
-# Configuration And Operations
+# 配置与运行
 
 本文解释启动参数如何进入运行时配置，以及本地运行、观测、调参和关闭时应该看哪些入口。
 
@@ -227,30 +227,3 @@ java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SN
 关闭是 best-effort，顺序大致是：server channel、cleanup future、executor graceful shutdown、engine、instance runtime access、command group、boss group、worker group。runtime access 的关闭会通过 `executor.executeOwnerTask(runtimeAccess::close)` 回到 owner thread，避免在错误线程释放已绑定 DB runtime。
 
 脚本层关闭逻辑也要按真实进程处理：`scripts/smoke.sh` 用 trap 杀掉临时 server；benchmark 的 `ServerProcess.stop()` 先 `destroy()`，超时后 `destroyForcibly()`。
-
-## 推荐测试
-
-推荐源码：
-
-- `YierdisServerArgs.java`
-- `YierdisServerRuntimeConfig.java`
-- `ServerConfig.java`
-- `YierdisServerBootstrap.java`
-- `YierdisServerChannelInitializer.java`
-- `NettyServerInfoProvider.java`
-- `CommandExecutor.java`
-- `EngineSession.java`
-- `YierdisInstance.java`
-- `YierdisGlobalMaxmemoryGovernor.java`
-
-推荐测试：
-
-- `YierdisServerArgsTest`：参数解析、归一化和失败路径。
-- `YierdisServerBootstrapCommandWiringTest`：bootstrap、pipeline、`INFO` / `STATS` wiring。
-- `CommandExecutorBackpressureTest`：队列、bytes budget 和 `autoRead` 背压。
-- `CommandExecutorFairSchedulingTest`：`fair` 调度。
-- `CommandExecutorTest`：owner thread、drain 和关闭。
-- `TransactionQueueLimitTest`：事务队列上限。
-- `MaxmemoryScopeTest`：global/per-db 预算行为。
-- `MemoryStatsCommandTest`：`MEMORY STATS` 字段稳定性。
-- `RespProtocolErrorIntegrationTest` 和 `RespRequestDecoderTest`：协议上限和错误关闭。

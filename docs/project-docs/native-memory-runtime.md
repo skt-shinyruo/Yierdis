@@ -1,4 +1,4 @@
-# Native Memory Runtime
+# Native Memory 运行时
 
 本文解释 Yierdis 如何把 JDK FFM 接入运行时：runtime、region、span、access、DB scope、maxmemory 和仍然 heap-backed 的边界。
 
@@ -133,26 +133,3 @@ YierdisNativePageAllocator
 - `realloc` 可以移动 native block，同时保持 handle 不变。
 - active defrag 可以移动 allocator-backed objects，并通过 object table 发布新 location。
 - pin、epoch 和 quarantine 防止 view 或扫描期间过早回收 memory。
-
-## 推荐源码和测试
-
-推荐源码：
-
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmMemoryRuntime.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmRegion.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmSpan.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisFfmAccess.java`
-- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbStorageComponents.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbOwnedResources.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java`
-
-推荐测试：
-
-- `YierdisFfmMemoryRuntimeTest`
-- `YierdisForeignOffHeapAllocatorTest`
-- `OffHeapLeakRegressionTest`
-- `YierdisInstanceTest`
-- `MaxmemoryScopeTest`
-- `MemoryStatsAccountingConsistencyTest`
-- `NativeStorageRegressionTest`

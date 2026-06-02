@@ -1,4 +1,4 @@
-# Main Path Walkthrough
+# 源码主路径导览
 
 本文按源码阅读顺序串起 Yierdis 的主路径，适合一边打开文件一边跟读。
 
@@ -10,7 +10,7 @@
 2. 命令执行会被提交到 owner thread。
 3. DB 写入和协议回包是分层处理的。
 
-如果还不熟，先看 [`project-introduction.md`](./project-introduction.md) 和 [`request-execution-flow.md`](./request-execution-flow.md)。
+如果还不熟，先看 [`project-overview.md`](./project-overview.md) 和 [`request-execution-flow.md`](./request-execution-flow.md)。
 
 ## 路线图
 

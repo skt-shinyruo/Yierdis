@@ -1,4 +1,4 @@
-# Commands And Data Model
+# 命令层与数据模型
 
 本文说明命令层如何注册、解析和分发命令，以及命令语义如何映射到 DB 能力、逻辑类型和内部编码。
 
@@ -72,7 +72,7 @@ read DB result
 
 ## 命令家族总览
 
-当前命令语义是 Redis-style minimum subset where implemented。覆盖状态以 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) 为准。
+当前命令语义是 Redis-style minimum subset where implemented。具体支持情况以 `CommandRegistry`、内置命令模块和对应测试为准；不要把文档表格当作完整 Redis command reference。
 
 | 家族 | 主要模块 | 代表命令 |
 | --- | --- | --- |
@@ -147,36 +147,6 @@ HLL 也没有独立 `ValueType`。命令层有 `HllCommands`，DB 层有 `Yierdi
 3. 用 `ArgReader`、`CommandArity`、`CommandParsers`、`CommandParseError` 表达参数规则和错误，不在 handler 里散落重复校验。
 4. 通过 `CommandContext` 取得 `ReplyWriter`，通过 `CommandSupport` 取得 DB capability。
 5. 让 handler 调用 typed ops，不直接触碰 value root、allocator handle 或 RESP 字节。
-6. 补测试，并更新 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) 的覆盖状态。
+6. 补命令家族测试、错误路径测试；如果新增 server-only 行为，再补 server-main 组装或协议集成测试。
 
 如果命令会暴露内部编码或 memory 信息，还需要同时检查 `OBJECT ENCODING`、`MEMORY USAGE`、`MEMORY STATS` 等 introspection 行为是否仍然一致。
-
-## 推荐源码和测试
-
-源码入口：
-
-- [`YierdisFastCommandProcessor.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java)
-- [`CommandRegistry.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java)
-- [`CommandSpec.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java)
-- [`ArgReader.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ArgReader.java)
-- [`CommandArity.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandArity.java)
-- [`CommandParsers.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandParsers.java)
-- [`CommandParseError.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandParseError.java)
-- [`CommandContext.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandContext.java)
-- [`CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
-- [`DefaultCommandModules.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/DefaultCommandModules.java)
-
-优先阅读的测试：
-
-- `CommandProcessorTest`
-- `CommandErrorTest`
-- `TransactionCommandTest`
-- `StringCommandTest`
-- `HllCommandTest`
-- `ListCommandTest`
-- `HashCommandTest`
-- `SetCommandTest`
-- `ZSetCommandTest`
-- `MemoryStatsCommandTest`
-
-命令覆盖状态见 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md)。DB 内核和 allocator 细节可继续阅读 [`db-internals.md`](./db-internals.md) 和 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。

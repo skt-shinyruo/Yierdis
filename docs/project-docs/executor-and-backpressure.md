@@ -1,8 +1,6 @@
-# Executor And Backpressure
+# Executor 与背压
 
 本文解释命令为什么不直接在 I/O 线程里执行，以及 executor 如何用队列、预算、调度和 Netty 读写控制保护系统。
-
-## 先记住一句话
 
 Yierdis 把“收包”和“执行命令”分开：Netty I/O 线程只解析并提交请求，`CommandExecutor` 在 owner executor 线程里串行执行 DB 访问；队列容量、queued bytes、连接 pending、全局 backlog 水位、Netty output writability 和 `autoRead` 一起形成背压。
 
@@ -159,27 +157,3 @@ executor 热路径用 `LongAdder` 和 connection context 记录观测值：
 - connection stats：pending、pendingBytes、closing、inputDisabledByExecutor、commandsEnqueued、commandsRejected
 
 这些数据进入 `CommandExecutor.StatsSnapshot`、`ExecutionConnectionContext.ConnectionStatsSnapshot`，再被 `STATS` / `INFO yierdis` 等观测命令使用。
-
-## 推荐源码和测试
-
-推荐源码顺序：
-
-1. `CommandExecutor`
-2. `CommandExecutorSubmitter`
-3. `ExecutorBacklogBudget`
-4. `ExecutorTaskQueue`
-5. `CommandExecutorDrainLoop`
-6. `CommandExecutorExecutionSupport`
-7. `ExecutorBackpressureController`
-8. `ExecutionConnectionContext`
-9. `NettyExecutionConnection`
-10. `YierdisServerChannelInitializer`
-
-推荐测试：
-
-- `CommandExecutorTest`：执行器主流程。
-- `CommandExecutorBackpressureTest`：queue full、bytes budget、`autoRead` enter/exit 和 global recovery。
-- `CommandExecutorFairSchedulingTest`：`GLOBAL` / `FAIR` 调度差异。
-- `ExecutionConnectionContextTest`：连接 pending、pending bytes 和状态统计。
-- `NettyExecutionAdapterIntegrationTest`：Netty adapter 到 executor request/reply 的边界。
-- `YierdisServerBootstrapCommandWiringTest`：server 配置如何接入 output buffer watermark、idle timeout 和 executor。

@@ -1,4 +1,4 @@
-# FFM Primer
+# JDK FFM 入门
 
 本文是阅读 Yierdis native-memory 文档前的最小 JDK FFM 入门。它只解释后续文档会反复用到的概念。
 

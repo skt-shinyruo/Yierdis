@@ -1,8 +1,6 @@
-# DB Internals
+# DB 内部结构
 
 本文解释单个 `YierdisDb` 内部如何组织 key、entry、value、TTL、maxmemory、memory ledger 和 introspection。
-
-## 先记住一句话
 
 `YierdisDb` 不是一张简单的 `Map<byte[], Object>`，而是单 DB 的状态 owner：key bytes、entry metadata、value payload、TTL index、memory ledger、maxmemory eviction 和 introspection 都在这里按同一套生命周期协调。
 
@@ -230,16 +228,3 @@ global maxmemory scope 下，ledger 把预算准备委托给 instance 级 `Yierd
 - 改 memory/object 命令：看 `YierdisDbMemoryReporter`、`YierdisDbIntrospection` 和 `DbMemoryAccounting`。
 
 边界也要守住：command 层不要依赖 `YierdisDb`；ops 不要绕过 mutation executor 做增长型写入；删除 key 不要绕过 lifecycle；TTL index 和 `EntryRecord.expireAtMillis` 不要只更新一边；DB hot path 不要缓存 allocator physical address 或长生命周期 `NativeObjectView`。
-
-## 推荐测试
-
-- `YierdisInstanceTest`：多 DB、owner thread 和 runtime 行为。
-- `GlobalMaxmemoryLruAcrossDbsTest`：global maxmemory 跨 DB 选择 LRU victim。
-- `MutationExecutorReservationTest`：reservation rollback、noeviction 拒绝和 no-op mutation。
-- `MemoryLedgerContractTest`：ledger reserve/commit/rollback 不变量。
-- `ExpireIndexTest`：expire index 和 TTL lifecycle。
-- `TtlLifecycleDirectOpsTest`：TTL、flush、memory/object API 的 direct ops 行为。
-- `MemoryStatsAccountingConsistencyTest`：memory accounting 字段一致性。
-- `NativeStorageRegressionTest`：native entry/key/value graph 回归。
-- `NativeKeyDirectoryTest`、`EntryTableContractTest`、`EntryHandleContractTest`、`ValueHandleContractTest`：handle 和 native storage contract。
-- `YierdisDbArchitectureGuardTest`：command 层和 DB 实现边界。

@@ -1,4 +1,4 @@
-# Core Logic Index
+# 核心源码索引
 
 本文是源码定位索引，不再重复完整架构解释。每个条目说明职责、入口、边界和应该继续阅读的专题文档。
 
@@ -12,7 +12,7 @@
 - DB 内核：[`db-internals.md`](./db-internals.md)
 - executor：[`executor-and-backpressure.md`](./executor-and-backpressure.md)
 - 代理和变更事件：[`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)
-- native memory：[`ffm-usage.md`](./ffm-usage.md)、[`native-memory-runtime.md`](./native-memory-runtime.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)
+- native memory：[`native-memory-runtime.md`](./native-memory-runtime.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`offheap-copy-behavior.md`](./offheap-copy-behavior.md)
 - 测试入口：[`testing-and-debugging.md`](./testing-and-debugging.md)
 
 ## Server 启动与组装
@@ -68,7 +68,7 @@
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
 | --- | --- | --- | --- |
 | [`CommandSpec`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java) | 命令元数据、arity、handler、MULTI 限制 | factory / accessor methods | [`commands-and-data-model.md`](./commands-and-data-model.md) |
-| [`CommandRegistry`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java) | command name 到 `CommandSpec` 的注册表 | `register(...)`, `spec(...)`, `upperNamesSorted()` | [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) |
+| [`CommandRegistry`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java) | command name 到 `CommandSpec` 的注册表 | `register(...)`, `spec(...)`, `upperNamesSorted()` | [`commands-and-data-model.md`](./commands-and-data-model.md) |
 | [`YierdisFastCommandProcessor`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java) | empty/unknown command、命令查表、解析执行主流程；事务入队、异常翻译和 change event gate 委托给 command-kernel 小组件 | `execute(...)` | [`request-execution-flow.md`](./request-execution-flow.md) |
 | [`DefaultCommandModules`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/DefaultCommandModules.java) | transport-neutral 默认命令模块集合 | `create(...)` | [`module-architecture.md`](./module-architecture.md) |
 | [`CommandSupport`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java) | 参数读取、DB routing、常用 reply/error helper | helper methods | [`commands-and-data-model.md`](./commands-and-data-model.md) |
@@ -141,8 +141,6 @@
 
 | 测试 | 保护什么 | 继续阅读 |
 | --- | --- | --- |
-| [`OperationCoverageMatrixTest`](../../yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/OperationCoverageMatrixTest.java) | 默认命令、DB API、native/internal inventory 和矩阵行格式 | [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) |
-| [`ServerOperationCoverageMatrixTest`](../../yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/ServerOperationCoverageMatrixTest.java) | server-only command 必须出现在矩阵里 | [`testing-and-debugging.md`](./testing-and-debugging.md) |
 | `ArchitectureDependencyRuleTest` | Maven/module 依赖方向 | [`module-architecture.md`](./module-architecture.md) |
 | `RespBoundaryGuardTest` | RESP DTO 不越过协议边界 | [`protocol-reference.md`](./protocol-reference.md) |
 | `YierdisDbArchitectureGuardTest` | DB internal 边界和 owner thread 假设 | [`db-internals.md`](./db-internals.md) |
@@ -156,4 +154,4 @@
 - DB 写路径统一经过 mutation executor 和 memory ledger。
 - TTL、key lifecycle、maxmemory 记账要和真实变更一起提交或回滚。
 - native handle 必须经过 domain/kind/generation 校验，不能把 raw long 当普通指针传递。
-- 新 command、option、DB API、native/internal 结构必须同步维护 coverage matrix。
+- 新 command、option、DB API、native/internal 结构必须同步补真实测试，并更新受影响的专题文档。

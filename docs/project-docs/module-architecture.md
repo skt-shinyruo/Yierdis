@@ -1,4 +1,4 @@
-# Module Architecture
+# 模块架构
 
 本文说明 Yierdis 的 Maven 模块和依赖方向。重点不是列目录，而是说明哪些模块拥有协议、命令、执行、DB、memory 和组装职责。
 
@@ -6,89 +6,82 @@
 
 下面的箭头表示当前 POM 中的仓库内部 production 直接依赖方向：左侧模块依赖右侧模块。这里不列测试 scope 依赖，也不列 Netty、picocli、slf4j、logback、JUnit 等第三方依赖。
 
-```text
-yierdis-server-main
-  -> yierdis-server-api
-  -> yierdis-db-api
-  -> yierdis-db-memory
-  -> yierdis-command-api
-  -> yierdis-command-core
-  -> yierdis-command-builtin
-  -> yierdis-server-core
-  -> yierdis-networking-resp
-  -> yierdis-networking-netty
-  -> yierdis-server-runtime
-  -> yierdis-server-runtime-api
-  -> yierdis-server-executor
-  -> yierdis-memory-ffm
+```mermaid
+flowchart LR
+  serverMain["yierdis-server-main"]
+  serverCore["yierdis-server-core"]
+  serverExecutor["yierdis-server-executor"]
+  serverRuntime["yierdis-server-runtime"]
+  serverRuntimeApi["yierdis-server-runtime-api"]
+  serverApi["yierdis-server-api"]
+  netty["yierdis-networking-netty"]
+  resp["yierdis-networking-resp"]
+  commandBuiltin["yierdis-command-builtin"]
+  commandCore["yierdis-command-core"]
+  commandApi["yierdis-command-api"]
+  dbMemory["yierdis-db-memory"]
+  dbApi["yierdis-db-api"]
+  dbTestkit["yierdis-db-testkit"]
+  memoryFfm["yierdis-memory-ffm"]
+  memoryApi["yierdis-memory-api"]
+  commonBytes["yierdis-common-bytes"]
+  cli["yierdis-cli"]
+  benchmark["yierdis-benchmark"]
 
-yierdis-server-core
-  -> yierdis-server-api
-  -> yierdis-command-api
-  -> yierdis-command-core
+  serverMain --> serverApi
+  serverMain --> dbApi
+  serverMain --> dbMemory
+  serverMain --> commandApi
+  serverMain --> commandCore
+  serverMain --> commandBuiltin
+  serverMain --> serverCore
+  serverMain --> resp
+  serverMain --> netty
+  serverMain --> serverRuntime
+  serverMain --> serverRuntimeApi
+  serverMain --> serverExecutor
+  serverMain --> memoryFfm
 
-yierdis-server-executor
-  -> yierdis-server-api
+  serverCore --> serverApi
+  serverCore --> commandApi
+  serverCore --> commandCore
+  serverExecutor --> serverApi
+  serverApi --> commonBytes
 
-yierdis-server-api
-  -> yierdis-common-bytes
+  serverRuntime --> dbApi
+  serverRuntime --> serverRuntimeApi
+  serverRuntimeApi --> serverApi
+  serverRuntimeApi --> dbApi
 
-yierdis-server-runtime
-  -> yierdis-db-api
-  -> yierdis-server-runtime-api
+  netty --> commonBytes
+  netty --> resp
+  resp --> commonBytes
+  resp --> serverApi
 
-yierdis-server-runtime-api
-  -> yierdis-server-api
-  -> yierdis-db-api
+  commandBuiltin --> commandApi
+  commandBuiltin --> serverApi
+  commandBuiltin --> dbApi
+  commandBuiltin --> commonBytes
+  commandCore --> commandApi
+  commandCore --> dbApi
+  commandApi --> serverApi
+  commandApi --> dbApi
 
-yierdis-networking-netty
-  -> yierdis-common-bytes
-  -> yierdis-networking-resp
+  dbMemory --> dbApi
+  dbMemory --> serverRuntimeApi
+  dbMemory --> commonBytes
+  dbMemory --> memoryFfm
+  dbMemory --> memoryApi
+  dbApi --> commonBytes
+  dbTestkit --> dbApi
 
-yierdis-networking-resp
-  -> yierdis-common-bytes
-  -> yierdis-server-api
+  memoryFfm --> memoryApi
+  memoryApi --> commonBytes
 
-yierdis-command-builtin
-  -> yierdis-command-api
-  -> yierdis-server-api
-  -> yierdis-db-api
-  -> yierdis-common-bytes
-
-yierdis-command-core
-  -> yierdis-command-api
-  -> yierdis-db-api
-
-yierdis-command-api
-  -> yierdis-server-api
-  -> yierdis-db-api
-
-yierdis-db-memory
-  -> yierdis-db-api
-  -> yierdis-server-runtime-api
-  -> yierdis-common-bytes
-  -> yierdis-memory-ffm
-  -> yierdis-memory-api
-
-yierdis-db-api
-  -> yierdis-common-bytes
-
-yierdis-db-testkit
-  -> yierdis-db-api
-
-yierdis-memory-ffm
-  -> yierdis-memory-api
-
-yierdis-memory-api
-  -> yierdis-common-bytes
-
-yierdis-cli
-  -> yierdis-networking-resp
-
-yierdis-benchmark
-  -> yierdis-networking-resp
-  -> yierdis-db-api
-  -> yierdis-memory-ffm
+  cli --> resp
+  benchmark --> resp
+  benchmark --> dbApi
+  benchmark --> memoryFfm
 ```
 
 这条方向图说明：实现模块依赖 API 模块，适配模块依赖协议和 bytes 基础层，最外层 `yierdis-server-main` 依赖各车道完成最终组装。
@@ -199,7 +192,7 @@ architecture tests protect dependency direction.
 
 如果要改依赖方向，先读这几类文件：
 
-- [`module-architecture.svg`](./assets/module-architecture.svg)
+- 本页开头的依赖方向图
 - [`core-logic-index.md`](./core-logic-index.md)
 - [`glossary.md`](./glossary.md)
 - [`native-memory-runtime.md`](./native-memory-runtime.md)

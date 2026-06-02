@@ -1,4 +1,4 @@
-# Glossary
+# 术语表
 
 本文解释 Yierdis 文档和源码里反复出现的术语。每个术语都尽量指向最相关的专题文档。
 
@@ -36,7 +36,7 @@
 
 ### command variant
 
-同一个 command 的 option、subcommand 或重要语义分支，例如 `SET / NX`、`SCAN / MATCH`、`MEMORY / STATS`。这些分支需要在 [`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) 中登记。
+同一个 command 的 option、subcommand 或重要语义分支，例如 `SET / NX`、`SCAN / MATCH`、`MEMORY / STATS`。这些分支应由对应命令家族测试覆盖，测试选择看 [`testing-and-debugging.md`](./testing-and-debugging.md)。
 
 ## Engine / Runtime
 
@@ -167,14 +167,6 @@ native allocator 中记录对象 metadata、generation、pin 状态和 quarantin
 在预算内移动可移动 native 对象、减少碎片并更新 object table metadata 的维护动作。详见 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 ## Testing
-
-### operation coverage matrix
-
-[`operation-test-coverage-matrix.md`](./operation-test-coverage-matrix.md) 中的命令、DB API 和 native/internal 覆盖索引。`OperationCoverageMatrixTest` 和 `ServerOperationCoverageMatrixTest` 会解析它，防止新增能力没有测试证据。
-
-### matrix guard
-
-专门验证 matrix heading、状态词、证据引用、DB API inventory 和 native/internal inventory 的测试组合。修改矩阵时必须运行。
 
 ### architecture guard
 

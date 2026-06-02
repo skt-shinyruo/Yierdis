@@ -1,4 +1,4 @@
-# Protocol Reference
+# 协议参考
 
 本文解释 Yierdis 当前公开 TCP 协议的实现边界：RESP 请求如何进入系统、回包如何编码、协议错误如何处理，以及哪些 Redis 协议能力还只是基础兼容。
 
@@ -158,24 +158,3 @@ Yierdis 支持 Redis 风格 RESP 入口和一组基础握手命令，但不声�
 - 命令语义以当前已实现命令为准。
 
 不应从协议兼容推出完整 Redis 命令集、ACL、复制、集群、Pub/Sub、Lua、模块系统或完整 RESP3 客户端生态能力已经实现。
-
-## 推荐源码和测试
-
-源码入口：
-
-- [`RespRequestDecoder.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java)
-- [`RespProtocolErrorReplyHandler.java`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespProtocolErrorReplyHandler.java)
-- [`RespExecutionAdapter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespExecutionAdapter.java)
-- [`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java)
-- [`CoreConnectionCommands.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/connection/CoreConnectionCommands.java)
-
-优先阅读的测试：
-
-- `RespRequestDecoderTest`
-- `RespReplyWriterTest`
-- `RespReplyWriterFactoryTest`
-- `RespProtocolVersionTest`
-- `RespProtocolLimitsTest`
-- `RespHandshakeIntegrationTest`
-- `RespProtocolErrorIntegrationTest`
-- `RedisCliCompatibilityTest`

@@ -1,4 +1,4 @@
-# Native Allocator And Handles
+# Native Allocator 与 Handles
 
 本文解释 production stable native allocator、handle ABI、object table、pin/epoch/quarantine、active defrag，以及 DB handle 语义。它接在 [`native-memory-runtime.md`](./native-memory-runtime.md) 后面：runtime 管 region 和 FFM lifetime，allocator 管稳定对象身份和可移动 native block。
 
@@ -320,33 +320,3 @@ list quicklist metadata records 使用 `LIST_QUICKLIST_NODE` 进入 allocator。
 - `internalFragmentationBytes`：reserved 与 logical 的差。
 - `externalFragmentationBytes`：page allocator 可复用空闲。
 - `quarantineBytes`：freed quarantined object 和 moved old block 仍占用的 bytes。
-
-## 推荐源码和测试
-
-推荐源码：
-
-- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeHandle.java`
-- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeObjectKind.java`
-- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeAllocator.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativePageAllocator.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/keyspace/NativeKeyDirectory.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryTable.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/NativeCollectionRootTable.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/StringRoot.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/value/ListValue.java`
-
-推荐测试：
-
-- `NativeHandleTest`
-- `NativeAllocatorContractTest`
-- `YierdisNativeObjectTableTest`
-- `YierdisNativePageAllocatorTest`
-- `YierdisStableNativeAllocatorTest`
-- `EntryHandleContractTest`
-- `ValueHandleContractTest`
-- `EntryTableContractTest`
-- `NativeStorageRegressionTest`
-- `YierdisDbMemoryReporterTest`
-- `NativeKeyDirectoryTest`
