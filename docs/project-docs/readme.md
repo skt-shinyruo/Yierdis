@@ -37,6 +37,5 @@
 ## 维护者提示
 
 - 新命令、新协议行为、新 DB API 或 native-memory 结构需要同时检查 [`development-navigation.md`](./development-navigation.md)、[`testing-and-debugging.md`](./testing-and-debugging.md) 和 [`code-logic-coverage.md`](./code-logic-coverage.md)；覆盖状态统一维护在覆盖矩阵里，不要再分散记在别处。
-- 覆盖追踪：[`code-logic-coverage.md`](./code-logic-coverage.md)
 - native-memory 事实应在 [`native-memory-runtime.md`](./native-memory-runtime.md), [`native-allocator-and-handles.md`](./native-allocator-and-handles.md), [`db-internals.md`](./db-internals.md), [`offheap-copy-behavior.md`](./offheap-copy-behavior.md) 之间保持一致。
 - 根部 `README.md` 应保持 quick-start 页面定位，不要扩张成内部实现手册。

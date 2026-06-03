@@ -93,7 +93,7 @@
 
 | 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `InlineCommandParser` | parse methods | CLI inline 命令切词、引号和转义解析 | quote/escape 规则、空 token、错误输入 | 纯 heap 解析，不共享 server 请求对象 | `YierdisClientTest`, `MaxmemoryScopeTest` | [`client-and-bench-internals.md`](./client-and-bench-internals.md), [`protocol-reference.md`](./protocol-reference.md) | `partial` | 需要补 CLI parser 与 server inline 解析的异同 |
+| `InlineCommandParser` | parse methods | CLI inline 命令切词、引号和转义解析 | quote/escape 规则、空 token、错误输入 | 纯 heap 解析，不共享 server 请求对象 | `InlineCommandParserTest`, `YierdisClientTest`, `MaxmemoryScopeTest` | [`client-and-bench-internals.md`](./client-and-bench-internals.md), [`protocol-reference.md`](./protocol-reference.md) | `partial` | 需要补 CLI parser 与 server inline 解析的异同 |
 | `YierdisClient` | connect / execute / reply decode methods | 提供测试和 CLI 共用的 RESP client | 读超时、半包、server close、flooding reply | socket / buffer 生命周期只在 client 侧封装 | `YierdisClientTest`, `TransactionQueueLimitTest` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) | `covered` | 客户端行为、测试用法和边界已有较完整入口 |
 | `YierdisBench` | `main(...)`, workload execution | benchmark 启动/复用 server 并执行 workload | 本地 server vs 外部 server、结果汇总、参数模式切换 | bench 作为外部使用者，不能绕过 RESP/CLI 边界 | `YierdisBenchComparisonExecutionTest`, `YierdisBenchSummaryFormatTest` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) | `partial` | 需要补 workload 选择和结果聚合主线 |
 
