@@ -125,15 +125,21 @@
 - `KeyspaceReadOps`、`KeyspaceWriteOps`
 - `TtlReadOps`、`TtlWriteOps`
 - `MemoryOps`
+- `YierdisTtlOps`
 - `YierdisDbKeyLifecycle`
+- `YierdisDbExpirationSupport`
 - `YierdisExpireIndex`、`YierdisHeapExpireIndex`、`YierdisFfmExpireIndex`
 - `YierdisDbMutationExecutor`
 - `YierdisDbMemoryLedger`
-- maxmemory coordinator / governor 相关类
+- `YierdisDbMaxmemorySupport`
+- `YierdisGlobalMaxmemoryGovernor`
+- `YierdisInstanceRuntimeAccess`、`YierdisInstanceMaintenance`
 
 继续追：
 
-- key lifecycle、TTL、maxmemory 主线看 [`db-internals.md`](./db-internals.md)。
+- key lifecycle 总览看 [`db-internals.md`](./db-internals.md)。
+- TTL 命令写路径、lazy expire、cleanup budget 看 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
+- maxmemory reservation、policy 和 global governor 看 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 - 运行配置和线上语义看 [`configuration-and-operations.md`](./configuration-and-operations.md)。
 - native keyspace 和 expires 看 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
@@ -141,12 +147,14 @@
 
 - `TtlLifecycleDirectOpsTest`
 - `ExpireIndexTest`
+- `ExpireSemanticsTest`
 - `ExpireIndexContractTest`
 - `TtlMaxmemoryTest`
 - `MaxmemoryEvictionTest`
 - `MutationExecutorReservationTest`
 - `YierdisGlobalMaxmemoryGovernorTest`
 - `GlobalMaxmemoryLruAcrossDbsTest`
+- `MemoryStatsAccountingConsistencyTest`
 
 ## 改 native memory
 

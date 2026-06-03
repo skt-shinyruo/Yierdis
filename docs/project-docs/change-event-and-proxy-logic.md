@@ -162,6 +162,8 @@ YierdisInstanceRuntimeAccess.maintenanceTick()
   -> YierdisChangeEventBridge
 ```
 
+惰性过期、cleanup 和 synthetic `EXPIRED` delete 的细节见 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)；victim 选择和 synthetic `EVICTED` delete 的细节见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
+
 `CommandSupport.recordMutation(...)` 是用户命令路径里的关键连接点。命令 handler 通过它把 DB 返回的 `MutationOutcome` 记录到 `CommandContext`。没有真实 value/TTL 变化的命令不应该发用户命令事件。
 
 事件消费失败是 best-effort：bridge 和 observer 都会吞掉 sink 异常，不能让消费端失败影响命令执行、expire cleanup 或 eviction。
@@ -190,6 +192,15 @@ YierdisInstanceRuntimeAccess.maintenanceTick()
 用户命令事件的判断标准是 `CommandContext.changedAny()`。这意味着读命令、未改变值的条件写入、解析失败、unknown command、事务入队阶段都不应该直接产出用户命令事件。
 
 synthetic 事件不表示客户端真的发送了 `DEL`。它是 DB lifecycle 为了可重放最小记录构造的等价命令。
+
+## change event 不是完整持久化协议
+
+当前 change event contract 只承诺“哪些事实值得被重放”，不承诺“这些事实已经被可靠持久化或复制”。
+
+- `CommandChangeEmitter` 只有在 command handler 记录了真实 mutation outcome 后才发用户命令事件。
+- `EXPIRED` / `EVICTED` synthetic delete 只说明最终状态等价于 `DEL key`，不携带 DB internal diff。
+- sink 消费失败不会回滚命令、cleanup 或 eviction；当前语义始终是 best-effort。
+- maintenance 路径和用户命令路径都能发事件，但它们共用的是最小 replay contract，不是 Redis replication backlog、AOF fsync 或 crash-recovery 日志。
 
 ## Non-Guarantees
 

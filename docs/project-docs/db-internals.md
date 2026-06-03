@@ -165,6 +165,10 @@ TTL 写命令仍走 `YierdisDbMutationExecutor`。首次给 key 增加 TTL 时�
 
 cleanup 不扫描全部 key，而是从 `YierdisFfmExpireIndex` 采样。它会处理三类情况：entry 不存在时清掉脏索引；entry TTL 与 index 不一致时修正索引；key 已过期时通过 lifecycle 删除完整 key graph。循环会被过期比例、最大轮数和时间预算限制。
 
+## 更细的 TTL 行为
+
+本页只保留 DB storage graph 和 lifecycle 总览。TTL 命令写路径、`liveEntryRecord(...)` 的 lazy expire、`cleanupExpired(...)` 的 sample/budget，以及 `EntryRecord.expireAtMillis` 与 expire index 的双写约束见 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
+
 ## maxmemory 和 memory ledger
 
 `YierdisDbMemoryLedger` 维护 `usedBytes` 和 `reservedBytes`。`reservedBytes` 表示预算已通过但 mutation 还没 commit 的窗口；成功后 reservation 释放，actual delta 进入 `usedBytes`，失败时只撤销 reservation。
@@ -180,6 +184,10 @@ per-DB maxmemory scope 下，`reserve(...)` 的顺序是：
 `YierdisDbMaxmemorySupport` 在 owner thread 内选 victim：random 策略随机采样，LRU 策略按 samples 选择 LRU clock 最小的 key；samples 覆盖所有 key 时可以扫描最佳候选，减少测试不稳定性。删除 victim 仍走 lifecycle，ledger delta callback 会扣减 usage。
 
 global maxmemory scope 下，ledger 把预算准备委托给 instance 级 `YierdisGlobalMaxmemoryGovernor.prepareWrite(...)`。governor 汇总各 DB participant usage 和 shared off-heap usage source，跨 DB cleanup/evict，并避免把 shared FFM usage 在每个 DB 上重复计算。
+
+## 更细的 maxmemory 行为
+
+ledger reservation、`usedBytes` / `reservedBytes` 口径、per-DB 与 global scope、victim 选择和 OOM 路径见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 
 ## memory / object introspection
 

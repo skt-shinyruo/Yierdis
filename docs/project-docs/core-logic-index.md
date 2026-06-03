@@ -12,6 +12,8 @@
 - 命令解析与分发：[`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)
 - 事务与 replay：[`transaction-and-replay.md`](./transaction-and-replay.md)
 - DB 内核：[`db-internals.md`](./db-internals.md)
+- TTL / 过期：[`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)
+- maxmemory / 淘汰：[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)
 - executor：[`executor-and-backpressure.md`](./executor-and-backpressure.md)
 - 代理和变更事件：[`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)
 - native memory：[`native-memory-runtime.md`](./native-memory-runtime.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`offheap-copy-behavior.md`](./offheap-copy-behavior.md)
@@ -38,7 +40,8 @@
 | [`YierdisInstance`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java) | 多 DB 生命周期、owner thread 绑定、资源关闭；strict `create(config)` 要求已注入 `DbEngineFactory` | `create(...)`, `createWithDefaults(...)`, `engine(int)`, `engines()`, `bindToCurrentThread()`, `close()` | [`db-internals.md`](./db-internals.md) |
 | [`YierdisInstanceConfig`](../../yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisInstanceConfig.java) | runtime 配置对象，承载外部注入的 DB factory 和 factory-owned resource | builder methods | [`configuration-and-operations.md`](./configuration-and-operations.md) |
 | [`YierdisInstanceRuntimeAccess`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceRuntimeAccess.java) | executor 线程绑定和运行期访问面 | `bindToCurrentThread()` | [`request-execution-flow.md`](./request-execution-flow.md) |
-| [`YierdisInstanceMaintenance`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceMaintenance.java) | maintenance tick，驱动过期清理和 defrag | tick methods | [`configuration-and-operations.md`](./configuration-and-operations.md) |
+| [`YierdisInstanceMaintenance`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceMaintenance.java) | maintenance tick，驱动过期清理、defrag 和 maxmemory maintenance | `maintenanceTick()` | [`configuration-and-operations.md`](./configuration-and-operations.md), [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md) |
+| [`YierdisGlobalMaxmemoryGovernor`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisGlobalMaxmemoryGovernor.java) | global scope 下跨 DB 协调 cleanup、victim 选择和淘汰 | `prepareWrite(...)`, `enforceMaintenance()`, victim selection helpers | [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md), [`configuration-and-operations.md`](./configuration-and-operations.md) |
 | [`YierdisInstanceObservability`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceObservability.java) | INFO / STATS 使用的实例观测快照 | snapshot methods | [`configuration-and-operations.md`](./configuration-and-operations.md) |
 
 边界：runtime 暴露 `DbEngine` 能力视图，不把 `YierdisDb` 具体类泄漏给 command/server。
@@ -101,7 +104,10 @@
 | [`DbEngine`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/DbEngine.java) | DB 能力聚合接口 | `reads()`, `writes()`, `expiration()`, `memory()`, `lifecycle()` | [`db-internals.md`](./db-internals.md) |
 | [`YierdisDbEngineFactory`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbEngineFactory.java) | 创建 memory DB engine，连接 FFM、keyspace、TTL、ledger | factory methods | [`native-memory-runtime.md`](./native-memory-runtime.md) |
 | [`YierdisDb`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java) | 单 DB 内核和 capability view 实现 | ops accessors / lifecycle methods | [`db-internals.md`](./db-internals.md) |
-| [`YierdisDbMutationExecutor`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java) | mutation plan、memory reservation、rollback/no-op accounting | mutation methods | [`db-internals.md`](./db-internals.md) |
+| [`YierdisDbKeyLifecycle`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbKeyLifecycle.java) | 协调 key directory、entry table、payload root、TTL metadata 和 synthetic delete | `liveEntryRecord(...)`, `computeWithHandle(...)`, `removeIfExpired(...)`, `removeEntry(...)` | [`db-internals.md`](./db-internals.md), [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md) |
+| [`YierdisDbMutationExecutor`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java) | mutation plan、memory reservation、rollback/no-op accounting | `execute(plan)` | [`db-internals.md`](./db-internals.md), [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md) |
+| [`YierdisDbExpirationSupport`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/expire/YierdisDbExpirationSupport.java) | 按 sample/time budget 做 expire cleanup | `cleanupExpired(...)` | [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md) |
+| [`YierdisDbMaxmemorySupport`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMaxmemorySupport.java) | 单 DB maxmemory participant，负责 victim 选择、evict 和 synthetic `EVICTED` delete | `evictUntilUnder(...)`, `sampleCandidate(...)`, `scanBestCandidate(...)`, `evict(...)` | [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md) |
 | [`YierdisDbMemoryReporter`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java) | `MEMORY` / `INFO memory` 数据来源 | memory methods | [`configuration-and-operations.md`](./configuration-and-operations.md) |
 | [`YierdisDbIntrospection`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbIntrospection.java) | `OBJECT ENCODING` 和 snapshot 读取 native metadata | introspection methods | [`db-internals.md`](./db-internals.md) |
 

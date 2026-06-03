@@ -128,6 +128,8 @@ bootstrap 使用 Netty worker event loop 做定时器，但定时器只提交 `e
 
 当前 native-memory 路径统一使用 JDK 25 FFM。更细的 runtime、region、arena 和 copy 边界见 [`native-memory-runtime.md`](./native-memory-runtime.md)。
 
+TTL 命令写路径、lazy expire、cleanup sample/budget 和 synthetic `EXPIRED` delete 见 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。这里的配置章节只保留参数和 runtime 调度顺序。
+
 ## maxmemory 和 eviction
 
 maxmemory 参数：
@@ -146,6 +148,8 @@ maxmemory 参数：
 `global` 是共享实例级 runtime/governor；`per-db` 是拆分预算和 runtime ownership。不要把 `ioThreads`、Netty 连接数或 DB 数误解成 maxmemory 的并发写入模型，mutation 仍经 owner thread。
 
 `MEMORY STATS` 是 explainable estimate，不是 JVM instrumentation object graph；native memory 是否纳入 maxmemory 要看字段口径。global scope 下 `NettyServerInfoProvider.memoryStats(...)` 会优先返回 instance 聚合视角。
+
+更细的 reservation 顺序、`usedBytes` / `reservedBytes` 口径、victim 选择、global governor 协调和 synthetic `EVICTED` delete 见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
 
 ## 慢客户端和输出缓冲保护
 
