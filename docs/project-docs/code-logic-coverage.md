@@ -30,6 +30,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `YierdisServerBootstrap` | `start(...)`, `startInternal()`, `close()` | 组装 runtime、engine、executor 和 Netty server | 启动顺序、资源关闭顺序、默认组件选择 | Netty 线程和 executor owner thread 分离 | `YierdisServerBootstrapCommandWiringTest`, `YierdisServerBootstrapCloseTest` | [`request-execution-flow.md`](./request-execution-flow.md), [`main-path-walkthrough.md`](./main-path-walkthrough.md) | `partial` | 需要补关闭路径和依赖装配细节 |
 | `YierdisServerChannelInitializer` | `initChannel(...)`, backpressure / idle handler 装配 | 为单连接挂载协议、执行和关闭保护 handler | handler 顺序、协议错误回包、read-idle 关闭 | 每条连接只在 Netty channel 生命周期内持有上下文 | `NettyExecutionAdapterIntegrationTest`, `RespProtocolErrorIntegrationTest` | [`protocol-reference.md`](./protocol-reference.md), [`request-execution-flow.md`](./request-execution-flow.md) | `partial` | 现有文档覆盖主链，但缺少 pipeline 组装细节 |
+| `YierdisFastCommandHandler` | submit path | 把 `ExecutionRequest` 提交给 `CommandExecutor` | submit reject、closing、直接回错 | I/O 线程不执行命令 | `ClosingSkipSideEffectsIntegrationTest`, `NettyExecutionAdapterIntegrationTest`, `RespProtocolErrorIntegrationTest` | [`request-execution-flow.md`](./request-execution-flow.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md) | `covered` | handler 提交/拒绝/直接回错边界已补齐 |
 | `NettyExecutionConnection` | request/reply/close 适配块 | 把 Netty channel 状态收敛成 executor 可消费的连接抽象 | 关闭后跳过副作用、reply 写回失败处理 | Channel 生命周期与 executor connection state 对接 | `ClosingSkipSideEffectsIntegrationTest`, `NettyExecutionAdapterIntegrationTest` | [`request-execution-flow.md`](./request-execution-flow.md) | `missing` | 目前主要靠源码和集成测试理解 |
 
 ## networking-resp / networking-netty
@@ -44,7 +45,7 @@
 
 | 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `CommandExecutor` | `start()`, `submit(...)`, `close()` | owner-thread 执行器总入口，管理提交、drain、统计和关闭 | reject reason、关闭后提交、drain 终止条件 | DB 访问只能发生在 owner thread | `CommandExecutorTest`, `CommandExecutorBackpressureTest` | [`executor-and-backpressure.md`](./executor-and-backpressure.md), [`request-execution-flow.md`](./request-execution-flow.md) | `covered` | 主流程和边界已有专题说明 |
+| `CommandExecutor` | `start()`, `trySubmit(...)`, drain loop | owner thread 执行、排队、预算、关闭 | queue slot、queued bytes、drain budget、close-after-reply | DB 访问只能发生在 owner thread | `CommandExecutorTest`, `CommandExecutorBackpressureTest`, `CommandExecutorFairSchedulingTest` | [`executor-and-backpressure.md`](./executor-and-backpressure.md), [`request-execution-flow.md`](./request-execution-flow.md) | `covered` | 关闭、恢复和 flush/close 关系已补到专题文档 |
 | `CommandExecutorSubmitter` | submit / budget accounting path | 处理 backlog budget、bytes budget 和连接背压 | 超预算拒绝、背压恢复、队列状态切换 | Netty submitter 线程只能入队，不能执行命令 | `CommandExecutorBackpressureTest`, `ExecutionConnectionContextTest` | [`executor-and-backpressure.md`](./executor-and-backpressure.md) | `partial` | 文档有整体说明，但分支和统计细节不够细 |
 | `CommandExecutorDrainLoop` | GLOBAL / FAIR drain loop | 决定 drain 次序、公平调度和单轮预算 | scheduling policy、per-connection budget、空队列退出 | owner thread 独占 drain 和 session 执行 | `CommandExecutorFairSchedulingTest`, `CommandExecutorTest` | [`executor-and-backpressure.md`](./executor-and-backpressure.md) | `partial` | 需要补 FAIR / GLOBAL 差异和饥饿避免不变量 |
 
@@ -52,8 +53,9 @@
 
 | 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `DefaultYierdisEngine` | `execute(...)` | 把 `ExecutionRequest` 交给 command processor 并维持 engine 边界 | command exception 翻译、reply writer 生命周期、session 透传 | engine 不接触 Netty DTO，只消费执行请求 | `DefaultYierdisEngineTest`, `DbEngineReadWriteBoundaryTest` | [`request-execution-flow.md`](./request-execution-flow.md) | `partial` | 主链已写到，但 engine 边界还可再明确 |
+| `DefaultYierdisEngine` | `execute(...)` | session/request/reply 到 command processor 的桥接 | session capability 收窄、reply writer 边界 | engine 不直接触 DB internal | `DefaultYierdisEngineTest`, `DbEngineReadWriteBoundaryTest` | [`request-execution-flow.md`](./request-execution-flow.md), [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md) | `covered` | capability 边界和 processor 入口已补齐 |
 | `EngineSession` | session accessors, `DefaultTransactionState` | 维护 DB index、protocol version、transaction queue 和 client metadata | `MULTI/EXEC/DISCARD` 状态机、abort 标记、selected DB 持续性 | session 状态只在单连接执行上下文中读写 | `EngineSessionTest`, `TransactionQueueCleanupTest` | [`commands-and-data-model.md`](./commands-and-data-model.md), [`request-execution-flow.md`](./request-execution-flow.md) | `partial` | 需要补事务状态机和 replay 约束 |
+| `TransactionState` | queue / replay lifecycle | `MULTI/EXEC/DISCARD` 状态机 | queue 限制、abort、replay 顺序 | 事务保存的是请求快照 | `TransactionCommandTest`, `EngineSessionTest`, `TransactionQueueCleanupTest` | [`transaction-and-replay.md`](./transaction-and-replay.md) | `covered` | 已补独立状态机文档 |
 | `ExecutionRecord` | transaction replay snapshot / change event payload | 保存可重放命令和变更事件所需的最小事实 | queue 时校验一次、replay 时复用参数快照 | 必须与原始请求生命周期解耦 | `TransactionQueueCleanupTest`, `RuntimeChangeSinkCommandChangeObserverTest` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md), [`glossary.md`](./glossary.md) | `missing` | 目前只在相关文档零散出现，缺少集中解释 |
 
 ## command-api / command-core / builtin commands
@@ -61,7 +63,7 @@
 | 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `CommandSpec` | spec factory / accessor methods | 定义命令名、arity、handler 和事务限制 | arity 规则、MULTI 限制、只读/写语义 | command 元数据与 transport 无关 | `CommandContractTest`, `CommandRegistryGuardTest` | [`commands-and-data-model.md`](./commands-and-data-model.md) | `covered` | 命令抽象和约束已有较完整说明 |
-| `YierdisFastCommandProcessor` | `execute(...)` | 执行 empty/unknown command、查表、参数校验、事务排队与异常翻译 | 事务入队前复用校验、change event gate、server-only wiring | 不直接依赖 RESP DTO，输入固定为 `ExecutionRequest` | `YierdisFastCommandProcessorPolicyTest`, `YierdisFastCommandProcessorRegistrationTest`, `CommandVariantCoverageTest` | [`request-execution-flow.md`](./request-execution-flow.md), [`commands-and-data-model.md`](./commands-and-data-model.md) | `partial` | 主执行链有文档，但 command-kernel 小组件拆分还未单列 |
+| `YierdisFastCommandProcessor` | `execute(...)` | 命令查表、解析、事务分支、执行和错误翻译 | empty/unknown、parse error、MULTI queue、observer gate | 只通过 API 访问 DB | `YierdisFastCommandProcessorPolicyTest`, `YierdisFastCommandProcessorRegistrationTest`, `YierdisFastCommandProcessorModuleTest`, `CommandVariantCoverageTest` | [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md), [`request-execution-flow.md`](./request-execution-flow.md) | `covered` | 已补完整分发说明 |
 | `StringCommands` | GET/SET/INCR 族 handler | 代表内建命令如何经 `CommandSupport` 路由到 DB API | wrong-type、NX/XX/EX/PX 语义、整数分支 | handler 不直接碰 internal root/value | `StringCommandTest`, `CommandErrorTest` | [`commands-and-data-model.md`](./commands-and-data-model.md) | `partial` | 类型族语义覆盖较好，但命令家族间的文档颗粒度仍偏粗 |
 
 ## runtime / multi-db / maxmemory governor

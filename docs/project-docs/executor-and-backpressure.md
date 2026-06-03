@@ -126,6 +126,37 @@ drain loop 使用 batched flush：单条命令通常只 `write`，tick 结束时
 
 这四类背压最终都收敛到 `ExecutorBackpressureController.disableAutoRead(...)`，避免不同路径各自操作 Netty `autoRead`。
 
+## `autoRead`、writability 和 close-after-reply
+
+需要明确写出单连接 pending、queued bytes、channel writability 和 flush/close 之间的关系，不要只停留在“有背压”这一层。
+
+提交阶段先发生的是 backlog 和连接统计：
+
+- `taskQueue.offer(...)` 成功后，`ExecutionConnectionContext.recordCommandEnqueued(...)` 增加 `pending` 和 `pendingBytes`
+- 达到连接 high watermark、全局 backlog high watermark 或 queued bytes 上限附近时，executor 会关闭该连接 `autoRead`
+- 这一步只阻止继续收包，不会取消已经入队的命令
+
+执行阶段再叠加 transport 状态：
+
+- `CommandExecutorExecutionSupport.execute(...)` 调用命令后，只把 reply buffer 交给 I/O adapter `writeBufferedReply(...)`
+- 真正的 `flushPending(...)` 发生在 drain tick 末尾，因此一个 tick 内的多条 reply 可以批量 flush
+- `WriteBufferBackpressureHandler` / `onTransportUnwritable(...)` 会把 channel 不可写也收敛成关闭 `autoRead`
+
+`close-after-reply` 则是同一条链上的最后一步：
+
+- 命令显式 `requestCloseAfterReply()`，或 executor-thread 失败后补写 internal error 时，连接会先被标记为 `closing`
+- I/O adapter 仍然先写出 buffered reply，并在 flush 后真正关闭 transport
+- 因为 `closing` 已经置位，这条连接不会再进入 `autoRead` 恢复路径
+
+所以恢复输入必须同时满足四个条件：
+
+- 该连接不在 `closing`
+- `pending <= backpressureLowWatermark`
+- `pendingBytes <= backpressureBytesLowWatermark`（启用 bytes 水位时）
+- 全局 backlog 已回落，且 transport 当前可写
+
+这也是为什么“reply 已经写完”和“连接可以重新收包”不是一回事：前者只说明当前输出缓冲已经进入 flush/close 路径，后者还要同时满足本地 backlog、全局 backlog 和 Netty writability 三层条件。
+
 ## global recovery
 
 `ExecutorBackpressureController` 记录哪些连接是被 executor 关闭输入的。全局 backlog 恢复到低水位后，它不会无条件打开所有连接，而是做 best-effort recovery：

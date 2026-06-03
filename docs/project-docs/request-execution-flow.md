@@ -92,6 +92,19 @@ flowchart LR
 
 如果提交失败，handler 会直接回写 busy/error，而不会让请求进入命令层。
 
+## 提交拒绝和直接回错
+
+`YierdisFastCommandHandler` 只负责提交，不负责执行业务命令。提交失败时，错误在 handler / I/O 边界直接回写，不会进入 command 层。
+
+更具体地说：
+
+- `executor.trySubmit(...)` 成功时，request ownership 转给 executor；
+- `connection_closing` 时，handler 只关闭 request，不再给已经 closing 的连接追加 busy reply；
+- `not_running`、`queue_full`、`bytes_budget`、`offer_failed` 这类拒绝会直接在 handler 里回 `ERR busy <reason>`；
+- `exceptionCaught(...)` 里的 protocol error / internal error 也在同一边界直接回写，并在需要时 close-after-reply。
+
+这就是“Netty I/O 线程只提交、不执行业务命令”的实际落点。更细的提交预算和背压关系见 [`executor-and-backpressure.md`](./executor-and-backpressure.md)；命令进入 processor 之后的查表和 parse 细节见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
+
 ## owner thread 执行
 
 owner thread 是 DB 访问的真实边界。`CommandExecutor` 在这个线程上 drain 队列，然后调用 `DefaultYierdisEngine.execute(...)`。
@@ -117,6 +130,8 @@ executor 交给 engine 的只有三样东西：
 - 在配置了 change observer 时，只对真实 mutation outcome 产出最小可重放 change event
 
 命令层本身不碰 Netty，只通过 DB 能力接口做真实存取。
+
+如果你在追 `CommandRegistry`、`CommandSpec`、`ArgReader`、parse error、unknown command 或 change observer gate，直接读 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md) 会更准确；本页只保留请求主链视角。
 
 ## PING 最短路径
 
@@ -162,6 +177,12 @@ Netty ByteBuf
 事务保存的是 `ExecutionRequest` 快照，不是另一套命令 IR。
 
 入队时，当前请求会被复制成 `ByteArrayExecutionRequest`，这样原始对象在 executor 生命周期结束后仍然能安全 replay。`EXEC` 之后的重放仍然走同一套 `YierdisFastCommandProcessor`、`CommandSpec<ExecutionRequest>`、command implementation 和 DB 访问路径。
+
+## replay 仍然走同一条执行链
+
+事务重放不会走另一套“内部命令执行器”。触发 replay 的 `EXEC` 请求仍先经过 `DefaultYierdisEngine`，而队列里的快照会逐条重新进入同一个 `YierdisFastCommandProcessor` 和原始 command handler。
+
+当前实现里，`EXEC` 会把事务队列里的 `ExecutionRequest` 快照按顺序重新喂回同一个 processor；查表、parse、mutation gate、错误翻译和 reply writer 都与普通请求相同。更完整的状态机、abort 和 queue limit 细节见 [`transaction-and-replay.md`](./transaction-and-replay.md)。
 
 ## 错误、关闭和背压
 

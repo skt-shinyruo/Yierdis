@@ -9,6 +9,8 @@
 - 请求主链：[`request-execution-flow.md`](./request-execution-flow.md)
 - 模块边界：[`module-architecture.md`](./module-architecture.md)
 - 命令和数据模型：[`commands-and-data-model.md`](./commands-and-data-model.md)
+- 命令解析与分发：[`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)
+- 事务与 replay：[`transaction-and-replay.md`](./transaction-and-replay.md)
 - DB 内核：[`db-internals.md`](./db-internals.md)
 - executor：[`executor-and-backpressure.md`](./executor-and-backpressure.md)
 - 代理和变更事件：[`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)
@@ -25,6 +27,7 @@
 | [`CommandExecutorConfigs`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/CommandExecutorConfigs.java) | runtime config 到 executor config 的映射 | `from(...)` | [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 | [`YierdisServerBootstrap`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java) | composition root，选择默认 `YierdisDbEngineFactory` / memory runtime，并组装 `YierdisInstance`、`DefaultYierdisEngine`、`CommandExecutor`、Netty pipeline | `start(...)`, `startInternal()`, `close()` | [`request-execution-flow.md`](./request-execution-flow.md) |
 | [`YierdisServerChannelInitializer`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java) | 组装每条连接的 Netty handler 链 | `initChannel(...)` | [`protocol-reference.md`](./protocol-reference.md) |
+| [`YierdisFastCommandHandler`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java) | handler / I/O 边界上的提交入口、拒绝回包和异常 fallback | `channelRead0(...)`, `exceptionCaught(...)` | [`request-execution-flow.md`](./request-execution-flow.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 
 边界：`yierdis-server-main` 可以接触 Netty、runtime、engine、executor 和 server-only command；不应该承载普通 Redis 命令语义。
 
@@ -44,7 +47,7 @@
 
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
 | --- | --- | --- | --- |
-| [`CommandExecutor`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java) | owner thread 执行器，管理提交、drain、统计、关闭 | `start()`, `submit(...)`, `close()` | [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
+| [`CommandExecutor`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutor.java) | owner thread 执行器，管理提交、drain、统计、关闭 | `start()`, `trySubmit(...)`, `close()` | [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 | [`CommandExecutorSubmitter`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorSubmitter.java) | 请求入队、bytes/backlog budget、连接背压 | submit methods | [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 | [`CommandExecutorDrainLoop`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorDrainLoop.java) | GLOBAL / FAIR 调度和 drain budget | drain methods | [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 | [`CommandExecutorExecutionSupport`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java) | 执行前后上下文、reply writer、IO 写回 | execute methods | [`request-execution-flow.md`](./request-execution-flow.md) |
@@ -56,11 +59,11 @@
 
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
 | --- | --- | --- | --- |
-| [`DefaultYierdisEngine`](../../yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java) | 将 `ExecutionRequest` 交给 command processor，维护 engine/session 边界 | `execute(...)` | [`request-execution-flow.md`](./request-execution-flow.md) |
+| [`DefaultYierdisEngine`](../../yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java) | 将 `ExecutionRequest` 交给 command processor，维护 engine/session capability 边界 | `execute(...)` | [`request-execution-flow.md`](./request-execution-flow.md), [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md) |
 | [`CommandSessionCapabilities`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandSessionCapabilities.java) | 把通用 `Session` 收窄成命令需要的 DB index、client metadata、transaction、stats 和 protocol 能力 | `from(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
 | [`ServerSession`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ServerSession.java) | 连接状态：DB index、RESP version、transaction state、client metadata | session accessors | [`commands-and-data-model.md`](./commands-and-data-model.md) |
-| `TransactionState` | `MULTI/EXEC/DISCARD` 队列状态和 abort 状态 | queue/replay methods | [`commands-and-data-model.md`](./commands-and-data-model.md) |
-| `ExecutionRecord` | 记录可 replay 的命令快照，也用于 change event | constructor / accessors | [`glossary.md`](./glossary.md) |
+| [`TransactionState`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/TransactionState.java) | `MULTI/EXEC/DISCARD` 队列状态、abort 和 replay contract | `begin()`, `discard()`, `tryEnqueue(...)`, `drain()` | [`transaction-and-replay.md`](./transaction-and-replay.md) |
+| [`ExecutionRecord`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ExecutionRecord.java) | 记录 change event / replay surface 需要的不可变请求快照 | constructor / accessors | [`transaction-and-replay.md`](./transaction-and-replay.md), [`glossary.md`](./glossary.md) |
 
 边界：事务排队前要复用 `CommandSpec` 校验；真正执行时仍走同一 command handler。
 
@@ -68,11 +71,11 @@
 
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
 | --- | --- | --- | --- |
-| [`CommandSpec`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java) | 命令元数据、arity、handler、MULTI 限制 | factory / accessor methods | [`commands-and-data-model.md`](./commands-and-data-model.md) |
-| [`CommandRegistry`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java) | command name 到 `CommandSpec` 的注册表 | `register(...)`, `spec(...)`, `upperNamesSorted()` | [`commands-and-data-model.md`](./commands-and-data-model.md) |
-| [`YierdisFastCommandProcessor`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java) | empty/unknown command、命令查表、解析执行主流程；事务入队、异常翻译和 change event gate 委托给 command-kernel 小组件 | `execute(...)` | [`request-execution-flow.md`](./request-execution-flow.md) |
+| [`CommandSpec`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/CommandSpec.java) | 命令元数据、arity、handler、MULTI 限制 | factory / accessor methods | [`commands-and-data-model.md`](./commands-and-data-model.md), [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md) |
+| [`CommandRegistry`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandRegistry.java) | command name 到 `CommandSpec` 的注册表 | `register(...)`, `spec(...)`, `upperNamesSorted()` | [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md) |
+| [`YierdisFastCommandProcessor`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java) | empty/unknown command、命令查表、parse、事务排队、异常翻译和 change event gate 的 command-kernel 主入口 | `execute(...)` | [`request-execution-flow.md`](./request-execution-flow.md), [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md) |
 | [`DefaultCommandModules`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/DefaultCommandModules.java) | transport-neutral 默认命令模块集合 | `create(...)` | [`module-architecture.md`](./module-architecture.md) |
-| [`CommandSupport`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java) | 参数读取、DB routing、常用 reply/error helper | helper methods | [`commands-and-data-model.md`](./commands-and-data-model.md) |
+| [`CommandSupport`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java) | 参数读取、DB routing、scratch buffer 和 mutation/reply helper | helper methods | [`commands-and-data-model.md`](./commands-and-data-model.md), [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md) |
 | [`YierdisDbRouter`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/YierdisDbRouter.java) | 根据当前 session DB index 选择命令本次访问的 `DbEngine` | `dbFor(...)`, `databases()` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
 | [`ServerInfoProvider`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ServerInfoProvider.java) | command 层 Netty-free 的 INFO / STATS / MEMORY STATS 观测代理 | `info(...)`, `stats(...)`, `memoryStats(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
 

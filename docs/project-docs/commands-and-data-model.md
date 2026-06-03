@@ -21,6 +21,13 @@ ExecutionRequest
 
 命令层不直接解析 RESP 字节，也不直接管理 allocator、entry table 或具体 value root。它负责 Redis 风格最小子集的命令语义：已经实现的命令尽量采用 Redis 风格参数、错误和返回值；未实现的 Redis 能力不在这里隐式承诺。
 
+## 分发与事务专题入口
+
+本页只保留命令抽象、命令家族和逻辑类型模型。
+
+- 如果你要追 `CommandRegistry`、`CommandSpec`、`ArgReader`、parse error、unknown command、change observer gate，请看 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
+- 如果你要追 `MULTI/EXEC/DISCARD`、队列快照、abort、replay 和 queue limit，请看 [`transaction-and-replay.md`](./transaction-and-replay.md)。
+
 ## CommandRegistry 和 CommandSpec
 
 `YierdisFastCommandProcessor` 构造时创建 `CommandRegistry`。它先注册 `TransactionCommands`，再注册注入的 `CommandModule`。生产默认模块来自 `DefaultCommandModules`，server runtime 还会补充 `ServerCommandModule`。
@@ -36,24 +43,28 @@ ExecutionRequest
 
 有些简单命令可以直接使用 `CommandSpec<ExecutionRequest>`，也就是 handler 仍接收原始 argv 视图；更复杂的命令通常使用 typed parsed object，把参数形状和业务执行分开。
 
+完整的分发表构建、`YierdisFastCommandProcessor.execute(...)` 主流程和事务入队前复用校验，不在本页展开，统一见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
+
 ## 参数解析和错误
 
 参数解析集中在 command API 的几个小组件里：
 
-- `ArgReader` 包住 `ExecutionRequest`，提供 `argc()`、`arg(index)`、`is(index, literal)`、`longAt(...)`、`positiveLongAt(...)` 等读取能力，并尽量直接基于 argv bytes 做 ASCII 比较。
+- `ArgReader` 包住 `ExecutionRequest`，提供 `argc()`、`bytes(index)`、`is(index, literal)`、`longAt(...)`、`positiveLongAt(...)` 等读取能力，并尽量直接基于 argv bytes 做 ASCII 比较。
 - `CommandArity` 表达参数个数规则，包括 exact、min、range、one-of 和 pair-tail。pair-tail 用于 `HSET field value ...`、`ZADD score member ...` 这类尾部成对参数。
 - `CommandParsers` 把常见 arity rule 包成 `CommandParser<T>`，也支持 mapper 把 `ArgReader` 转成 typed parsed object。
 - `CommandParseError` 集中表达 wrong arity、syntax、integer out of range 和自定义错误，并转换成 Redis 风格 reply 文案。
 
 `CommandSpec.parse(...)` 返回 parse result。解析失败时，处理器直接通过 `ReplyWriter.error(...)` 写出错误；解析成功时，handler 才会运行。这个约束同样用于事务入队：`MULTI` 状态下，普通命令会先 lookup spec、检查事务策略、运行 parser，通过后才保存 `ExecutionRequest` 快照并返回 `QUEUED`。
 
+这里保留的是 parser 抽象和错误模型；真正的分支顺序、unknown command、change observer gate 和错误翻译，见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
+
 ## CommandContext 和 ReplyWriter
 
 `CommandContext` 是一次命令执行的环境对象，通常提供：
 
 - `ReplyWriter`；
-- 当前连接 session；
-- 当前 DB index provider；
+- `CommandSessionCapabilities` 视图；
+- 当前 DB index / transaction / client metadata / protocol negotiation 能力；
 - 可通过上下文取得的 DB runtime 能力。
 
 `RedisReplyWriter` 是命令层唯一的 Redis reply 语义模型；现有执行边界继续暴露兼容别名 `ReplyWriter`。命令 handler 写的是 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`mapHeader`、`nullValue`、`error` 等 Redis reply 形状，不写 `+OK\r\n`、`$-1\r\n` 这类协议字节。RESP2 / RESP3 的差异由协议 writer 根据连接版本处理。
@@ -137,6 +148,8 @@ HLL 也没有独立 `ValueType`。命令层有 `HllCommands`，DB 层有 `Yierdi
 `EXEC` 回放已入队的请求，按队列顺序调用同一个命令处理器执行；`DISCARD` 清空队列并退出事务。事务控制命令本身有特殊策略，例如 `HELLO` 这类连接协议协商命令在 `MULTI` 中被禁止。
 
 这里的事务语义是 Redis 风格最小子集：它提供连接级队列和顺序回放，但不应被理解成完整 Redis 事务生态、Lua、watch 或集群语义。
+
+本页只解释事务在 command model 里的位置。`TransactionState` 的所有权、为什么队列里保存的是 `ExecutionRequest` 快照、`EXEC` 如何 replay、abort/cleanup/queue limit 如何收敛，都放在 [`transaction-and-replay.md`](./transaction-and-replay.md)。
 
 ## 新增命令时的路线
 
