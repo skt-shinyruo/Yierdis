@@ -14,6 +14,7 @@
 - 代理和变更事件：[`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)
 - native memory：[`native-memory-runtime.md`](./native-memory-runtime.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`offheap-copy-behavior.md`](./offheap-copy-behavior.md)
 - 测试入口：[`testing-and-debugging.md`](./testing-and-debugging.md)
+- 维护覆盖矩阵：[`code-logic-coverage.md`](./code-logic-coverage.md)
 
 ## Server 启动与组装
 

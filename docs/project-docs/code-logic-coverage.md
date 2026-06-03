@@ -1,0 +1,106 @@
+# Code Logic Coverage
+
+本文是 Yierdis 代码逻辑文档覆盖矩阵。它不重复完整专题解释，只记录哪些核心逻辑已经有文档、哪些还只有源码和测试。
+
+## 怎么使用
+
+- 先按子系统找到类和关键方法。
+- 看 `覆盖状态` 判断当前文档是否足够。
+- 看 `文档归属` 决定补哪篇文档。
+- 看 `相关测试` 决定改动后先验证哪里。
+
+## 记录字段
+
+| 字段 | 含义 |
+| --- | --- |
+| 子系统 | 逻辑所属模块或行为边界 |
+| 类 | 主要实现入口 |
+| 关键方法/逻辑块 | 需要解释的行为单元 |
+| 行为职责 | 这段逻辑真正负责什么 |
+| 关键分支/状态/不变量 | 维护时最容易破坏的事实 |
+| 线程/内存边界 | owner thread、生命周期、materialization 等边界 |
+| 相关测试 | 改这里先看哪些测试 |
+| 文档归属 | 已有或计划中的文档 |
+| 覆盖状态 | `covered` / `partial` / `missing` |
+| 备注 | 实现现状、文档缺口或待确认点 |
+
+## server-main / bootstrap / connection
+
+| 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `YierdisServerBootstrap` | `start(...)`, `startInternal()`, `close()` | 组装 runtime、engine、executor 和 Netty server | 启动顺序、资源关闭顺序、默认组件选择 | Netty 线程和 executor owner thread 分离 | `YierdisServerBootstrapCommandWiringTest`, `YierdisServerBootstrapCloseTest` | [`request-execution-flow.md`](./request-execution-flow.md), [`main-path-walkthrough.md`](./main-path-walkthrough.md) | `partial` | 需要补关闭路径和依赖装配细节 |
+| `YierdisServerChannelInitializer` | `initChannel(...)`, backpressure / idle handler 装配 | 为单连接挂载协议、执行和关闭保护 handler | handler 顺序、协议错误回包、read-idle 关闭 | 每条连接只在 Netty channel 生命周期内持有上下文 | `NettyExecutionAdapterIntegrationTest`, `RespProtocolErrorIntegrationTest` | [`protocol-reference.md`](./protocol-reference.md), [`request-execution-flow.md`](./request-execution-flow.md) | `partial` | 现有文档覆盖主链，但缺少 pipeline 组装细节 |
+| `NettyExecutionConnection` | request/reply/close 适配块 | 把 Netty channel 状态收敛成 executor 可消费的连接抽象 | 关闭后跳过副作用、reply 写回失败处理 | Channel 生命周期与 executor connection state 对接 | `ClosingSkipSideEffectsIntegrationTest`, `NettyExecutionAdapterIntegrationTest` | [`request-execution-flow.md`](./request-execution-flow.md) | `missing` | 目前主要靠源码和集成测试理解 |
+
+## networking-resp / networking-netty
+
+| 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `RespRequestDecoder` | `decode(...)` | RESP array / inline command 解码 | 协议错误、inline 分支、limit 分支 | I/O 线程只做协议适配 | `RespRequestDecoderTest`, `RespProtocolErrorIntegrationTest` | [`request-execution-flow.md`](./request-execution-flow.md), [`protocol-reference.md`](./protocol-reference.md) | `partial` | 需要补协议错误和关闭行为 |
+| `RespExecutionAdapter` | request -> `ExecutionRequest` materialize path | 隔离 RESP DTO 与执行层请求模型 | 复制语义、事务 replay 复用、空参数边界 | materialize 到 `ByteArrayExecutionRequest` | `RespExecutionAdapterTest`, `RespBoundaryGuardTest` | [`request-execution-flow.md`](./request-execution-flow.md), [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md) | `partial` | 需要补复制边界和读写视图差异 |
+| `RespReplyWriter` | reply encode methods | 把 command 层回包语义编码成 RESP2/RESP3 | RESP2/RESP3 类型差异、null/map/set 编码、error 形态 | 编码层不泄漏 command/internal 对象 | `RespReplyWriterTest`, `RespHandshakeIntegrationTest` | [`protocol-reference.md`](./protocol-reference.md) | `covered` | 协议输出形态已有专门文档和测试入口 |
+
+## executor
+
+| 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `CommandExecutor` | `start()`, `submit(...)`, `close()` | owner-thread 执行器总入口，管理提交、drain、统计和关闭 | reject reason、关闭后提交、drain 终止条件 | DB 访问只能发生在 owner thread | `CommandExecutorTest`, `CommandExecutorBackpressureTest` | [`executor-and-backpressure.md`](./executor-and-backpressure.md), [`request-execution-flow.md`](./request-execution-flow.md) | `covered` | 主流程和边界已有专题说明 |
+| `CommandExecutorSubmitter` | submit / budget accounting path | 处理 backlog budget、bytes budget 和连接背压 | 超预算拒绝、背压恢复、队列状态切换 | Netty submitter 线程只能入队，不能执行命令 | `CommandExecutorBackpressureTest`, `ExecutionConnectionContextTest` | [`executor-and-backpressure.md`](./executor-and-backpressure.md) | `partial` | 文档有整体说明，但分支和统计细节不够细 |
+| `CommandExecutorDrainLoop` | GLOBAL / FAIR drain loop | 决定 drain 次序、公平调度和单轮预算 | scheduling policy、per-connection budget、空队列退出 | owner thread 独占 drain 和 session 执行 | `CommandExecutorFairSchedulingTest`, `CommandExecutorTest` | [`executor-and-backpressure.md`](./executor-and-backpressure.md) | `partial` | 需要补 FAIR / GLOBAL 差异和饥饿避免不变量 |
+
+## engine / session / transaction
+
+| 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `DefaultYierdisEngine` | `execute(...)` | 把 `ExecutionRequest` 交给 command processor 并维持 engine 边界 | command exception 翻译、reply writer 生命周期、session 透传 | engine 不接触 Netty DTO，只消费执行请求 | `DefaultYierdisEngineTest`, `DbEngineReadWriteBoundaryTest` | [`request-execution-flow.md`](./request-execution-flow.md) | `partial` | 主链已写到，但 engine 边界还可再明确 |
+| `EngineSession` | session accessors, `DefaultTransactionState` | 维护 DB index、protocol version、transaction queue 和 client metadata | `MULTI/EXEC/DISCARD` 状态机、abort 标记、selected DB 持续性 | session 状态只在单连接执行上下文中读写 | `EngineSessionTest`, `TransactionQueueCleanupTest` | [`commands-and-data-model.md`](./commands-and-data-model.md), [`request-execution-flow.md`](./request-execution-flow.md) | `partial` | 需要补事务状态机和 replay 约束 |
+| `ExecutionRecord` | transaction replay snapshot / change event payload | 保存可重放命令和变更事件所需的最小事实 | queue 时校验一次、replay 时复用参数快照 | 必须与原始请求生命周期解耦 | `TransactionQueueCleanupTest`, `RuntimeChangeSinkCommandChangeObserverTest` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md), [`glossary.md`](./glossary.md) | `missing` | 目前只在相关文档零散出现，缺少集中解释 |
+
+## command-api / command-core / builtin commands
+
+| 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `CommandSpec` | spec factory / accessor methods | 定义命令名、arity、handler 和事务限制 | arity 规则、MULTI 限制、只读/写语义 | command 元数据与 transport 无关 | `CommandContractTest`, `CommandRegistryGuardTest` | [`commands-and-data-model.md`](./commands-and-data-model.md) | `covered` | 命令抽象和约束已有较完整说明 |
+| `YierdisFastCommandProcessor` | `execute(...)` | 执行 empty/unknown command、查表、参数校验、事务排队与异常翻译 | 事务入队前复用校验、change event gate、server-only wiring | 不直接依赖 RESP DTO，输入固定为 `ExecutionRequest` | `YierdisFastCommandProcessorPolicyTest`, `YierdisFastCommandProcessorRegistrationTest`, `CommandVariantCoverageTest` | [`request-execution-flow.md`](./request-execution-flow.md), [`commands-and-data-model.md`](./commands-and-data-model.md) | `partial` | 主执行链有文档，但 command-kernel 小组件拆分还未单列 |
+| `StringCommands` | GET/SET/INCR 族 handler | 代表内建命令如何经 `CommandSupport` 路由到 DB API | wrong-type、NX/XX/EX/PX 语义、整数分支 | handler 不直接碰 internal root/value | `StringCommandTest`, `CommandErrorTest` | [`commands-and-data-model.md`](./commands-and-data-model.md) | `partial` | 类型族语义覆盖较好，但命令家族间的文档颗粒度仍偏粗 |
+
+## runtime / multi-db / maxmemory governor
+
+| 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `YierdisInstance` | `create(...)`, `engine(int)`, `bindToCurrentThread()`, `close()` | 管理多 DB 生命周期、owner thread 绑定和 runtime 资源 | strict create 注入要求、DB index 边界、关闭幂等性 | runtime access 绑定 executor owner thread | `YierdisInstanceTest`, `YierdisInstanceBoundaryTest` | [`db-internals.md`](./db-internals.md), [`configuration-and-operations.md`](./configuration-and-operations.md) | `partial` | 多 DB 和生命周期有文档，但 thread-binding 约束还需更显式 |
+| `YierdisInstanceMaintenance` | maintenance tick path | 驱动 expire cleanup、defrag 和 maintenance 协调 | tick 是否跳过、各 DB 扫描顺序、维护副作用范围 | maintenance 在 runtime owner 上下文运行 | `YierdisDbDefragMaintenanceTest`, `ExpireIndexTest` | [`configuration-and-operations.md`](./configuration-and-operations.md), [`db-internals.md`](./db-internals.md) | `missing` | 目前缺少专门的 maintenance 路线说明 |
+| `YierdisGlobalMaxmemoryGovernor` | cross-db arbitration / eviction loop | 在多 DB 之间协调全局 maxmemory 压力和淘汰 | victim 选择、公平性、逐库回退、全局限制收敛 | 协调器跨 DB 观察 memory participant，但不直接越过 DB API | `YierdisGlobalMaxmemoryGovernorTest`, `GlobalMaxmemoryLruAcrossDbsTest`, `TtlMaxmemoryTest` | [`configuration-and-operations.md`](./configuration-and-operations.md), [`db-internals.md`](./db-internals.md) | `partial` | 已有线上语义说明，但跨 DB 仲裁细节仍散落在测试里 |
+
+## db-api / db-memory
+
+| 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `YierdisDb` | capability accessors / lifecycle methods | 暴露单 DB 的 reads/writes/expiration/memory/lifecycle 视图 | capability 聚合边界、关闭后行为、internal 不外泄 | DB 实现只应在 runtime/command 约定边界内可见 | `YierdisDbConstructionTest`, `DbEngineReadWriteBoundaryTest` | [`db-internals.md`](./db-internals.md) | `covered` | 单 DB capability 视图已有专题文档 |
+| `YierdisDbMutationExecutor` | mutation reservation / commit / rollback path | 串联 mutation plan、memory reservation 和真实提交 | no-op accounting、rollback 一致性、TTL/ledger 同步提交 | owner thread 写路径统一入口，不能绕过 ledger | `MutationExecutorReservationTest`, `TtlMaxmemoryTest` | [`db-internals.md`](./db-internals.md), [`configuration-and-operations.md`](./configuration-and-operations.md) | `partial` | 需要补 reservation 失败与回滚的具体分支 |
+| `YierdisDbKeyLifecycle` | `liveEntryRecord(...)`, delete / replace path | 维护 key 生命周期、过期可见性和 entry 状态 | expired key 不可见、替换和值类型同步、删除副作用 | key record / value handle 生命周期必须成对收敛 | `ExpireIndexTest`, `ExpireKeySharingTest`, `OffHeapBytesViewTtlRegressionTest` | [`db-internals.md`](./db-internals.md), [`offheap-copy-behavior.md`](./offheap-copy-behavior.md) | `partial` | 需要补 live view 与实际删除的边界说明 |
+| `YierdisDbMaxmemorySupport` | participant eviction helpers | 提供单 DB 视角的 victim 选择、回收和 memory 统计 | victim record 失效重试、淘汰与 TTL 清理协同 | participant 受全局 governor 调用，但仍保留单 DB 边界 | `TtlMaxmemoryTest`, `GlobalMaxmemoryLruAcrossDbsTest` | [`db-internals.md`](./db-internals.md), [`configuration-and-operations.md`](./configuration-and-operations.md) | `missing` | 目前基本只能从实现和集成测试读取 |
+
+## bytes / memory / ffm
+
+| 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `ByteArrayExecutionRequest` | constructor / copy / read-only access path | 提供 heap byte[] backed `ExecutionRequest` 视图 | copy vs read-only 边界、数组复用、空参数表示 | 必须与协议层 materialized argv 生命周期一致 | `RespExecutionAdapterTest`, `DefaultYierdisEngineTest` | [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md), [`protocol-reference.md`](./protocol-reference.md) | `partial` | 需要补 `ExecutionRequest` 视图族之间的选择规则 |
+| `YierdisNativeObjectTable` | allocate / free / resolve / quarantine path | 管理 native object metadata、generation、pin 和隔离回收 | generation 校验、pin 泄漏、防止 use-after-free | native handle 只能经 table 解析，不能把 raw handle 当指针 | `YierdisNativeObjectTableTest`, `KeyHandleContractTest` | [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) | `covered` | object table、pin、quarantine 已有相对完整说明 |
+| `YierdisStableNativeAllocator` | allocate / realloc / defrag methods | 提供稳定地址分配、重定位和 active defrag 能力 | stable address 不变量、epoch、defrag 可见性 | FFM/native 生命周期独立于 Java object，但受 owner/runtime 管理 | `YierdisStableNativeAllocatorTest`, `UnsafeOffHeapDbSmokeTest` | [`native-allocator-and-handles.md`](./native-allocator-and-handles.md), [`native-memory-runtime.md`](./native-memory-runtime.md) | `partial` | 需要把 allocator 与 DB handle 图的联系写得更直接 |
+
+## cli / benchmark / smoke
+
+| 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `InlineCommandParser` | parse methods | CLI inline 命令切词、引号和转义解析 | quote/escape 规则、空 token、错误输入 | 纯 heap 解析，不共享 server 请求对象 | `YierdisClientTest`, `MaxmemoryScopeTest` | [`client-and-bench-internals.md`](./client-and-bench-internals.md), [`protocol-reference.md`](./protocol-reference.md) | `partial` | 需要补 CLI parser 与 server inline 解析的异同 |
+| `YierdisClient` | connect / execute / reply decode methods | 提供测试和 CLI 共用的 RESP client | 读超时、半包、server close、flooding reply | socket / buffer 生命周期只在 client 侧封装 | `YierdisClientTest`, `TransactionQueueLimitTest` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) | `covered` | 客户端行为、测试用法和边界已有较完整入口 |
+| `YierdisBench` | `main(...)`, workload execution | benchmark 启动/复用 server 并执行 workload | 本地 server vs 外部 server、结果汇总、参数模式切换 | bench 作为外部使用者，不能绕过 RESP/CLI 边界 | `YierdisBenchComparisonExecutionTest`, `YierdisBenchSummaryFormatTest` | [`client-and-bench-internals.md`](./client-and-bench-internals.md) | `partial` | 需要补 workload 选择和结果聚合主线 |
+
+## tests / architecture guards / contract tests
+
+| 类 | 关键方法/逻辑块 | 行为职责 | 关键分支/状态/不变量 | 线程/内存边界 | 相关测试 | 文档归属 | 覆盖状态 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `ArchitectureDependencyRuleTest` | module dependency assertions | 防止 Maven/module 依赖方向回退 | forbidden edge、allowed edge、测试模块例外 | 架构护栏，不承载运行时状态 | [`ArchitectureDependencyRuleTest`](../../yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/architecture/ArchitectureDependencyRuleTest.java) | [`module-architecture.md`](./module-architecture.md), [`testing-and-debugging.md`](./testing-and-debugging.md) | `covered` | 导航和护栏关系已经较清楚 |
+| `RespBoundaryGuardTest` | protocol boundary assertions | 防止 RESP DTO 穿透进 command 层 | DTO/package 泄漏、adapter 绕过、边界回退 | 保护 transport-neutral 输入边界 | [`RespBoundaryGuardTest`](../../yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/protocol/resp/RespBoundaryGuardTest.java), `RespExecutionAdapterTest` | [`protocol-reference.md`](./protocol-reference.md), [`testing-and-debugging.md`](./testing-and-debugging.md) | `partial` | 需要在测试导航里把 guard 与功能测试串得更紧 |
+| `YierdisDbArchitectureGuardTest` | DB internal boundary assertions | 防止 command/runtime 越界依赖 DB internal | internal package 访问、owner-thread 假设、handle 泄漏 | 保护 DB API 与 internal 的编译期边界 | [`YierdisDbArchitectureGuardTest`](../../yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/storage/memory/YierdisDbArchitectureGuardTest.java), `DbEngineReadWriteBoundaryTest` | [`db-internals.md`](./db-internals.md), [`testing-and-debugging.md`](./testing-and-debugging.md) | `partial` | 需要补“哪些改动必须跑护栏测试”的维护指引 |

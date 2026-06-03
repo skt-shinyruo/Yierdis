@@ -19,7 +19,7 @@
 - 系统主线: [`request-execution-flow.md`](./request-execution-flow.md), [`main-path-walkthrough.md`](./main-path-walkthrough.md), [`module-architecture.md`](./module-architecture.md)。负责串起请求执行链、源码主路径和 Maven 模块边界。
 - 专题手册: [`protocol-reference.md`](./protocol-reference.md), [`commands-and-data-model.md`](./commands-and-data-model.md), [`db-internals.md`](./db-internals.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md), [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md), [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md), [`configuration-and-operations.md`](./configuration-and-operations.md), [`client-and-bench-internals.md`](./client-and-bench-internals.md), [`ffm-primer.md`](./ffm-primer.md), [`native-memory-runtime.md`](./native-memory-runtime.md), [`native-allocator-and-handles.md`](./native-allocator-and-handles.md), [`offheap-copy-behavior.md`](./offheap-copy-behavior.md)。负责按协议、命令、DB、执行器、代理/变更事件、bytes、配置、客户端和 native memory 等主题提供深入说明。
 - 开发导航: [`development-navigation.md`](./development-navigation.md), [`testing-and-debugging.md`](./testing-and-debugging.md)。负责把常见改动类型、排障路径和验证范围连接起来。
-- 参考资料: [`core-logic-index.md`](./core-logic-index.md), [`glossary.md`](./glossary.md)。负责集中索引核心类、核心方法和高频术语，方便读源码时快速定位。
+- 参考资料: [`core-logic-index.md`](./core-logic-index.md), [`code-logic-coverage.md`](./code-logic-coverage.md), [`glossary.md`](./glossary.md)。负责集中索引核心类、核心方法、覆盖追踪和高频术语，方便读源码时快速定位。
 
 ## 推荐第一轮阅读
 
@@ -36,6 +36,7 @@
 
 ## 维护者提示
 
-- 新命令、新协议行为、新 DB API 或 native-memory 结构需要同时检查 [`development-navigation.md`](./development-navigation.md) 和 [`testing-and-debugging.md`](./testing-and-debugging.md)，不要维护额外的手工覆盖矩阵。
+- 新命令、新协议行为、新 DB API 或 native-memory 结构需要同时检查 [`development-navigation.md`](./development-navigation.md)、[`testing-and-debugging.md`](./testing-and-debugging.md) 和 [`code-logic-coverage.md`](./code-logic-coverage.md)；覆盖状态统一维护在覆盖矩阵里，不要再分散记在别处。
+- 覆盖追踪：[`code-logic-coverage.md`](./code-logic-coverage.md)
 - native-memory 事实应在 [`native-memory-runtime.md`](./native-memory-runtime.md), [`native-allocator-and-handles.md`](./native-allocator-and-handles.md), [`db-internals.md`](./db-internals.md), [`offheap-copy-behavior.md`](./offheap-copy-behavior.md) 之间保持一致。
 - 根部 `README.md` 应保持 quick-start 页面定位，不要扩张成内部实现手册。
