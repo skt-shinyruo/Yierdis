@@ -55,6 +55,12 @@ flowchart LR
 - `EngineSession`：DB index、transaction、client state、RESP version
 - `ExecutionConnectionContext`：pending、pending bytes、closing、backpressure、调度状态
 
+`NettyExecutionConnection` 是这三类状态的唯一连接 root。`getOrCreate(channel, txMaxCommands, txMaxBytes)` 会把一个 `EngineSession` 和一个 `ExecutionConnectionContext` 绑到同一个 `Channel.attr(...)` 上，重复初始化会复用同一个实例；`markClosing()` 会先把连接标成 closing，再丢弃事务，避免 `QUIT` 或 close-after-reply 之后继续保留 queued snapshot。
+
+`YierdisServerBootstrap` 的组装和关闭顺序也在这条链里固定下来：先创建 `YierdisInstance`、engine 和 executor，再创建 Netty groups 和 `ServerBootstrap`；关闭时则反向释放 server、event loop、executor 和 runtime owned resources，避免半初始化状态泄漏。
+
+`YierdisServerChannelInitializer` 的 pipeline 只做连接级装配，不承载命令语义。顺序是 decode -> RESP adapter -> execution adapter -> backpressure handlers -> fast command handler。连接级 close 和 protocol error 也在这条 pipeline 上闭环，而不是让 handler 自己猜测 channel 生命周期。
+
 ## Netty pipeline
 
 连接上的 pipeline 负责把网络数据推进到请求模型，再推进到 executor 提交点。

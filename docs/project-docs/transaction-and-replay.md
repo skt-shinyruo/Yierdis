@@ -33,6 +33,12 @@
 
 `EngineSession.DefaultTransactionState.tryEnqueue(...)` 还会同时记录 `queuedBytes`，因此 transaction queue 的容量限制不是只看命令条数，也看 snapshot 保留的字节数。
 
+## `ExecutionRecord` 是 replay 和 change-event 的不可变快照
+
+`ExecutionRecord` 把 `dbIndex` 和 `ExecutionRequest` 绑成一个不可变 record。构造时它会把负的 `dbIndex` 归零，并通过 `ByteArrayExecutionRequest.copyOf(request)` 再复制一份稳定快照，所以它不会持有可变 request 引用。
+
+它是 transaction replay 和 change-event 记录的共同载体：`YierdisChangeEvent` 直接包着 `ExecutionRecord`，而 replay / sink / test 都应该读取这个封装后的快照，而不是原始请求对象。
+
 ## `MULTI` 之后的入队流程
 
 `MULTI` 自身只做一件事：把 `TransactionState.active` 置为 true，并清空之前残留的 queue / aborted 状态。

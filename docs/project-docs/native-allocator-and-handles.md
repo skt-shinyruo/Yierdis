@@ -57,6 +57,14 @@ bits 3..0    flags       4 bits
 
 `NativeHandle.of(...)` 会检查 domain/kind 是否匹配，以及 slot/generation/flags 是否在位宽范围内。`EntryHandle` 只允许包装 `ENTRY_RECORD`；`ValueHandle` 可以包装 string 或 collection root 相关 native handle，但调用边界必须校验 domain/kind。
 
+## DB hot path 只保存 stable handle
+
+DB hot path 保存的是 stable handle raw value，不是 physical address，也不是 `NativeObjectView`。`EntryHandle` 和 `ValueHandle` 只是 typed wrapper：前者约束 `ENTRY_RECORD` 语义，后者约束 string / collection root 语义。调用方只应该在一次有界操作里 `resolve(...)`，拿到短生命周期 view 后立刻关闭，不能把 resolved address 缓存到 DB graph 里。
+
+## domain / kind / generation 校验失败意味着什么
+
+`NativeHandle.of(...)`、`resolve(...)` 和 wrapper factory 会把 domain / kind / generation 当作 ABI 和生命周期护栏，而不是调试辅助。校验失败意味着 stale handle、wrong kind/domain 或 slot 复用错误，应该 fail fast。`pin`、`quarantine` 和 active defrag 之所以能成立，依赖的就是这组校验不会被绕过。
+
 ## Object table
 
 `YierdisNativeObjectTable` 是 handle 到对象 metadata 的权威表。每个 slot 记录：

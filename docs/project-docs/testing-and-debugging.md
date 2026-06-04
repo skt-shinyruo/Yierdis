@@ -66,6 +66,36 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 排障顺序：`DbEngine` capability view -> family ops -> `YierdisDbMutationExecutor` -> key lifecycle -> root/value 结构。DB 读写细节看 [`db-internals.md`](./db-internals.md)。
 
+## 改 transaction / replay 时
+
+先跑事务状态和 replay 相关测试：
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-core,yierdis-server/yierdis-server-api -am -Dtest=EngineSessionTest,TransactionCommandTest,TransactionQueueCleanupTest,YierdisFastCommandProcessorPolicyTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+排障顺序：`TransactionState` -> `EngineSession` -> `ByteArrayExecutionRequest.copyOf(...)` -> `EXEC` replay -> `ExecutionRecord` / change-event 快照。事务与 replay 的完整主线看 [`transaction-and-replay.md`](./transaction-and-replay.md)。
+
+## 改 TTL / expiration 时
+
+先跑 TTL 和过期清理测试：
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-integration-tests -am -Dtest=TtlLifecycleDirectOpsTest,ExpireIndexTest,ExpireSemanticsTest,ExpireIndexContractTest,OffHeapBytesViewTtlRegressionTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+排障顺序：`YierdisTtlOps` -> `YierdisDbKeyLifecycle` -> `YierdisDbExpirationSupport` -> synthetic `EXPIRED` delete -> `MEMORY STATS` / `INFO memory` 口径。TTL 细节看 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)。
+
+## 改 maxmemory / eviction 时
+
+先跑 maxmemory 和 eviction 测试：
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory,yierdis-tests/yierdis-integration-tests -am -Dtest=MutationExecutorReservationTest,MaxmemoryEvictionTest,TtlMaxmemoryTest,YierdisGlobalMaxmemoryGovernorTest,GlobalMaxmemoryLruAcrossDbsTest,MemoryStatsAccountingConsistencyTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+排障顺序：`YierdisDbMemoryLedger` -> `YierdisDbMutationExecutor` -> `YierdisDbMaxmemorySupport` / `YierdisGlobalMaxmemoryGovernor` -> synthetic `EVICTED` delete -> `MEMORY STATS` 校验。maxmemory 的完整语义看 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
+
 ## 改 native memory 时
 
 先跑 allocator / handle contract：
@@ -113,6 +143,16 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 ```
 
 排障顺序：`InlineCommandParser` -> client codec -> script contract -> benchmark args -> summary/comparison renderer。详细入口看 [`client-and-bench-internals.md`](./client-and-bench-internals.md)。
+
+## 改架构护栏时
+
+当改动可能触碰协议边界、command/internal 边界或 runtime 访问约束时，优先补护栏测试：
+
+- `RespBoundaryGuardTest`：检查 RESP DTO 不能穿透进 command 层，必要时连同 `RespExecutionAdapterTest` 一起跑。
+- `YierdisDbArchitectureGuardTest`：检查 command/runtime 不能直接依赖 DB internal，必要时连同 `DbEngineReadWriteBoundaryTest` 一起跑。
+- `ArchitectureDependencyRuleTest`：检查 Maven/module 依赖方向没有回退。
+
+排障顺序：先确认是 boundary regression 还是功能 regression，再决定是去 protocol / command / DB 文档还是直接补 guard 测试。
 
 ## 常见故障入口
 

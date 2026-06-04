@@ -143,6 +143,8 @@ YierdisFastCommandProcessor
         -> YierdisChangeEvent(ExecutionRecord(dbIndex, request))
 ```
 
+这里真正被传递的是 `ExecutionRecord`：它把 `dbIndex` 和已复制的 `ExecutionRequest` 绑成不可变快照，所以 change sink 看到的是可重放事实，而不是原始 mutable request 引用。`YierdisChangeEvent` 只是再包一层 kind / synthetic 标记。
+
 DB 内部 synthetic 路径有两个 owner-thread scope。命令执行期间的 lazy expire / eviction 由 command observer 打开 DB change scope；maintenance tick 则由 runtime access 打开同类 scope。
 
 ```text

@@ -99,6 +99,14 @@ read DB result
 
 connection/server 命令更多操作连接态、握手兼容、server runtime 信息和执行框架；数据结构命令则通过 DB capability 修改或读取逻辑类型。
 
+## `StringCommands` 的主路线
+
+`StringCommands` 是 string / bitmap 家族的主入口。`SET`、`GET`、`APPEND`、`INCR` 这类命令不是各自独立地直连 DB，而是先走 `CommandSupport` 再走 typed ops / `DbEngine`，让 wrong-type、NX/XX/EX/PX/KEEPTTL 和整数分支都收敛到同一条命令语义里。
+
+bitmap 只是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCOUNT` 和普通 string 命令共享 `ValueType.STRING` 及其 wrong-type 约束。写路径最终仍会经过 `YierdisDbMutationExecutor`、`YierdisDbKeyLifecycle` 和对应的 TTL / memory 账本；读路径则通过 `ReplyWriter` 把结果写回，而不是直接拼 RESP bytes。
+
+如果要改 `StringCommands`，优先看 string 家族测试、`StringWriteOps` / `StringReadOps`、`commands-and-data-model.md` 的逻辑类型映射，以及 [`request-execution-flow.md`](./request-execution-flow.md) 里的 `SET` 主链。
+
 ## 逻辑类型和内部编码
 
 用户看到的是逻辑类型，DB 记录的是逻辑类型加内部编码。逻辑类型由 `ValueType` 表达，当前包括：

@@ -12,6 +12,10 @@
 
 以 heap `byte[]` 保存参数的 `ExecutionRequest` 实现。测试、事务 replay 和部分适配路径会使用它。详见 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
 
+### `ExecutionRecord`
+
+`dbIndex` + `ExecutionRequest` 的不可变 replay / change-event 快照。构造时会归一化 `dbIndex` 并复制请求，避免把 mutable request 引用带进事务队列或 change sink。详见 [`transaction-and-replay.md`](./transaction-and-replay.md) 和 [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)。
+
 ### `ReplyWriter`
 
 命令层唯一的 Redis reply 语义出口，当前是 `RedisReplyWriter` 的兼容别名。handler 只调用 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`mapHeader`、`error` 等 Redis reply 语义方法，不拼 RESP bytes。详见 [`commands-and-data-model.md`](./commands-and-data-model.md)。
@@ -123,6 +127,14 @@ executor 在多连接之间选择任务的策略，目前文档中常见的是 `
 ### `BytesSlice`
 
 带 offset/length 的 bytes 片段，常用于写路径把参数或 native slice 传给 DB。
+
+### `BytesSink`
+
+写入端口，只承诺接收 bytes，不承担 source ownership。协议编码器和 reply writer 用它做流式写出。
+
+### `DirectBytesSink`
+
+`BytesSink` 的 direct-aware 扩展，暴露 writer cursor 和 memory address，但不会改变 source ownership。
 
 ### materialize
 

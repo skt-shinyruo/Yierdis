@@ -35,6 +35,16 @@ Yierdis 选择中立 bytes 层：
 
 `BulkStringSink` 是 storage API 里的协议无关 bulk string 输出端口，支持 `bulkString(byte[])`、`bulkString(byte[], off, len)`、`bulkString(BytesSlice)`、`bulkStringLongAscii(long)` 和 null bulk。list/hash/set/zset range 这类 DB 读路径用它向 reply 层流式发元素。
 
+## `ExecutionRequest` 视图族怎么选
+
+`RespExecutionAdapter` 的默认选择是 `ByteArrayExecutionRequest.copyOf(...)`。只要请求要跨过 Netty decoder 生命周期、进入 executor queue、进入 transaction replay，或者作为 change-event / replay snapshot 保存，就要拿一份独立快照，而不是继续引用协议 DTO。
+
+`wrapReadOnly(...)` 只适合调用方已经拥有 argv、并且能持续遵守只读约定的场景。`readOnlyByteArray(...)` 是 heap-backed immutable request 的快速读路径，不等于把内部数组的所有权暴露给外部。`fromUtf8(...)` 只是测试、CLI 和固定输入构造的便利函数。
+
+## `BytesView` 与 `BytesSlice` 的 ownership
+
+`BytesView` 是短生命周期只读视图，适合 lookup 输入，不适合被 DB state 长期保存。`BytesSlice` 可以被流式写给 sink，但如果它要跨命令、跨线程或跨队列保存，就必须先 materialize 成 heap bytes。`BytesSink` 只接收写入，不承担 source lifetime；`DirectBytesSink` 可以暴露 memory address，但不会改变 source ownership。
+
 ## 协议层如何使用 bytes
 
 RESP decode 后的协议对象是 `RespCommandRequest`。它内部保存 `byte[][] argv` 和 `retainedBytes`，提供两种构造：

@@ -6,6 +6,12 @@
 
 CLI 负责人工交互和轻量验证；benchmark 负责固定 workload shape 下的吞吐、延迟和 correctness smoke。比较 benchmark 结果时必须保证 workload shape 一致，例如相同的 `requests`、`clients`、`pipeline`、`keyspace`、`dataSize`，并保持可比的运行环境、JVM 参数和 server 启动参数。comparison mode 会刻意使用 baseline/current 两个 jar；它们应是操作者想比较且可识别来源的 artifacts。baseline/current 任一侧启动失败、协议错误、返回错误或缺少必要测量时，输出应视为 `non-comparable`，不能当成可信性能结论。
 
+## 它们更适合验证什么
+
+- CLI：快速确认协议、回包和单命令行为。
+- smoke：快速确认 server 启动、基础命令和 CLI/RESP 主链。
+- benchmark：观察高并发请求、pipeline 和 backpressure 行为，但不是 correctness oracle。
+
 ## yierdis-cli
 
 入口是 `YierdisCli.main(...)`，参数模型是 `YierdisCliArgs`。默认连接 `127.0.0.1:6378`，常用参数与根 `README.md` 一致：
@@ -52,6 +58,8 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 - `maxArgs` 上限，超出时报 `Protocol error: array length too large`。
 
 `parse(...)` 返回 `Decoded`，其中保存一块 decoded byte buffer，以及每个 argv 的 offset/length。`splitUtf8(...)` 是 CLI REPL 使用的便利方法，会把 Java `String` 先编码成 UTF-8，再复制出每个 argv。服务端 decoder 使用显式的 `parseUnlimited(...)`，解析后再按连接配置返回更精确的参数数量错误。
+
+CLI 和 server 共用同一套 inline 语法，但边界不同：CLI 侧更偏人手输入和单机验证，服务端侧更偏协议适配和错误关闭。两边都不把 inline 解析当成 RESP array 的替代品，只是为了给手工调试、`redis-cli` 风格输入和基础兼容留一条可控路径。
 
 这个 parser 也解释了为什么 CLI REPL 可以输入带空格或二进制转义的参数，例如：
 
@@ -138,6 +146,8 @@ YierdisBenchArgs
 这意味着 benchmark 的默认模式会覆盖真实进程启动、真实 Netty server、真实 RESP decode/execute/reply 路径。`--noStartServer` 则连接已有 server，适合手工启动特殊参数后跑同一 workload。
 
 comparison mode 会分别启动 baseline/current jar。只有双方完成同一组必要测量且没有 workload/protocol/reply errors 时，结果才标记 comparable；否则 summary 里会标记 `non-comparable`。
+
+benchmark 的结果聚合也有边界：吞吐和延迟样本只是观测值，不是 correctness oracle。`summary`、`comparison` 和 `strictReplies` 的组合用来判断“跑得快不快”以及“这次结果能不能拿来比较”，但不替代协议测试、命令测试或 DB direct ops。
 
 ## workload workers
 

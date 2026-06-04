@@ -84,6 +84,8 @@ FFM-backed storage paths 当前集中在这些结构：
 - `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot`：collection root records 使用 allocator-backed `LIST_NODE`、`HASH_NODE`、`SET_NODE`、`ZSET_NODE`，root record 再映射到 adapter-owned payload implementation。
 - list quicklist metadata records 使用 allocator-backed `LIST_QUICKLIST_NODE`；payload bytes 以及 hash/set/zset internals 仍有迁移边界。
 
+`EntryHandle` 和 `ValueHandle` 是这些结构上的 typed stable-handle wrapper。`NativeKeyDirectory` 持有的是 `EntryHandle` raw value，`EntryTable` 持有的是 `EntryHandle -> ENTRY_RECORD` 的稳定映射，而 `ENTRY_RECORD` 内再保存 `ValueHandle` raw value。它们都不是 physical address，也不应该被当成可以长期缓存的 `MemorySegment` 视图。
+
 这些结构由 `YierdisDbKeyLifecycle` 统一串起来。插入、替换、删除 key 时，lifecycle 负责同步 key directory、entry table、expire index、type root release 和 memory ledger delta。
 
 ## maxmemory 和 memory stats

@@ -34,6 +34,8 @@ argv
 9. 创建 boss/worker Netty group，并由 `YierdisServerChannelInitializer` 装配连接 pipeline。
 10. `bind(port)`。
 
+`YierdisInstance` 在这个过程中不是“随手可用的 DB 容器”。`YierdisInstance.create(config)` 要求 `engineFactory` 已经注入；`bindToCurrentThread()` 要先把当前线程标成 owner thread，后续 DB access 才会被允许；`close()` 负责按拥有关系关闭 runtime、allocator 和 DB resources。bootstrap 失败时会 best-effort 清掉已经创建的对象，避免留下半初始化实例。
+
 注意：benchmark 有自己的 `YierdisBenchServerArgs`，只负责生成子进程 server argv。它不是完整 server 参数模型，尤其没有 server-only 的 client idle/output-buffer 慢客户端参数。
 
 源码入口：
@@ -123,6 +125,8 @@ TTL 语义是“访问时惰性删除 + 轻量后台清理”。相关参数：
 - `--nativeDefragEnabled` 及 `--nativeDefragMaxMoveBytes`、`--nativeDefragMaxObjects`、`--nativeDefragTimeLimitMillis`：maintenance tick 里可选 native allocator defrag 预算。
 
 bootstrap 使用 Netty worker event loop 做定时器，但定时器只提交 `executor.executeMaintenance(...)`。真正的 DB cleanup、global maxmemory maintenance 和 native defrag 都在 DB owner thread 上执行。`cleanupPending` 会 coalesce 尚未完成的 cleanup，避免高压下堆积追赶式 maintenance 任务。
+
+`nativeDefragEnabled` 只是给 `YierdisDb.defragMaintenance()` 提供预算闸门；更细的移动、pin、quarantine 和 object table 语义看 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md)。
 
 `KEYS` 的预算来自 `SlowCommandGovernor`，由 `DefaultCommandModules.create(...)` 注入命令模块。大 keyspace 运行时优先使用 `SCAN`，把 `KEYS` 当成受限诊断工具。
 

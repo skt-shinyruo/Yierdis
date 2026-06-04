@@ -55,6 +55,7 @@
 | [`CommandExecutorDrainLoop`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorDrainLoop.java) | GLOBAL / FAIR 调度和 drain budget | drain methods | [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 | [`CommandExecutorExecutionSupport`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/CommandExecutorExecutionSupport.java) | 执行前后上下文、reply writer、IO 写回 | execute methods | [`request-execution-flow.md`](./request-execution-flow.md) |
 | [`ExecutionConnectionContext`](../../yierdis-server/yierdis-server-executor/src/main/java/yier/bubu/redis/execution/executor/ExecutionConnectionContext.java) | 单连接执行状态、背压恢复和关闭保护 | queue / drain methods | [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
+| [`NettyExecutionConnection`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionConnection.java) | Channel 级 connection root，绑定 `Channel`、`EngineSession` 和 `ExecutionConnectionContext` | `getOrCreate(...)`, `markClosing()`, `connectionId()` | [`request-execution-flow.md`](./request-execution-flow.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 
 边界：Netty I/O 线程只提交请求，不访问 DB；DB 访问发生在 executor owner thread。
 
@@ -67,7 +68,7 @@
 | [`CommandSessionCapabilities`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/CommandSessionCapabilities.java) | 把通用 `Session` 收窄成命令需要的 DB index、client metadata、transaction、stats 和 protocol 能力 | `from(...)` | [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md) |
 | [`ServerSession`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ServerSession.java) | 连接状态：DB index、RESP version、transaction state、client metadata | session accessors | [`commands-and-data-model.md`](./commands-and-data-model.md) |
 | [`TransactionState`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/TransactionState.java) | `MULTI/EXEC/DISCARD` 队列状态、abort 和 replay contract | `begin()`, `discard()`, `tryEnqueue(...)`, `drain()` | [`transaction-and-replay.md`](./transaction-and-replay.md) |
-| [`ExecutionRecord`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ExecutionRecord.java) | 记录 change event / replay surface 需要的不可变请求快照 | constructor / accessors | [`transaction-and-replay.md`](./transaction-and-replay.md), [`glossary.md`](./glossary.md) |
+| [`ExecutionRecord`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ExecutionRecord.java) | dbIndex + copied request 的不可变 replay / change-event 快照 | constructor / accessors | [`transaction-and-replay.md`](./transaction-and-replay.md), [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md), [`glossary.md`](./glossary.md) |
 
 边界：事务排队前要复用 `CommandSpec` 校验；真正执行时仍走同一 command handler。
 
@@ -129,11 +130,11 @@
 
 | 类/模块 | 职责 | 关键入口 | 继续阅读 |
 | --- | --- | --- | --- |
-| `BytesView` / `BytesSlice` | 跨 heap/off-heap 的 bytes 读取抽象 | view/slice methods | [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md) |
+| `BytesView` / `BytesSlice` / `BytesSink` | 跨 heap/off-heap 的 bytes 读取和流式写出抽象 | view/slice/sink methods | [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md), [`offheap-copy-behavior.md`](./offheap-copy-behavior.md) |
 | [`NativeHandle`](../../yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeHandle.java) | native object stable handle 的 ABI 编码 | encode/decode methods | [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) |
 | [`YierdisNativeObjectTable`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java) | object metadata、generation、pin、quarantine | allocate/free/resolve methods | [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) |
 | [`YierdisStableNativeAllocator`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java) | stable allocator、realloc、epoch、active defrag | allocate/realloc/defrag methods | [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) |
-| [`EntryHandle`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryHandle.java) / [`ValueHandle`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/ValueHandle.java) | DB 层对 native handle 的类型化包装 | factory/accessor methods | [`native-memory-runtime.md`](./native-memory-runtime.md) |
+| [`EntryHandle`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/EntryHandle.java) / [`ValueHandle`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/entry/ValueHandle.java) | DB 层对 native handle 的类型化包装 | factory/accessor methods | [`native-memory-runtime.md`](./native-memory-runtime.md), [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) |
 
 边界：native allocator 解决稳定地址和生命周期；DB handle wrapper 解决 DB domain/kind 语义。
 
