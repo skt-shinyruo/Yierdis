@@ -114,12 +114,16 @@ memory 车道负责 native memory contract 和 FFM backend，不拥有 DB 语义
 
 这里定义的是能力接口，不是具体分配器实现：
 
-- `OffHeapAllocator`
-- `OffHeapBuf`
 - `NativeHandle`
 - `NativeAllocator`
+- `NativeObjectView`
+- `NativeObjectKind` / `NativeHandleDomain`
 - `NativeDefrag*`
 - `NativeEpoch*`
+- `NativeAllocatorStats`
+- `NativeAllocationLatencyHistogram`
+- `NativeDefragOptions`
+- `NativeReallocPolicy`
 
 ## protocol 车道
 
