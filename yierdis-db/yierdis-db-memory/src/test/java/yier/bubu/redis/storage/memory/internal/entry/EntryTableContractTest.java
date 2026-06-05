@@ -5,7 +5,6 @@ import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisFfmSlabAllocator;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import yier.bubu.redis.storage.api.ValueType;
 
@@ -80,7 +79,7 @@ public class EntryTableContractTest {
     @Test
     public void entryTableRejectsStaleReleasedHandleAfterSlotReuse() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("entry-slab-idle-test")) {
-            EntryTable table = new EntryTable(runtime, new YierdisFfmSlabAllocator(runtime), 64);
+            EntryTable table = new EntryTable(runtime, 64);
 
             EntryHandle first = table.allocate(new EntryRecord(
                     1L, valueHandle(2L), 3, ValueType.STRING, ValueEncoding.STRING_RAW, 0, -1L, 0L, 0L

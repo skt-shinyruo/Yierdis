@@ -21,7 +21,7 @@ import java.nio.charset.StandardCharsets;
 public class MutationExecutorReservationTest {
     @Test
     public void failedMutationRollsBackReservationAndDoesNotPoisonNextMutation() {
-        YierdisDb db = new YierdisDb(null, 1024, "noeviction", 5, 5, 5);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(1024, "noeviction", 5, 5, 5);
         db.bindToCurrentThread();
         try {
             YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(db);
@@ -57,7 +57,7 @@ public class MutationExecutorReservationTest {
 
     @Test
     public void noevictionRejectsBeforeMutationCanRun() {
-        YierdisDb db = new YierdisDb(null, 1, "noeviction", 5, 5, 5);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(1, "noeviction", 5, 5, 5);
         db.bindToCurrentThread();
         try {
             YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(db);

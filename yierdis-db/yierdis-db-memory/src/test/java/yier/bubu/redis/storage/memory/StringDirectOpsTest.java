@@ -91,7 +91,7 @@ public class StringDirectOpsTest {
             Assert.assertEquals(-1L, db.reads().ttl().ttlMillis(view("k")));
         });
 
-        YierdisDb small = new YierdisDb(null, 4, "noeviction", 5, 5, 5);
+        YierdisDb small = YierdisDb.createWithOwnedFfmRuntime(4, "noeviction", 5, 5, 5);
         try {
             small.bindToCurrentThread();
             try {
@@ -113,7 +113,7 @@ public class StringDirectOpsTest {
         byte[] smallValue = b("x");
         long maxmemoryBytes = usedAfterSet(key, largeValue);
 
-        YierdisDb db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
 
@@ -139,7 +139,7 @@ public class StringDirectOpsTest {
         long usedWithOldValue = usedAfterSet(key, oldValue);
         long maxmemoryBytes = usedWithOldValue + 1L;
 
-        YierdisDb db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, "noeviction", 5, 5, 5);
         try {
             db.bindToCurrentThread();
 

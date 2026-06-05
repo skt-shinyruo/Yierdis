@@ -11,7 +11,6 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
-import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 public final class YierdisDbComponentFactory {
@@ -22,8 +21,6 @@ public final class YierdisDbComponentFactory {
             OwnerCallbacks owner,
             YierdisDbRuntimeState runtimeState,
             YierdisFfmMemoryRuntime memoryRuntime,
-            OffHeapAllocator offHeapAllocator,
-            boolean ownsOffHeapAllocator,
             boolean ownsMemoryRuntime,
             long maxmemoryBytes,
             MaxmemoryPolicy maxmemoryPolicy,
@@ -34,8 +31,6 @@ public final class YierdisDbComponentFactory {
     ) {
         YierdisDbStorageComponents storage = YierdisDbStorageComponents.create(
                 memoryRuntime,
-                offHeapAllocator,
-                ownsOffHeapAllocator,
                 ownsMemoryRuntime
         );
         YierdisDbConfig config = YierdisDbConfig.create(
@@ -46,10 +41,7 @@ public final class YierdisDbComponentFactory {
                 expireCleanupTimeLimitMillis,
                 nativeDefragOptions
         );
-        YierdisDbMemoryEstimator memoryEstimator = new YierdisDbMemoryEstimator(
-                storage.keysStoredOffHeap,
-                storage.offHeapAllocator
-        );
+        YierdisDbMemoryEstimator memoryEstimator = new YierdisDbMemoryEstimator();
         // ledger 需要在写入前触发过期清理和淘汰，但这两个组件又依赖 keyLifecycle；
         // 因此先传入可回绑的占位回调，等组件图闭合后再绑定真实实现。
         YierdisDbMemoryBudgetCallbacks memoryBudgetCallbacks = new YierdisDbMemoryBudgetCallbacks();
@@ -64,7 +56,6 @@ public final class YierdisDbComponentFactory {
         YierdisDbMutationExecutor mutationExecutor = new YierdisDbMutationExecutor(owner::checkThread, ledger);
         YierdisDbKeyLifecycle keyLifecycle = new YierdisDbKeyLifecycle(
                 storage.expires,
-                storage.offHeapAllocator,
                 storage.nativeAllocator,
                 storage.memoryRuntime,
                 storage.entries,
@@ -102,7 +93,6 @@ public final class YierdisDbComponentFactory {
                 keyLifecycle,
                 storage.expires,
                 config.maxmemoryBytes,
-                storage.keysStoredOffHeap,
                 ledger,
                 runtimeState::hasNoMaxmemoryCoordinator,
                 memoryEstimator,

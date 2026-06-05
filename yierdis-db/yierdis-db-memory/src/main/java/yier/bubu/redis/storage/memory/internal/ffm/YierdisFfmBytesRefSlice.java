@@ -9,10 +9,10 @@ import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesSink;
+import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.foreign.YierdisFfmAccess;
-import yier.bubu.redis.memory.api.OffHeapSlice;
 
-public final class YierdisFfmBytesRefSlice implements OffHeapSlice {
+public final class YierdisFfmBytesRefSlice implements BytesSlice {
     private static final int COPY_CHUNK_BYTES = 8 * 1024;
     private static final ThreadLocal<byte[]> TL_COPY_BUF =
             ThreadLocal.withInitial(() -> new byte[COPY_CHUNK_BYTES]);

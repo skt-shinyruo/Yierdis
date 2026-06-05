@@ -66,8 +66,7 @@ public class YierdisDbMemoryReporterTest {
 
                 YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
                 long entryBytes = lifecycle.entryTable().nativeBytes();
-                long expectedOffHeap = lifecycle.offHeapAllocator().usedBytes()
-                        + lifecycle.nativeAllocator().stats().logicalUsedBytes()
+                long expectedNative = lifecycle.nativeAllocator().stats().logicalUsedBytes()
                         + lifecycle.keyDirectory().nativeBytes()
                         + lifecycle.listRoot().nativeBytes()
                         + lifecycle.hashRoot().nativeBytes()
@@ -75,7 +74,7 @@ public class YierdisDbMemoryReporterTest {
                         + lifecycle.zsetRoot().nativeBytes();
 
                 Assert.assertTrue("entry records must be present for double-count regression coverage", entryBytes > 0L);
-                Assert.assertEquals(expectedOffHeap, db.memory().memoryStats().offHeapUsedBytes());
+                Assert.assertEquals(expectedNative, db.memory().memoryStats().offHeapUsedBytes());
             } finally {
                 db.shutdown();
             }

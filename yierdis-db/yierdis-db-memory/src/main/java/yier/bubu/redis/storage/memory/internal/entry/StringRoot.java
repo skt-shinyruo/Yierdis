@@ -8,10 +8,7 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
-import yier.bubu.redis.memory.api.OffHeapAllocator;
-import yier.bubu.redis.memory.api.OffHeapSlice;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisForeignOffHeapAllocator;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
@@ -24,7 +21,7 @@ public final class StringRoot implements TypeRoot {
     private static final int COPY_BUFFER_BYTES = 8 * 1024;
     private static final ThreadLocal<byte[]> TL_COPY_BUF = ThreadLocal.withInitial(() -> new byte[COPY_BUFFER_BYTES]);
     private static final byte[] ZERO_BUF = new byte[COPY_BUFFER_BYTES];
-    private static final OffHeapSlice EMPTY_SLICE = new HeapBackedOffHeapSlice(new byte[0]);
+    private static final BytesSlice EMPTY_SLICE = new HeapBackedBytesSlice(new byte[0]);
 
     private final NativeAllocator allocator;
     private final boolean ownsAllocator;
@@ -37,10 +34,6 @@ public final class StringRoot implements TypeRoot {
 
     public StringRoot(NativeAllocator allocator) {
         this(allocator, false);
-    }
-
-    public StringRoot(OffHeapAllocator allocator) {
-        this(stableAllocatorFromLegacyAllocator(allocator), true);
     }
 
     private StringRoot(NativeAllocator allocator, boolean ownsAllocator) {
@@ -203,13 +196,13 @@ public final class StringRoot implements TypeRoot {
         }
     }
 
-    public synchronized OffHeapSlice slice(ValueHandle handle) {
+    public synchronized BytesSlice slice(ValueHandle handle) {
         ensureOpen();
         byte[] copy = copy(handle);
         if (copy.length == 0) {
             return EMPTY_SLICE;
         }
-        return new HeapBackedOffHeapSlice(copy);
+        return new HeapBackedBytesSlice(copy);
     }
 
     public synchronized byte[] copy(ValueHandle handle) {
@@ -358,24 +351,16 @@ public final class StringRoot implements TypeRoot {
         }
     }
 
-    private static NativeAllocator stableAllocatorFromLegacyAllocator(OffHeapAllocator allocator) {
-        Objects.requireNonNull(allocator, "allocator");
-        if (allocator instanceof YierdisForeignOffHeapAllocator foreignAllocator) {
-            return new YierdisStableNativeAllocator(foreignAllocator.memoryRuntime(), 4096);
-        }
-        throw new IllegalArgumentException("Only the foreign off-heap allocator is supported");
-    }
-
     private void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("string root is closed");
         }
     }
 
-    private static final class HeapBackedOffHeapSlice implements OffHeapSlice {
+    private static final class HeapBackedBytesSlice implements BytesSlice {
         private final byte[] bytes;
 
-        private HeapBackedOffHeapSlice(byte[] bytes) {
+        private HeapBackedBytesSlice(byte[] bytes) {
             this.bytes = Objects.requireNonNull(bytes, "bytes").length == 0 ? bytes : Arrays.copyOf(bytes, bytes.length);
         }
 

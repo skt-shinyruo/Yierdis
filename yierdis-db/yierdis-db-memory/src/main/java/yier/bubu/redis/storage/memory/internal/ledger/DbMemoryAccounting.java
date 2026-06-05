@@ -11,7 +11,6 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragReport;
-import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 
@@ -30,7 +29,6 @@ public final class DbMemoryAccounting {
             long maxmemoryBytes,
             long heapDataBytesEstimate,
             long reservedBytes,
-            OffHeapAllocator offHeapAllocator,
             long directNativeBytes,
             int keyCount,
             YierdisExpireIndex expires,
@@ -39,9 +37,8 @@ public final class DbMemoryAccounting {
             NativeAllocatorStats nativeAllocatorStats,
             NativeDefragReport nativeDefragReport
     ) {
-        long allocatorOffHeapUsedBytes = safeOffHeapUsedBytes(offHeapAllocator);
         long directNativeUsedBytes = Math.max(0L, directNativeBytes);
-        long offHeapUsedBytes = allocatorOffHeapUsedBytes + directNativeUsedBytes;
+        long offHeapUsedBytes = directNativeUsedBytes;
 
         int expireCount = expires == null ? 0 : expires.size();
 
@@ -79,7 +76,7 @@ public final class DbMemoryAccounting {
             }
         }
         long effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + Math.max(0L, reservedBytes);
-        long totalEstimatedBytes = heapDataBytesEstimate + allocatorOffHeapUsedBytes + directNativeUsedBytes;
+        long totalEstimatedBytes = heapDataBytesEstimate + directNativeUsedBytes;
         if (expires instanceof YierdisHeapExpireIndex) {
             totalEstimatedBytes += expireOverhead + expireValueObjects;
         }
@@ -118,17 +115,6 @@ public final class DbMemoryAccounting {
                 nativeAllocatorStats == null ? 0L : nativeAllocatorStats.staleHandleDetections(),
                 nativeAllocatorStats == null ? 0L : nativeAllocatorStats.defragReclaimedPages()
         );
-    }
-
-    private static long safeOffHeapUsedBytes(OffHeapAllocator allocator) {
-        if (allocator == null) {
-            return 0;
-        }
-        try {
-            return Math.max(0L, allocator.usedBytes());
-        } catch (Throwable ignored) {
-            return 0;
-        }
     }
 
     private static long estimateLongObjectBytes(int count) {

@@ -13,7 +13,6 @@ import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedger;
-import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
@@ -32,7 +31,6 @@ public final class YierdisDbMemoryReporter {
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final YierdisExpireIndex expires;
     private final long maxmemoryBytes;
-    private final boolean keysStoredOffHeap;
     private final MemoryLedger ledger;
     private final BooleanSupplier offHeapIncludedInMaxmemorySupplier;
     private final YierdisDbMemoryEstimator memoryEstimator;
@@ -43,7 +41,6 @@ public final class YierdisDbMemoryReporter {
             YierdisDbKeyLifecycle keyLifecycle,
             YierdisExpireIndex expires,
             long maxmemoryBytes,
-            boolean keysStoredOffHeap,
             MemoryLedger ledger,
             BooleanSupplier offHeapIncludedInMaxmemorySupplier,
             YierdisDbMemoryEstimator memoryEstimator,
@@ -53,7 +50,6 @@ public final class YierdisDbMemoryReporter {
         this.keyLifecycle = java.util.Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.expires = java.util.Objects.requireNonNull(expires, "expires");
         this.maxmemoryBytes = maxmemoryBytes;
-        this.keysStoredOffHeap = keysStoredOffHeap;
         this.ledger = java.util.Objects.requireNonNull(ledger, "ledger");
         this.offHeapIncludedInMaxmemorySupplier = java.util.Objects.requireNonNull(
                 offHeapIncludedInMaxmemorySupplier,
@@ -74,7 +70,7 @@ public final class YierdisDbMemoryReporter {
         }
         long keyLen = keyView == null ? 0 : Math.max(0L, (long) keyView.len());
         var keyHandle = keyLifecycle.keyHandle(keyView);
-        return metadataEstimatedBytes(keyHandle, record) + estimateOffHeapBytesForMemoryUsage(keyLen, record);
+        return metadataEstimatedBytes(keyHandle, record) + estimateNativeBytesForMemoryUsage(keyLen, record);
     }
 
     long memoryUsage(byte[] keyBytes) {
@@ -87,7 +83,7 @@ public final class YierdisDbMemoryReporter {
             return -1;
         }
         var keyHandle = keyLifecycle.keyHandle(keyBytes);
-        return metadataEstimatedBytes(keyHandle, record) + estimateOffHeapBytesForMemoryUsage(keyBytes.length, record);
+        return metadataEstimatedBytes(keyHandle, record) + estimateNativeBytesForMemoryUsage(keyBytes.length, record);
     }
 
     YierdisMemoryStats memoryStats() {
@@ -96,11 +92,10 @@ public final class YierdisDbMemoryReporter {
                 maxmemoryBytes,
                 ledger.usedBytes(),
                 ledger.reservedBytes(),
-                keyLifecycle.offHeapAllocator(),
                 directNativeBytes(),
                 keyLifecycle.keyCount(),
                 expires,
-                keysStoredOffHeap,
+                true,
                 offHeapIncludedInMaxmemorySupplier.getAsBoolean(),
                 safeNativeAllocatorStats(),
                 nativeDefragReportSupplier.get()
@@ -144,12 +139,12 @@ public final class YierdisDbMemoryReporter {
         return 0L;
     }
 
-    private long estimateOffHeapBytesForMemoryUsage(long keyLen, EntryRecord record) {
+    private long estimateNativeBytesForMemoryUsage(long keyLen, EntryRecord record) {
         if (record == null) {
             return 0;
         }
         long extra = 0;
-        if (keysStoredOffHeap && keyLen > 0) {
+        if (keyLen > 0) {
             extra += keyLen;
         }
         ValueType type = record.type();
@@ -218,7 +213,7 @@ public final class YierdisDbMemoryReporter {
     }
 
     private long nativeBytesForMaxmemory() {
-        return addSaturating(safeOffHeapUsedBytes(), directNativeBytes());
+        return directNativeBytes();
     }
 
     private long directNativeBytes() {
@@ -263,18 +258,6 @@ public final class YierdisDbMemoryReporter {
             return allocator.stats();
         } catch (Throwable ignored) {
             return null;
-        }
-    }
-
-    private long safeOffHeapUsedBytes() {
-        var allocator = keyLifecycle.offHeapAllocator();
-        if (allocator == null) {
-            return 0L;
-        }
-        try {
-            return Math.max(0L, allocator.usedBytes());
-        } catch (Throwable ignored) {
-            return 0L;
         }
     }
 

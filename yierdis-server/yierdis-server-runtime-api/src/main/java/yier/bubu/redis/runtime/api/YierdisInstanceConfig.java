@@ -139,21 +139,6 @@ public final class YierdisInstanceConfig {
             return this;
         }
 
-        @Deprecated
-        public Builder offHeapAllocator(Object ignored) {
-            return this;
-        }
-
-        @Deprecated
-        public Builder ownsOffHeapAllocator(boolean ignored) {
-            return this;
-        }
-
-        @Deprecated
-        public Builder offHeapKeysEnabled(boolean ignored) {
-            return this;
-        }
-
         public Builder engineFactory(DbEngineFactory engineFactory) {
             this.engineFactory = engineFactory;
             this.engineFactoryBinding = null;

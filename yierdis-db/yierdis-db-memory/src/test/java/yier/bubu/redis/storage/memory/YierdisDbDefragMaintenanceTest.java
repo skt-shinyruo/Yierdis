@@ -6,7 +6,6 @@ import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.api.OffHeapBuf;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
@@ -112,32 +111,6 @@ public class YierdisDbDefragMaintenanceTest {
             } finally {
                 if (allocator != null && pinnedRecord != null) {
                     allocator.unpin(pinnedRecord.valueHandle().nativeHandle());
-                }
-                db.shutdown();
-            }
-        }
-    }
-
-    @Test
-    public void defragMaintenanceDoesNotTouchLegacyOffHeapAdapterBytes() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db-defrag-legacy-offheap")) {
-            YierdisDb db = createDefragEnabledDb(runtime, new NativeDefragOptions(1_000_000L, 1_000L, Long.MAX_VALUE));
-            db.bindToCurrentThread();
-            OffHeapBuf blob = null;
-            try {
-                blob = db.offHeapAllocator.allocate(32);
-                blob.setBytes(0, b("adapter-native-bytes"), 0, "adapter-native-bytes".length());
-                long usedBefore = db.offHeapAllocator.usedBytes();
-                byte firstBefore = blob.getByte(0);
-
-                Assert.assertTrue(db.writes().strings().setString(b("k"), b("v"), SetMode.NORMAL, null).value());
-                db.defragMaintenance();
-
-                Assert.assertEquals(usedBefore, db.offHeapAllocator.usedBytes());
-                Assert.assertEquals(firstBefore, blob.getByte(0));
-            } finally {
-                if (blob != null) {
-                    blob.close();
                 }
                 db.shutdown();
             }

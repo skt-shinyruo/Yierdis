@@ -14,8 +14,6 @@ import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisForeignOffHeapAllocator;
-import yier.bubu.redis.memory.api.OffHeapSlice;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
@@ -42,7 +40,7 @@ public class OffHeapStringStorageTest {
 
                 RecordingBulkOutput out = new RecordingBulkOutput();
                 db.reads().strings().getStringValue(new TestBytesView(key)).writeTo(out);
-                Assert.assertTrue(out.usedOffHeapSlice);
+                Assert.assertTrue(out.usedBytesSlice);
                 Assert.assertArrayEquals(value, out.bytes);
 
                 Assert.assertEquals(1L, (long) db.writes().keyspace().del(Collections.singletonList(key)).value());
@@ -112,22 +110,8 @@ public class OffHeapStringStorageTest {
 
             RecordingBulkOutput out = new RecordingBulkOutput();
             db.reads().strings().getStringValue(new TestBytesView(key)).writeTo(out);
-            Assert.assertTrue(out.usedOffHeapSlice);
+            Assert.assertTrue(out.usedBytesSlice);
             Assert.assertArrayEquals(v2, out.bytes);
-        } finally {
-            db.shutdown();
-        }
-    }
-
-    @Test
-    public void deprecatedOffHeapAllocatorDoesNotOwnStringPayloadsAfterStableAllocatorMigration() {
-        YierdisForeignOffHeapAllocator allocator = new YierdisForeignOffHeapAllocator(4);
-        YierdisDb db = new YierdisDb(allocator, 0, "noeviction", 5, 5, 5);
-        try {
-            db.bindToCurrentThread();
-            Assert.assertTrue(db.writes().strings().setString(b("k"), b("hello"), SetMode.NORMAL, null).value());
-            Assert.assertEquals(0L, allocator.usedBytes());
-            Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
         } finally {
             db.shutdown();
         }
@@ -135,11 +119,11 @@ public class OffHeapStringStorageTest {
 
     private static final class RecordingBulkOutput implements BulkStringSink {
         private byte[] bytes;
-        private boolean usedOffHeapSlice;
+        private boolean usedBytesSlice;
 
         @Override
         public void bulkString(byte[] data) {
-            usedOffHeapSlice = false;
+            usedBytesSlice = false;
             if (data == null) {
                 bytes = null;
                 return;
@@ -150,7 +134,7 @@ public class OffHeapStringStorageTest {
 
         @Override
         public void bulkString(byte[] data, int off, int len) {
-            usedOffHeapSlice = false;
+            usedBytesSlice = false;
             if (data == null) {
                 bytes = null;
                 return;
@@ -161,7 +145,7 @@ public class OffHeapStringStorageTest {
 
         @Override
         public void bulkString(BytesSlice slice) {
-            usedOffHeapSlice = slice instanceof OffHeapSlice;
+            usedBytesSlice = slice != null;
             if (slice == null) {
                 bytes = null;
                 return;
@@ -172,7 +156,7 @@ public class OffHeapStringStorageTest {
 
         @Override
         public void bulkStringLongAscii(long value) {
-            usedOffHeapSlice = false;
+            usedBytesSlice = false;
             bytes = Long.toString(value).getBytes(StandardCharsets.US_ASCII);
         }
     }

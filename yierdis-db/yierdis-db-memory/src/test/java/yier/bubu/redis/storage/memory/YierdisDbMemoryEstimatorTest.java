@@ -25,7 +25,7 @@ import java.util.List;
 public class YierdisDbMemoryEstimatorTest {
     @Test
     public void estimatesHeapStringEntryBytesIncludingHeapKey() {
-        YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator(false, null);
+        YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator();
         KeyHandle key = KeyHandle.forHeap(b("abc"), 1);
         EntryRecord record = record(ValueEncoding.STRING_RAW, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
 
@@ -36,7 +36,7 @@ public class YierdisDbMemoryEstimatorTest {
 
     @Test
     public void estimatesHeapStringEntryBytesExcludingOffHeapKey() {
-        YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator(true, null);
+        YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator();
         KeyHandle key = KeyHandle.forHeap(b("abc"), 1);
         EntryRecord record = record(ValueEncoding.STRING_RAW, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
 
@@ -47,7 +47,7 @@ public class YierdisDbMemoryEstimatorTest {
 
     @Test
     public void estimatesIntegerEncodedStringPayloadAsLongBytes() {
-        YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator(false, null);
+        YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator();
         KeyHandle key = KeyHandle.forHeap(b("n"), 1);
         EntryRecord record = record(ValueEncoding.STRING_INT, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + Long.BYTES);
 

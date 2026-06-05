@@ -13,8 +13,6 @@ import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
-import yier.bubu.redis.memory.foreign.YierdisForeignOffHeapAllocator;
-import yier.bubu.redis.memory.api.OffHeapAllocator;
 
 public final class YierdisDbStorageComponents {
     private static final int ENTRY_TABLE_NATIVE_SLOT_CAPACITY = 64 * 1024;
@@ -23,7 +21,6 @@ public final class YierdisDbStorageComponents {
     private static final int COLLECTION_ROOT_NATIVE_SLOT_CAPACITY = 64 * 1024;
 
     final YierdisFfmMemoryRuntime memoryRuntime;
-    final OffHeapAllocator offHeapAllocator;
     final NativeAllocator nativeAllocator;
     final YierdisDbOwnedResources resources;
     final YierdisExpireIndex expires;
@@ -34,11 +31,9 @@ public final class YierdisDbStorageComponents {
     final HashRoot hashRoot;
     final SetRoot setRoot;
     final ZSetRoot zsetRoot;
-    final boolean keysStoredOffHeap;
 
     private YierdisDbStorageComponents(
             YierdisFfmMemoryRuntime memoryRuntime,
-            OffHeapAllocator offHeapAllocator,
             NativeAllocator nativeAllocator,
             YierdisDbOwnedResources resources,
             YierdisExpireIndex expires,
@@ -48,11 +43,9 @@ public final class YierdisDbStorageComponents {
             ListRoot listRoot,
             HashRoot hashRoot,
             SetRoot setRoot,
-            ZSetRoot zsetRoot,
-            boolean keysStoredOffHeap
+            ZSetRoot zsetRoot
     ) {
         this.memoryRuntime = memoryRuntime;
-        this.offHeapAllocator = offHeapAllocator;
         this.nativeAllocator = nativeAllocator;
         this.resources = resources;
         this.expires = expires;
@@ -63,37 +56,15 @@ public final class YierdisDbStorageComponents {
         this.hashRoot = hashRoot;
         this.setRoot = setRoot;
         this.zsetRoot = zsetRoot;
-        this.keysStoredOffHeap = keysStoredOffHeap;
     }
 
     static YierdisDbStorageComponents create(
             YierdisFfmMemoryRuntime memoryRuntime,
-            OffHeapAllocator offHeapAllocator,
-            boolean ownsOffHeapAllocator,
             boolean ownsMemoryRuntime
     ) {
-        YierdisFfmMemoryRuntime resolvedRuntime = memoryRuntime;
-        OffHeapAllocator resolvedAllocator = offHeapAllocator;
-        boolean resolvedOwnsAllocator = ownsOffHeapAllocator;
-        boolean resolvedOwnsRuntime = ownsMemoryRuntime;
-
-        // 构造阶段只接受 FFM-backed allocator，并在缺省一侧时补齐 runtime/allocator，避免后续组件各自推断 native 运行时。
-        if (resolvedRuntime == null && resolvedAllocator == null) {
-            resolvedRuntime = new YierdisFfmMemoryRuntime("db");
-            resolvedAllocator = new YierdisForeignOffHeapAllocator(resolvedRuntime, 0);
-            resolvedOwnsAllocator = true;
-            resolvedOwnsRuntime = true;
-        } else if (resolvedRuntime == null) {
-            if (!(resolvedAllocator instanceof YierdisForeignOffHeapAllocator foreignAllocator)) {
-                throw new IllegalArgumentException("Only the foreign off-heap allocator is supported");
-            }
-            resolvedRuntime = foreignAllocator.memoryRuntime();
-        } else if (resolvedAllocator == null) {
-            resolvedAllocator = new YierdisForeignOffHeapAllocator(resolvedRuntime, 0);
-            resolvedOwnsAllocator = true;
-        } else if (!(resolvedAllocator instanceof YierdisForeignOffHeapAllocator)) {
-            throw new IllegalArgumentException("Only the foreign off-heap allocator is supported");
-        }
+        YierdisFfmMemoryRuntime resolvedRuntime =
+                memoryRuntime == null ? new YierdisFfmMemoryRuntime("db") : memoryRuntime;
+        boolean resolvedOwnsRuntime = memoryRuntime == null || ownsMemoryRuntime;
 
         // Entry、key bytes、string bytes 和 collection roots 共享一个 stable allocator，
         // 使 defrag/释放时可以按统一的 native handle 域验证对象类型与存活状态。
@@ -103,10 +74,8 @@ public final class YierdisDbStorageComponents {
         );
         YierdisDbOwnedResources resources = new YierdisDbOwnedResources(
                 resolvedRuntime,
-                resolvedAllocator,
                 nativeAllocator,
                 resolvedOwnsRuntime,
-                resolvedOwnsAllocator,
                 true
         );
         EntryTable entries = new EntryTable(resolvedRuntime, nativeAllocator);
@@ -118,7 +87,6 @@ public final class YierdisDbStorageComponents {
         ZSetRoot zsetRoot = new ZSetRoot(resolvedRuntime, nativeAllocator);
         return new YierdisDbStorageComponents(
                 resolvedRuntime,
-                resolvedAllocator,
                 nativeAllocator,
                 resources,
                 new YierdisFfmExpireIndex(resolvedRuntime, nativeAllocator),
@@ -128,8 +96,7 @@ public final class YierdisDbStorageComponents {
                 listRoot,
                 hashRoot,
                 setRoot,
-                zsetRoot,
-                true
+                zsetRoot
         );
     }
 
