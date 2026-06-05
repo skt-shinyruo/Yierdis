@@ -28,15 +28,14 @@ embedded/test 兼容路径可以显式调用 `YierdisInstance.createWithDefaults
 
 ```text
 YierdisFfmMemoryRuntime
-  -> YierdisForeignOffHeapAllocator
   -> YierdisStableNativeAllocator
-  -> EntryTable
-  -> NativeKeyDirectory
-  -> StringRoot / ListRoot / HashRoot / SetRoot / ZSetRoot
-  -> YierdisFfmExpireIndex
+     -> EntryTable
+     -> NativeKeyDirectory
+     -> StringRoot / ListRoot / HashRoot / SetRoot / ZSetRoot
+     -> YierdisFfmExpireIndex
 ```
 
-DB resources 会记录哪些对象由当前 DB 拥有。关闭 DB 时，只关闭自己 owns 的 runtime / off-heap allocator / native allocator，避免 global scope 下一个 DB 误关 shared runtime。
+DB resources 会记录哪些对象由当前 DB 拥有。关闭 DB 时，只关闭自己 owns 的 runtime / native allocator，避免 global scope 下一个 DB 误关 shared runtime。
 
 ## runtime / region / span / access
 
