@@ -1,27 +1,22 @@
 package yier.bubu.redis.storage.memory.internal.expire;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
+import yier.bubu.redis.storage.memory.internal.keyspace.YierdisKeyspace;
 
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
- * Heap-backed TTL index implementation using {@link ByteArrayKeyspace}.
+ * Heap-backed TTL index retained until expire-index cleanup removes the legacy implementation.
  * <p>
  * This preserves the existing "canonical key sharing" behavior where the expires index stores TTLs under the
  * store's canonical key instance.
  */
 public final class YierdisHeapExpireIndex implements YierdisExpireIndex {
-    private final ByteArrayKeyspace<Long> expires = new ByteArrayKeyspace<>();
+    private final Map<ByteArrayKey, ExpireEntry> expires = new HashMap<>();
 
     @Override
     public int size() {
@@ -30,30 +25,34 @@ public final class YierdisHeapExpireIndex implements YierdisExpireIndex {
 
     @Override
     public Long get(byte[] keyBytes) {
-        return expires.get(keyBytes);
+        ExpireEntry entry = expires.get(ByteArrayKey.of(keyBytes));
+        return entry == null ? null : entry.expireAtMillis;
     }
 
     @Override
     public Long get(BytesView keyView) {
-        return expires.get(keyView);
+        ExpireEntry entry = expires.get(ByteArrayKey.of(keyView));
+        return entry == null ? null : entry.expireAtMillis;
     }
 
     @Override
     public Long get(KeyHandle keyHandle) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        // Important: expires uses its own per-table seed, so we must not use keyHandle.dictHash() for indexing.
-        return expires.get((BytesView) keyHandle);
+        return get((BytesView) keyHandle);
     }
 
     @Override
     public byte[] randomKey() {
-        return expires.randomKey();
+        if (expires.isEmpty()) {
+            return null;
+        }
+        return expires.values().iterator().next().canonicalKey;
     }
 
     @Override
     public KeyHandle randomKeyHandle() {
-        byte[] k = expires.randomKey();
-        if (k == null) {
+        byte[] key = randomKey();
+        if (key == null) {
             return null;
         }
         throw new UnsupportedOperationException("YierdisHeapExpireIndex no longer produces internal KeyHandle instances");
@@ -74,50 +73,48 @@ public final class YierdisHeapExpireIndex implements YierdisExpireIndex {
             canonical = keyBytes;
         }
 
-        // If the expires key is stored under a different byte[] instance, migrate it to the canonical key.
-        byte[] expiresKey = expires.canonicalKey(keyBytes);
-        if (expiresKey != null && expiresKey != canonical) {
-            Long current = expires.get(keyBytes);
-            if (current != null) {
-                expires.remove(keyBytes, current);
-            }
+        ByteArrayKey lookup = ByteArrayKey.of(keyBytes);
+        ExpireEntry existing = expires.get(lookup);
+        if (existing != null && existing.canonicalKey != canonical) {
+            expires.remove(lookup);
         }
 
-        expires.compute(canonical, (k, old) -> expireAtMillis);
+        expires.put(ByteArrayKey.of(canonical), new ExpireEntry(canonical, expireAtMillis));
     }
 
     @Override
     public void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
         Objects.requireNonNull(keyHandle, "keyHandle");
         byte[] canonical = keyBytes(keyHandle);
-
-        // Preserve canonical key sharing semantics: ensure the expires key is stored under the canonical key instance.
-        byte[] expiresKey = expires.canonicalKey(canonical);
-        if (expiresKey != null && expiresKey != canonical) {
-            Long current = expires.get(canonical);
-            if (current != null) {
-                expires.remove(canonical, current);
-            }
-        }
-
-        expires.compute(canonical, (k, old) -> expireAtMillis);
+        expires.put(ByteArrayKey.of(canonical), new ExpireEntry(canonical, expireAtMillis));
     }
 
     @Override
     public void removeExpire(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
-        expires.computeIfPresent(keyBytes, (k, old) -> null);
+        expires.remove(ByteArrayKey.of(keyBytes));
     }
 
     @Override
     public void removeExpire(KeyHandle keyHandle) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        byte[] canonical = keyBytes(keyHandle);
-        expires.computeIfPresent(canonical, (k, old) -> null);
+        expires.remove(ByteArrayKey.of((BytesView) keyHandle));
     }
 
-    public ByteArrayKeyspace<Long> rawKeyspace() {
-        return expires;
+    public boolean isRehashing() {
+        return false;
+    }
+
+    public int table0Capacity() {
+        return Math.max(16, nextPowerOfTwo((int) Math.ceil(expires.size() / 0.75d)));
+    }
+
+    public int table1Capacity() {
+        return 0;
+    }
+
+    public long estimatedTableOverheadBytes() {
+        return (long) table0Capacity() * (Long.BYTES + Integer.BYTES + 2L * Long.BYTES);
     }
 
     private static byte[] keyBytes(KeyHandle keyHandle) {
@@ -126,5 +123,49 @@ public final class YierdisHeapExpireIndex implements YierdisExpireIndex {
             out[i] = keyHandle.byteAt(i);
         }
         return out;
+    }
+
+    private static int nextPowerOfTwo(int value) {
+        int capacity = 1;
+        while (capacity < value) {
+            capacity <<= 1;
+        }
+        return capacity;
+    }
+
+    private record ExpireEntry(byte[] canonicalKey, long expireAtMillis) {
+    }
+
+    private static final class ByteArrayKey {
+        private final byte[] bytes;
+        private final int hash;
+
+        private ByteArrayKey(byte[] bytes) {
+            this.bytes = Objects.requireNonNull(bytes, "bytes");
+            this.hash = Arrays.hashCode(bytes);
+        }
+
+        private static ByteArrayKey of(byte[] bytes) {
+            return new ByteArrayKey(bytes);
+        }
+
+        private static ByteArrayKey of(BytesView view) {
+            Objects.requireNonNull(view, "view");
+            byte[] bytes = new byte[view.length()];
+            for (int i = 0; i < bytes.length; i++) {
+                bytes[i] = view.getByte(i);
+            }
+            return new ByteArrayKey(bytes);
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            return obj instanceof ByteArrayKey other && Arrays.equals(bytes, other.bytes);
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
     }
 }
