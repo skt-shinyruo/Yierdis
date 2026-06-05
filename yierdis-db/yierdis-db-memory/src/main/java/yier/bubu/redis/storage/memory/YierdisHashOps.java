@@ -21,7 +21,7 @@ import java.util.Objects;
 import java.util.function.IntSupplier;
 
 public final class YierdisHashOps implements HashReadOps, HashWriteOps {
-    private static final long HASH_PAIR_OVERHEAD_BYTES_ESTIMATE = 64L;
+    private static final long HASH_PAIR_OVERHEAD_BYTES_ESTIMATE = 256L;
 
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;

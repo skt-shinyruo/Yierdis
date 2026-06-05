@@ -59,15 +59,27 @@ public final class NativeListpack implements AutoCloseable {
         insertAt(entries.size(), value);
     }
 
+    public void addLast(byte[] value, NativeObjectKind kind) {
+        insertAt(entries.size(), value, kind);
+    }
+
     public void addFirst(byte[] value) {
         insertAt(0, value);
     }
 
+    public void addFirst(byte[] value, NativeObjectKind kind) {
+        insertAt(0, value, kind);
+    }
+
     public void insertAt(int index, byte[] value) {
+        insertAt(index, value, valueKind);
+    }
+
+    public void insertAt(int index, byte[] value, NativeObjectKind kind) {
         if (index < 0 || index > entries.size()) {
             throw new IndexOutOfBoundsException();
         }
-        NativeHandle handle = store(value);
+        NativeHandle handle = store(value, kind);
         entries.add(index, handle);
         encodedBytes += entryEncodedBytes(value == null ? -1 : value.length);
         if (handle != null) {
@@ -112,8 +124,12 @@ public final class NativeListpack implements AutoCloseable {
     }
 
     public void set(int index, byte[] value) {
+        set(index, value, valueKind);
+    }
+
+    public void set(int index, byte[] value, NativeObjectKind kind) {
         NativeHandle old = entries.get(index);
-        NativeHandle next = store(value);
+        NativeHandle next = store(value, kind);
         entries.set(index, next);
         encodedBytes += entryEncodedBytes(value == null ? -1 : value.length)
                 - entryEncodedBytes(old == null ? -1 : byteStore.length(old));
@@ -148,10 +164,14 @@ public final class NativeListpack implements AutoCloseable {
     }
 
     private NativeHandle store(byte[] value) {
+        return store(value, valueKind);
+    }
+
+    private NativeHandle store(byte[] value, NativeObjectKind kind) {
         if (value == null) {
             return null;
         }
-        return byteStore.store(value, valueKind);
+        return byteStore.store(value, kind);
     }
 
     private void release(NativeHandle handle) {

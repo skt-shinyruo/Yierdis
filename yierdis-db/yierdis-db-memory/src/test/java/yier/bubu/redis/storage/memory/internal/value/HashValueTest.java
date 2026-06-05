@@ -1,26 +1,45 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
+import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 
+import java.util.ArrayList;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 
 public class HashValueTest {
     @Test
+    public void rootCreatedPackedHashStoresFieldsAndValuesAsNativeBytesAndStreamsNativeSlices() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-native-packed-bytes");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             HashRoot root = new HashRoot(allocator)) {
+            ValueHandle handle = root.create();
+
+            root.hsetMany(handle, List.of(bytes("field"), bytes("value")));
+
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.HASH_FIELD_BYTES));
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.HASH_VALUE_BYTES));
+            RecordingBulkStringSink out = new RecordingBulkStringSink();
+            root.hgetallPairsInto(handle, out);
+            Assert.assertTrue(out.sawNativeBytesSlice());
+            Assert.assertEquals(List.of("field", "value"), out.strings());
+        }
+    }
+
+    @Test
     public void packedHashSupportsUpdateAndDeleteWithRepacking() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-test")) {
-            HashValue hv = new HashValue(runtime);
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-test");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+            HashValue hv = new HashValue(allocator);
             try {
                 Assert.assertEquals(ValueEncoding.HASH_PACKED, hv.encoding());
 
@@ -57,8 +76,9 @@ public class HashValueTest {
 
     @Test
     public void hashConvertsToHashTableAfterTooManyFields() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-test")) {
-            HashValue hv = new HashValue(runtime);
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("hash-test");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+            HashValue hv = new HashValue(allocator);
             try {
                 int added = 0;
                 for (int i = 0; i < 600; i++) {
@@ -74,6 +94,53 @@ public class HashValueTest {
             } finally {
                 hv.close();
             }
+        }
+    }
+
+    private static byte[] bytes(String value) {
+        return value.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static final class RecordingBulkStringSink implements BulkStringSink {
+        private final List<String> values = new ArrayList<>();
+        private boolean sawNativeBytesSlice;
+
+        @Override
+        public void bulkString(byte[] data) {
+            sawNativeBytesSlice = false;
+            values.add(data == null ? null : new String(data, StandardCharsets.US_ASCII));
+        }
+
+        @Override
+        public void bulkString(byte[] data, int off, int len) {
+            sawNativeBytesSlice = false;
+            values.add(data == null ? null : new String(data, off, len, StandardCharsets.US_ASCII));
+        }
+
+        @Override
+        public void bulkString(BytesSlice slice) {
+            if (slice == null) {
+                values.add(null);
+                return;
+            }
+            sawNativeBytesSlice = slice instanceof NativeBytesSlice;
+            byte[] data = new byte[slice.length()];
+            slice.getBytes(0, data, 0, data.length);
+            values.add(new String(data, StandardCharsets.US_ASCII));
+        }
+
+        @Override
+        public void bulkStringLongAscii(long value) {
+            sawNativeBytesSlice = false;
+            values.add(Long.toString(value));
+        }
+
+        private boolean sawNativeBytesSlice() {
+            return sawNativeBytesSlice;
+        }
+
+        private List<String> strings() {
+            return values;
         }
     }
 }
