@@ -242,6 +242,31 @@ public class YierdisDbArchitectureGuardTest {
         }
     }
 
+    @Test
+    public void dbMemoryMustNotReferenceLegacyExpireIndexImplementations() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("unable to resolve repository root", repoRoot);
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = 0;
+        for (Path root : List.of(storageMemoryMain(repoRoot), storageMemoryTest(repoRoot))) {
+            scanned += scanForForbiddenText(
+                    repoRoot,
+                    root,
+                    offenders,
+                    "YierdisHeapExpireIndex",
+                    "YierdisFfmExpireIndex(YierdisFfmBlobStore",
+                    "setExpireAtMillis(byte[] keyBytes, long expireAtMillis, YierdisKeyspace"
+            );
+        }
+
+        Assert.assertTrue("expected to scan yierdis-db-memory sources", scanned > 0);
+        if (!offenders.isEmpty()) {
+            Assert.fail("db-memory must not reference legacy expire index implementations:\n"
+                    + String.join("\n", offenders));
+        }
+    }
+
     private static Method findDeclaredMethod(Class<?> type, String name, Class<?>... parameterTypes) {
         try {
             return type.getDeclaredMethod(name, parameterTypes);

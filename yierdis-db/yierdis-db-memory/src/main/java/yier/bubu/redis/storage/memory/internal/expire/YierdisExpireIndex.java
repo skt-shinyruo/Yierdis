@@ -41,8 +41,6 @@ public interface YierdisExpireIndex {
 
     void clear();
 
-    void setExpireAtMillis(byte[] keyBytes, long expireAtMillis, YierdisKeyspace<?> store);
-
     /**
      * 为稳定 {@link KeyHandle} identity 设置 TTL timestamp。
      *

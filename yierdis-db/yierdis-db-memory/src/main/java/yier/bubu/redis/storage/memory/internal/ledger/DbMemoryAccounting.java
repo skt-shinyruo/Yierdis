@@ -20,8 +20,6 @@ import yier.bubu.redis.storage.api.YierdisMemoryStats;
  * The project intentionally avoids deep JVM-instrumentation; these numbers are explainable estimates.
  */
 public final class DbMemoryAccounting {
-    private static final int ESTIMATED_HEAP_OBJECT_HEADER_BYTES = 16;
-
     private DbMemoryAccounting() {
     }
 
@@ -52,13 +50,7 @@ public final class DbMemoryAccounting {
         int expireCap1 = 0;
         long expireOverhead = 0;
         long expireValueObjects = 0;
-        if (expires instanceof YierdisHeapExpireIndex heap) {
-            expireRehashing = heap.isRehashing();
-            expireCap0 = heap.table0Capacity();
-            expireCap1 = heap.table1Capacity();
-            expireOverhead = heap.estimatedTableOverheadBytes();
-            expireValueObjects = estimateLongObjectBytes(expireCount);
-        } else if (expires instanceof YierdisFfmExpireIndex ffm) {
+        if (expires instanceof YierdisFfmExpireIndex ffm) {
             expireRehashing = ffm.isRehashing();
             expireCap0 = ffm.table0Capacity();
             expireCap1 = ffm.table1Capacity();
@@ -76,9 +68,6 @@ public final class DbMemoryAccounting {
         }
         long effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + Math.max(0L, reservedBytes);
         long totalEstimatedBytes = heapDataBytesEstimate + directNativeUsedBytes;
-        if (expires instanceof YierdisHeapExpireIndex) {
-            totalEstimatedBytes += expireOverhead + expireValueObjects;
-        }
 
         return new YierdisMemoryStats(
                 maxmemoryBytes,
@@ -114,18 +103,6 @@ public final class DbMemoryAccounting {
                 nativeAllocatorStats == null ? 0L : nativeAllocatorStats.staleHandleDetections(),
                 nativeAllocatorStats == null ? 0L : nativeAllocatorStats.defragReclaimedPages()
         );
-    }
-
-    private static long estimateLongObjectBytes(int count) {
-        if (count <= 0) {
-            return 0;
-        }
-        long one = align8((long) ESTIMATED_HEAP_OBJECT_HEADER_BYTES + Long.BYTES);
-        return one * (long) count;
-    }
-
-    private static long align8(long bytes) {
-        return (bytes + 7L) & ~7L;
     }
 
     private static long estimateTtlBytesForMaxmemory(int expireCount) {
