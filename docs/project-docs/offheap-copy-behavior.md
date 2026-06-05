@@ -18,7 +18,7 @@ DB lookup 当前也会 materialize heap key。虽然 DB read/write API 接受 `B
 
 string 写入时，`StringRoot` 会把输入 `BytesSlice` / `byte[]` 内容写入 allocator-backed `STRING_BYTES` object。即使 source 是带 memory address 的 slice，当前 `StringRoot` 也可能通过 heap scratch buffer 分块读，再写入 native object；不要把 `BytesSlice` 自动理解成 address-to-address copy。
 
-collection 写入也类似：root record 可能是 allocator-backed native object，但 payload bytes 是否复制到 native、adapter-owned bytes 或 legacy FFM structure，要看具体 type root 和 value implementation。
+collection 写入也类似：root record 和 payload internals 都是 allocator-backed native objects。输入仍通常来自 heap argv，因此写入会把 field、member、score 或 list entry bytes 复制到 type-specific native handles。
 
 ## Off-heap -> heap
 
@@ -32,7 +32,7 @@ collection 写入也类似：root record 可能是 allocator-backed native objec
 - `MEMORY` / `OBJECT` 类命令需要构造诊断输出。
 - 返回 `List<byte[]>` 的 collection read API，例如非流式聚合结果。
 
-当前 string `GET` 路径虽然可以通过 `BytesSlice` / `BulkStringSink` 接到 reply writer，但 `StringRoot.slice(...)` 不应被理解成长期暴露 allocator view。它可能先从 native `STRING_BYTES` 复制成 heap-backed slice，再交给上层写出。
+当前 string `GET` 路径可以通过 `BytesSlice` / `BulkStringSink` 接到 reply writer。native slice 只在同步 `writeTo` 期间 pin allocator handle；它不是可被长期持有的 allocator view。
 
 keyspace 也是同理：key bytes 持久化为 `KEY_BYTES` native object，但只要外部接口要 `byte[]`，就会通过 allocator resolve view 读取并复制出来。
 
@@ -55,9 +55,9 @@ collection read path 的 `BulkStringSink` 也服务这个目标。`LRANGE`、`HG
 
 但这仍不是普遍零拷贝承诺：
 
-- source slice 可能本身已经是 heap-backed copy。
+- source slice 可能来自 request heap bytes，或来自同步 pin/unpin 的 native handle view。
 - sink 可能只是普通 `BytesSink`，只能接收 `byte[]`。
-- 某些格式转换、排序、聚合、escape、base64 或 legacy adapter 边界仍需要中间 buffer。
+- 某些格式转换、排序、聚合、escape 或 base64 边界仍需要中间 buffer。
 
 ## 同侧复制也存在
 
@@ -70,7 +70,7 @@ heap -> heap：
 off-heap -> off-heap：
 
 - `StringRoot` append/growth 调用 allocator `realloc(..., PRESERVE_PREFIX)` 时，如果容量不足，allocator 会分配新 native block 并复制旧 prefix。
-- active defrag 移动 `KEY_BYTES`、`ENTRY_RECORD`、`STRING_BYTES`、collection root records 或 `LIST_QUICKLIST_NODE` metadata record 时，会复制 old block 到 target block，再通过 object table 发布新 location。
+- active defrag 移动 `KEY_BYTES`、`ENTRY_RECORD`、`STRING_BYTES`、collection root records、`LIST_NODE` metadata record 或 collection internal byte handles 时，会复制 old block 到 target block，再通过 object table 发布新 location。
 - direct buffer 写回也可能是 direct -> direct copy，而不是 view 共享。
 
 view / handle 不是 copy：
@@ -93,9 +93,9 @@ view / handle 不是 copy：
 
 `NativeHandle` 不是 physical address。必须通过 allocator resolve，拿到短生命周期 `NativeObjectView` 后读写。这个约束让 `realloc`、quarantine 和 active defrag 可以成立。
 
-误读四：collection root nativeized 等于所有 collection payload 都 nativeized。
+误读四：collection nativeized 等于完全零拷贝。
 
-当前 collection root records 是 allocator-backed，list quicklist metadata records 也进入 allocator；但 payload bytes、adapter-owned structures 和 legacy FFM internals 仍是分阶段迁移边界。
+当前 collection root records、list quicklist metadata records 和 hash/set/zset/list payload internals 都是 allocator-backed native handles。但 RESP decode、snapshot、聚合返回和诊断输出仍可能需要 copy。
 
 误读五：同侧就不会复制。
 

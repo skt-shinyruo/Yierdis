@@ -73,7 +73,7 @@ public final class YierdisDbMemoryEstimator {
         int memberCount = members == null ? 0 : members.size();
         return estimateCollectionWriteUpperBound(
                 keyLength,
-                sumByteLengths(members),
+                Math.multiplyExact(sumByteLengths(members), 2L),
                 Math.multiplyExact((long) memberCount, SET_MEMBER_OVERHEAD_BYTES_ESTIMATE)
         );
     }
@@ -83,7 +83,7 @@ public final class YierdisDbMemoryEstimator {
         long memberBytes = sumZSetMemberByteLengths(scoreMemberPairs);
         return estimateCollectionWriteUpperBound(
                 keyLength,
-                Math.multiplyExact(memberBytes, 2L),
+                Math.multiplyExact(memberBytes, 4L),
                 Math.multiplyExact((long) memberCount, ZSET_MEMBER_OVERHEAD_BYTES_ESTIMATE)
         );
     }

@@ -6,6 +6,7 @@ import yier.bubu.redis.storage.api.result.BulkStringSink;
 
 import java.util.ArrayList;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 public final class NativeListpack implements AutoCloseable {
     private final NativeByteStore byteStore;
@@ -115,6 +116,16 @@ public final class NativeListpack implements AutoCloseable {
         return handle == null ? null : byteStore.toByteArray(handle);
     }
 
+    public void writeAt(int index, BulkStringSink out) {
+        Objects.requireNonNull(out, "out");
+        NativeHandle handle = entries.get(index);
+        if (handle == null) {
+            out.bulkStringNull();
+            return;
+        }
+        out.bulkString(byteStore.slice(handle));
+    }
+
     public boolean equalsAt(int index, byte[] other) {
         NativeHandle handle = entries.get(index);
         if (handle == null) {
@@ -156,6 +167,15 @@ public final class NativeListpack implements AutoCloseable {
 
     public Cursor cursor() {
         return new Cursor(this);
+    }
+
+    public void forEachNativeHandle(Consumer<NativeHandle> consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        for (NativeHandle handle : entries) {
+            if (handle != null) {
+                consumer.accept(handle);
+            }
+        }
     }
 
     @Override

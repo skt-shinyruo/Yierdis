@@ -13,8 +13,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
-public final class ListValue implements YierdisValue {
+public final class ListValue implements YierdisValue, NativeHandleOwner {
     private static final int QUICKLIST_NODE_MAX_BYTES = YierdisEncodingThresholds.LIST_MAX_LISTPACK_BYTES;
     private static final int QUICKLIST_NODE_RECORD_BYTES = 48;
     private static final int QUICKLIST_NODE_OWNER_ROOT_OFFSET = 0;
@@ -70,6 +71,18 @@ public final class ListValue implements YierdisValue {
     public long estimatedBytes() {
         long nodeBytes = quicklist == null ? 0L : (long) quicklist.size() * QUICKLIST_NODE_RECORD_BYTES;
         return byteStore.nativeBytes() + nodeBytes;
+    }
+
+    @Override
+    public void forEachNativeHandle(Consumer<NativeHandle> consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        if (quicklist != null) {
+            for (ListNode node : quicklist) {
+                node.forEachNativeHandle(consumer);
+            }
+            return;
+        }
+        listpack.forEachNativeHandle(consumer);
     }
 
     public void lpushAll(List<byte[]> values) {
@@ -721,6 +734,13 @@ public final class ListValue implements YierdisValue {
 
         long rawHandle() {
             return nodeHandle == null ? 0L : nodeHandle.raw();
+        }
+
+        void forEachNativeHandle(Consumer<NativeHandle> consumer) {
+            Objects.requireNonNull(consumer, "consumer");
+            validateLiveNode();
+            consumer.accept(nodeHandle);
+            listpack.forEachNativeHandle(consumer);
         }
 
         void writeMetadata(long prevRaw, long nextRaw) {

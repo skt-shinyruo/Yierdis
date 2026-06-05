@@ -1,9 +1,8 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
 import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.value.SetValue;
@@ -11,31 +10,18 @@ import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 public final class SetRoot implements TypeRoot {
-    private final YierdisFfmMemoryRuntime runtime;
     private final NativeCollectionRootTable<SetValue> sets;
     private boolean closed;
 
-    public SetRoot(YierdisFfmMemoryRuntime runtime) {
-        this(runtime, new YierdisStableNativeAllocator(Objects.requireNonNull(runtime, "runtime"), 4096), true);
-    }
-
-    public SetRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator) {
-        this(runtime, allocator, false);
-    }
-
     public SetRoot(NativeAllocator allocator) {
-        this(null, allocator, false);
-    }
-
-    private SetRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator, boolean ownsAllocator) {
-        this.runtime = runtime;
         this.sets = new NativeCollectionRootTable<>(
-                allocator,
+                Objects.requireNonNull(allocator, "allocator"),
                 NativeObjectKind.SET_ROOT,
                 "set",
-                ownsAllocator
+                false
         );
     }
 
@@ -118,6 +104,11 @@ public final class SetRoot implements TypeRoot {
         return sets.adapterBytes(SetValue::estimatedBytes);
     }
 
+    public synchronized void forEachNativeHandle(ValueHandle handle, Consumer<NativeHandle> consumer) {
+        ensureOpen();
+        requireSet(handle).forEachNativeHandle(consumer);
+    }
+
     @Override
     public synchronized void release(ValueHandle handle) {
         sets.release(handle);
@@ -143,7 +134,7 @@ public final class SetRoot implements TypeRoot {
     }
 
     private SetValue newSetValue() {
-        return runtime == null ? new SetValue() : new SetValue(runtime);
+        return new SetValue(sets.allocator());
     }
 
     private void ensureOpen() {

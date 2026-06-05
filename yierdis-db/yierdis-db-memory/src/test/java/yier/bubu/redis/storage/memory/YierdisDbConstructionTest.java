@@ -201,8 +201,8 @@ public class YierdisDbConstructionTest {
         StringRoot stringRoot = new StringRoot(allocator);
         ListRoot listRoot = new ListRoot(allocator);
         HashRoot hashRoot = new HashRoot(allocator);
-        SetRoot setRoot = new SetRoot(runtime);
-        ZSetRoot zsetRoot = new ZSetRoot(runtime);
+        SetRoot setRoot = new SetRoot(allocator);
+        ZSetRoot zsetRoot = new ZSetRoot(allocator);
         try {
             YierdisDbKeyLifecycle lifecycle = new YierdisDbKeyLifecycle(
                     expires,
@@ -336,8 +336,8 @@ public class YierdisDbConstructionTest {
         StringRoot stringRoot = new StringRoot(allocator);
         ListRoot listRoot = new ListRoot(allocator);
         HashRoot hashRoot = new HashRoot(allocator);
-        SetRoot setRoot = new SetRoot(runtime);
-        ZSetRoot zsetRoot = new ZSetRoot(runtime);
+        SetRoot setRoot = new SetRoot(allocator);
+        ZSetRoot zsetRoot = new ZSetRoot(allocator);
         try {
             YierdisDbKeyLifecycle lifecycle = new YierdisDbKeyLifecycle(
                     expires,

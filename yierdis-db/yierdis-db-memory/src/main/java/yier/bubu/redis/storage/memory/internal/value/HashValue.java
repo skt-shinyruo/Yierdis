@@ -9,8 +9,9 @@ import yier.bubu.redis.storage.api.result.BulkStringSink;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
-public final class HashValue implements YierdisValue {
+public final class HashValue implements YierdisValue, NativeHandleOwner {
     private final NativeByteStore fieldStore;
     private final NativeByteStore valueStore;
 
@@ -194,6 +195,21 @@ public final class HashValue implements YierdisValue {
             return fieldStore.nativeBytes() + valueStore.nativeBytes();
         }
         return packed.estimatedBytes();
+    }
+
+    @Override
+    public void forEachNativeHandle(Consumer<NativeHandle> consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        if (map != null) {
+            map.forEach((fieldRef, valueRef) -> {
+                consumer.accept(fieldRef);
+                if (valueRef != null) {
+                    consumer.accept(valueRef);
+                }
+            });
+            return;
+        }
+        packed.forEachNativeHandle(consumer);
     }
 
     @Override

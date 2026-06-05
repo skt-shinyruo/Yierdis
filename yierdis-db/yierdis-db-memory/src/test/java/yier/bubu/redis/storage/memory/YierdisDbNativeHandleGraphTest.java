@@ -45,6 +45,7 @@ public class YierdisDbNativeHandleGraphTest {
             Assert.assertEquals(Integer.valueOf(5), roleCounts.get(YierdisDbNativeHandleGraph.Role.ENTRY_RECORD));
             Assert.assertEquals(Integer.valueOf(1), roleCounts.get(YierdisDbNativeHandleGraph.Role.STRING_VALUE));
             Assert.assertEquals(Integer.valueOf(4), roleCounts.get(YierdisDbNativeHandleGraph.Role.COLLECTION_ROOT));
+            Assert.assertEquals(Integer.valueOf(5), roleCounts.get(YierdisDbNativeHandleGraph.Role.COLLECTION_INTERNAL));
 
             Assert.assertEquals(Integer.valueOf(5), kindCounts.get(NativeObjectKind.KEY_BYTES));
             Assert.assertEquals(Integer.valueOf(5), kindCounts.get(NativeObjectKind.ENTRY_RECORD));
@@ -53,6 +54,11 @@ public class YierdisDbNativeHandleGraphTest {
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.HASH_ROOT));
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.SET_ROOT));
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.ZSET_ROOT));
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.LISTPACK_BYTES));
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.HASH_FIELD_BYTES));
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.HASH_VALUE_BYTES));
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.SET_MEMBER_BYTES));
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.ZSET_MEMBER_BYTES));
         } finally {
             db.shutdown();
         }
@@ -77,9 +83,6 @@ public class YierdisDbNativeHandleGraphTest {
             Assert.assertEquals(3L,
                     db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.LIST_NODE));
 
-            // Internal quicklist node traversal is intentionally deferred: graph and list internals
-            // currently cross package boundaries, and Task 4 does not broaden the internal handle API.
-            // Task 3 list tests cover quicklist node allocation, liveness, release, and movement.
             List<YierdisDbNativeHandleGraph.Role> roles = new ArrayList<>();
             EnumMap<NativeObjectKind, Integer> kindCounts = new EnumMap<>(NativeObjectKind.class);
 
@@ -92,13 +95,19 @@ public class YierdisDbNativeHandleGraphTest {
             Assert.assertEquals(List.of(
                     YierdisDbNativeHandleGraph.Role.KEY_BYTES,
                     YierdisDbNativeHandleGraph.Role.ENTRY_RECORD,
-                    YierdisDbNativeHandleGraph.Role.COLLECTION_ROOT
+                    YierdisDbNativeHandleGraph.Role.COLLECTION_ROOT,
+                    YierdisDbNativeHandleGraph.Role.COLLECTION_INTERNAL,
+                    YierdisDbNativeHandleGraph.Role.COLLECTION_INTERNAL,
+                    YierdisDbNativeHandleGraph.Role.COLLECTION_INTERNAL,
+                    YierdisDbNativeHandleGraph.Role.COLLECTION_INTERNAL,
+                    YierdisDbNativeHandleGraph.Role.COLLECTION_INTERNAL,
+                    YierdisDbNativeHandleGraph.Role.COLLECTION_INTERNAL
             ), roles);
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.KEY_BYTES));
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.ENTRY_RECORD));
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.LIST_ROOT));
-            Assert.assertFalse(kindCounts.containsKey(NativeObjectKind.LIST_NODE));
-            Assert.assertFalse(kindCounts.containsKey(NativeObjectKind.STRING_BYTES));
+            Assert.assertEquals(Integer.valueOf(3), kindCounts.get(NativeObjectKind.LIST_NODE));
+            Assert.assertEquals(Integer.valueOf(3), kindCounts.get(NativeObjectKind.LISTPACK_BYTES));
         } finally {
             db.shutdown();
         }

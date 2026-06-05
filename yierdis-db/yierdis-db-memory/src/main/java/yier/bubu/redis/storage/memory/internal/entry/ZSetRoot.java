@@ -1,9 +1,8 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
 import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
@@ -13,31 +12,18 @@ import yier.bubu.redis.storage.memory.internal.value.ZSetValue.ZAddResult;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 public final class ZSetRoot implements TypeRoot {
-    private final YierdisFfmMemoryRuntime runtime;
     private final NativeCollectionRootTable<ZSetValue> zsets;
     private boolean closed;
 
-    public ZSetRoot(YierdisFfmMemoryRuntime runtime) {
-        this(runtime, new YierdisStableNativeAllocator(Objects.requireNonNull(runtime, "runtime"), 4096), true);
-    }
-
-    public ZSetRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator) {
-        this(runtime, allocator, false);
-    }
-
     public ZSetRoot(NativeAllocator allocator) {
-        this(null, allocator, false);
-    }
-
-    private ZSetRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator, boolean ownsAllocator) {
-        this.runtime = runtime;
         this.zsets = new NativeCollectionRootTable<>(
-                allocator,
+                Objects.requireNonNull(allocator, "allocator"),
                 NativeObjectKind.ZSET_ROOT,
                 "zset",
-                ownsAllocator
+                false
         );
     }
 
@@ -209,6 +195,11 @@ public final class ZSetRoot implements TypeRoot {
         return zsets.adapterBytes(ZSetValue::estimatedBytes);
     }
 
+    public synchronized void forEachNativeHandle(ValueHandle handle, Consumer<NativeHandle> consumer) {
+        ensureOpen();
+        requireZSet(handle).forEachNativeHandle(consumer);
+    }
+
     @Override
     public synchronized void release(ValueHandle handle) {
         zsets.release(handle);
@@ -234,7 +225,7 @@ public final class ZSetRoot implements TypeRoot {
     }
 
     private ZSetValue newZSetValue() {
-        return runtime == null ? new ZSetValue() : new ZSetValue(runtime);
+        return new ZSetValue(zsets.allocator());
     }
 
     private void ensureOpen() {

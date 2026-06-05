@@ -47,11 +47,16 @@ bits 3..0    flags       4 bits
 - `KEY_BYTES`
 - `ENTRY_RECORD`
 - `STRING_BYTES`
+- `LIST_ROOT`
+- `HASH_ROOT`
+- `SET_ROOT`
+- `ZSET_ROOT`
 - `LIST_NODE`
-- `HASH_NODE`
-- `SET_NODE`
-- `ZSET_NODE`
-- `LIST_QUICKLIST_NODE`
+- `LISTPACK_BYTES`
+- `HASH_FIELD_BYTES`
+- `HASH_VALUE_BYTES`
+- `SET_MEMBER_BYTES`
+- `ZSET_MEMBER_BYTES`
 - `INDEX_NODE`
 - `METADATA_RECORD`
 
@@ -217,14 +222,10 @@ active defrag 的目标是移动 allocator-backed live object，减少碎片或�
 - `KEY_BYTES`
 - `ENTRY_RECORD`
 - `STRING_BYTES`
-- collection root records：`LIST_NODE`、`HASH_NODE`、`SET_NODE`、`ZSET_NODE`
-- list quicklist metadata records：`LIST_QUICKLIST_NODE`
+- collection root records：`LIST_ROOT`、`HASH_ROOT`、`SET_ROOT`、`ZSET_ROOT`
+- collection internal records and bytes：`LIST_NODE`、`LISTPACK_BYTES`、`HASH_FIELD_BYTES`、`HASH_VALUE_BYTES`、`SET_MEMBER_BYTES`、`ZSET_MEMBER_BYTES`
 
-不能过度声称的边界：
-
-- active defrag 不移动 adapter-owned payload bytes。
-- active defrag 不整理仍由 legacy FFM structures 拥有的 hash/set/zset internals。
-- collection root record 可移动，不等于所有 collection internal nodes/payload bytes 都已经 fully nativeized。
+DB native handle graph traversal must enumerate keys, entries, string values, collection roots, and collection internal handles. Defrag validation uses the same stable-handle model: handles stay stable while allocator-backed blocks may move behind the object table.
 
 单对象移动协议：
 
@@ -285,14 +286,14 @@ Type roots
 
 collection root records 使用：
 
-- list：`LIST_NODE`
-- hash：`HASH_NODE`
-- set：`SET_NODE`
-- zset：`ZSET_NODE`
+- list：`LIST_ROOT`
+- hash：`HASH_ROOT`
+- set：`SET_ROOT`
+- zset：`ZSET_ROOT`
 
-`NativeCollectionRootTable` 为 root record 分配 8 bytes，写入自己的 handle raw value，并用 `Map<Long, adapter>` 把 stable native root identity 映射到当前 Java adapter。root record 进入 allocator stats 和 defrag；adapter-owned payload bytes 仍按各类型实现管理。
+`NativeCollectionRootTable` 为 root record 分配 8 bytes，写入自己的 handle raw value，并用 `Map<Long, adapter>` 把 stable native root identity 映射到当前 Java adapter。root record 进入 allocator stats、native handle graph 和 defrag traversal。
 
-list quicklist metadata records 使用 `LIST_QUICKLIST_NODE` 进入 allocator。这里仍要区分 metadata record 和 payload bytes：metadata nativeized 不代表 list entry payload 或所有 collection internals 都已经 nativeized。
+collection internals also use allocator-backed native handles. List quicklist metadata uses `LIST_NODE`; list payload bytes use `LISTPACK_BYTES`; hash, set, and zset member bytes use their type-specific storage object kinds. These handles are exposed through collection traversal hooks so graph validation and defrag maintenance see the same live native object graph that reads use.
 
 ## metrics
 

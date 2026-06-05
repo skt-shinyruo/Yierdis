@@ -67,14 +67,14 @@ Type root
 
 `EntryRecord` 是 key 的 metadata，不保存 Java collection 本体。它包含 key handle identity、`ValueHandle`、key hash、`ValueType`、`ValueEncoding`、flags、`expireAtMillis`、version 和 LRU/LFU 槽位。
 
-`ValueHandle` 也是 raw identity。string 的 `ValueHandle` 包装 allocator-backed `STRING_BYTES`；list/hash/set/zset 的 `ValueHandle` 包装对应 allocator-backed root record：`LIST_NODE`、`HASH_NODE`、`SET_NODE`、`ZSET_NODE`。这些 root record 让 DB graph 有统一入口，但不能过度理解成所有 collection internals 都已经完全 allocator-object 化。
+`ValueHandle` 也是 raw identity。string 的 `ValueHandle` 包装 allocator-backed `STRING_BYTES`；list/hash/set/zset 的 `ValueHandle` 包装对应 allocator-backed root record：`LIST_ROOT`、`HASH_ROOT`、`SET_ROOT`、`ZSET_ROOT`。这些 root record 让 DB graph 有统一入口，并通过 native handle graph 暴露 collection internal handles。
 
 type roots 管真实 payload：
 
 - `StringRoot` 创建、读取、修改和释放 string bytes，当前 string payload 是 allocator-backed object。
-- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 的 allocator-backed root record 提供稳定 root identity 和 validation；`NativeCollectionRootTable` 再用 native handle raw value 映射到 Java adapter，从而通过 `ValueHandle` 找回 payload implementation。
-- `ListRoot` 的 quicklist 节点 metadata 有 allocator-backed `LIST_QUICKLIST_NODE` records。
-- collection payload bytes、list entry bytes 以及 hash/set/zset 内部结构仍可能由 adapter 或 legacy FFM structures 拥有；active defrag 不移动 adapter-owned payload bytes，也不把任意 collection internal identity 当作 allocator object resolve。
+- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot` 的 allocator-backed root record 提供稳定 root identity 和 validation；`NativeCollectionRootTable` 再用 native handle raw value 映射到 Java adapter，从而通过 `ValueHandle` 找回 native payload implementation。
+- `ListRoot` 的 quicklist 节点 metadata 有 allocator-backed `LIST_NODE` records。
+- collection payload bytes、list entry bytes 以及 hash/set/zset 内部结构都由 native handles 持有。active defrag 可以沿 `YierdisDbNativeHandleGraph` 发现这些 internal handles，并只通过 allocator stable handle resolve/move allocator-owned objects。
 
 这些事实要和 [`native-allocator-and-handles.md`](./native-allocator-and-handles.md) 保持一致：DB hot path 只保存 stable handle，物理 page、offset、packed address、pin、epoch、quarantine、`realloc` 和 defrag 都属于 allocator 语义。
 

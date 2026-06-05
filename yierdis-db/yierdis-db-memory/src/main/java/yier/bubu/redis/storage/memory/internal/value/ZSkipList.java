@@ -1,15 +1,8 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
+import yier.bubu.redis.memory.api.NativeHandle;
 
-import java.util.Arrays;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.Objects;
 
 public final class ZSkipList {
     // Mirrors Redis defaults:
@@ -17,10 +10,15 @@ public final class ZSkipList {
     private static final int MAX_LEVEL = 32;
     private static final double P = 0.25d;
 
+    private final NativeByteStore memberStore;
     private final Node header = new Node(MAX_LEVEL, null, 0);
     private Node tail;
     private int level = 1;
     private int length = 0;
+
+    public ZSkipList(NativeByteStore memberStore) {
+        this.memberStore = Objects.requireNonNull(memberStore, "memberStore");
+    }
 
     public Node first() {
         return header.forward[0];
@@ -56,7 +54,7 @@ public final class ZSkipList {
         return x == header ? null : x;
     }
 
-    public Node insert(double score, byte[] member) {
+    public Node insert(double score, NativeHandle member) {
         if (member == null) {
             throw new IllegalArgumentException("member must not be null");
         }
@@ -74,7 +72,7 @@ public final class ZSkipList {
             update[i] = x;
         }
 
-        int newLevel = randomLevel();
+        int newLevel = levelFor(score, member);
         if (newLevel > level) {
             for (int i = level; i < newLevel; i++) {
                 rank[i] = 0;
@@ -108,7 +106,7 @@ public final class ZSkipList {
         return newNode;
     }
 
-    public boolean delete(double score, byte[] member) {
+    public boolean delete(double score, NativeHandle member) {
         if (member == null) {
             return false;
         }
@@ -123,7 +121,7 @@ public final class ZSkipList {
         }
 
         x = x.forward[0];
-        if (x == null || Double.compare(x.score, score) != 0 || !Arrays.equals(x.member, member)) {
+        if (x == null || Double.compare(x.score, score) != 0 || memberStore.compareLex(x.member, member) != 0) {
             return false;
         }
 
@@ -169,44 +167,41 @@ public final class ZSkipList {
         return null;
     }
 
-    private static boolean lessThan(Node node, double score, byte[] member) {
+    private boolean lessThan(Node node, double score, NativeHandle member) {
         if (Double.compare(node.score, score) < 0) {
             return true;
         }
         if (Double.compare(node.score, score) > 0) {
             return false;
         }
-        return compareLex(node.member, member) < 0;
+        return memberStore.compareLex(node.member, member) < 0;
     }
 
-    private static int compareLex(byte[] a, byte[] b) {
-        int min = Math.min(a.length, b.length);
-        for (int i = 0; i < min; i++) {
-            int av = a[i] & 0xFF;
-            int bv = b[i] & 0xFF;
-            if (av != bv) {
-                return Integer.compare(av, bv);
-            }
-        }
-        return Integer.compare(a.length, b.length);
-    }
-
-    private static int randomLevel() {
+    private int levelFor(double score, NativeHandle member) {
         int lvl = 1;
-        while (lvl < MAX_LEVEL && ThreadLocalRandom.current().nextDouble() < P) {
+        long state = mix64(Double.doubleToLongBits(score) ^ memberStore.hashBytes(member));
+        while (lvl < MAX_LEVEL && (state & 0x3L) == 0L) {
             lvl++;
+            state = mix64(state + 0x9E3779B97F4A7C15L);
         }
         return lvl;
     }
 
+    private static long mix64(long value) {
+        long z = value;
+        z = (z ^ (z >>> 33)) * 0xff51afd7ed558ccdL;
+        z = (z ^ (z >>> 33)) * 0xc4ceb9fe1a85ec53L;
+        return z ^ (z >>> 33);
+    }
+
     static final class Node {
-        final byte[] member;
+        final NativeHandle member;
         final double score;
         final Node[] forward;
         final int[] span;
         Node backward;
 
-        Node(int level, byte[] member, double score) {
+        Node(int level, NativeHandle member, double score) {
             this.member = member;
             this.score = score;
             this.forward = new Node[level];

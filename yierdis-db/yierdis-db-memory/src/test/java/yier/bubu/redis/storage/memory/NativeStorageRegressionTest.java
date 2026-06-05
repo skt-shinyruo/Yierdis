@@ -18,6 +18,8 @@ import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.api.result.BulkStringSequence;
+import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
@@ -164,6 +166,51 @@ public class NativeStorageRegressionTest {
                 }
                 Assert.assertEquals("cycle " + cycle + " leaked runtime bytes", 0L, runtime.usedBytes());
             }
+        }
+    }
+
+    @Test
+    public void collectionReadsRemainValidAfterNativeDefragTraversalAndReleaseAllInternalHandles() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-collection-defrag")) {
+            YierdisDb db = createNativeRegressionDb(runtime, 0, MaxmemoryPolicy.NOEVICTION);
+            db.bindToCurrentThread();
+            try {
+                Assert.assertEquals(Long.valueOf(3L), db.writes().lists().rpush(
+                        b("list"),
+                        List.of(b("a"), b("b"), b("c"))
+                ).value());
+                Assert.assertEquals(Long.valueOf(2L), db.writes().hashes().hset(
+                        b("hash"),
+                        List.of(b("f1"), b("v1"), b("f2"), b("v2"))
+                ).value());
+                Assert.assertEquals(Long.valueOf(2L), db.writes().sets().sadd(
+                        b("set"),
+                        List.of(b("m1"), b("m2"))
+                ).value());
+                Assert.assertEquals(Long.valueOf(2L), db.writes().zsets().zadd(
+                        b("zset"),
+                        List.of(b("1"), b("z1"), b("2"), b("z2"))
+                ).value());
+
+                db.defragMaintenance();
+
+                Assert.assertEquals(List.of("a", "b", "c"), strings(db.reads().lists().lrange(b("list"), 0, -1)));
+                Assert.assertArrayEquals(b("v1"), db.reads().hashes().hget(b("hash"), b("f1")));
+                Assert.assertArrayEquals(b("v2"), db.reads().hashes().hget(b("hash"), b("f2")));
+                Assert.assertTrue(strings(db.reads().sets().smembers(b("set"))).containsAll(List.of("m1", "m2")));
+                Assert.assertEquals(List.of("z1", "z2"), strings(db.reads().zsets().zrange(b("zset"), 0, -1, false)));
+
+                Assert.assertEquals(Long.valueOf(4L), db.writes().keyspace().del(List.of(
+                        b("list"),
+                        b("hash"),
+                        b("set"),
+                        b("zset")
+                )).value());
+                assertNativeDbEmpty(db);
+            } finally {
+                db.shutdown();
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
@@ -794,6 +841,12 @@ public class NativeStorageRegressionTest {
         Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.HASH_ROOT));
         Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.SET_ROOT));
         Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.ZSET_ROOT));
+        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.LIST_NODE));
+        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.LISTPACK_BYTES));
+        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.HASH_FIELD_BYTES));
+        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.HASH_VALUE_BYTES));
+        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.SET_MEMBER_BYTES));
+        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.ZSET_MEMBER_BYTES));
         Assert.assertEquals(0L, allocator.logicalUsedBytes());
         Assert.assertEquals(0L, allocator.quarantinedObjects());
     }
@@ -883,6 +936,38 @@ public class NativeStorageRegressionTest {
         for (byte[] value : values) {
             out.add(new String(value, StandardCharsets.UTF_8));
         }
+        return out;
+    }
+
+    private static List<String> strings(BulkStringSequence values) {
+        List<String> out = new ArrayList<>(values.count());
+        values.emitTo(new BulkStringSink() {
+            @Override
+            public void bulkString(byte[] data) {
+                out.add(data == null ? null : new String(data, StandardCharsets.UTF_8));
+            }
+
+            @Override
+            public void bulkString(byte[] data, int off, int len) {
+                out.add(data == null ? null : new String(data, off, len, StandardCharsets.UTF_8));
+            }
+
+            @Override
+            public void bulkString(BytesSlice slice) {
+                if (slice == null) {
+                    out.add(null);
+                    return;
+                }
+                byte[] data = new byte[slice.length()];
+                slice.getBytes(0, data, 0, data.length);
+                out.add(new String(data, StandardCharsets.UTF_8));
+            }
+
+            @Override
+            public void bulkStringLongAscii(long value) {
+                out.add(Long.toString(value));
+            }
+        });
         return out;
     }
 }

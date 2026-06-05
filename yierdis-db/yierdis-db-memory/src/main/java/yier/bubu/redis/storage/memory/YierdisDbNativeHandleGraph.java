@@ -19,7 +19,8 @@ final class YierdisDbNativeHandleGraph {
         KEY_BYTES,
         ENTRY_RECORD,
         STRING_VALUE,
-        COLLECTION_ROOT
+        COLLECTION_ROOT,
+        COLLECTION_INTERNAL
     }
 
     @FunctionalInterface
@@ -39,11 +40,16 @@ final class YierdisDbNativeHandleGraph {
                 visitResolved(allocator, keyNativeHandle, Role.KEY_BYTES, record, visitor);
             }
             visitResolved(allocator, entryHandle.nativeHandle(), Role.ENTRY_RECORD, record, visitor);
-            visitValueHandle(allocator, record, visitor);
+            visitValueHandle(lifecycle, allocator, record, visitor);
         });
     }
 
-    private static void visitValueHandle(NativeAllocator allocator, EntryRecord record, Visitor visitor) {
+    private static void visitValueHandle(
+            YierdisDbKeyLifecycle lifecycle,
+            NativeAllocator allocator,
+            EntryRecord record,
+            Visitor visitor
+    ) {
         if (record == null) {
             return;
         }
@@ -56,6 +62,38 @@ final class YierdisDbNativeHandleGraph {
             return;
         }
         visitResolved(allocator, valueHandle.nativeHandle(), role, record, visitor);
+        if (role == Role.COLLECTION_ROOT) {
+            visitCollectionInternals(lifecycle, allocator, record, valueHandle, visitor);
+        }
+    }
+
+    private static void visitCollectionInternals(
+            YierdisDbKeyLifecycle lifecycle,
+            NativeAllocator allocator,
+            EntryRecord record,
+            ValueHandle valueHandle,
+            Visitor visitor
+    ) {
+        switch (record.type()) {
+            case LIST -> lifecycle.listRoot().forEachNativeHandle(
+                    valueHandle,
+                    handle -> visitResolved(allocator, handle, Role.COLLECTION_INTERNAL, record, visitor)
+            );
+            case HASH -> lifecycle.hashRoot().forEachNativeHandle(
+                    valueHandle,
+                    handle -> visitResolved(allocator, handle, Role.COLLECTION_INTERNAL, record, visitor)
+            );
+            case SET -> lifecycle.setRoot().forEachNativeHandle(
+                    valueHandle,
+                    handle -> visitResolved(allocator, handle, Role.COLLECTION_INTERNAL, record, visitor)
+            );
+            case ZSET -> lifecycle.zsetRoot().forEachNativeHandle(
+                    valueHandle,
+                    handle -> visitResolved(allocator, handle, Role.COLLECTION_INTERNAL, record, visitor)
+            );
+            default -> {
+            }
+        }
     }
 
     private static Role valueRole(ValueType type) {
