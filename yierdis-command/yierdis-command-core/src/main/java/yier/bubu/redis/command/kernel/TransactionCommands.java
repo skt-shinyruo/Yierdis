@@ -5,7 +5,7 @@ import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.TransactionState;
 
 import java.util.List;
@@ -34,7 +34,7 @@ final class TransactionCommands implements CommandModule {
     }
 
     private void multi(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 1) {
             wrongArity(out, "multi");
             return;
@@ -49,7 +49,7 @@ final class TransactionCommands implements CommandModule {
     }
 
     private void discard(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 1) {
             wrongArity(out, "discard");
             return;
@@ -64,7 +64,7 @@ final class TransactionCommands implements CommandModule {
     }
 
     private void exec(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 1) {
             wrongArity(out, "exec");
             return;
@@ -94,7 +94,7 @@ final class TransactionCommands implements CommandModule {
         return ctx.transactionSession().transaction();
     }
 
-    private static void wrongArity(ReplyWriter out, String cmdLower) {
+    private static void wrongArity(RedisReplyWriter out, String cmdLower) {
         out.error("ERR wrong number of arguments for '" + cmdLower + "' command");
     }
 }

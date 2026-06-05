@@ -21,9 +21,9 @@ RESP bytes
 
 - `YierdisFastCommandHandler` 只负责提交，提交失败时在 I/O 边界直接回 `ERR busy <reason>`，不会进入命令层。
 - `CommandExecutor` 只负责 owner-thread 调度、budget 和关闭保护，不解释命令语义。
-- `DefaultYierdisEngine` 把 `Session` 收窄成命令层需要的 capability，并把 `ExecutionRequest` 和 `ReplyWriter` 交给 processor。
+- `DefaultYierdisEngine` 把 `Session` 收窄成命令层需要的 capability，并把 `ExecutionRequest` 和 `RedisReplyWriter` 交给 processor。
 - `YierdisFastCommandProcessor` 只消费 transport-neutral 的 `ExecutionRequest`，不接触 RESP DTO，也不拼协议字节。
-- command handler 只通过 `ReplyWriter` 写 Redis reply 语义，不直接写 `+OK\r\n` 这类 wire bytes。
+- command handler 只通过 `RedisReplyWriter` 写 Redis reply 语义，不直接写 `+OK\r\n` 这类 wire bytes。
 
 所以这条链里“提交失败回错”和“命令解析执行”是两段不同责任：前者属于 server/executor 边界，后者才属于 command-kernel。
 

@@ -16,7 +16,7 @@ import yier.bubu.redis.storage.api.result.BulkStringSequence;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.util.Objects;
 
@@ -66,7 +66,7 @@ public final class ZSetCommands implements CommandModule {
     }
 
     private void zadd(ArgReader args, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         int pairsLen = args.argc() - 2;
         ExecutionRequest request = args.request();
         support.sliceResetFromRequest(request, 2, pairsLen);
@@ -120,7 +120,7 @@ public final class ZSetCommands implements CommandModule {
     }
 
     private void zrange(ZRangeArgs args, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         BulkStringSequence seq = args.rev()
                 ? support.commandDb(ctx).reads().zsets().zrevrange(args.key(), args.start(), args.stop(), args.withScores())
                 : support.commandDb(ctx).reads().zsets().zrange(args.key(), args.start(), args.stop(), args.withScores());
@@ -133,7 +133,7 @@ public final class ZSetCommands implements CommandModule {
     }
 
     private void zrevrange(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 4 && request.argc() != 5) {
             CommandSupport.wrongArity(out, "zrevrange");
             return;
@@ -219,7 +219,7 @@ public final class ZSetCommands implements CommandModule {
     }
 
     private void zrangebyscore(ZRangeByScoreArgs args, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         BulkStringSequence seq = support.commandDb(ctx).reads().zsets().zrangeByScore(
                 args.key(),
                 args.min().value,
@@ -239,7 +239,7 @@ public final class ZSetCommands implements CommandModule {
     }
 
     private void zremrangebyscore(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 4) {
             CommandSupport.wrongArity(out, "zremrangebyscore");
             return;
@@ -258,7 +258,7 @@ public final class ZSetCommands implements CommandModule {
     }
 
     private void zrevrangebyscore(ZRangeByScoreArgs args, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         BulkStringSequence seq = support.commandDb(ctx).reads().zsets().zrevrangeByScore(
                 args.key(),
                 args.min().value,
@@ -278,7 +278,7 @@ public final class ZSetCommands implements CommandModule {
     }
 
     private void zremrangebyrank(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 4) {
             CommandSupport.wrongArity(out, "zremrangebyrank");
             return;
@@ -293,7 +293,7 @@ public final class ZSetCommands implements CommandModule {
     }
 
     private void zrem(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() < 3) {
             CommandSupport.wrongArity(out, "zrem");
             return;

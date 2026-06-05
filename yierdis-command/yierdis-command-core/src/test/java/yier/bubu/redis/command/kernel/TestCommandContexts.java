@@ -3,7 +3,7 @@ package yier.bubu.redis.command.kernel;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ServerSession;
 import yier.bubu.redis.execution.api.TransactionState;
 
@@ -13,7 +13,7 @@ final class TestCommandContexts {
     private TestCommandContexts() {
     }
 
-    static CommandContext context(ReplyWriter out) {
+    static CommandContext context(RedisReplyWriter out) {
         return new CommandContext(new TestSession(), out);
     }
 

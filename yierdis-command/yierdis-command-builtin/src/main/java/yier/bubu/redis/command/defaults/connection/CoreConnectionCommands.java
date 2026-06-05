@@ -14,7 +14,7 @@ import yier.bubu.redis.command.defaults.CommandSupport;
 
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Objects;
@@ -50,7 +50,7 @@ public final class CoreConnectionCommands {
     }
 
     private void ping(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() == 1) {
             out.simpleString("PONG");
             return;
@@ -63,7 +63,7 @@ public final class CoreConnectionCommands {
     }
 
     private void echo(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "echo");
             return;
@@ -72,7 +72,7 @@ public final class CoreConnectionCommands {
     }
 
     private void select(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "select");
             return;
@@ -104,7 +104,7 @@ public final class CoreConnectionCommands {
     }
 
     private void quit(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 1) {
             CommandSupport.wrongArity(out, "quit");
             return;
@@ -114,7 +114,7 @@ public final class CoreConnectionCommands {
     }
 
     private void client(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (CommandSupport.asciiEqualsIgnoreCase(request, 1, "SETINFO")) {
             out.simpleString("OK");
             return;
@@ -149,7 +149,7 @@ public final class CoreConnectionCommands {
     }
 
     private void flushdb(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 1 && request.argc() != 2) {
             CommandSupport.wrongArity(out, "flushdb");
             return;
@@ -165,7 +165,7 @@ public final class CoreConnectionCommands {
         out.simpleString("OK");
     }
 
-    private static void command(ExecutionRequest request, ReplyWriter out, CommandModule.Registration registration) {
+    private static void command(ExecutionRequest request, RedisReplyWriter out, CommandModule.Registration registration) {
         if (request.argc() == 1) {
             String[] names = registration.upperNamesSorted();
             out.arrayHeader(names.length);
@@ -216,7 +216,7 @@ public final class CoreConnectionCommands {
         out.error("ERR syntax error");
     }
 
-    private static void writeCommandInfo(ReplyWriter out, String nameUpper, CommandDescriptor descriptor) {
+    private static void writeCommandInfo(RedisReplyWriter out, String nameUpper, CommandDescriptor descriptor) {
         Objects.requireNonNull(nameUpper, "nameUpper");
         Objects.requireNonNull(descriptor, "descriptor");
         out.arrayHeader(6);

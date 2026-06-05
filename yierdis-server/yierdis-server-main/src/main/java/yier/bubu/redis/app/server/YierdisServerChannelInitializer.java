@@ -9,7 +9,7 @@ import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.concurrent.ScheduledFuture;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
-import yier.bubu.redis.execution.api.ReplyWriterFactory;
+import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.protocol.resp.netty.RespCommandAdapter;
 import yier.bubu.redis.protocol.resp.netty.RespProtocolErrorReplyHandler;
@@ -21,12 +21,12 @@ import java.util.concurrent.TimeUnit;
 final class YierdisServerChannelInitializer extends ChannelInitializer<SocketChannel> {
     private final YierdisServerRuntimeConfig config;
     private final CommandExecutor<NettyExecutionConnection> executor;
-    private final ReplyWriterFactory replyWriterFactory;
+    private final RedisReplyWriterFactory replyWriterFactory;
 
     YierdisServerChannelInitializer(
             YierdisServerRuntimeConfig config,
             CommandExecutor<NettyExecutionConnection> executor,
-            ReplyWriterFactory replyWriterFactory
+            RedisReplyWriterFactory replyWriterFactory
     ) {
         this.config = Objects.requireNonNull(config, "config");
         this.executor = Objects.requireNonNull(executor, "executor");

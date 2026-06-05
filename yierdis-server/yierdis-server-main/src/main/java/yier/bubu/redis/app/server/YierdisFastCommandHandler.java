@@ -9,8 +9,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
-import yier.bubu.redis.execution.api.ReplyWriterFactory;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 
 import java.util.Objects;
@@ -19,11 +19,11 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
     private static final Logger log = LoggerFactory.getLogger(YierdisFastCommandHandler.class);
 
     private final CommandExecutor<NettyExecutionConnection> executor;
-    private final ReplyWriterFactory replyWriterFactory;
+    private final RedisReplyWriterFactory replyWriterFactory;
 
     public YierdisFastCommandHandler(
             CommandExecutor<NettyExecutionConnection> executor,
-            ReplyWriterFactory replyWriterFactory
+            RedisReplyWriterFactory replyWriterFactory
     ) {
         this.executor = Objects.requireNonNull(executor, "executor");
         this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
@@ -43,7 +43,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
 
         ByteBuf out = ctx.alloc().buffer();
         try {
-            ReplyWriter writer = replyWriterFactory.newWriter(connection.session(), new NettyByteBufSink(out));
+            RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), new NettyByteBufSink(out));
             writer.error("ERR busy " + reject.code());
             ctx.writeAndFlush(out);
             out = null;
@@ -84,7 +84,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
                 safeDisableAutoRead(ctx);
             }
 
-            ReplyWriter writer = newReplyWriter(out, connection);
+            RedisReplyWriter writer = newReplyWriter(out, connection);
             if (protocolError) {
                 // 回包的 message 净化/限长由协议层 writer SSOT 统一处理，handler 不做重复净化避免漂移。
                 writer.protocolError(rawMessage);
@@ -100,7 +100,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         }
     }
 
-    private ReplyWriter newReplyWriter(ByteBuf out, NettyExecutionConnection connection) {
+    private RedisReplyWriter newReplyWriter(ByteBuf out, NettyExecutionConnection connection) {
         return connection == null
                 ? replyWriterFactory.newWriter(new NettyByteBufSink(out))
                 : replyWriterFactory.newWriter(connection.session(), new NettyByteBufSink(out));

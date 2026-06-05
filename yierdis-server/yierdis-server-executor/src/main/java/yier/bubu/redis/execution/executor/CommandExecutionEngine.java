@@ -1,7 +1,7 @@
 package yier.bubu.redis.execution.executor;
 
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.Session;
 
 /**
@@ -11,5 +11,5 @@ import yier.bubu.redis.execution.api.Session;
  */
 @FunctionalInterface
 public interface CommandExecutionEngine {
-    void execute(Session session, ExecutionRequest request, ReplyWriter out);
+    void execute(Session session, ExecutionRequest request, RedisReplyWriter out);
 }

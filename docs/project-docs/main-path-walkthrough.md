@@ -29,7 +29,7 @@ YierdisServer
   -> StringCommands
   -> YierdisStringOps
   -> YierdisDbMutationExecutor
-  -> ReplyWriter
+  -> RedisReplyWriter
   -> RespReplyWriter
   -> NettyExecutionIoAdapter
 ```
@@ -115,7 +115,7 @@ pipeline 的关键点是 `RespRequestDecoder` 和 `RespCommandAdapter`。它们�
 
 看 [`DefaultYierdisEngine.java`](../../yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java) 和 [`YierdisFastCommandProcessor.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java)。
 
-`DefaultYierdisEngine` 接住调度合同，把 `Session + ExecutionRequest + ReplyWriter` 送进命令层。
+`DefaultYierdisEngine` 接住调度合同，把 `Session + ExecutionRequest + RedisReplyWriter` 送进命令层。
 
 `YierdisFastCommandProcessor` 才是命令分发入口，它会把请求分到具体 `CommandSpec` 和 typed handler。
 
@@ -128,7 +128,7 @@ pipeline 的关键点是 `RespRequestDecoder` 和 `RespCommandAdapter`。它们�
 - `CommandExecutor` 把请求送到 owner thread
 - `DefaultYierdisEngine` 接管执行
 - `YierdisFastCommandProcessor` 找到对应 command implementation
-- `ReplyWriter` 写出 `PONG`
+- `RedisReplyWriter` 写出 `PONG`
 
 ## 9. SET 路径
 
@@ -142,7 +142,7 @@ pipeline 的关键点是 `RespRequestDecoder` 和 `RespCommandAdapter`。它们�
 
 ## 10. 回包写出
 
-最后看 [`ReplyWriter.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ReplyWriter.java)、[`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java) 和 [`NettyExecutionIoAdapter.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java)。
+最后看 [`RedisReplyWriter.java`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/RedisReplyWriter.java)、[`RespReplyWriter.java`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java) 和 [`NettyExecutionIoAdapter.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/NettyExecutionIoAdapter.java)。
 
 这里的核心是：
 

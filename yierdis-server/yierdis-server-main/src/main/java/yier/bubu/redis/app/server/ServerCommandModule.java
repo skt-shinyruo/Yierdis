@@ -8,7 +8,7 @@ import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.defaults.CommandSupport;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
@@ -47,7 +47,7 @@ final class ServerCommandModule implements CommandModule {
     }
 
     private void info(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 1 && request.argc() != 2) {
             out.error("ERR wrong number of arguments for 'info' command");
             return;
@@ -60,7 +60,7 @@ final class ServerCommandModule implements CommandModule {
     }
 
     private void hello(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         int requested = ctx.protocolNegotiationSession().respVersion();
         int i = 1;
         if (request.argc() >= 2) {

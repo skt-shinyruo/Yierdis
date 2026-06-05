@@ -10,8 +10,7 @@
  *     <li>ExecutionRecord - API. Audience: command transaction/replay logic, runtime change tracking, tests.</li>
  *     <li>ReplySink - API. Audience: command/storage value streaming adapters and reply writer implementations.</li>
  *     <li>RedisReplyWriter - API. Audience: command handlers and server reply implementations that need the explicit Redis command reply model.</li>
- *     <li>ReplyWriter - compatibility alias. Audience: existing command handlers, engine, protocol adapters, server reply implementations, tests.</li>
- *     <li>ReplyWriterFactory - API. Audience: executor, server/protocol adapter composition, tests.</li>
+ *     <li>RedisReplyWriterFactory - API. Audience: executor, server/protocol adapter composition, tests.</li>
  *     <li>Session - API. Audience: executor, engine, server session implementations, tests.</li>
  *     <li>DbIndexSession - API. Audience: DB routing and SELECT command handlers.</li>
  *     <li>ClientMetadataSession - API. Audience: CLIENT, AUTH, and server HELLO command handlers.</li>

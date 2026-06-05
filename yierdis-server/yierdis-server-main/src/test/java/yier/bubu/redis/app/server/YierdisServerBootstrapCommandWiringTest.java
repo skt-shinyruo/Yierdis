@@ -7,7 +7,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriterFactory;
+import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
@@ -433,7 +433,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
     private static final class InitializerTestEnv implements AutoCloseable {
         private final YierdisInstance instance;
-        private final ReplyWriterFactory replyWriterFactory;
+        private final RedisReplyWriterFactory replyWriterFactory;
         private final CommandExecutor<NettyExecutionConnection> executor;
 
         private InitializerTestEnv() {

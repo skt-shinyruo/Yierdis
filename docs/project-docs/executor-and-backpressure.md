@@ -13,7 +13,7 @@ Yierdis 把“收包”和“执行命令”分开：Netty I/O 线程只解析�
 - `ExecutorBacklogBudget`：全局 backlog 预算，限制 queue capacity 和 queued bytes，并给全局背压提供高低水位。
 - `ExecutorTaskQueue`：调度队列，支持 `GLOBAL` 和 `FAIR`。
 - `CommandExecutorDrainLoop`：cooperative drain loop，真正 poll task 并执行命令。
-- `CommandExecutorExecutionSupport`：把 executor 任务接到 `CommandExecutionEngine`、`ReplyWriterFactory` 和 I/O adapter。
+- `CommandExecutorExecutionSupport`：把 executor 任务接到 `CommandExecutionEngine`、`RedisReplyWriterFactory` 和 I/O adapter。
 - `ExecutorBackpressureController`：统一执行 `autoRead` disable/enable 和 global recovery。
 - `ExecutionConnectionContext`：每个连接的 executor 状态，包括 pending count、pending bytes、closing、fair queue state 和统计。
 - `NettyExecutionConnection`：Netty channel 到 executor connection 的 adapter，挂载 `EngineSession` 和 `ExecutionConnectionContext`。
@@ -90,7 +90,7 @@ RespRequestDecoder
 
 1. 检查连接是否 active / closing。
 2. 为 reply 分配 output buffer。
-3. 创建 `ReplyWriter`。
+3. 创建 `RedisReplyWriter`。
 4. 调用 `CommandExecutorExecutionSupport.execute(...)`。
 5. 将 reply 写入 channel。
 6. 如需 close-after-reply，flush 后关闭连接。
@@ -103,7 +103,7 @@ drain loop 使用 batched flush：单条命令通常只 `write`，tick 结束时
 `CommandExecutorExecutionSupport` 是 executor 与 command engine 的连接层。它负责：
 
 - 通过 I/O adapter 检查 channel active/writable、分配 output、write/flush/close。
-- 通过 `ReplyWriterFactory` 创建 `ReplyWriter`。
+- 通过 `RedisReplyWriterFactory` 创建 `RedisReplyWriter`。
 - 从 `ExecutionConnection` 获取 `EngineSession`。
 - 调用 `CommandExecutionEngine.execute(session, request, writer)`。
 - 命令结束后释放 `ExecutorBacklogBudget` 中的 slot/queued bytes。

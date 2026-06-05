@@ -8,7 +8,7 @@ import yier.bubu.redis.bytes.BytesSlice;
  * 用于“协议无关”地流式输出 bulk string 值的输出端口。
  * <p>
  * 该接口用于让 storage/value/off-heap 层与协议输出端口解耦
- * （例如 {@code ReplyWriter}/{@code ReplySink}），同时仍允许低分配的流式输出。
+ * （例如 {@code RedisReplyWriter}/{@code ReplySink}），同时仍允许低分配的流式输出。
  * <p>
  * 语义约定：
  * <ul>

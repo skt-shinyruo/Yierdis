@@ -16,13 +16,13 @@
 
 `dbIndex` + `ExecutionRequest` 的不可变 replay / change-event 快照。构造时会归一化 `dbIndex` 并复制请求，避免把 mutable request 引用带进事务队列或 change sink。详见 [`transaction-and-replay.md`](./transaction-and-replay.md) 和 [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)。
 
-### `ReplyWriter`
+### `RedisReplyWriter`
 
-命令层唯一的 Redis reply 语义出口，当前是 `RedisReplyWriter` 的兼容别名。handler 只调用 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`mapHeader`、`error` 等 Redis reply 语义方法，不拼 RESP bytes。详见 [`commands-and-data-model.md`](./commands-and-data-model.md)。
+命令层唯一的 Redis reply 语义出口。handler 只调用 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`mapHeader`、`error` 等 Redis reply 语义方法，不拼 RESP bytes。详见 [`commands-and-data-model.md`](./commands-and-data-model.md)。
 
 ### `RespReplyWriter`
 
-`ReplyWriter` 的 RESP 实现，负责把语义回包编码成 RESP2 或基础 RESP3 bytes。详见 [`protocol-reference.md`](./protocol-reference.md)。
+`RedisReplyWriter` 的 RESP 实现，负责把语义回包编码成 RESP2 或基础 RESP3 bytes。详见 [`protocol-reference.md`](./protocol-reference.md)。
 
 ## Command Layer
 
@@ -36,7 +36,7 @@
 
 ### `CommandContext`
 
-单次命令执行的上下文，携带 `ReplyWriter`、`ServerSession`、当前 DB 路由和 mutation outcome。它把 handler 和执行环境连接起来。
+单次命令执行的上下文，携带 `RedisReplyWriter`、`ServerSession`、当前 DB 路由和 mutation outcome。它把 handler 和执行环境连接起来。
 
 ### command variant
 

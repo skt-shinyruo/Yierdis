@@ -19,7 +19,7 @@ import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.command.kernel.YierdisCommandProcessorOptions;
 import yier.bubu.redis.execution.api.CommandContext;
-import yier.bubu.redis.execution.api.ReplyWriterFactory;
+import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
 import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
@@ -162,7 +162,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         );
         engine = commandEngine;
         commandGroup = new DefaultEventExecutorGroup(1);
-        ReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
+        RedisReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutorConfig executorConfig = CommandExecutorConfigs.from(runtimeConfig);
         executor = new CommandExecutor<>(
                 runtimeAccess::bindToCurrentThread,

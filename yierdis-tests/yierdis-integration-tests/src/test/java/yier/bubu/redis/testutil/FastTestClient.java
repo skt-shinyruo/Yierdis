@@ -5,7 +5,7 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ServerSession;
 import yier.bubu.redis.execution.api.TransactionState;
 
@@ -55,7 +55,7 @@ public final class FastTestClient implements AutoCloseable {
         // no-op
     }
 
-    private static final class CapturingReplyWriter implements ReplyWriter {
+    private static final class CapturingReplyWriter implements RedisReplyWriter {
         private boolean closeAfterReplyRequested;
 
         private ReplyObject root;

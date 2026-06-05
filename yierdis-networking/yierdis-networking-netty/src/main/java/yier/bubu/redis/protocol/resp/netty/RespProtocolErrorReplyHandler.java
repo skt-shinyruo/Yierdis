@@ -6,23 +6,23 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
 import yier.bubu.redis.bytes.netty.NettyByteBufSink;
-import yier.bubu.redis.execution.api.ReplyWriter;
-import yier.bubu.redis.execution.api.ReplyWriterFactory;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 
 import java.util.Objects;
 import java.util.function.Consumer;
 
 public final class RespProtocolErrorReplyHandler extends ChannelInboundHandlerAdapter {
-    private final ReplyWriterFactory replyWriterFactory;
+    private final RedisReplyWriterFactory replyWriterFactory;
     private final Consumer<ChannelHandlerContext> closeAfterReplyObserver;
     private boolean closing;
 
-    public RespProtocolErrorReplyHandler(ReplyWriterFactory replyWriterFactory) {
+    public RespProtocolErrorReplyHandler(RedisReplyWriterFactory replyWriterFactory) {
         this(replyWriterFactory, ctx -> {});
     }
 
     public RespProtocolErrorReplyHandler(
-            ReplyWriterFactory replyWriterFactory,
+            RedisReplyWriterFactory replyWriterFactory,
             Consumer<ChannelHandlerContext> closeAfterReplyObserver
     ) {
         this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
@@ -46,7 +46,7 @@ public final class RespProtocolErrorReplyHandler extends ChannelInboundHandlerAd
         }
         ByteBuf out = ctx.alloc().buffer();
         try {
-            ReplyWriter writer = replyWriterFactory.newWriter(new NettyByteBufSink(out));
+            RedisReplyWriter writer = replyWriterFactory.newWriter(new NettyByteBufSink(out));
             writer.protocolError(error.message());
             if (error.closeAfterReply()) {
                 ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);

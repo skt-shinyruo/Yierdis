@@ -8,7 +8,7 @@ import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.util.List;
 
@@ -69,7 +69,7 @@ public class YierdisFastCommandProcessorModuleTest {
         Assert.assertEquals("ERR unknown command '" + commandName + "'", out.errorValue);
     }
 
-    private static final class CapturingReplyWriter implements ReplyWriter {
+    private static final class CapturingReplyWriter implements RedisReplyWriter {
         private String simpleStringValue;
         private String errorValue;
 

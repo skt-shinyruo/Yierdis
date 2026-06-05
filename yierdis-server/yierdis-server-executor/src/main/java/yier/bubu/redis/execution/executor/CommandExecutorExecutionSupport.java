@@ -1,7 +1,7 @@
 package yier.bubu.redis.execution.executor;
 
-import yier.bubu.redis.execution.api.ReplyWriter;
-import yier.bubu.redis.execution.api.ReplyWriterFactory;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 
 import java.util.Collection;
 import java.util.Objects;
@@ -10,7 +10,7 @@ import java.util.function.BooleanSupplier;
 
 final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
     private final CommandExecutionEngine commandProcessor;
-    private final ReplyWriterFactory replyWriterFactory;
+    private final RedisReplyWriterFactory replyWriterFactory;
     private final ExecutionIoAdapter<C> ioAdapter;
     private final ExecutorBacklogBudget backlogBudget;
     private final ExecutorBackpressureController<C> backpressureController;
@@ -24,7 +24,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
 
     CommandExecutorExecutionSupport(
             CommandExecutionEngine commandProcessor,
-            ReplyWriterFactory replyWriterFactory,
+            RedisReplyWriterFactory replyWriterFactory,
             ExecutionIoAdapter<C> ioAdapter,
             ExecutorBacklogBudget backlogBudget,
             ExecutorBackpressureController<C> backpressureController,
@@ -67,7 +67,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
 
         boolean executed = false;
         try {
-            ReplyWriter writer = replyWriterFactory.newWriter(connection.session(), ioAdapter.newReplySink(connection));
+            RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), ioAdapter.newReplySink(connection));
             commandProcessor.execute(connection.session(), task.request, writer);
             if (writer.closeAfterReplyRequested()) {
                 context.recordCloseAfterReply();
@@ -167,7 +167,7 @@ final class CommandExecutorExecutionSupport<C extends ExecutionConnection> {
         }
 
         try {
-            ReplyWriter writer = replyWriterFactory.newWriter(connection.session(), ioAdapter.newReplySink(connection));
+            RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), ioAdapter.newReplySink(connection));
             writer.internalError("ERR internal error");
             writer.requestCloseAfterReply();
             context.recordCloseAfterReply();

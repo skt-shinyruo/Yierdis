@@ -1,7 +1,7 @@
 package yier.bubu.redis.execution.executor;
 
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriterFactory;
+import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -46,7 +46,7 @@ public final class CommandExecutor<C extends ExecutionConnection> implements Aut
             Runnable bindToCurrentThread,
             CommandExecutionEngine commandProcessor,
             Executor ownerExecutor,
-            ReplyWriterFactory replyWriterFactory,
+            RedisReplyWriterFactory replyWriterFactory,
             ExecutionIoAdapter<C> ioAdapter,
             CommandExecutorConfig config
     ) {

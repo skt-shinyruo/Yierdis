@@ -139,7 +139,7 @@ protocol owns wire shape and reply encoding, not DB semantics.
 
 ## execution 和 server 车道
 
-`yierdis-server-api` 定义执行契约，例如 `ExecutionRequest`、`ReplyWriter` 和 `Session`。它是 command 和 protocol 之间的稳定接口层。
+`yierdis-server-api` 定义执行契约，例如 `ExecutionRequest`、`RedisReplyWriter` 和 `Session`。它是 command 和 protocol 之间的稳定接口层。
 
 `yierdis-server-core` 提供 `DefaultYierdisEngine` 之类的执行入口。
 

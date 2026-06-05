@@ -14,7 +14,7 @@ import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.nio.charset.StandardCharsets;
 import java.util.AbstractList;
@@ -147,7 +147,7 @@ public final class CommandSupport {
         };
     }
 
-    public static void wrongArity(ReplyWriter out, String cmdLower) {
+    public static void wrongArity(RedisReplyWriter out, String cmdLower) {
         out.error("ERR wrong number of arguments for '" + cmdLower + "' command");
     }
 
