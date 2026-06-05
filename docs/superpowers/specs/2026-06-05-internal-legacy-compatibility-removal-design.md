@@ -16,7 +16,7 @@ The codebase still exposes several names whose only purpose is to keep older int
 
 - `Command` is a deprecated alias over `ExecutionRequest`.
 - `ReplyWriter` is a compatibility name over the explicit `RedisReplyWriter` reply model.
-- `BytesView.len()` / `BytesView.byteAt()` and memory `KeyHandle.len()` / `KeyHandle.byteAt()` duplicate newer `length()` / `getByte()` APIs.
+- `BytesView.len()` / `BytesView.byteAt()` and storage `KeyHandle.len()` / `KeyHandle.byteAt()` duplicate newer `length()` / `getByte()` APIs.
 - `YierdisDb` and `YierdisInstanceConfig.Builder` accept deprecated `String maxmemoryPolicy` overloads even though internal runtime wiring already has `MaxmemoryPolicy`.
 - `yierdis-cli` has an `InlineCommandParser` wrapper that only forwards to the shared RESP inline parser.
 
@@ -30,7 +30,7 @@ Remove these internal compatibility surfaces:
 - `yierdis-server-api` `ReplyWriter` alias.
 - `yierdis-server-api` `ReplyWriterFactory` as a factory name tied to the deleted alias.
 - `BytesView.len()` and `BytesView.byteAt()`.
-- `yierdis-db-memory` internal `KeyHandle.len()` and `KeyHandle.byteAt()`.
+- `yierdis-db-api` `KeyHandle.len()` and `KeyHandle.byteAt()`, plus the matching memory implementation overrides.
 - Deprecated `String maxmemoryPolicy` overloads in `YierdisDb` and `YierdisInstanceConfig.Builder`.
 - `yierdis-cli` package-local `InlineCommandParser` wrapper.
 - Docs and architecture guards that describe these surfaces as retained compatibility.
@@ -94,7 +94,7 @@ Callers should use:
 - `length()`
 - `getByte(int index)`
 
-Remove `len()` and `byteAt(int)` from `yierdis-db-memory` internal `KeyHandle`. `KeyHandle` should rely on the inherited storage/public byte view methods and keep only key-specific behavior such as `dictHash()` and native-handle factory construction.
+Remove `len()` and `byteAt(int)` from `yierdis-db-api` `KeyHandle` and the matching `yierdis-db-memory` internal `KeyHandle`. `KeyHandle` should rely on the inherited storage/public byte view methods and keep only key-specific behavior such as `dictHash()` and native-handle factory construction.
 
 The cleanup must not touch `ExecutionRequest.len(int argIndex)` or `ExecutionRequest.byteAt(int argIndex, int byteIndex)`. Those methods are part of the request argv API and are not the historical byte-view aliases being removed.
 
@@ -131,6 +131,7 @@ Update architecture tests to assert the new steady state:
 - `RedisReplyWriterFactory` is the server API factory boundary.
 - Command, executor, server, and protocol code do not import deleted compatibility types.
 - `BytesView` does not contain `len()` or `byteAt()`.
+- `yierdis-db-api` and `yierdis-db-memory` `KeyHandle` types do not contain `len()` or `byteAt()`.
 - `YierdisDb` and `YierdisInstanceConfig.Builder` do not expose deprecated string maxmemory policy overloads.
 - The CLI wrapper class does not exist.
 
@@ -178,4 +179,3 @@ Manual smoke is not required for this spec because no Redis wire behavior should
 - Search-and-replace for `len()` / `byteAt()` can accidentally hit `ExecutionRequest`; review every replacement.
 - Removing `String maxmemoryPolicy` overloads can break tests that intentionally exercise old constructors. Replace those tests with enum-based construction and architecture guards for the deleted overloads.
 - Leaving docs with `ReplyWriter` compatibility language after deletion would make architecture docs misleading.
-
