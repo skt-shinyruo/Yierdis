@@ -454,6 +454,14 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
 
+        Path commandAlias = repoRoot.resolve(
+                "yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/Command.java"
+        ).normalize();
+        Assert.assertFalse(
+                "Command compatibility alias must be deleted; use ExecutionRequest directly",
+                Files.exists(commandAlias)
+        );
+
         List<String> offenders = new ArrayList<>();
         scanCommandMainForForbiddenText(
                 repoRoot,
