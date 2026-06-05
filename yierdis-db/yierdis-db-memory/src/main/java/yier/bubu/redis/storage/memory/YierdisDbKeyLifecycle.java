@@ -33,6 +33,12 @@ import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 
 public final class YierdisDbKeyLifecycle {
+    public record EntryMutationResult<R>(EntryRecord record, R result) {
+        public static <R> EntryMutationResult<R> of(EntryRecord record, R result) {
+            return new EntryMutationResult<>(record, result);
+        }
+    }
+
     private final YierdisExpireIndex expires;
     private final OffHeapAllocator offHeapAllocator;
     private final NativeAllocator nativeAllocator;
@@ -306,9 +312,9 @@ public final class YierdisDbKeyLifecycle {
         return keyHandle == null ? null : expires.get(keyHandle);
     }
 
-    public EntryRecord computeWithHandle(
+    public <R> R computeWithHandleResult(
             byte[] keyBytes,
-            BiFunction<? super KeyHandle, ? super EntryRecord, ? extends EntryRecord> remappingFunction
+            BiFunction<? super KeyHandle, ? super EntryRecord, EntryMutationResult<R>> remappingFunction
     ) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         Objects.requireNonNull(remappingFunction, "remappingFunction");
@@ -316,19 +322,23 @@ public final class YierdisDbKeyLifecycle {
         KeyHandle keyHandle = keyHandleForEntryRemapping(keyBytes);
         EntryHandle existingHandle = keyDirectory.get(keyBytes);
         EntryRecord oldRecord = existingHandle == null ? null : entryTable.get(existingHandle);
-        EntryRecord newRecord = remappingFunction.apply(keyHandle, oldRecord);
+        EntryMutationResult<R> mutation = Objects.requireNonNull(
+                remappingFunction.apply(keyHandle, oldRecord),
+                "entry mutation result"
+        );
+        EntryRecord newRecord = mutation.record();
         if (newRecord == null) {
             if (existingHandle != null) {
                 keyDirectory.remove(keyBytes, existingHandle);
                 entryTable.release(existingHandle);
                 releaseValue(oldRecord);
             }
-            return null;
+            return mutation.result();
         }
         if (existingHandle != null) {
             entryTable.replace(existingHandle, newRecord);
             releaseReplacedValue(oldRecord, newRecord);
-            return newRecord;
+            return mutation.result();
         }
 
         EntryHandle created = null;
@@ -344,7 +354,7 @@ public final class YierdisDbKeyLifecycle {
                 return allocated;
             });
             inserted = true;
-            return newRecord;
+            return mutation.result();
         } finally {
             if (!inserted) {
                 if (created != null) {
@@ -355,9 +365,9 @@ public final class YierdisDbKeyLifecycle {
         }
     }
 
-    public EntryRecord computeIfPresentWithHandle(
+    public <R> R computeIfPresentWithHandleResult(
             byte[] keyBytes,
-            BiFunction<? super KeyHandle, ? super EntryRecord, ? extends EntryRecord> remappingFunction
+            BiFunction<? super KeyHandle, ? super EntryRecord, EntryMutationResult<R>> remappingFunction
     ) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         Objects.requireNonNull(remappingFunction, "remappingFunction");
@@ -373,16 +383,20 @@ public final class YierdisDbKeyLifecycle {
             return null;
         }
 
-        EntryRecord newRecord = remappingFunction.apply(keyHandleForEntryRemapping(keyBytes), oldRecord);
+        EntryMutationResult<R> mutation = Objects.requireNonNull(
+                remappingFunction.apply(keyHandleForEntryRemapping(keyBytes), oldRecord),
+                "entry mutation result"
+        );
+        EntryRecord newRecord = mutation.record();
         if (newRecord == null) {
             keyDirectory.remove(keyBytes, existingHandle);
             entryTable.release(existingHandle);
             releaseValue(oldRecord);
-            return null;
+            return mutation.result();
         }
         entryTable.replace(existingHandle, newRecord);
         releaseReplacedValue(oldRecord, newRecord);
-        return newRecord;
+        return mutation.result();
     }
 
     public long estimatedBytesForRemoval(KeyHandle keyHandle, EntryRecord record) {

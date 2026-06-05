@@ -21,6 +21,9 @@ import java.util.List;
 import java.nio.charset.StandardCharsets;
 
 public final class ZSetValue implements YierdisValue {
+    public record ZAddResult(int added, boolean changedAny) {
+    }
+
     private static final int REF_BYTES = 8;
 
     private final YierdisFfmMemoryRuntime memoryRuntime;
@@ -84,12 +87,12 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public int zaddMany(List<byte[]> scoreMemberPairs) {
-        return zaddMany(scoreMemberPairs, null);
+        return zaddManyResult(scoreMemberPairs).added();
     }
 
-    public int zaddMany(List<byte[]> scoreMemberPairs, boolean[] changedRef) {
+    public ZAddResult zaddManyResult(List<byte[]> scoreMemberPairs) {
         if (memoryRuntime != null) {
-            return ffm.zaddMany(scoreMemberPairs, changedRef);
+            return ffm.zaddManyResult(scoreMemberPairs);
         }
         int added = 0;
         boolean changedAny = false;
@@ -118,10 +121,7 @@ public final class ZSetValue implements YierdisValue {
                 }
             }
         }
-        if (changedRef != null && changedRef.length > 0 && changedAny) {
-            changedRef[0] = true;
-        }
-        return added;
+        return new ZAddResult(added, changedAny);
     }
 
     public int zrem(List<byte[]> members) {

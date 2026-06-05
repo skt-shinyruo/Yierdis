@@ -8,6 +8,7 @@ import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import yier.bubu.redis.storage.memory.internal.value.ZSetValue;
+import yier.bubu.redis.storage.memory.internal.value.ZSetValue.ZAddResult;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -84,9 +85,9 @@ public final class ZSetRoot implements TypeRoot {
         }
     }
 
-    public synchronized int zadd(ValueHandle handle, List<byte[]> scoreMemberPairs, boolean[] changedRef) {
+    public synchronized ZAddResult zaddResult(ValueHandle handle, List<byte[]> scoreMemberPairs) {
         ensureOpen();
-        return requireZSet(handle).zaddMany(scoreMemberPairs, changedRef);
+        return requireZSet(handle).zaddManyResult(scoreMemberPairs);
     }
 
     public synchronized int zadd(ValueHandle handle, List<byte[]> scoreMemberPairs) {

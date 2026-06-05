@@ -74,20 +74,6 @@ public interface YierdisKeyspace<V> {
 
     V computeIfPresent(byte[] key, BiFunction<? super byte[], ? super V, ? extends V> remappingFunction);
 
-    /**
-     * Like {@link #compute(byte[], BiFunction)} but exposes a stable {@link KeyHandle} identity to the remapping function.
-     * <p>
-     * 约束：实现不得为生成 handle 而隐式生成 canonical heap key copy。
-     */
-    V computeWithHandle(byte[] key, BiFunction<? super KeyHandle, ? super V, ? extends V> remappingFunction);
-
-    /**
-     * Like {@link #computeIfPresent(byte[], BiFunction)} but exposes a stable {@link KeyHandle} identity to the remapping function.
-     * <p>
-     * 约束：实现不得为生成 handle 而隐式生成 canonical heap key copy。
-     */
-    V computeIfPresentWithHandle(byte[] key, BiFunction<? super KeyHandle, ? super V, ? extends V> remappingFunction);
-
     boolean remove(byte[] key, V expectedValue);
 
     /**

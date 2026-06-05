@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.StringWriteOps;
+import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 
@@ -55,29 +56,29 @@ public class StringDirectOpsTest {
             Assert.assertTrue(db.writes().strings().setString(b("slice"), slice("sliced"), SetMode.NORMAL, null).value());
             Assert.assertArrayEquals(b("sliced"), db.reads().strings().getStringBytes(b("slice")));
 
-            StringWriteOps.SetStringResult nxExisting = db.writes().strings()
+            WriteResult<StringWriteOps.SetStringValue> nxExisting = db.writes().strings()
                     .set(b("k"), slice("two"), SetMode.NX, null, true);
-            Assert.assertFalse(nxExisting.applied());
-            Assert.assertNull(nxExisting.oldValue());
+            Assert.assertFalse(nxExisting.value().applied());
+            Assert.assertNull(nxExisting.value().oldValue());
             Assert.assertSame(MutationOutcome.NONE, nxExisting.mutationOutcome());
             Assert.assertArrayEquals(b("one"), db.reads().strings().getStringBytes(b("k")));
 
-            StringWriteOps.SetStringResult nxMissing = db.writes().strings()
+            WriteResult<StringWriteOps.SetStringValue> nxMissing = db.writes().strings()
                     .set(b("new"), slice("created"), SetMode.NX, null, true);
-            Assert.assertTrue(nxMissing.applied());
-            Assert.assertNull(nxMissing.oldValue());
+            Assert.assertTrue(nxMissing.value().applied());
+            Assert.assertNull(nxMissing.value().oldValue());
             Assert.assertArrayEquals(b("created"), db.reads().strings().getStringBytes(b("new")));
 
-            StringWriteOps.SetStringResult xxMissing = db.writes().strings()
+            WriteResult<StringWriteOps.SetStringValue> xxMissing = db.writes().strings()
                     .set(b("absent"), slice("ignored"), SetMode.XX, null, true);
-            Assert.assertFalse(xxMissing.applied());
-            Assert.assertNull(xxMissing.oldValue());
+            Assert.assertFalse(xxMissing.value().applied());
+            Assert.assertNull(xxMissing.value().oldValue());
             Assert.assertSame(MutationOutcome.NONE, xxMissing.mutationOutcome());
 
-            StringWriteOps.SetStringResult xxExisting = db.writes().strings()
+            WriteResult<StringWriteOps.SetStringValue> xxExisting = db.writes().strings()
                     .set(b("k"), slice("three"), SetMode.XX, ExpireOption.px(5000), true);
-            Assert.assertTrue(xxExisting.applied());
-            Assert.assertArrayEquals(b("one"), xxExisting.oldValue());
+            Assert.assertTrue(xxExisting.value().applied());
+            Assert.assertArrayEquals(b("one"), xxExisting.value().oldValue());
             Assert.assertTrue(xxExisting.mutationOutcome().valueChanged());
             Assert.assertTrue(xxExisting.mutationOutcome().ttlChanged());
             Assert.assertArrayEquals(b("three"), db.reads().strings().getStringBytes(b("k")));

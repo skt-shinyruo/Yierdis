@@ -13,6 +13,7 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.EntryMutationResult;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 import java.util.List;
@@ -43,14 +44,13 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
-                final int[] added = new int[]{0};
-                final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeWithHandle(keyBytes, (k, oldRecord) -> {
+                return keyLifecycle.computeWithHandleResult(keyBytes, (k, oldRecord) -> {
                     EntryRecord current = oldRecord;
                     long oldEstimate = estimateRecordBytes(k, current);
+                    long deltaBytes = 0L;
                     if (current != null && keyLifecycle.isKeyExpired(k, now)) {
                         keyLifecycle.removeExpire(k);
-                        deltaBytes[0] -= oldEstimate;
+                        deltaBytes -= oldEstimate;
                         current = null;
                         oldEstimate = 0L;
                     }
@@ -65,23 +65,19 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
                     boolean ok = false;
                     try {
-                        added[0] = setRoot.sadd(handle, members);
+                        int added = setRoot.sadd(handle, members);
                         EntryRecord next = setRecord(k, handle, current == null ? -1L : current.expireAtMillis(), current);
-                        deltaBytes[0] -= oldEstimate;
-                        deltaBytes[0] += estimateRecordBytes(k, next);
+                        deltaBytes -= oldEstimate;
+                        deltaBytes += estimateRecordBytes(k, next);
                         ok = true;
-                        return next;
+                        MutationOutcome outcome = added > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                        return mutationResult(next, WriteResult.of((long) added, outcome), deltaBytes);
                     } finally {
                         if (!ok && current == null) {
                             setRoot.release(handle);
                         }
                     }
                 });
-                MutationOutcome outcome = added[0] > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of((long) added[0], outcome),
-                        deltaBytes[0]
-                );
             }
         });
     }
@@ -98,34 +94,33 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
-                final int[] removed = new int[]{0};
-                final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, oldRecord) -> {
-                    EntryRecord current = oldRecord;
-                    long oldEstimate = estimateRecordBytes(k, current);
-                    if (keyLifecycle.isKeyExpired(k, now)) {
-                        keyLifecycle.removeExpire(k);
-                        deltaBytes[0] -= oldEstimate;
-                        return null;
-                    }
-                    requireSet(current);
-                    ValueHandle handle = requireSetHandle(current);
-                    removed[0] = setRoot.srem(handle, members);
-                    if (setRoot.size(handle) == 0) {
-                        keyLifecycle.removeExpire(k);
-                        deltaBytes[0] -= oldEstimate;
-                        return null;
-                    }
-                    EntryRecord next = setRecord(k, handle, current.expireAtMillis(), current);
-                    deltaBytes[0] -= oldEstimate;
-                    deltaBytes[0] += estimateRecordBytes(k, next);
-                    return next;
-                });
-                MutationOutcome outcome = removed[0] > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of((long) removed[0], outcome),
-                        deltaBytes[0]
-                );
+                YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> mutation =
+                        keyLifecycle.computeIfPresentWithHandleResult(keyBytes, (k, oldRecord) -> {
+                            EntryRecord current = oldRecord;
+                            long oldEstimate = estimateRecordBytes(k, current);
+                            long deltaBytes = 0L;
+                            if (keyLifecycle.isKeyExpired(k, now)) {
+                                keyLifecycle.removeExpire(k);
+                                deltaBytes -= oldEstimate;
+                                return mutationResult(null, WriteResult.of(0L, MutationOutcome.NONE), deltaBytes);
+                            }
+                            requireSet(current);
+                            ValueHandle handle = requireSetHandle(current);
+                            int removed = setRoot.srem(handle, members);
+                            MutationOutcome outcome = removed > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                            if (setRoot.size(handle) == 0) {
+                                keyLifecycle.removeExpire(k);
+                                deltaBytes -= oldEstimate;
+                                return mutationResult(null, WriteResult.of((long) removed, outcome), deltaBytes);
+                            }
+                            EntryRecord next = setRecord(k, handle, current.expireAtMillis(), current);
+                            deltaBytes -= oldEstimate;
+                            deltaBytes += estimateRecordBytes(k, next);
+                            return mutationResult(next, WriteResult.of((long) removed, outcome), deltaBytes);
+                        });
+                return mutation == null
+                        ? YierdisDbMutationExecutor.MutationResult.of(WriteResult.of(0L, MutationOutcome.NONE), 0L)
+                        : mutation;
             }
         });
     }
@@ -241,6 +236,14 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
                 emitter.emitTo(out);
             }
         };
+    }
+
+    private static <T> EntryMutationResult<YierdisDbMutationExecutor.MutationResult<T>> mutationResult(
+            EntryRecord record,
+            T value,
+            long deltaBytes
+    ) {
+        return EntryMutationResult.of(record, YierdisDbMutationExecutor.MutationResult.of(value, deltaBytes));
     }
 
     @FunctionalInterface

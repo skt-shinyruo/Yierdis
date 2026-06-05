@@ -116,13 +116,13 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
             long nowMillis = System.currentTimeMillis();
             List<byte[]> out = new ArrayList<>();
             List<byte[]> expiredKeys = new ArrayList<>();
-            final boolean[] timedOut = new boolean[]{false};
+            DeadlineState deadlineState = new DeadlineState(deadline);
 
             ScanCursorV2 cursor = ScanCursorV2.start();
             int guard = 0;
             while (true) {
-                if (System.nanoTime() >= deadline) {
-                    timedOut[0] = true;
+                if (deadlineState.reached()) {
+                    deadlineState.markTimedOut();
                     break;
                 }
                 ScanCursorV2 next = keyLifecycle.scan(cursor, 1024, (k, record) -> {
@@ -142,8 +142,8 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                             return false;
                         }
                     }
-                    if (System.nanoTime() >= deadline) {
-                        timedOut[0] = true;
+                    if (deadlineState.reached()) {
+                        deadlineState.markTimedOut();
                         return false;
                     }
                     return true;
@@ -152,7 +152,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                 if (cursor.value() == 0) {
                     break;
                 }
-                if (out.size() >= limit || timedOut[0]) {
+                if (out.size() >= limit || deadlineState.timedOut()) {
                     break;
                 }
                 if (++guard > 1_000_000) {
@@ -187,7 +187,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
             long now = System.currentTimeMillis();
             List<byte[]> expiredKeys = new ArrayList<>();
             int maxSteps = Math.max(64, count * 10);
-            final int[] remaining = new int[]{count};
+            RemainingLimit remaining = new RemainingLimit(count);
 
             ScanCursorV2 next = keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, record) -> {
                 if (k == null) {
@@ -202,8 +202,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                 }
                 if (globPattern == null || YierdisGlobMatcher.matches(globPattern, k)) {
                     out.add(YierdisDb.toByteArray(k));
-                    remaining[0]--;
-                    if (remaining[0] <= 0) {
+                    if (!remaining.consume()) {
                         return false;
                     }
                 }
@@ -222,6 +221,40 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
                 }
             }
             return next;
+        }
+    }
+
+    private static final class DeadlineState {
+        private final long deadlineNanos;
+        private boolean timedOut;
+
+        DeadlineState(long deadlineNanos) {
+            this.deadlineNanos = deadlineNanos;
+        }
+
+        boolean reached() {
+            return System.nanoTime() >= deadlineNanos;
+        }
+
+        void markTimedOut() {
+            timedOut = true;
+        }
+
+        boolean timedOut() {
+            return timedOut;
+        }
+    }
+
+    private static final class RemainingLimit {
+        private int remaining;
+
+        RemainingLimit(int remaining) {
+            this.remaining = remaining;
+        }
+
+        boolean consume() {
+            remaining--;
+            return remaining > 0;
         }
     }
 }

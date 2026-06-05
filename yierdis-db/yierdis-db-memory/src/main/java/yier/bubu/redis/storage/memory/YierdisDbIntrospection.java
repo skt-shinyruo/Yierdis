@@ -60,7 +60,7 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
         try (NativeEpochScope ignored = keyLifecycle.nativeAllocator().beginEpoch(NativeEpochKind.SNAPSHOT)) {
             long now = System.currentTimeMillis();
             int maxSteps = Math.max(64, count * 10);
-            final int[] remaining = new int[]{count};
+            RemainingLimit remaining = new RemainingLimit(count);
 
             return keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, record) -> {
                 if (k == null || record == null) {
@@ -85,8 +85,7 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
                 }
                 out.add(new YierdisSnapshotEntry(keyBytes, type, stringValue, expireAtMillis));
 
-                remaining[0]--;
-                return remaining[0] > 0;
+                return remaining.consume();
             });
         }
     }
@@ -117,6 +116,19 @@ public final class YierdisDbIntrospection implements YierdisSnapshot {
                 return "skiplist";
             default:
                 return encoding.name().toLowerCase(java.util.Locale.ROOT);
+        }
+    }
+
+    private static final class RemainingLimit {
+        private int remaining;
+
+        RemainingLimit(int remaining) {
+            this.remaining = remaining;
+        }
+
+        boolean consume() {
+            remaining--;
+            return remaining > 0;
         }
     }
 }

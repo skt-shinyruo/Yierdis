@@ -9,7 +9,6 @@ import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.MutationOutcome;
-import yier.bubu.redis.storage.api.StringWriteOps;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.execution.api.CommandContext;
@@ -72,15 +71,6 @@ public final class CommandSupport {
         java.util.Objects.requireNonNull(result, "result");
         recordMutation(ctx, result.mutationOutcome());
         return result.value();
-    }
-
-    public StringWriteOps.SetStringResult recordStringSetResult(
-            CommandContext ctx,
-            StringWriteOps.SetStringResult result
-    ) {
-        java.util.Objects.requireNonNull(result, "result");
-        recordMutation(ctx, result.mutationOutcome());
-        return result;
     }
 
     public int databases() {

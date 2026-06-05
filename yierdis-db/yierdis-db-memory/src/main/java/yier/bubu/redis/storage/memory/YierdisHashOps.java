@@ -13,6 +13,7 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.EntryMutationResult;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 import java.util.List;
@@ -48,14 +49,13 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
-                final int[] added = new int[]{0};
-                final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeWithHandle(keyBytes, (k, oldRecord) -> {
+                return keyLifecycle.computeWithHandleResult(keyBytes, (k, oldRecord) -> {
                     EntryRecord current = oldRecord;
                     long oldEstimate = estimateRecordBytes(k, current);
+                    long deltaBytes = 0L;
                     if (current != null && keyLifecycle.isKeyExpired(k, now)) {
                         keyLifecycle.removeExpire(k);
-                        deltaBytes[0] -= oldEstimate;
+                        deltaBytes -= oldEstimate;
                         current = null;
                         oldEstimate = 0L;
                     }
@@ -70,22 +70,22 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
                     boolean ok = false;
                     try {
-                        added[0] = hashRoot.hsetMany(handle, fieldValuePairs);
+                        int added = hashRoot.hsetMany(handle, fieldValuePairs);
                         EntryRecord next = hashRecord(k, handle, current == null ? -1L : current.expireAtMillis(), current);
-                        deltaBytes[0] -= oldEstimate;
-                        deltaBytes[0] += estimateRecordBytes(k, next);
+                        deltaBytes -= oldEstimate;
+                        deltaBytes += estimateRecordBytes(k, next);
                         ok = true;
-                        return next;
+                        return mutationResult(
+                                next,
+                                WriteResult.of((long) added, MutationOutcome.VALUE_CHANGED),
+                                deltaBytes
+                        );
                     } finally {
                         if (!ok && current == null) {
                             hashRoot.release(handle);
                         }
                     }
                 });
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of((long) added[0], MutationOutcome.VALUE_CHANGED),
-                        deltaBytes[0]
-                );
             }
         });
     }
@@ -131,34 +131,33 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
-                final int[] removed = new int[]{0};
-                final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeIfPresentWithHandle(keyBytes, (k, oldRecord) -> {
-                    EntryRecord current = oldRecord;
-                    long oldEstimate = estimateRecordBytes(k, current);
-                    if (keyLifecycle.isKeyExpired(k, now)) {
-                        keyLifecycle.removeExpire(k);
-                        deltaBytes[0] -= oldEstimate;
-                        return null;
-                    }
-                    requireHash(current);
-                    ValueHandle handle = requireHashHandle(current);
-                    removed[0] = hashRoot.hdel(handle, fields);
-                    if (hashRoot.size(handle) == 0) {
-                        keyLifecycle.removeExpire(k);
-                        deltaBytes[0] -= oldEstimate;
-                        return null;
-                    }
-                    EntryRecord next = hashRecord(k, handle, current.expireAtMillis(), current);
-                    deltaBytes[0] -= oldEstimate;
-                    deltaBytes[0] += estimateRecordBytes(k, next);
-                    return next;
-                });
-                MutationOutcome outcome = removed[0] > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of((long) removed[0], outcome),
-                        deltaBytes[0]
-                );
+                YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> mutation =
+                        keyLifecycle.computeIfPresentWithHandleResult(keyBytes, (k, oldRecord) -> {
+                            EntryRecord current = oldRecord;
+                            long oldEstimate = estimateRecordBytes(k, current);
+                            long deltaBytes = 0L;
+                            if (keyLifecycle.isKeyExpired(k, now)) {
+                                keyLifecycle.removeExpire(k);
+                                deltaBytes -= oldEstimate;
+                                return mutationResult(null, WriteResult.of(0L, MutationOutcome.NONE), deltaBytes);
+                            }
+                            requireHash(current);
+                            ValueHandle handle = requireHashHandle(current);
+                            int removed = hashRoot.hdel(handle, fields);
+                            MutationOutcome outcome = removed > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                            if (hashRoot.size(handle) == 0) {
+                                keyLifecycle.removeExpire(k);
+                                deltaBytes -= oldEstimate;
+                                return mutationResult(null, WriteResult.of((long) removed, outcome), deltaBytes);
+                            }
+                            EntryRecord next = hashRecord(k, handle, current.expireAtMillis(), current);
+                            deltaBytes -= oldEstimate;
+                            deltaBytes += estimateRecordBytes(k, next);
+                            return mutationResult(next, WriteResult.of((long) removed, outcome), deltaBytes);
+                        });
+                return mutation == null
+                        ? YierdisDbMutationExecutor.MutationResult.of(WriteResult.of(0L, MutationOutcome.NONE), 0L)
+                        : mutation;
             }
         });
     }
@@ -254,6 +253,14 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                 emitter.emitTo(out);
             }
         };
+    }
+
+    private static <T> EntryMutationResult<YierdisDbMutationExecutor.MutationResult<T>> mutationResult(
+            EntryRecord record,
+            T value,
+            long deltaBytes
+    ) {
+        return EntryMutationResult.of(record, YierdisDbMutationExecutor.MutationResult.of(value, deltaBytes));
     }
 
     @FunctionalInterface

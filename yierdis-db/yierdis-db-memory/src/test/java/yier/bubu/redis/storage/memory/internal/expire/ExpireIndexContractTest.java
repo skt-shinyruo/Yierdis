@@ -32,7 +32,7 @@ public class ExpireIndexContractTest {
             YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(blobStore);
             try {
                 byte[] key = bytes("ffm-key");
-                keyspace.computeWithHandle(key, (handle, old) -> 1);
+                keyspace.compute(key, (keyBytes, old) -> 1);
                 KeyHandle handle = keyspace.keyHandle(key);
 
                 assertRoundTripAndClear(expires, keyspace, key, handle);

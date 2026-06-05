@@ -12,6 +12,7 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.EntryMutationResult;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import yier.bubu.redis.storage.memory.internal.value.YierdisHyperLogLog;
@@ -43,14 +44,13 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Integer>> apply() {
-                final boolean[] changed = new boolean[]{false};
-                final long[] deltaBytes = new long[]{0};
-                keyLifecycle.computeWithHandle(keyBytes, (k, oldRecord) -> {
+                return keyLifecycle.computeWithHandleResult(keyBytes, (k, oldRecord) -> {
                     EntryRecord current = oldRecord;
                     long oldEstimate = estimateRecordBytes(k, current);
+                    long deltaBytes = 0L;
                     if (current != null && keyLifecycle.isKeyExpired(k, now)) {
                         keyLifecycle.removeExpire(k);
-                        deltaBytes[0] -= oldEstimate;
+                        deltaBytes -= oldEstimate;
                         current = null;
                         oldEstimate = 0L;
                     }
@@ -65,23 +65,19 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
                     boolean ok = false;
                     try {
-                        changed[0] = YierdisHyperLogLog.pfAdd(stringRoot, handle, elements);
+                        boolean changed = YierdisHyperLogLog.pfAdd(stringRoot, handle, elements);
                         EntryRecord next = hllRecord(k, handle, current == null ? -1L : current.expireAtMillis(), current);
-                        deltaBytes[0] -= oldEstimate;
-                        deltaBytes[0] += estimateRecordBytes(k, next);
+                        deltaBytes -= oldEstimate;
+                        deltaBytes += estimateRecordBytes(k, next);
                         ok = true;
-                        return next;
+                        MutationOutcome outcome = changed ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                        return mutationResult(next, WriteResult.of(changed ? 1 : 0, outcome), deltaBytes);
                     } finally {
                         if (!ok && current == null) {
                             stringRoot.release(handle);
                         }
                     }
                 });
-                MutationOutcome outcome = changed[0] ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of(changed[0] ? 1 : 0, outcome),
-                        deltaBytes[0]
-                );
             }
         });
     }
@@ -133,16 +129,19 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
 
             @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Void>> apply() {
-                final long[] deltaBytes = new long[]{0};
-                final boolean[] changed = new boolean[]{false};
-                final KeyHandle[] keyHandleRef = new KeyHandle[1];
-                keyLifecycle.computeWithHandle(destKeyBytes, (k, oldRecord) -> {
-                    keyHandleRef[0] = k;
+                record PfMergeComputation(
+                        KeyHandle keyHandle,
+                        YierdisDbMutationExecutor.MutationResult<WriteResult<Void>> mutation
+                ) {
+                }
+
+                PfMergeComputation computation = keyLifecycle.computeWithHandleResult(destKeyBytes, (k, oldRecord) -> {
                     EntryRecord current = oldRecord;
                     long oldEstimate = estimateRecordBytes(k, current);
+                    long deltaBytes = 0L;
                     if (current != null && keyLifecycle.isKeyExpired(k, now)) {
                         keyLifecycle.removeExpire(k);
-                        deltaBytes[0] -= oldEstimate;
+                        deltaBytes -= oldEstimate;
                         current = null;
                         oldEstimate = 0L;
                     }
@@ -157,17 +156,17 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
                     }
 
                     EntryRecord next = hllRecord(k, handle, -1L, current);
-                    deltaBytes[0] -= oldEstimate;
-                    deltaBytes[0] += estimateRecordBytes(k, next);
-                    changed[0] = true;
-                    return next;
+                    deltaBytes -= oldEstimate;
+                    deltaBytes += estimateRecordBytes(k, next);
+                    YierdisDbMutationExecutor.MutationResult<WriteResult<Void>> mutation =
+                            YierdisDbMutationExecutor.MutationResult.of(
+                                    WriteResult.of(null, MutationOutcome.VALUE_CHANGED),
+                                    deltaBytes
+                            );
+                    return EntryMutationResult.of(next, new PfMergeComputation(k, mutation));
                 });
-                keyLifecycle.removeExpire(currentKeyHandle(destKeyBytes, keyHandleRef[0]));
-                MutationOutcome outcome = changed[0] ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of(null, outcome),
-                        deltaBytes[0]
-                );
+                keyLifecycle.removeExpire(currentKeyHandle(destKeyBytes, computation.keyHandle()));
+                return computation.mutation();
             }
         });
     }
@@ -253,5 +252,13 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     private KeyHandle currentKeyHandle(byte[] keyBytes, KeyHandle fallback) {
         KeyHandle current = keyLifecycle.keyHandle(keyBytes);
         return current == null ? fallback : current;
+    }
+
+    private static <T> EntryMutationResult<YierdisDbMutationExecutor.MutationResult<T>> mutationResult(
+            EntryRecord record,
+            T value,
+            long deltaBytes
+    ) {
+        return EntryMutationResult.of(record, YierdisDbMutationExecutor.MutationResult.of(value, deltaBytes));
     }
 }

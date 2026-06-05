@@ -134,7 +134,7 @@ public final class StringCommands implements CommandModule {
 
     private void set(SetArgs args, CommandContext ctx) {
         ReplyWriter out = ctx.out();
-        var result = support.recordStringSetResult(
+        var result = support.recordWriteValue(
                 ctx,
                 support.commandDb(ctx).writes().strings().set(
                         args.key(),

@@ -254,66 +254,6 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
     }
 
     @Override
-    public V computeWithHandle(byte[] key, BiFunction<? super KeyHandle, ? super V, ? extends V> remappingFunction) {
-        Objects.requireNonNull(key, "key");
-        Objects.requireNonNull(remappingFunction, "remappingFunction");
-        ensureTable0();
-        rehashStep();
-        maybeStartRehashForInsert();
-
-        int h = hash(key);
-        Location loc = findLocation(key, h);
-        if (loc == null) {
-            YierdisFfmBytesRef ref = blobStore.store(key);
-            KeyHandle handle = KeyHandle.forFfm(ref, h);
-            V newValue;
-            try {
-                newValue = remappingFunction.apply(handle, null);
-            } catch (RuntimeException e) {
-                blobStore.release(ref);
-                throw e;
-            }
-            if (newValue == null) {
-                blobStore.release(ref);
-                return null;
-            }
-            insertNew(ref, h, newValue);
-            return newValue;
-        }
-
-        V newValue = remappingFunction.apply(loc.keyHandle(), loc.getValue());
-        if (newValue == null) {
-            loc.remove();
-            return null;
-        }
-        loc.setValue(newValue);
-        return newValue;
-    }
-
-    @Override
-    public V computeIfPresentWithHandle(byte[] key, BiFunction<? super KeyHandle, ? super V, ? extends V> remappingFunction) {
-        Objects.requireNonNull(key, "key");
-        Objects.requireNonNull(remappingFunction, "remappingFunction");
-        Table t0 = table0;
-        if (t0 == null) {
-            return null;
-        }
-        rehashStep();
-        int h = hash(key);
-        Location loc = findLocation(key, h);
-        if (loc == null) {
-            return null;
-        }
-        V newValue = remappingFunction.apply(loc.keyHandle(), loc.getValue());
-        if (newValue == null) {
-            loc.remove();
-            return null;
-        }
-        loc.setValue(newValue);
-        return newValue;
-    }
-
-    @Override
     public boolean remove(byte[] key, V expectedValue) {
         Objects.requireNonNull(key, "key");
         Table t0 = table0;

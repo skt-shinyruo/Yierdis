@@ -136,8 +136,7 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
             return null;
         }
 
-        final KeyHandle[] bestKeyHandleRef = new KeyHandle[1];
-        final long[] bestLruRef = new long[]{Long.MAX_VALUE};
+        BestLruCandidate best = new BestLruCandidate();
         keyLifecycle.forEachKeyHandle((k, record) -> {
             if (k == null || record == null) {
                 return;
@@ -145,18 +144,14 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
             if (keyLifecycle.isKeyExpired(k, nowMillis)) {
                 return;
             }
-            long lru = record.lruOrLfu();
-            if (bestKeyHandleRef[0] == null || lru < bestLruRef[0]) {
-                bestKeyHandleRef[0] = k;
-                bestLruRef[0] = lru;
-            }
+            best.consider(k, record);
         });
 
-        KeyHandle bestKeyHandle = bestKeyHandleRef[0];
+        KeyHandle bestKeyHandle = best.keyHandle();
         if (bestKeyHandle == null) {
             return null;
         }
-        return new MaxmemoryCandidate(this, bestKeyHandle, bestLruRef[0]);
+        return new MaxmemoryCandidate(this, bestKeyHandle, best.lru());
     }
 
     @Override
@@ -199,8 +194,7 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
 
         if (samples >= total) {
             // 样本数覆盖全量时退化为完整扫描，避免随机抽样在小 keyspace 上错过最旧 key。
-            final KeyHandle[] bestKeyRef = new KeyHandle[1];
-            final long[] bestLruRef = new long[]{Long.MAX_VALUE};
+            BestLruCandidate best = new BestLruCandidate();
             keyLifecycle.forEachKeyHandle((k, record) -> {
                 if (keyLifecycle.isKeyExpired(k, nowMillis)) {
                     return;
@@ -208,13 +202,9 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
                 if (record == null) {
                     return;
                 }
-                long lru = record.lruOrLfu();
-                if (bestKeyRef[0] == null || lru < bestLruRef[0]) {
-                    bestKeyRef[0] = k;
-                    bestLruRef[0] = lru;
-                }
+                best.consider(k, record);
             });
-            return bestKeyRef[0];
+            return best.keyHandle();
         }
 
         for (int i = 0; i < samples; i++) {
@@ -249,5 +239,29 @@ public final class YierdisDbMaxmemorySupport implements MaxmemoryParticipant {
             return true;
         }
         return false;
+    }
+
+    private static final class BestLruCandidate {
+        private KeyHandle keyHandle;
+        private long lru = Long.MAX_VALUE;
+
+        void consider(KeyHandle keyHandle, EntryRecord record) {
+            if (keyHandle == null || record == null) {
+                return;
+            }
+            long candidateLru = record.lruOrLfu();
+            if (this.keyHandle == null || candidateLru < lru) {
+                this.keyHandle = keyHandle;
+                this.lru = candidateLru;
+            }
+        }
+
+        KeyHandle keyHandle() {
+            return keyHandle;
+        }
+
+        long lru() {
+            return lru;
+        }
     }
 }

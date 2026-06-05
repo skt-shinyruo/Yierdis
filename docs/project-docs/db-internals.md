@@ -94,8 +94,8 @@ type roots 管真实 payload：
 
 写侧常用方法包括：
 
-- `computeWithHandle(...)`
-- `computeIfPresentWithHandle(...)`
+- `computeWithHandleResult(...)`
+- `computeIfPresentWithHandleResult(...)`
 - `newRecord(...)`
 - `removeEntry(...)`
 
@@ -140,10 +140,10 @@ command
   -> DbWrites.<family>()
   -> Yierdis*Ops write method
   -> estimate upper bound
-  -> YierdisDbMutationExecutor.execute(plan)
-     -> YierdisDbMemoryLedger.reserve(upperBound)
+     -> YierdisDbMutationExecutor.execute(plan)
+        -> YierdisDbMemoryLedger.reserve(upperBound)
      -> plan.apply()
-        -> YierdisDbKeyLifecycle.computeWithHandle(...)
+        -> YierdisDbKeyLifecycle.computeWithHandleResult(...)
         -> Type root mutation
         -> EntryRecord replacement / delete
         -> TTL metadata update

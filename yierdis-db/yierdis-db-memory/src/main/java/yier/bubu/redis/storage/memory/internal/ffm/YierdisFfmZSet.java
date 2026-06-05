@@ -11,6 +11,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.internal.value.ZSetValue.ZAddResult;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -40,10 +41,10 @@ public final class YierdisFfmZSet implements AutoCloseable {
     }
 
     public int zaddMany(List<byte[]> scoreMemberPairs) {
-        return zaddMany(scoreMemberPairs, null);
+        return zaddManyResult(scoreMemberPairs).added();
     }
 
-    public int zaddMany(List<byte[]> scoreMemberPairs, boolean[] changedRef) {
+    public ZAddResult zaddManyResult(List<byte[]> scoreMemberPairs) {
         int added = 0;
         boolean changedAny = false;
         for (int i = 0; i < scoreMemberPairs.size(); i += 2) {
@@ -57,10 +58,7 @@ public final class YierdisFfmZSet implements AutoCloseable {
                 }
             }
         }
-        if (changedRef != null && changedRef.length > 0 && changedAny) {
-            changedRef[0] = true;
-        }
-        return added;
+        return new ZAddResult(added, changedAny);
     }
 
     public int zrem(List<byte[]> members) {

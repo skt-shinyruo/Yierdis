@@ -202,10 +202,10 @@ public class YierdisDbConstructionTest {
             );
 
             try {
-                lifecycle.computeWithHandle(bytes("entry-allocation-fails"), (keyHandle, oldRecord) -> {
+                lifecycle.computeWithHandleResult(bytes("entry-allocation-fails"), (keyHandle, oldRecord) -> {
                     Assert.assertNull(oldRecord);
                     ValueHandle valueHandle = stringRoot.store(bytes("value"));
-                    return lifecycle.newRecord(
+                    EntryRecord next = lifecycle.newRecord(
                             keyHandle,
                             valueHandle,
                             ValueType.STRING,
@@ -214,6 +214,7 @@ public class YierdisDbConstructionTest {
                             0L,
                             null
                     );
+                    return YierdisDbKeyLifecycle.EntryMutationResult.of(next, null);
                 });
                 Assert.fail("entry allocation should fail when the shared native allocator has no free slots");
             } catch (NativeMemoryException e) {
@@ -232,6 +233,38 @@ public class YierdisDbConstructionTest {
                     setRoot,
                     zsetRoot
             );
+        }
+    }
+
+    @Test
+    public void computeWithHandleResultStoresRecordAndReturnsMetadata() {
+        YierdisDb db = new YierdisDb();
+        try {
+            db.bindToCurrentThread();
+            YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
+
+            String result = lifecycle.computeWithHandleResult(bytes("metadata-key"), (keyHandle, oldRecord) -> {
+                Assert.assertNull(oldRecord);
+                ValueHandle valueHandle = lifecycle.stringRoot().store(bytes("metadata-value"));
+                EntryRecord next = lifecycle.newRecord(
+                        keyHandle,
+                        valueHandle,
+                        ValueType.STRING,
+                        ValueEncoding.STRING_RAW,
+                        -1L,
+                        123L,
+                        null
+                );
+                return new YierdisDbKeyLifecycle.EntryMutationResult<>(next, "created:" + keyHandle.dictHash());
+            });
+
+            Assert.assertTrue(result.startsWith("created:"));
+            EntryRecord stored = lifecycle.entryRecord(bytes("metadata-key"));
+            Assert.assertNotNull(stored);
+            Assert.assertEquals(ValueType.STRING, stored.type());
+            Assert.assertArrayEquals(bytes("metadata-value"), lifecycle.stringRoot().copy(stored.valueHandle()));
+        } finally {
+            db.shutdown();
         }
     }
 
