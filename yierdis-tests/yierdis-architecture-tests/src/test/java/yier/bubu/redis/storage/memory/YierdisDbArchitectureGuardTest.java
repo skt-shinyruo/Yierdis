@@ -91,10 +91,10 @@ public class YierdisDbArchitectureGuardTest {
                 repoRoot,
                 dbFile,
                 offenders,
-                "private final boolean ownsOffHeapAllocator;",
+                "private final boolean owns" + "Off" + "HeapAllocator;",
                 "private final boolean ownsMemoryRuntime;",
                 "private final class DbMemoryLedger",
-                "offHeapAllocator.close();",
+                "off" + "HeapAllocator.close();",
                 "memoryRuntime.close();"
         );
 
@@ -132,8 +132,8 @@ public class YierdisDbArchitectureGuardTest {
                 "findGlobClassEnd(",
                 "globClassMatches(",
                 "new YierdisFfmMemoryRuntime(",
-                "new YierdisFfmBlobStore(",
-                "new YierdisFfmKeyspace",
+                "new YierdisFfm" + "BlobStore(",
+                "new YierdisFfm" + "Keyspace",
                 "new YierdisFfmExpireIndex(",
                 "new YierdisStringOps(",
                 "new YierdisHashOps(",
@@ -226,12 +226,12 @@ public class YierdisDbArchitectureGuardTest {
                     repoRoot,
                     root,
                     offenders,
-                    "ByteArrayKeyspace",
-                    "YierdisFfmKeyspace",
-                    "HeapKeyHandle",
-                    "FfmKeyHandle",
-                    "KeyHandle.forHeap",
-                    "KeyHandle.forFfm"
+                    "ByteArray" + "Keyspace",
+                    "YierdisFfm" + "Keyspace",
+                    "Heap" + "KeyHandle",
+                    "Ffm" + "KeyHandle",
+                    "KeyHandle.for" + "Heap",
+                    "KeyHandle.for" + "Ffm"
             );
         }
 
@@ -254,8 +254,8 @@ public class YierdisDbArchitectureGuardTest {
                     repoRoot,
                     root,
                     offenders,
-                    "YierdisHeapExpireIndex",
-                    "YierdisFfmExpireIndex(YierdisFfmBlobStore",
+                    "Yierdis" + "HeapExpireIndex",
+                    "YierdisFfmExpireIndex(YierdisFfm" + "BlobStore",
                     "setExpireAtMillis(byte[] keyBytes, long expireAtMillis, YierdisKeyspace"
             );
         }
@@ -264,6 +264,58 @@ public class YierdisDbArchitectureGuardTest {
         if (!offenders.isEmpty()) {
             Assert.fail("db-memory must not reference legacy expire index implementations:\n"
                     + String.join("\n", offenders));
+        }
+    }
+
+    @Test
+    public void dbMemoryProductionMustBeNativeHandleOnlyStorage() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("unable to resolve repository root", repoRoot);
+
+        Path mainRoot = storageMemoryMain(repoRoot);
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                mainRoot,
+                offenders,
+                "Off" + "HeapAllocator",
+                "Off" + "HeapBuf",
+                "Off" + "HeapSlice",
+                "YierdisForeign" + "Off" + "HeapAllocator",
+                "YierdisFfm" + "SlabAllocator",
+                "Heap" + "KeyHandle",
+                "Ffm" + "KeyHandle",
+                "KeyHandle.for" + "Heap",
+                "KeyHandle.for" + "Ffm",
+                "ByteArray" + "Keyspace",
+                "YierdisFfm" + "Keyspace",
+                "Yierdis" + "HeapExpireIndex",
+                "YierdisFfm" + "BytesRef",
+                "YierdisFfm" + "BytesRefSlice",
+                "YierdisFfm" + "BlobStore",
+                "YierdisFfm" + "ByteMap",
+                "YierdisFfm" + "Listpack",
+                "ByteArray" + "HashMap",
+                "ByteArray" + "HashSet"
+        );
+
+        Assert.assertTrue("expected to scan yierdis-db-memory production sources", scanned > 0);
+        if (!offenders.isEmpty()) {
+            Assert.fail("yierdis-db-memory production sources must not reference legacy storage symbols:\n"
+                    + String.join("\n", offenders));
+        }
+
+        String productionSource = readAllJavaSources(mainRoot);
+        for (String requiredText : List.of(
+                "YierdisStableNativeAllocator",
+                "NativeKeyDirectory",
+                "NativeBytesSlice",
+                "KeyHandle.forNative"
+        )) {
+            Assert.assertTrue(
+                    "yierdis-db-memory production sources must contain native-only storage marker: " + requiredText,
+                    productionSource.contains(requiredText)
+            );
         }
     }
 
@@ -386,6 +438,24 @@ public class YierdisDbArchitectureGuardTest {
                 }
             }
         }
+    }
+
+    private static String readAllJavaSources(Path root) throws IOException {
+        if (!Files.isDirectory(root)) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder();
+        List<Path> javaFiles;
+        try (java.util.stream.Stream<Path> files = Files.walk(root)) {
+            javaFiles = files
+                    .filter(Files::isRegularFile)
+                    .filter(path -> path.toString().endsWith(".java"))
+                    .toList();
+        }
+        for (Path javaFile : javaFiles) {
+            out.append(Files.readString(javaFile, StandardCharsets.UTF_8)).append('\n');
+        }
+        return out.toString();
     }
 
     private static int countMatches(Pattern pattern, String source) {

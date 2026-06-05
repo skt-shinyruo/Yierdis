@@ -28,10 +28,10 @@ public class CollectionRootTest {
     @Test
     public void hashSetAndZsetRootsRoundTripMembers() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root");
-             NativeAllocator hashAllocator = new YierdisStableNativeAllocator(runtime, 4096);
-             HashRoot hash = new HashRoot(hashAllocator);
-             SetRoot set = new SetRoot(runtime);
-             ZSetRoot zset = new ZSetRoot(runtime)) {
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             HashRoot hash = new HashRoot(allocator);
+             SetRoot set = new SetRoot(allocator);
+             ZSetRoot zset = new ZSetRoot(allocator)) {
             ValueHandle hashHandle = hash.create();
             ValueHandle setHandle = set.create();
             ValueHandle zsetHandle = zset.create();
@@ -52,8 +52,8 @@ public class CollectionRootTest {
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32);
              ListRoot list = new ListRoot(allocator);
              HashRoot hash = new HashRoot(allocator);
-             SetRoot set = new SetRoot(runtime, allocator);
-             ZSetRoot zset = new ZSetRoot(runtime, allocator)) {
+             SetRoot set = new SetRoot(allocator);
+             ZSetRoot zset = new ZSetRoot(allocator)) {
             assertReleasedHandleIsAllocatorStale(allocator, NativeObjectKind.LIST_ROOT, list.create(), list::contains, list::release);
             assertReleasedHandleIsAllocatorStale(allocator, NativeObjectKind.HASH_ROOT, hash.create(), hash::contains, hash::release);
             assertReleasedHandleIsAllocatorStale(allocator, NativeObjectKind.SET_ROOT, set.create(), set::contains, set::release);
@@ -67,8 +67,8 @@ public class CollectionRootTest {
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32);
              ListRoot list = new ListRoot(allocator);
              HashRoot hash = new HashRoot(allocator);
-             SetRoot set = new SetRoot(runtime, allocator);
-             ZSetRoot zset = new ZSetRoot(runtime, allocator)) {
+             SetRoot set = new SetRoot(allocator);
+             ZSetRoot zset = new ZSetRoot(allocator)) {
             assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.LIST_ROOT, list.create(), list::contains, list::size);
             assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.HASH_ROOT, hash.create(), hash::contains, hash::size);
             assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.SET_ROOT, set.create(), set::contains, set::size);

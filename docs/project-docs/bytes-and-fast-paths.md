@@ -2,7 +2,7 @@
 
 本文解释 Yierdis 为什么有一套独立于 Netty 和 DB 的 bytes 抽象，以及这些抽象如何减少无意义复制。
 
-Yierdis 的 bytes 抽象不是为了把 `byte[]` 包一层对象，而是为了让 protocol、execution、DB、off-heap value 和 Netty write-back 共享一套 Netty-free contract；能流式写出时不强制 heap copy，必须 materialize 时又把复制边界写清楚。
+Yierdis 的 bytes 抽象不是为了把 `byte[]` 包一层对象，而是为了让 protocol、execution、DB、native value 和 Netty write-back 共享一套 Netty-free contract；能流式写出时不强制 heap copy，必须 materialize 时又把复制边界写清楚。
 
 ## 为什么不是直接传 byte[]
 
@@ -10,14 +10,14 @@ Yierdis 的 bytes 抽象不是为了把 `byte[]` 包一层对象，而是为了�
 
 第一，所有上层都会默认“我拥有这段数组”。这会让协议 decode、transaction replay、DB lookup、DB persistence 和 tests 混在同一种形状里，最后只能靠防御性 copy 保安全。
 
-第二，`byte[]` 表达不了 direct/off-heap source 或 Netty output buffer 的能力。即使下游可以按地址、按 slice 或按 sink 流式处理，上游也已经把数据收缩成 heap array。
+第二，`byte[]` 表达不了 direct/native source 或 Netty output buffer 的能力。即使下游可以按 slice 或按 sink 流式处理，上游也已经把数据收缩成 heap array。
 
 Yierdis 选择中立 bytes 层：
 
 - lookup API 用短生命周期只读 view 表达输入；当前 DB lifecycle 边界仍会 materialize heap key copy。
 - 写入值用 slice，把“读取”和“写出”能力同时交给 DB。
 - reply 用 sink，把协议编码和 Netty `ByteBuf` 解耦。
-- direct/off-heap 优化只在实现支持时启用，不污染 API 默认语义。
+- native/direct 优化只在实现支持时启用，不污染 API 默认语义。
 
 ## 核心接口
 
@@ -64,7 +64,7 @@ DB API 的很多 read ops 接受 `BytesView`，例如 `StringReadOps`、`TtlRead
 
 新 key 持久化会把 key bytes 存成 allocator-backed `KEY_BYTES`；SCAN、snapshot 和显式 introspection 仍会为了输出或诊断生成 heap copy。这些复制点和 lifecycle 边界 copy 一样，都是有意的 lifetime/ownership 边界。
 
-写路径中，`StringWriteOps.set(...)`、`append(...)` 和 HLL 内部逻辑接收 `BytesSlice`。这让 command 层把 value 作为 slice 交给 DB，由 `StringRoot` 或对应 type root 决定写入 allocator-backed `STRING_BYTES`、collection payload、adapter-owned bytes 或必要 fallback。slice 的重点是延后复制决策，而不是承诺零拷贝持久化。
+写路径中，`StringWriteOps.set(...)`、`append(...)` 和 HLL 内部逻辑接收 `BytesSlice`。这让 command 层把 value 作为 slice 交给 DB，由 `StringRoot` 或对应 type root 写入 allocator-backed `STRING_BYTES` 或 collection native payload handles。slice 的重点是延后复制决策，而不是承诺零拷贝持久化。
 
 集合读路径大量使用 `BulkStringSink`。`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE` 等可以逐项 emit 到 sink，避免先组装完整 `List<byte[]>` 再交给协议层。
 
@@ -85,7 +85,7 @@ CommandExecutorDrainLoop
   -> channel.write(...)
 ```
 
-`ReplyWriter.bulkString(BytesSlice)` 和 `BulkStringSink.bulkString(BytesSlice)` 是关键入口。heap `byte[]` 仍然可用，但不是唯一形状；off-heap string、collection range 和 computed ASCII number 都可以按更合适的方式写出。
+`ReplyWriter.bulkString(BytesSlice)` 和 `BulkStringSink.bulkString(BytesSlice)` 是关键入口。heap `byte[]` 仍然可用，但不是唯一形状；native string、collection range 和 computed ASCII number 都可以按更合适的方式写出。
 
 ## fast path 和 fallback
 
@@ -93,6 +93,7 @@ fast path 主要出现在这些地方：
 
 - API 边界使用 `BytesView`，让 command/DB contract 不依赖 Netty，并为后续 direct lookup 优化保留形状；当前 DB lifecycle lookup 仍会 materialize heap `byte[]`。
 - `BytesSlice.writeTo(BytesSink)` 可以把 value 直接流式写出。
+- `NativeBytesSlice` 在同步写出期间 pin allocator handle，写完后 unpin，避免为了 `LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE` 这类流式读先 materialize `List<byte[]>`。
 - `DirectBytesSink` 暴露 writer cursor 和 memory address，支持 direct/off-heap aware 写入。
 - `NettyByteBufSink.unwrap()` 允许 adapter 边界在必要时使用 `ByteBuf` 能力。
 - `BulkStringSink` 让 collection range 边遍历边输出。
@@ -104,7 +105,8 @@ fallback 也同样重要。以下 heap materialization 是有意的：
 - transaction replay：事务队列需要保存可重放的 `ByteArrayExecutionRequest` / `ExecutionRecord`，不能引用短生命周期 frame。
 - explicit introspection：`SCAN`、snapshot、`MEMORY` / object 类输出需要构造返回值或诊断对象，不能把 native view 泄漏给调用方。
 - tests：测试经常用 heap arrays 和 recording sinks 断言内容，这是可读性和确定性的取舍。
-- unavoidable fallback paths：JSON/base64/escape、legacy collection internals、adapter-owned payload、短生命周期输入持久化、需要排序/聚合的结果，都可能必须复制。
+- ownership-returning DB APIs：`GET` / `HGET` / pop / snapshot / introspection 等返回 owned `byte[]` 或集合快照时会复制。
+- unavoidable fallback paths：JSON/base64/escape、短生命周期输入持久化、需要排序/聚合或独立所有权的结果，都可能必须复制。
 
 判断一条路径是否合理，不是看它有没有复制，而是看复制是否发生在 ownership、lifetime 或格式转换真正需要的位置。
 
@@ -116,7 +118,7 @@ bytes 抽象不是 native allocator。它只描述“如何读一段 bytes”和
 
 - `NativeKeyDirectory` 持久化 key bytes 为 allocator-backed `KEY_BYTES`。
 - `StringRoot` 持久化 string payload 为 allocator-backed `STRING_BYTES`。
-- entry metadata、collection root records 和部分 list quicklist metadata 是 allocator-backed objects。
-- collection payload internals 仍可能由 adapter 或 legacy FFM structures 拥有。
+- entry metadata、collection root records 和 collection internal bytes 都是 allocator-backed objects。
+- streaming reply paths for list/hash/set/zset use native-backed `BytesSlice` values; heap copies remain an ownership boundary, not the default streaming shape.
 
 因此 `BytesView` / `BytesSlice` 可以帮助 native 和 heap 路径共享 API，但它们本身不保证数据 off-heap，也不保证零拷贝。它们保证的是短生命周期 view、流式写出和 adapter 边界清晰。

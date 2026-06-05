@@ -119,13 +119,15 @@ maintenance 时的顺序由 `YierdisInstanceRuntimeAccess.maintenanceTick()` 固
 - cleanup 没释放出足够空间；
 - eviction policy 在预算内找不到可删的 victim；
 - shared/global usage 仍高于目标线；
-- `apply()` 过程中命中了 off-heap OOM。
+- `apply()` 过程中命中了 native allocator OOM。
 
 这些失败路径的约束是：
 
 - 增长型写入最终必须返回稳定 OOM 文案；
 - 失败前不能把半成品 mutation 留在 DB 内部；
 - reservation 必须 rollback，避免后续写入被“幽灵 reserved bytes”污染。
+
+TTL index、random/LRU eviction candidates 和 synthetic delete 都使用 native-backed key handles。删除前复制稳定 key bytes 是为了 change event 和 output ownership，不表示 DB 内部仍有 heap keyspace。
 
 `prepareWrite(0)` 是 maintenance-only enforcement 的关键特例：在 `noeviction` 下它不会因为“当前已经超限”而阻止不增长的维护操作。
 

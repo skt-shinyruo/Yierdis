@@ -1,53 +1,39 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
+import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ValueType;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBlobStore;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmZSet;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.Consumer;
 import java.nio.charset.StandardCharsets;
 
-public final class ZSetValue implements YierdisValue {
+public final class ZSetValue implements YierdisValue, NativeHandleOwner {
     public record ZAddResult(int added, boolean changedAny) {
     }
 
     private static final int REF_BYTES = 8;
 
-    private final YierdisFfmMemoryRuntime memoryRuntime;
-    private final YierdisFfmZSet ffm;
+    private final NativeByteStore memberStore;
 
     // Redis uses listpack for small ZSETs and upgrades to dict+skiplist as needed.
     // We approximate that behavior with an in-Java "listpack-like" sorted array and upgrade to
     // HashMap+skiplist once size/element thresholds are crossed.
-    private PackedZSet listpack;
-    private ByteArrayHashMap<ZSkipList.Node> byMember;
+    private NativePackedZSet listpack;
+    private NativeByteMap<ZSkipList.Node> byMember;
     private ZSkipList byScore;
-    private long rawBytes;
     private long skiplistLevels;
 
-    public ZSetValue() {
-        this.memoryRuntime = null;
-        this.ffm = null;
-        this.listpack = new PackedZSet();
-    }
-
-    public ZSetValue(YierdisFfmMemoryRuntime memoryRuntime) {
-        this.memoryRuntime = memoryRuntime;
-        this.ffm = new YierdisFfmZSet(new YierdisFfmBlobStore(memoryRuntime, "zset"));
-        this.listpack = null;
+    public ZSetValue(NativeAllocator allocator) {
+        NativeAllocator nativeAllocator = Objects.requireNonNull(allocator, "allocator");
+        this.memberStore = new NativeByteStore(nativeAllocator, NativeObjectKind.ZSET_MEMBER_BYTES);
+        this.listpack = new NativePackedZSet(memberStore);
     }
 
     @Override
@@ -57,16 +43,10 @@ public final class ZSetValue implements YierdisValue {
 
     @Override
     public ValueEncoding encoding() {
-        if (memoryRuntime != null) {
-            return ffm.encoding();
-        }
         return listpack != null ? ValueEncoding.ZSET_PACKED : ValueEncoding.ZSET_SKIPLIST;
     }
 
     public int size() {
-        if (memoryRuntime != null) {
-            return ffm.size();
-        }
         if (listpack != null) {
             return listpack.size();
         }
@@ -74,16 +54,26 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public long estimatedBytes() {
-        if (memoryRuntime != null) {
-            return ffm.nativeBytes();
-        }
         if (listpack != null) {
             return listpack.estimatedBytes();
         }
         // dict (hash map) + raw member bytes + skiplist forward/span arrays (approximate by level count).
-        return byMember.estimatedBytes()
-                + rawBytes
-                + skiplistLevels * (REF_BYTES + Integer.BYTES);
+        return memberStore.nativeBytes() + skiplistLevels * (REF_BYTES + Integer.BYTES);
+    }
+
+    @Override
+    public void forEachNativeHandle(Consumer<NativeHandle> consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        if (listpack != null) {
+            listpack.forEachNativeHandle(consumer);
+            return;
+        }
+        if (byMember != null) {
+            byMember.forEach((memberRef, node) -> {
+                consumer.accept(memberRef);
+                consumer.accept(node.member);
+            });
+        }
     }
 
     public int zaddMany(List<byte[]> scoreMemberPairs) {
@@ -91,9 +81,6 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public ZAddResult zaddManyResult(List<byte[]> scoreMemberPairs) {
-        if (memoryRuntime != null) {
-            return ffm.zaddManyResult(scoreMemberPairs);
-        }
         int added = 0;
         boolean changedAny = false;
         for (int i = 0; i < scoreMemberPairs.size(); i += 2) {
@@ -125,9 +112,6 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public int zrem(List<byte[]> members) {
-        if (memoryRuntime != null) {
-            return ffm.zrem(members);
-        }
         if (listpack != null) {
             int removed = 0;
             for (byte[] m : members) {
@@ -142,18 +126,15 @@ public final class ZSetValue implements YierdisValue {
             if (old == null) {
                 continue;
             }
-            rawBytes -= old.member.length;
             skiplistLevels -= old.forward.length;
             byScore.delete(old.score, old.member);
+            memberStore.release(old.member);
             removed++;
         }
         return removed;
     }
 
     public List<byte[]> zrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        if (memoryRuntime != null) {
-            return ffm.zrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
-        }
         if (count <= 0) {
             return new ArrayList<>();
         }
@@ -165,9 +146,6 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public List<byte[]> zrevrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        if (memoryRuntime != null) {
-            return ffm.zrevrangeByScore(min, minExclusive, max, maxExclusive, withScores, offset, count);
-        }
         if (count <= 0) {
             return new ArrayList<>();
         }
@@ -179,9 +157,6 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public int zremrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive) {
-        if (memoryRuntime != null) {
-            return ffm.zremrangeByScore(min, minExclusive, max, maxExclusive);
-        }
         if (listpack != null) {
             int removed = 0;
             for (int i = listpack.size() - 1; i >= 0; i--) {
@@ -198,10 +173,11 @@ public final class ZSetValue implements YierdisValue {
         ZSkipList.Node node = firstNodeForMin(min, minExclusive);
         while (node != null && scoreInRange(node.score, min, minExclusive, max, maxExclusive)) {
             ZSkipList.Node next = node.forward[0];
-            rawBytes -= node.member.length;
             skiplistLevels -= node.forward.length;
-            byMember.remove(node.member);
+            byte[] memberBytes = memberStore.toByteArray(node.member);
+            byMember.remove(memberBytes);
             byScore.delete(node.score, node.member);
+            memberStore.release(node.member);
             removed++;
             node = next;
         }
@@ -209,9 +185,6 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public int zremrangeByRank(long start, long stop) {
-        if (memoryRuntime != null) {
-            return ffm.zremrangeByRank(start, stop);
-        }
         int size = size();
         if (size == 0) {
             return 0;
@@ -250,10 +223,11 @@ public final class ZSetValue implements YierdisValue {
         ZSkipList.Node node = byScore.getElementByRank(startRank);
         for (int i = 0; i < remaining && node != null; i++) {
             ZSkipList.Node next = node.forward[0];
-            rawBytes -= node.member.length;
             skiplistLevels -= node.forward.length;
-            byMember.remove(node.member);
+            byte[] memberBytes = memberStore.toByteArray(node.member);
+            byMember.remove(memberBytes);
             byScore.delete(node.score, node.member);
+            memberStore.release(node.member);
             removed++;
             node = next;
         }
@@ -261,53 +235,30 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public List<byte[]> zrange(long start, long stop, boolean withScores) {
-        if (memoryRuntime != null) {
-            return ffm.zrange(start, stop, withScores);
-        }
         return rangeByIndex(start, stop, withScores, false);
     }
 
     public List<byte[]> zrevrange(long start, long stop, boolean withScores) {
-        if (memoryRuntime != null) {
-            return ffm.zrevrange(start, stop, withScores);
-        }
         return rangeByIndex(start, stop, withScores, true);
     }
 
     public int zrangeCount(long start, long stop, boolean withScores) {
-        if (memoryRuntime != null) {
-            return ffm.zrangeCount(start, stop, withScores);
-        }
         return rangeByIndexCount(start, stop, withScores, false);
     }
 
     public void zrangeWriteTo(long start, long stop, boolean withScores, BulkStringSink out) {
-        if (memoryRuntime != null) {
-            ffm.zrangeWriteTo(start, stop, withScores, out);
-            return;
-        }
         rangeByIndexWriteTo(start, stop, withScores, false, out);
     }
 
     public int zrevrangeCount(long start, long stop, boolean withScores) {
-        if (memoryRuntime != null) {
-            return ffm.zrevrangeCount(start, stop, withScores);
-        }
         return rangeByIndexCount(start, stop, withScores, true);
     }
 
     public void zrevrangeWriteTo(long start, long stop, boolean withScores, BulkStringSink out) {
-        if (memoryRuntime != null) {
-            ffm.zrevrangeWriteTo(start, stop, withScores, out);
-            return;
-        }
         rangeByIndexWriteTo(start, stop, withScores, true, out);
     }
 
     public int zrangeByScoreCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        if (memoryRuntime != null) {
-            return ffm.zrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
-        }
         if (count <= 0) {
             return 0;
         }
@@ -318,10 +269,6 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public void zrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, BulkStringSink out) {
-        if (memoryRuntime != null) {
-            ffm.zrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
-            return;
-        }
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }
@@ -336,9 +283,6 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public int zrevrangeByScoreCount(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
-        if (memoryRuntime != null) {
-            return ffm.zrevrangeByScoreCount(min, minExclusive, max, maxExclusive, withScores, offset, count);
-        }
         if (count <= 0) {
             return 0;
         }
@@ -349,10 +293,6 @@ public final class ZSetValue implements YierdisValue {
     }
 
     public void zrevrangeByScoreWriteTo(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count, BulkStringSink out) {
-        if (memoryRuntime != null) {
-            ffm.zrevrangeByScoreWriteTo(min, minExclusive, max, maxExclusive, withScores, offset, count, out);
-            return;
-        }
         if (out == null) {
             throw new IllegalArgumentException("out must not be null");
         }
@@ -410,7 +350,7 @@ public final class ZSetValue implements YierdisValue {
         if (!withScores) {
             List<byte[]> out = new ArrayList<>(remaining);
             for (int i = 0; i < remaining && node != null; i++) {
-                out.add(node.member);
+                out.add(memberStore.toByteArray(node.member));
                 node = stepBackwards ? node.backward : node.forward[0];
             }
             return out;
@@ -418,7 +358,7 @@ public final class ZSetValue implements YierdisValue {
 
         List<byte[]> out = new ArrayList<>(remaining * 2);
         for (int i = 0; i < remaining && node != null; i++) {
-            out.add(node.member);
+            out.add(memberStore.toByteArray(node.member));
             out.add(formatScoreBytes(node.score));
             node = stepBackwards ? node.backward : node.forward[0];
         }
@@ -537,7 +477,7 @@ public final class ZSetValue implements YierdisValue {
             if (node.member == null) {
                 out.bulkStringNull();
             } else {
-                out.bulkString(node.member, 0, node.member.length);
+                out.bulkString(memberStore.slice(node.member));
             }
             if (withScores) {
                 writeScoreTo(out, node.score);
@@ -824,7 +764,7 @@ public final class ZSetValue implements YierdisValue {
                 continue;
             }
 
-            out.add(node.member);
+            out.add(memberStore.toByteArray(node.member));
             if (withScores) {
                 out.add(formatScoreBytes(s));
             }
@@ -893,7 +833,7 @@ public final class ZSetValue implements YierdisValue {
             if (node.member == null) {
                 out.bulkStringNull();
             } else {
-                out.bulkString(node.member, 0, node.member.length);
+                out.bulkString(memberStore.slice(node.member));
             }
             if (withScores) {
                 writeScoreTo(out, s);
@@ -930,7 +870,7 @@ public final class ZSetValue implements YierdisValue {
                 continue;
             }
 
-            out.add(node.member);
+            out.add(memberStore.toByteArray(node.member));
             if (withScores) {
                 out.add(formatScoreBytes(s));
             }
@@ -998,7 +938,7 @@ public final class ZSetValue implements YierdisValue {
             if (node.member == null) {
                 out.bulkStringNull();
             } else {
-                out.bulkString(node.member, 0, node.member.length);
+                out.bulkString(memberStore.slice(node.member));
             }
             if (withScores) {
                 writeScoreTo(out, s);
@@ -1139,26 +1079,24 @@ public final class ZSetValue implements YierdisValue {
 
     private int skiplistZadd(double score, byte[] memberBytes) {
         if (byMember == null) {
-            byMember = new ByteArrayHashMap<>();
-            byScore = new ZSkipList();
+            byMember = new NativeByteMap<>(memberStore, NativeObjectKind.ZSET_MEMBER_BYTES);
+            byScore = new ZSkipList(memberStore);
         }
 
         ZSkipList.Node old = byMember.get(memberBytes);
-        byte[] member = memberBytes;
         if (old != null) {
-            member = old.member;
             if (Double.compare(old.score, score) == 0) {
                 return 0;
             }
             skiplistLevels -= old.forward.length;
-            byScore.delete(old.score, member);
-        } else {
-            rawBytes += memberBytes.length;
+            byScore.delete(old.score, old.member);
+            memberStore.release(old.member);
         }
 
+        NativeHandle member = memberStore.store(memberBytes);
         ZSkipList.Node next = byScore.insert(score, member);
         skiplistLevels += next.forward.length;
-        byMember.put(member, next);
+        byMember.put(memberBytes, next);
         return old == null ? 1 : -1;
     }
 
@@ -1221,27 +1159,127 @@ public final class ZSetValue implements YierdisValue {
             return;
         }
         int size = listpack.size();
-        ByteArrayHashMap<ZSkipList.Node> outByMember = new ByteArrayHashMap<>(Math.max(16, size));
-        ZSkipList outByScore = new ZSkipList();
-        rawBytes = 0;
+        NativeByteMap<ZSkipList.Node> outByMember = new NativeByteMap<>(memberStore, NativeObjectKind.ZSET_MEMBER_BYTES);
+        ZSkipList outByScore = new ZSkipList(memberStore);
         skiplistLevels = 0;
         for (int i = 0; i < size; i++) {
             double score = listpack.scoreAt(i);
             byte[] member = listpack.memberAt(i);
-            ZSkipList.Node n = outByScore.insert(score, member);
+            NativeHandle memberHandle = memberStore.store(member);
+            ZSkipList.Node n = outByScore.insert(score, memberHandle);
             outByMember.put(member, n);
-            rawBytes += member.length;
             skiplistLevels += n.forward.length;
         }
         this.byMember = outByMember;
         this.byScore = outByScore;
+        this.listpack.close();
         this.listpack = null;
     }
 
     @Override
     public void close() {
-        if (memoryRuntime != null) {
-            ffm.close();
+        if (byMember != null) {
+            byMember.forEach((memberRef, node) -> memberStore.release(node.member));
+            byMember.close();
+            byMember = null;
+            byScore = null;
+        }
+        if (listpack != null) {
+            listpack.close();
+            listpack = null;
+        }
+    }
+
+    private static final class NativePackedZSet implements AutoCloseable {
+        private final NativeListpack members;
+        private double[] scores = new double[0];
+        private int size;
+
+        private NativePackedZSet(NativeByteStore memberStore) {
+            this.members = new NativeListpack(memberStore, NativeObjectKind.ZSET_MEMBER_BYTES);
+        }
+
+        int size() {
+            return size;
+        }
+
+        long estimatedBytes() {
+            return members.estimatedBytes() + (long) scores.length * Double.BYTES;
+        }
+
+        double scoreAt(int index) {
+            checkIndex(index);
+            return scores[index];
+        }
+
+        byte[] memberAt(int index) {
+            checkIndex(index);
+            return members.get(index);
+        }
+
+        void memberWriteTo(int index, BulkStringSink out) {
+            checkIndex(index);
+            members.writeAt(index, out);
+        }
+
+        void forEachNativeHandle(Consumer<NativeHandle> consumer) {
+            members.forEachNativeHandle(consumer);
+        }
+
+        int indexOfMember(byte[] memberBytes) {
+            return members.indexOf(memberBytes);
+        }
+
+        int compareMemberAt(int index, byte[] other) {
+            checkIndex(index);
+            byte[] member = members.get(index);
+            return compareLex(member, other);
+        }
+
+        void insertAt(int index, double score, byte[] memberBytes) {
+            if (index < 0 || index > size) {
+                throw new IndexOutOfBoundsException();
+            }
+            ensureCapacity(size + 1);
+            if (size - index > 0) {
+                System.arraycopy(scores, index, scores, index + 1, size - index);
+            }
+            scores[index] = score;
+            members.insertAt(index, memberBytes, NativeObjectKind.ZSET_MEMBER_BYTES);
+            size++;
+        }
+
+        void removeAt(int index) {
+            checkIndex(index);
+            members.removeAt(index);
+            if (size - index - 1 > 0) {
+                System.arraycopy(scores, index + 1, scores, index, size - index - 1);
+            }
+            size--;
+        }
+
+        @Override
+        public void close() {
+            members.close();
+            scores = new double[0];
+            size = 0;
+        }
+
+        private void ensureCapacity(int desired) {
+            if (scores.length >= desired) {
+                return;
+            }
+            int next = Math.max(16, scores.length);
+            while (next < desired) {
+                next <<= 1;
+            }
+            scores = Arrays.copyOf(scores, next);
+        }
+
+        private void checkIndex(int index) {
+            if (index < 0 || index >= size) {
+                throw new IndexOutOfBoundsException();
+            }
         }
     }
 

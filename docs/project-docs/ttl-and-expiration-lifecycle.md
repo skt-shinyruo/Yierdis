@@ -6,7 +6,7 @@
 
 TTL 当前不是单点字段，而是两份状态一起维护：
 
-- `YierdisFfmExpireIndex` / `YierdisHeapExpireIndex`：按 `KeyHandle -> expireAtMillis` 建索引，给 `TTL/PTTL`、随机采样 cleanup、maxmemory cleanup-first 使用。
+- `YierdisFfmExpireIndex`：按 native-backed `KeyHandle -> expireAtMillis` 建索引，给 `TTL/PTTL`、随机采样 cleanup、maxmemory cleanup-first 使用。
 - `EntryRecord.expireAtMillis`：镜像当前 TTL，保证 entry 改写、introspection 和后续 value rewrite 看到同一状态。
 
 `YierdisDbKeyLifecycle.setExpireAtMillis(...)` 先写 expire index，再通过 `replaceEntryExpire(...)` 更新 `EntryRecord` 镜像。`removeExpire(...)` 则先删 index，再把 entry 里的 TTL 设回 `-1`。
@@ -121,4 +121,4 @@ TTL 相关删除和更新都在维护同一个顺序约束：
 - `ExpireSemanticsTest`：`EXPIRE 0` 删除 list/hash/set/zset 后，后续写入可以按新 key 重建。
 - `TtlMaxmemoryTest`：新增第一条 TTL metadata 时，`noeviction` 下的 OOM 必须发生在 mutation 之前。
 - `MemoryStatsAccountingConsistencyTest`：`usedBytesForMaxmemory` 与 `MEMORY STATS` 在有 TTL metadata 时保持一致。
-- `OffHeapBytesViewTtlRegressionTest`、`ExpireKeySharingTest`：补充覆盖 off-heap 读视图和 key 生命周期共享状态下的过期行为。
+- `OffHeapBytesViewTtlRegressionTest`、`ExpireKeySharingTest`：补充覆盖 bytes view lookup 和 native key 生命周期共享状态下的过期行为。

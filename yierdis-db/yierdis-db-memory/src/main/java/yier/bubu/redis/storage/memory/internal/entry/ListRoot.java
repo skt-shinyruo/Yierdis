@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 public final class ListRoot implements TypeRoot {
     private final NativeCollectionRootTable<ListValue> lists;
@@ -118,6 +119,11 @@ public final class ListRoot implements TypeRoot {
 
     public synchronized long nativeBytes() {
         return lists.adapterBytes(ListValue::estimatedBytes);
+    }
+
+    public synchronized void forEachNativeHandle(ValueHandle handle, Consumer<NativeHandle> consumer) {
+        ensureOpen();
+        requireList(handle).forEachNativeHandle(consumer);
     }
 
     @Override

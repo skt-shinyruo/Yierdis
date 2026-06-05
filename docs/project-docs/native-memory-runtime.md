@@ -1,6 +1,6 @@
 # Native Memory 运行时
 
-本文解释 Yierdis 如何把 JDK FFM 接入运行时：runtime、region、span、access、DB scope、maxmemory 和仍然 heap-backed 的边界。
+本文解释 Yierdis 如何把 JDK FFM 接入运行时：runtime、region、span、access、DB scope、maxmemory 和必须 materialize 到 heap 的边界。
 
 ## 当前结论
 
@@ -78,10 +78,11 @@ FFM-backed storage paths 当前集中在这些结构：
 
 - `NativeKeyDirectory`：key -> `EntryHandle` 目录。key bytes 存为 allocator-backed `KEY_BYTES` object；directory 的 open-addressing arrays 仍是 heap arrays。
 - `EntryTable`：`EntryHandle` -> `ENTRY_RECORD`。entry metadata 是 allocator-backed native object，按固定 offset 存 key identity、value handle、type、encoding、TTL、version 和 LRU/LFU 字段。
-- `YierdisFfmExpireIndex`：TTL index 使用 FFM/native 结构参与 DB lifecycle；TTL authoritative 字段仍要和 `EntryRecord.expireAtMillis` 保持一致。
+- `YierdisFfmExpireIndex`：TTL index 只接收 native-backed `KeyHandle`，并以 native key identity 参与 DB lifecycle；TTL authoritative 字段仍要和 `EntryRecord.expireAtMillis` 保持一致。
 - `StringRoot`：string payload 使用 allocator-backed `STRING_BYTES`。
-- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot`：collection root records 使用 allocator-backed `LIST_NODE`、`HASH_NODE`、`SET_NODE`、`ZSET_NODE`，root record 再映射到 adapter-owned payload implementation。
-- list quicklist metadata records 使用 allocator-backed `LIST_QUICKLIST_NODE`；payload bytes 以及 hash/set/zset internals 仍有迁移边界。
+- `ListRoot` / `HashRoot` / `SetRoot` / `ZSetRoot`：collection root records 使用 allocator-backed `LIST_ROOT`、`HASH_ROOT`、`SET_ROOT`、`ZSET_ROOT`。
+- collection internal bytes 使用 allocator-backed objects：list payload 为 `LISTPACK_BYTES`，hash field/value 为 `HASH_FIELD_BYTES` / `HASH_VALUE_BYTES`，set members 为 `SET_MEMBER_BYTES`，zset members 为 `ZSET_MEMBER_BYTES`。
+- list quicklist node metadata 使用 allocator-backed `LIST_NODE`。
 
 `EntryHandle` 和 `ValueHandle` 是这些结构上的 typed stable-handle wrapper。`NativeKeyDirectory` 持有的是 `EntryHandle` raw value，`EntryTable` 持有的是 `EntryHandle -> ENTRY_RECORD` 的稳定映射，而 `ENTRY_RECORD` 内再保存 `ValueHandle` raw value。它们都不是 physical address，也不应该被当成可以长期缓存的 `MemorySegment` 视图。
 
@@ -105,8 +106,8 @@ native memory 不等于所有路径零拷贝。
 - RESP decode 和 execution request snapshot 使用 heap `byte[]`。
 - `YierdisDbKeyLifecycle` 当前把 `BytesView` lookup 输入转成 heap `byte[]` 后进入 `NativeKeyDirectory`。
 - `SCAN`、snapshot、`RANDOMKEY`、introspection 和显式返回 `byte[]` / `List<byte[]>` 的 API 会复制出 heap bytes。
-- 当前 string `GET` 路径返回的 slice 仍可能先复制成 heap-backed slice，而不是暴露 allocator view。
-- collection payload internals、adapter-owned bytes、排序/聚合结果和 legacy structures 可能有自己的 copy 边界。
+- `GET` / `HGET` / pop / snapshot 这类所有权返回 API 会复制出 heap bytes。
+- collection range/member streaming 路径通过 native-backed `BytesSlice` 输出；排序、聚合或命令语义要求拥有结果时仍可能复制。
 
 copy 细节见 [`offheap-copy-behavior.md`](./offheap-copy-behavior.md) 和 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
 

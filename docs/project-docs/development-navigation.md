@@ -128,7 +128,7 @@
 - `YierdisTtlOps`
 - `YierdisDbKeyLifecycle`
 - `YierdisDbExpirationSupport`
-- `YierdisExpireIndex`、`YierdisHeapExpireIndex`、`YierdisFfmExpireIndex`
+- `YierdisExpireIndex`、`YierdisFfmExpireIndex`
 - `YierdisDbMutationExecutor`
 - `YierdisDbMemoryLedger`
 - `YierdisDbMaxmemorySupport`
@@ -164,7 +164,8 @@
 - [`YierdisNativeObjectTable.java`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisNativeObjectTable.java)
 - [`YierdisStableNativeAllocator.java`](../../yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java)
 - `EntryHandle`、`ValueHandle`、`KeyHandle`
-- `YierdisFfmBlobStore`、`YierdisFfmKeyspace`
+- `NativeKeyDirectory`
+- `NativeBytesSlice`、`NativeByteStore`、`NativeByteMap`、`NativeListpack`
 - `YierdisDbNativeHandleGraph`
 
 继续追：
@@ -182,7 +183,7 @@
 - `ValueHandleContractTest`
 - `KeyHandleContractTest`
 - `YierdisDbNativeHandleGraphTest`
-- `OffHeapLeakRegressionTest`
+- `NativeStorageRegressionTest`
 
 ## 改 executor / backpressure
 

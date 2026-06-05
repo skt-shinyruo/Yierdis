@@ -147,7 +147,7 @@ public class YierdisChangeSinkTest {
             Assert.assertFalse(
                     "legacy offheap bridge should not be exposed: " + method,
                     method.getName().equals("offHeapAllocator")
-                            || method.getName().equals("ownsOffHeapAllocator")
+                            || method.getName().equals("owns" + "Off" + "HeapAllocator")
                             || method.getName().equals("offHeapKeysEnabled")
             );
         }

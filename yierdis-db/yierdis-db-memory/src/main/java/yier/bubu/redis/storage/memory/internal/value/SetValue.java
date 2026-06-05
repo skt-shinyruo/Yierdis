@@ -1,34 +1,25 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
+import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ValueType;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBlobStore;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmByteMap;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBytesRefSlice;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmIntSet;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.Consumer;
 
-public final class SetValue implements YierdisValue {
+public final class SetValue implements YierdisValue, NativeHandleOwner {
     // Redis uses intset for small integer-only sets and upgrades to hashtable as needed.
     private static final byte[] LONG_MIN_VALUE_BYTES = "-9223372036854775808".getBytes(StandardCharsets.US_ASCII);
     private static final int LONG_BYTES = Long.BYTES;
 
     private static final Object PRESENT = new Object();
 
-    private final YierdisFfmMemoryRuntime memoryRuntime;
-    private final YierdisFfmBlobStore ffmBlobStore;
+    private final NativeByteStore memberStore;
 
     private short[] intset16 = new short[0];
     private int[] intset32;
@@ -36,21 +27,10 @@ public final class SetValue implements YierdisValue {
     private int intsetEncodingBytes = Short.BYTES;
     private int intsetSize = 0;
 
-    private ByteArrayHashSet hashset;
-    private long rawBytes;
+    private NativeByteMap<Object> members;
 
-    private YierdisFfmIntSet intsetFfm;
-    private YierdisFfmByteMap<Object> hashsetFfm;
-
-    public SetValue() {
-        this.memoryRuntime = null;
-        this.ffmBlobStore = null;
-    }
-
-    public SetValue(YierdisFfmMemoryRuntime memoryRuntime) {
-        this.memoryRuntime = memoryRuntime;
-        this.ffmBlobStore = new YierdisFfmBlobStore(memoryRuntime, "set");
-        this.intsetFfm = new YierdisFfmIntSet(memoryRuntime);
+    public SetValue(NativeAllocator allocator) {
+        this.memberStore = new NativeByteStore(Objects.requireNonNull(allocator, "allocator"), NativeObjectKind.SET_MEMBER_BYTES);
     }
 
     @Override
@@ -60,32 +40,19 @@ public final class SetValue implements YierdisValue {
 
     @Override
     public ValueEncoding encoding() {
-        if (memoryRuntime != null) {
-            return hashsetFfm != null ? ValueEncoding.SET_HT : ValueEncoding.SET_INTSET;
-        }
-        if (hashset != null) {
-            return ValueEncoding.SET_HT;
-        }
-        return ValueEncoding.SET_INTSET;
+        return members != null ? ValueEncoding.SET_HT : ValueEncoding.SET_INTSET;
     }
 
     public int size() {
-        if (memoryRuntime != null) {
-            return hashsetFfm != null ? hashsetFfm.size() : intsetFfm.size();
-        }
-        if (hashset != null) {
-            return hashset.size();
+        if (members != null) {
+            return members.size();
         }
         return intsetSize;
     }
 
     public long estimatedBytes() {
-        if (memoryRuntime != null) {
-            long intsetBytes = intsetFfm == null ? 0L : intsetFfm.nativeBytes();
-            return addSaturating(ffmBlobStore.liveBytes(), intsetBytes);
-        }
-        if (hashset != null) {
-            return rawBytes + hashset.estimatedBytes();
+        if (members != null) {
+            return memberStore.nativeBytes();
         }
 
         if (intsetEncodingBytes == Short.BYTES) {
@@ -121,17 +88,8 @@ public final class SetValue implements YierdisValue {
     }
 
     public boolean contains(byte[] member) {
-        if (memoryRuntime != null) {
-            if (hashsetFfm != null) {
-                return hashsetFfm.get(member) != null;
-            }
-
-            long parsed = parseCanonicalLongOrSentinel(member);
-            boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
-            return isInt && intsetFfm.contains(parsed);
-        }
-        if (hashset != null) {
-            return hashset.contains(member);
+        if (members != null) {
+            return members.get(member) != null;
         }
 
         long parsed = parseCanonicalLongOrSentinel(member);
@@ -143,22 +101,9 @@ public final class SetValue implements YierdisValue {
     }
 
     public List<byte[]> members() {
-        if (memoryRuntime != null) {
-            if (hashsetFfm != null) {
-                List<byte[]> out = new ArrayList<>(hashsetFfm.size());
-                hashsetFfm.forEach((keyRef, ignored) -> out.add(ffmBlobStore.toByteArray(keyRef)));
-                return out;
-            }
-
-            List<byte[]> out = new ArrayList<>(intsetFfm.size());
-            for (int i = 0; i < intsetFfm.size(); i++) {
-                out.add(Long.toString(intsetFfm.get(i)).getBytes(StandardCharsets.US_ASCII));
-            }
-            return out;
-        }
-        if (hashset != null) {
-            List<byte[]> out = new ArrayList<>(hashset.size());
-            hashset.forEach(out::add);
+        if (members != null) {
+            List<byte[]> out = new ArrayList<>(members.size());
+            members.forEach((memberRef, ignored) -> out.add(memberStore.toByteArray(memberRef)));
             return out;
         }
 
@@ -170,23 +115,10 @@ public final class SetValue implements YierdisValue {
     }
 
     public void membersInto(BulkStringSink out) {
-        if (out == null) {
-            throw new IllegalArgumentException("out must not be null");
-        }
+        Objects.requireNonNull(out, "out");
 
-        if (memoryRuntime != null) {
-            if (hashsetFfm != null) {
-                hashsetFfm.forEach((keyRef, ignored) -> out.bulkString(new YierdisFfmBytesRefSlice(keyRef)));
-                return;
-            }
-            for (int i = 0; i < intsetFfm.size(); i++) {
-                out.bulkStringLongAscii(intsetFfm.get(i));
-            }
-            return;
-        }
-
-        if (hashset != null) {
-            hashset.forEach(k -> out.bulkString(k, 0, k.length));
+        if (members != null) {
+            members.forEach((memberRef, ignored) -> out.bulkString(memberStore.slice(memberRef)));
             return;
         }
 
@@ -195,51 +127,28 @@ public final class SetValue implements YierdisValue {
         }
     }
 
+    @Override
+    public void forEachNativeHandle(Consumer<NativeHandle> consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        if (members != null) {
+            members.forEach((memberRef, ignored) -> consumer.accept(memberRef));
+        }
+    }
+
     private boolean addOne(byte[] member) {
         if (member == null) {
             throw new IllegalArgumentException("member must not be null");
         }
 
-        if (memoryRuntime != null) {
-            if (hashsetFfm != null) {
-                boolean added = hashsetFfm.put(member, PRESENT) == null;
-                if (added) {
-                    rawBytes += member.length;
-                }
-                return added;
-            }
-
-            long parsed = parseCanonicalLongOrSentinel(member);
-            boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
-            if (!isInt) {
-                convertToHashSetFfm();
-                boolean added = hashsetFfm.put(member, PRESENT) == null;
-                if (added) {
-                    rawBytes += member.length;
-                }
-                return added;
-            }
-
-            boolean added = intsetFfm.add(parsed);
-            if (added && intsetFfm.size() > YierdisEncodingThresholds.SET_MAX_INTSET_ENTRIES) {
-                convertToHashSetFfm();
-            }
-            return added;
-        }
-
-        if (hashset != null) {
-            boolean added = hashset.add(member);
-            if (added) {
-                rawBytes += member.length;
-            }
-            return added;
+        if (members != null) {
+            return members.put(member, PRESENT) == null;
         }
 
         long parsed = parseCanonicalLongOrSentinel(member);
         boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
         if (!isInt) {
             convertToHashSet();
-            return hashset.add(member);
+            return members.put(member, PRESENT) == null;
         }
 
         boolean added = intsetAdd(parsed);
@@ -254,26 +163,8 @@ public final class SetValue implements YierdisValue {
             return false;
         }
 
-        if (memoryRuntime != null) {
-            if (hashsetFfm != null) {
-                boolean removed = hashsetFfm.remove(member) != null;
-                if (removed) {
-                    rawBytes -= member.length;
-                }
-                return removed;
-            }
-
-            long parsed = parseCanonicalLongOrSentinel(member);
-            boolean isInt = parsed != Long.MIN_VALUE || isLongMinValueBytes(member);
-            return isInt && intsetFfm.remove(parsed);
-        }
-
-        if (hashset != null) {
-            boolean removed = hashset.remove(member);
-            if (removed) {
-                rawBytes -= member.length;
-            }
-            return removed;
+        if (members != null) {
+            return members.remove(member) != null;
         }
 
         long parsed = parseCanonicalLongOrSentinel(member);
@@ -285,41 +176,21 @@ public final class SetValue implements YierdisValue {
     }
 
     private void convertToHashSet() {
-        if (hashset != null) {
+        if (members != null) {
             return;
         }
-        ByteArrayHashSet out = new ByteArrayHashSet(Math.max(16, size()));
-        long bytes = 0;
+        NativeByteMap<Object> out = new NativeByteMap<>(memberStore, NativeObjectKind.SET_MEMBER_BYTES);
         for (int i = 0; i < intsetSize; i++) {
             byte[] member = Long.toString(intsetLongAt(i)).getBytes(StandardCharsets.US_ASCII);
-            bytes += member.length;
-            out.add(member);
+            out.put(member, PRESENT);
         }
 
-        this.hashset = out;
-        this.rawBytes = bytes;
+        this.members = out;
         this.intset16 = null;
         this.intset32 = null;
         this.intset64 = null;
         this.intsetEncodingBytes = 0;
         this.intsetSize = 0;
-    }
-
-    private void convertToHashSetFfm() {
-        if (hashsetFfm != null) {
-            return;
-        }
-        YierdisFfmByteMap<Object> out = new YierdisFfmByteMap<>(ffmBlobStore);
-        long bytes = 0L;
-        for (int i = 0; i < intsetFfm.size(); i++) {
-            byte[] member = Long.toString(intsetFfm.get(i)).getBytes(StandardCharsets.US_ASCII);
-            out.put(member, PRESENT);
-            bytes += member.length;
-        }
-        intsetFfm.close();
-        intsetFfm = null;
-        hashsetFfm = out;
-        rawBytes = bytes;
     }
 
     private boolean intsetContains(long v) {
@@ -506,15 +377,9 @@ public final class SetValue implements YierdisValue {
 
     @Override
     public void close() {
-        if (memoryRuntime != null) {
-            if (hashsetFfm != null) {
-                hashsetFfm.close();
-                hashsetFfm = null;
-            }
-            if (intsetFfm != null) {
-                intsetFfm.close();
-                intsetFfm = null;
-            }
+        if (members != null) {
+            members.close();
+            members = null;
         }
     }
 
@@ -577,13 +442,6 @@ public final class SetValue implements YierdisValue {
             digits++;
         }
         return v < 0 ? digits + 1 : digits;
-    }
-
-    private static long addSaturating(long left, long right) {
-        if (left < 0 || right < 0 || Long.MAX_VALUE - left < right) {
-            return Long.MAX_VALUE;
-        }
-        return left + right;
     }
 
     /**

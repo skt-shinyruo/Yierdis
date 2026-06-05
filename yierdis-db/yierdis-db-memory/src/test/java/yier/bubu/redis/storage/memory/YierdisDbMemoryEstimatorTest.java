@@ -75,8 +75,8 @@ public class YierdisDbMemoryEstimatorTest {
 
     @Test
     public void estimatesSetAndZSetCreationUpperBounds() {
-        long setExpected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 1L + 3L + (2L * 32L);
-        long zsetExpected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 1L + (2L * 4L) + (2L * 96L);
+        long setExpected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 1L + (2L * 3L) + (2L * 32L);
+        long zsetExpected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 1L + (4L * 4L) + (2L * 96L);
 
         Assert.assertEquals(setExpected, YierdisDbMemoryEstimator.estimateSetWriteUpperBound(1, List.of(b("a"), b("bc"))));
         Assert.assertEquals(zsetExpected, YierdisDbMemoryEstimator.estimateZSetWriteUpperBound(1, List.of(b("1"), b("aa"), b("2"), b("bb"))));

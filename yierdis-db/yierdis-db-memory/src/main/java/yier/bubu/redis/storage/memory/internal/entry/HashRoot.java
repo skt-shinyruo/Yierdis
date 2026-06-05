@@ -1,6 +1,7 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
 import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
@@ -9,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 public final class HashRoot implements TypeRoot {
     private final NativeCollectionRootTable<HashValue> hashes;
@@ -110,6 +112,11 @@ public final class HashRoot implements TypeRoot {
 
     public synchronized long nativeBytes() {
         return hashes.adapterBytes(HashValue::estimatedBytes);
+    }
+
+    public synchronized void forEachNativeHandle(ValueHandle handle, Consumer<NativeHandle> consumer) {
+        ensureOpen();
+        requireHash(handle).forEachNativeHandle(consumer);
     }
 
     @Override

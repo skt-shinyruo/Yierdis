@@ -106,6 +106,43 @@ public final class NativeByteStore {
         }
     }
 
+    public int hashBytes(NativeHandle handle) {
+        Objects.requireNonNull(handle, "handle");
+        try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+            int hash = 1;
+            int len = view.size();
+            for (int i = 0; i < len; i++) {
+                hash = 31 * hash + (view.getByte(i) & 0xFF);
+            }
+            return hash;
+        }
+    }
+
+    public int compareLex(NativeHandle left, byte[] right) {
+        Objects.requireNonNull(left, "left");
+        Objects.requireNonNull(right, "right");
+        try (NativeObjectView leftView = allocator.resolve(left, NativeAccessMode.READ_ONLY)) {
+            return compareLex(leftView, right);
+        }
+    }
+
+    public int compareLex(NativeHandle left, NativeHandle right) {
+        Objects.requireNonNull(left, "left");
+        Objects.requireNonNull(right, "right");
+        try (NativeObjectView leftView = allocator.resolve(left, NativeAccessMode.READ_ONLY);
+             NativeObjectView rightView = allocator.resolve(right, NativeAccessMode.READ_ONLY)) {
+            int min = Math.min(leftView.size(), rightView.size());
+            for (int i = 0; i < min; i++) {
+                int av = leftView.getByte(i) & 0xFF;
+                int bv = rightView.getByte(i) & 0xFF;
+                if (av != bv) {
+                    return Integer.compare(av, bv);
+                }
+            }
+            return Integer.compare(leftView.size(), rightView.size());
+        }
+    }
+
     public int allocatedBytes(NativeHandle handle) {
         Objects.requireNonNull(handle, "handle");
         try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
@@ -120,5 +157,17 @@ public final class NativeByteStore {
 
     public long nativeBytes() {
         return nativeBytes;
+    }
+
+    private static int compareLex(NativeObjectView leftView, byte[] right) {
+        int min = Math.min(leftView.size(), right.length);
+        for (int i = 0; i < min; i++) {
+            int av = leftView.getByte(i) & 0xFF;
+            int bv = right[i] & 0xFF;
+            if (av != bv) {
+                return Integer.compare(av, bv);
+            }
+        }
+        return Integer.compare(leftView.size(), right.length);
     }
 }

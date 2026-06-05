@@ -1,16 +1,12 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
+import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.memory.api.NativeAllocator;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
+import yier.bubu.redis.storage.api.result.BulkStringSink;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -20,8 +16,9 @@ import java.util.List;
 public class ZSetValueTest {
     @Test
     public void packedZSetKeepsScoreOrderingAndSupportsUpdates() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-test")) {
-            ZSetValue zv = new ZSetValue(runtime);
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-test");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+            ZSetValue zv = new ZSetValue(allocator);
             try {
                 Assert.assertEquals(ValueEncoding.ZSET_PACKED, zv.encoding());
 
@@ -55,8 +52,9 @@ public class ZSetValueTest {
 
     @Test
     public void zsetUpgradesAfterTooManyEntries() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-test")) {
-            ZSetValue zv = new ZSetValue(runtime);
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-test");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+            ZSetValue zv = new ZSetValue(allocator);
             try {
                 ArrayList<byte[]> pairs = new ArrayList<>();
                 for (int i = 0; i < 200; i++) {
@@ -72,7 +70,85 @@ public class ZSetValueTest {
         }
     }
 
+    @Test
+    public void packedZSetStreamsMembersThroughNativeBytesSlice() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-stream-packed");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+            ZSetValue zv = new ZSetValue(allocator);
+            try {
+                Assert.assertEquals(2, zv.zaddMany(List.of(b("1"), b("m1"), b("2"), b("m2"))));
+                RecordingSink out = new RecordingSink();
+
+                zv.zrangeWriteTo(0, -1, false, out);
+
+                Assert.assertEquals(List.of("m1", "m2"), out.values);
+                Assert.assertTrue(out.sawNativeBytesSlice);
+            } finally {
+                zv.close();
+            }
+        }
+    }
+
+    @Test
+    public void skiplistZSetStreamsMembersThroughNativeBytesSlice() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("zset-stream-skiplist");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096)) {
+            ZSetValue zv = new ZSetValue(allocator);
+            try {
+                ArrayList<byte[]> pairs = new ArrayList<>();
+                for (int i = 0; i < 200; i++) {
+                    pairs.add(b(Integer.toString(i)));
+                    pairs.add(b("m" + i));
+                }
+                Assert.assertEquals(200, zv.zaddMany(pairs));
+                RecordingSink out = new RecordingSink();
+
+                zv.zrangeWriteTo(0, 1, false, out);
+
+                Assert.assertEquals(List.of("m0", "m1"), out.values);
+                Assert.assertTrue(out.sawNativeBytesSlice);
+            } finally {
+                zv.close();
+            }
+        }
+    }
+
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static final class RecordingSink implements BulkStringSink {
+        private final ArrayList<String> values = new ArrayList<>();
+        private boolean sawNativeBytesSlice;
+
+        @Override
+        public void bulkString(byte[] data) {
+            values.add(data == null ? null : new String(data, StandardCharsets.US_ASCII));
+            sawNativeBytesSlice = false;
+        }
+
+        @Override
+        public void bulkString(byte[] data, int off, int len) {
+            values.add(data == null ? null : new String(data, off, len, StandardCharsets.US_ASCII));
+            sawNativeBytesSlice = false;
+        }
+
+        @Override
+        public void bulkString(BytesSlice slice) {
+            if (slice == null) {
+                values.add(null);
+                return;
+            }
+            byte[] bytes = new byte[slice.length()];
+            slice.getBytes(0, bytes, 0, bytes.length);
+            values.add(new String(bytes, StandardCharsets.US_ASCII));
+            sawNativeBytesSlice = slice instanceof NativeBytesSlice;
+        }
+
+        @Override
+        public void bulkStringLongAscii(long value) {
+            values.add(Long.toString(value));
+            sawNativeBytesSlice = false;
+        }
     }
 }
