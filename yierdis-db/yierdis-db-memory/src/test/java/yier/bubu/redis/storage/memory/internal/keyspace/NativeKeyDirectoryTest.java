@@ -14,11 +14,14 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 public class NativeKeyDirectoryTest {
     @Test
@@ -56,6 +59,31 @@ public class NativeKeyDirectoryTest {
     }
 
     @Test
+    public void nativeKeyDirectoryRehashesAndFindsAllKeys() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-rehash-test")) {
+            NativeKeyDirectory directory = new NativeKeyDirectory(runtime);
+            try {
+                int count = 300;
+                for (int i = 0; i < count; i++) {
+                    int slot = i;
+                    directory.compute(bytes("key-" + i), (key, old) -> entryHandle(slot + 1L));
+                }
+
+                Assert.assertEquals(count, directory.size());
+                for (int i = 0; i < count; i++) {
+                    byte[] key = bytes("key-" + i);
+                    Assert.assertEquals(entryHandle(i + 1L), directory.get(key));
+                    Assert.assertArrayEquals(key, copy(directory.getKeyHandle(key)));
+                }
+            } finally {
+                directory.close();
+            }
+
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
+    @Test
     public void nativeKeyDirectoryExposesKeyHandlesForScanAndRandomSelection() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-iteration-test")) {
             NativeKeyDirectory directory = new NativeKeyDirectory(runtime);
@@ -73,6 +101,7 @@ public class NativeKeyDirectoryTest {
 
                 KeyHandle random = directory.randomKeyHandle();
                 Assert.assertNotNull(random);
+                Assert.assertNotNull(KeyHandleAccess.allocatorNativeHandleOrNull(random));
                 Assert.assertTrue(
                         "random key must come from the directory",
                         equalsBytes(random, bytes("first")) || equalsBytes(random, bytes("second"))
@@ -105,6 +134,43 @@ public class NativeKeyDirectoryTest {
     }
 
     @Test
+    public void nativeKeyDirectoryScanResumesAfterCursor() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-scan-resume-test")) {
+            NativeKeyDirectory directory = new NativeKeyDirectory(runtime);
+            try {
+                Map<String, Long> expected = new HashMap<>();
+                for (int i = 0; i < 32; i++) {
+                    String key = "scan-" + i;
+                    EntryHandle handle = entryHandle(i + 1L);
+                    expected.put(key, handle.raw());
+                    directory.compute(bytes(key), (ignored, old) -> handle);
+                }
+
+                Set<String> seen = new HashSet<>();
+                ScanCursorV2 cursor = ScanCursorV2.start();
+                do {
+                    ScanCursorV2 previous = cursor;
+                    cursor = directory.scan(cursor, 3, (keyHandle, entryHandle) -> {
+                        String key = new String(copy(keyHandle), StandardCharsets.UTF_8);
+                        Assert.assertTrue("scan must not revisit keys after resuming from a cursor", seen.add(key));
+                        Assert.assertEquals(expected.get(key).longValue(), entryHandle.raw());
+                        return true;
+                    });
+                    if (cursor.value() != 0L) {
+                        Assert.assertTrue("scan cursor must advance", cursor.value() > previous.value());
+                    }
+                } while (cursor.value() != 0L);
+
+                Assert.assertEquals(expected.keySet(), seen);
+            } finally {
+                directory.close();
+            }
+
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
+    @Test
     public void nativeKeyDirectoryScanCanStopEarlyAndRandomKeyIsNullWhenEmpty() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-scan-stop-test")) {
             NativeKeyDirectory directory = new NativeKeyDirectory(runtime);
@@ -128,6 +194,43 @@ public class NativeKeyDirectoryTest {
             }
 
             Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
+    @Test
+    public void nativeKeyDirectoryRemoveByEntryHandleReleasesKeyAndRemovesMapping() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-remove-entry-handle-test");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 64)) {
+            NativeKeyDirectory directory = new NativeKeyDirectory(allocator);
+            try {
+                byte[] key = bytes("entry-handle-key");
+                EntryHandle handle = entryHandle(81L);
+                EntryHandle otherHandle = entryHandle(82L);
+
+                directory.compute(key, (ignored, old) -> handle);
+                directory.compute(bytes("other"), (ignored, old) -> otherHandle);
+                KeyHandle stored = directory.getKeyHandle(key);
+                Assert.assertNotNull(stored);
+                Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.KEY_BYTES));
+
+                Assert.assertTrue(directory.remove(handle));
+                Assert.assertNull(directory.get(key));
+                Assert.assertNull(directory.getKeyHandle(key));
+                Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.KEY_BYTES));
+                try {
+                    stored.len();
+                    Assert.fail("entry handle removal must release the native key handle");
+                } catch (RuntimeException expected) {
+                    Assert.assertTrue(expected.getMessage().contains("stale native handle"));
+                }
+
+                Assert.assertFalse(directory.remove(handle));
+                Assert.assertEquals(otherHandle, directory.get(bytes("other")));
+            } finally {
+                directory.close();
+            }
+
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.KEY_BYTES));
         }
     }
 

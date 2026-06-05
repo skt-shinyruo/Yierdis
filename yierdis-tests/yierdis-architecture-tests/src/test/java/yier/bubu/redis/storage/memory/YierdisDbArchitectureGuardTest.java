@@ -214,6 +214,34 @@ public class YierdisDbArchitectureGuardTest {
         }
     }
 
+    @Test
+    public void dbMemoryMustNotReferenceLegacyKeyspaceOrKeyHandleImplementations() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("unable to resolve repository root", repoRoot);
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = 0;
+        for (Path root : List.of(storageMemoryMain(repoRoot), storageMemoryTest(repoRoot))) {
+            scanned += scanForForbiddenText(
+                    repoRoot,
+                    root,
+                    offenders,
+                    "ByteArrayKeyspace",
+                    "YierdisFfmKeyspace",
+                    "HeapKeyHandle",
+                    "FfmKeyHandle",
+                    "KeyHandle.forHeap",
+                    "KeyHandle.forFfm"
+            );
+        }
+
+        Assert.assertTrue("expected to scan yierdis-db-memory sources", scanned > 0);
+        if (!offenders.isEmpty()) {
+            Assert.fail("db-memory must not reference legacy keyspace/key handle implementations:\n"
+                    + String.join("\n", offenders));
+        }
+    }
+
     private static Method findDeclaredMethod(Class<?> type, String name, Class<?>... parameterTypes) {
         try {
             return type.getDeclaredMethod(name, parameterTypes);
@@ -279,6 +307,10 @@ public class YierdisDbArchitectureGuardTest {
         return repoRoot.resolve("yierdis-db/yierdis-db-memory/src/main/java").normalize();
     }
 
+    private static Path storageMemoryTest(Path repoRoot) {
+        return repoRoot.resolve("yierdis-db/yierdis-db-memory/src/test/java").normalize();
+    }
+
     private static void scanFileForForbiddenText(Path workspaceRoot, Path file, List<String> offenders, String... forbiddenTexts)
             throws IOException {
         if (!Files.isRegularFile(file)) {
@@ -296,6 +328,11 @@ public class YierdisDbArchitectureGuardTest {
 
     private static int scanForForbiddenText(Path workspaceRoot, Path root, List<String> offenders, String forbiddenText)
             throws IOException {
+        return scanForForbiddenText(workspaceRoot, root, offenders, new String[]{forbiddenText});
+    }
+
+    private static int scanForForbiddenText(Path workspaceRoot, Path root, List<String> offenders, String... forbiddenTexts)
+            throws IOException {
         if (!Files.isDirectory(root)) {
             offenders.add(relativePath(workspaceRoot, root) + " (missing directory)");
             return 0;
@@ -308,17 +345,20 @@ public class YierdisDbArchitectureGuardTest {
                     .toList();
         }
         for (Path javaFile : javaFiles) {
-            scanJavaFileForForbiddenText(workspaceRoot, javaFile, offenders, forbiddenText);
+            scanJavaFileForForbiddenText(workspaceRoot, javaFile, offenders, forbiddenTexts);
         }
         return javaFiles.size();
     }
 
-    private static void scanJavaFileForForbiddenText(Path workspaceRoot, Path file, List<String> offenders, String forbiddenText)
+    private static void scanJavaFileForForbiddenText(Path workspaceRoot, Path file, List<String> offenders, String... forbiddenTexts)
             throws IOException {
         List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
         for (int i = 0; i < lines.size(); i++) {
-            if (lines.get(i).contains(forbiddenText)) {
-                offenders.add(relativePath(workspaceRoot, file) + ":" + (i + 1));
+            for (String forbiddenText : forbiddenTexts) {
+                if (lines.get(i).contains(forbiddenText)) {
+                    offenders.add(relativePath(workspaceRoot, file) + ":" + (i + 1)
+                            + " contains forbidden text: " + forbiddenText);
+                }
             }
         }
     }

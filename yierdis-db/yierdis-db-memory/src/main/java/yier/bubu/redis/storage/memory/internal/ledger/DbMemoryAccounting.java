@@ -53,11 +53,10 @@ public final class DbMemoryAccounting {
         long expireOverhead = 0;
         long expireValueObjects = 0;
         if (expires instanceof YierdisHeapExpireIndex heap) {
-            ByteArrayKeyspace<Long> raw = heap.rawKeyspace();
-            expireRehashing = raw.isRehashing();
-            expireCap0 = raw.table0Capacity();
-            expireCap1 = raw.table1Capacity();
-            expireOverhead = raw.estimatedTableOverheadBytes();
+            expireRehashing = heap.isRehashing();
+            expireCap0 = heap.table0Capacity();
+            expireCap1 = heap.table1Capacity();
+            expireOverhead = heap.estimatedTableOverheadBytes();
             expireValueObjects = estimateLongObjectBytes(expireCount);
         } else if (expires instanceof YierdisFfmExpireIndex ffm) {
             expireRehashing = ffm.isRehashing();
