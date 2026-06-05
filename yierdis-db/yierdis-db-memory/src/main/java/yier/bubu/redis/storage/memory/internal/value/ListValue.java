@@ -71,9 +71,9 @@ public final class ListValue implements YierdisValue {
         this.ffmBlobStore = new YierdisFfmBlobStore(memoryRuntime, "list");
         this.nativeAllocator = Objects.requireNonNull(nativeAllocator, "nativeAllocator");
         this.rootHandle = Objects.requireNonNull(rootHandle, "rootHandle");
-        if (rootHandle.domain() != NativeObjectKind.LIST_NODE.domain()
-                || rootHandle.kindCode() != NativeObjectKind.LIST_NODE.code()) {
-            throw new IllegalArgumentException("rootHandle must be a LIST_NODE handle: " + rootHandle.raw());
+        if (rootHandle.domain() != NativeObjectKind.LIST_ROOT.domain()
+                || rootHandle.kindCode() != NativeObjectKind.LIST_ROOT.code()) {
+            throw new IllegalArgumentException("rootHandle must be a LIST_ROOT handle: " + rootHandle.raw());
         }
         this.listpackFfm = new YierdisFfmListpack(ffmBlobStore);
     }
@@ -993,7 +993,7 @@ public final class ListValue implements YierdisValue {
             this.allocator = Objects.requireNonNull(allocator, "allocator");
             this.rootHandle = Objects.requireNonNull(rootHandle, "rootHandle");
             NativeHandle allocated = this.allocator.allocate(
-                    NativeObjectKind.LIST_QUICKLIST_NODE,
+                    NativeObjectKind.LIST_NODE,
                     QUICKLIST_NODE_RECORD_BYTES
             );
             try {
@@ -1132,16 +1132,16 @@ public final class ListValue implements YierdisValue {
 
         private void validateNodeHandleKind() {
             if (nodeHandle != null
-                    && (nodeHandle.domain() != NativeObjectKind.LIST_QUICKLIST_NODE.domain()
-                    || nodeHandle.kindCode() != NativeObjectKind.LIST_QUICKLIST_NODE.code())) {
-                throw new NativeMemoryException("LIST_QUICKLIST_NODE handle expected: "
+                    && (nodeHandle.domain() != NativeObjectKind.LIST_NODE.domain()
+                    || nodeHandle.kindCode() != NativeObjectKind.LIST_NODE.code())) {
+                throw new NativeMemoryException("LIST_NODE handle expected: "
                         + nodeHandle.raw());
             }
         }
 
         private void validateOwnerRoot() {
             try (NativeObjectView ignored = allocator.resolve(rootHandle, NativeAccessMode.READ_ONLY)) {
-                // Allocator resolution validates root handle liveness; constructor validates LIST_NODE kind.
+                // Allocator resolution validates root handle liveness; constructor validates LIST_ROOT kind.
             }
         }
 

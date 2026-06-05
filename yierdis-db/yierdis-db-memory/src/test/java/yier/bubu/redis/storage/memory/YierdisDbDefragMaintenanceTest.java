@@ -78,10 +78,10 @@ public class YierdisDbDefragMaintenanceTest {
                 Assert.assertEquals(after.quarantineBytes(), stats.nativeDefragQuarantineBytes());
                 Assert.assertEquals(before.objectCount(NativeObjectKind.KEY_BYTES), after.objectCount(NativeObjectKind.KEY_BYTES));
                 Assert.assertEquals(before.objectCount(NativeObjectKind.STRING_BYTES), after.objectCount(NativeObjectKind.STRING_BYTES));
-                Assert.assertEquals(before.objectCount(NativeObjectKind.LIST_NODE), after.objectCount(NativeObjectKind.LIST_NODE));
-                Assert.assertEquals(before.objectCount(NativeObjectKind.HASH_NODE), after.objectCount(NativeObjectKind.HASH_NODE));
-                Assert.assertEquals(before.objectCount(NativeObjectKind.SET_NODE), after.objectCount(NativeObjectKind.SET_NODE));
-                Assert.assertEquals(before.objectCount(NativeObjectKind.ZSET_NODE), after.objectCount(NativeObjectKind.ZSET_NODE));
+                Assert.assertEquals(before.objectCount(NativeObjectKind.LIST_ROOT), after.objectCount(NativeObjectKind.LIST_ROOT));
+                Assert.assertEquals(before.objectCount(NativeObjectKind.HASH_ROOT), after.objectCount(NativeObjectKind.HASH_ROOT));
+                Assert.assertEquals(before.objectCount(NativeObjectKind.SET_ROOT), after.objectCount(NativeObjectKind.SET_ROOT));
+                Assert.assertEquals(before.objectCount(NativeObjectKind.ZSET_ROOT), after.objectCount(NativeObjectKind.ZSET_ROOT));
             } finally {
                 db.shutdown();
             }

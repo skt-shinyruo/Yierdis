@@ -53,10 +53,10 @@ public class CollectionRootTest {
              HashRoot hash = new HashRoot(runtime, allocator);
              SetRoot set = new SetRoot(runtime, allocator);
              ZSetRoot zset = new ZSetRoot(runtime, allocator)) {
-            assertReleasedHandleIsAllocatorStale(allocator, NativeObjectKind.LIST_NODE, list.create(), list::contains, list::release);
-            assertReleasedHandleIsAllocatorStale(allocator, NativeObjectKind.HASH_NODE, hash.create(), hash::contains, hash::release);
-            assertReleasedHandleIsAllocatorStale(allocator, NativeObjectKind.SET_NODE, set.create(), set::contains, set::release);
-            assertReleasedHandleIsAllocatorStale(allocator, NativeObjectKind.ZSET_NODE, zset.create(), zset::contains, zset::release);
+            assertReleasedHandleIsAllocatorStale(allocator, NativeObjectKind.LIST_ROOT, list.create(), list::contains, list::release);
+            assertReleasedHandleIsAllocatorStale(allocator, NativeObjectKind.HASH_ROOT, hash.create(), hash::contains, hash::release);
+            assertReleasedHandleIsAllocatorStale(allocator, NativeObjectKind.SET_ROOT, set.create(), set::contains, set::release);
+            assertReleasedHandleIsAllocatorStale(allocator, NativeObjectKind.ZSET_ROOT, zset.create(), zset::contains, zset::release);
         }
     }
 
@@ -68,10 +68,10 @@ public class CollectionRootTest {
              HashRoot hash = new HashRoot(runtime, allocator);
              SetRoot set = new SetRoot(runtime, allocator);
              ZSetRoot zset = new ZSetRoot(runtime, allocator)) {
-            assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.LIST_NODE, list.create(), list::contains, list::size);
-            assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.HASH_NODE, hash.create(), hash::contains, hash::size);
-            assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.SET_NODE, set.create(), set::contains, set::size);
-            assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.ZSET_NODE, zset.create(), zset::contains, zset::size);
+            assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.LIST_ROOT, list.create(), list::contains, list::size);
+            assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.HASH_ROOT, hash.create(), hash::contains, hash::size);
+            assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.SET_ROOT, set.create(), set::contains, set::size);
+            assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.ZSET_ROOT, zset.create(), zset::contains, zset::size);
         }
     }
 
@@ -81,7 +81,7 @@ public class CollectionRootTest {
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32)) {
             NativeCollectionRootTable<ThrowOnceListValue> table = new NativeCollectionRootTable<>(
                     allocator,
-                    NativeObjectKind.LIST_NODE,
+                    NativeObjectKind.LIST_ROOT,
                     "list",
                     false
             );
@@ -96,14 +96,14 @@ public class CollectionRootTest {
             }
 
             Assert.assertFalse(table.contains(handle));
-            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
             Assert.assertEquals(1, value.closeCalls());
             assertStale(allocator, handle.nativeHandle());
 
             table.release(handle);
 
             Assert.assertFalse(table.contains(handle));
-            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
             Assert.assertEquals(2, value.closeCalls());
             assertStale(allocator, handle.nativeHandle());
         }
@@ -115,7 +115,7 @@ public class CollectionRootTest {
              FailOnceFreeAllocator allocator = new FailOnceFreeAllocator(runtime, 32)) {
             NativeCollectionRootTable<CountingListValue> table = new NativeCollectionRootTable<>(
                     allocator,
-                    NativeObjectKind.LIST_NODE,
+                    NativeObjectKind.LIST_ROOT,
                     "list",
                     false
             );
@@ -132,12 +132,12 @@ public class CollectionRootTest {
                 Assert.assertTrue(expected.getMessage().contains("injected root free failure"));
             }
 
-            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
             Assert.assertEquals(1, value.closeCalls());
 
             table.release(handle);
 
-            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
             Assert.assertEquals(2, value.closeCalls());
             assertStale(allocator, handle.nativeHandle());
         }

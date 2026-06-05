@@ -33,7 +33,7 @@ public final class HashRoot implements TypeRoot {
         this.runtime = runtime;
         this.hashes = new NativeCollectionRootTable<>(
                 allocator,
-                NativeObjectKind.HASH_NODE,
+                NativeObjectKind.HASH_ROOT,
                 "hash",
                 ownsAllocator
         );

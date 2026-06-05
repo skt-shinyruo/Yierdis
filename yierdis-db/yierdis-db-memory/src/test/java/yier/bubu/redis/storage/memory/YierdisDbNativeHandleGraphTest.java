@@ -49,10 +49,10 @@ public class YierdisDbNativeHandleGraphTest {
             Assert.assertEquals(Integer.valueOf(5), kindCounts.get(NativeObjectKind.KEY_BYTES));
             Assert.assertEquals(Integer.valueOf(5), kindCounts.get(NativeObjectKind.ENTRY_RECORD));
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.STRING_BYTES));
-            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.LIST_NODE));
-            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.HASH_NODE));
-            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.SET_NODE));
-            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.ZSET_NODE));
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.LIST_ROOT));
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.HASH_ROOT));
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.SET_ROOT));
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.ZSET_ROOT));
         } finally {
             db.shutdown();
         }
@@ -75,7 +75,7 @@ public class YierdisDbNativeHandleGraphTest {
             values.add(new byte[4096]);
             Assert.assertEquals(Long.valueOf(3L), db.writes().lists().rpush(b("list"), values).value());
             Assert.assertEquals(3L,
-                    db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+                    db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.LIST_NODE));
 
             // Internal quicklist node traversal is intentionally deferred: graph and list internals
             // currently cross package boundaries, and Task 4 does not broaden the internal handle API.
@@ -96,8 +96,8 @@ public class YierdisDbNativeHandleGraphTest {
             ), roles);
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.KEY_BYTES));
             Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.ENTRY_RECORD));
-            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.LIST_NODE));
-            Assert.assertFalse(kindCounts.containsKey(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(Integer.valueOf(1), kindCounts.get(NativeObjectKind.LIST_ROOT));
+            Assert.assertFalse(kindCounts.containsKey(NativeObjectKind.LIST_NODE));
             Assert.assertFalse(kindCounts.containsKey(NativeObjectKind.STRING_BYTES));
         } finally {
             db.shutdown();
