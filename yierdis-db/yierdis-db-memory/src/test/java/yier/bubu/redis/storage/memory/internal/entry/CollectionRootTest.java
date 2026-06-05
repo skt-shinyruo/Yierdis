@@ -28,7 +28,8 @@ public class CollectionRootTest {
     @Test
     public void hashSetAndZsetRootsRoundTripMembers() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root");
-             HashRoot hash = new HashRoot(runtime);
+             NativeAllocator hashAllocator = new YierdisStableNativeAllocator(runtime, 4096);
+             HashRoot hash = new HashRoot(hashAllocator);
              SetRoot set = new SetRoot(runtime);
              ZSetRoot zset = new ZSetRoot(runtime)) {
             ValueHandle hashHandle = hash.create();
@@ -50,7 +51,7 @@ public class CollectionRootTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root-native-handles");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32);
              ListRoot list = new ListRoot(allocator);
-             HashRoot hash = new HashRoot(runtime, allocator);
+             HashRoot hash = new HashRoot(allocator);
              SetRoot set = new SetRoot(runtime, allocator);
              ZSetRoot zset = new ZSetRoot(runtime, allocator)) {
             assertReleasedHandleIsAllocatorStale(allocator, NativeObjectKind.LIST_ROOT, list.create(), list::contains, list::release);
@@ -65,7 +66,7 @@ public class CollectionRootTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root-native-liveness");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32);
              ListRoot list = new ListRoot(allocator);
-             HashRoot hash = new HashRoot(runtime, allocator);
+             HashRoot hash = new HashRoot(allocator);
              SetRoot set = new SetRoot(runtime, allocator);
              ZSetRoot zset = new ZSetRoot(runtime, allocator)) {
             assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.LIST_ROOT, list.create(), list::contains, list::size);

@@ -2,8 +2,6 @@ package yier.bubu.redis.storage.memory.internal.entry;
 
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.value.HashValue;
@@ -13,29 +11,15 @@ import java.util.List;
 import java.util.Objects;
 
 public final class HashRoot implements TypeRoot {
-    private final YierdisFfmMemoryRuntime runtime;
     private final NativeCollectionRootTable<HashValue> hashes;
     private boolean closed;
 
-    public HashRoot(YierdisFfmMemoryRuntime runtime) {
-        this(runtime, new YierdisStableNativeAllocator(Objects.requireNonNull(runtime, "runtime"), 4096), true);
-    }
-
-    public HashRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator) {
-        this(runtime, allocator, false);
-    }
-
     public HashRoot(NativeAllocator allocator) {
-        this(null, allocator, false);
-    }
-
-    private HashRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator, boolean ownsAllocator) {
-        this.runtime = runtime;
         this.hashes = new NativeCollectionRootTable<>(
-                allocator,
+                Objects.requireNonNull(allocator, "allocator"),
                 NativeObjectKind.HASH_ROOT,
                 "hash",
-                ownsAllocator
+                false
         );
     }
 
@@ -153,7 +137,7 @@ public final class HashRoot implements TypeRoot {
     }
 
     private HashValue newHashValue() {
-        return runtime == null ? new HashValue() : new HashValue(runtime);
+        return new HashValue(hashes.allocator());
     }
 
     private void ensureOpen() {

@@ -37,6 +37,11 @@ public final class NativeByteMap<V> implements AutoCloseable {
         return size;
     }
 
+    public boolean containsKey(byte[] keyBytes) {
+        Objects.requireNonNull(keyBytes, "keyBytes");
+        return findIndex(keyBytes) >= 0;
+    }
+
     @SuppressWarnings("unchecked")
     public V get(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");

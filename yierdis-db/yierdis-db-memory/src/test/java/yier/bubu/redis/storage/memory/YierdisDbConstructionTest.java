@@ -200,7 +200,7 @@ public class YierdisDbConstructionTest {
         NativeKeyDirectory keyDirectory = new NativeKeyDirectory(allocator);
         StringRoot stringRoot = new StringRoot(allocator);
         ListRoot listRoot = new ListRoot(allocator);
-        HashRoot hashRoot = new HashRoot(runtime);
+        HashRoot hashRoot = new HashRoot(allocator);
         SetRoot setRoot = new SetRoot(runtime);
         ZSetRoot zsetRoot = new ZSetRoot(runtime);
         try {
@@ -335,7 +335,7 @@ public class YierdisDbConstructionTest {
         NativeKeyDirectory keyDirectory = new NativeKeyDirectory(allocator);
         StringRoot stringRoot = new StringRoot(allocator);
         ListRoot listRoot = new ListRoot(allocator);
-        HashRoot hashRoot = new HashRoot(runtime);
+        HashRoot hashRoot = new HashRoot(allocator);
         SetRoot setRoot = new SetRoot(runtime);
         ZSetRoot zsetRoot = new ZSetRoot(runtime);
         try {
