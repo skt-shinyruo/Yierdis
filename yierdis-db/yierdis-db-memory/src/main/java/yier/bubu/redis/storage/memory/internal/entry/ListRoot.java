@@ -3,8 +3,6 @@ package yier.bubu.redis.storage.memory.internal.entry;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
-import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.value.ListValue;
@@ -14,29 +12,15 @@ import java.util.List;
 import java.util.Objects;
 
 public final class ListRoot implements TypeRoot {
-    private final YierdisFfmMemoryRuntime runtime;
     private final NativeCollectionRootTable<ListValue> lists;
     private boolean closed;
 
-    public ListRoot(YierdisFfmMemoryRuntime runtime) {
-        this(runtime, new YierdisStableNativeAllocator(Objects.requireNonNull(runtime, "runtime"), 4096), true);
-    }
-
-    public ListRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator) {
-        this(runtime, allocator, false);
-    }
-
     public ListRoot(NativeAllocator allocator) {
-        this(null, allocator, false);
-    }
-
-    private ListRoot(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator, boolean ownsAllocator) {
-        this.runtime = runtime;
         this.lists = new NativeCollectionRootTable<>(
-                allocator,
+                Objects.requireNonNull(allocator, "allocator"),
                 NativeObjectKind.LIST_ROOT,
                 "list",
-                ownsAllocator
+                false
         );
     }
 
@@ -161,7 +145,7 @@ public final class ListRoot implements TypeRoot {
     }
 
     private ListValue newListValue(NativeHandle rootHandle) {
-        return runtime == null ? new ListValue() : new ListValue(runtime, lists.allocator(), rootHandle);
+        return new ListValue(lists.allocator(), rootHandle);
     }
 
     private void ensureOpen() {

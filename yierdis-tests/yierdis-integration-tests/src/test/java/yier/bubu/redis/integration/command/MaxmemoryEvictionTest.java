@@ -341,7 +341,7 @@ public class MaxmemoryEvictionTest {
         private final YierdisDb db;
 
         private DbFixture(long maxmemoryBytes) {
-            this.db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
+            this.db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, "noeviction", 5, 5, 5);
             this.db.bindToCurrentThread();
         }
 

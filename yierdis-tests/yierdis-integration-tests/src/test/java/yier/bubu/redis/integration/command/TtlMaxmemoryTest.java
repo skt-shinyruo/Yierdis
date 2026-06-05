@@ -24,7 +24,7 @@ public class TtlMaxmemoryTest {
         byte[] value = b("v");
         long maxmemoryBytes = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + key.length + value.length;
 
-        YierdisDb db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, "noeviction", 5, 5, 5);
         db.bindToCurrentThread();
 
         YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
@@ -48,7 +48,7 @@ public class TtlMaxmemoryTest {
         byte[] value = b("v");
         long maxmemoryBytes = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + key.length + value.length;
 
-        YierdisDb db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, "noeviction", 5, 5, 5);
         db.bindToCurrentThread();
 
         YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
@@ -72,7 +72,7 @@ public class TtlMaxmemoryTest {
         byte[] value = b("v");
         long maxmemoryBytes = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + key.length + value.length;
 
-        YierdisDb db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, "noeviction", 5, 5, 5);
         db.bindToCurrentThread();
 
         YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
@@ -97,7 +97,7 @@ public class TtlMaxmemoryTest {
         byte[] value = b("v");
         long maxmemoryBytes = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + key.length + value.length;
 
-        YierdisDb db = new YierdisDb(null, maxmemoryBytes, "noeviction", 5, 5, 5);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, "noeviction", 5, 5, 5);
         db.bindToCurrentThread();
 
         YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);

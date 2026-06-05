@@ -22,7 +22,7 @@ import java.util.List;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
-public class OffHeapCollectionReadStreamingTest {
+public class NativeCollectionReadStreamingTest {
     @Test
     public void lrangeStreamsBytesSlices() {
         withDb(db -> {

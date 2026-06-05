@@ -49,7 +49,7 @@ public class CollectionRootTest {
     public void collectionRootHandlesAreAllocatorBackedAndStaleAfterRelease() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root-native-handles");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32);
-             ListRoot list = new ListRoot(runtime, allocator);
+             ListRoot list = new ListRoot(allocator);
              HashRoot hash = new HashRoot(runtime, allocator);
              SetRoot set = new SetRoot(runtime, allocator);
              ZSetRoot zset = new ZSetRoot(runtime, allocator)) {
@@ -64,7 +64,7 @@ public class CollectionRootTest {
     public void collectionRootAdapterTablesDoNotResurrectExternallyFreedHandles() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root-native-liveness");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32);
-             ListRoot list = new ListRoot(runtime, allocator);
+             ListRoot list = new ListRoot(allocator);
              HashRoot hash = new HashRoot(runtime, allocator);
              SetRoot set = new SetRoot(runtime, allocator);
              ZSetRoot zset = new ZSetRoot(runtime, allocator)) {
