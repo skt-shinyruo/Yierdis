@@ -10,7 +10,6 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
-import yier.bubu.redis.storage.memory.internal.keyspace.YierdisKeyspace;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.memory.api.NativeAllocator;
@@ -31,7 +30,6 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     private static final byte STATE_FILLED = 1;
     private static final byte STATE_TOMBSTONE = 2;
 
-    private final YierdisFfmBlobStore blobStore;
     private final YierdisFfmMemoryRuntime memoryRuntime;
     private final NativeAllocator nativeAllocator;
     private final ArrayDeque<Table> retiredTables = new ArrayDeque<>();
@@ -40,14 +38,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     private Table table1;
     private int rehashIndex = -1;
 
-    public YierdisFfmExpireIndex(YierdisFfmBlobStore blobStore) {
-        this.blobStore = Objects.requireNonNull(blobStore, "blobStore");
-        this.memoryRuntime = blobStore.memoryRuntime();
-        this.nativeAllocator = null;
-    }
-
     public YierdisFfmExpireIndex(YierdisFfmMemoryRuntime memoryRuntime, NativeAllocator nativeAllocator) {
-        this.blobStore = null;
         this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
         this.nativeAllocator = Objects.requireNonNull(nativeAllocator, "nativeAllocator");
     }
@@ -196,48 +187,6 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         table0 = null;
         table1 = null;
         rehashIndex = -1;
-    }
-
-    @Override
-    public void setExpireAtMillis(byte[] keyBytes, long expireAtMillis, YierdisKeyspace<?> store) {
-        Objects.requireNonNull(keyBytes, "keyBytes");
-        Objects.requireNonNull(store, "store");
-        byte[] canonical = store.canonicalKey(keyBytes);
-        if (canonical == null) {
-            return;
-        }
-        setExpireAtMillis(canonical, expireAtMillis);
-    }
-
-    private void setExpireAtMillis(byte[] keyBytes, long expireAtMillis) {
-        ensureTable0();
-        rehashStep();
-        maybeStartRehashForInsert();
-
-        int h = hash(keyBytes);
-        int idx = findIndex(table0, keyBytes, h);
-        if (idx >= 0) {
-            table0.setExpireAt(idx, expireAtMillis);
-            return;
-        }
-        Table t1 = table1;
-        if (t1 != null) {
-            idx = findIndex(t1, keyBytes, h);
-            if (idx >= 0) {
-                t1.setExpireAt(idx, expireAtMillis);
-                return;
-            }
-        }
-
-        if (blobStore == null) {
-            throw new IllegalStateException("byte-key expire insertion requires a blob store");
-        }
-        KeyRef ref = new FfmKeyRef(YierdisFfmBlobStore.fromBytes(memoryRuntime, keyBytes));
-        if (table1 != null) {
-            insertNewIntoTable1(ref, h, expireAtMillis);
-            return;
-        }
-        insertNewIntoTable(table0, ref, h, expireAtMillis);
     }
 
     @Override
@@ -815,7 +764,7 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         return out;
     }
 
-    private sealed interface KeyRef permits FfmKeyRef, AllocatorKeyRef {
+    private sealed interface KeyRef permits AllocatorKeyRef {
         boolean equalsBytes(byte[] key);
 
         boolean equalsBytes(BytesView key);
@@ -829,73 +778,6 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         void retainForIndex();
 
         void releaseFromIndex();
-    }
-
-    private final class FfmKeyRef implements KeyRef {
-        private final YierdisFfmBytesRef ref;
-
-        private FfmKeyRef(YierdisFfmBytesRef ref) {
-            this.ref = Objects.requireNonNull(ref, "ref");
-        }
-
-        @Override
-        public boolean equalsBytes(byte[] key) {
-            if (key.length != ref.length()) {
-                return false;
-            }
-            for (int i = 0; i < ref.length(); i++) {
-                if (ref.byteAt(i) != key[i]) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        @Override
-        public boolean equalsBytes(BytesView key) {
-            if (key.length() != ref.length()) {
-                return false;
-            }
-            for (int i = 0; i < ref.length(); i++) {
-                if (ref.byteAt(i) != key.getByte(i)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        @Override
-        public KeyHandle keyHandle(int hash) {
-            throw new UnsupportedOperationException("legacy FFM expire keys no longer produce internal KeyHandle instances");
-        }
-
-        @Override
-        public byte[] copyBytes() {
-            return blobStore.toByteArray(ref);
-        }
-
-        @Override
-        public boolean sameIdentity(KeyRef other) {
-            return other instanceof FfmKeyRef f
-                    && (ref == f.ref
-                    || (ref.region() == f.ref.region()
-                    && ref.offset() == f.ref.offset()
-                    && ref.length() == f.ref.length()));
-        }
-
-        @Override
-        public void retainForIndex() {
-            if (blobStore != null) {
-                blobStore.retain(ref);
-            }
-        }
-
-        @Override
-        public void releaseFromIndex() {
-            if (blobStore != null) {
-                blobStore.release(ref);
-            }
-        }
     }
 
     private final class AllocatorKeyRef implements KeyRef {
