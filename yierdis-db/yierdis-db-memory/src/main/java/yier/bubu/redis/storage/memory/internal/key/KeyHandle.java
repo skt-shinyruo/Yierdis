@@ -1,19 +1,7 @@
 package yier.bubu.redis.storage.memory.internal.key;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
-// KeyHandle：key identity SSOT（heap/off-heap/bytesview），用于 keyspace/expires/scan 等内部路径的零拷贝交互。
-
-import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBytesRef;
 
 import java.util.Objects;
 
@@ -22,14 +10,14 @@ import java.util.Objects;
  * <p>
  * 设计目标：
  * <ul>
- *   <li>统一 heap/off-heap/bytesview 三种来源的 key 表示</li>
+ *   <li>统一 native allocator 中的 key 表示</li>
  *   <li>提供 {@code len + byteAt} 的只读访问能力，避免为“canonicalKey”强制产生 heap copy</li>
  *   <li>允许携带“字典 hash”（通常包含 per-dict seed），用于 keyspace 索引；但 equality 以 bytes 内容为准</li>
  * </ul>
  * <p>
  * 生命周期约束：
  * <ul>
- *   <li>该对象可被用于短期查找/迭代；若其底层指向 off-heap 地址，调用方必须确保内存生命周期覆盖使用期</li>
+ *   <li>该对象可被用于短期查找/迭代；调用方必须确保 native handle 生命周期覆盖使用期</li>
  *   <li>实现必须是只读的，不得暴露可变 byte[] 的写入入口</li>
  * </ul>
  */
@@ -62,27 +50,9 @@ public interface KeyHandle extends yier.bubu.redis.storage.api.KeyHandle {
      */
     int dictHash();
 
-    public static KeyHandle forHeap(byte[] keyBytes, int dictHash) {
-        Objects.requireNonNull(keyBytes, "keyBytes");
-        return new HeapKeyHandle(keyBytes, dictHash);
-    }
-
-    public static KeyHandle forFfm(YierdisFfmBytesRef ref, int dictHash) {
-        Objects.requireNonNull(ref, "ref");
-        return new FfmKeyHandle(ref, dictHash);
-    }
-
     public static KeyHandle forNative(NativeAllocator allocator, NativeHandle handle, int dictHash) {
         Objects.requireNonNull(allocator, "allocator");
         Objects.requireNonNull(handle, "handle");
         return new AllocatorKeyHandle(allocator, handle, dictHash);
-    }
-
-    public static int hashBytesView(BytesView view, int len) {
-        int h = 1;
-        for (int i = 0; i < len; i++) {
-            h = 31 * h + view.getByte(i);
-        }
-        return h;
     }
 }

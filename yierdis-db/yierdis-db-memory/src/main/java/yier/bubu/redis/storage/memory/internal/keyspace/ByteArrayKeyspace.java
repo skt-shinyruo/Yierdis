@@ -207,12 +207,12 @@ public final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
         int h = hash(key);
         int idx = findIndex(keys0, hashes0, states0, key, h);
         if (idx >= 0) {
-            return KeyHandle.forHeap(keys0[idx], hashes0[idx]);
+            return unsupportedKeyHandle();
         }
         if (keys1 != null) {
             idx = findIndex(keys1, hashes1, states1, key, h);
             if (idx >= 0) {
-                return KeyHandle.forHeap(keys1[idx], hashes1[idx]);
+                return unsupportedKeyHandle();
             }
         }
         return null;
@@ -225,12 +225,12 @@ public final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
         int h = hash(key);
         int idx = findIndex(keys0, hashes0, states0, key, h);
         if (idx >= 0) {
-            return KeyHandle.forHeap(keys0[idx], hashes0[idx]);
+            return unsupportedKeyHandle();
         }
         if (keys1 != null) {
             idx = findIndex(keys1, hashes1, states1, key, h);
             if (idx >= 0) {
-                return KeyHandle.forHeap(keys1[idx], hashes1[idx]);
+                return unsupportedKeyHandle();
             }
         }
         return null;
@@ -434,7 +434,7 @@ public final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
                 if (states0[pos] == STATE_FILLED) {
                     @SuppressWarnings("unchecked")
                     V v = (V) values0[pos];
-                    KeyHandle handle = KeyHandle.forHeap(keys0[pos], hashes0[pos]);
+                    KeyHandle handle = unsupportedKeyHandle();
                     pos++;
                     if (!consumer.accept(handle, v)) {
                         return ScanCursorV2.ofPhaseAndPosition(phase, pos);
@@ -455,7 +455,7 @@ public final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
                 if (states1[pos] == STATE_FILLED) {
                     @SuppressWarnings("unchecked")
                     V v = (V) values1[pos];
-                    KeyHandle handle = KeyHandle.forHeap(keys1[pos], hashes1[pos]);
+                    KeyHandle handle = unsupportedKeyHandle();
                     pos++;
                     if (!consumer.accept(handle, v)) {
                         return ScanCursorV2.ofPhaseAndPosition(phase, pos);
@@ -559,14 +559,14 @@ public final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
         for (int i = 0; i < quickSteps; i++) {
             int idx = (start + i) & mask;
             if (states[idx] == STATE_FILLED) {
-                return KeyHandle.forHeap(keys[idx], hashes[idx]);
+                return unsupportedKeyHandle();
             }
         }
 
         for (int i = 0; i < len; i++) {
             int idx = (start + i) & mask;
             if (states[idx] == STATE_FILLED) {
-                return KeyHandle.forHeap(keys[idx], hashes[idx]);
+                return unsupportedKeyHandle();
             }
         }
         return null;
@@ -590,8 +590,12 @@ public final class ByteArrayKeyspace<V> implements YierdisKeyspace<V> {
             }
             @SuppressWarnings("unchecked")
             V v = (V) values[i];
-            consumer.accept(KeyHandle.forHeap(keys[i], hashes[i]), v);
+            consumer.accept(unsupportedKeyHandle(), v);
         }
+    }
+
+    private static KeyHandle unsupportedKeyHandle() {
+        throw new UnsupportedOperationException("ByteArrayKeyspace no longer produces internal KeyHandle instances");
     }
 
     private void initTable0(int capacity) {

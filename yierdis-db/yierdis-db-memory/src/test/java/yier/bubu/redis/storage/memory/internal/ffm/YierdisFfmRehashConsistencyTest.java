@@ -10,7 +10,6 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 
 import java.nio.charset.StandardCharsets;
@@ -61,9 +60,7 @@ public class YierdisFfmRehashConsistencyTest {
                     byte[] key = bytes("k" + i);
                     int value = i;
                     store.compute(key, (k, old) -> value);
-                    KeyHandle handle = store.keyHandle(key);
-                    Assert.assertNotNull(handle);
-                    expires.setExpireAtMillis(handle, nowMillis);
+                    expires.setExpireAtMillis(key, nowMillis, store);
                 }
                 Assert.assertEquals(n, store.size());
                 Assert.assertEquals(n, expires.size());

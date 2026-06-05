@@ -12,11 +12,15 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.ValueType;
+import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.nio.charset.StandardCharsets;
@@ -24,36 +28,39 @@ import java.util.List;
 
 public class YierdisDbMemoryEstimatorTest {
     @Test
-    public void estimatesHeapStringEntryBytesIncludingHeapKey() {
-        YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator();
-        KeyHandle key = KeyHandle.forHeap(b("abc"), 1);
-        EntryRecord record = record(ValueEncoding.STRING_RAW, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
+    public void estimatesStringEntryBytesFromNativeKeyHandle() {
+        withNativeKey("abc", key -> {
+            YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator();
+            EntryRecord record = record(ValueEncoding.STRING_RAW, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
 
-        long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+            long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
 
-        Assert.assertEquals(expected, estimator.estimateEntryBytes(key, record));
+            Assert.assertEquals(expected, estimator.estimateEntryBytes(key, record));
+        });
     }
 
     @Test
-    public void estimatesHeapStringEntryBytesExcludingOffHeapKey() {
-        YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator();
-        KeyHandle key = KeyHandle.forHeap(b("abc"), 1);
-        EntryRecord record = record(ValueEncoding.STRING_RAW, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
+    public void estimatesRawStringEntryBytesWithoutAddingNativeKeyBytes() {
+        withNativeKey("abc", key -> {
+            YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator();
+            EntryRecord record = record(ValueEncoding.STRING_RAW, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE);
 
-        long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+            long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
 
-        Assert.assertEquals(expected, estimator.estimateEntryBytes(key, record));
+            Assert.assertEquals(expected, estimator.estimateEntryBytes(key, record));
+        });
     }
 
     @Test
     public void estimatesIntegerEncodedStringPayloadAsLongBytes() {
-        YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator();
-        KeyHandle key = KeyHandle.forHeap(b("n"), 1);
-        EntryRecord record = record(ValueEncoding.STRING_INT, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + Long.BYTES);
+        withNativeKey("n", key -> {
+            YierdisDbMemoryEstimator estimator = new YierdisDbMemoryEstimator();
+            EntryRecord record = record(ValueEncoding.STRING_INT, DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + Long.BYTES);
 
-        long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + Long.BYTES;
+            long expected = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + Long.BYTES;
 
-        Assert.assertEquals(expected, estimator.estimateEntryBytes(key, record));
+            Assert.assertEquals(expected, estimator.estimateEntryBytes(key, record));
+        });
     }
 
     @Test
@@ -96,5 +103,25 @@ public class YierdisDbMemoryEstimatorTest {
     private static ValueHandle valueHandle(long slotId) {
         NativeObjectKind kind = NativeObjectKind.STRING_BYTES;
         return ValueHandle.fromNativeHandle(NativeHandle.of(kind.domain(), kind, slotId, 1, 0));
+    }
+
+    private static void withNativeKey(String value, KeyAssertion assertion) {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("memory-estimator-key");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator)) {
+            EntryHandle entry = EntryHandle.fromNativeHandle(allocator.allocate(NativeObjectKind.ENTRY_RECORD, 32));
+            try {
+                byte[] keyBytes = b(value);
+                directory.compute(keyBytes, (ignored, old) -> entry);
+                assertion.accept(directory.getKeyHandle(keyBytes));
+            } finally {
+                allocator.free(entry.nativeHandle());
+            }
+        }
+    }
+
+    @FunctionalInterface
+    private interface KeyAssertion {
+        void accept(KeyHandle keyHandle);
     }
 }

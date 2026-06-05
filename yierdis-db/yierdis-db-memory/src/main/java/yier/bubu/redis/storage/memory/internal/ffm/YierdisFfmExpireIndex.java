@@ -154,8 +154,20 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
     @Override
     public byte[] randomKey() {
-        KeyHandle handle = randomKeyHandle();
-        return handle == null ? null : copyKey(handle);
+        rehashStep();
+        int total = size();
+        if (total == 0) {
+            return null;
+        }
+        if (table1 == null) {
+            return randomKeyFromTable(table0);
+        }
+        int r = ThreadLocalRandom.current().nextInt(total);
+        byte[] key = r < table0.size ? randomKeyFromTable(table0) : randomKeyFromTable(table1);
+        if (key != null) {
+            return key;
+        }
+        return r < table0.size ? randomKeyFromTable(table1) : randomKeyFromTable(table0);
     }
 
     @Override
@@ -190,11 +202,42 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     public void setExpireAtMillis(byte[] keyBytes, long expireAtMillis, YierdisKeyspace<?> store) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         Objects.requireNonNull(store, "store");
-        KeyHandle handle = store.keyHandle(keyBytes);
-        if (handle == null) {
+        byte[] canonical = store.canonicalKey(keyBytes);
+        if (canonical == null) {
             return;
         }
-        setExpireAtMillis(handle, expireAtMillis);
+        setExpireAtMillis(canonical, expireAtMillis);
+    }
+
+    private void setExpireAtMillis(byte[] keyBytes, long expireAtMillis) {
+        ensureTable0();
+        rehashStep();
+        maybeStartRehashForInsert();
+
+        int h = hash(keyBytes);
+        int idx = findIndex(table0, keyBytes, h);
+        if (idx >= 0) {
+            table0.setExpireAt(idx, expireAtMillis);
+            return;
+        }
+        Table t1 = table1;
+        if (t1 != null) {
+            idx = findIndex(t1, keyBytes, h);
+            if (idx >= 0) {
+                t1.setExpireAt(idx, expireAtMillis);
+                return;
+            }
+        }
+
+        if (blobStore == null) {
+            throw new IllegalStateException("byte-key expire insertion requires a blob store");
+        }
+        KeyRef ref = new FfmKeyRef(YierdisFfmBlobStore.fromBytes(memoryRuntime, keyBytes));
+        if (table1 != null) {
+            insertNewIntoTable1(ref, h, expireAtMillis);
+            return;
+        }
+        insertNewIntoTable(table0, ref, h, expireAtMillis);
     }
 
     @Override
@@ -301,6 +344,28 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
             int idx = (start + i) & mask;
             if (table.stateAt(idx) == STATE_FILLED) {
                 return table.refs[idx].keyHandle(table.hashAt(idx));
+            }
+        }
+        return null;
+    }
+
+    private byte[] randomKeyFromTable(Table table) {
+        if (table == null || table.capacity == 0) {
+            return null;
+        }
+        int mask = table.capacity - 1;
+        int start = ThreadLocalRandom.current().nextInt(table.capacity);
+        int quickSteps = Math.min(16, table.capacity);
+        for (int i = 0; i < quickSteps; i++) {
+            int idx = (start + i) & mask;
+            if (table.stateAt(idx) == STATE_FILLED) {
+                return table.refs[idx].copyBytes();
+            }
+        }
+        for (int i = 0; i < table.capacity; i++) {
+            int idx = (start + i) & mask;
+            if (table.stateAt(idx) == STATE_FILLED) {
+                return table.refs[idx].copyBytes();
             }
         }
         return null;
@@ -642,10 +707,6 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     }
 
     private KeyRef keyRefOrNull(KeyHandle handle) {
-        YierdisFfmBytesRef ffm = KeyHandleAccess.ffmBytesRefOrNull(handle);
-        if (ffm != null) {
-            return new FfmKeyRef(ffm);
-        }
         NativeHandle nativeHandle = KeyHandleAccess.allocatorNativeHandleOrNull(handle);
         if (nativeHandle != null) {
             return new AllocatorKeyRef(nativeHandle);
@@ -761,6 +822,8 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
         KeyHandle keyHandle(int hash);
 
+        byte[] copyBytes();
+
         boolean sameIdentity(KeyRef other);
 
         void retainForIndex();
@@ -803,7 +866,12 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
         @Override
         public KeyHandle keyHandle(int hash) {
-            return KeyHandle.forFfm(ref, hash);
+            throw new UnsupportedOperationException("legacy FFM expire keys no longer produce internal KeyHandle instances");
+        }
+
+        @Override
+        public byte[] copyBytes() {
+            return blobStore.toByteArray(ref);
         }
 
         @Override
@@ -869,6 +937,11 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         @Override
         public KeyHandle keyHandle(int hash) {
             return KeyHandle.forNative(nativeAllocator, handle, hash);
+        }
+
+        @Override
+        public byte[] copyBytes() {
+            return copyKey(keyHandle(0));
         }
 
         @Override
