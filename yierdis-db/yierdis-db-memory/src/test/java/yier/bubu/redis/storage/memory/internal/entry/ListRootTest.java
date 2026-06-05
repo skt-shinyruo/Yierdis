@@ -23,15 +23,15 @@ public class ListRootTest {
              ListRoot root = new ListRoot(runtime, allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
-            Assert.assertEquals(3L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(3L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
             root.rpop(handle, 1);
-            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
-            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
 
             root.rpush(handle, List.of(new byte[elementBytes]));
 
-            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
-            Assert.assertEquals(3L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
+            Assert.assertEquals(3L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
         }
     }
 
@@ -45,19 +45,19 @@ public class ListRootTest {
              ListRoot root = new ListRoot(runtime, allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
-            Assert.assertEquals(3L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(3L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
             allocator.clearFreeKinds();
 
             root.release(handle);
 
             Assert.assertEquals(List.of(
-                    NativeObjectKind.LIST_QUICKLIST_NODE,
-                    NativeObjectKind.LIST_QUICKLIST_NODE,
-                    NativeObjectKind.LIST_QUICKLIST_NODE,
-                    NativeObjectKind.LIST_NODE
+                    NativeObjectKind.LIST_NODE,
+                    NativeObjectKind.LIST_NODE,
+                    NativeObjectKind.LIST_NODE,
+                    NativeObjectKind.LIST_ROOT
             ), allocator.freeKinds());
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
             Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
-            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
         }
     }
 
@@ -73,8 +73,8 @@ public class ListRootTest {
 
             root.clear();
 
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
             Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
-            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
         }
     }
 
@@ -90,8 +90,8 @@ public class ListRootTest {
 
             root.close();
 
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
             Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
-            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
         }
     }
 

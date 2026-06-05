@@ -572,12 +572,22 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     private NativeObjectKindCounts objectKindCounts() {
         long generic = 0;
         long stringBytes = 0;
+        long listpackBytes = 0;
+        long hashFieldBytes = 0;
+        long hashValueBytes = 0;
+        long setMemberBytes = 0;
+        long zsetMemberBytes = 0;
+        long scoreBytes = 0;
         long entryRecords = 0;
         long keyBytes = 0;
+        long listRoots = 0;
+        long hashRoots = 0;
+        long setRoots = 0;
+        long zsetRoots = 0;
         long listNodes = 0;
-        long listQuicklistNodes = 0;
-        long hashNodes = 0;
-        long setNodes = 0;
+        long hashTables = 0;
+        long setTables = 0;
+        long zsetTables = 0;
         long zsetNodes = 0;
         long indexNodes = 0;
         long metadataRecords = 0;
@@ -592,12 +602,22 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             switch (kind) {
                 case GENERIC -> generic++;
                 case STRING_BYTES -> stringBytes++;
+                case LISTPACK_BYTES -> listpackBytes++;
+                case HASH_FIELD_BYTES -> hashFieldBytes++;
+                case HASH_VALUE_BYTES -> hashValueBytes++;
+                case SET_MEMBER_BYTES -> setMemberBytes++;
+                case ZSET_MEMBER_BYTES -> zsetMemberBytes++;
+                case SCORE_BYTES -> scoreBytes++;
                 case ENTRY_RECORD -> entryRecords++;
                 case KEY_BYTES -> keyBytes++;
+                case LIST_ROOT -> listRoots++;
+                case HASH_ROOT -> hashRoots++;
+                case SET_ROOT -> setRoots++;
+                case ZSET_ROOT -> zsetRoots++;
                 case LIST_NODE -> listNodes++;
-                case LIST_QUICKLIST_NODE -> listQuicklistNodes++;
-                case HASH_NODE -> hashNodes++;
-                case SET_NODE -> setNodes++;
+                case HASH_TABLE -> hashTables++;
+                case SET_TABLE -> setTables++;
+                case ZSET_TABLE -> zsetTables++;
                 case ZSET_NODE -> zsetNodes++;
                 case INDEX_NODE -> indexNodes++;
                 case METADATA_RECORD -> metadataRecords++;
@@ -606,12 +626,22 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         return new NativeObjectKindCounts(
                 generic,
                 stringBytes,
+                listpackBytes,
+                hashFieldBytes,
+                hashValueBytes,
+                setMemberBytes,
+                zsetMemberBytes,
+                scoreBytes,
                 entryRecords,
                 keyBytes,
+                listRoots,
+                hashRoots,
+                setRoots,
+                zsetRoots,
                 listNodes,
-                listQuicklistNodes,
-                hashNodes,
-                setNodes,
+                hashTables,
+                setTables,
+                zsetTables,
                 zsetNodes,
                 indexNodes,
                 metadataRecords

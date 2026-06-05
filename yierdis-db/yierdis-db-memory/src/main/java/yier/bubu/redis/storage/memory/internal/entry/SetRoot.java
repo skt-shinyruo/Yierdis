@@ -33,7 +33,7 @@ public final class SetRoot implements TypeRoot {
         this.runtime = runtime;
         this.sets = new NativeCollectionRootTable<>(
                 allocator,
-                NativeObjectKind.SET_NODE,
+                NativeObjectKind.SET_ROOT,
                 "set",
                 ownsAllocator
         );

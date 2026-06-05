@@ -56,7 +56,17 @@ public class NativeAllocatorContractTest {
                 8,
                 9,
                 10,
-                11
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21
         );
         NativeAllocationLatencyHistogram histogram = new NativeAllocationLatencyHistogram(
                 20,
@@ -106,10 +116,12 @@ public class NativeAllocatorContractTest {
         Assert.assertEquals(15L, stats.doubleFreeDetections());
         Assert.assertEquals(16L, stats.defragReclaimedPages());
         Assert.assertEquals(2L, stats.objectCount(NativeObjectKind.STRING_BYTES));
-        Assert.assertEquals(3L, stats.objectCount(NativeObjectKind.ENTRY_RECORD));
-        Assert.assertEquals(5L, stats.objectCount(NativeObjectKind.LIST_NODE));
-        Assert.assertEquals(6L, stats.objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
-        Assert.assertEquals(6L, stats.objectKindCounts().listQuicklistNodeObjects());
+        Assert.assertEquals(3L, stats.objectCount(NativeObjectKind.LISTPACK_BYTES));
+        Assert.assertEquals(9L, stats.objectCount(NativeObjectKind.ENTRY_RECORD));
+        Assert.assertEquals(11L, stats.objectCount(NativeObjectKind.LIST_ROOT));
+        Assert.assertEquals(15L, stats.objectCount(NativeObjectKind.LIST_NODE));
+        Assert.assertEquals(16L, stats.objectCount(NativeObjectKind.HASH_TABLE));
+        Assert.assertEquals(15L, stats.objectKindCounts().listNodeObjects());
         Assert.assertEquals(20L, stats.allocationLatencyHistogram().allocationCount());
         Assert.assertEquals(10_000L, stats.allocationLatencyHistogram().totalNanos());
     }

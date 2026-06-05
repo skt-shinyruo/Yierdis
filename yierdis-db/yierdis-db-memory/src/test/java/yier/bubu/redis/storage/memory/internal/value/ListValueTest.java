@@ -37,8 +37,8 @@ public class ListValueTest {
 
             root.rpush(handle, List.of(b("a"), b("b"), b("c")));
 
-            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
-            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
         }
     }
 
@@ -54,8 +54,8 @@ public class ListValueTest {
 
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
 
-            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
-            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
         }
     }
 
@@ -110,11 +110,11 @@ public class ListValueTest {
 
             root.rpush(handle, in);
             Assert.assertEquals(3, root.size(handle));
-            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
 
             root.lpop(handle, 1);
             Assert.assertEquals(2, root.size(handle));
-            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
         }
     }
 
@@ -135,7 +135,7 @@ public class ListValueTest {
 
             Assert.assertArrayEquals(a, root.lpop(handle, 1).get(0));
 
-            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
             assertStale(allocator, nodeHandles.get(0));
             assertLive(allocator, nodeHandles.get(1));
             assertLive(allocator, nodeHandles.get(2));
@@ -163,7 +163,7 @@ public class ListValueTest {
 
             Assert.assertArrayEquals(a, root.lpop(handle, 1).get(0));
 
-            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
             assertLive(allocator, nodeHandles.get(0));
             assertStale(allocator, nodeHandles.get(1));
             List<byte[]> remaining = readRange(root, handle, 0, -1);
@@ -191,7 +191,7 @@ public class ListValueTest {
 
             Assert.assertArrayEquals(c, root.rpop(handle, 1).get(0));
 
-            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
             assertLive(allocator, nodeHandles.get(0));
             assertStale(allocator, nodeHandles.get(1));
             List<byte[]> remaining = readRange(root, handle, 0, -1);
@@ -257,8 +257,8 @@ public class ListValueTest {
             assertStale(allocator, staleHandle);
 
             NativeHandle wrongKindHandle = NativeHandle.of(
-                    NativeObjectKind.HASH_NODE.domain(),
-                    NativeObjectKind.HASH_NODE,
+                    NativeObjectKind.HASH_ROOT.domain(),
+                    NativeObjectKind.HASH_ROOT,
                     NativeHandle.fromRaw(staleHandle).slotId(),
                     NativeHandle.fromRaw(staleHandle).generation(),
                     NativeHandle.fromRaw(staleHandle).flags()
@@ -299,7 +299,7 @@ public class ListValueTest {
             Assert.assertTrue(result.moved());
             Assert.assertEquals(48L, result.movedBytes());
             assertLive(allocator, nodeHandleRaw);
-            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
             Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.STRING_BYTES));
 
             root.rpush(handle, List.of(d));
@@ -310,7 +310,7 @@ public class ListValueTest {
             Assert.assertArrayEquals(b, values.get(1));
             Assert.assertArrayEquals(c, values.get(2));
             Assert.assertArrayEquals(d, values.get(3));
-            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
         }
     }
 
@@ -326,7 +326,7 @@ public class ListValueTest {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
 
-            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
             List<Long> nodeHandles = allocator.allocatedQuicklistHandles();
             Assert.assertEquals(2, nodeHandles.size());
 
@@ -336,8 +336,8 @@ public class ListValueTest {
 
             root.release(handle);
 
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
             Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
-            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
         }
     }
 
@@ -352,7 +352,7 @@ public class ListValueTest {
              ListRoot root = new ListRoot(runtime, allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
-            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
             long remainingNodeHandle = allocator.allocatedQuicklistHandles().get(0);
 
             allocator.failOnQuicklistResolveCall(remainingNodeHandle, 1);
@@ -364,7 +364,7 @@ public class ListValueTest {
             }
 
             Assert.assertEquals(2, root.size(handle));
-            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
         }
     }
 
@@ -381,7 +381,7 @@ public class ListValueTest {
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
             root.rpop(handle, 1);
             Assert.assertEquals(2, root.size(handle));
-            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
             long existingNodeHandle = allocator.allocatedQuicklistHandles().get(0);
 
             allocator.failOnQuicklistResolveCall(existingNodeHandle, 1);
@@ -394,11 +394,11 @@ public class ListValueTest {
 
             Assert.assertEquals(3, root.size(handle));
             Assert.assertEquals(3, readRange(root, handle, 0, -1).size());
-            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+            Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
 
             root.release(handle);
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
             Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
-            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
         }
     }
 
@@ -422,12 +422,12 @@ public class ListValueTest {
                 }
 
                 Assert.assertEquals(0, root.size(handle));
-                Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
-                Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
+                Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
+                Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
 
                 root.release(handle);
+                Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
                 Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
-                Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_QUICKLIST_NODE));
             }
             Assert.assertEquals(0L, runtime.usedBytes());
         }
@@ -562,7 +562,7 @@ public class ListValueTest {
         } catch (InvocationTargetException e) {
             Assert.assertTrue("expected native validation failure but got " + e.getCause(),
                     e.getCause() instanceof NativeMemoryException);
-            Assert.assertTrue(e.getCause().getMessage().contains("LIST_QUICKLIST_NODE"));
+            Assert.assertTrue(e.getCause().getMessage().contains("LIST_NODE"));
         }
     }
 
@@ -666,7 +666,7 @@ public class ListValueTest {
         @Override
         public NativeHandle allocate(NativeObjectKind kind, int size) {
             NativeHandle handle = delegate.allocate(kind, size);
-            if (kind == NativeObjectKind.LIST_QUICKLIST_NODE) {
+            if (kind == NativeObjectKind.LIST_NODE) {
                 allocatedQuicklistHandles.add(handle.raw());
             }
             return handle;
@@ -714,8 +714,8 @@ public class ListValueTest {
         }
 
         private static boolean isQuicklistNode(NativeHandle handle) {
-            return handle.domain() == NativeObjectKind.LIST_QUICKLIST_NODE.domain()
-                    && handle.kindCode() == NativeObjectKind.LIST_QUICKLIST_NODE.code();
+            return handle.domain() == NativeObjectKind.LIST_NODE.domain()
+                    && handle.kindCode() == NativeObjectKind.LIST_NODE.code();
         }
 
         @Override

@@ -34,7 +34,7 @@ public final class ListRoot implements TypeRoot {
         this.runtime = runtime;
         this.lists = new NativeCollectionRootTable<>(
                 allocator,
-                NativeObjectKind.LIST_NODE,
+                NativeObjectKind.LIST_ROOT,
                 "list",
                 ownsAllocator
         );

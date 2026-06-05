@@ -45,6 +45,25 @@ public class NativeHandleTest {
     }
 
     @Test
+    public void collectionNativeObjectKindsHaveDistinctCodesInsideTheirDomains() {
+        java.util.EnumMap<NativeHandleDomain, java.util.HashSet<Integer>> seen = new java.util.EnumMap<>(NativeHandleDomain.class);
+        for (NativeObjectKind kind : NativeObjectKind.values()) {
+            java.util.HashSet<Integer> codes = seen.computeIfAbsent(kind.domain(), ignored -> new java.util.HashSet<>());
+            Assert.assertTrue("duplicate kind code " + kind.code() + " in domain " + kind.domain(), codes.add(kind.code()));
+        }
+
+        Assert.assertEquals(NativeHandleDomain.TYPE_ROOT, NativeObjectKind.LIST_ROOT.domain());
+        Assert.assertEquals(NativeHandleDomain.TYPE_ROOT, NativeObjectKind.HASH_ROOT.domain());
+        Assert.assertEquals(NativeHandleDomain.TYPE_ROOT, NativeObjectKind.SET_ROOT.domain());
+        Assert.assertEquals(NativeHandleDomain.TYPE_ROOT, NativeObjectKind.ZSET_ROOT.domain());
+        Assert.assertEquals(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.LISTPACK_BYTES.domain());
+        Assert.assertEquals(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.HASH_FIELD_BYTES.domain());
+        Assert.assertEquals(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.HASH_VALUE_BYTES.domain());
+        Assert.assertEquals(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.SET_MEMBER_BYTES.domain());
+        Assert.assertEquals(NativeHandleDomain.STORAGE_OBJECT, NativeObjectKind.ZSET_MEMBER_BYTES.domain());
+    }
+
+    @Test
     public void rejectsNonZeroReservedDomain() {
         long raw = 0x0000_0000_0000_0010L;
         assertIllegal(() -> NativeHandle.fromRaw(raw));

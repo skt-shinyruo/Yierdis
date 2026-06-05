@@ -35,7 +35,7 @@ public final class ZSetRoot implements TypeRoot {
         this.runtime = runtime;
         this.zsets = new NativeCollectionRootTable<>(
                 allocator,
-                NativeObjectKind.ZSET_NODE,
+                NativeObjectKind.ZSET_ROOT,
                 "zset",
                 ownsAllocator
         );

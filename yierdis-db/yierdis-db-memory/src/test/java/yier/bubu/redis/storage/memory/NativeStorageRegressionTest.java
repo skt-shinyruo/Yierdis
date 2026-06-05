@@ -790,10 +790,10 @@ public class NativeStorageRegressionTest {
         Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.STRING_BYTES));
         Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.ENTRY_RECORD));
         Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.KEY_BYTES));
-        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.LIST_NODE));
-        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.HASH_NODE));
-        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.SET_NODE));
-        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.ZSET_NODE));
+        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.LIST_ROOT));
+        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.HASH_ROOT));
+        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.SET_ROOT));
+        Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.ZSET_ROOT));
         Assert.assertEquals(0L, allocator.logicalUsedBytes());
         Assert.assertEquals(0L, allocator.quarantinedObjects());
     }
@@ -806,10 +806,10 @@ public class NativeStorageRegressionTest {
     }
 
     private static void assertCollectionRootCounts(YierdisDb db, long expected) {
-        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.LIST_NODE));
-        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.HASH_NODE));
-        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.SET_NODE));
-        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.ZSET_NODE));
+        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.LIST_ROOT));
+        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.HASH_ROOT));
+        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.SET_ROOT));
+        Assert.assertEquals(expected, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.ZSET_ROOT));
     }
 
     private static void assertNativeStringOnly(YierdisDb db, byte[] key, byte[] expectedBytes) {
