@@ -24,7 +24,6 @@
  *     <li>ConnectionStatsView - API. Audience: server INFO/STATS views, executor/server observability, tests.</li>
  *     <li>TransactionState - API. Audience: command transaction handlers, engine sessions, server sessions, tests.</li>
  *     <li>CommandContext - API. Audience: engine and command handlers; executor/server must not construct it directly.</li>
- *     <li>Command - compatibility/deprecated. Audience: legacy embedders only; new code uses ExecutionRequest.</li>
  * </ul>
  */
 package yier.bubu.redis.execution.api;

@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * 测试辅助：以协议无关的 {@link Command}/{@link ReplyWriter} 语义执行命令，并捕获 reply 供断言使用。
+ * 测试辅助：以协议无关的 {@link ExecutionRequest}/{@link yier.bubu.redis.execution.api.RedisReplyWriter} 语义执行命令，并捕获 reply 供断言使用。
  * <p>
  * 说明：对外协议已切换为 RESP，因此 core 单测不再依赖任何 wire codec/对象模型。
  */
