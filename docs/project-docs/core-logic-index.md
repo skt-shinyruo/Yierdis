@@ -120,8 +120,8 @@
 | --- | --- | --- | --- |
 | [`ExecutionRequest`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ExecutionRequest.java) | command 层看到的 argv bytes 视图 | `argc()`, `len(int)`, `copyToByteArray(...)`, `toByteArray(int)`, `readOnlyByteArray(int)` | [`protocol-reference.md`](./protocol-reference.md) |
 | [`ByteArrayExecutionRequest`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ByteArrayExecutionRequest.java) | heap byte[] backed request 实现，常用于测试和适配 | constructors / factory methods | [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md) |
-| [`RedisReplyWriter`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/RedisReplyWriter.java) / [`ReplyWriter`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ReplyWriter.java) | command 层唯一 Redis reply 语义接口；`ReplyWriter` 是兼容别名 | `simpleString`, `bulkString`, `integer`, `arrayHeader`, `mapHeader`, `error` | [`commands-and-data-model.md`](./commands-and-data-model.md) |
-| [`RespReplyWriter`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java) | 将 `ReplyWriter` 调用编码成 RESP2/RESP3 bytes | reply methods | [`protocol-reference.md`](./protocol-reference.md) |
+| [`RedisReplyWriter`](../../yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/RedisReplyWriter.java) | command 层唯一 Redis reply 语义接口 | `simpleString`, `bulkString`, `integer`, `arrayHeader`, `mapHeader`, `error` | [`commands-and-data-model.md`](./commands-and-data-model.md) |
+| [`RespReplyWriter`](../../yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriter.java) | 将 `RedisReplyWriter` 调用编码成 RESP2/RESP3 bytes | reply methods | [`protocol-reference.md`](./protocol-reference.md) |
 | [`RespRequestDecoder`](../../yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespRequestDecoder.java) | Netty 入站 RESP decoder | `decode(...)` | [`protocol-reference.md`](./protocol-reference.md) |
 
 边界：协议层只处理 wire format；命令 handler 不拼 RESP bytes。
@@ -162,7 +162,7 @@
 - Netty I/O 线程不访问 DB。
 - `ExecutionRequest` 是 command 层输入，RESP DTO 不进入 command 层。
 - command 层通过 `DbEngine` / `DbReads` / `DbWrites` 访问 DB，不依赖 `YierdisDb` internal。
-- 回包统一走 `ReplyWriter`，handler 不拼 RESP bytes。
+- 回包统一走 `RedisReplyWriter`，handler 不拼 RESP bytes。
 - DB 写路径统一经过 mutation executor 和 memory ledger。
 - TTL、key lifecycle、maxmemory 记账要和真实变更一起提交或回滚。
 - native handle 必须经过 domain/kind/generation 校验，不能把 raw long 当普通指针传递。

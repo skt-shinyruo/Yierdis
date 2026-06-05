@@ -15,7 +15,7 @@ import yier.bubu.redis.command.defaults.CommandSupport;
 import yier.bubu.redis.storage.api.result.BulkStringMapPairs;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.util.Objects;
 
@@ -42,7 +42,7 @@ public final class HashCommands implements CommandModule {
     }
 
     private void hset(ArgReader args, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         int pairsLen = args.argc() - 2;
         ExecutionRequest request = args.request();
         support.sliceResetFromRequest(request, 2, pairsLen);
@@ -58,7 +58,7 @@ public final class HashCommands implements CommandModule {
     }
 
     private void hget(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 3) {
             CommandSupport.wrongArity(out, "hget");
             return;
@@ -67,7 +67,7 @@ public final class HashCommands implements CommandModule {
     }
 
     private void hgetall(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "hgetall");
             return;
@@ -84,7 +84,7 @@ public final class HashCommands implements CommandModule {
     }
 
     private void hlen(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "hlen");
             return;
@@ -93,7 +93,7 @@ public final class HashCommands implements CommandModule {
     }
 
     private void hdel(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() < 3) {
             CommandSupport.wrongArity(out, "hdel");
             return;

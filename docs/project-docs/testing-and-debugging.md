@@ -160,7 +160,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 | --- | --- | --- |
 | unknown command 或 arity 不对 | `CommandRegistry`, `CommandSpec`, command handler | `CommandRegistryGuardTest`, `CommandErrorTest` |
 | 事务里行为不同 | `YierdisFastCommandProcessor`, `TransactionState` | `TransactionCommandTest`, `TransactionQueueCleanupTest` |
-| RESP 回包形状不对 | `ReplyWriter`, `RespReplyWriter` | `RespReplyWriterTest`, `RespProtocolIntegrationTest` |
+| RESP 回包形状不对 | `RedisReplyWriter`, `RespReplyWriter` | `RespReplyWriterTest`, `RespProtocolIntegrationTest` |
 | TTL 不准或过期 key 仍可见 | `YierdisExpireIndex`, lifecycle cleanup | `TtlLifecycleDirectOpsTest`, `ExpireIndexTest` |
 | maxmemory 多回包或错误回包 | `YierdisDbMemoryLedger`, mutation executor | `MaxmemoryEvictionTest`, `MaxmemoryDoubleReplyRegressionTest` |
 | off-heap 泄漏 | root/value release, blob store, native handle graph | `OffHeapLeakRegressionTest`, `NativeStorageRegressionTest` |

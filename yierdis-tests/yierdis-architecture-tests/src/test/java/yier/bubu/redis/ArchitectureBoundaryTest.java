@@ -522,8 +522,8 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("缺少 YierdisEngine.java，无法约束 engine 执行边界", Files.isRegularFile(engineFile));
         String engineSource = Files.readString(engineFile, StandardCharsets.UTF_8);
         Assert.assertTrue(
-                "YierdisEngine public execution boundary must expose Session + ExecutionRequest + ReplyWriter",
-                engineSource.contains("void execute(Session session, ExecutionRequest request, ReplyWriter out);")
+                "YierdisEngine public execution boundary must expose Session + ExecutionRequest + RedisReplyWriter",
+                engineSource.contains("void execute(Session session, ExecutionRequest request, RedisReplyWriter out);")
         );
         Assert.assertFalse(
                 "YierdisEngine public API must not expose CommandContext compatibility overloads",
@@ -536,8 +536,8 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("缺少 CommandExecutionEngine.java，无法约束 executor 执行边界", Files.isRegularFile(executorEngineFile));
         String executorEngineSource = Files.readString(executorEngineFile, StandardCharsets.UTF_8);
         Assert.assertTrue(
-                "CommandExecutionEngine must accept Session + ExecutionRequest + ReplyWriter",
-                executorEngineSource.contains("void execute(Session session, ExecutionRequest request, ReplyWriter out);")
+                "CommandExecutionEngine must accept Session + ExecutionRequest + RedisReplyWriter",
+                executorEngineSource.contains("void execute(Session session, ExecutionRequest request, RedisReplyWriter out);")
         );
         Assert.assertFalse(
                 "executor-core execution seam must not expose CommandContext",
@@ -1015,12 +1015,19 @@ public class ArchitectureBoundaryTest {
         );
 
         Path replyWriterFile = apiPackage.resolve("ReplyWriter.java");
-        Assert.assertTrue("缺少 ReplyWriter.java", Files.isRegularFile(replyWriterFile));
-        String replyWriter = Files.readString(replyWriterFile, StandardCharsets.UTF_8);
-        Assert.assertTrue(
-                "ReplyWriter should remain as a compatibility alias over the more explicit RedisReplyWriter boundary",
-                replyWriter.contains("interface ReplyWriter extends RedisReplyWriter")
+        Assert.assertFalse(
+                "ReplyWriter compatibility alias must be deleted; use RedisReplyWriter",
+                Files.exists(replyWriterFile)
         );
+
+        Path replyWriterFactoryFile = apiPackage.resolve("ReplyWriterFactory.java");
+        Assert.assertFalse(
+                "ReplyWriterFactory compatibility name must be deleted; use RedisReplyWriterFactory",
+                Files.exists(replyWriterFactoryFile)
+        );
+
+        Path redisReplyWriterFactoryFile = apiPackage.resolve("RedisReplyWriterFactory.java");
+        Assert.assertTrue("缺少 RedisReplyWriterFactory.java", Files.isRegularFile(redisReplyWriterFactoryFile));
 
         List<String> offenders = new ArrayList<>();
         int scanned = 0;

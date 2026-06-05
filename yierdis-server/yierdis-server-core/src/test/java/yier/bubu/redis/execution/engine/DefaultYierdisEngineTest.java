@@ -11,7 +11,7 @@ import yier.bubu.redis.execution.api.ClientMetadataSession;
 import yier.bubu.redis.execution.api.ConnectionStatsSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.DbIndexSession;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
 import yier.bubu.redis.execution.api.Session;
 import yier.bubu.redis.execution.api.TransactionSession;
@@ -178,7 +178,7 @@ public class DefaultYierdisEngineTest {
         Assert.assertEquals(2, ticks.get());
     }
 
-    private static final class CapturingReplyWriter implements ReplyWriter {
+    private static final class CapturingReplyWriter implements RedisReplyWriter {
         private String simpleStringValue;
         private String errorValue;
 

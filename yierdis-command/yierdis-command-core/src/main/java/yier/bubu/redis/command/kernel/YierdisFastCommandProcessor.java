@@ -5,7 +5,7 @@ import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,7 +14,7 @@ import java.util.Objects;
 /**
  * A server-side command processor optimized for low allocation.
  * <p>
- * It executes commands and writes replies via {@link ReplyWriter}.
+ * It executes commands and writes replies via {@link RedisReplyWriter}.
  */
 public final class YierdisFastCommandProcessor {
     private static final String NULL_BULK_STRING_ERR = "ERR Protocol error: null bulk string";
@@ -50,7 +50,7 @@ public final class YierdisFastCommandProcessor {
     public void execute(ExecutionRequest request, CommandContext ctx) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(ctx, "ctx");
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         int argc = request.argc();
         if (argc <= 0) {
             out.error("ERR empty command");

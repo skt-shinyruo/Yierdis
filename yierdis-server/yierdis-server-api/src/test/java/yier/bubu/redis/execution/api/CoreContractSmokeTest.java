@@ -27,7 +27,7 @@ public class CoreContractSmokeTest {
 
     @Test
     public void commandContextCanBeBuiltFromNarrowCapabilitiesWithoutServerSession() {
-        ReplyWriter writer = noopWriter();
+        RedisReplyWriter writer = noopWriter();
         NarrowSession session = new NarrowSession();
 
         CommandContext ctx = new CommandContext(
@@ -51,7 +51,7 @@ public class CoreContractSmokeTest {
 
     @Test
     public void contractTypesCompose() {
-        ReplyWriter writer = noopWriter();
+        RedisReplyWriter writer = noopWriter();
 
         ServerSession session = new ServerSession() {
             private final TransactionState tx = new TransactionState() {
@@ -143,8 +143,8 @@ public class CoreContractSmokeTest {
         Assert.assertTrue(writer.closeAfterReplyRequested());
     }
 
-    private static ReplyWriter noopWriter() {
-        return new ReplyWriter() {
+    private static RedisReplyWriter noopWriter() {
+        return new RedisReplyWriter() {
             private boolean closeAfter;
 
             @Override

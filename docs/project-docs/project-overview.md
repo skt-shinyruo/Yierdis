@@ -35,7 +35,7 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 
 读源码前先建立三条心智模型：
 
-- 请求不是“方法调用”，而是一段从 RESP bytes 到 `ExecutionRequest`、executor、command handler、DB、`ReplyWriter` 再回到 RESP bytes 的链路。
+- 请求不是“方法调用”，而是一段从 RESP bytes 到 `ExecutionRequest`、executor、command handler、DB、`RedisReplyWriter` 再回到 RESP bytes 的链路。
 - DB 不是一张大表，而是 keyspace、entry metadata、value roots、TTL index、memory ledger 和 native handles 共同维护的生命周期边界。
 - native memory 不是旁路优化，而是当前默认数据路径的一部分；但它不等于零拷贝，copy 边界需要按接口 ownership 和 lifetime 判断。
 
@@ -48,7 +48,7 @@ Yierdis 当前是 Java 25 + Netty + JDK FFM 实现的 Redis-style 单机内存 K
 | `yierdis-memory/yierdis-memory-ffm` | JDK FFM allocator/runtime、native segment 管理和 stable handle 支撑。 |
 | `yierdis-networking/yierdis-networking-resp` | RESP request/reply model、`RespCommandRequest`、`RespExecutionAdapter`、`RespReplyWriter`。 |
 | `yierdis-networking/yierdis-networking-netty` | Netty decoder、channel handler、protocol error 和 TCP write-back。 |
-| `yierdis-server/yierdis-server-api` | `ExecutionRequest`、`ByteArrayExecutionRequest`、`ReplyWriter` 等执行层公共契约。 |
+| `yierdis-server/yierdis-server-api` | `ExecutionRequest`、`ByteArrayExecutionRequest`、`RedisReplyWriter` 等执行层公共契约。 |
 | `yierdis-server/yierdis-server-core` | engine、execution context 和 server-side command dispatch glue。 |
 | `yierdis-server/yierdis-server-executor` | `CommandExecutor`、队列、背压和执行线程模型。 |
 | `yierdis-server/yierdis-server-runtime` | `YierdisInstance`、多 DB 装配、runtime config、maxmemory governor 和 maintenance。 |
@@ -78,7 +78,7 @@ Netty inbound bytes
   -> engine
   -> command processor
   -> DB
-  -> ReplyWriter
+  -> RedisReplyWriter
   -> RespReplyWriter
   -> Netty write-back
 ```
@@ -92,7 +92,7 @@ Netty inbound bytes
 - `CommandExecutor` 把请求从 I/O 线程切到执行线程，并施加队列和背压约束。
 - engine 持有执行上下文和命令入口，command processor 做命令解析、校验和分发。
 - DB 通过 API 暴露读写能力，具体内存实现完成 key 和 value 操作。
-- `ReplyWriter` 是命令层写 reply 的抽象，`RespReplyWriter` 把抽象 reply 编成 RESP，最后由 Netty write-back 发回客户端。
+- `RedisReplyWriter` 是命令层写 reply 的抽象，`RespReplyWriter` 把抽象 reply 编成 RESP，最后由 Netty write-back 发回客户端。
 
 逐行追请求时看 [`request-execution-flow.md`](./request-execution-flow.md)。
 

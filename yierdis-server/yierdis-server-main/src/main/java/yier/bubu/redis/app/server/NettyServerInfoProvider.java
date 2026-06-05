@@ -7,7 +7,7 @@ import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
@@ -95,7 +95,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     @Override
     public void info(ExecutionRequest request, CommandContext ctx) {
         Objects.requireNonNull(ctx, "ctx");
-        ReplyWriter out = Objects.requireNonNull(ctx.out(), "out");
+        RedisReplyWriter out = Objects.requireNonNull(ctx.out(), "out");
         CommandExecutor<NettyExecutionConnection> ex = executor;
         if (ex == null) {
             out.error("ERR INFO not ready");
@@ -114,7 +114,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
     @Override
     public void stats(ExecutionRequest request, CommandContext ctx) {
         Objects.requireNonNull(ctx, "ctx");
-        ReplyWriter out = Objects.requireNonNull(ctx.out(), "out");
+        RedisReplyWriter out = Objects.requireNonNull(ctx.out(), "out");
         CommandExecutor<NettyExecutionConnection> ex = executor;
         if (ex == null) {
             out.error("ERR STATS not ready");
@@ -169,7 +169,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         return aggregatedMemoryStats();
     }
 
-    private void writeYierdisStructuredInfo(ReplyWriter out, CommandExecutor<NettyExecutionConnection> ex) {
+    private void writeYierdisStructuredInfo(RedisReplyWriter out, CommandExecutor<NettyExecutionConnection> ex) {
         CommandExecutor.StatsSnapshot s = ex.statsSnapshot();
         long nowMillis = System.currentTimeMillis();
         long uptimeMillis = Math.max(0, nowMillis - startedMillis);
@@ -351,7 +351,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         return ctx.connectionStatsSession().connectionStats();
     }
 
-    private static void writeHeader(ReplyWriter out, int pairs) {
+    private static void writeHeader(RedisReplyWriter out, int pairs) {
         try {
             out.mapHeader(pairs);
         } catch (RuntimeException e) {
@@ -360,12 +360,12 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         }
     }
 
-    private static void writePair(ReplyWriter out, byte[] key, byte[] value) {
+    private static void writePair(RedisReplyWriter out, byte[] key, byte[] value) {
         out.bulkString(key);
         out.bulkString(value);
     }
 
-    private static void writePair(ReplyWriter out, byte[] key, long value) {
+    private static void writePair(RedisReplyWriter out, byte[] key, long value) {
         out.bulkString(key);
         out.integer(value);
     }

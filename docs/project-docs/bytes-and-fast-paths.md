@@ -68,16 +68,16 @@ DB API 的很多 read ops 接受 `BytesView`，例如 `StringReadOps`、`TtlRead
 
 集合读路径大量使用 `BulkStringSink`。`LRANGE`、`HGETALL`、`SMEMBERS`、`ZRANGE` 等可以逐项 emit 到 sink，避免先组装完整 `List<byte[]>` 再交给协议层。
 
-## ReplyWriter 和 Netty 写回
+## RedisReplyWriter 和 Netty 写回
 
-execution 层使用 `ReplyWriterFactory` 为每条命令创建 `ReplyWriter`。Netty adapter 分配 `ByteBuf`，再用 `NettyByteBufSink` 包装给 RESP writer。
+execution 层使用 `RedisReplyWriterFactory` 为每条命令创建 `RedisReplyWriter`。Netty adapter 分配 `ByteBuf`，再用 `NettyByteBufSink` 包装给 RESP writer。
 
 写回路径大致是：
 
 ```text
 CommandExecutorDrainLoop
   -> ioAdapter.allocateOutput(...)
-  -> ReplyWriterFactory
+  -> RedisReplyWriterFactory
   -> RespReplyWriter
   -> BytesSink / DirectBytesSink
   -> NettyByteBufSink
@@ -85,7 +85,7 @@ CommandExecutorDrainLoop
   -> channel.write(...)
 ```
 
-`ReplyWriter.bulkString(BytesSlice)` 和 `BulkStringSink.bulkString(BytesSlice)` 是关键入口。heap `byte[]` 仍然可用，但不是唯一形状；native string、collection range 和 computed ASCII number 都可以按更合适的方式写出。
+`RedisReplyWriter.bulkString(BytesSlice)` 和 `BulkStringSink.bulkString(BytesSlice)` 是关键入口。heap `byte[]` 仍然可用，但不是唯一形状；native string、collection range 和 computed ASCII number 都可以按更合适的方式写出。
 
 ## fast path 和 fallback
 

@@ -15,7 +15,7 @@ import yier.bubu.redis.command.defaults.CommandSupport;
 import yier.bubu.redis.storage.api.result.BulkStringSequence;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.util.List;
 import java.util.Objects;
@@ -54,7 +54,7 @@ public final class ListCommands implements CommandModule {
     }
 
     private void push(ExecutionRequest request, CommandContext ctx, boolean left) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() < 3) {
             CommandSupport.wrongArity(out, left ? "lpush" : "rpush");
             return;
@@ -75,7 +75,7 @@ public final class ListCommands implements CommandModule {
     }
 
     private void lrange(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 4) {
             CommandSupport.wrongArity(out, "lrange");
             return;
@@ -94,7 +94,7 @@ public final class ListCommands implements CommandModule {
     }
 
     private void pop(ExecutionRequest request, CommandContext ctx, boolean left) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 2 && request.argc() != 3) {
             CommandSupport.wrongArity(out, left ? "lpop" : "rpop");
             return;
@@ -122,7 +122,7 @@ public final class ListCommands implements CommandModule {
         popResponse(out, popped, hasCount);
     }
 
-    private static void popResponse(ReplyWriter out, List<byte[]> popped, boolean hasCount) {
+    private static void popResponse(RedisReplyWriter out, List<byte[]> popped, boolean hasCount) {
         if (!hasCount) {
             if (popped == null || popped.isEmpty()) {
                 out.bulkString((byte[]) null);

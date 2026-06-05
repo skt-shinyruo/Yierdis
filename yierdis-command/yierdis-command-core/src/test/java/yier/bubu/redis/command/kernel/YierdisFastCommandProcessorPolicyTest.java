@@ -10,7 +10,7 @@ import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.ServerSession;
 import yier.bubu.redis.execution.api.TransactionState;
 
@@ -323,7 +323,7 @@ public class YierdisFastCommandProcessorPolicyTest {
         }
     }
 
-    private static final class CapturingReplyWriter implements ReplyWriter {
+    private static final class CapturingReplyWriter implements RedisReplyWriter {
         private String simpleString;
         private String error;
         private Integer arrayHeader;

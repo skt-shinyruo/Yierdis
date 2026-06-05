@@ -4,7 +4,7 @@ import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.TransactionState;
 
 import java.util.Objects;
@@ -20,7 +20,7 @@ final class TransactionQueuePolicy {
             return false;
         }
 
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         CommandSpec<?> spec = registry.spec(request);
         if (spec == null) {
             tx.markAborted();
@@ -52,7 +52,7 @@ final class TransactionQueuePolicy {
             CommandSpec<?> spec,
             ExecutionRequest request,
             TransactionState tx,
-            ReplyWriter out
+            RedisReplyWriter out
     ) {
         CommandParseResult<?> parsed = spec.parse(request);
         if (parsed.ok()) {

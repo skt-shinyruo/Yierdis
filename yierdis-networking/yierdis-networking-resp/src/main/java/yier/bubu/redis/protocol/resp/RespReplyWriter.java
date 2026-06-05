@@ -2,14 +2,14 @@ package yier.bubu.redis.protocol.resp;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.IntSupplier;
 
-public final class RespReplyWriter implements ReplyWriter {
+public final class RespReplyWriter implements RedisReplyWriter {
     private static final byte[] CRLF = new byte[]{'\r', '\n'};
     private final BytesSink out;
     private final IntSupplier versionSupplier;

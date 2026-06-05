@@ -16,7 +16,7 @@ import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.util.Objects;
 
@@ -133,7 +133,7 @@ public final class StringCommands implements CommandModule {
     }
 
     private void set(SetArgs args, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         var result = support.recordWriteValue(
                 ctx,
                 support.commandDb(ctx).writes().strings().set(
@@ -156,19 +156,19 @@ public final class StringCommands implements CommandModule {
     }
 
     private void get(ArgReader args, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
         support.commandDb(ctx).reads().strings().getStringValue(support.argView(request, 1)).writeTo(new BulkStringReplyAdapter(out));
     }
 
     private void strlen(ArgReader args, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
         out.integer(support.commandDb(ctx).reads().strings().strlen(support.argView(request, 1)));
     }
 
     private void append(ArgReader args, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
         long length = support.recordWriteValue(
                 ctx,
@@ -178,7 +178,7 @@ public final class StringCommands implements CommandModule {
     }
 
     private void setbit(ArgReader args, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
         long offset = CommandSupport.parseNonNegativeLong(request, 2, "offset");
         long v = CommandSupport.parseLong(request, 3, "value");
@@ -200,14 +200,14 @@ public final class StringCommands implements CommandModule {
     }
 
     private void getbit(ArgReader args, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
         long offset = CommandSupport.parseNonNegativeLong(request, 2, "offset");
         out.integer(support.commandDb(ctx).reads().strings().getBit(support.argView(request, 1), offset));
     }
 
     private void bitcount(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 2 && request.argc() != 4) {
             CommandSupport.wrongArity(out, "bitcount");
             return;
@@ -230,7 +230,7 @@ public final class StringCommands implements CommandModule {
     }
 
     private void incrBy(ArgReader args, CommandContext ctx, long delta) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         ExecutionRequest request = args.request();
         long value = support.recordWriteValue(
                 ctx,

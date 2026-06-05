@@ -4,7 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -15,7 +15,7 @@ public class RespReplyWriterFactoryTest {
         ByteArraySink sink = new ByteArraySink();
         RespReplyWriterFactory factory = new RespReplyWriterFactory();
 
-        ReplyWriter writer = factory.newWriter(serverSession(3), sink);
+        RedisReplyWriter writer = factory.newWriter(serverSession(3), sink);
         writer.booleanValue(true);
 
         Assert.assertEquals("#t\r\n", sink.utf8());
@@ -27,7 +27,7 @@ public class RespReplyWriterFactoryTest {
         RespReplyWriterFactory factory = new RespReplyWriterFactory();
         MutableSession session = new MutableSession(2);
 
-        ReplyWriter writer = factory.newWriter(session, sink);
+        RedisReplyWriter writer = factory.newWriter(session, sink);
         session.setRespVersion(3);
         writer.mapHeader(1);
         writer.bulkString("proto".getBytes(StandardCharsets.US_ASCII));
@@ -41,7 +41,7 @@ public class RespReplyWriterFactoryTest {
         ByteArraySink sink = new ByteArraySink();
         RespReplyWriterFactory factory = new RespReplyWriterFactory();
 
-        ReplyWriter writer = factory.newWriter(null, sink);
+        RedisReplyWriter writer = factory.newWriter(null, sink);
         writer.booleanValue(true);
 
         Assert.assertEquals(":1\r\n", sink.utf8());

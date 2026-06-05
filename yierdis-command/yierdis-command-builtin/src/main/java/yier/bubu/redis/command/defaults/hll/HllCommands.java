@@ -14,7 +14,7 @@ import yier.bubu.redis.command.defaults.CommandSupport;
 
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.util.Objects;
 
@@ -34,7 +34,7 @@ public final class HllCommands implements CommandModule {
     }
 
     private void pfadd(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() < 3) {
             CommandSupport.wrongArity(out, "pfadd");
             return;
@@ -53,7 +53,7 @@ public final class HllCommands implements CommandModule {
     }
 
     private void pfcount(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() < 2) {
             CommandSupport.wrongArity(out, "pfcount");
             return;
@@ -68,7 +68,7 @@ public final class HllCommands implements CommandModule {
     }
 
     private void pfmerge(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() < 3) {
             CommandSupport.wrongArity(out, "pfmerge");
             return;

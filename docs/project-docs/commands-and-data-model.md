@@ -4,7 +4,7 @@
 
 ## 命令层职责
 
-命令层位于协议和 DB 之间。它接收传输无关的 `ExecutionRequest`，选择对应命令，解析参数，调用 DB capability，并通过 `ReplyWriter` 写回语义结果。
+命令层位于协议和 DB 之间。它接收传输无关的 `ExecutionRequest`，选择对应命令，解析参数，调用 DB capability，并通过 `RedisReplyWriter` 写回语义结果。
 
 主路径可以简化成：
 
@@ -54,22 +54,22 @@ ExecutionRequest
 - `CommandParsers` 把常见 arity rule 包成 `CommandParser<T>`，也支持 mapper 把 `ArgReader` 转成 typed parsed object。
 - `CommandParseError` 集中表达 wrong arity、syntax、integer out of range 和自定义错误，并转换成 Redis 风格 reply 文案。
 
-`CommandSpec.parse(...)` 返回 parse result。解析失败时，处理器直接通过 `ReplyWriter.error(...)` 写出错误；解析成功时，handler 才会运行。这个约束同样用于事务入队：`MULTI` 状态下，普通命令会先 lookup spec、检查事务策略、运行 parser，通过后才保存 `ExecutionRequest` 快照并返回 `QUEUED`。
+`CommandSpec.parse(...)` 返回 parse result。解析失败时，处理器直接通过 `RedisReplyWriter.error(...)` 写出错误；解析成功时，handler 才会运行。这个约束同样用于事务入队：`MULTI` 状态下，普通命令会先 lookup spec、检查事务策略、运行 parser，通过后才保存 `ExecutionRequest` 快照并返回 `QUEUED`。
 
 这里保留的是 parser 抽象和错误模型；真正的分支顺序、unknown command、change observer gate 和错误翻译，见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
 
-## CommandContext 和 ReplyWriter
+## CommandContext 和 RedisReplyWriter
 
 `CommandContext` 是一次命令执行的环境对象，通常提供：
 
-- `ReplyWriter`；
+- `RedisReplyWriter`；
 - `CommandSessionCapabilities` 视图；
 - 当前 DB index / transaction / client metadata / protocol negotiation 能力；
 - 可通过上下文取得的 DB runtime 能力。
 
-`RedisReplyWriter` 是命令层唯一的 Redis reply 语义模型；现有执行边界继续暴露兼容别名 `ReplyWriter`。命令 handler 写的是 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`mapHeader`、`nullValue`、`error` 等 Redis reply 形状，不写 `+OK\r\n`、`$-1\r\n` 这类协议字节。RESP2 / RESP3 的差异由协议 writer 根据连接版本处理。
+`RedisReplyWriter` 是命令层唯一的 Redis reply 语义模型。命令 handler 写的是 `simpleString`、`bulkString`、`integer`、`arrayHeader`、`mapHeader`、`nullValue`、`error` 等 Redis reply 形状，不写 `+OK\r\n`、`$-1\r\n` 这类协议字节。RESP2 / RESP3 的差异由协议 writer 根据连接版本处理。
 
-`CommandSupport` 是内置命令的公共工具箱。它帮助各个 `*Commands` 类读取参数、解析整数、取得 `DbReads` / `DbWrites` / `DbEngine`、复用 scratch buffer，并把 DB 返回的 bulk-string 序列适配到 `ReplyWriter`。
+`CommandSupport` 是内置命令的公共工具箱。它帮助各个 `*Commands` 类读取参数、解析整数、取得 `DbReads` / `DbWrites` / `DbEngine`、复用 scratch buffer，并把 DB 返回的 bulk-string 序列适配到 `RedisReplyWriter`。
 
 集合读命令通常按这个顺序写回：
 
@@ -103,7 +103,7 @@ connection/server 命令更多操作连接态、握手兼容、server runtime �
 
 `StringCommands` 是 string / bitmap 家族的主入口。`SET`、`GET`、`APPEND`、`INCR` 这类命令不是各自独立地直连 DB，而是先走 `CommandSupport` 再走 typed ops / `DbEngine`，让 wrong-type、NX/XX/EX/PX/KEEPTTL 和整数分支都收敛到同一条命令语义里。
 
-bitmap 只是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCOUNT` 和普通 string 命令共享 `ValueType.STRING` 及其 wrong-type 约束。写路径最终仍会经过 `YierdisDbMutationExecutor`、`YierdisDbKeyLifecycle` 和对应的 TTL / memory 账本；读路径则通过 `ReplyWriter` 把结果写回，而不是直接拼 RESP bytes。
+bitmap 只是 string bytes 的一种视图，因此 `SETBIT`、`GETBIT`、`BITCOUNT` 和普通 string 命令共享 `ValueType.STRING` 及其 wrong-type 约束。写路径最终仍会经过 `YierdisDbMutationExecutor`、`YierdisDbKeyLifecycle` 和对应的 TTL / memory 账本；读路径则通过 `RedisReplyWriter` 把结果写回，而不是直接拼 RESP bytes。
 
 如果要改 `StringCommands`，优先看 string 家族测试、`StringWriteOps` / `StringReadOps`、`commands-and-data-model.md` 的逻辑类型映射，以及 [`request-execution-flow.md`](./request-execution-flow.md) 里的 `SET` 主链。
 
@@ -166,7 +166,7 @@ HLL 也没有独立 `ValueType`。命令层有 `HllCommands`，DB 层有 `Yierdi
 1. 确认命令属于哪个 family，或是否需要新的 `CommandModule`。
 2. 在 `CommandRegistry` 中注册 `CommandSpec`，补齐 parser、handler、`CommandDescriptor` 和 MULTI policy。
 3. 用 `ArgReader`、`CommandArity`、`CommandParsers`、`CommandParseError` 表达参数规则和错误，不在 handler 里散落重复校验。
-4. 通过 `CommandContext` 取得 `ReplyWriter`，通过 `CommandSupport` 取得 DB capability。
+4. 通过 `CommandContext` 取得 `RedisReplyWriter`，通过 `CommandSupport` 取得 DB capability。
 5. 让 handler 调用 typed ops，不直接触碰 value root、allocator handle 或 RESP 字节。
 6. 补命令家族测试、错误路径测试；如果新增 server-only 行为，再补 server-main 组装或协议集成测试。
 

@@ -4,7 +4,7 @@
 
 ## 协议定位
 
-Yierdis 的公开网络入口是 Redis RESP 风格的 TCP 协议。协议层负责把线上字节解析成 argv，再交给命令层；命令层负责语义执行，并通过 `ReplyWriter` 写出回复。两层之间的边界是 `ExecutionRequest` 和 `ReplyWriter`，不是 RESP 字节。
+Yierdis 的公开网络入口是 Redis RESP 风格的 TCP 协议。协议层负责把线上字节解析成 argv，再交给命令层；命令层负责语义执行，并通过 `RedisReplyWriter` 写出回复。两层之间的边界是 `ExecutionRequest` 和 `RedisReplyWriter`，不是 RESP 字节。
 
 请求进入系统的主路径是：
 
@@ -69,7 +69,7 @@ HELLO 2 SETNAME <name>
 HELLO 3 SETNAME <name>
 ```
 
-`HELLO 2` 把连接设置为 RESP2 回包；`HELLO 3` 把连接切到基础 RESP3 reply encoding。切换成功后，`EngineSession.respVersion()` 会记录当前版本，后续 `RespReplyWriter` 根据 session 版本把同一组 `ReplyWriter` 语义编码成不同 RESP 形态。
+`HELLO 2` 把连接设置为 RESP2 回包；`HELLO 3` 把连接切到基础 RESP3 reply encoding。切换成功后，`EngineSession.respVersion()` 会记录当前版本，后续 `RespReplyWriter` 根据 session 版本把同一组 `RedisReplyWriter` 语义编码成不同 RESP 形态。
 
 `HELLO` 返回 5 个字段：`server`、`version`、`proto`、`mode`、`role`。在 RESP2 下这个 reply 是 flat array；在 RESP3 下是 map。例如 `HELLO 3` 成功后，响应包含 `proto: 3`，并且后续 map、null、bool、double 等语义会使用 RESP3 基础编码。
 
@@ -80,13 +80,13 @@ HELLO 3 SETNAME <name>
 - `HELLO` 在 `MULTI` 中被禁止；
 - RESP3 协商只表示回包编码切换，不表示完整 Redis RESP3 客户端生态兼容。
 
-## ReplyWriter 到 RESP 回包
+## RedisReplyWriter 到 RESP 回包
 
-`RedisReplyWriter` 是 Redis command reply model 的权威来源；`ReplyWriter` 保留为执行边界上的兼容别名。命令实现调用 `simpleString`、`integer`、`bulkString`、`arrayHeader`、`mapHeader`、`nullValue`、`error` 等语义 API；RESP writer 只负责把这些 Redis reply 形状编码成线上 bytes。
+`RedisReplyWriter` 是 Redis command reply model 的权威来源。命令实现调用 `simpleString`、`integer`、`bulkString`、`arrayHeader`、`mapHeader`、`nullValue`、`error` 等语义 API；RESP writer 只负责把这些 Redis reply 形状编码成线上 bytes。
 
 RESP2 下的典型映射是：
 
-| `ReplyWriter` 语义 | RESP2 编码 |
+| `RedisReplyWriter` 语义 | RESP2 编码 |
 | --- | --- |
 | `simpleString("OK")` | `+OK\r\n` |
 | `integer(1)` | `:1\r\n` |
@@ -102,7 +102,7 @@ RESP2 下的典型映射是：
 
 RESP3 下，已有专属形态的语义会换成 RESP3 编码：
 
-| `ReplyWriter` 语义 | RESP3 编码 |
+| `RedisReplyWriter` 语义 | RESP3 编码 |
 | --- | --- |
 | `nullValue()` / `nullArray()` | `_\r\n` |
 | `mapHeader(pairs)` | `%<pairs>\r\n` |
@@ -119,7 +119,7 @@ RESP3 下，已有专属形态的语义会换成 RESP3 编码：
 
 ## 协议错误和断连
 
-malformed RESP 没有可靠的重同步点。Yierdis 的策略是：尽量返回 RESP error reply，然后关闭当前连接。实现上，`RespRequestDecoder` 产出 `RespProtocolError`，`RespProtocolErrorReplyHandler` 使用正常 `ReplyWriter` 写出错误，并标记 `close-after-reply`，flush 后断开连接。
+malformed RESP 没有可靠的重同步点。Yierdis 的策略是：尽量返回 RESP error reply，然后关闭当前连接。实现上，`RespRequestDecoder` 产出 `RespProtocolError`，`RespProtocolErrorReplyHandler` 使用正常 `RedisReplyWriter` 写出错误，并标记 `close-after-reply`，flush 后断开连接。
 
 常见协议错误包括：
 

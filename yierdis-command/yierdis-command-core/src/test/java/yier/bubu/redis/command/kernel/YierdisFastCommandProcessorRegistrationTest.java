@@ -9,7 +9,7 @@ import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -172,7 +172,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
         }
     }
 
-    private static final class TestReplyWriter implements ReplyWriter {
+    private static final class TestReplyWriter implements RedisReplyWriter {
         private String simpleString;
         private String bulkString;
         private String error;

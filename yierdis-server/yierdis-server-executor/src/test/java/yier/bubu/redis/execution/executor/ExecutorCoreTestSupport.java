@@ -3,8 +3,8 @@ package yier.bubu.redis.execution.executor;
 import org.junit.Assert;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
-import yier.bubu.redis.execution.api.ReplyWriterFactory;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.Session;
 
 import java.io.ByteArrayOutputStream;
@@ -46,7 +46,7 @@ final class ExecutorCoreTestSupport {
         Assert.assertFalse("executor.start should complete after owner tasks run", startThread.isAlive());
     }
 
-    static ReplyWriterFactory simpleReplyWriterFactory() {
+    static RedisReplyWriterFactory simpleReplyWriterFactory() {
         return SimpleReplyWriter::new;
     }
 
@@ -236,7 +236,7 @@ final class TrackingExecutionRequest implements ExecutionRequest {
     }
 }
 
-final class SimpleReplyWriter implements ReplyWriter {
+final class SimpleReplyWriter implements RedisReplyWriter {
     private final BytesSink out;
     private boolean closeAfterReplyRequested;
 

@@ -18,7 +18,7 @@ flowchart LR
   command["CommandSpec + command implementation"]
   db["DbEngine / DbReads / DbWrites"]
   memory["yierdis-db-memory"]
-  reply["ReplyWriter"]
+  reply["RedisReplyWriter"]
   respReply["RespReplyWriter"]
   io["NettyExecutionIoAdapter"]
   flush["transport flush"]
@@ -119,7 +119,7 @@ executor 交给 engine 的只有三样东西：
 
 - `Session`
 - `ExecutionRequest`
-- `ReplyWriter`
+- `RedisReplyWriter`
 
 它不创建 `CommandContext`，也不直接知道命令语义。
 
@@ -157,7 +157,7 @@ Netty ByteBuf
   -> YierdisFastCommandProcessor
   -> CommandSpec<ExecutionRequest>
   -> command implementation
-  -> ReplyWriter
+  -> RedisReplyWriter
   -> RespReplyWriter
   -> NettyExecutionIoAdapter
 ```

@@ -17,7 +17,7 @@ import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ReplyWriter;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -73,7 +73,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void type(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "type");
             return;
@@ -87,7 +87,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void memory(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() < 2) {
             CommandSupport.wrongArity(out, "memory");
             return;
@@ -190,7 +190,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void object(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 3) {
             CommandSupport.wrongArity(out, "object");
             return;
@@ -208,7 +208,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void keys(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "keys");
             return;
@@ -267,7 +267,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void scan(ScanArgs args, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         List<byte[]> keys = new ArrayList<>();
         ScanCursorV2 next = support.commandDb(ctx).reads().keyspace().scan(
                 ScanCursorV2.of(args.cursor()),
@@ -283,7 +283,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void del(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() < 2) {
             CommandSupport.wrongArity(out, "del");
             return;
@@ -302,7 +302,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void exists(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() < 2) {
             CommandSupport.wrongArity(out, "exists");
             return;
@@ -318,7 +318,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void expire(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 3) {
             CommandSupport.wrongArity(out, "expire");
             return;
@@ -332,7 +332,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void pexpire(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 3) {
             CommandSupport.wrongArity(out, "pexpire");
             return;
@@ -346,7 +346,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void expireat(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 3) {
             CommandSupport.wrongArity(out, "expireat");
             return;
@@ -360,7 +360,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void pexpireat(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 3) {
             CommandSupport.wrongArity(out, "pexpireat");
             return;
@@ -374,7 +374,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void persist(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "persist");
             return;
@@ -387,7 +387,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void ttl(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "ttl");
             return;
@@ -396,7 +396,7 @@ public final class KeyCommands implements CommandModule {
     }
 
     private void pttl(ExecutionRequest request, CommandContext ctx) {
-        ReplyWriter out = ctx.out();
+        RedisReplyWriter out = ctx.out();
         if (request.argc() != 2) {
             CommandSupport.wrongArity(out, "pttl");
             return;
