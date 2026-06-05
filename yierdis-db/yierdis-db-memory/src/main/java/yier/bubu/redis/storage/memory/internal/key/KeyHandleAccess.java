@@ -1,16 +1,5 @@
 package yier.bubu.redis.storage.memory.internal.key;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
-// KeyHandleAccess：KeyHandle 的内部访问桥接（用于将 handle 落地到 keyspace/expire index 等实现细节）。
-
-import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmBytesRef;
 import yier.bubu.redis.memory.api.NativeHandle;
 
 /**
@@ -24,37 +13,17 @@ public final class KeyHandleAccess {
     private KeyHandleAccess() {
     }
 
-    public static boolean isHeap(KeyHandle handle) {
-        return handle instanceof HeapKeyHandle;
-    }
-
-    public static boolean isFfm(KeyHandle handle) {
-        return handle instanceof FfmKeyHandle;
-    }
-
     public static boolean isAllocator(KeyHandle handle) {
         return handle instanceof AllocatorKeyHandle;
     }
 
-    public static byte[] heapBytesOrNull(KeyHandle handle) {
-        if (handle instanceof HeapKeyHandle h) {
-            return h.bytesUnsafe();
+    public static NativeHandle allocatorNativeHandle(KeyHandle handle) {
+        NativeHandle nativeHandle = allocatorNativeHandleOrNull(handle);
+        if (nativeHandle == null) {
+            throw new IllegalArgumentException("expected allocator-backed KeyHandle: "
+                    + (handle == null ? "null" : handle.getClass().getName()));
         }
-        return null;
-    }
-
-    public static YierdisFfmBytesRef ffmBytesRef(KeyHandle handle) {
-        if (!(handle instanceof FfmKeyHandle h)) {
-            throw new IllegalArgumentException("not an FFM KeyHandle: " + (handle == null ? "null" : handle.getClass().getName()));
-        }
-        return h.refUnsafe();
-    }
-
-    public static YierdisFfmBytesRef ffmBytesRefOrNull(KeyHandle handle) {
-        if (handle instanceof FfmKeyHandle h) {
-            return h.refUnsafe();
-        }
-        return null;
+        return nativeHandle;
     }
 
     public static NativeHandle allocatorNativeHandleOrNull(KeyHandle handle) {
@@ -63,5 +32,4 @@ public final class KeyHandleAccess {
         }
         return null;
     }
-
 }

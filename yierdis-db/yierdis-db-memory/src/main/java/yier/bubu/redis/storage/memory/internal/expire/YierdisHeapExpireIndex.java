@@ -56,8 +56,7 @@ public final class YierdisHeapExpireIndex implements YierdisExpireIndex {
         if (k == null) {
             return null;
         }
-        // dictHash is best-effort here: heap backend callers can still use the returned bytes without copying.
-        return KeyHandle.forHeap(k, 1);
+        throw new UnsupportedOperationException("YierdisHeapExpireIndex no longer produces internal KeyHandle instances");
     }
 
     @Override
@@ -90,10 +89,7 @@ public final class YierdisHeapExpireIndex implements YierdisExpireIndex {
     @Override
     public void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        byte[] canonical = KeyHandleAccess.heapBytesOrNull(keyHandle);
-        if (canonical == null) {
-            throw new IllegalArgumentException("expected a heap KeyHandle");
-        }
+        byte[] canonical = keyBytes(keyHandle);
 
         // Preserve canonical key sharing semantics: ensure the expires key is stored under the canonical key instance.
         byte[] expiresKey = expires.canonicalKey(canonical);
@@ -116,14 +112,19 @@ public final class YierdisHeapExpireIndex implements YierdisExpireIndex {
     @Override
     public void removeExpire(KeyHandle keyHandle) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        byte[] canonical = KeyHandleAccess.heapBytesOrNull(keyHandle);
-        if (canonical == null) {
-            throw new IllegalArgumentException("expected a heap KeyHandle");
-        }
+        byte[] canonical = keyBytes(keyHandle);
         expires.computeIfPresent(canonical, (k, old) -> null);
     }
 
     public ByteArrayKeyspace<Long> rawKeyspace() {
         return expires;
+    }
+
+    private static byte[] keyBytes(KeyHandle keyHandle) {
+        byte[] out = new byte[keyHandle.len()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = keyHandle.byteAt(i);
+        }
+        return out;
     }
 }

@@ -309,50 +309,27 @@ public final class YierdisDbKeyLifecycle {
         Objects.requireNonNull(keyBytes, "keyBytes");
         Objects.requireNonNull(remappingFunction, "remappingFunction");
 
-        KeyHandle keyHandle = keyHandleForEntryRemapping(keyBytes);
         EntryHandle existingHandle = keyDirectory.get(keyBytes);
         EntryRecord oldRecord = existingHandle == null ? null : entryTable.get(existingHandle);
+        if (existingHandle == null) {
+            return computeNewWithNativeKeyHandle(keyBytes, remappingFunction);
+        }
+
+        KeyHandle keyHandle = keyHandle(keyBytes);
         EntryMutationResult<R> mutation = Objects.requireNonNull(
                 remappingFunction.apply(keyHandle, oldRecord),
                 "entry mutation result"
         );
         EntryRecord newRecord = mutation.record();
         if (newRecord == null) {
-            if (existingHandle != null) {
-                keyDirectory.remove(keyBytes, existingHandle);
-                entryTable.release(existingHandle);
-                releaseValue(oldRecord);
-            }
+            keyDirectory.remove(keyBytes, existingHandle);
+            entryTable.release(existingHandle);
+            releaseValue(oldRecord);
             return mutation.result();
         }
-        if (existingHandle != null) {
-            entryTable.replace(existingHandle, newRecord);
-            releaseReplacedValue(oldRecord, newRecord);
-            return mutation.result();
-        }
-
-        EntryHandle created = null;
-        boolean inserted = false;
-        try {
-            // 新 entry 先落到 entryTable，再发布到 keyDirectory；发布失败时 finally 会回收半创建的 entry/value。
-            EntryHandle allocated = entryTable.allocate(newRecord);
-            created = allocated;
-            keyDirectory.compute(keyBytes, (key, oldHandle) -> {
-                if (oldHandle != null) {
-                    throw new IllegalStateException("native entry appeared during remapping");
-                }
-                return allocated;
-            });
-            inserted = true;
-            return mutation.result();
-        } finally {
-            if (!inserted) {
-                if (created != null) {
-                    entryTable.release(created);
-                }
-                releaseValue(newRecord);
-            }
-        }
+        entryTable.replace(existingHandle, newRecord);
+        releaseReplacedValue(oldRecord, newRecord);
+        return mutation.result();
     }
 
     public <R> R computeIfPresentWithHandleResult(
@@ -374,7 +351,7 @@ public final class YierdisDbKeyLifecycle {
         }
 
         EntryMutationResult<R> mutation = Objects.requireNonNull(
-                remappingFunction.apply(keyHandleForEntryRemapping(keyBytes), oldRecord),
+                remappingFunction.apply(keyHandle(keyBytes), oldRecord),
                 "entry mutation result"
         );
         EntryRecord newRecord = mutation.record();
@@ -648,36 +625,54 @@ public final class YierdisDbKeyLifecycle {
         return expireAtMillis == null ? -1L : expireAtMillis;
     }
 
-    private KeyHandle keyHandleForEntryRemapping(byte[] keyBytes) {
-        KeyHandle keyHandle = keyHandle(keyBytes);
-        if (keyHandle != null) {
-            return keyHandle;
-        }
-        // 新 key 尚未发布到 NativeKeyDirectory，只能先给 remappingFunction 一个 heap handle 作为临时 key identity。
-        return KeyHandle.forHeap(keyBytes, hashBytes(keyBytes));
-    }
+    private <R> R computeNewWithNativeKeyHandle(
+            byte[] keyBytes,
+            BiFunction<? super KeyHandle, ? super EntryRecord, EntryMutationResult<R>> remappingFunction
+    ) {
+        EntryHandle created = entryTable.reserve();
+        boolean published = false;
+        boolean initialized = false;
+        EntryRecord newRecord = null;
+        try {
+            keyDirectory.compute(keyBytes, (key, oldHandle) -> {
+                if (oldHandle != null) {
+                    throw new IllegalStateException("native entry appeared during remapping");
+                }
+                return created;
+            });
+            published = true;
 
-    private static int hashBytes(byte[] keyBytes) {
-        int h = 1;
-        for (byte keyByte : keyBytes) {
-            h = 31 * h + keyByte;
+            KeyHandle keyHandle = keyDirectory.getKeyHandle(keyBytes);
+            EntryMutationResult<R> mutation = Objects.requireNonNull(
+                    remappingFunction.apply(keyHandle, null),
+                    "entry mutation result"
+            );
+            newRecord = mutation.record();
+            if (newRecord == null) {
+                return mutation.result();
+            }
+
+            entryTable.writeReserved(created, newRecord);
+            initialized = true;
+            return mutation.result();
+        } finally {
+            if (!initialized) {
+                if (published) {
+                    keyDirectory.remove(keyBytes, created);
+                }
+                entryTable.release(created);
+                if (newRecord != null) {
+                    releaseValue(newRecord);
+                }
+            }
         }
-        return h;
     }
 
     private static long keyHandleIdentity(KeyHandle keyHandle) {
         if (keyHandle == null) {
             return 0L;
         }
-        var nativeHandle = KeyHandleAccess.allocatorNativeHandleOrNull(keyHandle);
-        if (nativeHandle != null) {
-            return nativeHandle.raw();
-        }
-        var ref = KeyHandleAccess.ffmBytesRefOrNull(keyHandle);
-        if (ref != null) {
-            return System.identityHashCode(ref.region());
-        }
-        return System.identityHashCode(keyHandle);
+        return KeyHandleAccess.allocatorNativeHandle(keyHandle).raw();
     }
 
     private static byte[] keyBytes(KeyHandle keyHandle) {

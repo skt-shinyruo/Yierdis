@@ -288,6 +288,39 @@ public class YierdisDbConstructionTest {
     }
 
     @Test
+    public void computeWithHandleResultPassesNativeKeyHandleWhenCreatingEntry() {
+        YierdisDb db = new YierdisDb();
+        try {
+            db.bindToCurrentThread();
+            YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
+            byte[] key = bytes("native-remap-key");
+
+            lifecycle.computeWithHandleResult(key, (keyHandle, oldRecord) -> {
+                Assert.assertNull(oldRecord);
+                Assert.assertTrue(KeyHandleAccess.isAllocator(keyHandle));
+                Assert.assertArrayEquals(key, lifecycle.copyKeyBytes(keyHandle));
+                ValueHandle valueHandle = lifecycle.stringRoot().store(bytes("value"));
+                EntryRecord next = lifecycle.newRecord(
+                        keyHandle,
+                        valueHandle,
+                        ValueType.STRING,
+                        ValueEncoding.STRING_RAW,
+                        -1L,
+                        123L,
+                        null
+                );
+                return YierdisDbKeyLifecycle.EntryMutationResult.of(next, null);
+            });
+
+            EntryRecord stored = lifecycle.entryRecord(key);
+            Assert.assertNotNull(stored);
+            Assert.assertEquals(KeyHandleAccess.allocatorNativeHandle(lifecycle.keyHandle(key)).raw(), stored.keyHandle());
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
     public void setBitReleasesNewStringWhenEnsureLengthFails() {
         YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db-setbit-ensure-length-failure");
         NativeAllocator allocator = new ReallocSlotLimitNativeAllocator(new YierdisStableNativeAllocator(runtime, 1));

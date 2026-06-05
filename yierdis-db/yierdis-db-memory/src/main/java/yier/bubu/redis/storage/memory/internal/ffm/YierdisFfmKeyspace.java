@@ -155,13 +155,13 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
         int h = hash(key);
         int idx = findIndex(t0, key, h);
         if (idx >= 0) {
-            return KeyHandle.forFfm(t0.refs[idx], t0.hashAt(idx));
+            return unsupportedKeyHandle();
         }
         Table t1 = table1;
         if (t1 != null) {
             idx = findIndex(t1, key, h);
             if (idx >= 0) {
-                return KeyHandle.forFfm(t1.refs[idx], t1.hashAt(idx));
+                return unsupportedKeyHandle();
             }
         }
         return null;
@@ -178,13 +178,13 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
         int h = hash(key);
         int idx = findIndex(t0, key, h);
         if (idx >= 0) {
-            return KeyHandle.forFfm(t0.refs[idx], t0.hashAt(idx));
+            return unsupportedKeyHandle();
         }
         Table t1 = table1;
         if (t1 != null) {
             idx = findIndex(t1, key, h);
             if (idx >= 0) {
-                return KeyHandle.forFfm(t1.refs[idx], t1.hashAt(idx));
+                return unsupportedKeyHandle();
             }
         }
         return null;
@@ -193,15 +193,47 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
     @Override
     public byte[] canonicalKey(byte[] key) {
         Objects.requireNonNull(key, "key");
-        KeyHandle handle = keyHandle(key);
-        return handle == null ? null : blobStore.toByteArray(KeyHandleAccess.ffmBytesRef(handle));
+        rehashStep();
+        Table t0 = table0;
+        if (t0 == null) {
+            return null;
+        }
+        int h = hash(key);
+        int idx = findIndex(t0, key, h);
+        if (idx >= 0) {
+            return blobStore.toByteArray(t0.refs[idx]);
+        }
+        Table t1 = table1;
+        if (t1 != null) {
+            idx = findIndex(t1, key, h);
+            if (idx >= 0) {
+                return blobStore.toByteArray(t1.refs[idx]);
+            }
+        }
+        return null;
     }
 
     @Override
     public byte[] canonicalKey(BytesView key) {
         Objects.requireNonNull(key, "key");
-        KeyHandle handle = keyHandle(key);
-        return handle == null ? null : blobStore.toByteArray(KeyHandleAccess.ffmBytesRef(handle));
+        rehashStep();
+        Table t0 = table0;
+        if (t0 == null) {
+            return null;
+        }
+        int h = hash(key);
+        int idx = findIndex(t0, key, h);
+        if (idx >= 0) {
+            return blobStore.toByteArray(t0.refs[idx]);
+        }
+        Table t1 = table1;
+        if (t1 != null) {
+            idx = findIndex(t1, key, h);
+            if (idx >= 0) {
+                return blobStore.toByteArray(t1.refs[idx]);
+            }
+        }
+        return null;
     }
 
     @Override
@@ -342,7 +374,7 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
                 }
                 if (t0.stateAt(pos) == STATE_FILLED) {
                     V v = t0.valueAt(pos);
-                    KeyHandle handle = KeyHandle.forFfm(t0.refs[pos], t0.hashAt(pos));
+                    KeyHandle handle = unsupportedKeyHandle();
                     pos++;
                     if (!consumer.accept(handle, v)) {
                         return ScanCursorV2.ofPhaseAndPosition(phase, pos);
@@ -363,7 +395,7 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
                 }
                 if (t1.stateAt(pos) == STATE_FILLED) {
                     V v = t1.valueAt(pos);
-                    KeyHandle handle = KeyHandle.forFfm(t1.refs[pos], t1.hashAt(pos));
+                    KeyHandle handle = unsupportedKeyHandle();
                     pos++;
                     if (!consumer.accept(handle, v)) {
                         return ScanCursorV2.ofPhaseAndPosition(phase, pos);
@@ -466,7 +498,7 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
             if (table.stateAt(i) != STATE_FILLED) {
                 continue;
             }
-            consumer.accept(KeyHandle.forFfm(table.refs[i], table.hashAt(i)), table.valueAt(i));
+            consumer.accept(unsupportedKeyHandle(), table.valueAt(i));
         }
     }
 
@@ -505,14 +537,14 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
         for (int i = 0; i < quickSteps; i++) {
             int idx = (start + i) & mask;
             if (table.stateAt(idx) == STATE_FILLED) {
-                return KeyHandle.forFfm(table.refs[idx], table.hashAt(idx));
+                return unsupportedKeyHandle();
             }
         }
 
         for (int i = 0; i < table.capacity; i++) {
             int idx = (start + i) & mask;
             if (table.stateAt(idx) == STATE_FILLED) {
-                return KeyHandle.forFfm(table.refs[idx], table.hashAt(idx));
+                return unsupportedKeyHandle();
             }
         }
         return null;
@@ -795,7 +827,6 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
         if (table == null) {
             return -1;
         }
-        YierdisFfmBytesRef handleRef = KeyHandleAccess.ffmBytesRefOrNull(keyHandle);
         int mask = table.capacity - 1;
         int idx = hash & mask;
         while (true) {
@@ -805,9 +836,6 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
             }
             if (state == STATE_FILLED && table.hashAt(idx) == hash) {
                 YierdisFfmBytesRef storedRef = table.refs[idx];
-                if (handleRef != null && sameRef(storedRef, handleRef)) {
-                    return idx;
-                }
                 if (equalsBytes(storedRef, keyHandle)) {
                     return idx;
                 }
@@ -869,6 +897,10 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
         return cap;
     }
 
+    private static KeyHandle unsupportedKeyHandle() {
+        throw new UnsupportedOperationException("YierdisFfmKeyspace no longer produces internal KeyHandle instances");
+    }
+
     private final class Location {
         private final int table;
         private final int index;
@@ -888,7 +920,7 @@ public final class YierdisFfmKeyspace<V> implements YierdisKeyspace<V> {
 
         KeyHandle keyHandle() {
             Table current = currentTable();
-            return KeyHandle.forFfm(current.refs[index], current.hashAt(index));
+            return unsupportedKeyHandle();
         }
 
         void remove() {

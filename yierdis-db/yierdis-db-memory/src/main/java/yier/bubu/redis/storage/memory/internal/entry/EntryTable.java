@@ -71,6 +71,32 @@ public final class EntryTable implements AutoCloseable {
         }
     }
 
+    public synchronized EntryHandle reserve() {
+        ensureOpen();
+        NativeHandle nativeHandle = allocator.allocate(NativeObjectKind.ENTRY_RECORD, RECORD_BYTES);
+        boolean ok = false;
+        try {
+            EntryHandle handle = EntryHandle.fromNativeHandle(nativeHandle);
+            liveHandles.add(handle.raw());
+            ok = true;
+            return handle;
+        } finally {
+            if (!ok) {
+                allocator.free(nativeHandle);
+            }
+        }
+    }
+
+    public synchronized void writeReserved(EntryHandle handle, EntryRecord record) {
+        Objects.requireNonNull(handle, "handle");
+        Objects.requireNonNull(record, "record");
+        ensureOpen();
+        if (!liveHandles.contains(handle.raw())) {
+            throw new IllegalArgumentException("entry handle is not reserved by this table");
+        }
+        write(handle.nativeHandle(), record);
+    }
+
     public synchronized EntryRecord get(EntryHandle handle) {
         if (handle == null) {
             return null;
