@@ -32,7 +32,7 @@ public class ListValueTest {
     public void rootCreatedPackedFfmListDoesNotAllocateQuicklistNodeRecords() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-native-node-packed");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
 
             root.rpush(handle, List.of(b("a"), b("b"), b("c")));
@@ -43,13 +43,30 @@ public class ListValueTest {
     }
 
     @Test
+    public void rootCreatedPackedListStoresEntriesAsNativeListpackBytesAndStreamsNativeSlices() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-native-packed-bytes");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             ListRoot root = new ListRoot(allocator)) {
+            ValueHandle handle = root.create();
+
+            root.rpush(handle, List.of(b("a"), b("b"), b("c")));
+
+            Assert.assertEquals(3L, allocator.stats().objectCount(NativeObjectKind.LISTPACK_BYTES));
+            RecordingBulkStringSink out = new RecordingBulkStringSink();
+            root.rangeInto(handle, 0, -1, out);
+            Assert.assertTrue(out.sawNativeBytesSlice());
+            Assert.assertEquals(List.of("a", "b", "c"), out.strings());
+        }
+    }
+
+    @Test
     public void rootCreatedFfmListAllocatesOneNativeRecordPerQuicklistNodeAfterConversion() {
         int maxBytes = ListValue.quicklistNodeMaxBytesForTesting();
         int elementBytes = elementBytesSoTwoFitThreeDoNot(maxBytes);
 
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-native-node-convert");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
 
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
@@ -60,21 +77,19 @@ public class ListValueTest {
     }
 
     @Test
-    public void ffmListValueRequiresNativeAllocatorBackedRoot() {
-        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-native-node-direct")) {
-            try {
-                new ListValue(runtime);
-                Assert.fail("expected direct FFM ListValue construction to be unavailable");
-            } catch (UnsupportedOperationException expected) {
-                Assert.assertTrue(expected.getMessage().contains("ListRoot"));
-            }
+    public void listValueExposesOnlyNativeAllocatorBackedConstruction() {
+        for (java.lang.reflect.Constructor<?> constructor : ListValue.class.getConstructors()) {
+            Assert.assertEquals(2, constructor.getParameterCount());
+            Assert.assertEquals(NativeAllocator.class, constructor.getParameterTypes()[0]);
+            Assert.assertEquals(NativeHandle.class, constructor.getParameterTypes()[1]);
         }
     }
 
     @Test
     public void packedListPreservesNullVsEmptyElements() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test");
-             ListRoot root = new ListRoot(runtime)) {
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, Arrays.asList(null, new byte[0], "a".getBytes(StandardCharsets.US_ASCII)));
 
@@ -101,7 +116,7 @@ public class ListValueTest {
 
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             List<byte[]> in = new ArrayList<>();
             in.add(new byte[elementBytes]);
@@ -127,7 +142,7 @@ public class ListValueTest {
 
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-pop-free-node");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(a, b, c));
             List<Long> nodeHandles = quicklistNodeHandles(root, handle);
@@ -155,7 +170,7 @@ public class ListValueTest {
 
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-first-merge-free");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(a, b, c));
             List<Long> nodeHandles = quicklistNodeHandles(root, handle);
@@ -183,7 +198,7 @@ public class ListValueTest {
 
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-last-merge-free");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.lpush(handle, List.of(c, b, a));
             List<Long> nodeHandles = quicklistNodeHandles(root, handle);
@@ -202,7 +217,7 @@ public class ListValueTest {
     }
 
     @Test
-    public void removedQuicklistNodeHandleAndAdapterStayStaleAfterSlotReuse() throws Exception {
+    public void removedQuicklistNodeHandleAndAdapterStayStaleAfterFurtherAllocations() throws Exception {
         int elementBytes = ListValue.quicklistNodeMaxBytesForTesting();
         byte[] a = filledValue('a', elementBytes);
         byte[] b = filledValue('b', elementBytes);
@@ -210,8 +225,8 @@ public class ListValueTest {
         byte[] d = filledValue('d', elementBytes);
 
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-stale-node");
-             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 5);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 7);
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(a, b, c));
             Object staleAdapter = firstQuicklistNodeAdapter(root, handle);
@@ -221,18 +236,12 @@ public class ListValueTest {
             root.lpop(handle, 1);
             assertStale(allocator, staleHandle);
 
-            root.create();
             root.rpush(handle, List.of(d));
 
-            long reusedHandle = quicklistNodeHandles(root, handle).stream()
-                    .filter(raw -> NativeHandle.fromRaw(raw).slotId() == staleNativeHandle.slotId())
-                    .findFirst()
-                    .orElseThrow(() -> new AssertionError("expected freed quicklist node slot to be reused"));
-            NativeHandle reusedNativeHandle = NativeHandle.fromRaw(reusedHandle);
-            Assert.assertEquals(staleNativeHandle.slotId(), reusedNativeHandle.slotId());
-            Assert.assertNotEquals(staleNativeHandle.raw(), reusedNativeHandle.raw());
-            Assert.assertNotEquals(staleNativeHandle.generation(), reusedNativeHandle.generation());
-            assertLive(allocator, reusedHandle);
+            for (long liveHandle : quicklistNodeHandles(root, handle)) {
+                Assert.assertNotEquals(staleNativeHandle.raw(), liveHandle);
+                assertLive(allocator, liveHandle);
+            }
             assertStale(allocator, staleHandle);
             assertStaleAdapterFailsThroughAllocator(staleAdapter);
         }
@@ -247,7 +256,7 @@ public class ListValueTest {
 
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-corrupt-node-handle");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(a, b, c));
             Object staleAdapter = firstQuicklistNodeAdapter(root, handle);
@@ -289,7 +298,7 @@ public class ListValueTest {
 
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-defrag-node");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(a, b, c));
             long nodeHandleRaw = quicklistNodeHandles(root, handle).get(0);
@@ -322,7 +331,7 @@ public class ListValueTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-release");
              NativeAllocator delegate = new YierdisStableNativeAllocator(runtime, 4096);
              FailOnResolveAllocator allocator = new FailOnResolveAllocator(delegate);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
 
@@ -349,7 +358,7 @@ public class ListValueTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-refresh-failure");
              NativeAllocator delegate = new YierdisStableNativeAllocator(runtime, 4096);
              FailOnResolveAllocator allocator = new FailOnResolveAllocator(delegate);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
             Assert.assertEquals(2L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
@@ -376,7 +385,7 @@ public class ListValueTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-add-refresh-failure");
              NativeAllocator delegate = new YierdisStableNativeAllocator(runtime, 4096);
              FailOnResolveAllocator allocator = new FailOnResolveAllocator(delegate);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
             root.rpop(handle, 1);
@@ -410,7 +419,7 @@ public class ListValueTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-test-initial-metadata-failure")) {
             NativeAllocator delegate = new YierdisStableNativeAllocator(runtime, 4096);
             try (FailOnResolveAllocator allocator = new FailOnResolveAllocator(delegate);
-                 ListRoot root = new ListRoot(runtime, allocator)) {
+                 ListRoot root = new ListRoot(allocator)) {
                 ValueHandle handle = root.create();
 
                 allocator.failOnAnyQuicklistResolveCall(1);
@@ -490,6 +499,49 @@ public class ListValueTest {
         return out;
     }
 
+    private static final class RecordingBulkStringSink implements BulkStringSink {
+        private final List<String> values = new ArrayList<>();
+        private boolean sawNativeBytesSlice;
+
+        @Override
+        public void bulkString(byte[] data) {
+            sawNativeBytesSlice = false;
+            values.add(data == null ? null : new String(data, StandardCharsets.US_ASCII));
+        }
+
+        @Override
+        public void bulkString(byte[] data, int off, int len) {
+            sawNativeBytesSlice = false;
+            values.add(data == null ? null : new String(data, off, len, StandardCharsets.US_ASCII));
+        }
+
+        @Override
+        public void bulkString(yier.bubu.redis.bytes.BytesSlice slice) {
+            if (slice == null) {
+                values.add(null);
+                return;
+            }
+            sawNativeBytesSlice = slice instanceof NativeBytesSlice;
+            byte[] data = new byte[slice.length()];
+            slice.getBytes(0, data, 0, data.length);
+            values.add(new String(data, StandardCharsets.US_ASCII));
+        }
+
+        @Override
+        public void bulkStringLongAscii(long value) {
+            sawNativeBytesSlice = false;
+            values.add(Long.toString(value));
+        }
+
+        private boolean sawNativeBytesSlice() {
+            return sawNativeBytesSlice;
+        }
+
+        private List<String> strings() {
+            return values;
+        }
+    }
+
     private static List<Long> quicklistNodeHandles(ListRoot root, ValueHandle handle) {
         ArrayDeque<?> quicklist = quicklist(root, handle);
         List<Long> out = new ArrayList<>();
@@ -513,7 +565,7 @@ public class ListValueTest {
             adaptersField.setAccessible(true);
             Map<Long, ListValue> adapters = (Map<Long, ListValue>) adaptersField.get(lists);
             ListValue value = adapters.get(handle.raw());
-            Field quicklistField = ListValue.class.getDeclaredField("quicklistFfm");
+            Field quicklistField = ListValue.class.getDeclaredField("quicklist");
             quicklistField.setAccessible(true);
             return (ArrayDeque<?>) quicklistField.get(value);
         } catch (ReflectiveOperationException e) {

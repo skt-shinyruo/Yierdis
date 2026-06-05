@@ -19,7 +19,7 @@ public class ListRootTest {
 
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-root-native-node-add");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
             Assert.assertEquals(3L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
@@ -41,7 +41,7 @@ public class ListRootTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-root-release-order");
              NativeAllocator delegate = new YierdisStableNativeAllocator(runtime, 4096);
              RecordingFreeAllocator allocator = new RecordingFreeAllocator(delegate);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
             Assert.assertEquals(3L, allocator.stats().objectCount(NativeObjectKind.LIST_NODE));
@@ -50,8 +50,11 @@ public class ListRootTest {
             root.release(handle);
 
             Assert.assertEquals(List.of(
+                    NativeObjectKind.LISTPACK_BYTES,
                     NativeObjectKind.LIST_NODE,
+                    NativeObjectKind.LISTPACK_BYTES,
                     NativeObjectKind.LIST_NODE,
+                    NativeObjectKind.LISTPACK_BYTES,
                     NativeObjectKind.LIST_NODE,
                     NativeObjectKind.LIST_ROOT
             ), allocator.freeKinds());
@@ -66,7 +69,7 @@ public class ListRootTest {
 
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-root-clear-release");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
 
@@ -83,7 +86,7 @@ public class ListRootTest {
 
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-root-close-release");
              NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
-             ListRoot root = new ListRoot(runtime, allocator)) {
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(new byte[elementBytes], new byte[elementBytes], new byte[elementBytes]));
 
@@ -97,7 +100,8 @@ public class ListRootTest {
     @Test
     public void listRootSupportsPushPopAndStreaming() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("list-root");
-             ListRoot root = new ListRoot(runtime)) {
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             ListRoot root = new ListRoot(allocator)) {
             ValueHandle handle = root.create();
             root.rpush(handle, List.of(b("a"), b("b"), b("c")));
 

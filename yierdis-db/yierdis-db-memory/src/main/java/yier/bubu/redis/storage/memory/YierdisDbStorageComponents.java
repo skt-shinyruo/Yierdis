@@ -81,7 +81,7 @@ public final class YierdisDbStorageComponents {
         EntryTable entries = new EntryTable(resolvedRuntime, nativeAllocator);
         NativeKeyDirectory keyDirectory = new NativeKeyDirectory(nativeAllocator);
         StringRoot stringRoot = new StringRoot(nativeAllocator);
-        ListRoot listRoot = new ListRoot(resolvedRuntime, nativeAllocator);
+        ListRoot listRoot = new ListRoot(nativeAllocator);
         HashRoot hashRoot = new HashRoot(resolvedRuntime, nativeAllocator);
         SetRoot setRoot = new SetRoot(resolvedRuntime, nativeAllocator);
         ZSetRoot zsetRoot = new ZSetRoot(resolvedRuntime, nativeAllocator);

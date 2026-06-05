@@ -225,10 +225,6 @@ public final class YierdisDbMemoryReporter {
         if (keyDirectory != null) {
             total = addSaturating(total, keyDirectory.nativeBytes());
         }
-        ListRoot listRoot = keyLifecycle.listRoot();
-        if (listRoot != null) {
-            total = addSaturating(total, listRoot.nativeBytes());
-        }
         HashRoot hashRoot = keyLifecycle.hashRoot();
         if (hashRoot != null) {
             total = addSaturating(total, hashRoot.nativeBytes());
