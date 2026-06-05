@@ -9,7 +9,6 @@ import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.foreign.YierdisFfmSlabAllocator;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
@@ -42,14 +41,6 @@ public final class EntryTable implements AutoCloseable {
                 Objects.requireNonNull(runtime, "runtime"),
                 Math.max(4096, initialCapacity)
         ), true);
-    }
-
-    public EntryTable(YierdisFfmMemoryRuntime runtime, YierdisFfmSlabAllocator ignored, int initialCapacity) {
-        this(runtime, new YierdisStableNativeAllocator(
-                Objects.requireNonNull(runtime, "runtime"),
-                Math.max(4096, initialCapacity)
-        ), true);
-        Objects.requireNonNull(ignored, "allocator").close();
     }
 
     public EntryTable(YierdisFfmMemoryRuntime runtime, NativeAllocator allocator) {

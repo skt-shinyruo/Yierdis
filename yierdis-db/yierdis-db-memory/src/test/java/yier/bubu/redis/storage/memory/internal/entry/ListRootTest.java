@@ -4,7 +4,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.api.*;
-import yier.bubu.redis.memory.api.OffHeapSlice;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
@@ -106,7 +105,7 @@ public class ListRootTest {
             Assert.assertTrue(root.nativeBytes() > 0L);
             RecordingBulkSink out = new RecordingBulkSink();
             root.rangeInto(handle, 0, -1, out);
-            Assert.assertTrue(out.sawOffHeapSlice());
+            Assert.assertTrue(out.sawBytesSlice());
             Assert.assertEquals(List.of("a", "b", "c"), out.values());
 
             Assert.assertArrayEquals(b("a"), root.lpop(handle, 1).get(0));
@@ -202,7 +201,7 @@ public class ListRootTest {
 
     private static final class RecordingBulkSink implements BulkStringSink {
         private final List<String> values = new ArrayList<>();
-        private boolean sawOffHeapSlice;
+        private boolean sawBytesSlice;
 
         @Override
         public void bulkString(byte[] data) {
@@ -220,9 +219,7 @@ public class ListRootTest {
                 values.add(null);
                 return;
             }
-            if (slice instanceof OffHeapSlice) {
-                sawOffHeapSlice = true;
-            }
+            sawBytesSlice = true;
             byte[] raw = new byte[slice.length()];
             slice.getBytes(0, raw, 0, raw.length);
             values.add(new String(raw, StandardCharsets.US_ASCII));
@@ -233,8 +230,8 @@ public class ListRootTest {
             values.add(Long.toString(value));
         }
 
-        private boolean sawOffHeapSlice() {
-            return sawOffHeapSlice;
+        private boolean sawBytesSlice() {
+            return sawBytesSlice;
         }
 
         private List<String> values() {

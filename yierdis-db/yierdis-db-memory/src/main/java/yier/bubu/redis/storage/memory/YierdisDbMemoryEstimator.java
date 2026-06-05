@@ -18,7 +18,7 @@ public final class YierdisDbMemoryEstimator {
     private static final long SET_MEMBER_OVERHEAD_BYTES_ESTIMATE = 32L;
     private static final long ZSET_MEMBER_OVERHEAD_BYTES_ESTIMATE = 96L;
 
-    YierdisDbMemoryEstimator(boolean keysStoredOffHeap, yier.bubu.redis.memory.api.OffHeapAllocator offHeapAllocator) {
+    YierdisDbMemoryEstimator() {
     }
 
     long estimateEntryBytes(KeyHandle keyHandle, EntryRecord record) {

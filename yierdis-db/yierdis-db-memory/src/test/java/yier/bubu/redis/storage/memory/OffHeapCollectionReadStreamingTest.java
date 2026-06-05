@@ -12,7 +12,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
-import yier.bubu.redis.memory.api.OffHeapSlice;
 import yier.bubu.redis.storage.api.result.BulkStringMapPairs;
 import yier.bubu.redis.storage.api.result.BulkStringSequence;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
@@ -25,7 +24,7 @@ import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class OffHeapCollectionReadStreamingTest {
     @Test
-    public void lrangeStreamsOffHeapSlices() {
+    public void lrangeStreamsBytesSlices() {
         withDb(db -> {
             db.writes().lists().rpush(b("list"), List.of(b("a"), b("b"), b("c"))).value();
 
@@ -34,13 +33,13 @@ public class OffHeapCollectionReadStreamingTest {
             Assert.assertEquals(3, seq.count());
 
             seq.emitTo(out);
-            Assert.assertTrue(out.sawOffHeapSlice());
+            Assert.assertTrue(out.sawBytesSlice());
             Assert.assertEquals(List.of("a", "b", "c"), out.strings());
         });
     }
 
     @Test
-    public void smembersStreamsOffHeapSlices() {
+    public void smembersStreamsBytesSlices() {
         withDb(db -> {
             db.writes().sets().sadd(b("set"), List.of(b("alpha"), b("beta"))).value();
 
@@ -49,14 +48,14 @@ public class OffHeapCollectionReadStreamingTest {
             Assert.assertEquals(2, seq.count());
 
             seq.emitTo(out);
-            Assert.assertTrue(out.sawOffHeapSlice());
+            Assert.assertTrue(out.sawBytesSlice());
             Assert.assertTrue(out.strings().contains("alpha"));
             Assert.assertTrue(out.strings().contains("beta"));
         });
     }
 
     @Test
-    public void hgetallStreamsOffHeapSlices() {
+    public void hgetallStreamsBytesSlices() {
         withDb(db -> {
             db.writes().hashes().hset(b("hash"), List.of(b("field"), b("value"))).value();
 
@@ -65,13 +64,13 @@ public class OffHeapCollectionReadStreamingTest {
             Assert.assertEquals(1, pairs.pairCount());
 
             pairs.emitPairsTo(out);
-            Assert.assertTrue(out.sawOffHeapSlice());
+            Assert.assertTrue(out.sawBytesSlice());
             Assert.assertEquals(List.of("field", "value"), out.strings());
         });
     }
 
     @Test
-    public void zrangeStreamsOffHeapSlices() {
+    public void zrangeStreamsBytesSlices() {
         withDb(db -> {
             db.writes().zsets().zadd(b("z"), List.of(b("1"), b("m1"), b("2"), b("m2"))).value();
 
@@ -80,7 +79,7 @@ public class OffHeapCollectionReadStreamingTest {
             Assert.assertEquals(2, seq.count());
 
             seq.emitTo(out);
-            Assert.assertTrue(out.sawOffHeapSlice());
+            Assert.assertTrue(out.sawBytesSlice());
             Assert.assertEquals(List.of("m1", "m2"), out.strings());
         });
     }
@@ -104,17 +103,17 @@ public class OffHeapCollectionReadStreamingTest {
 
     private static final class RecordingBulkSequenceOutput implements BulkStringSink {
         private final List<String> values = new ArrayList<>();
-        private boolean sawOffHeapSlice;
+        private boolean sawBytesSlice;
 
         @Override
         public void bulkString(byte[] data) {
-            sawOffHeapSlice = false;
+            sawBytesSlice = false;
             values.add(data == null ? null : new String(data, StandardCharsets.UTF_8));
         }
 
         @Override
         public void bulkString(byte[] data, int off, int len) {
-            sawOffHeapSlice = false;
+            sawBytesSlice = false;
             values.add(data == null ? null : new String(data, off, len, StandardCharsets.UTF_8));
         }
 
@@ -124,9 +123,7 @@ public class OffHeapCollectionReadStreamingTest {
                 values.add(null);
                 return;
             }
-            if (slice instanceof OffHeapSlice) {
-                sawOffHeapSlice = true;
-            }
+            sawBytesSlice = true;
             byte[] bytes = new byte[slice.length()];
             slice.getBytes(0, bytes, 0, bytes.length);
             values.add(new String(bytes, StandardCharsets.UTF_8));
@@ -134,12 +131,12 @@ public class OffHeapCollectionReadStreamingTest {
 
         @Override
         public void bulkStringLongAscii(long value) {
-            sawOffHeapSlice = false;
+            sawBytesSlice = false;
             values.add(Long.toString(value));
         }
 
-        private boolean sawOffHeapSlice() {
-            return sawOffHeapSlice;
+        private boolean sawBytesSlice() {
+            return sawBytesSlice;
         }
 
         private List<String> strings() {

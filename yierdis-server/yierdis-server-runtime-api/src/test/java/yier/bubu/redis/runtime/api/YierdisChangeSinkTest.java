@@ -144,6 +144,12 @@ public class YierdisChangeSinkTest {
                     "EngineFactoryBinding owns runtime resources now: " + method,
                     method.getName().equals("engineFactoryOwnedResource")
             );
+            Assert.assertFalse(
+                    "legacy offheap bridge should not be exposed: " + method,
+                    method.getName().equals("offHeapAllocator")
+                            || method.getName().equals("ownsOffHeapAllocator")
+                            || method.getName().equals("offHeapKeysEnabled")
+            );
         }
     }
 

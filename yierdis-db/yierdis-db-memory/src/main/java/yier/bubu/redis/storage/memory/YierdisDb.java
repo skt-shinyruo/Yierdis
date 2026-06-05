@@ -13,7 +13,6 @@ import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
-import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
@@ -31,8 +30,6 @@ import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.api.result.BulkStringValue;
 
 public final class YierdisDb implements RuntimeDbEngine {
-    final OffHeapAllocator offHeapAllocator;
-
     /**
      * @deprecated Use {@link MaxmemoryErrors#OOM_ERR}.
      */
@@ -52,11 +49,7 @@ public final class YierdisDb implements RuntimeDbEngine {
     private final DbLifecycleOps lifecycleOps;
 
     public YierdisDb() {
-        this(null, null, false, false, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
-    }
-
-    public YierdisDb(OffHeapAllocator offHeapAllocator) {
-        this(offHeapAllocator, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        this(null, false, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5, null);
     }
 
     private static MaxmemoryPolicy compatibilityMaxmemoryPolicy(String policy) {
@@ -64,17 +57,6 @@ public final class YierdisDb implements RuntimeDbEngine {
             return MaxmemoryPolicy.NOEVICTION;
         }
         return MaxmemoryPolicy.parse(policy);
-    }
-
-    private YierdisDb(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
-    ) {
-        this(memoryRuntime, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis, null);
     }
 
     public static YierdisDb createWithSharedFfmRuntime(
@@ -121,8 +103,6 @@ public final class YierdisDb implements RuntimeDbEngine {
     ) {
         return new YierdisDb(
                 memoryRuntime,
-                null,
-                false,
                 false,
                 maxmemoryBytes,
                 maxmemoryPolicy,
@@ -160,8 +140,16 @@ public final class YierdisDb implements RuntimeDbEngine {
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        return new YierdisDb(null, null, false, false,
-                maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
+        return new YierdisDb(
+                null,
+                true,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                null
+        );
     }
 
     public static YierdisDb createWithOwnedFfmRuntime(
@@ -174,9 +162,7 @@ public final class YierdisDb implements RuntimeDbEngine {
     ) {
         return new YierdisDb(
                 null,
-                null,
-                false,
-                false,
+                true,
                 maxmemoryBytes,
                 maxmemoryPolicy,
                 maxmemorySamples,
@@ -197,9 +183,7 @@ public final class YierdisDb implements RuntimeDbEngine {
     ) {
         return new YierdisDb(
                 null,
-                null,
-                false,
-                false,
+                true,
                 maxmemoryBytes,
                 maxmemoryPolicy,
                 maxmemorySamples,
@@ -227,65 +211,8 @@ public final class YierdisDb implements RuntimeDbEngine {
         );
     }
 
-    public YierdisDb(
-            OffHeapAllocator offHeapAllocator,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
-    ) {
-        this(null, offHeapAllocator, false, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis);
-    }
-
-    @Deprecated
-    public YierdisDb(
-            OffHeapAllocator offHeapAllocator,
-            long maxmemoryBytes,
-            String maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
-    ) {
-        this(
-                offHeapAllocator,
-                maxmemoryBytes,
-                compatibilityMaxmemoryPolicy(maxmemoryPolicy),
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis
-        );
-    }
-
     private YierdisDb(
             YierdisFfmMemoryRuntime memoryRuntime,
-            OffHeapAllocator offHeapAllocator,
-            boolean ownsOffHeapAllocator,
-            boolean ownsMemoryRuntime,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
-    ) {
-        this(
-                memoryRuntime,
-                offHeapAllocator,
-                ownsOffHeapAllocator,
-                ownsMemoryRuntime,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                null
-        );
-    }
-
-    private YierdisDb(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            OffHeapAllocator offHeapAllocator,
-            boolean ownsOffHeapAllocator,
             boolean ownsMemoryRuntime,
             long maxmemoryBytes,
             MaxmemoryPolicy maxmemoryPolicy,
@@ -296,8 +223,6 @@ public final class YierdisDb implements RuntimeDbEngine {
     ) {
         this(
                 memoryRuntime,
-                offHeapAllocator,
-                ownsOffHeapAllocator,
                 ownsMemoryRuntime,
                 maxmemoryBytes,
                 maxmemoryPolicy,
@@ -311,8 +236,6 @@ public final class YierdisDb implements RuntimeDbEngine {
 
     private YierdisDb(
             YierdisFfmMemoryRuntime memoryRuntime,
-            OffHeapAllocator offHeapAllocator,
-            boolean ownsOffHeapAllocator,
             boolean ownsMemoryRuntime,
             long maxmemoryBytes,
             MaxmemoryPolicy maxmemoryPolicy,
@@ -337,8 +260,6 @@ public final class YierdisDb implements RuntimeDbEngine {
                 },
                 runtimeState,
                 memoryRuntime,
-                offHeapAllocator,
-                ownsOffHeapAllocator,
                 ownsMemoryRuntime,
                 maxmemoryBytes,
                 maxmemoryPolicy,
@@ -349,7 +270,6 @@ public final class YierdisDb implements RuntimeDbEngine {
         );
 
         this.runtimeState = components.runtimeState;
-        this.offHeapAllocator = components.storage.offHeapAllocator;
         this.ledger = components.ledger;
         this.keyLifecycle = components.keyLifecycle;
         this.introspection = components.introspection;
@@ -360,53 +280,6 @@ public final class YierdisDb implements RuntimeDbEngine {
         this.memoryOps = components.memoryOps;
         this.lifecycleOps = components.lifecycleOps;
         // 这里不启动独立调度线程；过期清理、maxmemory 淘汰和 defrag 只会在上层 event loop/调用线程里触发。
-    }
-
-    private YierdisDb(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            boolean ownsMemoryRuntime,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
-    ) {
-        this(
-                memoryRuntime,
-                null,
-                false,
-                ownsMemoryRuntime,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                null
-        );
-    }
-
-    private YierdisDb(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            boolean ownsMemoryRuntime,
-            long maxmemoryBytes,
-            MaxmemoryPolicy maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis,
-            NativeDefragOptions nativeDefragOptions
-    ) {
-        this(
-                memoryRuntime,
-                null,
-                false,
-                ownsMemoryRuntime,
-                maxmemoryBytes,
-                maxmemoryPolicy,
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis,
-                nativeDefragOptions
-        );
     }
 
     @Override

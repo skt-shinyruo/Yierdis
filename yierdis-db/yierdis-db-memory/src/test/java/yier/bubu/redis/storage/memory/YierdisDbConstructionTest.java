@@ -23,7 +23,6 @@ import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
-import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.DbChange;
@@ -83,9 +82,32 @@ public class YierdisDbConstructionTest {
     }
 
     @Test
+    public void defaultDbCreatesNativeRuntimeAndStableNativeStorage() {
+        YierdisDb db = new YierdisDb();
+        try {
+            Assert.assertNotNull(db.keyLifecycle().nativeAllocator());
+            Assert.assertNotNull(db.keyLifecycle().memoryRuntime());
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void sharedRuntimeDbUsesProvidedRuntime() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("shared-runtime-construction")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+            try {
+                Assert.assertSame(runtime, db.keyLifecycle().memoryRuntime());
+            } finally {
+                db.shutdown();
+            }
+        }
+    }
+
+    @Test
     public void unknownPolicyStillThrowsIllegalArgumentException() {
         try {
-            new YierdisDb((OffHeapAllocator) null, 0, "unknown-policy", 5, 5, 5);
+            YierdisDb.createWithOwnedFfmRuntime(0, "unknown-policy", 5, 5, 5);
             Assert.fail("unknown policy should fail construction");
         } catch (IllegalArgumentException e) {
             Assert.assertTrue(e.getMessage().contains("unknown maxmemory policy"));
@@ -102,7 +124,7 @@ public class YierdisDbConstructionTest {
 
     @Test
     public void storageComponentsCarryNativeEntryDirectoryGraph() {
-        YierdisDbStorageComponents storage = YierdisDbStorageComponents.create(null, null, false, false);
+        YierdisDbStorageComponents storage = YierdisDbStorageComponents.create(null, false);
         Assert.assertNotNull(storage.entries);
         Assert.assertNotNull(storage.keyDirectory);
         storage.resources.releaseAll(
@@ -119,7 +141,7 @@ public class YierdisDbConstructionTest {
 
     @Test
     public void storageComponentsShareOneNativeAllocatorForEntriesStringsAndCollectionRoots() {
-        YierdisDbStorageComponents storage = YierdisDbStorageComponents.create(null, null, false, false);
+        YierdisDbStorageComponents storage = YierdisDbStorageComponents.create(null, false);
         try {
             Assert.assertNotNull(storage.nativeAllocator);
             Assert.assertSame(storage.nativeAllocator, nativeAllocator(storage.entries));
@@ -169,10 +191,8 @@ public class YierdisDbConstructionTest {
         NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1);
         YierdisDbOwnedResources resources = new YierdisDbOwnedResources(
                 runtime,
-                null,
                 allocator,
                 true,
-                false,
                 true
         );
         YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator);
@@ -186,7 +206,6 @@ public class YierdisDbConstructionTest {
         try {
             YierdisDbKeyLifecycle lifecycle = new YierdisDbKeyLifecycle(
                     expires,
-                    null,
                     allocator,
                     runtime,
                     entries,
@@ -274,10 +293,8 @@ public class YierdisDbConstructionTest {
         NativeAllocator allocator = new ReallocSlotLimitNativeAllocator(new YierdisStableNativeAllocator(runtime, 1));
         YierdisDbOwnedResources resources = new YierdisDbOwnedResources(
                 runtime,
-                null,
                 allocator,
                 true,
-                false,
                 true
         );
         YierdisFfmExpireIndex expires = new YierdisFfmExpireIndex(runtime, allocator);
@@ -291,7 +308,6 @@ public class YierdisDbConstructionTest {
         try {
             YierdisDbKeyLifecycle lifecycle = new YierdisDbKeyLifecycle(
                     expires,
-                    null,
                     allocator,
                     runtime,
                     entries,
@@ -509,7 +525,7 @@ public class YierdisDbConstructionTest {
     }
 
     private static void assertConstructsWithPolicy(String policy) {
-        YierdisDb db = new YierdisDb((OffHeapAllocator) null, 0, policy, 5, 5, 5);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(0, policy, 5, 5, 5);
         try {
             db.bindToCurrentThread();
         } finally {
@@ -526,7 +542,7 @@ public class YierdisDbConstructionTest {
             String messagePart
     ) {
         try {
-            new YierdisDb((OffHeapAllocator) null, maxmemoryBytes, policy, samples, evictionMillis, expireMillis);
+            YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, policy, samples, evictionMillis, expireMillis);
             Assert.fail("invalid construction should fail: " + messagePart);
         } catch (IllegalArgumentException e) {
             Assert.assertTrue(e.getMessage().contains(messagePart));

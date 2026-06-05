@@ -2,7 +2,6 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.NativeAllocator;
-import yier.bubu.redis.memory.api.OffHeapAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
 import yier.bubu.redis.storage.api.DbChange;
@@ -40,7 +39,6 @@ public final class YierdisDbKeyLifecycle {
     }
 
     private final YierdisExpireIndex expires;
-    private final OffHeapAllocator offHeapAllocator;
     private final NativeAllocator nativeAllocator;
     private final YierdisFfmMemoryRuntime memoryRuntime;
     private final EntryTable entryTable;
@@ -56,7 +54,6 @@ public final class YierdisDbKeyLifecycle {
 
     YierdisDbKeyLifecycle(
             YierdisExpireIndex expires,
-            OffHeapAllocator offHeapAllocator,
             NativeAllocator nativeAllocator,
             YierdisFfmMemoryRuntime memoryRuntime,
             EntryTable entryTable,
@@ -71,7 +68,6 @@ public final class YierdisDbKeyLifecycle {
     ) {
         this(
                 expires,
-                offHeapAllocator,
                 nativeAllocator,
                 memoryRuntime,
                 entryTable,
@@ -89,7 +85,6 @@ public final class YierdisDbKeyLifecycle {
 
     YierdisDbKeyLifecycle(
             YierdisExpireIndex expires,
-            OffHeapAllocator offHeapAllocator,
             NativeAllocator nativeAllocator,
             YierdisFfmMemoryRuntime memoryRuntime,
             EntryTable entryTable,
@@ -104,7 +99,6 @@ public final class YierdisDbKeyLifecycle {
             int dbIndex
     ) {
         this.expires = Objects.requireNonNull(expires, "expires");
-        this.offHeapAllocator = offHeapAllocator;
         this.nativeAllocator = java.util.Objects.requireNonNull(nativeAllocator, "nativeAllocator");
         this.memoryRuntime = memoryRuntime;
         this.entryTable = Objects.requireNonNull(entryTable, "entryTable");
@@ -117,10 +111,6 @@ public final class YierdisDbKeyLifecycle {
         this.lruClockSupplier = Objects.requireNonNull(lruClockSupplier, "lruClockSupplier");
         this.adjustUsedBytesCallback = Objects.requireNonNull(adjustUsedBytesCallback, "adjustUsedBytesCallback");
         this.dbIndex = Math.max(0, dbIndex);
-    }
-
-    public OffHeapAllocator offHeapAllocator() {
-        return offHeapAllocator;
     }
 
     NativeAllocator nativeAllocator() {
