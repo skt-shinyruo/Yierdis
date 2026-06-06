@@ -3,6 +3,7 @@ package yier.bubu.redis.app.client;
 // CLI：提供简易的交互与单次执行，使用 Redis RESP 协议。
 
 import picocli.CommandLine;
+import yier.bubu.redis.protocol.resp.InlineCommandParser;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
 import java.io.BufferedReader;

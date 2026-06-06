@@ -1110,6 +1110,20 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void cliMustUseSharedInlineCommandParserDirectly() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
+
+        Path cliWrapper = repoRoot.resolve(
+                "yierdis-cli/src/main/java/yier/bubu/redis/app/client/InlineCommandParser.java"
+        ).normalize();
+        Assert.assertFalse(
+                "CLI InlineCommandParser wrapper must be deleted; use protocol.resp.InlineCommandParser",
+                Files.exists(cliWrapper)
+        );
+    }
+
+    @Test
     public void serverSessionProtocolNegotiationMustBeSplitFromGeneralSessionState() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
