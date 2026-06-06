@@ -23,9 +23,9 @@ public class KeyHandleContractTest {
 
                 KeyHandle handle = directory.getKeyHandle(key);
                 Assert.assertNotNull(handle);
-                Assert.assertEquals(key.length, handle.len());
+                Assert.assertEquals(key.length, handle.length());
                 for (int i = 0; i < key.length; i++) {
-                    Assert.assertEquals(key[i], handle.byteAt(i));
+                    Assert.assertEquals(key[i], handle.getByte(i));
                 }
                 Assert.assertEquals(handle.dictHash(), directory.getKeyHandle(key).dictHash());
                 Assert.assertTrue(KeyHandleAccess.isAllocator(handle));

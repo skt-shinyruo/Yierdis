@@ -291,12 +291,12 @@ public class YierdisGlobalMaxmemoryGovernorTest {
     private static KeyHandle handle(byte[] key) {
         return new KeyHandle() {
             @Override
-            public int len() {
+            public int length() {
                 return key.length;
             }
 
             @Override
-            public byte byteAt(int index) {
+            public byte getByte(int index) {
                 return key[index];
             }
 
@@ -312,9 +312,9 @@ public class YierdisGlobalMaxmemoryGovernorTest {
     }
 
     private static byte[] bytes(KeyHandle keyHandle) {
-        byte[] out = new byte[keyHandle.len()];
+        byte[] out = new byte[keyHandle.length()];
         for (int i = 0; i < out.length; i++) {
-            out[i] = keyHandle.byteAt(i);
+            out[i] = keyHandle.getByte(i);
         }
         return out;
     }

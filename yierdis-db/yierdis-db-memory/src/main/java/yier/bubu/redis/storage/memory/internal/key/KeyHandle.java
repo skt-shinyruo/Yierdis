@@ -11,7 +11,7 @@ import java.util.Objects;
  * 设计目标：
  * <ul>
  *   <li>统一 native allocator 中的 key 表示</li>
- *   <li>提供 {@code len + byteAt} 的只读访问能力，避免为“canonicalKey”强制产生 heap copy</li>
+ *   <li>提供 {@code length + getByte} 的只读访问能力，避免为“canonicalKey”强制产生 heap copy</li>
  *   <li>允许携带“字典 hash”（通常包含 per-dict seed），用于 keyspace 索引；但 equality 以 bytes 内容为准</li>
  * </ul>
  * <p>
@@ -22,26 +22,6 @@ import java.util.Objects;
  * </ul>
  */
 public interface KeyHandle extends yier.bubu.redis.storage.api.KeyHandle {
-    /**
-     * 兼容历史语义：KeyHandle 仍以 {@code len + byteAt} 作为最小能力视图。
-     */
-    int len();
-
-    /**
-     * 兼容历史语义：KeyHandle 仍以 {@code len + byteAt} 作为最小能力视图。
-     */
-    byte byteAt(int index);
-
-    @Override
-    public default int length() {
-        return len();
-    }
-
-    @Override
-    public default byte getByte(int index) {
-        return byteAt(index);
-    }
-
     /**
      * 用于 keyspace/hash table 的索引 hash。
      * <p>

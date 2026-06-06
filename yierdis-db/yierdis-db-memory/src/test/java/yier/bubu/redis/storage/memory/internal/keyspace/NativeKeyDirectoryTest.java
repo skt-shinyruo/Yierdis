@@ -218,7 +218,7 @@ public class NativeKeyDirectoryTest {
                 Assert.assertNull(directory.getKeyHandle(key));
                 Assert.assertEquals(1L, allocator.stats().objectCount(NativeObjectKind.KEY_BYTES));
                 try {
-                    stored.len();
+                    stored.length();
                     Assert.fail("entry handle removal must release the native key handle");
                 } catch (RuntimeException expected) {
                     Assert.assertTrue(expected.getMessage().contains("stale native handle"));
@@ -256,7 +256,7 @@ public class NativeKeyDirectoryTest {
                 Assert.assertTrue(directory.remove(key, handle));
                 Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.KEY_BYTES));
                 try {
-                    stored.len();
+                    stored.length();
                     Assert.fail("freed key handle should fail through allocator stale-handle checks");
                 } catch (RuntimeException expected) {
                     Assert.assertTrue(expected.getMessage().contains("stale native handle"));
@@ -293,19 +293,19 @@ public class NativeKeyDirectoryTest {
     }
 
     private static byte[] copy(KeyHandle keyHandle) {
-        byte[] out = new byte[keyHandle.len()];
+        byte[] out = new byte[keyHandle.length()];
         for (int i = 0; i < out.length; i++) {
-            out[i] = keyHandle.byteAt(i);
+            out[i] = keyHandle.getByte(i);
         }
         return out;
     }
 
     private static boolean equalsBytes(KeyHandle keyHandle, byte[] bytes) {
-        if (keyHandle.len() != bytes.length) {
+        if (keyHandle.length() != bytes.length) {
             return false;
         }
         for (int i = 0; i < bytes.length; i++) {
-            if (keyHandle.byteAt(i) != bytes[i]) {
+            if (keyHandle.getByte(i) != bytes[i]) {
                 return false;
             }
         }

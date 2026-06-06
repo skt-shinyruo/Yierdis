@@ -891,9 +891,9 @@ public class NativeStorageRegressionTest {
     }
 
     private static byte[] copy(KeyHandle keyHandle) {
-        byte[] out = new byte[keyHandle.len()];
+        byte[] out = new byte[keyHandle.length()];
         for (int i = 0; i < out.length; i++) {
-            out[i] = keyHandle.byteAt(i);
+            out[i] = keyHandle.getByte(i);
         }
         return out;
     }

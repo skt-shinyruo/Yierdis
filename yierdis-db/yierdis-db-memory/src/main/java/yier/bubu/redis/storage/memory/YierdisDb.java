@@ -338,7 +338,7 @@ public final class YierdisDb implements RuntimeDbEngine {
         if (view == null) {
             throw new IllegalArgumentException("view must not be null");
         }
-        int len = view.len();
+        int len = view.length();
         if (len < 0) {
             return null;
         }
@@ -347,7 +347,7 @@ public final class YierdisDb implements RuntimeDbEngine {
         }
         byte[] out = new byte[len];
         for (int i = 0; i < len; i++) {
-            out[i] = view.byteAt(i);
+            out[i] = view.getByte(i);
         }
         return out;
     }

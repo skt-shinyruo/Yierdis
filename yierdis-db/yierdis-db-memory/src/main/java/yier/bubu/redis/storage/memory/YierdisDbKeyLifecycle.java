@@ -677,10 +677,10 @@ public final class YierdisDbKeyLifecycle {
 
     private static byte[] keyBytes(KeyHandle keyHandle) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        int len = keyHandle.len();
+        int len = keyHandle.length();
         byte[] out = new byte[len];
         for (int i = 0; i < len; i++) {
-            out[i] = keyHandle.byteAt(i);
+            out[i] = keyHandle.getByte(i);
         }
         return out;
     }
