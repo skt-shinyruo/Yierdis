@@ -757,9 +757,9 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     }
 
     private static byte[] copyKey(KeyHandle keyHandle) {
-        byte[] out = new byte[keyHandle.len()];
+        byte[] out = new byte[keyHandle.length()];
         for (int i = 0; i < out.length; i++) {
-            out[i] = keyHandle.byteAt(i);
+            out[i] = keyHandle.getByte(i);
         }
         return out;
     }
@@ -790,11 +790,11 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         @Override
         public boolean equalsBytes(byte[] key) {
             KeyHandle stored = keyHandle(0);
-            if (stored.len() != key.length) {
+            if (stored.length() != key.length) {
                 return false;
             }
             for (int i = 0; i < key.length; i++) {
-                if (stored.byteAt(i) != key[i]) {
+                if (stored.getByte(i) != key[i]) {
                     return false;
                 }
             }
@@ -805,11 +805,11 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         public boolean equalsBytes(BytesView key) {
             KeyHandle stored = keyHandle(0);
             int len = key.length();
-            if (stored.len() != len) {
+            if (stored.length() != len) {
                 return false;
             }
             for (int i = 0; i < len; i++) {
-                if (stored.byteAt(i) != key.getByte(i)) {
+                if (stored.getByte(i) != key.getByte(i)) {
                     return false;
                 }
             }

@@ -26,14 +26,14 @@ public final class AllocatorKeyHandle implements KeyHandle {
     }
 
     @Override
-    public int len() {
+    public int length() {
         try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
             return view.size();
         }
     }
 
     @Override
-    public byte byteAt(int index) {
+    public byte getByte(int index) {
         try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
             if (index < 0 || index >= view.size()) {
                 throw new IndexOutOfBoundsException("index=" + index + ", len=" + view.size());
@@ -63,12 +63,12 @@ public final class AllocatorKeyHandle implements KeyHandle {
                 return false;
             }
         }
-        int len = len();
-        if (other.len() != len) {
+        int len = length();
+        if (other.length() != len) {
             return false;
         }
         for (int i = 0; i < len; i++) {
-            if (byteAt(i) != other.byteAt(i)) {
+            if (getByte(i) != other.getByte(i)) {
                 return false;
             }
         }

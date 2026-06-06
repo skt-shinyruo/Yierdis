@@ -99,7 +99,7 @@ public final class YierdisGlobMatcher {
         if (pattern == null || text == null) {
             return false;
         }
-        int textLen = text.len();
+        int textLen = text.length();
         if (textLen < 0) {
             return false;
         }
@@ -110,7 +110,7 @@ public final class YierdisGlobMatcher {
         int starText = 0;
 
         while (t < textLen) {
-            byte tb = text.byteAt(t);
+            byte tb = text.getByte(t);
             if (p < pattern.length) {
                 byte pc = pattern[p];
 

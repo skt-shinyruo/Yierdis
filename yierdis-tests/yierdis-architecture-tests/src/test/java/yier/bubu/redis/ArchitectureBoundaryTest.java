@@ -1044,6 +1044,35 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
+    public void byteViewAndKeyHandleMustNotExposeLegacyAliases() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
+
+        Path bytesView = repoRoot.resolve(
+                "yierdis-common/yierdis-common-bytes/src/main/java/yier/bubu/redis/bytes/BytesView.java"
+        ).normalize();
+        Path storageKeyHandle = repoRoot.resolve(
+                "yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/KeyHandle.java"
+        ).normalize();
+        Path memoryKeyHandle = repoRoot.resolve(
+                "yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/key/KeyHandle.java"
+        ).normalize();
+
+        for (Path file : List.of(bytesView, storageKeyHandle, memoryKeyHandle)) {
+            Assert.assertTrue("缺少 byte view/key handle API 文件: " + relativePath(repoRoot, file), Files.isRegularFile(file));
+            String source = Files.readString(file, StandardCharsets.UTF_8);
+            Assert.assertFalse(
+                    relativePath(repoRoot, file) + " must not expose legacy len()",
+                    source.contains(" len()")
+            );
+            Assert.assertFalse(
+                    relativePath(repoRoot, file) + " must not expose legacy byteAt(int)",
+                    source.contains(" byteAt(int")
+            );
+        }
+    }
+
+    @Test
     public void serverSessionProtocolNegotiationMustBeSplitFromGeneralSessionState() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);

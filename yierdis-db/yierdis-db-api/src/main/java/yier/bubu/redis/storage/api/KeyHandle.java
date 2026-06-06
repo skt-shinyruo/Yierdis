@@ -11,26 +11,6 @@ import yier.bubu.redis.bytes.BytesView;
  */
 public interface KeyHandle extends BytesView {
     /**
-     * Length of the key in bytes.
-     */
-    int len();
-
-    /**
-     * Byte at {@code index}.
-     */
-    byte byteAt(int index);
-
-    @Override
-    default int length() {
-        return len();
-    }
-
-    @Override
-    default byte getByte(int index) {
-        return byteAt(index);
-    }
-
-    /**
      * Storage-local dictionary hash. It is stable only inside the owning keyspace.
      */
     int dictHash();

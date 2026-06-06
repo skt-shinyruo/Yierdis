@@ -8,20 +8,6 @@ package yier.bubu.redis.bytes;
 public interface BytesView extends BytesSource {
     int length();
 
-    /**
-     * 兼容别名：历史代码可能使用 {@code len()} 表达长度。
-     */
-    default int len() {
-        return length();
-    }
-
-    /**
-     * 兼容别名：历史代码可能使用 {@code byteAt(i)} 访问字节。
-     */
-    default byte byteAt(int index) {
-        return getByte(index);
-    }
-
     @Override
     default void getBytes(int index, byte[] dst, int dstOff, int len) {
         if (dst == null) {

@@ -68,7 +68,7 @@ public final class YierdisDbMemoryReporter {
         if (record == null) {
             return -1;
         }
-        long keyLen = keyView == null ? 0 : Math.max(0L, (long) keyView.len());
+        long keyLen = keyView == null ? 0 : Math.max(0L, (long) keyView.length());
         var keyHandle = keyLifecycle.keyHandle(keyView);
         return metadataEstimatedBytes(keyHandle, record) + estimateNativeBytesForMemoryUsage(keyLen, record);
     }
