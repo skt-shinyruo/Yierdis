@@ -28,11 +28,6 @@ public final class CommandSessionCapabilities {
         this.protocolNegotiationSession = Objects.requireNonNull(protocolNegotiationSession, "protocolNegotiationSession");
     }
 
-    public static CommandSessionCapabilities from(ServerSession session) {
-        Objects.requireNonNull(session, "session");
-        return new CommandSessionCapabilities(session, session, session, session, session);
-    }
-
     public static CommandSessionCapabilities from(Session session) {
         if (!(session instanceof DbIndexSession dbIndexSession)
                 || !(session instanceof ClientMetadataSession clientMetadataSession)

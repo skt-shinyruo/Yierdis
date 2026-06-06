@@ -4,9 +4,9 @@
 
 ## 事务状态属于哪里
 
-事务状态不是 command-kernel 自己持有的全局结构，而是连接级 `ServerSession` 的一部分。
+事务状态不是 command-kernel 自己持有的全局结构，而是连接级 session capability 状态的一部分。
 
-生产实现里，`EngineSession` 持有一个私有的 `DefaultTransactionState`，并通过 `TransactionState` 接口暴露给命令层。这个状态同时保存：
+生产实现里，`EngineSession` 持有一个私有的 `DefaultTransactionState`，并通过 `TransactionSession` / `TransactionState` 接口暴露给命令层。这个状态同时保存：
 
 - `active`：当前是否处于 `MULTI` 中
 - `aborted`：事务是否已经因为前置错误而失效

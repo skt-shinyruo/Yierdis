@@ -8,10 +8,10 @@ import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.CommandSessionCapabilities;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.execution.api.ServerSession;
 import yier.bubu.redis.execution.api.TransactionState;
 
 import java.nio.charset.StandardCharsets;
@@ -31,7 +31,7 @@ public class YierdisFastCommandProcessorPolicyTest {
         );
         TestSession session = new TestSession();
         CapturingReplyWriter out = new CapturingReplyWriter();
-        CommandContext ctx = new CommandContext(session, out);
+        CommandContext ctx = context(session, out);
 
         processor.execute(request("MULTI"), ctx);
         Assert.assertEquals("OK", out.simpleString());
@@ -67,7 +67,7 @@ public class YierdisFastCommandProcessorPolicyTest {
         );
         TestSession session = new TestSession();
         CapturingReplyWriter out = new CapturingReplyWriter();
-        CommandContext ctx = new CommandContext(session, out);
+        CommandContext ctx = context(session, out);
 
         processor.execute(request("MULTI"), ctx);
         out.clear();
@@ -110,7 +110,7 @@ public class YierdisFastCommandProcessorPolicyTest {
         TestSession session = new TestSession();
         session.setDbIndex(2);
         CapturingReplyWriter out = new CapturingReplyWriter();
-        CommandContext ctx = new CommandContext(session, out);
+        CommandContext ctx = context(session, out);
 
         processor.execute(request("READONLY"), ctx);
         Assert.assertEquals(0, events.size());
@@ -133,7 +133,7 @@ public class YierdisFastCommandProcessorPolicyTest {
         YierdisFastCommandProcessor processor = mutationAwareProcessor(events);
         TestSession session = new TestSession();
         CapturingReplyWriter out = new CapturingReplyWriter();
-        CommandContext ctx = new CommandContext(session, out);
+        CommandContext ctx = context(session, out);
 
         processor.execute(request("MULTI"), ctx);
 
@@ -160,7 +160,7 @@ public class YierdisFastCommandProcessorPolicyTest {
         YierdisFastCommandProcessor processor = mutationAwareProcessor(events);
         TestSession session = new TestSession();
         CapturingReplyWriter out = new CapturingReplyWriter();
-        CommandContext ctx = new CommandContext(session, out);
+        CommandContext ctx = context(session, out);
 
         processor.execute(request("MULTI"), ctx);
 
@@ -215,7 +215,16 @@ public class YierdisFastCommandProcessorPolicyTest {
         return new String(bytes, StandardCharsets.US_ASCII);
     }
 
-    private static final class TestSession implements ServerSession {
+    private static CommandContext context(TestSession session, CapturingReplyWriter out) {
+        return new CommandContext(CommandSessionCapabilities.of(session, session, session, session, session), out);
+    }
+
+    private static final class TestSession implements
+            yier.bubu.redis.execution.api.DbIndexSession,
+            yier.bubu.redis.execution.api.ClientMetadataSession,
+            yier.bubu.redis.execution.api.TransactionSession,
+            yier.bubu.redis.execution.api.ConnectionStatsSession,
+            yier.bubu.redis.execution.api.ProtocolNegotiationSession {
         private final TestTransactionState tx = new TestTransactionState();
         private int dbIndex;
 

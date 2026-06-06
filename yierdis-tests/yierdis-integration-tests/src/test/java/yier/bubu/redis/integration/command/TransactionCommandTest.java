@@ -8,7 +8,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ServerSession;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyArray;
@@ -229,7 +228,12 @@ public class TransactionCommandTest {
         });
     }
 
-    private static final class TestSession implements ServerSession {
+    private static final class TestSession implements
+            yier.bubu.redis.execution.api.DbIndexSession,
+            yier.bubu.redis.execution.api.ClientMetadataSession,
+            yier.bubu.redis.execution.api.TransactionSession,
+            yier.bubu.redis.execution.api.ConnectionStatsSession,
+            yier.bubu.redis.execution.api.ProtocolNegotiationSession {
         private int dbIndex;
         private String clientName;
         private boolean authenticated;

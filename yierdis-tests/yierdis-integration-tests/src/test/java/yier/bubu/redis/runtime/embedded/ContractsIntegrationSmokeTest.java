@@ -4,7 +4,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ServerSession;
 import yier.bubu.redis.execution.api.TransactionState;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -95,7 +94,12 @@ public class ContractsIntegrationSmokeTest {
         return Long.parseLong(new String(cursorOut.data(), StandardCharsets.US_ASCII));
     }
 
-    private static final class TestSession implements ServerSession {
+    private static final class TestSession implements
+            yier.bubu.redis.execution.api.DbIndexSession,
+            yier.bubu.redis.execution.api.ClientMetadataSession,
+            yier.bubu.redis.execution.api.TransactionSession,
+            yier.bubu.redis.execution.api.ConnectionStatsSession,
+            yier.bubu.redis.execution.api.ProtocolNegotiationSession {
         private int dbIndex;
         private final TransactionState tx = new NoopTransactionState();
 

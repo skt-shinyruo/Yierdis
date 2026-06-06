@@ -27,7 +27,7 @@
 
 - 请求边界看 [`protocol-reference.md`](./protocol-reference.md) 和 [`request-execution-flow.md`](./request-execution-flow.md)。
 - bytes 零拷贝和 materialize 边界看 [`bytes-and-fast-paths.md`](./bytes-and-fast-paths.md)。
-- 如果是 `HELLO 2/3` 或回包类型差异，继续看 `RespReplyWriterFactory`、`ServerSession` 和 `RespHandshakeIntegrationTest`。
+- 如果是 `HELLO 2/3` 或回包类型差异，继续看 `RespReplyWriterFactory`、`ProtocolNegotiationSession`、`EngineSession` 和 `RespHandshakeIntegrationTest`。
 
 测试优先级：
 

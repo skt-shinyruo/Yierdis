@@ -15,17 +15,9 @@ public final class CommandContext {
     private boolean valueChanged;
     private boolean ttlChanged;
 
-    public CommandContext(ServerSession session, RedisReplyWriter out) {
-        this(CommandSessionCapabilities.from(session), out);
-    }
-
     public CommandContext(CommandSessionCapabilities session, RedisReplyWriter out) {
         this.session = Objects.requireNonNull(session, "session");
         this.out = Objects.requireNonNull(out, "out");
-    }
-
-    public CommandContext reset(ServerSession session, RedisReplyWriter out) {
-        return reset(CommandSessionCapabilities.from(session), out);
     }
 
     public CommandContext reset(CommandSessionCapabilities session, RedisReplyWriter out) {
