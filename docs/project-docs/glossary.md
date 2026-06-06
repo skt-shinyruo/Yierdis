@@ -36,7 +36,7 @@
 
 ### `CommandContext`
 
-单次命令执行的上下文，携带 `RedisReplyWriter`、`ServerSession`、当前 DB 路由和 mutation outcome。它把 handler 和执行环境连接起来。
+单次命令执行的上下文，携带 `RedisReplyWriter`、`CommandSessionCapabilities`、当前 DB 路由和 mutation outcome。它把 handler 和执行环境连接起来。
 
 ### command variant
 

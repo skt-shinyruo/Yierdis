@@ -50,89 +50,68 @@ public class CoreContractSmokeTest {
     }
 
     @Test
-    public void contractTypesCompose() {
+    public void commandContextDoesNotKeepServerSessionCompatibilityEntrypoints() {
+        for (var constructor : CommandContext.class.getDeclaredConstructors()) {
+            for (Class<?> parameterType : constructor.getParameterTypes()) {
+                Assert.assertNotEquals(
+                        "CommandContext must not expose ServerSession compatibility constructors",
+                        "yier.bubu.redis.execution.api.ServerSession",
+                        parameterType.getName()
+                );
+            }
+        }
+        for (Method method : CommandContext.class.getDeclaredMethods()) {
+            for (Class<?> parameterType : method.getParameterTypes()) {
+                Assert.assertNotEquals(
+                        "CommandContext must not expose ServerSession compatibility methods",
+                        "yier.bubu.redis.execution.api.ServerSession",
+                        parameterType.getName()
+                );
+            }
+        }
+    }
+
+    @Test
+    public void commandSessionCapabilitiesDoesNotKeepServerSessionFactory() {
+        for (Method method : CommandSessionCapabilities.class.getDeclaredMethods()) {
+            if (!method.getName().equals("from")) {
+                continue;
+            }
+            for (Class<?> parameterType : method.getParameterTypes()) {
+                Assert.assertNotEquals(
+                        "CommandSessionCapabilities must not keep the deleted aggregate-session factory overload",
+                        "yier.bubu.redis.execution.api.ServerSession",
+                        parameterType.getName()
+                );
+            }
+        }
+    }
+
+    @Test
+    public void contractTypesComposeWithoutServerSessionAggregate() {
         RedisReplyWriter writer = noopWriter();
+        NarrowSession session = new NarrowSession();
 
-        ServerSession session = new ServerSession() {
-            private final TransactionState tx = new TransactionState() {
-                @Override
-                public boolean active() {
-                    return false;
-                }
+        CommandContext ctx = new CommandContext(
+                CommandSessionCapabilities.of(session, session, session, session, session),
+                writer
+        );
 
-                @Override
-                public void begin() {
-                }
+        session.setDbIndex(4);
+        session.setClientName("client");
+        session.setAuthenticated(true);
+        session.setRespVersion(3);
 
-                @Override
-                public void discard() {
-                }
-
-                @Override
-                public void enqueue(ExecutionRequest request) {
-                }
-
-                @Override
-                public int size() {
-                    return 0;
-                }
-
-                @Override
-                public List<ExecutionRequest> drain() {
-                    return List.of();
-                }
-            };
-
-            @Override
-            public int dbIndex() {
-                return 0;
-            }
-
-            @Override
-            public void setDbIndex(int dbIndex) {
-            }
-
-            @Override
-            public long clientId() {
-                return 1L;
-            }
-
-            @Override
-            public String clientName() {
-                return null;
-            }
-
-            @Override
-            public void setClientName(String clientName) {
-            }
-
-            @Override
-            public boolean authenticated() {
-                return false;
-            }
-
-            @Override
-            public void setAuthenticated(boolean authenticated) {
-            }
-
-            @Override
-            public TransactionState transaction() {
-                return tx;
-            }
-
-            @Override
-            public ConnectionStatsView connectionStats() {
-                return null;
-            }
-        };
-
-        CommandContext ctx = new CommandContext(session, writer);
         Assert.assertSame(session, ctx.dbIndexSession());
         Assert.assertSame(session, ctx.clientMetadataSession());
         Assert.assertSame(session, ctx.transactionSession());
         Assert.assertSame(session, ctx.connectionStatsSession());
         Assert.assertSame(session, ctx.protocolNegotiationSession());
         Assert.assertSame(writer, ctx.out());
+        Assert.assertEquals(4, ctx.dbIndexSession().dbIndex());
+        Assert.assertEquals("client", ctx.clientMetadataSession().clientName());
+        Assert.assertTrue(ctx.clientMetadataSession().authenticated());
+        Assert.assertEquals(3, ctx.protocolNegotiationSession().respVersion());
         ctx.recordMutation(true, false);
         Assert.assertTrue(ctx.valueChanged());
         Assert.assertFalse(ctx.ttlChanged());

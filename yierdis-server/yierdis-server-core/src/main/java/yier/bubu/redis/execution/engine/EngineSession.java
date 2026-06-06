@@ -1,10 +1,14 @@
 package yier.bubu.redis.execution.engine;
 
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.ClientMetadataSession;
+import yier.bubu.redis.execution.api.ConnectionStatsSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
+import yier.bubu.redis.execution.api.DbIndexSession;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.execution.api.ServerSession;
+import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
 import yier.bubu.redis.execution.api.TransactionState;
+import yier.bubu.redis.execution.api.TransactionSession;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,7 +18,12 @@ import java.util.function.Supplier;
 /**
  * Engine-owned per-connection command session state.
  */
-public final class EngineSession implements ServerSession {
+public final class EngineSession implements
+        DbIndexSession,
+        ClientMetadataSession,
+        TransactionSession,
+        ConnectionStatsSession,
+        ProtocolNegotiationSession {
     private static final AtomicLong NEXT_CLIENT_ID = new AtomicLong(1);
 
     private final long clientId = NEXT_CLIENT_ID.getAndIncrement();

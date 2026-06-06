@@ -4,9 +4,9 @@ import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.CommandSessionCapabilities;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.execution.api.ServerSession;
 import yier.bubu.redis.execution.api.TransactionState;
 
 import java.util.ArrayDeque;
@@ -22,13 +22,13 @@ import java.util.Objects;
  */
 public final class FastTestClient implements AutoCloseable {
     private final YierdisFastCommandProcessor processor;
-    private final ServerSession session;
+    private final yier.bubu.redis.execution.api.Session session;
 
     public FastTestClient(YierdisFastCommandProcessor processor) {
         this(processor, null);
     }
 
-    public FastTestClient(YierdisFastCommandProcessor processor, ServerSession session) {
+    public FastTestClient(YierdisFastCommandProcessor processor, yier.bubu.redis.execution.api.Session session) {
         Objects.requireNonNull(processor, "processor");
         this.processor = processor;
         this.session = session != null ? session : new DefaultTestSession();
@@ -43,7 +43,7 @@ public final class FastTestClient implements AutoCloseable {
         Objects.requireNonNull(request, "request");
         CapturingReplyWriter writer = new CapturingReplyWriter();
         try {
-            processor.execute(request, new CommandContext(session, writer));
+            processor.execute(request, new CommandContext(CommandSessionCapabilities.from(session), writer));
             return writer.root();
         } finally {
             request.close();
@@ -320,7 +320,12 @@ public final class FastTestClient implements AutoCloseable {
         }
     }
 
-    private static final class DefaultTestSession implements ServerSession {
+    private static final class DefaultTestSession implements
+            yier.bubu.redis.execution.api.DbIndexSession,
+            yier.bubu.redis.execution.api.ClientMetadataSession,
+            yier.bubu.redis.execution.api.TransactionSession,
+            yier.bubu.redis.execution.api.ConnectionStatsSession,
+            yier.bubu.redis.execution.api.ProtocolNegotiationSession {
         private int dbIndex;
         private String clientName;
         private boolean authenticated;

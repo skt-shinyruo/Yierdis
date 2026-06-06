@@ -18,7 +18,6 @@
  *     <li>ConnectionStatsSession - API. Audience: server INFO/STATS views.</li>
  *     <li>ProtocolNegotiationSession - API. Audience: protocol reply writers and HELLO command handlers.</li>
  *     <li>CommandSessionCapabilities - API. Audience: engine and command context construction requiring the narrow command session surface.</li>
- *     <li>ServerSession - API. Audience: engine/session implementations that already aggregate all command session capabilities.</li>
  *     <li>DbIndexProvider - compatibility/deprecated. Audience: legacy embedders only; command routing uses DbIndexSession.</li>
  *     <li>ConnectionStatsView - API. Audience: server INFO/STATS views, executor/server observability, tests.</li>
  *     <li>TransactionState - API. Audience: command transaction handlers, engine sessions, server sessions, tests.</li>

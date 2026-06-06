@@ -1114,12 +1114,41 @@ public class ArchitectureBoundaryTest {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
 
+        Path cliPackage = repoRoot.resolve(
+                "yierdis-cli/src/main/java/yier/bubu/redis/app/client"
+        ).normalize();
+        Assert.assertTrue("缺少 CLI package，无法执行 inline parser 护栏", Files.isDirectory(cliPackage));
+
         Path cliWrapper = repoRoot.resolve(
                 "yierdis-cli/src/main/java/yier/bubu/redis/app/client/InlineCommandParser.java"
         ).normalize();
         Assert.assertFalse(
                 "CLI InlineCommandParser wrapper must be deleted; use protocol.resp.InlineCommandParser",
                 Files.exists(cliWrapper)
+        );
+
+        Path cliMain = cliPackage.resolve("YierdisCli.java");
+        Assert.assertTrue("缺少 YierdisCli.java，无法确认 CLI parser 边界", Files.isRegularFile(cliMain));
+        String cliSource = Files.readString(cliMain, StandardCharsets.UTF_8);
+        Assert.assertTrue(
+                "YierdisCli must import the shared RESP inline parser directly",
+                cliSource.contains("import yier.bubu.redis.protocol.resp.InlineCommandParser;")
+        );
+        Assert.assertTrue(
+                "YierdisCli must route REPL parsing through the shared inline parser",
+                cliSource.contains("InlineCommandParser.splitUtf8(")
+        );
+
+        List<String> offenders = new ArrayList<>();
+        scanFilesMatchingRegex(
+                repoRoot,
+                cliPackage,
+                offenders,
+                "\\b(?:class|interface|enum)\\s+\\w*Inline\\w*Parser\\b"
+        );
+        Assert.assertTrue(
+                "CLI package must not reintroduce a local inline parser implementation:\n" + String.join("\n", offenders),
+                offenders.isEmpty()
         );
     }
 
@@ -1138,7 +1167,6 @@ public class ArchitectureBoundaryTest {
         Path connectionStatsSessionFile = apiPackage.resolve("ConnectionStatsSession.java");
         Path protocolNegotiationSessionFile = apiPackage.resolve("ProtocolNegotiationSession.java");
         for (Path required : List.of(
-                serverSessionFile,
                 dbIndexSessionFile,
                 clientMetadataSessionFile,
                 transactionSessionFile,
@@ -1147,32 +1175,10 @@ public class ArchitectureBoundaryTest {
         )) {
             Assert.assertTrue("缺少拆分后的 session 能力接口: " + relativePath(repoRoot, required), Files.isRegularFile(required));
         }
-
-        String serverSession = Files.readString(serverSessionFile, StandardCharsets.UTF_8);
-        String normalizedServerSession = serverSession.replaceAll("\\s+", " ");
-        Assert.assertTrue(
-                "ServerSession should remain only as a compatibility aggregate over narrower session capabilities",
-                normalizedServerSession.contains(
-                        "interface ServerSession extends DbIndexSession, ClientMetadataSession, TransactionSession, ConnectionStatsSession, ProtocolNegotiationSession"
-                )
+        Assert.assertFalse(
+                "ServerSession aggregate must be deleted; use narrow session capabilities or CommandSessionCapabilities",
+                Files.exists(serverSessionFile)
         );
-        for (String directMethod : List.of(
-                "dbIndex()",
-                "setDbIndex(",
-                "clientName()",
-                "setClientName(",
-                "authenticated()",
-                "setAuthenticated(",
-                "transaction()",
-                "connectionStats()",
-                "respVersion()",
-                "setRespVersion("
-        )) {
-            Assert.assertFalse(
-                    "ServerSession must not directly redeclare split capability method " + directMethod,
-                    serverSession.contains(directMethod)
-            );
-        }
 
         String protocolNegotiationSession = Files.readString(protocolNegotiationSessionFile, StandardCharsets.UTF_8);
         Assert.assertTrue(
@@ -1204,6 +1210,35 @@ public class ArchitectureBoundaryTest {
         Assert.assertTrue("DbIndexSession must own DB index writes", dbIndexSession.contains("void setDbIndex(int dbIndex)"));
         Assert.assertFalse("DbIndexSession must not own RESP version", dbIndexSession.contains("respVersion("));
 
+        Path commandSessionCapabilitiesFile = apiPackage.resolve("CommandSessionCapabilities.java");
+        String commandSessionCapabilities = Files.readString(commandSessionCapabilitiesFile, StandardCharsets.UTF_8);
+        Assert.assertFalse(
+                "CommandSessionCapabilities must not keep from(ServerSession)",
+                commandSessionCapabilities.contains("from(ServerSession")
+        );
+
+        Path commandContextFile = apiPackage.resolve("CommandContext.java");
+        String commandContext = Files.readString(commandContextFile, StandardCharsets.UTF_8);
+        Assert.assertFalse(
+                "CommandContext must not keep ServerSession constructors",
+                commandContext.contains("CommandContext(ServerSession")
+        );
+        Assert.assertFalse(
+                "CommandContext must not keep ServerSession reset overloads",
+                commandContext.contains("reset(ServerSession")
+        );
+
+        Path engineSessionFile = repoRoot.resolve(
+                "yierdis-server/yierdis-server-core/src/main/java/yier/bubu/redis/execution/engine/EngineSession.java"
+        ).normalize();
+        String engineSession = Files.readString(engineSessionFile, StandardCharsets.UTF_8).replaceAll("\\s+", " ");
+        Assert.assertTrue(
+                "EngineSession must implement narrow session capabilities directly",
+                engineSession.contains(
+                        "implements DbIndexSession, ClientMetadataSession, TransactionSession, ConnectionStatsSession, ProtocolNegotiationSession"
+                )
+        );
+
         Path respFactoryFile = repoRoot.resolve(
                 "yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespReplyWriterFactory.java"
         ).normalize();
@@ -1216,6 +1251,56 @@ public class ArchitectureBoundaryTest {
         Assert.assertFalse(
                 "RESP writer factory must not require full ServerSession just to read RESP version",
                 respFactory.contains("import yier.bubu.redis.execution.api.ServerSession;")
+        );
+
+        List<String> offenders = new ArrayList<>();
+        Path architectureTestFile = repoRoot.resolve(
+                "yierdis-tests/yierdis-architecture-tests/src/test/java/yier/bubu/redis/ArchitectureBoundaryTest.java"
+        ).normalize();
+        int scanned = 0;
+        for (Path sourceRoot : List.of(
+                repoRoot.resolve("yierdis-server").normalize(),
+                repoRoot.resolve("yierdis-command").normalize(),
+                repoRoot.resolve("yierdis-tests").normalize()
+        )) {
+            scanned += scanForForbiddenTextExcluding(
+                    repoRoot,
+                    sourceRoot,
+                    offenders,
+                    List.of(architectureTestFile),
+                    "import yier.bubu.redis.execution.api.ServerSession;",
+                    "implements ServerSession",
+                    "from(ServerSession",
+                    "CommandContext(ServerSession",
+                    "reset(ServerSession"
+            );
+        }
+        Assert.assertTrue("ServerSession guard did not scan any Java files", scanned > 0);
+        Assert.assertTrue(
+                "ServerSession aggregate references remain:\n" + String.join("\n", offenders),
+                offenders.isEmpty()
+        );
+
+        List<String> docOffenders = new ArrayList<>();
+        Path docsRoot = repoRoot.resolve("docs/project-docs").normalize();
+        if (Files.exists(docsRoot)) {
+            try (Stream<Path> paths = Files.walk(docsRoot)) {
+                paths.filter(p -> p != null && p.toString().endsWith(".md"))
+                        .sorted()
+                        .forEach(p -> {
+                            try {
+                                if (Files.readString(p, StandardCharsets.UTF_8).contains("ServerSession")) {
+                                    docOffenders.add(relativePath(repoRoot, p));
+                                }
+                            } catch (IOException e) {
+                                throw new RuntimeException(e);
+                            }
+                        });
+            }
+        }
+        Assert.assertTrue(
+                "Project docs still describe ServerSession:\n" + String.join("\n", docOffenders),
+                docOffenders.isEmpty()
         );
     }
 

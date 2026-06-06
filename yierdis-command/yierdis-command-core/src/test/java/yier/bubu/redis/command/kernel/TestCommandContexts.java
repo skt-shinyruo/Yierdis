@@ -1,10 +1,10 @@
 package yier.bubu.redis.command.kernel;
 
 import yier.bubu.redis.execution.api.CommandContext;
+import yier.bubu.redis.execution.api.CommandSessionCapabilities;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
-import yier.bubu.redis.execution.api.ServerSession;
 import yier.bubu.redis.execution.api.TransactionState;
 
 import java.util.List;
@@ -14,10 +14,16 @@ final class TestCommandContexts {
     }
 
     static CommandContext context(RedisReplyWriter out) {
-        return new CommandContext(new TestSession(), out);
+        TestSession session = new TestSession();
+        return new CommandContext(CommandSessionCapabilities.of(session, session, session, session, session), out);
     }
 
-    private static final class TestSession implements ServerSession {
+    private static final class TestSession implements
+            yier.bubu.redis.execution.api.DbIndexSession,
+            yier.bubu.redis.execution.api.ClientMetadataSession,
+            yier.bubu.redis.execution.api.TransactionSession,
+            yier.bubu.redis.execution.api.ConnectionStatsSession,
+            yier.bubu.redis.execution.api.ProtocolNegotiationSession {
         private final TransactionState tx = new TestTransactionState();
 
         @Override
