@@ -102,7 +102,7 @@ public class YierdisChangeSinkTest {
 
         Assert.assertEquals(
                 MaxmemoryPolicy.ALLKEYS_LRU,
-                YierdisInstanceConfig.builder().maxmemoryPolicy("allkeys-lru").build().maxmemoryPolicy()
+                YierdisInstanceConfig.builder().maxmemoryPolicy(MaxmemoryPolicy.ALLKEYS_LRU).build().maxmemoryPolicy()
         );
         YierdisChangeSink sink = event -> {
         };

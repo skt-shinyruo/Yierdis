@@ -11,6 +11,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
@@ -31,7 +32,7 @@ public class OffHeapKeysToggleTest {
     @Test
     public void sharedRuntimeDbDoesNotOwnCallerRuntime() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 64, "noeviction", 5, 5, 5);
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 64, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             db.bindToCurrentThread();
             db.shutdown();
             Assert.assertEquals(0L, runtime.usedBytes());

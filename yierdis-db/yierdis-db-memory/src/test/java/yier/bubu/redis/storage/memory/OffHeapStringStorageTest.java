@@ -15,6 +15,7 @@ import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.ExpireOption;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 
@@ -28,7 +29,7 @@ public class OffHeapStringStorageTest {
     @Test
     public void setGetUsesNativeStringSliceAndDelFreesStableAllocatorBytes() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             try {
                 db.bindToCurrentThread();
                 byte[] key = b("k");
@@ -57,7 +58,7 @@ public class OffHeapStringStorageTest {
     @Test
     public void cleanupExpiredFreesFfmStrings() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             try {
                 db.bindToCurrentThread();
                 byte[] key = b("k");

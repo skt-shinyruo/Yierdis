@@ -39,12 +39,4 @@ public final class TestDbs {
             }
         }
     }
-
-    @Deprecated
-    public static void forEachDbWithMaxmemory(long maxmemoryBytes, String maxmemoryPolicy, int maxmemorySamples, Consumer<YierdisDb> test) {
-        MaxmemoryPolicy policy = maxmemoryPolicy == null || maxmemoryPolicy.isBlank()
-                ? MaxmemoryPolicy.NOEVICTION
-                : MaxmemoryPolicy.parse(maxmemoryPolicy);
-        forEachDbWithMaxmemory(maxmemoryBytes, policy, maxmemorySamples, test);
-    }
 }

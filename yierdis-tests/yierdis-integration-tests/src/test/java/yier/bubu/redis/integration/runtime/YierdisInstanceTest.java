@@ -238,7 +238,7 @@ public class YierdisInstanceTest {
     }
 
     @Test
-    public void maxmemoryPolicyBuilderUsesDomainEnumAndKeepsStringCompatibility() {
+    public void maxmemoryPolicyBuilderUsesDomainEnum() {
         YierdisInstanceConfig typed = YierdisInstanceConfig.builder()
                 .maxmemoryPolicy(MaxmemoryPolicy.ALLKEYS_LRU)
                 .build();
@@ -249,15 +249,10 @@ public class YierdisInstanceTest {
                 .build();
         Assert.assertEquals(MaxmemoryPolicy.NOEVICTION, defaulted.maxmemoryPolicy());
 
-        YierdisInstanceConfig legacyString = YierdisInstanceConfig.builder()
-                .maxmemoryPolicy("ALLKEYS_RANDOM")
+        YierdisInstanceConfig random = YierdisInstanceConfig.builder()
+                .maxmemoryPolicy(MaxmemoryPolicy.ALLKEYS_RANDOM)
                 .build();
-        Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_RANDOM, legacyString.maxmemoryPolicy());
-
-        YierdisInstanceConfig legacyBlank = YierdisInstanceConfig.builder()
-                .maxmemoryPolicy(" ")
-                .build();
-        Assert.assertEquals(MaxmemoryPolicy.NOEVICTION, legacyBlank.maxmemoryPolicy());
+        Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_RANDOM, random.maxmemoryPolicy());
     }
 
     private static long addSaturating(long left, long right) {

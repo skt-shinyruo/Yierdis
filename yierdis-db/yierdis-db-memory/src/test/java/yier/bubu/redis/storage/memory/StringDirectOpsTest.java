@@ -7,6 +7,7 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.StringWriteOps;
@@ -91,7 +92,7 @@ public class StringDirectOpsTest {
             Assert.assertEquals(-1L, db.reads().ttl().ttlMillis(view("k")));
         });
 
-        YierdisDb small = YierdisDb.createWithOwnedFfmRuntime(4, "noeviction", 5, 5, 5);
+        YierdisDb small = YierdisDb.createWithOwnedFfmRuntime(4, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         try {
             small.bindToCurrentThread();
             try {
@@ -113,7 +114,7 @@ public class StringDirectOpsTest {
         byte[] smallValue = b("x");
         long maxmemoryBytes = usedAfterSet(key, largeValue);
 
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, "noeviction", 5, 5, 5);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         try {
             db.bindToCurrentThread();
 
@@ -139,7 +140,7 @@ public class StringDirectOpsTest {
         long usedWithOldValue = usedAfterSet(key, oldValue);
         long maxmemoryBytes = usedWithOldValue + 1L;
 
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, "noeviction", 5, 5, 5);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         try {
             db.bindToCurrentThread();
 

@@ -52,13 +52,6 @@ public final class YierdisDb implements RuntimeDbEngine {
         this(null, false, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5, null);
     }
 
-    private static MaxmemoryPolicy compatibilityMaxmemoryPolicy(String policy) {
-        if (policy == null || policy.isBlank()) {
-            return MaxmemoryPolicy.NOEVICTION;
-        }
-        return MaxmemoryPolicy.parse(policy);
-    }
-
     public static YierdisDb createWithSharedFfmRuntime(
             YierdisFfmMemoryRuntime memoryRuntime,
             long maxmemoryBytes,
@@ -111,25 +104,6 @@ public final class YierdisDb implements RuntimeDbEngine {
                 expireCleanupTimeLimitMillis,
                 nativeDefragOptions,
                 dbIndex
-        );
-    }
-
-    @Deprecated
-    public static YierdisDb createWithSharedFfmRuntime(
-            YierdisFfmMemoryRuntime memoryRuntime,
-            long maxmemoryBytes,
-            String maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
-    ) {
-        return createWithSharedFfmRuntime(
-                memoryRuntime,
-                maxmemoryBytes,
-                compatibilityMaxmemoryPolicy(maxmemoryPolicy),
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis
         );
     }
 
@@ -191,23 +165,6 @@ public final class YierdisDb implements RuntimeDbEngine {
                 expireCleanupTimeLimitMillis,
                 nativeDefragOptions,
                 dbIndex
-        );
-    }
-
-    @Deprecated
-    public static YierdisDb createWithOwnedFfmRuntime(
-            long maxmemoryBytes,
-            String maxmemoryPolicy,
-            int maxmemorySamples,
-            long evictionTimeLimitMillis,
-            long expireCleanupTimeLimitMillis
-    ) {
-        return createWithOwnedFfmRuntime(
-                maxmemoryBytes,
-                compatibilityMaxmemoryPolicy(maxmemoryPolicy),
-                maxmemorySamples,
-                evictionTimeLimitMillis,
-                expireCleanupTimeLimitMillis
         );
     }
 
