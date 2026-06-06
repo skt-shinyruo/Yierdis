@@ -50,23 +50,9 @@ import java.util.List;
 
 public class YierdisDbConstructionTest {
     @Test
-    public void nullAndBlankMaxmemoryPoliciesDefaultToNoeviction() {
-        assertConstructsWithPolicy(null);
-        assertConstructsWithPolicy("");
-        assertConstructsWithPolicy("   ");
-    }
-
-    @Test
     public void typedConfigDefaultsNullPolicyToNoeviction() {
         YierdisDbConfig config = YierdisDbConfig.create(0, null, 5, 5, 5);
         Assert.assertSame(MaxmemoryPolicy.NOEVICTION, config.maxmemoryPolicy);
-    }
-
-    @Test
-    public void policyParsingNormalizesCaseAndUnderscore() {
-        assertConstructsWithPolicy("ALLKEYS_RANDOM");
-        assertConstructsWithPolicy("allkeys_LRU");
-        assertConstructsWithPolicy("  NoEviction  ");
     }
 
     @Test
@@ -105,21 +91,11 @@ public class YierdisDbConstructionTest {
     }
 
     @Test
-    public void unknownPolicyStillThrowsIllegalArgumentException() {
-        try {
-            YierdisDb.createWithOwnedFfmRuntime(0, "unknown-policy", 5, 5, 5);
-            Assert.fail("unknown policy should fail construction");
-        } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("unknown maxmemory policy"));
-        }
-    }
-
-    @Test
     public void invalidConstructionNumbersStillThrowIllegalArgumentException() {
-        assertInvalid(-1, "noeviction", 5, 5, 5, "maxmemoryBytes");
-        assertInvalid(0, "noeviction", 0, 5, 5, "maxmemorySamples");
-        assertInvalid(0, "noeviction", 5, 0, 5, "evictionTimeLimitMillis");
-        assertInvalid(0, "noeviction", 5, 5, 0, "expireCleanupTimeLimitMillis");
+        assertInvalid(-1, MaxmemoryPolicy.NOEVICTION, 5, 5, 5, "maxmemoryBytes");
+        assertInvalid(0, MaxmemoryPolicy.NOEVICTION, 0, 5, 5, "maxmemorySamples");
+        assertInvalid(0, MaxmemoryPolicy.NOEVICTION, 5, 0, 5, "evictionTimeLimitMillis");
+        assertInvalid(0, MaxmemoryPolicy.NOEVICTION, 5, 5, 0, "expireCleanupTimeLimitMillis");
     }
 
     @Test
@@ -557,18 +533,9 @@ public class YierdisDbConstructionTest {
         }
     }
 
-    private static void assertConstructsWithPolicy(String policy) {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(0, policy, 5, 5, 5);
-        try {
-            db.bindToCurrentThread();
-        } finally {
-            db.shutdown();
-        }
-    }
-
     private static void assertInvalid(
             long maxmemoryBytes,
-            String policy,
+            MaxmemoryPolicy policy,
             int samples,
             long evictionMillis,
             long expireMillis,

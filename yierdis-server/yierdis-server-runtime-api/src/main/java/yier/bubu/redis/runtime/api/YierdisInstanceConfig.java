@@ -171,16 +171,6 @@ public final class YierdisInstanceConfig {
             return this;
         }
 
-        @Deprecated
-        public Builder maxmemoryPolicy(String rawPolicy) {
-            if (rawPolicy == null || rawPolicy.isBlank()) {
-                this.maxmemoryPolicy = MaxmemoryPolicy.NOEVICTION;
-            } else {
-                this.maxmemoryPolicy = MaxmemoryPolicy.parse(rawPolicy);
-            }
-            return this;
-        }
-
         public Builder maxmemorySamples(int maxmemorySamples) {
             this.maxmemorySamples = maxmemorySamples;
             return this;

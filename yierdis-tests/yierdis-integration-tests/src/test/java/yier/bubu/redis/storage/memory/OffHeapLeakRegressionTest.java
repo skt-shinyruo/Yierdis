@@ -5,6 +5,7 @@ import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.runtime.embedded.TestCommandProcessors;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyInteger;
 import yier.bubu.redis.testutil.ReplySimpleString;
@@ -19,7 +20,7 @@ public class OffHeapLeakRegressionTest {
     @Test
     public void ffmEvictionAndExpireDoNotLeak() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 2500, "allkeys-random", 5, 5, 5);
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 2500, MaxmemoryPolicy.ALLKEYS_RANDOM, 5, 5, 5);
             try {
                 db.bindToCurrentThread();
                 YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
@@ -49,7 +50,7 @@ public class OffHeapLeakRegressionTest {
     @Test
     public void ffmEvictionDeleteAndExpireDoNotLeak() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 4500, "allkeys-random", 5, 5, 5);
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 4500, MaxmemoryPolicy.ALLKEYS_RANDOM, 5, 5, 5);
             try {
                 db.bindToCurrentThread();
                 YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);

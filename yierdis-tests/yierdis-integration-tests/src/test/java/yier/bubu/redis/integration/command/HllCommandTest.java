@@ -5,6 +5,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.storage.memory.YierdisDb;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.testutil.FastTestClient;
 import yier.bubu.redis.testutil.ReplyError;
 import yier.bubu.redis.testutil.ReplyInteger;
@@ -73,7 +74,7 @@ public class HllCommandTest {
     @Test
     public void denseHllSupportsInPlacePfaddAfterPfmergeUnderFfmStorage() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, "noeviction", 5, 5, 5);
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             try {
                 db.bindToCurrentThread();
                 YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
@@ -98,7 +99,7 @@ public class HllCommandTest {
     @Test
     public void densePfaddNearMaxmemoryDoesNotFalseOom() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 13000, "noeviction", 5, 5, 5);
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 13000, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             db.bindToCurrentThread();
             try {
                 YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);

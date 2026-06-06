@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import javax.xml.parsers.DocumentBuilderFactory;
 
@@ -1070,6 +1071,42 @@ public class ArchitectureBoundaryTest {
                     source.contains(" byteAt(int")
             );
         }
+    }
+
+    @Test
+    public void internalApisMustNotExposeStringMaxmemoryPolicyOverloads() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
+
+        Path yierdisDb = repoRoot.resolve(
+                "yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java"
+        ).normalize();
+        Assert.assertTrue("缺少 YierdisDb.java", Files.isRegularFile(yierdisDb));
+        String dbSource = Files.readString(yierdisDb, StandardCharsets.UTF_8);
+        Assert.assertFalse(
+                "YierdisDb must not keep String maxmemoryPolicy overloads",
+                Pattern.compile("\\bcreateWith(?:Shared|Owned)FfmRuntime\\s*\\([^)]*\\b(?:java\\.lang\\.)?String\\b", Pattern.DOTALL)
+                        .matcher(dbSource)
+                        .find()
+        );
+        Assert.assertFalse(
+                "YierdisDb must not keep compatibilityMaxmemoryPolicy",
+                Pattern.compile("\\bcompatibilityMaxmemoryPolicy\\s*\\(")
+                        .matcher(dbSource)
+                        .find()
+        );
+
+        Path instanceConfig = repoRoot.resolve(
+                "yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisInstanceConfig.java"
+        ).normalize();
+        Assert.assertTrue("缺少 YierdisInstanceConfig.java", Files.isRegularFile(instanceConfig));
+        String configSource = Files.readString(instanceConfig, StandardCharsets.UTF_8);
+        Assert.assertFalse(
+                "YierdisInstanceConfig.Builder must not keep String maxmemoryPolicy overload",
+                Pattern.compile("\\bmaxmemoryPolicy\\s*\\(\\s*(?:java\\.lang\\.)?String\\b", Pattern.DOTALL)
+                        .matcher(configSource)
+                        .find()
+        );
     }
 
     @Test

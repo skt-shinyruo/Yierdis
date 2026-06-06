@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.memory.YierdisDb;
@@ -26,7 +27,7 @@ import static yier.bubu.redis.testutil.TestDbs.forEachDbWithMaxmemory;
 public class MaxmemoryEvictionTest {
     @Test
     public void noevictionRejectsWritesWhenFull() {
-        forEachDbWithMaxmemory(3000, "noeviction", 5, db -> {
+        forEachDbWithMaxmemory(3000, MaxmemoryPolicy.NOEVICTION, 5, db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
@@ -51,7 +52,7 @@ public class MaxmemoryEvictionTest {
         byte[] smallValue = b("x");
         long maxmemoryBytes = usedAfterSet(key, largeValue);
 
-        forEachDbWithMaxmemory(maxmemoryBytes, "noeviction", 5, db -> {
+        forEachDbWithMaxmemory(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 Assert.assertTrue(client.execute(List.of(b("SET"), key, largeValue)) instanceof ReplySimpleString);
@@ -70,7 +71,7 @@ public class MaxmemoryEvictionTest {
 
     @Test
     public void noevictionRejectsCollectionGrowthWritesBeforeTheyMutate() {
-        forEachDbWithMaxmemory(1, "noeviction", 5, db -> {
+        forEachDbWithMaxmemory(1, MaxmemoryPolicy.NOEVICTION, 5, db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 assertCollectionWriteRejected(client, List.of(b("LPUSH"), b("l"), b("a")), b("l"));
@@ -121,7 +122,7 @@ public class MaxmemoryEvictionTest {
 
     @Test
     public void allkeysRandomEvictsToStayWithinLimit() {
-        forEachDbWithMaxmemory(3000, "allkeys-random", 5, db -> {
+        forEachDbWithMaxmemory(3000, MaxmemoryPolicy.ALLKEYS_RANDOM, 5, db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
@@ -141,7 +142,7 @@ public class MaxmemoryEvictionTest {
     @Test
     public void allkeysLruEvictsLeastRecentlyUsedWhenSamplesCoverAllKeys() {
         // samples >= total keys triggers a deterministic full scan in eviction.
-        forEachDbWithMaxmemory(4500, "allkeys-lru", 10, db -> {
+        forEachDbWithMaxmemory(4500, MaxmemoryPolicy.ALLKEYS_LRU, 10, db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
             try (FastTestClient client = new FastTestClient(processor)) {
 
@@ -341,7 +342,7 @@ public class MaxmemoryEvictionTest {
         private final YierdisDb db;
 
         private DbFixture(long maxmemoryBytes) {
-            this.db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, "noeviction", 5, 5, 5);
+            this.db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             this.db.bindToCurrentThread();
         }
 
