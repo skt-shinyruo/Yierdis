@@ -43,6 +43,15 @@ public final class YierdisBenchArgs {
     @Option(names = "--currentServerJar", description = "Path to the current server jar used in comparison mode.")
     public Path currentServerJar;
 
+    @Option(names = "--suite", description = "Run the release-grade benchmark suite.")
+    public boolean suite;
+
+    @Option(names = "--suiteProfile", defaultValue = "release", description = "Suite profile: release|full.")
+    public String suiteProfile = "release";
+
+    @Option(names = "--reportDir", description = "Directory for suite JSON, CSV, and Markdown report artifacts.")
+    public Path reportDir;
+
     @Option(names = "--javaCmd", defaultValue = "java", description = "Java command used to start server (only used when starting server).")
     public String javaCmd = "java";
 
