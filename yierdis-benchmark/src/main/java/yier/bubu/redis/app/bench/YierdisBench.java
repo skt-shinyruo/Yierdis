@@ -2,6 +2,7 @@ package yier.bubu.redis.app.bench;
 
 import picocli.CommandLine;
 import picocli.CommandLine.ParameterException;
+import yier.bubu.redis.app.bench.suite.SuiteConfig;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
@@ -117,6 +118,18 @@ public final class YierdisBench {
             return;
         }
         baseServerArgs.normalizeAndValidate();
+
+        if (benchArgs.suite) {
+            try {
+                SuiteConfig.from(benchArgs, baseServerArgs);
+            } catch (IllegalArgumentException e) {
+                System.err.println(e.getMessage());
+                cmd.usage(System.err);
+                return;
+            }
+            System.err.println("suite runner is not implemented yet");
+            return;
+        }
 
         BenchConfig config;
         try {

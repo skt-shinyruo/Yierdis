@@ -41,6 +41,7 @@ public record SuiteConfig(
         Objects.requireNonNull(xmx, "xmx");
         Objects.requireNonNull(maxDirectMemory, "maxDirectMemory");
         Objects.requireNonNull(baseServerArgs, "baseServerArgs");
+        baseServerArgs = baseServerArgs.copy();
         if (portBase < 0 || portBase > 65535) {
             throw new IllegalArgumentException("portBase must be in range 0..65535");
         }
@@ -86,7 +87,7 @@ public record SuiteConfig(
                 args.xms,
                 args.xmx,
                 args.maxDirectMemory,
-                serverArgs.copy(),
+                serverArgs,
                 true
         );
     }

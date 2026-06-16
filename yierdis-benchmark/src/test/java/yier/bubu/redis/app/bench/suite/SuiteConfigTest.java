@@ -28,6 +28,7 @@ public class SuiteConfigTest {
         Assert.assertFalse(currentOnly.baseline().isPresent());
         Assert.assertTrue(currentOnly.reportDir().toString().contains("target/benchmark-reports"));
         Assert.assertEquals("current", currentOnly.current().label());
+        Assert.assertTrue(currentOnly.strictReplies());
 
         SuiteConfig comparison = config(
                 "--suite",
@@ -39,6 +40,53 @@ public class SuiteConfigTest {
         Assert.assertEquals(SuiteProfileName.FULL, comparison.profile());
         Assert.assertEquals(List.of("baseline", "current"), comparison.artifactLabels());
         Assert.assertEquals(baseline, comparison.baseline().orElseThrow().jarPath());
+
+        Path suppliedReportDir = Files.createTempDirectory("suite-report-dir-");
+        SuiteConfig suppliedReport = config(
+                "--suite",
+                "--currentServerJar", current.toString(),
+                "--reportDir", suppliedReportDir.toString()
+        );
+        Assert.assertEquals(suppliedReportDir.toAbsolutePath().normalize(), suppliedReport.reportDir());
+        Assert.assertTrue(suppliedReport.reportDir().isAbsolute());
+    }
+
+    @Test
+    public void suiteCopiesBaseServerArgs() throws Exception {
+        Path current = regularTempJar("current");
+        YierdisBenchArgs args = new YierdisBenchArgs();
+        new CommandLine(args).parseArgs("--suite", "--currentServerJar", current.toString());
+
+        YierdisBenchServerArgs serverArgs = new YierdisBenchServerArgs();
+        serverArgs.port = 17378;
+        serverArgs.normalizeAndValidate();
+
+        SuiteConfig config = SuiteConfig.from(args, serverArgs);
+        serverArgs.port = 17379;
+
+        Assert.assertNotSame(serverArgs, config.baseServerArgs());
+        Assert.assertEquals(17378, config.baseServerArgs().port);
+
+        YierdisBenchServerArgs constructorArgs = new YierdisBenchServerArgs();
+        constructorArgs.port = 18378;
+        SuiteConfig constructed = new SuiteConfig(
+                SuiteProfileName.RELEASE,
+                new SuiteArtifact("current", current, ""),
+                java.util.Optional.empty(),
+                Files.createTempDirectory("suite-constructor-report-"),
+                "127.0.0.1",
+                16378,
+                "java",
+                "4g",
+                "4g",
+                "6g",
+                constructorArgs,
+                true
+        );
+        constructorArgs.port = 18379;
+
+        Assert.assertNotSame(constructorArgs, constructed.baseServerArgs());
+        Assert.assertEquals(18378, constructed.baseServerArgs().port);
     }
 
     @Test

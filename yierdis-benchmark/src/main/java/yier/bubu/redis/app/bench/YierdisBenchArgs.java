@@ -37,10 +37,10 @@ public final class YierdisBenchArgs {
     @Option(names = "--comparisonMode", description = "Run a jar-only baseline/current comparison.")
     public boolean comparisonMode;
 
-    @Option(names = "--baselineServerJar", description = "Path to the baseline server jar used in comparison mode.")
+    @Option(names = "--baselineServerJar", description = "Path to the baseline server jar used in comparison or suite mode.")
     public Path baselineServerJar;
 
-    @Option(names = "--currentServerJar", description = "Path to the current server jar used in comparison mode.")
+    @Option(names = "--currentServerJar", description = "Path to the current server jar used in comparison or suite mode.")
     public Path currentServerJar;
 
     @Option(names = "--suite", description = "Run the release-grade benchmark suite.")
