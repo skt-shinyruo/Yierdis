@@ -8,5 +8,8 @@ public record SuiteMetric(String name, double value) {
         if (!Double.isFinite(value)) {
             throw new IllegalArgumentException("metric value must be finite");
         }
+        if (value < 0.0) {
+            throw new IllegalArgumentException("metric value must be >= 0");
+        }
     }
 }
