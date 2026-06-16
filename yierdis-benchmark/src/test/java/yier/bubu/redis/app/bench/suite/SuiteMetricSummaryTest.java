@@ -32,10 +32,20 @@ public class SuiteMetricSummaryTest {
         ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
                 10, 0, 100, 1, 1, 0, 1, true);
         ScenarioPassResult clean = ScenarioPassResult.completed("current", scenario, List.of(
-                IterationResult.repeat(0, List.of(new SuiteMetric("qps", 1000.0), new SuiteMetric("errors", 0.0)))
+                IterationResult.repeat(0, List.of(
+                        new SuiteMetric("qps", 1000.0),
+                        new SuiteMetric("errors", 0.0),
+                        new SuiteMetric("p95_ms", 1.0),
+                        new SuiteMetric("p99_ms", 2.0)
+                ))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
         ScenarioPassResult dirty = ScenarioPassResult.completed("current", scenario, List.of(
-                IterationResult.repeat(0, List.of(new SuiteMetric("qps", 1000.0), new SuiteMetric("errors", 2.0)))
+                IterationResult.repeat(0, List.of(
+                        new SuiteMetric("qps", 1000.0),
+                        new SuiteMetric("errors", 2.0),
+                        new SuiteMetric("p95_ms", 1.0),
+                        new SuiteMetric("p99_ms", 2.0)
+                ))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
         ScenarioPassResult failed = ScenarioPassResult.failed("current", scenario, "server did not become ready");
 
@@ -93,5 +103,74 @@ public class SuiteMetricSummaryTest {
         Assert.assertThrows(IllegalArgumentException.class, () -> new SuiteMetric("qps", Double.NaN));
         Assert.assertThrows(IllegalArgumentException.class, () -> new SuiteMetric("qps", Double.POSITIVE_INFINITY));
         Assert.assertThrows(IllegalArgumentException.class, () -> new SuiteMetric("qps", Double.NEGATIVE_INFINITY));
+    }
+
+    @Test
+    public void completedPassRequiresCoreMetrics() {
+        ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
+                10, 0, 100, 1, 1, 0, 1, false);
+
+        ScenarioPassResult missingErrors = ScenarioPassResult.completed("current", scenario, List.of(
+                IterationResult.repeat(0, List.of(new SuiteMetric("qps", 1000.0)))
+        ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
+        ScenarioPassResult missingQps = ScenarioPassResult.completed("current", scenario, List.of(
+                IterationResult.repeat(0, List.of(new SuiteMetric("errors", 0.0)))
+        ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
+
+        Assert.assertFalse(missingErrors.clean());
+        Assert.assertFalse(missingQps.clean());
+    }
+
+    @Test
+    public void latencyPassRequiresLatencyMetrics() {
+        ScenarioDefinition latency = new ScenarioDefinition("release-ping-latency", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
+                10, 0, 100, 1, 1, 0, 1, true);
+        ScenarioDefinition noLatency = new ScenarioDefinition("release-ping-throughput", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
+                10, 0, 100, 1, 1, 0, 1, false);
+
+        ScenarioPassResult missingP95 = ScenarioPassResult.completed("current", latency, List.of(
+                IterationResult.repeat(0, List.of(new SuiteMetric("qps", 1000.0), new SuiteMetric("errors", 0.0), new SuiteMetric("p99_ms", 2.0)))
+        ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
+        ScenarioPassResult missingP99 = ScenarioPassResult.completed("current", latency, List.of(
+                IterationResult.repeat(0, List.of(new SuiteMetric("qps", 1000.0), new SuiteMetric("errors", 0.0), new SuiteMetric("p95_ms", 1.0)))
+        ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
+        ScenarioPassResult cleanNoLatency = ScenarioPassResult.completed("current", noLatency, List.of(
+                IterationResult.repeat(0, List.of(new SuiteMetric("qps", 1000.0), new SuiteMetric("errors", 0.0)))
+        ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
+
+        Assert.assertFalse(missingP95.clean());
+        Assert.assertFalse(missingP99.clean());
+        Assert.assertTrue(cleanNoLatency.clean());
+    }
+
+    @Test
+    public void suiteMetricRejectsNegativeValues() {
+        Assert.assertThrows(IllegalArgumentException.class, () -> new SuiteMetric("errors", -0.001));
+    }
+
+    @Test
+    public void suppliedSummaryMapKeysMustMatchSummaryNames() {
+        ScenarioDefinition scenario = new ScenarioDefinition("release-ping-throughput", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
+                10, 0, 100, 1, 1, 0, 1, false);
+        Map<String, MetricSummary> summaries = Map.of(
+                "qps", new MetricSummary("errors", 1, 0.0, 0.0, 0.0, 0.0),
+                "errors", new MetricSummary("errors", 1, 0.0, 0.0, 0.0, 0.0)
+        );
+
+        Assert.assertThrows(IllegalArgumentException.class, () -> new ScenarioPassResult("current", scenario, false, "",
+                List.of(), ObservationSnapshot.empty(), ObservationSnapshot.empty(), summaries));
+    }
+
+    @Test
+    public void suppliedSummaryMapMustMatchRepeatSummaries() {
+        ScenarioDefinition scenario = new ScenarioDefinition("release-ping-throughput", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
+                10, 0, 100, 1, 1, 0, 1, false);
+        Map<String, MetricSummary> summaries = Map.of(
+                "qps", new MetricSummary("qps", 1, 1000.0, 1000.0, 1000.0, 1000.0),
+                "errors", new MetricSummary("errors", 1, 0.0, 0.0, 0.0, 0.0)
+        );
+
+        Assert.assertThrows(IllegalArgumentException.class, () -> new ScenarioPassResult("current", scenario, false, "",
+                List.of(), ObservationSnapshot.empty(), ObservationSnapshot.empty(), summaries));
     }
 }
