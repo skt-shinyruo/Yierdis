@@ -106,6 +106,23 @@ public class SuiteMetricSummaryTest {
     }
 
     @Test
+    public void suiteMetricAcceptsOnlyLowercaseSnakeCaseNames() {
+        new SuiteMetric("qps", 1.0);
+        new SuiteMetric("errors", 0.0);
+        new SuiteMetric("p95_ms", 1.0);
+        new SuiteMetric("p99_ms", 1.0);
+
+        assertInvalidMetricName(null);
+        assertInvalidMetricName("");
+        assertInvalidMetricName("QPS");
+        assertInvalidMetricName("qps-ms");
+        assertInvalidMetricName("_qps");
+        assertInvalidMetricName("qps_");
+        assertInvalidMetricName("qps__avg");
+        assertInvalidMetricName("_");
+    }
+
+    @Test
     public void completedPassRequiresCoreMetrics() {
         ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
                 10, 0, 100, 1, 1, 0, 1, false);
@@ -172,5 +189,9 @@ public class SuiteMetricSummaryTest {
 
         Assert.assertThrows(IllegalArgumentException.class, () -> new ScenarioPassResult("current", scenario, false, "",
                 List.of(), ObservationSnapshot.empty(), ObservationSnapshot.empty(), summaries));
+    }
+
+    private static void assertInvalidMetricName(String name) {
+        Assert.assertThrows(IllegalArgumentException.class, () -> new SuiteMetric(name, 1.0));
     }
 }
