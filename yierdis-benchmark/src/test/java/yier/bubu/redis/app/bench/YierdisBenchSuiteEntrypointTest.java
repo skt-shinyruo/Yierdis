@@ -30,6 +30,19 @@ public class YierdisBenchSuiteEntrypointTest {
         Assert.assertTrue(captured.err(), captured.err().contains("--suite"));
     }
 
+    @Test
+    public void suiteModeReportsSuiteSpecificValidationAfterValidCurrentJar() throws Exception {
+        Path current = regularTempJar("current");
+
+        Captured captured = captureErr(() -> YierdisBench.main(
+                new String[]{"--suite", "--currentServerJar", current.toString(), "--comparisonMode"}
+        ));
+
+        Assert.assertTrue(captured.err(), captured.err().contains("suite does not support comparisonMode"));
+        Assert.assertFalse(captured.err(), captured.err().contains("suite runner is not implemented yet"));
+        Assert.assertFalse(captured.err(), captured.err().contains("suite requires currentServerJar"));
+    }
+
     private static Captured captureErr(ThrowingRunnable runnable) throws Exception {
         PrintStream originalErr = System.err;
         ByteArrayOutputStream err = new ByteArrayOutputStream();

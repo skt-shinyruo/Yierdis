@@ -99,6 +99,11 @@ public record SuiteConfig(
         return labels;
     }
 
+    @Override
+    public YierdisBenchServerArgs baseServerArgs() {
+        return baseServerArgs.copy();
+    }
+
     private static Path normalizeReportDir(Path supplied, SuiteProfileName profile) {
         Path dir = supplied;
         if (dir == null) {
@@ -117,6 +122,6 @@ public record SuiteConfig(
         if (!Files.isRegularFile(normalized)) {
             throw new IllegalArgumentException(optionName + " does not exist or is not a regular file: " + normalized);
         }
-        return path;
+        return normalized;
     }
 }

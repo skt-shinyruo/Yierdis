@@ -16,30 +16,33 @@ public class SuiteConfigTest {
     public void suiteRequiresCurrentJarAndAcceptsOptionalBaselineJar() throws Exception {
         Path current = regularTempJar("current");
         Path baseline = regularTempJar("baseline");
+        Path currentRelative = Path.of(".").toAbsolutePath().relativize(current.toAbsolutePath()).normalize();
+        Path baselineRelative = Path.of(".").toAbsolutePath().relativize(baseline.toAbsolutePath()).normalize();
 
         SuiteConfig currentOnly = config(
                 "--suite",
-                "--currentServerJar", current.toString(),
+                "--currentServerJar", currentRelative.toString(),
                 "--suiteProfile", "release"
         );
 
         Assert.assertEquals(SuiteProfileName.RELEASE, currentOnly.profile());
-        Assert.assertEquals(current, currentOnly.current().jarPath());
+        Assert.assertEquals(current.toAbsolutePath().normalize(), currentOnly.current().jarPath());
         Assert.assertFalse(currentOnly.baseline().isPresent());
-        Assert.assertTrue(currentOnly.reportDir().toString().contains("target/benchmark-reports"));
+        Assert.assertEquals(Path.of("target", "benchmark-reports").toAbsolutePath().normalize(), currentOnly.reportDir().getParent());
+        Assert.assertTrue(currentOnly.reportDir().getFileName().toString().endsWith("-release"));
         Assert.assertEquals("current", currentOnly.current().label());
         Assert.assertTrue(currentOnly.strictReplies());
 
         SuiteConfig comparison = config(
                 "--suite",
-                "--currentServerJar", current.toString(),
-                "--baselineServerJar", baseline.toString(),
+                "--currentServerJar", currentRelative.toString(),
+                "--baselineServerJar", baselineRelative.toString(),
                 "--suiteProfile", "full"
         );
 
         Assert.assertEquals(SuiteProfileName.FULL, comparison.profile());
         Assert.assertEquals(List.of("baseline", "current"), comparison.artifactLabels());
-        Assert.assertEquals(baseline, comparison.baseline().orElseThrow().jarPath());
+        Assert.assertEquals(baseline.toAbsolutePath().normalize(), comparison.baseline().orElseThrow().jarPath());
 
         Path suppliedReportDir = Files.createTempDirectory("suite-report-dir-");
         SuiteConfig suppliedReport = config(
@@ -87,6 +90,19 @@ public class SuiteConfigTest {
 
         Assert.assertNotSame(constructorArgs, constructed.baseServerArgs());
         Assert.assertEquals(18378, constructed.baseServerArgs().port);
+    }
+
+    @Test
+    public void suiteBaseServerArgsAccessorReturnsCopy() throws Exception {
+        Path current = regularTempJar("current");
+        SuiteConfig config = config("--suite", "--currentServerJar", current.toString());
+
+        YierdisBenchServerArgs firstAccess = config.baseServerArgs();
+        firstAccess.port = 19379;
+
+        YierdisBenchServerArgs secondAccess = config.baseServerArgs();
+        Assert.assertNotSame(firstAccess, secondAccess);
+        Assert.assertEquals(6378, secondAccess.port);
     }
 
     @Test
