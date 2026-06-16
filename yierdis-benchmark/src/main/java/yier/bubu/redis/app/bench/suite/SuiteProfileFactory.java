@@ -4,12 +4,14 @@ import yier.bubu.redis.app.bench.BenchWorkloadKind;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 public final class SuiteProfileFactory {
     private SuiteProfileFactory() {
     }
 
     public static List<ScenarioDefinition> expand(SuiteProfileName profile) {
+        Objects.requireNonNull(profile, "profile");
         List<ScenarioDefinition> scenarios = new ArrayList<>(releaseScenarios());
         if (profile == SuiteProfileName.FULL) {
             scenarios.addAll(fullOnlyScenarios());
