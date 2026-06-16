@@ -149,11 +149,32 @@ public class SuiteThresholdEvaluatorTest {
         ScenarioDefinition scenario = scenario();
         ScenarioPassResult baseline = pass("baseline", scenario, 1000.0, 10.0, 20.0, 0.0);
         ScenarioPassResult dirtyCurrent = pass("current", scenario, 1000.0, 10.0, 20.0, 1.0);
+        ScenarioPassResult current = pass("current", scenario, 900.0, 11.5, 23.0, 0.0);
+        ScenarioComparison dirtyComparison = ScenarioComparison.compare(scenario, baseline, dirtyCurrent);
+        Map<String, Double> expectedDeltas = Map.of("qps", -10.0, "p95_ms", 15.0, "p99_ms", 15.0);
 
         Assert.assertThrows(IllegalArgumentException.class, () -> new ScenarioComparison(
                 scenario, baseline, dirtyCurrent, true, "", Map.of("qps", 0.0)));
         Assert.assertThrows(IllegalArgumentException.class, () -> new ScenarioComparison(
                 scenario, baseline, baseline, false, "", Map.of()));
+        Assert.assertThrows(IllegalArgumentException.class, () -> new ScenarioComparison(
+                scenario, baseline, dirtyCurrent, false, "wrong reason", Map.of()));
+        Assert.assertThrows(IllegalArgumentException.class, () -> new ScenarioComparison(
+                scenario, baseline, dirtyCurrent, false, dirtyComparison.nonComparableReason(), Map.of("qps", 0.0)));
+        Assert.assertThrows(IllegalArgumentException.class, () -> new ScenarioComparison(
+                scenario, baseline, current, true, "", Map.of("qps", -1.0)));
+        Assert.assertThrows(NullPointerException.class, () -> new ScenarioComparison(
+                scenario, baseline, current, true, null, expectedDeltas));
+        Assert.assertThrows(NullPointerException.class, () -> new ScenarioComparison(
+                scenario, baseline, dirtyCurrent, false, dirtyComparison.nonComparableReason(), null));
+
+        ScenarioComparison validDirty = new ScenarioComparison(
+                scenario, baseline, dirtyCurrent, false, dirtyComparison.nonComparableReason(), Map.of());
+        ScenarioComparison validComparable = new ScenarioComparison(
+                scenario, baseline, current, true, "", expectedDeltas);
+
+        Assert.assertEquals(dirtyComparison, validDirty);
+        Assert.assertEquals(expectedDeltas, validComparable.deltaPercentByMetric());
     }
 
     @Test

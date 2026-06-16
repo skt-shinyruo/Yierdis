@@ -19,20 +19,22 @@ public record ScenarioComparison(
         Objects.requireNonNull(scenario, "scenario");
         Objects.requireNonNull(baseline, "baseline");
         Objects.requireNonNull(current, "current");
-        nonComparableReason = nonComparableReason == null ? "" : nonComparableReason;
+        Objects.requireNonNull(nonComparableReason, "nonComparableReason");
+        Objects.requireNonNull(deltaPercentByMetric, "deltaPercentByMetric");
         String expectedReason = nonComparableReason(scenario, baseline, current);
         boolean expectedComparable = expectedReason.isEmpty();
+        Map<String, Double> expectedDeltas = expectedComparable ? deltas(baseline, current) : Map.of();
+        Map<String, Double> suppliedDeltas = Collections.unmodifiableMap(new LinkedHashMap<>(deltaPercentByMetric));
         if (comparable != expectedComparable) {
             throw new IllegalArgumentException("comparable state does not match scenario comparison inputs");
         }
-        if (comparable && !nonComparableReason.isBlank()) {
-            throw new IllegalArgumentException("comparable comparison must not have a nonComparableReason");
+        if (!nonComparableReason.equals(expectedReason)) {
+            throw new IllegalArgumentException("nonComparableReason does not match scenario comparison inputs");
         }
-        if (!comparable && nonComparableReason.isBlank()) {
-            throw new IllegalArgumentException("non-comparable comparison requires a nonComparableReason");
+        if (!suppliedDeltas.equals(expectedDeltas)) {
+            throw new IllegalArgumentException("deltaPercentByMetric does not match scenario comparison inputs");
         }
-        nonComparableReason = comparable ? "" : expectedReason;
-        deltaPercentByMetric = comparable ? deltas(baseline, current) : Map.of();
+        deltaPercentByMetric = suppliedDeltas;
     }
 
     public static ScenarioComparison compare(ScenarioDefinition scenario, ScenarioPassResult baseline, ScenarioPassResult current) {
