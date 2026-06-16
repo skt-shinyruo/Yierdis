@@ -11,12 +11,15 @@ public final class SuiteProfileFactory {
     }
 
     public static List<ScenarioDefinition> expand(SuiteProfileName profile) {
-        Objects.requireNonNull(profile, "profile");
-        List<ScenarioDefinition> scenarios = new ArrayList<>(releaseScenarios());
-        if (profile == SuiteProfileName.FULL) {
-            scenarios.addAll(fullOnlyScenarios());
-        }
-        return List.copyOf(scenarios);
+        SuiteProfileName requiredProfile = Objects.requireNonNull(profile, "profile");
+        return switch (requiredProfile) {
+            case RELEASE -> releaseScenarios();
+            case FULL -> {
+                List<ScenarioDefinition> scenarios = new ArrayList<>(releaseScenarios());
+                scenarios.addAll(fullOnlyScenarios());
+                yield List.copyOf(scenarios);
+            }
+        };
     }
 
     private static List<ScenarioDefinition> releaseScenarios() {

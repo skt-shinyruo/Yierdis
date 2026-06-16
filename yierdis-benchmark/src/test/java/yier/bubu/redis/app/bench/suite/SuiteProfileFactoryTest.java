@@ -117,6 +117,25 @@ public class SuiteProfileFactoryTest {
         Assert.assertEquals("displayName must not be blank", whitespace.getMessage());
     }
 
+    @Test
+    public void scenarioRejectsInvalidNumericFieldsAndNullWorkload() {
+        assertRejectsNullWorkload();
+        assertRejectsScenario("keyspace", "valid-id", "Display", BenchWorkloadKind.PING,
+                0, 0, 1, 1, 1, 0, 1, true);
+        assertRejectsScenario("dataSize", "valid-id", "Display", BenchWorkloadKind.PING,
+                1, -1, 1, 1, 1, 0, 1, true);
+        assertRejectsScenario("requests", "valid-id", "Display", BenchWorkloadKind.PING,
+                1, 0, 0, 1, 1, 0, 1, true);
+        assertRejectsScenario("clients", "valid-id", "Display", BenchWorkloadKind.PING,
+                1, 0, 1, 0, 1, 0, 1, true);
+        assertRejectsScenario("pipeline", "valid-id", "Display", BenchWorkloadKind.PING,
+                1, 0, 1, 1, 0, 0, 1, true);
+        assertRejectsScenario("warmupIterations", "valid-id", "Display", BenchWorkloadKind.PING,
+                1, 0, 1, 1, 1, -1, 1, true);
+        assertRejectsScenario("repeatIterations", "valid-id", "Display", BenchWorkloadKind.PING,
+                1, 0, 1, 1, 1, 0, 0, true);
+    }
+
     private static ScenarioDefinition scenario(List<ScenarioDefinition> scenarios, String id) {
         for (ScenarioDefinition scenario : scenarios) {
             if (scenario.id().equals(id)) {
@@ -140,12 +159,12 @@ public class SuiteProfileFactoryTest {
         Assert.assertEquals("scenario id must be lowercase kebab-case", e.getMessage());
     }
 
-    private static IllegalArgumentException assertRejectsScenario(String messagePart, String id, String displayName) {
+    private static void assertRejectsNullWorkload() {
         try {
             new ScenarioDefinition(
-                    id,
-                    displayName,
-                    BenchWorkloadKind.PING,
+                    "valid-id",
+                    "Display",
+                    null,
                     1,
                     0,
                     1,
@@ -154,6 +173,45 @@ public class SuiteProfileFactoryTest {
                     0,
                     1,
                     true
+            );
+            Assert.fail("expected null workload rejection");
+        } catch (NullPointerException e) {
+            Assert.assertEquals("workload", e.getMessage());
+        }
+    }
+
+    private static IllegalArgumentException assertRejectsScenario(String messagePart, String id, String displayName) {
+        return assertRejectsScenario(messagePart, id, displayName, BenchWorkloadKind.PING,
+                1, 0, 1, 1, 1, 0, 1, true);
+    }
+
+    private static IllegalArgumentException assertRejectsScenario(
+            String messagePart,
+            String id,
+            String displayName,
+            BenchWorkloadKind workload,
+            int keyspace,
+            int dataSize,
+            int requests,
+            int clients,
+            int pipeline,
+            int warmupIterations,
+            int repeatIterations,
+            boolean latency
+    ) {
+        try {
+            new ScenarioDefinition(
+                    id,
+                    displayName,
+                    workload,
+                    keyspace,
+                    dataSize,
+                    requests,
+                    clients,
+                    pipeline,
+                    warmupIterations,
+                    repeatIterations,
+                    latency
             );
             Assert.fail("expected rejection containing " + messagePart);
             return null;

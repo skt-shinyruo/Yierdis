@@ -3,6 +3,7 @@ package yier.bubu.redis.app.bench.suite;
 import yier.bubu.redis.app.bench.BenchWorkloadKind;
 
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 public record ScenarioDefinition(
         String id,
@@ -17,6 +18,8 @@ public record ScenarioDefinition(
         int repeatIterations,
         boolean latency
 ) {
+    private static final Pattern STABLE_ID_PATTERN = Pattern.compile("[a-z0-9]+(?:-[a-z0-9]+)*");
+
     public ScenarioDefinition {
         requireStableId(id);
         displayName = Objects.requireNonNull(displayName, "displayName");
@@ -48,7 +51,7 @@ public record ScenarioDefinition(
     }
 
     private static void requireStableId(String id) {
-        if (id == null || !id.matches("[a-z0-9]+(?:-[a-z0-9]+)*")) {
+        if (id == null || !STABLE_ID_PATTERN.matcher(id).matches()) {
             throw new IllegalArgumentException("scenario id must be lowercase kebab-case");
         }
     }
