@@ -1,5 +1,7 @@
 package yier.bubu.redis.app.bench.suite;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -21,7 +23,9 @@ public record ScenarioPassResult(
         iterations = iterations == null ? List.of() : List.copyOf(iterations);
         before = before == null ? ObservationSnapshot.empty() : before;
         after = after == null ? ObservationSnapshot.empty() : after;
-        summaries = summaries == null ? MetricSummary.summarizeRepeats(iterations) : Map.copyOf(summaries);
+        summaries = summaries == null
+                ? MetricSummary.summarizeRepeats(iterations)
+                : Collections.unmodifiableMap(new LinkedHashMap<>(summaries));
     }
 
     public static ScenarioPassResult completed(
@@ -41,6 +45,9 @@ public record ScenarioPassResult(
 
     public boolean clean() {
         if (failed) {
+            return false;
+        }
+        if (summaries.isEmpty()) {
             return false;
         }
         MetricSummary errors = summaries.get("errors");

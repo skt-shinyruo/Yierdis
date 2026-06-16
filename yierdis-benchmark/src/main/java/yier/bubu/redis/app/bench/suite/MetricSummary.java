@@ -1,6 +1,7 @@
 package yier.bubu.redis.app.bench.suite;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,7 +23,7 @@ public record MetricSummary(String name, int sampleCount, double min, double med
         for (Map.Entry<String, List<Double>> entry : valuesByName.entrySet()) {
             summaries.put(entry.getKey(), of(entry.getKey(), entry.getValue()));
         }
-        return summaries;
+        return Collections.unmodifiableMap(summaries);
     }
 
     private static MetricSummary of(String name, List<Double> source) {

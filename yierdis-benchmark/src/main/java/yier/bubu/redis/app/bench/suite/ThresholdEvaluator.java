@@ -11,7 +11,9 @@ public final class ThresholdEvaluator {
         List<ThresholdFinding> findings = new ArrayList<>();
         String scenarioId = comparison.scenario().id();
         if (!comparison.comparable()) {
-            findings.add(new ThresholdFinding(ThresholdFinding.Level.CRITICAL, scenarioId, "comparability", comparison.nonComparableReason()));
+            findings.add(new ThresholdFinding(ThresholdFinding.Level.CRITICAL, scenarioId, "comparability",
+                    comparison.baseline().artifactLabel() + " vs " + comparison.current().artifactLabel()
+                            + ": " + comparison.nonComparableReason()));
         }
         addErrorFinding(findings, scenarioId, comparison.baseline());
         addErrorFinding(findings, scenarioId, comparison.current());
@@ -29,7 +31,7 @@ public final class ThresholdEvaluator {
         MetricSummary errors = pass.summaries().get("errors");
         if (errors != null && errors.max() > 0.0) {
             findings.add(new ThresholdFinding(ThresholdFinding.Level.CRITICAL, scenarioId, "errors",
-                    pass.artifactLabel() + " recorded benchmark errors"));
+                    pass.artifactLabel() + " recorded benchmark errors: max=" + format(errors.max())));
         }
     }
 

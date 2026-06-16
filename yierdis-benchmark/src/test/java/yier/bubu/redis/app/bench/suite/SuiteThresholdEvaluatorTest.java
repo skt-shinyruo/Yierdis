@@ -43,6 +43,74 @@ public class SuiteThresholdEvaluatorTest {
         assertFinding(failedFindings, "comparability", ThresholdFinding.Level.CRITICAL);
     }
 
+    @Test
+    public void emptyCompletedPassIsNonComparable() {
+        ScenarioDefinition scenario = scenario();
+        ScenarioPassResult baseline = pass("baseline", scenario, 1000.0, 10.0, 20.0, 0.0);
+        ScenarioPassResult current = ScenarioPassResult.completed("current", scenario, List.of(),
+                ObservationSnapshot.empty(), ObservationSnapshot.empty());
+
+        ScenarioComparison comparison = ScenarioComparison.compare(scenario, baseline, current);
+        List<ThresholdFinding> findings = ThresholdEvaluator.evaluate(comparison, ThresholdPolicy.defaults());
+
+        Assert.assertFalse(comparison.comparable());
+        Assert.assertTrue(comparison.nonComparableReason().contains("current"));
+        assertFinding(findings, "comparability", ThresholdFinding.Level.CRITICAL);
+    }
+
+    @Test
+    public void mismatchedScenariosAreNonComparable() {
+        ScenarioDefinition expected = scenario();
+        ScenarioDefinition other = new ScenarioDefinition("release-ping-latency", "PING", BenchWorkloadKind.PING,
+                100, 0, 1000, 8, 4, 0, 1, true);
+
+        ScenarioComparison baselineMismatch = ScenarioComparison.compare(expected,
+                pass("baseline", other, 1000.0, 10.0, 20.0, 0.0),
+                pass("current", expected, 1000.0, 10.0, 20.0, 0.0));
+        ScenarioComparison currentMismatch = ScenarioComparison.compare(expected,
+                pass("baseline", expected, 1000.0, 10.0, 20.0, 0.0),
+                pass("current", other, 1000.0, 10.0, 20.0, 0.0));
+
+        Assert.assertFalse(baselineMismatch.comparable());
+        Assert.assertTrue(baselineMismatch.nonComparableReason().contains("baseline scenario"));
+        Assert.assertFalse(currentMismatch.comparable());
+        Assert.assertTrue(currentMismatch.nonComparableReason().contains("current scenario"));
+    }
+
+    @Test
+    public void recordsBothDirtySidesInNonComparableReason() {
+        ScenarioDefinition scenario = scenario();
+        ScenarioComparison comparison = ScenarioComparison.compare(scenario,
+                pass("baseline", scenario, 1000.0, 10.0, 20.0, 1.0),
+                pass("current", scenario, 1000.0, 10.0, 20.0, 1.0));
+
+        Assert.assertFalse(comparison.comparable());
+        Assert.assertTrue(comparison.nonComparableReason().contains("baseline"));
+        Assert.assertTrue(comparison.nonComparableReason().contains("current"));
+    }
+
+    @Test
+    public void deltasAreImmutableAndThresholdBoundariesAreStrict() {
+        ScenarioDefinition scenario = scenario();
+        ScenarioComparison comparison = ScenarioComparison.compare(scenario,
+                pass("baseline", scenario, 1000.0, 10.0, 20.0, 0.0),
+                pass("current", scenario, 900.0, 11.5, 23.0, 0.0));
+
+        Assert.assertTrue(comparison.comparable());
+        Assert.assertEquals(List.of("qps", "p95_ms", "p99_ms"), List.copyOf(comparison.deltaPercentByMetric().keySet()));
+        Assert.assertThrows(UnsupportedOperationException.class,
+                () -> comparison.deltaPercentByMetric().put("qps", -99.0));
+        Assert.assertTrue(ThresholdEvaluator.evaluate(comparison, ThresholdPolicy.defaults()).isEmpty());
+    }
+
+    @Test
+    public void thresholdPolicyRejectsInvalidValues() {
+        Assert.assertThrows(IllegalArgumentException.class, () -> new ThresholdPolicy(-0.001, 15.0));
+        Assert.assertThrows(IllegalArgumentException.class, () -> new ThresholdPolicy(10.0, -0.001));
+        Assert.assertThrows(IllegalArgumentException.class, () -> new ThresholdPolicy(Double.NaN, 15.0));
+        Assert.assertThrows(IllegalArgumentException.class, () -> new ThresholdPolicy(10.0, Double.POSITIVE_INFINITY));
+    }
+
     private static ScenarioDefinition scenario() {
         return new ScenarioDefinition("release-set-get-256b-c64-p8", "SET/GET", BenchWorkloadKind.SET_GET,
                 100, 256, 1000, 8, 4, 0, 1, true);
