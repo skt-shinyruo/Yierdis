@@ -20,6 +20,9 @@ public record ScenarioDefinition(
     public ScenarioDefinition {
         requireStableId(id);
         displayName = Objects.requireNonNull(displayName, "displayName");
+        if (displayName.isBlank()) {
+            throw new IllegalArgumentException("displayName must not be blank");
+        }
         Objects.requireNonNull(workload, "workload");
         if (keyspace <= 0) {
             throw new IllegalArgumentException("keyspace must be > 0");
@@ -45,7 +48,7 @@ public record ScenarioDefinition(
     }
 
     private static void requireStableId(String id) {
-        if (id == null || !id.matches("[a-z0-9-]+")) {
+        if (id == null || !id.matches("[a-z0-9]+(?:-[a-z0-9]+)*")) {
             throw new IllegalArgumentException("scenario id must be lowercase kebab-case");
         }
     }
