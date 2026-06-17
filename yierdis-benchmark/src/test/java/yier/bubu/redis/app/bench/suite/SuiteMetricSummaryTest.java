@@ -87,6 +87,27 @@ public class SuiteMetricSummaryTest {
     }
 
     @Test
+    public void metricSummaryConstructorPreservesValueObjectInvariants() {
+        Assert.assertEquals(new MetricSummary("p95_ms", 3, 1.0, 2.0, 2.5, 4.0),
+                new MetricSummary("p95_ms", 3, 1.0, 2.0, 2.5, 4.0));
+
+        assertInvalidSummary(null, 1, 0.0, 0.0, 0.0, 0.0);
+        assertInvalidSummary("QPS", 1, 0.0, 0.0, 0.0, 0.0);
+        assertInvalidSummary("qps_", 1, 0.0, 0.0, 0.0, 0.0);
+        assertInvalidSummary("qps", 0, 0.0, 0.0, 0.0, 0.0);
+        assertInvalidSummary("qps", -1, 0.0, 0.0, 0.0, 0.0);
+        assertInvalidSummary("qps", 1, Double.NaN, 0.0, 0.0, 0.0);
+        assertInvalidSummary("qps", 1, 0.0, Double.POSITIVE_INFINITY, 0.0, 0.0);
+        assertInvalidSummary("qps", 1, 0.0, 0.0, Double.NEGATIVE_INFINITY, 0.0);
+        assertInvalidSummary("qps", 1, 0.0, 0.0, 0.0, Double.NaN);
+        assertInvalidSummary("qps", 1, -1.0, 0.0, 0.0, 0.0);
+        assertInvalidSummary("qps", 1, 2.0, 1.0, 2.0, 3.0);
+        assertInvalidSummary("qps", 1, 1.0, 4.0, 2.0, 3.0);
+        assertInvalidSummary("qps", 1, 1.0, 2.0, 0.5, 3.0);
+        assertInvalidSummary("qps", 1, 1.0, 2.0, 3.5, 3.0);
+    }
+
+    @Test
     public void passResultCopiesAutoComputedSummaries() {
         ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
                 10, 0, 100, 1, 1, 0, 1, true);
@@ -193,5 +214,10 @@ public class SuiteMetricSummaryTest {
 
     private static void assertInvalidMetricName(String name) {
         Assert.assertThrows(IllegalArgumentException.class, () -> new SuiteMetric(name, 1.0));
+    }
+
+    private static void assertInvalidSummary(String name, int sampleCount, double min, double median, double mean, double max) {
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new MetricSummary(name, sampleCount, min, median, mean, max));
     }
 }
