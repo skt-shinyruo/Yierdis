@@ -12,10 +12,12 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiFunction;
 
 public class BenchHarnessExtendedWorkloadTest {
     @Test
@@ -81,6 +83,112 @@ public class BenchHarnessExtendedWorkloadTest {
         }
     }
 
+    @Test
+    public void ttlExpirationPrefillsKeysBeforeExpireRequests() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("SET".equals(command)) {
+                return ok();
+            }
+            if ("EXPIRE".equals(command)) {
+                return integer(1);
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.TTL_EXPIRATION,
+                    "127.0.0.1",
+                    server.port(),
+                    4,
+                    1,
+                    2,
+                    3,
+                    8,
+                    false,
+                    true
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(4, result.ops());
+            Assert.assertEquals(0, result.errors());
+            Assert.assertEquals(List.of("SET", "SET", "SET", "EXPIRE", "EXPIRE", "EXPIRE", "EXPIRE"),
+                    server.awaitCommands(7));
+        }
+    }
+
+    @Test
+    public void extendedMutatorsCountWrongSuccessfulRepliesAsStrictFailures() throws Exception {
+        assertWrongIntegerReplyIsStrictFailure(BenchWorkloadKind.LIST_LPUSH, 0);
+        for (BenchWorkloadKind workload : List.of(BenchWorkloadKind.HASH_HSET, BenchWorkloadKind.SET_SADD,
+                BenchWorkloadKind.ZSET_ZADD)) {
+            assertWrongIntegerReplyIsStrictFailure(workload, 2);
+        }
+    }
+
+    private static void assertWrongIntegerReplyIsStrictFailure(BenchWorkloadKind workload, int replyValue) throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("SET".equals(command)) {
+                return ok();
+            }
+            return integer(replyValue);
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    workload,
+                    "127.0.0.1",
+                    server.port(),
+                    1,
+                    1,
+                    1,
+                    8,
+                    8,
+                    false,
+                    true
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(workload.name(), 1, result.ops());
+            Assert.assertEquals(workload.name(), 1, result.errors());
+        }
+    }
+
+    @Test
+    public void mixedReadWriteStrictlyValidatesBulkStringLength() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("SET".equals(command)) {
+                return ok();
+            }
+            if ("GET".equals(command)) {
+                return bulk("x");
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.MIXED_READ_WRITE,
+                    "127.0.0.1",
+                    server.port(),
+                    2,
+                    1,
+                    1,
+                    8,
+                    4,
+                    false,
+                    true
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(2, result.ops());
+            Assert.assertEquals(1, result.errors());
+        }
+    }
+
     private static void assertFrameContains(
             BenchWorkloadKind workload,
             int keyIndex,
@@ -99,6 +207,18 @@ public class BenchHarnessExtendedWorkloadTest {
         return value.getBytes(StandardCharsets.US_ASCII);
     }
 
+    private static byte[] ok() {
+        return "+OK\r\n".getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] integer(long value) {
+        return (":" + value + "\r\n").getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] bulk(String value) {
+        return ("$" + value.length() + "\r\n" + value + "\r\n").getBytes(StandardCharsets.US_ASCII);
+    }
+
     private static Map<String, Double> metricsByName(BenchWorkloadResult result) {
         return result.toMetrics().stream()
                 .collect(java.util.stream.Collectors.toMap(metric -> metric.name(), metric -> metric.value()));
@@ -111,8 +231,8 @@ public class BenchHarnessExtendedWorkloadTest {
     }
 
     private static final class OkRespServer implements AutoCloseable {
-        private static final byte[] OK = "+OK\r\n".getBytes(StandardCharsets.US_ASCII);
-        private static final byte[] ONE = ":1\r\n".getBytes(StandardCharsets.US_ASCII);
+        private static final byte[] OK = ok();
+        private static final byte[] ONE = integer(1);
         private static final byte[] SCAN_REPLY = "*2\r\n$1\r\n0\r\n*0\r\n".getBytes(StandardCharsets.US_ASCII);
 
         private final ServerSocket serverSocket;
@@ -192,6 +312,112 @@ public class BenchHarnessExtendedWorkloadTest {
                 } else {
                     out.write(OK);
                 }
+                out.flush();
+            }
+        }
+
+        private String commandName(RespClientCodec.RespReply command) {
+            byte[] bytes = command.values().get(0).bytes();
+            return bytes == null ? "" : new String(bytes, StandardCharsets.US_ASCII);
+        }
+
+        private boolean isClientDisconnect(IOException e) {
+            return e.getMessage() != null && e.getMessage().contains("unexpected EOF");
+        }
+
+        @Override
+        public void close() throws Exception {
+            closed = true;
+            serverSocket.close();
+            synchronized (accepted) {
+                for (Socket socket : accepted) {
+                    socket.close();
+                }
+            }
+            if (thread != null) {
+                thread.join(1_000);
+            }
+        }
+    }
+
+    private static final class ScriptedRespServer implements AutoCloseable {
+        private final ServerSocket serverSocket;
+        private final CountDownLatch listening = new CountDownLatch(1);
+        private final List<Socket> accepted = new ArrayList<>();
+        private final List<String> commands = Collections.synchronizedList(new ArrayList<>());
+        private final BiFunction<String, Integer, byte[]> responseScript;
+        private volatile boolean closed;
+        private Thread thread;
+
+        private ScriptedRespServer(ServerSocket serverSocket, BiFunction<String, Integer, byte[]> responseScript) {
+            this.serverSocket = serverSocket;
+            this.responseScript = responseScript;
+        }
+
+        static ScriptedRespServer start(BiFunction<String, Integer, byte[]> responseScript) throws IOException {
+            ScriptedRespServer server = new ScriptedRespServer(new ServerSocket(0), responseScript);
+            server.thread = new Thread(server::acceptLoop, "bench-harness-scripted-resp-server");
+            server.thread.setDaemon(true);
+            server.thread.start();
+            return server;
+        }
+
+        int port() {
+            return serverSocket.getLocalPort();
+        }
+
+        boolean awaitListening() throws InterruptedException {
+            return listening.await(1, TimeUnit.SECONDS);
+        }
+
+        List<String> awaitCommands(int expected) throws InterruptedException {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+            while (System.nanoTime() < deadline) {
+                synchronized (commands) {
+                    if (commands.size() >= expected) {
+                        return List.copyOf(commands);
+                    }
+                }
+                Thread.sleep(10);
+            }
+            synchronized (commands) {
+                return List.copyOf(commands);
+            }
+        }
+
+        private void acceptLoop() {
+            listening.countDown();
+            while (!closed) {
+                try {
+                    Socket socket = serverSocket.accept();
+                    synchronized (accepted) {
+                        accepted.add(socket);
+                    }
+                    handle(socket);
+                } catch (IOException e) {
+                    if (!closed && !isClientDisconnect(e)) {
+                        throw new IllegalStateException(e);
+                    }
+                }
+            }
+        }
+
+        private void handle(Socket socket) throws IOException {
+            InputStream in = socket.getInputStream();
+            OutputStream out = socket.getOutputStream();
+            while (!closed && !socket.isClosed()) {
+                RespClientCodec.RespReply command = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+                if (command.kind() != RespClientCodec.RespReply.Kind.ARRAY || command.values().isEmpty()) {
+                    continue;
+                }
+                String name = commandName(command);
+                int index;
+                synchronized (commands) {
+                    index = commands.size();
+                    commands.add(name);
+                }
+                byte[] reply = responseScript.apply(name, index);
+                out.write(reply == null ? ok() : reply);
                 out.flush();
             }
         }
