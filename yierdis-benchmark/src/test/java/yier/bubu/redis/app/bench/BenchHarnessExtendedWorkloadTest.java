@@ -119,6 +119,64 @@ public class BenchHarnessExtendedWorkloadTest {
     }
 
     @Test
+    public void ttlExpirationCountsZeroExpireReplyAsStrictFailure() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("SET".equals(command)) {
+                return ok();
+            }
+            if ("EXPIRE".equals(command)) {
+                return integer(0);
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.TTL_EXPIRATION,
+                    "127.0.0.1",
+                    server.port(),
+                    1,
+                    1,
+                    1,
+                    1,
+                    8,
+                    false,
+                    true
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(1, result.ops());
+            Assert.assertTrue("errors=" + result.errors(), result.errors() > 0);
+        }
+    }
+
+    @Test
+    public void scanCountsMalformedArrayReplyAsStrictFailure() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> emptyArray())) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.SCAN,
+                    "127.0.0.1",
+                    server.port(),
+                    1,
+                    1,
+                    1,
+                    8,
+                    8,
+                    false,
+                    true
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(1, result.ops());
+            Assert.assertTrue("errors=" + result.errors(), result.errors() > 0);
+        }
+    }
+
+    @Test
     public void extendedMutatorsCountWrongSuccessfulRepliesAsStrictFailures() throws Exception {
         assertWrongIntegerReplyIsStrictFailure(BenchWorkloadKind.LIST_LPUSH, 0);
         for (BenchWorkloadKind workload : List.of(BenchWorkloadKind.HASH_HSET, BenchWorkloadKind.SET_SADD,
@@ -213,6 +271,10 @@ public class BenchHarnessExtendedWorkloadTest {
 
     private static byte[] integer(long value) {
         return (":" + value + "\r\n").getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] emptyArray() {
+        return "*0\r\n".getBytes(StandardCharsets.US_ASCII);
     }
 
     private static byte[] bulk(String value) {
