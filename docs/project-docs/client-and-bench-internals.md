@@ -111,6 +111,14 @@ SET raw "\x00\x01"
 
 ## yierdis-benchmark
 
+### Suite mode
+
+`--suite` runs the release-grade benchmark suite. It is separate from the single-run benchmark path: single-run mode remains the fast local benchmark, while suite mode expands a stable profile into scenarios, starts a fresh server for each scenario and artifact, records warmup and repeat iterations, captures before/after `STATS`, `MEMORY STATS`, and `INFO`, and writes `suite-result.json`, `metrics.csv`, `comparisons.csv`, and `report.md`.
+
+`--currentServerJar` is required. `--baselineServerJar` is optional. When both jars are present, suite mode compares only clean baseline/current scenario pairs. A scenario with startup failure, protocol/reply errors, benchmark errors, or missing measurements is marked `non-comparable`.
+
+The first version uses soft thresholds: QPS drops, p95/p99 latency increases, errors, and non-comparable scenarios are reported as warnings or critical observations but do not fail the process by default.
+
 `yierdis-benchmark` 是真实协议路径 benchmark，不是 JMH microbenchmark，也不是直接调用 DB API。
 
 入口是 `YierdisBench.main(...)`。流程是：

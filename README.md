@@ -109,6 +109,27 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar
 REQUESTS=200000 CLIENTS=64 PIPELINE=8 DATA_SIZE=256 ./scripts/bench.sh
 ```
 
+正式性能报告：
+
+```bash
+java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar \
+  --suite \
+  --suiteProfile release \
+  --currentServerJar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
+  --reportDir target/benchmark-reports/manual-release
+```
+
+baseline/current 对比报告：
+
+```bash
+java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar \
+  --suite \
+  --suiteProfile release \
+  --baselineServerJar artifacts/baseline/yierdis-server-main-0.1.0-SNAPSHOT.jar \
+  --currentServerJar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
+  --reportDir target/benchmark-reports/release-comparison
+```
+
 快速 smoke：
 
 ```bash
