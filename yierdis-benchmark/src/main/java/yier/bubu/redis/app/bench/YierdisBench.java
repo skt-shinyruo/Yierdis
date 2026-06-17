@@ -1942,6 +1942,7 @@ public final class YierdisBench {
         private final byte[] value;
         private final int seqStartIndex;
         private final boolean strictReplies;
+        private final int readTimeoutMillis;
 
         ThroughputWorker(
                 String host,
@@ -1954,6 +1955,24 @@ public final class YierdisBench {
                 int seqStartIndex,
                 boolean strictReplies
         ) {
+            this(host, port, workload, requests, pipeline, keyspace, value, seqStartIndex, strictReplies, 0);
+        }
+
+        ThroughputWorker(
+                String host,
+                int port,
+                Workload workload,
+                int requests,
+                int pipeline,
+                int keyspace,
+                byte[] value,
+                int seqStartIndex,
+                boolean strictReplies,
+                int readTimeoutMillis
+        ) {
+            if (readTimeoutMillis < 0) {
+                throw new IllegalArgumentException("readTimeoutMillis must be >= 0");
+            }
             this.host = host;
             this.port = port;
             this.workload = workload;
@@ -1963,6 +1982,7 @@ public final class YierdisBench {
             this.value = value;
             this.seqStartIndex = seqStartIndex;
             this.strictReplies = strictReplies;
+            this.readTimeoutMillis = readTimeoutMillis;
         }
 
         @Override
@@ -1978,6 +1998,9 @@ public final class YierdisBench {
             try (Socket socket = new Socket()) {
                 socket.setTcpNoDelay(true);
                 socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
+                if (readTimeoutMillis > 0) {
+                    socket.setSoTimeout(readTimeoutMillis);
+                }
                 try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                      BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
                     try (RespCommandWriter writer = new RespCommandWriter(out)) {
@@ -2067,8 +2090,25 @@ public final class YierdisBench {
         private final int keyspace;
         private final byte[] value;
         private final boolean strictReplies;
+        private final int readTimeoutMillis;
 
         LatencyWorker(String host, int port, Workload workload, int requests, int keyspace, byte[] value, boolean strictReplies) {
+            this(host, port, workload, requests, keyspace, value, strictReplies, 0);
+        }
+
+        LatencyWorker(
+                String host,
+                int port,
+                Workload workload,
+                int requests,
+                int keyspace,
+                byte[] value,
+                boolean strictReplies,
+                int readTimeoutMillis
+        ) {
+            if (readTimeoutMillis < 0) {
+                throw new IllegalArgumentException("readTimeoutMillis must be >= 0");
+            }
             this.host = host;
             this.port = port;
             this.workload = workload;
@@ -2076,6 +2116,7 @@ public final class YierdisBench {
             this.keyspace = keyspace;
             this.value = value;
             this.strictReplies = strictReplies;
+            this.readTimeoutMillis = readTimeoutMillis;
         }
 
         @Override
@@ -2096,6 +2137,9 @@ public final class YierdisBench {
             try (Socket socket = new Socket()) {
                 socket.setTcpNoDelay(true);
                 socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
+                if (readTimeoutMillis > 0) {
+                    socket.setSoTimeout(readTimeoutMillis);
+                }
                 try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                      BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
                     try (RespCommandWriter writer = new RespCommandWriter(out)) {
