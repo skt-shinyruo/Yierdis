@@ -3,6 +3,10 @@ package yier.bubu.redis.app.bench;
 import picocli.CommandLine;
 import picocli.CommandLine.ParameterException;
 import yier.bubu.redis.app.bench.suite.SuiteConfig;
+import yier.bubu.redis.app.bench.suite.SuiteProfileFactory;
+import yier.bubu.redis.app.bench.suite.SuiteReportWriter;
+import yier.bubu.redis.app.bench.suite.SuiteRunResult;
+import yier.bubu.redis.app.bench.suite.SuiteRunner;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
@@ -120,14 +124,32 @@ public final class YierdisBench {
         baseServerArgs.normalizeAndValidate();
 
         if (benchArgs.suite) {
+            SuiteConfig suiteConfig;
             try {
-                SuiteConfig.from(benchArgs, baseServerArgs);
+                suiteConfig = SuiteConfig.from(benchArgs, baseServerArgs);
             } catch (IllegalArgumentException e) {
                 System.err.println(e.getMessage());
                 cmd.usage(System.err);
                 return;
             }
-            System.err.println("suite runner is not implemented yet");
+            println("YierdisBench（release-grade suite）");
+            println("profile: " + suiteConfig.profile().cliName());
+            println("reportDir: " + suiteConfig.reportDir());
+            println("");
+            SuiteRunner runner = new SuiteRunner(
+                    suiteConfig,
+                    new BenchHarness(),
+                    SuiteProfileFactory.expand(suiteConfig.profile())
+            );
+            SuiteRunResult result = runner.run();
+            SuiteReportWriter.writeAll(result, suiteConfig.reportDir());
+            println("reports:");
+            println("  " + suiteConfig.reportDir().resolve("suite-result.json"));
+            println("  " + suiteConfig.reportDir().resolve("metrics.csv"));
+            println("  " + suiteConfig.reportDir().resolve("comparisons.csv"));
+            println("  " + suiteConfig.reportDir().resolve("report.md"));
+            println("");
+            println("完成。");
             return;
         }
 

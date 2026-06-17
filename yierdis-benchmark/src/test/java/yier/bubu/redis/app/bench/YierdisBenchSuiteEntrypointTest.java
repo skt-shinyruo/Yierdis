@@ -12,13 +12,14 @@ import java.nio.file.Path;
 public class YierdisBenchSuiteEntrypointTest {
     @Test
     public void suiteModeValidatesConfigAndStopsBeforeNormalBenchmarkPath() throws Exception {
-        Path current = regularTempJar("current");
+        Path missing = Files.createTempDirectory("suite-missing-entrypoint-").resolve("current.jar");
 
         Captured captured = captureErr(() -> YierdisBench.main(
-                new String[]{"--suite", "--currentServerJar", current.toString(), "--suiteProfile", "release"}
+                new String[]{"--suite", "--currentServerJar", missing.toString(), "--suiteProfile", "release"}
         ));
 
-        Assert.assertTrue(captured.err(), captured.err().contains("suite runner is not implemented yet"));
+        Assert.assertTrue(captured.err(), captured.err().contains("currentServerJar"));
+        Assert.assertFalse(captured.err(), captured.err().contains("suite runner is not implemented yet"));
         Assert.assertFalse(captured.err(), captured.err().contains("serverJar is required"));
     }
 
