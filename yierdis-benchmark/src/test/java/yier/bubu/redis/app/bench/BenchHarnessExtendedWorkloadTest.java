@@ -33,6 +33,8 @@ public class BenchHarnessExtendedWorkloadTest {
         assertFrameContains(BenchWorkloadKind.SCAN, 3, 7, value, "SCAN");
         assertFrameContains(BenchWorkloadKind.MIXED_READ_WRITE, 3, 11, value, "GET");
         assertFrameContains(BenchWorkloadKind.MIXED_READ_WRITE, 3, 10, value, "SET");
+        assertFrameContains(BenchWorkloadKind.SET_GET, 3, 7, value, "GET");
+        assertFrameContains(BenchWorkloadKind.SET_GET, 3, 8, value, "SET");
     }
 
     @Test
@@ -45,13 +47,13 @@ public class BenchHarnessExtendedWorkloadTest {
                 BenchWorkloadKind.SET_SADD,
                 BenchWorkloadKind.ZSET_ZADD,
                 BenchWorkloadKind.SCAN,
-                BenchWorkloadKind.MIXED_READ_WRITE
+                BenchWorkloadKind.MIXED_READ_WRITE,
+                BenchWorkloadKind.SET_GET
         )) {
             Assert.assertTrue(workload.name(), BenchHarness.isExtendedWorkload(workload));
         }
 
         Assert.assertFalse(BenchHarness.isExtendedWorkload(BenchWorkloadKind.PING));
-        Assert.assertFalse(BenchHarness.isExtendedWorkload(BenchWorkloadKind.SET_GET));
     }
 
     @Test
@@ -209,6 +211,38 @@ public class BenchHarnessExtendedWorkloadTest {
     }
 
     @Test
+    public void setGetPrefillsKeysAndRunsBothSetAndGetCommands() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("GET".equals(command)) {
+                return bulk("xxxx");
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.SET_GET,
+                    "127.0.0.1",
+                    server.port(),
+                    4,
+                    1,
+                    2,
+                    3,
+                    4,
+                    false,
+                    true
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(4, result.ops());
+            Assert.assertEquals(0, result.errors());
+            Assert.assertEquals(List.of("SET", "SET", "SET", "SET", "GET", "SET", "GET"),
+                    server.awaitCommands(7));
+        }
+    }
+
+    @Test
     public void mixedReadWriteCountsNullGetReplyAsStrictFailure() throws Exception {
         try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
             if ("GET".equals(command)) {
@@ -220,6 +254,36 @@ public class BenchHarnessExtendedWorkloadTest {
             BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
             BenchWorkloadRequest request = new BenchWorkloadRequest(
                     BenchWorkloadKind.MIXED_READ_WRITE,
+                    "127.0.0.1",
+                    server.port(),
+                    2,
+                    1,
+                    1,
+                    2,
+                    4,
+                    false,
+                    true
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(2, result.ops());
+            Assert.assertTrue("errors=" + result.errors(), result.errors() > 0);
+        }
+    }
+
+    @Test
+    public void setGetCountsNullGetReplyAsStrictFailure() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("GET".equals(command)) {
+                return nullBulk();
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.SET_GET,
                     "127.0.0.1",
                     server.port(),
                     2,
@@ -291,6 +355,36 @@ public class BenchHarnessExtendedWorkloadTest {
             BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
             BenchWorkloadRequest request = new BenchWorkloadRequest(
                     BenchWorkloadKind.MIXED_READ_WRITE,
+                    "127.0.0.1",
+                    server.port(),
+                    2,
+                    1,
+                    1,
+                    8,
+                    4,
+                    false,
+                    true
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(2, result.ops());
+            Assert.assertEquals(1, result.errors());
+        }
+    }
+
+    @Test
+    public void setGetStrictlyValidatesBulkStringLength() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("GET".equals(command)) {
+                return bulk("x");
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.SET_GET,
                     "127.0.0.1",
                     server.port(),
                     2,

@@ -13,20 +13,41 @@ public final class SuiteCsvWriter {
 
     public static String metricsCsv(SuiteRunResult result) {
         StringBuilder out = new StringBuilder();
-        out.append("artifact,scenario,iteration_group,metric,sample_count,min,median,mean,max\n");
+        out.append("artifact,scenario,row_type,iteration_kind,iteration_index,metric,sample_count,min,median,mean,max,value\n");
         for (ScenarioPassResult pass : result.passes()) {
             for (MetricSummary summary : pass.summaries().values()) {
                 appendRow(out, List.of(
                         pass.artifactLabel(),
                         pass.scenario().id(),
-                        "repeat",
+                        "summary",
+                        IterationResult.Kind.REPEAT.name(),
+                        "",
                         summary.name(),
                         Integer.toString(summary.sampleCount()),
                         number(summary.min()),
                         number(summary.median()),
                         number(summary.mean()),
-                        number(summary.max())
+                        number(summary.max()),
+                        ""
                 ));
+            }
+            for (IterationResult iteration : pass.iterations()) {
+                for (SuiteMetric metric : iteration.metrics()) {
+                    appendRow(out, List.of(
+                            pass.artifactLabel(),
+                            pass.scenario().id(),
+                            "iteration",
+                            iteration.kind().name(),
+                            Integer.toString(iteration.index()),
+                            metric.name(),
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            number(metric.value())
+                    ));
+                }
             }
         }
         return out.toString();

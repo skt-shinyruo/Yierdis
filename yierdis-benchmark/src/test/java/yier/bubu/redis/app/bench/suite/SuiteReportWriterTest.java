@@ -36,12 +36,17 @@ public class SuiteReportWriterTest {
         Assert.assertTrue(json.contains("\"artifacts\""));
         Assert.assertTrue(json.contains("\"environment\""));
         Assert.assertTrue(json.contains("\"summaries\""));
+        Assert.assertTrue(json.contains("\"iterations\""));
+        Assert.assertTrue(json.contains("\"kind\":\"WARMUP\""));
+        Assert.assertTrue(json.contains("\"kind\":\"REPEAT\""));
         Assert.assertTrue(json.contains("\"findings\""));
         Assert.assertTrue(json.contains("\"comparisons\""));
 
         String metricsCsv = Files.readString(metricsPath, StandardCharsets.UTF_8);
-        Assert.assertTrue(metricsCsv.startsWith("artifact,scenario,iteration_group,metric,sample_count,min,median,mean,max\n"));
-        Assert.assertTrue(metricsCsv.contains("current,release-ping-latency,repeat,qps,1,850.000,850.000,850.000,850.000"));
+        Assert.assertTrue(metricsCsv.startsWith("artifact,scenario,row_type,iteration_kind,iteration_index,metric,sample_count,min,median,mean,max,value\n"));
+        Assert.assertTrue(metricsCsv.contains("current,release-ping-latency,summary,REPEAT,,qps,1,850.000,850.000,850.000,850.000,\n"));
+        Assert.assertTrue(metricsCsv.contains("current,release-ping-latency,iteration,WARMUP,0,qps,,,,,,425.000\n"));
+        Assert.assertTrue(metricsCsv.contains("current,release-ping-latency,iteration,REPEAT,0,qps,,,,,,850.000\n"));
 
         String comparisonsCsv = Files.readString(comparisonsPath, StandardCharsets.UTF_8);
         Assert.assertTrue(comparisonsCsv.startsWith("scenario,metric,baseline,current,delta_percent,status\n"));
@@ -77,7 +82,8 @@ public class SuiteReportWriterTest {
         Assert.assertTrue(json.contains("\"commitLabel\":\"main\\nabc\""));
 
         String metricsCsv = SuiteCsvWriter.metricsCsv(result);
-        Assert.assertTrue(metricsCsv.contains("current,release-ping-latency,repeat,qps,1,850.000,850.000,850.000,850.000"));
+        Assert.assertTrue(metricsCsv.contains("current,release-ping-latency,summary,REPEAT,,qps,1,850.000,850.000,850.000,850.000,"));
+        Assert.assertTrue(metricsCsv.contains("current,release-ping-latency,iteration,WARMUP,0,qps,,,,,,425.000"));
 
         String markdown = SuiteMarkdownWriter.write(result);
         Assert.assertTrue(markdown.contains("PING, \"latency\"<br>case"));
@@ -104,7 +110,7 @@ public class SuiteReportWriterTest {
 
         String metricsCsv = SuiteCsvWriter.metricsCsv(result);
 
-        Assert.assertTrue(metricsCsv.contains("\"current,\"\"quoted\"\"\nartifact\",release-ping-latency,repeat,qps"));
+        Assert.assertTrue(metricsCsv.contains("\"current,\"\"quoted\"\"\nartifact\",release-ping-latency,summary,REPEAT,,qps"));
     }
 
     @Test
@@ -213,6 +219,12 @@ public class SuiteReportWriterTest {
 
     private static ScenarioPassResult pass(String artifact, ScenarioDefinition scenario, double qps, double p95, double p99, double errors) {
         return ScenarioPassResult.completed(artifact, scenario, List.of(
+                IterationResult.warmup(0, List.of(
+                        new SuiteMetric("qps", qps / 2.0),
+                        new SuiteMetric("p95_ms", p95 * 2.0),
+                        new SuiteMetric("p99_ms", p99 * 2.0),
+                        new SuiteMetric("errors", errors)
+                )),
                 IterationResult.repeat(0, List.of(
                         new SuiteMetric("qps", qps),
                         new SuiteMetric("p95_ms", p95),

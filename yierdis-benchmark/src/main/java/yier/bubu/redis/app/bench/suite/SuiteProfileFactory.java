@@ -32,8 +32,10 @@ public final class SuiteProfileFactory {
                 scenario("release-hll-sparse-c64-p8", "HLL sparse PFADD c64 p8", BenchWorkloadKind.HLL_SPARSE, 200_000, 0, 300_000, 64, 8, 1, 5, true),
                 scenario("release-hll-dense-c64-p8", "HLL dense PFADD c64 p8", BenchWorkloadKind.HLL_DENSE, 4096, 0, 300_000, 64, 8, 1, 5, true),
                 scenario("release-hll-pfcount-c64-p8", "HLL PFCOUNT c64 p8", BenchWorkloadKind.HLL_PFCOUNT, 4096, 0, 300_000, 64, 8, 1, 5, false),
-                scenario("release-native-defrag-append", "Native defrag APPEND p99", BenchWorkloadKind.NATIVE_DEFRAG_APPEND, 4096, 256, 50_000, 8, 4, 1, 5, true),
-                scenario("release-maxmemory-eviction", "Maxmemory eviction pressure", BenchWorkloadKind.MAXMEMORY_EVICTION, 50_000, 512, 100_000, 32, 4, 1, 5, false),
+                scenario("release-native-defrag-append", "Native defrag APPEND p99", BenchWorkloadKind.NATIVE_DEFRAG_APPEND, 4096, 256, 50_000, 8, 4, 1, 5, true,
+                        ScenarioDefinition.ServerOverrides.nativeDefrag(256L * 1024L, 256L, 5L)),
+                scenario("release-maxmemory-eviction", "Maxmemory eviction pressure", BenchWorkloadKind.MAXMEMORY_EVICTION, 50_000, 512, 100_000, 32, 4, 1, 5, false,
+                        ScenarioDefinition.ServerOverrides.maxmemory(16L * 1024L * 1024L, "allkeys-lru", 16, 20L)),
                 scenario("release-ttl-expiration", "TTL expiration pressure", BenchWorkloadKind.TTL_EXPIRATION, 50_000, 128, 100_000, 32, 4, 1, 5, false)
         );
     }
@@ -64,5 +66,23 @@ public final class SuiteProfileFactory {
     ) {
         return new ScenarioDefinition(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
                 warmupIterations, repeatIterations, latency);
+    }
+
+    private static ScenarioDefinition scenario(
+            String id,
+            String displayName,
+            BenchWorkloadKind workload,
+            int keyspace,
+            int dataSize,
+            int requests,
+            int clients,
+            int pipeline,
+            int warmupIterations,
+            int repeatIterations,
+            boolean latency,
+            ScenarioDefinition.ServerOverrides serverOverrides
+    ) {
+        return new ScenarioDefinition(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
+                warmupIterations, repeatIterations, latency, serverOverrides);
     }
 }

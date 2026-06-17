@@ -84,6 +84,9 @@ public final class SuiteJsonWriter {
             out.comma();
             out.name("summaries");
             writeSummaries(out, pass);
+            out.comma();
+            out.name("iterations");
+            writeIterations(out, pass);
             out.objectEnd();
             if (i + 1 < result.passes().size()) {
                 out.comma();
@@ -166,6 +169,38 @@ public final class SuiteJsonWriter {
             out.name("max").number(summary.max());
             out.objectEnd();
             if (++index < pass.summaries().size()) {
+                out.comma();
+            }
+        }
+        out.arrayEnd();
+    }
+
+    private static void writeIterations(Json out, ScenarioPassResult pass) {
+        out.arrayStart();
+        for (int i = 0; i < pass.iterations().size(); i++) {
+            IterationResult iteration = pass.iterations().get(i);
+            out.objectStart();
+            out.name("kind").string(iteration.kind().name()).comma();
+            out.name("index").number(iteration.index()).comma();
+            out.name("metrics");
+            writeIterationMetrics(out, iteration.metrics());
+            out.objectEnd();
+            if (i + 1 < pass.iterations().size()) {
+                out.comma();
+            }
+        }
+        out.arrayEnd();
+    }
+
+    private static void writeIterationMetrics(Json out, List<SuiteMetric> metrics) {
+        out.arrayStart();
+        for (int i = 0; i < metrics.size(); i++) {
+            SuiteMetric metric = metrics.get(i);
+            out.objectStart();
+            out.name("metric").string(metric.name()).comma();
+            out.name("value").number(metric.value());
+            out.objectEnd();
+            if (i + 1 < metrics.size()) {
                 out.comma();
             }
         }
