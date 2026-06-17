@@ -130,6 +130,34 @@ public class SuiteEntrypointConfigTest {
     }
 
     @Test
+    public void workloadReturnsWhenServerAcceptsButNeverReplies() throws Exception {
+        try (HangingServer server = HangingServer.start()) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new RecordingDenseHllPreparer(), 100);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.PING,
+                    "127.0.0.1",
+                    server.port(),
+                    1,
+                    1,
+                    1,
+                    1,
+                    0,
+                    false,
+                    true
+            );
+
+            long startNs = System.nanoTime();
+            BenchWorkloadResult result = harness.runWorkload(request);
+            long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs);
+
+            Assert.assertEquals(0, result.ops());
+            Assert.assertEquals(1, result.errors());
+            Assert.assertTrue("elapsedMillis=" + elapsedMillis, elapsedMillis < 1_000);
+        }
+    }
+
+    @Test
     public void denseHllPrefillRunsOncePerPassOnlyForDenseScenarios() throws Exception {
         Path current = regularTempJar("current");
         Path reportDir = Files.createTempDirectory("suite-prefill-report-");

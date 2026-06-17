@@ -32,17 +32,27 @@ public final class BenchHarness implements SuiteHarness {
     private static final int READY_TIMEOUT_MILLIS = 15_000;
     private static final int READY_CONNECT_TIMEOUT_MILLIS = 500;
     private static final int READY_READ_TIMEOUT_MILLIS = 500;
+    private static final int WORKLOAD_READ_TIMEOUT_MILLIS = 5_000;
     private static final byte[] PING = "PING".getBytes(StandardCharsets.US_ASCII);
     private final ObservationClient observationClient = new ObservationClient();
     private final DenseHllPreparer denseHllPreparer;
+    private final int workloadReadTimeoutMillis;
     private final Set<PreparedPass> preparedPasses = ConcurrentHashMap.newKeySet();
 
     public BenchHarness() {
-        this(YierdisBench::prefillDenseHll);
+        this(YierdisBench::prefillDenseHll, WORKLOAD_READ_TIMEOUT_MILLIS);
     }
 
     BenchHarness(DenseHllPreparer denseHllPreparer) {
+        this(denseHllPreparer, WORKLOAD_READ_TIMEOUT_MILLIS);
+    }
+
+    BenchHarness(DenseHllPreparer denseHllPreparer, int workloadReadTimeoutMillis) {
         this.denseHllPreparer = Objects.requireNonNull(denseHllPreparer, "denseHllPreparer");
+        if (workloadReadTimeoutMillis <= 0) {
+            throw new IllegalArgumentException("workloadReadTimeoutMillis must be > 0");
+        }
+        this.workloadReadTimeoutMillis = workloadReadTimeoutMillis;
     }
 
     @Override
@@ -137,9 +147,9 @@ public final class BenchHarness implements SuiteHarness {
         Objects.requireNonNull(request, "request");
         YierdisBench.Workload workload = mapWorkload(request.workload());
         if (request.latency()) {
-            return runLatency(request, workload);
+            return runLatency(request, workload, workloadReadTimeoutMillis);
         }
-        return runThroughput(request, workload);
+        return runThroughput(request, workload, workloadReadTimeoutMillis);
     }
 
     void prepareScenario(SuiteHarness.RunningServer server, ScenarioDefinition scenario, SuiteConfig config) {
@@ -206,7 +216,8 @@ public final class BenchHarness implements SuiteHarness {
 
     private static BenchWorkloadResult runThroughput(
             BenchWorkloadRequest request,
-            YierdisBench.Workload workload
+            YierdisBench.Workload workload,
+            int readTimeoutMillis
     ) throws InterruptedException {
         byte[] value = new byte[request.dataSize()];
         Arrays.fill(value, (byte) 'x');
@@ -229,7 +240,8 @@ public final class BenchHarness implements SuiteHarness {
                         request.keyspace(),
                         value,
                         0,
-                        request.strictReplies()
+                        request.strictReplies(),
+                        readTimeoutMillis
                 )));
             }
             waitForPool(pool);
@@ -258,7 +270,8 @@ public final class BenchHarness implements SuiteHarness {
 
     private static BenchWorkloadResult runLatency(
             BenchWorkloadRequest request,
-            YierdisBench.Workload workload
+            YierdisBench.Workload workload,
+            int readTimeoutMillis
     ) throws InterruptedException {
         byte[] value = new byte[request.dataSize()];
         Arrays.fill(value, (byte) 'x');
@@ -279,7 +292,8 @@ public final class BenchHarness implements SuiteHarness {
                         n,
                         request.keyspace(),
                         value,
-                        request.strictReplies()
+                        request.strictReplies(),
+                        readTimeoutMillis
                 )));
             }
             waitForPool(pool);
