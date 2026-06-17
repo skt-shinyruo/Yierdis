@@ -14,7 +14,6 @@ public final class SuiteRunner {
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC);
     private static final int MIN_PORT = 1;
     private static final int MAX_PORT = 65535;
-    private static final int PORT_RANGE = MAX_PORT - MIN_PORT + 1;
 
     private final SuiteConfig config;
     private final SuiteHarness harness;
@@ -30,12 +29,14 @@ public final class SuiteRunner {
         Instant startedAt = Instant.now();
         String runId = RUN_ID_TIME.format(startedAt) + "-" + config.profile().cliName();
         List<SuiteArtifact> artifacts = artifactsInRunOrder();
+        validatePortHeadroom(artifacts.size());
         List<ScenarioPassResult> passes = new ArrayList<>();
 
-        for (ScenarioDefinition scenario : scenarios) {
+        for (int scenarioIndex = 0; scenarioIndex < scenarios.size(); scenarioIndex++) {
+            ScenarioDefinition scenario = scenarios.get(scenarioIndex);
             for (int artifactIndex = 0; artifactIndex < artifacts.size(); artifactIndex++) {
                 SuiteArtifact artifact = artifacts.get(artifactIndex);
-                int port = portFor(scenario, artifactIndex);
+                int port = portFor(scenarioIndex, artifactIndex, artifacts.size());
                 Path logFile = logFileFor(artifact, scenario);
                 passes.add(runPass(artifact, scenario, port, logFile));
             }
@@ -94,7 +95,7 @@ public final class SuiteRunner {
         try {
             harness.stopServer(server);
             return pass;
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
             String message = pass.failed()
                     ? pass.failureMessage() + "; stop failed: " + conciseFailureMessage(e)
                     : "stop failed: " + conciseFailureMessage(e);
@@ -170,17 +171,44 @@ public final class SuiteRunner {
     }
 
     private static String dirtySuffix(ScenarioPassResult pass) {
-        if (pass.failureMessage().isBlank()) {
+        List<String> details = new ArrayList<>();
+        if (!pass.failureMessage().isBlank()) {
+            details.add(pass.failureMessage());
+        }
+        List<String> missing = pass.missingRequiredMetrics();
+        if (!missing.isEmpty()) {
+            details.add("missing required metrics " + missing);
+        }
+        MetricSummary errors = pass.summaries().get("errors");
+        if (errors != null && errors.max() > 0.0) {
+            details.add("errors max=" + format(errors.max()));
+        }
+        if (details.isEmpty()) {
             return "";
         }
-        return ": " + pass.failureMessage();
+        return ": " + String.join(", ", details);
     }
 
-    private int portFor(ScenarioDefinition scenario, int artifactIndex) {
-        int scenarioHash = Math.floorMod(scenario.id().hashCode(), 1000);
-        long offset = (long) scenarioHash * 2L + artifactIndex;
-        long zeroBasedBase = Math.max(0, (long) config.portBase() - MIN_PORT);
-        return MIN_PORT + (int) Math.floorMod(zeroBasedBase + offset, PORT_RANGE);
+    private static String format(double value) {
+        return String.format(Locale.ROOT, "%.3f", value);
+    }
+
+    private void validatePortHeadroom(int artifactCount) {
+        long requiredPorts = (long) scenarios.size() * artifactCount;
+        if (requiredPorts == 0) {
+            return;
+        }
+        long lastPort = (long) config.portBase() + requiredPorts - 1L;
+        if (config.portBase() < MIN_PORT || lastPort > MAX_PORT) {
+            throw new IllegalArgumentException("portBase " + config.portBase()
+                    + " cannot allocate " + requiredPorts + " contiguous ports within "
+                    + MIN_PORT + ".." + MAX_PORT);
+        }
+    }
+
+    private int portFor(int scenarioIndex, int artifactIndex, int artifactCount) {
+        long offset = (long) scenarioIndex * artifactCount + artifactIndex;
+        return (int) ((long) config.portBase() + offset);
     }
 
     private Path logFileFor(SuiteArtifact artifact, ScenarioDefinition scenario) {

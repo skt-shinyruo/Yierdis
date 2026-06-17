@@ -22,7 +22,7 @@ public interface SuiteHarness {
             SuiteConfig config
     ) throws Exception;
 
-    void stopServer(RunningServer server);
+    void stopServer(RunningServer server) throws Exception;
 
     record RunningServer(String artifactLabel, String scenarioId, int port, Path logFile, Object handle) {
         public RunningServer(String artifactLabel, String scenarioId, int port, Path logFile) {

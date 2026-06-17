@@ -128,6 +128,47 @@ public class SuiteRunnerOrchestrationTest {
     }
 
     @Test
+    public void checkedStopFailureIsPreservedAsPassFailure() throws Exception {
+        ScenarioDefinition scenario = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
+        SuiteConfig config = TestSuiteConfigs.currentOnly(Files.createTempDirectory("suite-runner-checked-stop-"), 16378);
+        FakeHarness harness = new FakeHarness();
+        harness.failStopCheckedOnce = true;
+
+        SuiteRunResult result = new SuiteRunner(config, harness, List.of(scenario)).run();
+
+        Assert.assertEquals(1, result.passes().size());
+        ScenarioPassResult pass = result.passes().get(0);
+        Assert.assertTrue(pass.failed());
+        Assert.assertTrue(pass.failureMessage(), pass.failureMessage().contains("forced checked stop failure"));
+        Assert.assertEquals(1, result.findings().size());
+        Assert.assertTrue(result.findings().get(0).message(), result.findings().get(0).message().contains("forced checked stop failure"));
+    }
+
+    @Test
+    public void currentOnlyDirtyFindingMentionsMissingMetricsAndErrorSummary() throws Exception {
+        ScenarioDefinition scenario = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
+        SuiteConfig config = TestSuiteConfigs.currentOnly(Files.createTempDirectory("suite-runner-dirty-current-"), 16378);
+        FakeHarness harness = new FakeHarness();
+        harness.repeatMetrics = List.of(
+                new SuiteMetric("qps", 1000.0),
+                new SuiteMetric("p95_ms", 10.0),
+                new SuiteMetric("errors", 2.0)
+        );
+
+        SuiteRunResult result = new SuiteRunner(config, harness, List.of(scenario)).run();
+
+        Assert.assertEquals(1, result.passes().size());
+        Assert.assertFalse(result.passes().get(0).failed());
+        Assert.assertFalse(result.passes().get(0).clean());
+        Assert.assertEquals(1, result.findings().size());
+        ThresholdFinding finding = result.findings().get(0);
+        Assert.assertEquals(ThresholdFinding.Level.CRITICAL, finding.level());
+        Assert.assertTrue(finding.message(), finding.message().contains("p99_ms"));
+        Assert.assertTrue(finding.message(), finding.message().contains("errors"));
+        Assert.assertTrue(finding.message(), finding.message().contains("max=2.000"));
+    }
+
+    @Test
     public void comparisonFailureUsesEvaluatorFindingWithoutDuplicateComparabilityFinding() throws Exception {
         ScenarioDefinition scenario = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 2, true);
         SuiteConfig config = TestSuiteConfigs.comparison(Files.createTempDirectory("suite-runner-dirty-report-"), 16378);
@@ -147,17 +188,27 @@ public class SuiteRunnerOrchestrationTest {
     }
 
     @Test
-    public void highPortBaseStillAllocatesValidPorts() throws Exception {
+    public void highButSufficientPortBaseStaysInContiguousSafeRange() throws Exception {
         ScenarioDefinition scenario = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
-        SuiteConfig config = TestSuiteConfigs.comparison(Files.createTempDirectory("suite-runner-port-report-"), 65535);
+        SuiteConfig config = TestSuiteConfigs.comparison(Files.createTempDirectory("suite-runner-port-report-"), 65534);
         FakeHarness harness = new FakeHarness();
 
         new SuiteRunner(config, harness, List.of(scenario)).run();
 
-        Assert.assertEquals(2, harness.ports.size());
-        for (int port : harness.ports) {
-            Assert.assertTrue("invalid port " + port, port > 0 && port <= 65535);
-        }
+        Assert.assertEquals(List.of(65534, 65535), harness.ports);
+    }
+
+    @Test
+    public void highPortBaseWithInsufficientHeadroomFailsClearlyBeforeStartingServers() throws Exception {
+        ScenarioDefinition scenario = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
+        SuiteConfig config = TestSuiteConfigs.comparison(Files.createTempDirectory("suite-runner-port-overflow-"), 65535);
+        FakeHarness harness = new FakeHarness();
+
+        IllegalArgumentException failure = Assert.assertThrows(IllegalArgumentException.class,
+                () -> new SuiteRunner(config, harness, List.of(scenario)).run());
+
+        Assert.assertTrue(failure.getMessage(), failure.getMessage().contains("portBase"));
+        Assert.assertTrue(harness.lifecycle.isEmpty());
     }
 
     private static ScenarioDefinition scenario(String id, BenchWorkloadKind workload, int warmups, int repeats, boolean latency) {
@@ -172,6 +223,8 @@ public class SuiteRunnerOrchestrationTest {
         private boolean failIteration;
         private boolean failCurrentIteration;
         private boolean failStopOnce;
+        private boolean failStopCheckedOnce;
+        private List<SuiteMetric> repeatMetrics;
         private int observationCount;
 
         @Override
@@ -214,19 +267,24 @@ public class SuiteRunnerOrchestrationTest {
             if (failIteration || (failCurrentIteration && server.artifactLabel().equals("current"))) {
                 throw new Exception("forced failure in " + server.artifactLabel() + " " + scenario.id());
             }
-            List<SuiteMetric> metrics = List.of(
+            List<SuiteMetric> metrics = repeatMetrics == null || kind == IterationResult.Kind.WARMUP ? List.of(
                     new SuiteMetric("qps", 1000.0),
                     new SuiteMetric("p95_ms", 10.0),
                     new SuiteMetric("p99_ms", 20.0),
                     new SuiteMetric("errors", 0.0)
-            );
+            ) : repeatMetrics;
             return new IterationResult(kind, index, metrics);
         }
 
         @Override
-        public void stopServer(SuiteHarness.RunningServer server) {
+        public void stopServer(SuiteHarness.RunningServer server) throws Exception {
             lifecycle.add("stop " + server.artifactLabel() + " " + server.scenarioId());
             active = null;
+            if (failStopCheckedOnce) {
+                failStopCheckedOnce = false;
+                throw new Exception("forced checked stop failure in "
+                        + server.artifactLabel() + " " + server.scenarioId());
+            }
             if (failStopOnce) {
                 failStopOnce = false;
                 throw new IllegalStateException("forced stop failure in "
