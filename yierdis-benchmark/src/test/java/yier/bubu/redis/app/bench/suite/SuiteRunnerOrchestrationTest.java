@@ -75,6 +75,59 @@ public class SuiteRunnerOrchestrationTest {
     }
 
     @Test
+    public void stopFailureAfterIterationFailurePreservesBothFailuresAndDoesNotAbortRun() throws Exception {
+        ScenarioDefinition scenario1 = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 2, true);
+        ScenarioDefinition scenario2 = scenario("release-set-get-256b-c64-p8", BenchWorkloadKind.SET_GET, 1, 1, true);
+        SuiteConfig config = TestSuiteConfigs.currentOnly(Files.createTempDirectory("suite-runner-stop-after-failure-"), 16378);
+        FakeHarness harness = new FakeHarness();
+        harness.failIteration = true;
+        harness.failStopOnce = true;
+
+        SuiteRunResult result = new SuiteRunner(config, harness, List.of(scenario1, scenario2)).run();
+
+        Assert.assertEquals(2, result.passes().size());
+        ScenarioPassResult first = result.passes().get(0);
+        Assert.assertTrue(first.failed());
+        Assert.assertTrue(first.failureMessage(), first.failureMessage().contains("forced failure"));
+        Assert.assertTrue(first.failureMessage(), first.failureMessage().contains("forced stop failure"));
+        Assert.assertEquals("current:" + scenario1.id() + ":before", first.before().values().get("phase"));
+        Assert.assertEquals(List.of(
+                "start current release-ping-latency", "stop current release-ping-latency",
+                "start current release-set-get-256b-c64-p8", "stop current release-set-get-256b-c64-p8"
+        ), harness.lifecycle);
+    }
+
+    @Test
+    public void stopFailureAfterSuccessfulPassMarksFailedAndContinuesRemainingComparisonPasses() throws Exception {
+        ScenarioDefinition scenario1 = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
+        ScenarioDefinition scenario2 = scenario("release-set-get-256b-c64-p8", BenchWorkloadKind.SET_GET, 1, 1, true);
+        SuiteConfig config = TestSuiteConfigs.comparison(Files.createTempDirectory("suite-runner-stop-success-"), 16378);
+        FakeHarness harness = new FakeHarness();
+        harness.failStopOnce = true;
+
+        SuiteRunResult result = new SuiteRunner(config, harness, List.of(scenario1, scenario2)).run();
+
+        Assert.assertEquals(4, result.passes().size());
+        ScenarioPassResult first = result.passes().get(0);
+        Assert.assertTrue(first.failed());
+        Assert.assertTrue(first.failureMessage(), first.failureMessage().contains("forced stop failure"));
+        Assert.assertEquals(List.of(
+                "start baseline release-ping-latency", "stop baseline release-ping-latency",
+                "start current release-ping-latency", "stop current release-ping-latency",
+                "start baseline release-set-get-256b-c64-p8", "stop baseline release-set-get-256b-c64-p8",
+                "start current release-set-get-256b-c64-p8", "stop current release-set-get-256b-c64-p8"
+        ), harness.lifecycle);
+        Assert.assertEquals(2, result.comparisons().size());
+        Assert.assertFalse(result.comparisons().get(0).comparable());
+        Assert.assertTrue(result.comparisons().get(1).comparable());
+        List<ThresholdFinding> comparability = result.findings().stream()
+                .filter(finding -> finding.metric().equals("comparability"))
+                .toList();
+        Assert.assertEquals(1, comparability.size());
+        Assert.assertEquals(ThresholdFinding.Level.CRITICAL, comparability.get(0).level());
+    }
+
+    @Test
     public void comparisonFailureUsesEvaluatorFindingWithoutDuplicateComparabilityFinding() throws Exception {
         ScenarioDefinition scenario = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 2, true);
         SuiteConfig config = TestSuiteConfigs.comparison(Files.createTempDirectory("suite-runner-dirty-report-"), 16378);
@@ -118,6 +171,7 @@ public class SuiteRunnerOrchestrationTest {
         private SuiteHarness.RunningServer active;
         private boolean failIteration;
         private boolean failCurrentIteration;
+        private boolean failStopOnce;
         private int observationCount;
 
         @Override
@@ -173,6 +227,11 @@ public class SuiteRunnerOrchestrationTest {
         public void stopServer(SuiteHarness.RunningServer server) {
             lifecycle.add("stop " + server.artifactLabel() + " " + server.scenarioId());
             active = null;
+            if (failStopOnce) {
+                failStopOnce = false;
+                throw new IllegalStateException("forced stop failure in "
+                        + server.artifactLabel() + " " + server.scenarioId());
+            }
         }
     }
 }
