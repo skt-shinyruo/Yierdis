@@ -1,0 +1,158 @@
+package yier.bubu.redis.app.bench.suite;
+
+import org.junit.Assert;
+import org.junit.Test;
+import yier.bubu.redis.app.bench.BenchWorkloadKind;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+public class SuiteReportWriterTest {
+    @Test
+    public void writesAllSuiteReportArtifacts() throws Exception {
+        Path reportDir = Files.createTempDirectory("suite-report-writer-test");
+        SuiteRunResult result = suiteRunResult();
+
+        SuiteReportWriter.writeAll(result, reportDir);
+
+        Path jsonPath = reportDir.resolve("suite-result.json");
+        Path metricsPath = reportDir.resolve("metrics.csv");
+        Path comparisonsPath = reportDir.resolve("comparisons.csv");
+        Path markdownPath = reportDir.resolve("report.md");
+        Assert.assertTrue(Files.exists(jsonPath));
+        Assert.assertTrue(Files.exists(metricsPath));
+        Assert.assertTrue(Files.exists(comparisonsPath));
+        Assert.assertTrue(Files.exists(markdownPath));
+
+        String json = Files.readString(jsonPath, StandardCharsets.UTF_8);
+        Assert.assertTrue(json.contains("\"runId\":\"run-1\""));
+        Assert.assertTrue(json.contains("\"profile\":\"release\""));
+        Assert.assertTrue(json.contains("\"release-ping-latency\""));
+        Assert.assertTrue(json.contains("\"artifacts\""));
+        Assert.assertTrue(json.contains("\"environment\""));
+        Assert.assertTrue(json.contains("\"summaries\""));
+        Assert.assertTrue(json.contains("\"findings\""));
+        Assert.assertTrue(json.contains("\"comparisons\""));
+
+        String metricsCsv = Files.readString(metricsPath, StandardCharsets.UTF_8);
+        Assert.assertTrue(metricsCsv.startsWith("artifact,scenario,iteration_group,metric,sample_count,min,median,mean,max\n"));
+        Assert.assertTrue(metricsCsv.contains("current,release-ping-latency,repeat,qps,1,850.000,850.000,850.000,850.000"));
+
+        String comparisonsCsv = Files.readString(comparisonsPath, StandardCharsets.UTF_8);
+        Assert.assertTrue(comparisonsCsv.startsWith("scenario,metric,baseline,current,delta_percent,status\n"));
+        Assert.assertTrue(comparisonsCsv.contains("release-ping-latency,qps,1000.000,850.000,-15.000,warning"));
+
+        String markdown = Files.readString(markdownPath, StandardCharsets.UTF_8);
+        Assert.assertTrue(markdown.contains("# Yierdis Benchmark Suite Report"));
+        Assert.assertTrue(markdown.contains("release-ping-latency"));
+        Assert.assertTrue(markdown.contains("WARNING"));
+    }
+
+    @Test
+    public void escapesCsvJsonAndMarkdownTableContent() {
+        ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING, \"latency\"\ncase",
+                BenchWorkloadKind.PING, 10, 0, 100, 1, 1, 0, 1, true);
+        ScenarioPassResult current = pass("current", scenario, 850.0, 10.0, 20.0, 0.0);
+        SuiteRunResult result = new SuiteRunResult(
+                "run-\"1\n",
+                SuiteProfileName.RELEASE,
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:01Z"),
+                new SuiteEnvironment(Map.of("quote,key", "value \"x\"\nnext")),
+                List.of(new SuiteArtifact("current", Path.of("/tmp/current, \"jar\".jar"), "main\nabc")),
+                List.of(scenario),
+                List.of(current),
+                List.of(),
+                List.of(new ThresholdFinding(ThresholdFinding.Level.WARNING, scenario.id(), "qps", "pipe | newline\nmessage"))
+        );
+
+        String json = SuiteJsonWriter.write(result);
+        Assert.assertTrue(json.contains("\"runId\":\"run-\\\"1\\n\""));
+        Assert.assertTrue(json.contains("\"quote,key\":\"value \\\"x\\\"\\nnext\""));
+        Assert.assertTrue(json.contains("\"commitLabel\":\"main\\nabc\""));
+
+        String metricsCsv = SuiteCsvWriter.metricsCsv(result);
+        Assert.assertTrue(metricsCsv.contains("current,release-ping-latency,repeat,qps,1,850.000,850.000,850.000,850.000"));
+
+        String markdown = SuiteMarkdownWriter.write(result);
+        Assert.assertTrue(markdown.contains("PING, \"latency\"<br>case"));
+        Assert.assertTrue(markdown.contains("pipe \\| newline<br>message"));
+    }
+
+    @Test
+    public void suiteRunResultValidatesAndCopiesInputs() {
+        Instant startedAt = Instant.parse("2026-01-01T00:00:00Z");
+        Instant finishedAt = Instant.parse("2026-01-01T00:00:01Z");
+        SuiteRunResult empty = new SuiteRunResult("run-1", SuiteProfileName.RELEASE, startedAt, finishedAt,
+                new SuiteEnvironment(null), null, null, null, null, null);
+
+        Assert.assertTrue(empty.artifacts().isEmpty());
+        Assert.assertTrue(empty.scenarios().isEmpty());
+        Assert.assertTrue(empty.environment().values().isEmpty());
+        Assert.assertThrows(UnsupportedOperationException.class,
+                () -> empty.artifacts().add(new SuiteArtifact("current", Path.of("/tmp/current.jar"), "")));
+        Assert.assertThrows(IllegalArgumentException.class, () -> new SuiteRunResult(" ", SuiteProfileName.RELEASE,
+                startedAt, finishedAt, new SuiteEnvironment(null), null, null, null, null, null));
+        Assert.assertThrows(IllegalArgumentException.class, () -> new SuiteRunResult("run-1", SuiteProfileName.RELEASE,
+                finishedAt, startedAt, new SuiteEnvironment(null), null, null, null, null, null));
+    }
+
+    @Test
+    public void suiteEnvironmentCapturesStableKeysAndCopiesValues() {
+        Map<String, String> values = new LinkedHashMap<>();
+        values.put("first", "1");
+        SuiteEnvironment environment = new SuiteEnvironment(values);
+        values.put("second", "2");
+
+        Assert.assertEquals(List.of("first"), List.copyOf(environment.values().keySet()));
+        Assert.assertThrows(UnsupportedOperationException.class, () -> environment.values().put("third", "3"));
+
+        SuiteEnvironment captured = SuiteEnvironment.capture();
+        Assert.assertTrue(captured.values().containsKey("java.version"));
+        Assert.assertTrue(captured.values().containsKey("java.vm.name"));
+        Assert.assertTrue(captured.values().containsKey("os.name"));
+        Assert.assertTrue(captured.values().containsKey("os.arch"));
+        Assert.assertTrue(captured.values().containsKey("available.processors"));
+    }
+
+    private static SuiteRunResult suiteRunResult() {
+        ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING latency",
+                BenchWorkloadKind.PING, 10, 0, 100, 1, 1, 0, 1, true);
+        ScenarioPassResult baseline = pass("baseline", scenario, 1000.0, 10.0, 20.0, 0.0);
+        ScenarioPassResult current = pass("current", scenario, 850.0, 12.0, 24.0, 0.0);
+        ScenarioComparison comparison = ScenarioComparison.compare(scenario, baseline, current);
+        List<ThresholdFinding> findings = ThresholdEvaluator.evaluate(comparison, ThresholdPolicy.defaults());
+
+        return new SuiteRunResult(
+                "run-1",
+                SuiteProfileName.RELEASE,
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:05Z"),
+                new SuiteEnvironment(Map.of("java.version", "25", "os.name", "Linux")),
+                List.of(
+                        new SuiteArtifact("baseline", Path.of("/tmp/baseline.jar"), "base"),
+                        new SuiteArtifact("current", Path.of("/tmp/current.jar"), "head")
+                ),
+                List.of(scenario),
+                List.of(baseline, current),
+                List.of(comparison),
+                findings
+        );
+    }
+
+    private static ScenarioPassResult pass(String artifact, ScenarioDefinition scenario, double qps, double p95, double p99, double errors) {
+        return ScenarioPassResult.completed(artifact, scenario, List.of(
+                IterationResult.repeat(0, List.of(
+                        new SuiteMetric("qps", qps),
+                        new SuiteMetric("p95_ms", p95),
+                        new SuiteMetric("p99_ms", p99),
+                        new SuiteMetric("errors", errors)
+                ))
+        ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
+    }
+}
