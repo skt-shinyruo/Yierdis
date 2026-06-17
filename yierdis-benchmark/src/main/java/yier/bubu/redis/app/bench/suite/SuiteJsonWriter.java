@@ -1,5 +1,6 @@
 package yier.bubu.redis.app.bench.suite;
 
+import java.util.List;
 import java.util.Map;
 
 public final class SuiteJsonWriter {
@@ -36,15 +37,7 @@ public final class SuiteJsonWriter {
     }
 
     private static void writeEnvironment(Json out, SuiteEnvironment environment) {
-        out.objectStart();
-        int index = 0;
-        for (Map.Entry<String, String> entry : environment.values().entrySet()) {
-            out.name(entry.getKey()).string(entry.getValue());
-            if (++index < environment.values().size()) {
-                out.comma();
-            }
-        }
-        out.objectEnd();
+        writeStringMap(out, environment.values());
     }
 
     private static void writeArtifacts(Json out, SuiteRunResult result) {
@@ -181,10 +174,11 @@ public final class SuiteJsonWriter {
 
     private static void writeStringMap(Json out, Map<String, String> values) {
         out.objectStart();
-        int index = 0;
-        for (Map.Entry<String, String> entry : values.entrySet()) {
-            out.name(entry.getKey()).string(entry.getValue());
-            if (++index < values.size()) {
+        List<String> keys = values.keySet().stream().sorted().toList();
+        for (int i = 0; i < keys.size(); i++) {
+            String key = keys.get(i);
+            out.name(key).string(values.get(key));
+            if (i + 1 < keys.size()) {
                 out.comma();
             }
         }

@@ -85,6 +85,72 @@ public class SuiteReportWriterTest {
     }
 
     @Test
+    public void csvEscapesEmittedFieldsWithCommasQuotesAndNewlines() {
+        ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING latency",
+                BenchWorkloadKind.PING, 10, 0, 100, 1, 1, 0, 1, true);
+        ScenarioPassResult pass = pass("current,\"quoted\"\nartifact", scenario, 850.0, 10.0, 20.0, 0.0);
+        SuiteRunResult result = new SuiteRunResult(
+                "run-1",
+                SuiteProfileName.RELEASE,
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:01Z"),
+                new SuiteEnvironment(null),
+                List.of(),
+                List.of(scenario),
+                List.of(pass),
+                List.of(),
+                List.of()
+        );
+
+        String metricsCsv = SuiteCsvWriter.metricsCsv(result);
+
+        Assert.assertTrue(metricsCsv.contains("\"current,\"\"quoted\"\"\nartifact\",release-ping-latency,repeat,qps"));
+    }
+
+    @Test
+    public void jsonAndMarkdownSortMapKeysForDeterministicOutput() {
+        ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING latency",
+                BenchWorkloadKind.PING, 10, 0, 100, 1, 1, 0, 1, true);
+        Map<String, String> environment = new LinkedHashMap<>();
+        environment.put("z-key", "z");
+        environment.put("a-key", "a");
+        Map<String, String> before = new LinkedHashMap<>();
+        before.put("z-before", "z");
+        before.put("a-before", "a");
+        Map<String, String> after = new LinkedHashMap<>();
+        after.put("z-after", "z");
+        after.put("a-after", "a");
+        ScenarioPassResult pass = ScenarioPassResult.completed("current", scenario, List.of(
+                IterationResult.repeat(0, List.of(
+                        new SuiteMetric("qps", 850.0),
+                        new SuiteMetric("p95_ms", 10.0),
+                        new SuiteMetric("p99_ms", 20.0),
+                        new SuiteMetric("errors", 0.0)
+                ))
+        ), new ObservationSnapshot(before), new ObservationSnapshot(after));
+        SuiteRunResult result = new SuiteRunResult(
+                "run-1",
+                SuiteProfileName.RELEASE,
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:01Z"),
+                new SuiteEnvironment(environment),
+                List.of(),
+                List.of(scenario),
+                List.of(pass),
+                List.of(),
+                List.of()
+        );
+
+        String json = SuiteJsonWriter.write(result);
+        String markdown = SuiteMarkdownWriter.write(result);
+
+        Assert.assertTrue(json.indexOf("\"a-key\":\"a\"") < json.indexOf("\"z-key\":\"z\""));
+        Assert.assertTrue(json.indexOf("\"a-before\":\"a\"") < json.indexOf("\"z-before\":\"z\""));
+        Assert.assertTrue(json.indexOf("\"a-after\":\"a\"") < json.indexOf("\"z-after\":\"z\""));
+        Assert.assertTrue(markdown.indexOf("| a-key | a |") < markdown.indexOf("| z-key | z |"));
+    }
+
+    @Test
     public void suiteRunResultValidatesAndCopiesInputs() {
         Instant startedAt = Instant.parse("2026-01-01T00:00:00Z");
         Instant finishedAt = Instant.parse("2026-01-01T00:00:01Z");
