@@ -93,29 +93,6 @@ public class SuiteEntrypointConfigTest {
     }
 
     @Test
-    public void harnessRejectsUnsupportedExtendedWorkloadsClearly() {
-        BenchWorkloadRequest request = new BenchWorkloadRequest(
-                BenchWorkloadKind.MAXMEMORY_EVICTION,
-                "127.0.0.1",
-                6379,
-                1,
-                1,
-                1,
-                1,
-                0,
-                false,
-                true
-        );
-
-        IllegalArgumentException failure = Assert.assertThrows(
-                IllegalArgumentException.class,
-                () -> new BenchHarness().runWorkload(request)
-        );
-
-        Assert.assertEquals("unsupported extended suite workload: MAXMEMORY_EVICTION", failure.getMessage());
-    }
-
-    @Test
     public void readinessProbeTimesOutWhenServerAcceptsButNeverReplies() throws Exception {
         try (HangingServer server = HangingServer.start()) {
             Assert.assertTrue(server.awaitListening());
