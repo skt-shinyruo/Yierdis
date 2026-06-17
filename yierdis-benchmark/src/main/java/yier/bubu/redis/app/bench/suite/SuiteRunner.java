@@ -68,6 +68,7 @@ public final class SuiteRunner {
     private ScenarioPassResult runPass(SuiteArtifact artifact, ScenarioDefinition scenario, int port, Path logFile) {
         SuiteHarness.RunningServer server = null;
         ObservationSnapshot before = ObservationSnapshot.empty();
+        ScenarioPassResult pass;
         try {
             server = harness.startServer(artifact, scenario, config, port, logFile);
             before = requireObservation(harness.captureObservation(config.host(), port));
@@ -79,13 +80,26 @@ public final class SuiteRunner {
                 iterations.add(requireIteration(harness.runIteration(server, scenario, i, IterationResult.Kind.REPEAT, config)));
             }
             ObservationSnapshot after = requireObservation(harness.captureObservation(config.host(), port));
-            return ScenarioPassResult.completed(artifact.label(), scenario, iterations, before, after);
+            pass = ScenarioPassResult.completed(artifact.label(), scenario, iterations, before, after);
         } catch (Exception e) {
-            return failedPass(artifact.label(), scenario, e, before);
-        } finally {
-            if (server != null) {
-                harness.stopServer(server);
-            }
+            pass = failedPass(artifact.label(), scenario, e, before);
+        }
+        if (server != null) {
+            pass = stopServer(server, pass);
+        }
+        return pass;
+    }
+
+    private ScenarioPassResult stopServer(SuiteHarness.RunningServer server, ScenarioPassResult pass) {
+        try {
+            harness.stopServer(server);
+            return pass;
+        } catch (RuntimeException | Error e) {
+            String message = pass.failed()
+                    ? pass.failureMessage() + "; stop failed: " + conciseFailureMessage(e)
+                    : "stop failed: " + conciseFailureMessage(e);
+            return new ScenarioPassResult(pass.artifactLabel(), pass.scenario(), true, message,
+                    pass.iterations(), pass.before(), pass.after(), null);
         }
     }
 
@@ -97,12 +111,7 @@ public final class SuiteRunner {
         return Objects.requireNonNull(iteration, "iteration");
     }
 
-    private static ScenarioPassResult failedPass(
-            String artifactLabel,
-            ScenarioDefinition scenario,
-            Exception failure,
-            ObservationSnapshot before
-    ) {
+    private static ScenarioPassResult failedPass(String artifactLabel, ScenarioDefinition scenario, Throwable failure, ObservationSnapshot before) {
         String message = conciseFailureMessage(failure);
         if (before.values().isEmpty()) {
             return ScenarioPassResult.failed(artifactLabel, scenario, message);
@@ -111,7 +120,7 @@ public final class SuiteRunner {
                 ObservationSnapshot.empty(), null);
     }
 
-    private static String conciseFailureMessage(Exception failure) {
+    private static String conciseFailureMessage(Throwable failure) {
         String message = failure.getMessage();
         if (message == null || message.isBlank()) {
             message = failure.getClass().getSimpleName();
