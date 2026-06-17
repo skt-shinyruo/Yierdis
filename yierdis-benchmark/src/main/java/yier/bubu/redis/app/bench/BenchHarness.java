@@ -392,8 +392,9 @@ public final class BenchHarness implements SuiteHarness {
         byte[] value = new byte[request.dataSize()];
         Arrays.fill(value, (byte) 'x');
 
-        if (request.workload() == BenchWorkloadKind.TTL_EXPIRATION) {
-            if (!prefillExtendedTtlKeys(request, readTimeoutMillis, value)) {
+        if (request.workload() == BenchWorkloadKind.TTL_EXPIRATION
+                || request.workload() == BenchWorkloadKind.MIXED_READ_WRITE) {
+            if (!prefillExtendedKeys(request, readTimeoutMillis, value)) {
                 return new ExtendedOutcome(0, 1, new long[0], System.nanoTime());
             }
         }
@@ -561,7 +562,7 @@ public final class BenchHarness implements SuiteHarness {
         };
     }
 
-    private static boolean prefillExtendedTtlKeys(BenchWorkloadRequest request, int readTimeoutMillis, byte[] value) {
+    private static boolean prefillExtendedKeys(BenchWorkloadRequest request, int readTimeoutMillis, byte[] value) {
         try (Socket socket = new Socket()) {
             socket.setTcpNoDelay(true);
             socket.connect(new InetSocketAddress(request.host(), request.port()), WORKLOAD_CONNECT_TIMEOUT_MILLIS);
@@ -575,7 +576,7 @@ public final class BenchHarness implements SuiteHarness {
                     for (int i = 0; i < batch; i++) {
                         RespClientCodec.writeCommand(out, List.of(
                                 CMD_SET,
-                                extendedKey(BenchWorkloadKind.TTL_EXPIRATION, keyIndex++),
+                                extendedKey(request.workload(), keyIndex++),
                                 value
                         ));
                     }
@@ -632,8 +633,8 @@ public final class BenchHarness implements SuiteHarness {
                 if (opIndex % 5 == 0) {
                     yield reply.isSimpleString("OK");
                 }
-                yield reply.isNull() || (reply.kind() == RespClientCodec.RespReply.Kind.BULK_STRING
-                        && reply.bulkLength() == expectedDataSize);
+                yield reply.kind() == RespClientCodec.RespReply.Kind.BULK_STRING
+                        && reply.bulkLength() == expectedDataSize;
             }
             default -> true;
         };

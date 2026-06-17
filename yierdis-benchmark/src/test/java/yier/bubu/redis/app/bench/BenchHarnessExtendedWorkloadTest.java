@@ -177,6 +177,68 @@ public class BenchHarnessExtendedWorkloadTest {
     }
 
     @Test
+    public void mixedReadWritePrefillsKeysBeforeTimedCommands() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("GET".equals(command)) {
+                return bulk("xxxx");
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.MIXED_READ_WRITE,
+                    "127.0.0.1",
+                    server.port(),
+                    4,
+                    1,
+                    2,
+                    3,
+                    4,
+                    false,
+                    true
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(4, result.ops());
+            Assert.assertEquals(0, result.errors());
+            Assert.assertEquals(List.of("SET", "SET", "SET", "SET", "GET", "GET", "GET"),
+                    server.awaitCommands(7));
+        }
+    }
+
+    @Test
+    public void mixedReadWriteCountsNullGetReplyAsStrictFailure() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("GET".equals(command)) {
+                return nullBulk();
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.MIXED_READ_WRITE,
+                    "127.0.0.1",
+                    server.port(),
+                    2,
+                    1,
+                    1,
+                    2,
+                    4,
+                    false,
+                    true
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(2, result.ops());
+            Assert.assertTrue("errors=" + result.errors(), result.errors() > 0);
+        }
+    }
+
+    @Test
     public void extendedMutatorsCountWrongSuccessfulRepliesAsStrictFailures() throws Exception {
         assertWrongIntegerReplyIsStrictFailure(BenchWorkloadKind.LIST_LPUSH, 0);
         for (BenchWorkloadKind workload : List.of(BenchWorkloadKind.HASH_HSET, BenchWorkloadKind.SET_SADD,
@@ -279,6 +341,10 @@ public class BenchHarnessExtendedWorkloadTest {
 
     private static byte[] bulk(String value) {
         return ("$" + value.length() + "\r\n" + value + "\r\n").getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] nullBulk() {
+        return "$-1\r\n".getBytes(StandardCharsets.US_ASCII);
     }
 
     private static Map<String, Double> metricsByName(BenchWorkloadResult result) {
