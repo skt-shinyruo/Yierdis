@@ -677,7 +677,7 @@ public final class YierdisBench {
         return new LatencyResult(workload, all.length, errors, seconds, qps, stats);
     }
 
-    private static void prefillDenseHll(String host, int port, int keyspace, int pipeline) {
+    static void prefillDenseHll(String host, int port, int keyspace, int pipeline) {
         if (keyspace <= 0) {
             throw new IllegalArgumentException("keyspace must be > 0");
         }

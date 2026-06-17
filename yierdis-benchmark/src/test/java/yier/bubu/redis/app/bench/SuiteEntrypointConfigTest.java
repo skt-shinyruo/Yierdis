@@ -3,12 +3,21 @@ package yier.bubu.redis.app.bench;
 import org.junit.Assert;
 import org.junit.Test;
 import picocli.CommandLine;
+import yier.bubu.redis.app.bench.suite.ScenarioDefinition;
 import yier.bubu.redis.app.bench.suite.SuiteConfig;
+import yier.bubu.redis.app.bench.suite.SuiteHarness;
 import yier.bubu.redis.app.bench.suite.SuiteProfileName;
 
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 public class SuiteEntrypointConfigTest {
     @Test
@@ -106,6 +115,44 @@ public class SuiteEntrypointConfigTest {
         Assert.assertEquals("unsupported extended suite workload: MAXMEMORY_EVICTION", failure.getMessage());
     }
 
+    @Test
+    public void readinessProbeTimesOutWhenServerAcceptsButNeverReplies() throws Exception {
+        try (HangingServer server = HangingServer.start()) {
+            Assert.assertTrue(server.awaitListening());
+
+            long startNs = System.nanoTime();
+            boolean ready = BenchHarness.waitReady("127.0.0.1", server.port(), 250, 50);
+            long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs);
+
+            Assert.assertFalse(ready);
+            Assert.assertTrue("elapsedMillis=" + elapsedMillis, elapsedMillis < 1_000);
+        }
+    }
+
+    @Test
+    public void denseHllPrefillRunsOncePerPassOnlyForDenseScenarios() throws Exception {
+        Path current = regularTempJar("current");
+        Path reportDir = Files.createTempDirectory("suite-prefill-report-");
+        SuiteConfig config = suiteConfig(current, reportDir);
+        RecordingDenseHllPreparer preparer = new RecordingDenseHllPreparer();
+        BenchHarness harness = new BenchHarness(preparer);
+        SuiteHarness.RunningServer dense = runningServer("dense-pass", 17379, reportDir);
+        SuiteHarness.RunningServer pfcount = runningServer("pfcount-pass", 17380, reportDir);
+        SuiteHarness.RunningServer ping = runningServer("ping-pass", 17381, reportDir);
+        SuiteHarness.RunningServer setGet = runningServer("set-get-pass", 17382, reportDir);
+
+        harness.prepareScenario(dense, scenario("release-hll-dense-c64-p8", BenchWorkloadKind.HLL_DENSE), config);
+        harness.prepareScenario(dense, scenario("release-hll-dense-c64-p8", BenchWorkloadKind.HLL_DENSE), config);
+        harness.prepareScenario(pfcount, scenario("release-hll-pfcount-c64-p8", BenchWorkloadKind.HLL_PFCOUNT), config);
+        harness.prepareScenario(ping, scenario("release-ping-latency", BenchWorkloadKind.PING), config);
+        harness.prepareScenario(setGet, scenario("release-set-get-128b-c32-p4", BenchWorkloadKind.SET_GET), config);
+
+        Assert.assertEquals(List.of(
+                "127.0.0.1:17379:4096:4",
+                "127.0.0.1:17380:4096:4"
+        ), preparer.calls);
+    }
+
     private static void assertRejects(String messagePart, ThrowingRunnable runnable) {
         IllegalArgumentException failure = Assert.assertThrows(IllegalArgumentException.class, runnable::run);
         Assert.assertTrue(failure.getMessage(), failure.getMessage().contains(messagePart));
@@ -117,8 +164,96 @@ public class SuiteEntrypointConfigTest {
         return jar;
     }
 
+    private static SuiteConfig suiteConfig(Path current, Path reportDir) {
+        YierdisBenchArgs benchArgs = new YierdisBenchArgs();
+        new CommandLine(benchArgs).parseArgs(
+                "--suite",
+                "--currentServerJar", current.toString(),
+                "--reportDir", reportDir.toString()
+        );
+        YierdisBenchServerArgs serverArgs = new YierdisBenchServerArgs();
+        serverArgs.normalizeAndValidate();
+        return SuiteConfig.from(benchArgs, serverArgs);
+    }
+
+    private static ScenarioDefinition scenario(String id, BenchWorkloadKind workload) {
+        return new ScenarioDefinition(id, id, workload, 4096, 0, 1, 1, 4, 1, 1,
+                workload != BenchWorkloadKind.HLL_PFCOUNT);
+    }
+
+    private static SuiteHarness.RunningServer runningServer(String scenarioId, int port, Path reportDir) {
+        return new SuiteHarness.RunningServer("current", scenarioId, port, reportDir.resolve(scenarioId + ".log"));
+    }
+
     @FunctionalInterface
     private interface ThrowingRunnable {
         void run();
+    }
+
+    private static final class RecordingDenseHllPreparer implements BenchHarness.DenseHllPreparer {
+        private final List<String> calls = new ArrayList<>();
+
+        @Override
+        public void prefill(String host, int port, int keyspace, int pipeline) {
+            calls.add(host + ":" + port + ":" + keyspace + ":" + pipeline);
+        }
+    }
+
+    private static final class HangingServer implements AutoCloseable {
+        private final ServerSocket serverSocket;
+        private final CountDownLatch listening = new CountDownLatch(1);
+        private final List<Socket> accepted = new ArrayList<>();
+        private volatile boolean closed;
+        private Thread thread;
+
+        private HangingServer(ServerSocket serverSocket) {
+            this.serverSocket = serverSocket;
+        }
+
+        static HangingServer start() throws IOException {
+            HangingServer server = new HangingServer(new ServerSocket(0));
+            server.thread = new Thread(server::acceptLoop, "bench-harness-hanging-server");
+            server.thread.setDaemon(true);
+            server.thread.start();
+            return server;
+        }
+
+        int port() {
+            return serverSocket.getLocalPort();
+        }
+
+        boolean awaitListening() throws InterruptedException {
+            return listening.await(1, TimeUnit.SECONDS);
+        }
+
+        private void acceptLoop() {
+            listening.countDown();
+            while (!closed) {
+                try {
+                    Socket socket = serverSocket.accept();
+                    synchronized (accepted) {
+                        accepted.add(socket);
+                    }
+                } catch (IOException e) {
+                    if (!closed) {
+                        throw new IllegalStateException(e);
+                    }
+                }
+            }
+        }
+
+        @Override
+        public void close() throws Exception {
+            closed = true;
+            serverSocket.close();
+            synchronized (accepted) {
+                for (Socket socket : accepted) {
+                    socket.close();
+                }
+            }
+            if (thread != null) {
+                thread.join(1_000);
+            }
+        }
     }
 }
