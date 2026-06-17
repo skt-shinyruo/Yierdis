@@ -21,8 +21,9 @@ public final class SuiteMarkdownWriter {
         out.append("## Environment\n\n");
         out.append("| Key | Value |\n");
         out.append("| --- | --- |\n");
-        for (Map.Entry<String, String> entry : result.environment().values().entrySet()) {
-            row(out, entry.getKey(), entry.getValue());
+        Map<String, String> environment = result.environment().values();
+        for (String key : environment.keySet().stream().sorted().toList()) {
+            row(out, key, environment.get(key));
         }
         out.append('\n');
 
