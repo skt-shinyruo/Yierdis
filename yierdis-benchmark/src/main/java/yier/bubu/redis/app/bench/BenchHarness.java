@@ -626,8 +626,8 @@ public final class BenchHarness implements SuiteHarness {
             case TTL_EXPIRATION ->
                     reply.kind() == RespClientCodec.RespReply.Kind.INTEGER
                             && reply.integer() != null
-                            && (reply.integer() == 0L || reply.integer() == 1L);
-            case SCAN -> reply.kind() == RespClientCodec.RespReply.Kind.ARRAY;
+                            && reply.integer() == 1L;
+            case SCAN -> isValidScanReply(reply);
             case MIXED_READ_WRITE -> {
                 if (opIndex % 5 == 0) {
                     yield reply.isSimpleString("OK");
@@ -637,6 +637,20 @@ public final class BenchHarness implements SuiteHarness {
             }
             default -> true;
         };
+    }
+
+    private static boolean isValidScanReply(RespClientCodec.RespReply reply) {
+        if (reply.kind() != RespClientCodec.RespReply.Kind.ARRAY
+                || reply.values() == null
+                || reply.values().size() != 2) {
+            return false;
+        }
+
+        RespClientCodec.RespReply cursor = reply.values().get(0);
+        RespClientCodec.RespReply keys = reply.values().get(1);
+        boolean cursorString = cursor.kind() == RespClientCodec.RespReply.Kind.BULK_STRING
+                || cursor.kind() == RespClientCodec.RespReply.Kind.SIMPLE_STRING;
+        return cursorString && keys.kind() == RespClientCodec.RespReply.Kind.ARRAY;
     }
 
     private static byte[] ascii(String value) {
