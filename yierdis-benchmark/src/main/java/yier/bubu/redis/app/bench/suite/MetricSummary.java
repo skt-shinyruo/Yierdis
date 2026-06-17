@@ -8,6 +8,26 @@ import java.util.List;
 import java.util.Map;
 
 public record MetricSummary(String name, int sampleCount, double min, double median, double mean, double max) {
+    public MetricSummary {
+        SuiteMetric.requireValidName(name);
+        if (sampleCount <= 0) {
+            throw new IllegalArgumentException("sampleCount must be > 0");
+        }
+        requireNonNegativeFinite(min, "min");
+        requireNonNegativeFinite(median, "median");
+        requireNonNegativeFinite(mean, "mean");
+        requireNonNegativeFinite(max, "max");
+        if (min > median) {
+            throw new IllegalArgumentException("min must be <= median");
+        }
+        if (median > max) {
+            throw new IllegalArgumentException("median must be <= max");
+        }
+        if (mean < min || mean > max) {
+            throw new IllegalArgumentException("mean must be within [min, max]");
+        }
+    }
+
     public static Map<String, MetricSummary> summarizeRepeats(List<IterationResult> iterations) {
         Map<String, List<Double>> valuesByName = new LinkedHashMap<>();
         for (IterationResult iteration : iterations) {
@@ -38,5 +58,11 @@ public record MetricSummary(String name, int sampleCount, double min, double med
                 ? values.get(n / 2)
                 : (values.get(n / 2 - 1) + values.get(n / 2)) / 2.0;
         return new MetricSummary(name, n, values.get(0), median, sum / n, values.get(n - 1));
+    }
+
+    private static void requireNonNegativeFinite(double value, String name) {
+        if (!Double.isFinite(value) || value < 0.0) {
+            throw new IllegalArgumentException(name + " must be finite and >= 0");
+        }
     }
 }
