@@ -10,6 +10,8 @@ import yier.bubu.redis.app.bench.suite.SuiteHarness;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -33,6 +35,19 @@ public final class BenchHarness implements SuiteHarness {
     private static final int READY_CONNECT_TIMEOUT_MILLIS = 500;
     private static final int READY_READ_TIMEOUT_MILLIS = 500;
     private static final int WORKLOAD_READ_TIMEOUT_MILLIS = 5_000;
+    private static final int WORKLOAD_CONNECT_TIMEOUT_MILLIS = 1_000;
+    private static final byte[] CMD_SET = "SET".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] CMD_GET = "GET".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] CMD_EXPIRE = "EXPIRE".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] CMD_LPUSH = "LPUSH".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] CMD_HSET = "HSET".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] CMD_SADD = "SADD".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] CMD_ZADD = "ZADD".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] CMD_SCAN = "SCAN".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] CMD_COUNT = "COUNT".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] CMD_0 = "0".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] CMD_60 = "60".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] CMD_100 = "100".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] PING = "PING".getBytes(StandardCharsets.US_ASCII);
     private final ObservationClient observationClient = new ObservationClient();
     private final DenseHllPreparer denseHllPreparer;
@@ -145,11 +160,28 @@ public final class BenchHarness implements SuiteHarness {
 
     BenchWorkloadResult runWorkload(BenchWorkloadRequest request) throws InterruptedException {
         Objects.requireNonNull(request, "request");
+        if (isExtendedWorkload(request.workload())) {
+            return request.latency()
+                    ? runExtendedLatency(request, workloadReadTimeoutMillis)
+                    : runExtendedThroughput(request, workloadReadTimeoutMillis);
+        }
         YierdisBench.Workload workload = mapWorkload(request.workload());
         if (request.latency()) {
             return runLatency(request, workload, workloadReadTimeoutMillis);
         }
         return runThroughput(request, workload, workloadReadTimeoutMillis);
+    }
+
+    static boolean isExtendedWorkload(BenchWorkloadKind workload) {
+        return switch (Objects.requireNonNull(workload, "workload")) {
+            case MAXMEMORY_EVICTION, TTL_EXPIRATION, LIST_LPUSH, HASH_HSET, SET_SADD, ZSET_ZADD, SCAN, MIXED_READ_WRITE ->
+                    true;
+            default -> false;
+        };
+    }
+
+    static byte[] encodeExtendedCommandForTest(BenchWorkloadKind workload, int keyIndex, int opIndex, byte[] value) {
+        return RespClientCodec.encodeCommand(extendedCommand(workload, keyIndex, opIndex, value));
     }
 
     void prepareScenario(SuiteHarness.RunningServer server, ScenarioDefinition scenario, SuiteConfig config) {
@@ -339,6 +371,158 @@ public final class BenchHarness implements SuiteHarness {
         }
     }
 
+    private static BenchWorkloadResult runExtendedThroughput(BenchWorkloadRequest request, int readTimeoutMillis) throws InterruptedException {
+        ExtendedOutcome outcome = runExtended(request, readTimeoutMillis, false);
+        double seconds = elapsedSeconds(outcome.startNs());
+        double qps = seconds == 0.0 ? 0.0 : outcome.ops() / seconds;
+        return new BenchWorkloadResult(outcome.ops(), outcome.errors(), seconds, qps, Double.NaN, Double.NaN, Double.NaN);
+    }
+
+    private static BenchWorkloadResult runExtendedLatency(BenchWorkloadRequest request, int readTimeoutMillis) throws InterruptedException {
+        ExtendedOutcome outcome = runExtended(request, readTimeoutMillis, true);
+        long[] all = outcome.samples();
+        Arrays.sort(all);
+        YierdisBench.LatencyStats stats = YierdisBench.LatencyStats.ofSortedNanos(all);
+        double seconds = elapsedSeconds(outcome.startNs());
+        double qps = seconds == 0.0 ? 0.0 : all.length / seconds;
+        return new BenchWorkloadResult(outcome.ops(), outcome.errors(), seconds, qps, stats.p50Millis(), stats.p95Millis(), stats.p99Millis());
+    }
+
+    private static ExtendedOutcome runExtended(BenchWorkloadRequest request, int readTimeoutMillis, boolean latency) throws InterruptedException {
+        byte[] value = new byte[request.dataSize()];
+        Arrays.fill(value, (byte) 'x');
+
+        int perClient = request.requests() / request.clients();
+        int remainder = request.requests() % request.clients();
+        ExecutorService pool = Executors.newFixedThreadPool(request.clients());
+        List<Future<ExtendedClientResult>> futures = new ArrayList<>(request.clients());
+        int startOp = 0;
+
+        long startNs = System.nanoTime();
+        try {
+            for (int i = 0; i < request.clients(); i++) {
+                int n = perClient + (i < remainder ? 1 : 0);
+                int clientStartOp = startOp;
+                startOp += n;
+                futures.add(pool.submit(() -> runExtendedClient(
+                        request.host(),
+                        request.port(),
+                        request.workload(),
+                        n,
+                        clientStartOp,
+                        request.pipeline(),
+                        request.keyspace(),
+                        value,
+                        request.strictReplies(),
+                        readTimeoutMillis,
+                        latency
+                )));
+            }
+            waitForPool(pool);
+
+            long ops = 0;
+            long errors = 0;
+            List<long[]> samples = latency ? new ArrayList<>(futures.size()) : List.of();
+            int totalSamples = 0;
+            for (Future<ExtendedClientResult> future : futures) {
+                try {
+                    ExtendedClientResult result = future.get();
+                    ops += result.ops();
+                    errors += result.errors();
+                    if (latency) {
+                        samples.add(result.samples());
+                        totalSamples += result.samples().length;
+                    }
+                } catch (ExecutionException e) {
+                    throw new IllegalStateException("suite extended workload worker failed", e.getCause());
+                }
+            }
+
+            long[] all = new long[totalSamples];
+            if (latency) {
+                int offset = 0;
+                for (long[] sample : samples) {
+                    System.arraycopy(sample, 0, all, offset, sample.length);
+                    offset += sample.length;
+                }
+            }
+            return new ExtendedOutcome(ops, errors, latency ? all : new long[0], startNs);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private static ExtendedClientResult runExtendedClient(
+            String host,
+            int port,
+            BenchWorkloadKind workload,
+            int requests,
+            int startOpIndex,
+            int pipeline,
+            int keyspace,
+            byte[] value,
+            boolean strictReplies,
+            int readTimeoutMillis,
+            boolean latency
+    ) {
+        if (requests <= 0) {
+            return new ExtendedClientResult(0, 0, new long[0]);
+        }
+
+        long ops = 0;
+        long errors = 0;
+        long[] samples = latency ? new long[requests] : new long[0];
+        int recorded = 0;
+
+        try (Socket socket = new Socket()) {
+            socket.setTcpNoDelay(true);
+            socket.connect(new InetSocketAddress(host, port), WORKLOAD_CONNECT_TIMEOUT_MILLIS);
+            socket.setSoTimeout(readTimeoutMillis);
+            try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
+                 BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
+                int remaining = requests;
+                while (remaining > 0) {
+                    int batch = Math.min(pipeline, remaining);
+                    long[] batchStart = latency ? new long[batch] : null;
+                    for (int i = 0; i < batch; i++) {
+                        int opIndex = startOpIndex + (int) ops + i;
+                        int keyIndex = Math.floorMod(opIndex, keyspace);
+                        if (latency) {
+                            batchStart[i] = System.nanoTime();
+                        }
+                        RespClientCodec.writeCommand(out, extendedCommand(workload, keyIndex, opIndex, value));
+                    }
+                    out.flush();
+                    for (int i = 0; i < batch; i++) {
+                        int opIndex = startOpIndex + (int) ops + i;
+                        RespClientCodec.RespReply reply = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+                        if (reply.kind() == RespClientCodec.RespReply.Kind.ERROR) {
+                            errors++;
+                        } else if (strictReplies && !validateExtendedReply(workload, opIndex, reply)) {
+                            errors++;
+                        }
+                        if (latency) {
+                            samples[recorded++] = System.nanoTime() - batchStart[i];
+                        }
+                    }
+                    ops += batch;
+                    remaining -= batch;
+                }
+            }
+        } catch (Exception e) {
+            errors++;
+            if (latency && recorded < samples.length) {
+                samples = Arrays.copyOf(samples, recorded);
+            }
+            return new ExtendedClientResult(ops, errors, samples);
+        }
+
+        if (latency && recorded < samples.length) {
+            samples = Arrays.copyOf(samples, recorded);
+        }
+        return new ExtendedClientResult(ops, errors, samples);
+    }
+
     private static void waitForPool(ExecutorService pool) throws InterruptedException {
         pool.shutdown();
         try {
@@ -365,8 +549,51 @@ public final class BenchHarness implements SuiteHarness {
             case HLL_DENSE -> YierdisBench.Workload.PFADD_DENSE;
             case HLL_PFCOUNT -> YierdisBench.Workload.PFCOUNT;
             case MAXMEMORY_EVICTION, TTL_EXPIRATION, LIST_LPUSH, HASH_HSET, SET_SADD, ZSET_ZADD, SCAN, MIXED_READ_WRITE ->
-                    throw new IllegalArgumentException("unsupported extended suite workload: " + workload);
+                    throw new IllegalStateException("extended workload was not routed before core mapping: " + workload);
         };
+    }
+
+    private static List<byte[]> extendedCommand(BenchWorkloadKind workload, int keyIndex, int opIndex, byte[] value) {
+        byte[] key = ascii(workload.name() + ":key:" + keyIndex);
+        return switch (Objects.requireNonNull(workload, "workload")) {
+            case MAXMEMORY_EVICTION -> List.of(CMD_SET, key, value);
+            case TTL_EXPIRATION -> List.of(CMD_EXPIRE, key, CMD_60);
+            case LIST_LPUSH -> List.of(CMD_LPUSH, key, value);
+            case HASH_HSET -> List.of(CMD_HSET, key, ascii("field:" + keyIndex + ':' + opIndex), value);
+            case SET_SADD -> List.of(CMD_SADD, key, ascii("member:" + keyIndex + ':' + opIndex));
+            case ZSET_ZADD -> List.of(CMD_ZADD, key, ascii(Integer.toString(opIndex)), ascii("member:" + keyIndex + ':' + opIndex));
+            case SCAN -> List.of(CMD_SCAN, CMD_0, CMD_COUNT, CMD_100);
+            case MIXED_READ_WRITE -> opIndex % 5 == 0
+                    ? List.of(CMD_SET, key, value)
+                    : List.of(CMD_GET, key);
+            default -> throw new IllegalArgumentException("not an extended suite workload: " + workload);
+        };
+    }
+
+    private static boolean validateExtendedReply(BenchWorkloadKind workload, int opIndex, RespClientCodec.RespReply reply) {
+        return switch (workload) {
+            case MAXMEMORY_EVICTION -> reply.isSimpleString("OK");
+            case LIST_LPUSH, HASH_HSET, SET_SADD, ZSET_ZADD ->
+                    reply.kind() == RespClientCodec.RespReply.Kind.INTEGER
+                            && reply.integer() != null
+                            && reply.integer() >= 0L;
+            case TTL_EXPIRATION ->
+                    reply.kind() == RespClientCodec.RespReply.Kind.INTEGER
+                            && reply.integer() != null
+                            && (reply.integer() == 0L || reply.integer() == 1L);
+            case SCAN -> reply.kind() == RespClientCodec.RespReply.Kind.ARRAY;
+            case MIXED_READ_WRITE -> {
+                if (opIndex % 5 == 0) {
+                    yield reply.isSimpleString("OK");
+                }
+                yield reply.kind() == RespClientCodec.RespReply.Kind.BULK_STRING || reply.isNull();
+            }
+            default -> true;
+        };
+    }
+
+    private static byte[] ascii(String value) {
+        return value.getBytes(StandardCharsets.US_ASCII);
     }
 
     private static boolean requiresDenseHllPrefill(BenchWorkloadKind workload) {
@@ -388,5 +615,11 @@ public final class BenchHarness implements SuiteHarness {
                     && port == server.port()
                     && logFile.equals(server.logFile());
         }
+    }
+
+    private record ExtendedOutcome(long ops, long errors, long[] samples, long startNs) {
+    }
+
+    private record ExtendedClientResult(long ops, long errors, long[] samples) {
     }
 }
