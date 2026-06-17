@@ -7,13 +7,21 @@ import yier.bubu.redis.app.bench.suite.ScenarioDefinition;
 import yier.bubu.redis.app.bench.suite.SuiteArtifact;
 import yier.bubu.redis.app.bench.suite.SuiteConfig;
 import yier.bubu.redis.app.bench.suite.SuiteHarness;
+import yier.bubu.redis.protocol.resp.RespClientCodec;
+import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -22,7 +30,20 @@ import java.util.concurrent.TimeUnit;
 
 public final class BenchHarness implements SuiteHarness {
     private static final int READY_TIMEOUT_MILLIS = 15_000;
+    private static final int READY_CONNECT_TIMEOUT_MILLIS = 500;
+    private static final int READY_READ_TIMEOUT_MILLIS = 500;
+    private static final byte[] PING = "PING".getBytes(StandardCharsets.US_ASCII);
     private final ObservationClient observationClient = new ObservationClient();
+    private final DenseHllPreparer denseHllPreparer;
+    private final Set<PreparedPass> preparedPasses = ConcurrentHashMap.newKeySet();
+
+    public BenchHarness() {
+        this(YierdisBench::prefillDenseHll);
+    }
+
+    BenchHarness(DenseHllPreparer denseHllPreparer) {
+        this.denseHllPreparer = Objects.requireNonNull(denseHllPreparer, "denseHllPreparer");
+    }
 
     @Override
     public SuiteHarness.RunningServer startServer(
@@ -52,19 +73,7 @@ public final class BenchHarness implements SuiteHarness {
         );
         server.start();
         try {
-            BenchWorkloadRequest ping = new BenchWorkloadRequest(
-                    BenchWorkloadKind.PING,
-                    config.host(),
-                    port,
-                    1,
-                    1,
-                    1,
-                    1,
-                    0,
-                    false,
-                    config.strictReplies()
-            );
-            if (!waitReady(ping, READY_TIMEOUT_MILLIS)) {
+            if (!waitReady(config.host(), port, READY_TIMEOUT_MILLIS, READY_READ_TIMEOUT_MILLIS)) {
                 throw new IllegalStateException("suite server not ready within "
                         + READY_TIMEOUT_MILLIS + " ms: " + logFile);
             }
@@ -93,6 +102,7 @@ public final class BenchHarness implements SuiteHarness {
         Objects.requireNonNull(kind, "kind");
         Objects.requireNonNull(config, "config");
 
+        prepareScenario(server, scenario, config);
         BenchWorkloadRequest request = new BenchWorkloadRequest(
                 scenario.workload(),
                 config.host(),
@@ -120,6 +130,7 @@ public final class BenchHarness implements SuiteHarness {
             throw new IllegalArgumentException("unsupported suite server handle: " + handle.getClass().getName());
         }
         process.stop();
+        preparedPasses.removeIf(pass -> pass.matches(server));
     }
 
     BenchWorkloadResult runWorkload(BenchWorkloadRequest request) throws InterruptedException {
@@ -131,20 +142,66 @@ public final class BenchHarness implements SuiteHarness {
         return runThroughput(request, workload);
     }
 
-    private static boolean waitReady(BenchWorkloadRequest request, int timeoutMillis) throws InterruptedException {
+    void prepareScenario(SuiteHarness.RunningServer server, ScenarioDefinition scenario, SuiteConfig config) {
+        Objects.requireNonNull(server, "server");
+        Objects.requireNonNull(scenario, "scenario");
+        Objects.requireNonNull(config, "config");
+        if (!requiresDenseHllPrefill(scenario.workload())) {
+            return;
+        }
+        PreparedPass pass = PreparedPass.from(server);
+        if (preparedPasses.add(pass)) {
+            denseHllPreparer.prefill(config.host(), server.port(), scenario.keyspace(), scenario.pipeline());
+        }
+    }
+
+    static boolean waitReady(String host, int port, int timeoutMillis, int readTimeoutMillis) throws InterruptedException {
+        Objects.requireNonNull(host, "host");
+        if (host.isBlank()) {
+            throw new IllegalArgumentException("host must not be blank");
+        }
+        if (port <= 0 || port > 65535) {
+            throw new IllegalArgumentException("port must be in range 1..65535");
+        }
+        if (timeoutMillis <= 0) {
+            throw new IllegalArgumentException("timeoutMillis must be > 0");
+        }
+        if (readTimeoutMillis <= 0) {
+            throw new IllegalArgumentException("readTimeoutMillis must be > 0");
+        }
+
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         while (System.nanoTime() < deadline) {
-            try {
-                BenchWorkloadResult result = runThroughput(request, YierdisBench.Workload.PING);
-                if (result.ops() > 0 && result.errors() == 0) {
-                    return true;
-                }
-            } catch (RuntimeException ignored) {
-                // Retry until the bounded readiness deadline expires.
+            long remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+            if (remainingMillis <= 0) {
+                break;
             }
-            Thread.sleep(100);
+            int attemptReadTimeout = (int) Math.max(1, Math.min(readTimeoutMillis, remainingMillis));
+            int attemptConnectTimeout = (int) Math.max(1, Math.min(READY_CONNECT_TIMEOUT_MILLIS, remainingMillis));
+            if (pingOnce(host, port, attemptConnectTimeout, attemptReadTimeout)) {
+                return true;
+            }
+            remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+            if (remainingMillis > 0) {
+                // Retry until the bounded readiness deadline expires.
+                Thread.sleep(Math.min(100, remainingMillis));
+            }
         }
         return false;
+    }
+
+    private static boolean pingOnce(String host, int port, int connectTimeoutMillis, int readTimeoutMillis) {
+        try (Socket socket = new Socket()) {
+            socket.setTcpNoDelay(true);
+            socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis);
+            socket.setSoTimeout(readTimeoutMillis);
+            RespClientCodec.writeCommand(socket.getOutputStream(), List.of(PING));
+            RespClientCodec.RespReply reply = RespClientCodec.readReply(socket.getInputStream(),
+                    RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+            return reply.isSimpleString("PONG");
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
     }
 
     private static BenchWorkloadResult runThroughput(
@@ -296,5 +353,26 @@ public final class BenchHarness implements SuiteHarness {
             case MAXMEMORY_EVICTION, TTL_EXPIRATION, LIST_LPUSH, HASH_HSET, SET_SADD, ZSET_ZADD, SCAN, MIXED_READ_WRITE ->
                     throw new IllegalArgumentException("unsupported extended suite workload: " + workload);
         };
+    }
+
+    private static boolean requiresDenseHllPrefill(BenchWorkloadKind workload) {
+        return workload == BenchWorkloadKind.HLL_DENSE || workload == BenchWorkloadKind.HLL_PFCOUNT;
+    }
+
+    interface DenseHllPreparer {
+        void prefill(String host, int port, int keyspace, int pipeline);
+    }
+
+    private record PreparedPass(String artifactLabel, String scenarioId, int port, Path logFile) {
+        private static PreparedPass from(SuiteHarness.RunningServer server) {
+            return new PreparedPass(server.artifactLabel(), server.scenarioId(), server.port(), server.logFile());
+        }
+
+        private boolean matches(SuiteHarness.RunningServer server) {
+            return artifactLabel.equals(server.artifactLabel())
+                    && scenarioId.equals(server.scenarioId())
+                    && port == server.port()
+                    && logFile.equals(server.logFile());
+        }
     }
 }
