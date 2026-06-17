@@ -199,6 +199,20 @@ public class SuiteRunnerOrchestrationTest {
     }
 
     @Test
+    public void lowPortBaseFailsClearlyBeforeStartingServers() throws Exception {
+        ScenarioDefinition scenario = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
+        SuiteConfig config = TestSuiteConfigs.currentOnly(Files.createTempDirectory("suite-runner-low-port-"), 1023);
+        FakeHarness harness = new FakeHarness();
+
+        IllegalArgumentException failure = Assert.assertThrows(IllegalArgumentException.class,
+                () -> new SuiteRunner(config, harness, List.of(scenario)).run());
+
+        Assert.assertTrue(failure.getMessage(), failure.getMessage().contains("portBase"));
+        Assert.assertTrue(failure.getMessage(), failure.getMessage().contains("headroom"));
+        Assert.assertTrue(harness.lifecycle.isEmpty());
+    }
+
+    @Test
     public void highPortBaseWithInsufficientHeadroomFailsClearlyBeforeStartingServers() throws Exception {
         ScenarioDefinition scenario = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
         SuiteConfig config = TestSuiteConfigs.comparison(Files.createTempDirectory("suite-runner-port-overflow-"), 65535);

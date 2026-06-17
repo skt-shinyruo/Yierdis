@@ -12,7 +12,7 @@ import java.util.Objects;
 public final class SuiteRunner {
     private static final DateTimeFormatter RUN_ID_TIME =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC);
-    private static final int MIN_PORT = 1;
+    private static final int MIN_SUITE_PORT = 1024;
     private static final int MAX_PORT = 65535;
 
     private final SuiteConfig config;
@@ -199,10 +199,10 @@ public final class SuiteRunner {
             return;
         }
         long lastPort = (long) config.portBase() + requiredPorts - 1L;
-        if (config.portBase() < MIN_PORT || lastPort > MAX_PORT) {
+        if (config.portBase() < MIN_SUITE_PORT || lastPort > MAX_PORT) {
             throw new IllegalArgumentException("portBase " + config.portBase()
-                    + " cannot allocate " + requiredPorts + " contiguous ports within "
-                    + MIN_PORT + ".." + MAX_PORT);
+                    + " does not have headroom for " + requiredPorts
+                    + " contiguous suite ports within " + MIN_SUITE_PORT + ".." + MAX_PORT);
         }
     }
 
