@@ -392,6 +392,12 @@ public final class BenchHarness implements SuiteHarness {
         byte[] value = new byte[request.dataSize()];
         Arrays.fill(value, (byte) 'x');
 
+        if (request.workload() == BenchWorkloadKind.TTL_EXPIRATION) {
+            if (!prefillExtendedTtlKeys(request, readTimeoutMillis, value)) {
+                return new ExtendedOutcome(0, 1, new long[0], System.nanoTime());
+            }
+        }
+
         int perClient = request.requests() / request.clients();
         int remainder = request.requests() % request.clients();
         ExecutorService pool = Executors.newFixedThreadPool(request.clients());
@@ -414,6 +420,7 @@ public final class BenchHarness implements SuiteHarness {
                         request.keyspace(),
                         value,
                         request.strictReplies(),
+                        request.dataSize(),
                         readTimeoutMillis,
                         latency
                 )));
@@ -462,6 +469,7 @@ public final class BenchHarness implements SuiteHarness {
             int keyspace,
             byte[] value,
             boolean strictReplies,
+            int expectedDataSize,
             int readTimeoutMillis,
             boolean latency
     ) {
@@ -498,7 +506,7 @@ public final class BenchHarness implements SuiteHarness {
                         RespClientCodec.RespReply reply = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
                         if (reply.kind() == RespClientCodec.RespReply.Kind.ERROR) {
                             errors++;
-                        } else if (strictReplies && !validateExtendedReply(workload, opIndex, reply)) {
+                        } else if (strictReplies && !validateExtendedReply(workload, opIndex, expectedDataSize, reply)) {
                             errors++;
                         }
                         if (latency) {
@@ -553,8 +561,42 @@ public final class BenchHarness implements SuiteHarness {
         };
     }
 
+    private static boolean prefillExtendedTtlKeys(BenchWorkloadRequest request, int readTimeoutMillis, byte[] value) {
+        try (Socket socket = new Socket()) {
+            socket.setTcpNoDelay(true);
+            socket.connect(new InetSocketAddress(request.host(), request.port()), WORKLOAD_CONNECT_TIMEOUT_MILLIS);
+            socket.setSoTimeout(readTimeoutMillis);
+            try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
+                 BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
+                int remaining = request.keyspace();
+                int keyIndex = 0;
+                while (remaining > 0) {
+                    int batch = Math.min(request.pipeline(), remaining);
+                    for (int i = 0; i < batch; i++) {
+                        RespClientCodec.writeCommand(out, List.of(
+                                CMD_SET,
+                                extendedKey(BenchWorkloadKind.TTL_EXPIRATION, keyIndex++),
+                                value
+                        ));
+                    }
+                    out.flush();
+                    for (int i = 0; i < batch; i++) {
+                        RespClientCodec.RespReply reply = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+                        if (!reply.isSimpleString("OK")) {
+                            return false;
+                        }
+                    }
+                    remaining -= batch;
+                }
+                return true;
+            }
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private static List<byte[]> extendedCommand(BenchWorkloadKind workload, int keyIndex, int opIndex, byte[] value) {
-        byte[] key = ascii(workload.name() + ":key:" + keyIndex);
+        byte[] key = extendedKey(workload, keyIndex);
         return switch (Objects.requireNonNull(workload, "workload")) {
             case MAXMEMORY_EVICTION -> List.of(CMD_SET, key, value);
             case TTL_EXPIRATION -> List.of(CMD_EXPIRE, key, CMD_60);
@@ -570,13 +612,17 @@ public final class BenchHarness implements SuiteHarness {
         };
     }
 
-    private static boolean validateExtendedReply(BenchWorkloadKind workload, int opIndex, RespClientCodec.RespReply reply) {
+    private static boolean validateExtendedReply(BenchWorkloadKind workload, int opIndex, int expectedDataSize, RespClientCodec.RespReply reply) {
         return switch (workload) {
             case MAXMEMORY_EVICTION -> reply.isSimpleString("OK");
-            case LIST_LPUSH, HASH_HSET, SET_SADD, ZSET_ZADD ->
+            case LIST_LPUSH ->
                     reply.kind() == RespClientCodec.RespReply.Kind.INTEGER
                             && reply.integer() != null
-                            && reply.integer() >= 0L;
+                            && reply.integer() >= 1L;
+            case HASH_HSET, SET_SADD, ZSET_ZADD ->
+                    reply.kind() == RespClientCodec.RespReply.Kind.INTEGER
+                            && reply.integer() != null
+                            && reply.integer() == 1L;
             case TTL_EXPIRATION ->
                     reply.kind() == RespClientCodec.RespReply.Kind.INTEGER
                             && reply.integer() != null
@@ -586,7 +632,8 @@ public final class BenchHarness implements SuiteHarness {
                 if (opIndex % 5 == 0) {
                     yield reply.isSimpleString("OK");
                 }
-                yield reply.kind() == RespClientCodec.RespReply.Kind.BULK_STRING || reply.isNull();
+                yield reply.isNull() || (reply.kind() == RespClientCodec.RespReply.Kind.BULK_STRING
+                        && reply.bulkLength() == expectedDataSize);
             }
             default -> true;
         };
@@ -594,6 +641,10 @@ public final class BenchHarness implements SuiteHarness {
 
     private static byte[] ascii(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] extendedKey(BenchWorkloadKind workload, int keyIndex) {
+        return ascii(workload.name() + ":key:" + keyIndex);
     }
 
     private static boolean requiresDenseHllPrefill(BenchWorkloadKind workload) {
