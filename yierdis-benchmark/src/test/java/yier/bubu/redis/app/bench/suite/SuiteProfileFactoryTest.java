@@ -3,6 +3,7 @@ package yier.bubu.redis.app.bench.suite;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.bench.BenchWorkloadKind;
+import yier.bubu.redis.app.bench.YierdisBenchServerArgs;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -45,6 +46,30 @@ public class SuiteProfileFactoryTest {
         Assert.assertEquals(8, setGet.pipeline());
         Assert.assertTrue(setGet.repeatIterations() >= 3);
         Assert.assertTrue(setGet.warmupIterations() >= 1);
+    }
+
+    @Test
+    public void releaseRiskScenariosCarryServerOverridesForClaimedCoverage() {
+        List<ScenarioDefinition> scenarios = SuiteProfileFactory.expand(SuiteProfileName.RELEASE);
+
+        YierdisBenchServerArgs defragArgs = new YierdisBenchServerArgs();
+        scenario(scenarios, "release-native-defrag-append").applyServerOverrides(defragArgs);
+        defragArgs.normalizeAndValidate();
+
+        Assert.assertTrue(defragArgs.nativeDefragEnabled);
+        Assert.assertTrue(defragArgs.nativeDefragMaxMoveBytes > 0);
+        Assert.assertTrue(defragArgs.nativeDefragMaxObjects > 0);
+        Assert.assertTrue(defragArgs.nativeDefragTimeLimitMillis > 0);
+
+        YierdisBenchServerArgs maxmemoryArgs = new YierdisBenchServerArgs();
+        scenario(scenarios, "release-maxmemory-eviction").applyServerOverrides(maxmemoryArgs);
+        maxmemoryArgs.normalizeAndValidate();
+
+        Assert.assertTrue("maxmemoryBytes=" + maxmemoryArgs.maxmemoryBytes,
+                maxmemoryArgs.maxmemoryBytes > 0);
+        Assert.assertEquals("allkeys-lru", maxmemoryArgs.maxmemoryPolicy);
+        Assert.assertTrue(maxmemoryArgs.maxmemorySamples > 0);
+        Assert.assertTrue(maxmemoryArgs.evictionTimeLimitMillis > 0);
     }
 
     @Test

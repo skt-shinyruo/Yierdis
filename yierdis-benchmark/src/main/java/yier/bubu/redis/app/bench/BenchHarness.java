@@ -84,6 +84,7 @@ public final class BenchHarness implements SuiteHarness {
         Objects.requireNonNull(logFile, "logFile");
 
         YierdisBenchServerArgs serverArgs = config.baseServerArgs();
+        scenario.applyServerOverrides(serverArgs);
         serverArgs.port = port;
         serverArgs.normalizeAndValidate();
 
@@ -174,7 +175,7 @@ public final class BenchHarness implements SuiteHarness {
 
     static boolean isExtendedWorkload(BenchWorkloadKind workload) {
         return switch (Objects.requireNonNull(workload, "workload")) {
-            case MAXMEMORY_EVICTION, TTL_EXPIRATION, LIST_LPUSH, HASH_HSET, SET_SADD, ZSET_ZADD, SCAN, MIXED_READ_WRITE ->
+            case SET_GET, MAXMEMORY_EVICTION, TTL_EXPIRATION, LIST_LPUSH, HASH_HSET, SET_SADD, ZSET_ZADD, SCAN, MIXED_READ_WRITE ->
                     true;
             default -> false;
         };
@@ -392,7 +393,8 @@ public final class BenchHarness implements SuiteHarness {
         byte[] value = new byte[request.dataSize()];
         Arrays.fill(value, (byte) 'x');
 
-        if (request.workload() == BenchWorkloadKind.TTL_EXPIRATION
+        if (request.workload() == BenchWorkloadKind.SET_GET
+                || request.workload() == BenchWorkloadKind.TTL_EXPIRATION
                 || request.workload() == BenchWorkloadKind.MIXED_READ_WRITE) {
             if (!prefillExtendedKeys(request, readTimeoutMillis, value)) {
                 return new ExtendedOutcome(0, 1, new long[0], System.nanoTime());
@@ -552,12 +554,11 @@ public final class BenchHarness implements SuiteHarness {
     private static YierdisBench.Workload mapWorkload(BenchWorkloadKind workload) {
         return switch (workload) {
             case PING -> YierdisBench.Workload.PING;
-            case SET_GET -> YierdisBench.Workload.SET_RANDOM;
             case APPEND, NATIVE_DEFRAG_APPEND -> YierdisBench.Workload.APPEND;
             case HLL_SPARSE -> YierdisBench.Workload.PFADD_SPARSE;
             case HLL_DENSE -> YierdisBench.Workload.PFADD_DENSE;
             case HLL_PFCOUNT -> YierdisBench.Workload.PFCOUNT;
-            case MAXMEMORY_EVICTION, TTL_EXPIRATION, LIST_LPUSH, HASH_HSET, SET_SADD, ZSET_ZADD, SCAN, MIXED_READ_WRITE ->
+            case SET_GET, MAXMEMORY_EVICTION, TTL_EXPIRATION, LIST_LPUSH, HASH_HSET, SET_SADD, ZSET_ZADD, SCAN, MIXED_READ_WRITE ->
                     throw new IllegalStateException("extended workload was not routed before core mapping: " + workload);
         };
     }
@@ -599,6 +600,9 @@ public final class BenchHarness implements SuiteHarness {
     private static List<byte[]> extendedCommand(BenchWorkloadKind workload, int keyIndex, int opIndex, byte[] value) {
         byte[] key = extendedKey(workload, keyIndex);
         return switch (Objects.requireNonNull(workload, "workload")) {
+            case SET_GET -> opIndex % 2 == 0
+                    ? List.of(CMD_SET, key, value)
+                    : List.of(CMD_GET, key);
             case MAXMEMORY_EVICTION -> List.of(CMD_SET, key, value);
             case TTL_EXPIRATION -> List.of(CMD_EXPIRE, key, CMD_60);
             case LIST_LPUSH -> List.of(CMD_LPUSH, key, value);
@@ -615,6 +619,13 @@ public final class BenchHarness implements SuiteHarness {
 
     private static boolean validateExtendedReply(BenchWorkloadKind workload, int opIndex, int expectedDataSize, RespClientCodec.RespReply reply) {
         return switch (workload) {
+            case SET_GET -> {
+                if (opIndex % 2 == 0) {
+                    yield reply.isSimpleString("OK");
+                }
+                yield reply.kind() == RespClientCodec.RespReply.Kind.BULK_STRING
+                        && reply.bulkLength() == expectedDataSize;
+            }
             case MAXMEMORY_EVICTION -> reply.isSimpleString("OK");
             case LIST_LPUSH ->
                     reply.kind() == RespClientCodec.RespReply.Kind.INTEGER

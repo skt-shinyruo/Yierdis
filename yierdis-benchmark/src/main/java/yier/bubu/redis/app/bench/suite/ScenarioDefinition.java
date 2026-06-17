@@ -1,6 +1,8 @@
 package yier.bubu.redis.app.bench.suite;
 
 import yier.bubu.redis.app.bench.BenchWorkloadKind;
+import yier.bubu.redis.app.bench.YierdisBenchServerArgs;
+import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 
 import java.util.Objects;
 import java.util.regex.Pattern;
@@ -16,7 +18,8 @@ public record ScenarioDefinition(
         int pipeline,
         int warmupIterations,
         int repeatIterations,
-        boolean latency
+        boolean latency,
+        ServerOverrides serverOverrides
 ) {
     private static final Pattern STABLE_ID_PATTERN = Pattern.compile("[a-z0-9]+(?:-[a-z0-9]+)*");
 
@@ -48,11 +51,109 @@ public record ScenarioDefinition(
         if (repeatIterations <= 0) {
             throw new IllegalArgumentException("repeatIterations must be > 0");
         }
+        serverOverrides = serverOverrides == null ? ServerOverrides.none() : serverOverrides;
+    }
+
+    public ScenarioDefinition(
+            String id,
+            String displayName,
+            BenchWorkloadKind workload,
+            int keyspace,
+            int dataSize,
+            int requests,
+            int clients,
+            int pipeline,
+            int warmupIterations,
+            int repeatIterations,
+            boolean latency
+    ) {
+        this(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
+                warmupIterations, repeatIterations, latency, ServerOverrides.none());
+    }
+
+    public void applyServerOverrides(YierdisBenchServerArgs serverArgs) {
+        serverOverrides.applyTo(serverArgs);
     }
 
     private static void requireStableId(String id) {
         if (id == null || !STABLE_ID_PATTERN.matcher(id).matches()) {
             throw new IllegalArgumentException("scenario id must be lowercase kebab-case");
+        }
+    }
+
+    public record ServerOverrides(
+            boolean nativeDefragEnabled,
+            long nativeDefragMaxMoveBytes,
+            long nativeDefragMaxObjects,
+            long nativeDefragTimeLimitMillis,
+            long maxmemoryBytes,
+            String maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis
+    ) {
+        public ServerOverrides {
+            if (nativeDefragMaxMoveBytes < 0) {
+                throw new IllegalArgumentException("nativeDefragMaxMoveBytes must be >= 0");
+            }
+            if (nativeDefragMaxObjects < 0) {
+                throw new IllegalArgumentException("nativeDefragMaxObjects must be >= 0");
+            }
+            if (nativeDefragTimeLimitMillis < 0) {
+                throw new IllegalArgumentException("nativeDefragTimeLimitMillis must be >= 0");
+            }
+            if (maxmemoryBytes < 0) {
+                throw new IllegalArgumentException("maxmemoryBytes must be >= 0");
+            }
+            maxmemoryPolicy = maxmemoryPolicy == null ? "" : maxmemoryPolicy;
+            if (!maxmemoryPolicy.isBlank()) {
+                maxmemoryPolicy = MaxmemoryPolicy.parse(maxmemoryPolicy).redisName();
+            }
+            if (maxmemorySamples < 0) {
+                throw new IllegalArgumentException("maxmemorySamples must be >= 0");
+            }
+            if (evictionTimeLimitMillis < 0) {
+                throw new IllegalArgumentException("evictionTimeLimitMillis must be >= 0");
+            }
+        }
+
+        public static ServerOverrides none() {
+            return new ServerOverrides(false, 0, 0, 0, 0, "", 0, 0);
+        }
+
+        public static ServerOverrides nativeDefrag(long maxMoveBytes, long maxObjects, long timeLimitMillis) {
+            return new ServerOverrides(true, maxMoveBytes, maxObjects, timeLimitMillis, 0, "", 0, 0);
+        }
+
+        public static ServerOverrides maxmemory(long bytes, String policy, int samples, long evictionTimeLimitMillis) {
+            return new ServerOverrides(false, 0, 0, 0, bytes, policy, samples, evictionTimeLimitMillis);
+        }
+
+        private void applyTo(YierdisBenchServerArgs serverArgs) {
+            Objects.requireNonNull(serverArgs, "serverArgs");
+            if (nativeDefragEnabled) {
+                serverArgs.nativeDefragEnabled = true;
+                if (nativeDefragMaxMoveBytes > 0) {
+                    serverArgs.nativeDefragMaxMoveBytes = nativeDefragMaxMoveBytes;
+                }
+                if (nativeDefragMaxObjects > 0) {
+                    serverArgs.nativeDefragMaxObjects = nativeDefragMaxObjects;
+                }
+                if (nativeDefragTimeLimitMillis > 0) {
+                    serverArgs.nativeDefragTimeLimitMillis = nativeDefragTimeLimitMillis;
+                }
+            }
+            if (maxmemoryBytes > 0) {
+                serverArgs.maxmemoryBytes = maxmemoryBytes;
+            }
+            if (!maxmemoryPolicy.isBlank()) {
+                serverArgs.maxmemoryPolicy = maxmemoryPolicy;
+            }
+            if (maxmemorySamples > 0) {
+                serverArgs.maxmemorySamples = maxmemorySamples;
+            }
+            if (evictionTimeLimitMillis > 0) {
+                serverArgs.evictionTimeLimitMillis = evictionTimeLimitMillis;
+            }
         }
     }
 }
