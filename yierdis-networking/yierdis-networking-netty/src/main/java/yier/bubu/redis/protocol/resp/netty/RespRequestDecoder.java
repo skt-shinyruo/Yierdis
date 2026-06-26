@@ -17,6 +17,7 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
 
     private enum State {
         READ_COMMAND,
+        READ_ARRAY_BODY,
         CLOSING
     }
 
@@ -25,6 +26,11 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
     private final int maxInlineBytes;
     private final int maxCommandBytes;
     private State state = State.READ_COMMAND;
+    private byte[][] pendingArgv;
+    private int pendingArgc;
+    private int pendingArgIndex;
+    private int pendingRetainedBytes;
+    private int pendingBulkLength = -1;
 
     public RespRequestDecoder(int maxBulkBytes, int maxArgs, int maxInlineBytes, int maxCommandBytes) {
         this.maxBulkBytes = Math.max(0, maxBulkBytes);
@@ -47,25 +53,42 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
                 return;
             }
 
-            int commandStart = in.readerIndex();
-            byte first = in.getByte(commandStart);
-            ParseResult result = first == ARRAY ? tryReadArray(in, out) : tryReadInline(in, out);
-            if (result == ParseResult.NEED_MORE) {
-                in.readerIndex(commandStart);
-                return;
-            }
-            if (result == ParseResult.ERROR) {
-                if (shouldCloseAfterReply(out)) {
-                    state = State.CLOSING;
-                    in.readerIndex(in.writerIndex());
+            if (state == State.READ_COMMAND) {
+                byte first = in.getByte(in.readerIndex());
+                ParseResult result = first == ARRAY ? tryStartArray(in, out) : tryReadInline(in, out);
+                if (result == ParseResult.NEED_MORE) {
                     return;
                 }
-                continue;
+                if (result == ParseResult.ERROR) {
+                    if (shouldCloseAfterReply(out)) {
+                        state = State.CLOSING;
+                        in.readerIndex(in.writerIndex());
+                        return;
+                    }
+                    continue;
+                }
+                if (result == ParseResult.EMITTED) {
+                    continue;
+                }
+            }
+            if (state == State.READ_ARRAY_BODY) {
+                ParseResult result = tryContinueArray(in, out);
+                if (result == ParseResult.NEED_MORE) {
+                    return;
+                }
+                if (result == ParseResult.ERROR) {
+                    if (shouldCloseAfterReply(out)) {
+                        state = State.CLOSING;
+                        in.readerIndex(in.writerIndex());
+                        return;
+                    }
+                    continue;
+                }
             }
         }
     }
 
-    private ParseResult tryReadArray(ByteBuf in, List<Object> out) {
+    private ParseResult tryStartArray(ByteBuf in, List<Object> out) {
         int lineStart = in.readerIndex();
         int lf = findCrlfLine(in, out, "ERR Protocol error: invalid multibulk length");
         if (lf == Integer.MIN_VALUE) {
@@ -86,67 +109,99 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
             return ParseResult.ERROR;
         }
 
-        byte[][] argv = new byte[argc][];
-        int retainedBytes = 0;
-        for (int i = 0; i < argc; i++) {
-            if (!in.isReadable()) {
-                return ParseResult.NEED_MORE;
-            }
-            int bulkLineStart = in.readerIndex();
-            int bulkLf = findCrlfLine(in, out, "ERR Protocol error: invalid bulk length");
-            if (bulkLf == Integer.MIN_VALUE) {
-                return ParseResult.NEED_MORE;
-            }
-            if (bulkLf < 0) {
-                return ParseResult.ERROR;
-            }
-            if (in.getByte(bulkLineStart) != BULK) {
-                emitProtocolError(out, "ERR Protocol error: expected '$', got other", true);
-                state = State.CLOSING;
-                return ParseResult.ERROR;
+        pendingArgv = new byte[argc][];
+        pendingArgc = argc;
+        pendingArgIndex = 0;
+        pendingRetainedBytes = 0;
+        pendingBulkLength = -1;
+        state = State.READ_ARRAY_BODY;
+        return tryContinueArray(in, out);
+    }
+
+    private ParseResult tryContinueArray(ByteBuf in, List<Object> out) {
+        while (pendingArgIndex < pendingArgc) {
+            if (pendingBulkLength < 0) {
+                if (!in.isReadable()) {
+                    return ParseResult.NEED_MORE;
+                }
+                int bulkLineStart = in.readerIndex();
+                int bulkLf = findCrlfLine(in, out, "ERR Protocol error: invalid bulk length");
+                if (bulkLf == Integer.MIN_VALUE) {
+                    return ParseResult.NEED_MORE;
+                }
+                if (bulkLf < 0) {
+                    resetPendingArray();
+                    return ParseResult.ERROR;
+                }
+                if (in.getByte(bulkLineStart) != BULK) {
+                    emitProtocolError(out, "ERR Protocol error: expected '$', got other", true);
+                    state = State.CLOSING;
+                    resetPendingArray();
+                    return ParseResult.ERROR;
+                }
+
+                Long lenValue = parseInteger(in, bulkLineStart + 1, bulkLf - 1);
+                if (lenValue == null || lenValue < -1 || lenValue > RespProtocolLimits.MAX_BULK_BYTES) {
+                    emitProtocolError(out, "ERR Protocol error: invalid bulk length", true);
+                    state = State.CLOSING;
+                    resetPendingArray();
+                    return ParseResult.ERROR;
+                }
+                if (lenValue == -1L) {
+                    pendingArgv[pendingArgIndex++] = null;
+                    pendingBulkLength = -1;
+                    continue;
+                }
+
+                int len = lenValue.intValue();
+                if (maxBulkBytes > 0 && len > maxBulkBytes) {
+                    emitProtocolError(out, "ERR Protocol error: invalid bulk length", true);
+                    state = State.CLOSING;
+                    resetPendingArray();
+                    return ParseResult.ERROR;
+                }
+                pendingBulkLength = len;
             }
 
-            Long lenValue = parseInteger(in, bulkLineStart + 1, bulkLf - 1);
-            if (lenValue == null || lenValue < -1 || lenValue > RespProtocolLimits.MAX_BULK_BYTES) {
-                emitProtocolError(out, "ERR Protocol error: invalid bulk length", true);
-                state = State.CLOSING;
-                return ParseResult.ERROR;
+            if (in.readableBytes() < pendingBulkLength + 2L) {
+                return ParseResult.NEED_MORE;
             }
-            if (lenValue == -1L) {
-                argv[i] = null;
-                continue;
-            }
-            int len = lenValue.intValue();
-            if (maxBulkBytes > 0 && len > maxBulkBytes) {
-                emitProtocolError(out, "ERR Protocol error: invalid bulk length", true);
-                state = State.CLOSING;
-                return ParseResult.ERROR;
-            }
-            if (maxCommandBytes > 0 && retainedBytes > maxCommandBytes - len) {
+
+            if (maxCommandBytes > 0 && pendingRetainedBytes > maxCommandBytes - pendingBulkLength) {
                 emitProtocolError(out, "ERR Protocol error: command is too large", true);
                 state = State.CLOSING;
+                resetPendingArray();
                 return ParseResult.ERROR;
             }
-            long requiredBytes = (long) len + 2L;
-            if (in.readableBytes() < requiredBytes) {
-                return ParseResult.NEED_MORE;
-            }
 
-            byte[] arg = new byte[len];
+            byte[] arg = new byte[pendingBulkLength];
             in.readBytes(arg);
             byte cr = in.readByte();
             byte lfByte = in.readByte();
             if (cr != CR || lfByte != LF) {
                 emitProtocolError(out, "ERR Protocol error: invalid bulk string terminator", true);
                 state = State.CLOSING;
+                resetPendingArray();
                 return ParseResult.ERROR;
             }
-            argv[i] = arg;
-            retainedBytes = saturatedAdd(retainedBytes, len);
+
+            pendingArgv[pendingArgIndex++] = arg;
+            pendingRetainedBytes = saturatedAdd(pendingRetainedBytes, pendingBulkLength);
+            pendingBulkLength = -1;
         }
 
-        out.add(RespCommandRequest.wrapReadOnly(argv, retainedBytes));
+        out.add(RespCommandRequest.wrapReadOnly(pendingArgv, pendingRetainedBytes));
+        resetPendingArray();
+        state = State.READ_COMMAND;
         return ParseResult.EMITTED;
+    }
+
+    private void resetPendingArray() {
+        pendingArgv = null;
+        pendingArgc = 0;
+        pendingArgIndex = 0;
+        pendingRetainedBytes = 0;
+        pendingBulkLength = -1;
     }
 
     private ParseResult tryReadInline(ByteBuf in, List<Object> out) {
