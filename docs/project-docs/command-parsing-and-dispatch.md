@@ -19,7 +19,7 @@ RESP bytes
 
 这里最重要的边界是：
 
-- `YierdisFastCommandHandler` 只负责提交，提交失败时在 I/O 边界直接回 `ERR busy <reason>`，不会进入命令层。
+- `YierdisFastCommandHandler` 只负责提交，提交失败时在 I/O 边界直接回 `ERR busy <reason>`，运行时异常时回 `ERR internal error`，不会承担 RESP protocol error 的回包职责。
 - `CommandExecutor` 只负责 owner-thread 调度、budget 和关闭保护，不解释命令语义。
 - `DefaultYierdisEngine` 把 `Session` 收窄成命令层需要的 capability，并把 `ExecutionRequest` 和 `RedisReplyWriter` 交给 processor。
 - `YierdisFastCommandProcessor` 只消费 transport-neutral 的 `ExecutionRequest`，不接触 RESP DTO，也不拼协议字节。
@@ -129,7 +129,7 @@ sanity checks
 
 ### 协议错误不在这里处理
 
-RESP frame 级别的 protocol error 发生在 decoder / Netty handler 边界，由协议层回错并关闭连接；它不是 command-kernel 的责任。
+RESP frame 级别的 protocol error 发生在 `RespRequestDecoder` / `RespProtocolErrorReplyHandler` 边界，由协议层回错并关闭连接；它不会进入 `RespCommandAdapter`、`ExecutionRequest` 或 command-kernel。
 
 ## 事务排队前的复用规则
 
