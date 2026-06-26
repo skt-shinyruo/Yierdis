@@ -6,6 +6,7 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
 
 import java.nio.charset.StandardCharsets;
@@ -64,6 +65,44 @@ public class RespProtocolErrorReplyHandlerTest {
         }
     }
 
+    @Test
+    public void protocolErrorUsesInjectedSessionReplyWriterWhenAvailable() {
+        TestProtocolSession session = new TestProtocolSession();
+        session.setRespVersion(3);
+        EmbeddedChannel ch = new EmbeddedChannel(new RespProtocolErrorReplyHandler(
+                new RespReplyWriterFactory(),
+                ctx -> session,
+                ctx -> false,
+                ctx -> {}
+        ));
+        try {
+            Assert.assertFalse(ch.writeInbound(new RespProtocolError("ERR Protocol error", true)));
+            Assert.assertArrayEquals(ascii("-ERR Protocol error\r\n"), readOutbound(ch));
+            Assert.assertFalse(ch.isOpen());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void closingStateSignalDropsProtocolErrorWithoutWritingReply() {
+        AtomicBoolean closeObserverCalled = new AtomicBoolean();
+        EmbeddedChannel ch = new EmbeddedChannel(new RespProtocolErrorReplyHandler(
+                new RespReplyWriterFactory(),
+                ctx -> null,
+                ctx -> true,
+                ctx -> closeObserverCalled.set(true)
+        ));
+        try {
+            Assert.assertFalse(ch.writeInbound(new RespProtocolError("ERR Protocol error", true)));
+            Assert.assertNull(readOutbound(ch));
+            Assert.assertTrue(ch.isOpen());
+            Assert.assertFalse(closeObserverCalled.get());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
     private static byte[] readOutbound(EmbeddedChannel ch) {
         ByteBuf out = ch.readOutbound();
         if (out == null) {
@@ -88,6 +127,20 @@ public class RespProtocolErrorReplyHandlerTest {
         @Override
         public void close() {
             closed = true;
+        }
+    }
+
+    private static final class TestProtocolSession implements ProtocolNegotiationSession {
+        private int respVersion = 2;
+
+        @Override
+        public int respVersion() {
+            return respVersion;
+        }
+
+        @Override
+        public void setRespVersion(int respVersion) {
+            this.respVersion = respVersion;
         }
     }
 }

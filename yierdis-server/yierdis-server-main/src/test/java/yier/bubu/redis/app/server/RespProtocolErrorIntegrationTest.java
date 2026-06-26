@@ -89,6 +89,58 @@ public class RespProtocolErrorIntegrationTest {
         }
     }
 
+    @Test
+    public void malformedRespAfterHello3ReturnsProtocolErrorThenCloses() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start("--port", "0");
+             Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+            socket.setSoTimeout(2000);
+
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            out.write("*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            readRespFrame(in);
+
+            out.write("*1\r\nPING\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+
+            String error = readLine(in);
+            Assert.assertTrue(error, error.startsWith("-ERR Protocol error"));
+            Assert.assertEquals(-1, in.read());
+        }
+    }
+
+    private static void readRespFrame(InputStream in) throws IOException {
+        int type = in.read();
+        if (type == '%') {
+            int pairs = Integer.parseInt(respLineValue(readLine(in)));
+            for (int i = 0; i < pairs * 2; i++) {
+                int entryType = in.read();
+                if (entryType == '$') {
+                    int len = Integer.parseInt(respLineValue(readLine(in)));
+                    in.readNBytes(len);
+                    if (in.read() != '\r' || in.read() != '\n') {
+                        throw new IOException("expected CRLF after HELLO bulk string");
+                    }
+                    continue;
+                }
+                if (entryType == ':') {
+                    readLine(in);
+                    continue;
+                }
+                throw new IOException("unexpected HELLO map entry type: " + entryType);
+            }
+            return;
+        }
+        throw new IOException("unexpected RESP frame type: " + type);
+    }
+
+    private static String respLineValue(String line) {
+        return line.endsWith("\r") ? line.substring(0, line.length() - 1) : line;
+    }
+
     private static String readLine(InputStream in) throws IOException {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         for (; ; ) {

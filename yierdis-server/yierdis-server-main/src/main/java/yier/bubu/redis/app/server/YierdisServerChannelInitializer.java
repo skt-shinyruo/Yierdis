@@ -67,6 +67,14 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                 ))
                 .addLast("respProtocolErrorReply", new RespProtocolErrorReplyHandler(
                         replyWriterFactory,
+                        ctx -> {
+                            NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
+                            return connection == null ? null : connection.session();
+                        },
+                        ctx -> {
+                            NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
+                            return connection != null && connection.context().isClosing();
+                        },
                         YierdisServerChannelInitializer::markProtocolErrorClosing
                 ))
                 .addLast("respCommandAdapter", new RespCommandAdapter())

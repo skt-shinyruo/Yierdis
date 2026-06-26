@@ -91,6 +91,25 @@ public class ClosingSkipSideEffectsIntegrationTest {
     }
 
     @Test
+    public void protocolErrorReplyHandlerDropsWhenInjectedClosingSignalIsAlreadySet() {
+        TrackingCloseable dropped = new TrackingCloseable();
+        EmbeddedChannel ch = new EmbeddedChannel(new RespProtocolErrorReplyHandler(
+                new RespReplyWriterFactory(),
+                ctx -> null,
+                ctx -> true,
+                ctx -> Assert.fail("close observer should not run when already closing")
+        ));
+        try {
+            ch.writeInbound(dropped);
+            Assert.assertNull("no protocol error reply should be produced once closing is already set", readOutbound(ch));
+            Assert.assertTrue("late inbound should be closed when the connection is already closing", dropped.closed);
+            Assert.assertTrue("channel should remain open when the handler only drops late protocol errors", ch.isOpen());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void commandHandlerTreatsDecoderWrappedProtocolFailuresAsInternalErrors() throws Exception {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
@@ -348,13 +367,33 @@ public class ClosingSkipSideEffectsIntegrationTest {
         return s.getBytes(StandardCharsets.US_ASCII);
     }
 
+    private static final class TrackingCloseable implements AutoCloseable {
+        private boolean closed;
+
+        @Override
+        public void close() {
+            closed = true;
+        }
+    }
+
     private static RespProtocolErrorReplyHandler protocolErrorHandler(RespReplyWriterFactory replyWriterFactory) {
-        return new RespProtocolErrorReplyHandler(replyWriterFactory, ctx -> {
-            NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
-            if (connection != null && connection.markClosing()) {
-                ctx.channel().config().setAutoRead(false);
-            }
-        });
+        return new RespProtocolErrorReplyHandler(
+                replyWriterFactory,
+                ctx -> {
+                    NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
+                    return connection == null ? null : connection.session();
+                },
+                ctx -> {
+                    NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
+                    return connection != null && connection.context().isClosing();
+                },
+                ctx -> {
+                    NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
+                    if (connection != null && connection.markClosing()) {
+                        ctx.channel().config().setAutoRead(false);
+                    }
+                }
+        );
     }
 
     private static RespCommandRequest request(String cmd, String... args) {
