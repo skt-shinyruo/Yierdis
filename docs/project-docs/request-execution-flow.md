@@ -8,6 +8,7 @@
 flowchart LR
   client["client RESP bytes"]
   decoder["RespRequestDecoder"]
+  protocolError["RespProtocolErrorReplyHandler"]
   request["RespCommandRequest"]
   adapter["RespCommandAdapter + RespExecutionAdapter"]
   execRequest["ByteArrayExecutionRequest / ExecutionRequest"]
@@ -23,7 +24,7 @@ flowchart LR
   io["NettyExecutionIoAdapter"]
   flush["transport flush"]
 
-  client --> decoder --> request --> adapter --> execRequest --> handler --> executor
+  client --> decoder --> protocolError --> request --> adapter --> execRequest --> handler --> executor
   executor --> engine --> processor --> command --> db --> memory --> reply --> respReply --> io --> flush
 ```
 
@@ -59,7 +60,7 @@ flowchart LR
 
 `YierdisServerBootstrap` 的组装和关闭顺序也在这条链里固定下来：先创建 `YierdisInstance`、engine 和 executor，再创建 Netty groups 和 `ServerBootstrap`；关闭时则反向释放 server、event loop、executor 和 runtime owned resources，避免半初始化状态泄漏。
 
-`YierdisServerChannelInitializer` 的 pipeline 只做连接级装配，不承载命令语义。顺序是 decode -> RESP adapter -> execution adapter -> backpressure handlers -> fast command handler。连接级 close 和 protocol error 也在这条 pipeline 上闭环，而不是让 handler 自己猜测 channel 生命周期。
+`YierdisServerChannelInitializer` 的 pipeline 只做连接级装配，不承载命令语义。顺序是 decode -> protocol error reply -> RESP adapter -> fast command handler。连接级 close 和 protocol error 也在这条 pipeline 上闭环，而不是让 handler 自己猜测 channel 生命周期。
 
 ## Netty pipeline
 
@@ -68,6 +69,7 @@ flowchart LR
 关键节点是：
 
 - `RespRequestDecoder`：从 `ByteBuf` 解析 RESP array 或 inline command，产出 `RespCommandRequest` 或协议错误
+- `RespProtocolErrorReplyHandler`：统一回写 RESP protocol error，并在需要时标记 closing / close-after-reply
 - `RespCommandAdapter`：把 `RespCommandRequest` 转成 `ExecutionRequest`
 - `YierdisFastCommandHandler`：接收 `ExecutionRequest`，只调用 `CommandExecutor.trySubmit(...)`
 
@@ -107,7 +109,7 @@ flowchart LR
 - `executor.trySubmit(...)` 成功时，request ownership 转给 executor；
 - `connection_closing` 时，handler 只关闭 request，不再给已经 closing 的连接追加 busy reply；
 - `not_running`、`queue_full`、`bytes_budget`、`offer_failed` 这类拒绝会直接在 handler 里回 `ERR busy <reason>`；
-- `exceptionCaught(...)` 里的 protocol error / internal error 也在同一边界直接回写，并在需要时 close-after-reply。
+- `exceptionCaught(...)` 里的运行时异常会在同一边界直接回 `ERR internal error`，并在需要时 close-after-reply。
 
 这就是“Netty I/O 线程只提交、不执行业务命令”的实际落点。更细的提交预算和背压关系见 [`executor-and-backpressure.md`](./executor-and-backpressure.md)；命令进入 processor 之后的查表和 parse 细节见 [`command-parsing-and-dispatch.md`](./command-parsing-and-dispatch.md)。
 

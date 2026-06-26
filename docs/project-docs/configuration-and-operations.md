@@ -76,7 +76,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar STATS
 
 `YierdisServerChannelInitializer` 会把它们直接传给 `RespRequestDecoder`。含义分别是 RESP bulk string 最大字节数、单条命令最大参数个数、inline command / header 行最大字节数。它们是入口防护参数：暴露在不可信网络里时，优先收紧这里，再考虑更深层的内存调参。
 
-解析失败会走 RESP protocol error 路径：server 写回协议错误并关闭连接，避免请求和回包错位。相关入口是 `RespRequestDecoder`、`RespCommandAdapter`、`RespProtocolErrorReplyHandler` 和 `YierdisFastCommandHandler`。
+解析失败会走 RESP protocol error 路径：`RespRequestDecoder` 只负责 RESP 解析和限制，出错时产出 `RespProtocolError`；`RespProtocolErrorReplyHandler` 统一回协议错误并关闭连接，避免请求和回包错位。这个路径不会进入 `RespCommandAdapter` 或 `YierdisFastCommandHandler` 的命令提交主链。
 
 ## executor 和 backpressure
 
