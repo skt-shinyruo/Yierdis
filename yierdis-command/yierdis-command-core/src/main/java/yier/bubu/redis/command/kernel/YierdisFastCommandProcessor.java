@@ -6,6 +6,7 @@ import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.TransactionState;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -51,6 +52,7 @@ public final class YierdisFastCommandProcessor {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(ctx, "ctx");
         RedisReplyWriter out = ctx.out();
+        TransactionState tx = ctx.transactionSession().transaction();
         int argc = request.argc();
         if (argc <= 0) {
             out.error("ERR empty command");
@@ -61,8 +63,10 @@ public final class YierdisFastCommandProcessor {
             return;
         }
 
-        // Reject null bulk strings early to avoid NPEs deeper in the DB and data structures.
-        // We only allow a null bulk string for PING/ECHO's single message argument (argv[1]).
+        // RESP arrays may legally carry null bulk strings into ExecutionRequest.
+        // Command semantics still reject them by default so DB and command implementations
+        // never see unexpected nulls. The only allowed form remains PING/ECHO with a
+        // single message argument at argv[1].
         boolean allowNullMessage = CommandRequestSupport.asciiEqualsIgnoreCase(request, 0, "PING")
                 || CommandRequestSupport.asciiEqualsIgnoreCase(request, 0, "ECHO");
         for (int i = 1; i < argc; i++) {
@@ -71,6 +75,9 @@ public final class YierdisFastCommandProcessor {
             }
             if (allowNullMessage && argc == 2 && i == 1) {
                 continue;
+            }
+            if (tx.active()) {
+                tx.markAborted();
             }
             out.error(NULL_BULK_STRING_ERR);
             return;

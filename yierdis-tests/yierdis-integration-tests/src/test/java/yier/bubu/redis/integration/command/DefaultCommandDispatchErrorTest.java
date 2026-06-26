@@ -35,6 +35,7 @@ public class DefaultCommandDispatchErrorTest {
             assertError("ERR empty command", client.execute(Arrays.asList(b(""))));
             assertError("ERR unknown command 'NOPE'", client.execute(cmd("NOPE")));
             assertError("ERR unknown command", client.execute(Arrays.asList(new byte[]{0})));
+            assertError("ERR Protocol error: null bulk string", client.execute(Arrays.asList(b("SET"), b("k"), null)));
         });
     }
 

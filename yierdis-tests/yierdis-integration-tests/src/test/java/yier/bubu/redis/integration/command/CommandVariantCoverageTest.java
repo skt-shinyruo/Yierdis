@@ -48,6 +48,17 @@ public class CommandVariantCoverageTest {
     }
 
     @Test
+    public void connectionCommandsAcceptNullBulkMessages() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                Assert.assertTrue(client.execute(java.util.Arrays.asList(b("PING"), null)) instanceof ReplyNull);
+                Assert.assertTrue(client.execute(java.util.Arrays.asList(b("ECHO"), null)) instanceof ReplyNull);
+            }
+        });
+    }
+
+    @Test
     public void commandVariantsCoverBaseCountInfoAndUnknownName() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
