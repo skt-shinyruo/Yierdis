@@ -57,25 +57,14 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        // Best-effort: return an error reply.
-        // RESP protocol errors close after the error reply because request/reply pairing cannot be resynchronized safely.
-        // Internal errors may close the connection to avoid side effects from already-queued commands.
         if (ctx == null) {
             return;
         }
 
         Throwable root = unwrapDecoderException(cause);
-        String rawMessage = root == null ? null : root.getMessage();
         String logMessage = safeLogMessage(root);
         String remote = String.valueOf(ctx.channel().remoteAddress());
-        boolean protocolError = rawMessage != null && rawMessage.startsWith("Protocol error");
-
-        if (protocolError) {
-            // Protocol errors are often client-driven; keep logs low-noise by default.
-            log.debug("Protocol error from {}: {}", remote, logMessage);
-        } else {
-            log.error("Internal error from {}: {}", remote, logMessage, root);
-        }
+        log.error("Internal error from {}: {}", remote, logMessage, root);
 
         ByteBuf out = ctx.alloc().buffer();
         try {
@@ -85,12 +74,7 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
             }
 
             RedisReplyWriter writer = newReplyWriter(out, connection);
-            if (protocolError) {
-                // 回包的 message 净化/限长由协议层 writer SSOT 统一处理，handler 不做重复净化避免漂移。
-                writer.protocolError(rawMessage);
-            } else {
-                writer.internalError("ERR internal error");
-            }
+            writer.internalError("ERR internal error");
             ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
             out = null;
         } finally {

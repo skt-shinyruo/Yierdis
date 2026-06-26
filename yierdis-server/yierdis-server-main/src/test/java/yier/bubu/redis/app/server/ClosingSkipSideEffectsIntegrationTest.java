@@ -16,6 +16,8 @@ import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.resp.RespCommandRequest;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
 import yier.bubu.redis.protocol.resp.netty.RespCommandAdapter;
+import yier.bubu.redis.protocol.resp.netty.RespProtocolError;
+import yier.bubu.redis.protocol.resp.netty.RespProtocolErrorReplyHandler;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
@@ -25,7 +27,7 @@ import java.util.concurrent.TimeUnit;
 
 public class ClosingSkipSideEffectsIntegrationTest {
     @Test
-    public void protocolErrorFromDecoderExceptionMarksClosingAndClosesAfterReply() throws Exception {
+    public void protocolErrorReplyHandlerMarksClosingAndClosesAfterReply() throws Exception {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
@@ -51,7 +53,11 @@ public class ClosingSkipSideEffectsIntegrationTest {
         });
         Assert.assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
 
-        EmbeddedChannel ch = new EmbeddedChannel(new RespCommandAdapter(), new YierdisFastCommandHandler(executor, replyWriterFactory));
+        EmbeddedChannel ch = new EmbeddedChannel(
+                protocolErrorHandler(replyWriterFactory),
+                new RespCommandAdapter(),
+                new YierdisFastCommandHandler(executor, replyWriterFactory)
+        );
         try {
             NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 16, 1024);
             ch.writeInbound(request("PING"));
@@ -60,25 +66,62 @@ public class ClosingSkipSideEffectsIntegrationTest {
             ExecutionConnectionContext context = connection.context();
             Assert.assertEquals(1L, context.statsSnapshot().commandsEnqueued());
 
-            ch.pipeline().fireExceptionCaught(new DecoderException(
-                    new IllegalArgumentException("Protocol error: invalid inline command")
-            ));
+            Assert.assertFalse(ch.writeInbound(new RespProtocolError("ERR Protocol error: invalid inline command", true)));
             Assert.assertArrayEquals(
                     ascii("-ERR Protocol error: invalid inline command\r\n"),
                     awaitOutbound(ch, 1000)
             );
-            Assert.assertTrue("expected protocol error fallback to mark connection closing", context.statsSnapshot().closing());
+            Assert.assertTrue("expected protocol error handler to mark connection closing", context.statsSnapshot().closing());
             ch.runPendingTasks();
             ch.runScheduledPendingTasks();
-            Assert.assertFalse("protocol error fallback should close after replying", ch.isOpen());
+            Assert.assertFalse("protocol error handler should close after replying", ch.isOpen());
 
             unblock.countDown();
 
             awaitCounter(context, c -> c.statsSnapshot().commandsSkippedClosing(), 1L, 1000);
             Assert.assertEquals(0L, context.statsSnapshot().commandsExecuted());
-            Assert.assertNull("no command reply should be produced after protocol error closing", readOutbound(ch));
+            Assert.assertNull("no command reply should be produced after protocol close begins", readOutbound(ch));
         } finally {
             unblock.countDown();
+            executor.shutdownGracefully().join();
+            executor.executeOwnerTask(instance::close).join();
+            group.shutdownGracefully().syncUninterruptibly();
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void commandHandlerTreatsDecoderWrappedProtocolFailuresAsInternalErrors() throws Exception {
+        DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
+        EventExecutor eventExecutor = group.next();
+
+        YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
+        YierdisEngine engine = TestYierdisEngines.forInstance(instance);
+        RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
+        CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
+                instance::bindToCurrentThread,
+                engine::execute,
+                eventExecutor,
+                replyWriterFactory,
+                new NettyExecutionIoAdapter(),
+                new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        executor.start();
+
+        EmbeddedChannel ch = new EmbeddedChannel(new YierdisFastCommandHandler(executor, replyWriterFactory));
+        try {
+            NettyExecutionConnection connection = NettyExecutionConnection.getOrCreate(ch, 16, 1024);
+
+            ch.pipeline().fireExceptionCaught(new DecoderException(
+                    new IllegalArgumentException("Protocol error: invalid inline command")
+            ));
+
+            Assert.assertArrayEquals(ascii("-ERR internal error\r\n"), awaitOutbound(ch, 1000));
+            Assert.assertTrue("expected command handler fallback to mark connection closing", connection.context().statsSnapshot().closing());
+            ch.runPendingTasks();
+            ch.runScheduledPendingTasks();
+            Assert.assertFalse("internal error fallback should close after replying", ch.isOpen());
+        } finally {
             executor.shutdownGracefully().join();
             executor.executeOwnerTask(instance::close).join();
             group.shutdownGracefully().syncUninterruptibly();
@@ -303,6 +346,15 @@ public class ClosingSkipSideEffectsIntegrationTest {
 
     private static byte[] ascii(String s) {
         return s.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static RespProtocolErrorReplyHandler protocolErrorHandler(RespReplyWriterFactory replyWriterFactory) {
+        return new RespProtocolErrorReplyHandler(replyWriterFactory, ctx -> {
+            NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
+            if (connection != null && connection.markClosing()) {
+                ctx.channel().config().setAutoRead(false);
+            }
+        });
     }
 
     private static RespCommandRequest request(String cmd, String... args) {
