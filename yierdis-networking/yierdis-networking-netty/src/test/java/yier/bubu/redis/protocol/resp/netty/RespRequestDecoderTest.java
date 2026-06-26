@@ -11,6 +11,16 @@ import java.nio.charset.StandardCharsets;
 
 public class RespRequestDecoderTest {
     @Test
+    public void exposesOnlyTheSupportedThreeArgumentConstructor() {
+        java.lang.reflect.Constructor<?>[] constructors = RespRequestDecoder.class.getConstructors();
+        Assert.assertEquals("decoder should expose one supported public constructor", 1, constructors.length);
+        Assert.assertArrayEquals(
+                new Class<?>[]{int.class, int.class, int.class},
+                constructors[0].getParameterTypes()
+        );
+    }
+
+    @Test
     public void decodesArrayCommand() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024));
         try {

@@ -26,10 +26,6 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
     private State state = State.READ_COMMAND;
 
     public RespRequestDecoder(int maxBulkBytes, int maxArgs, int maxInlineBytes) {
-        this(maxBulkBytes, maxArgs, maxInlineBytes, safeDiscardBytes(maxBulkBytes, maxInlineBytes));
-    }
-
-    public RespRequestDecoder(int maxBulkBytes, int maxArgs, int maxInlineBytes, int maxDiscardBytes) {
         this.maxBulkBytes = Math.max(0, maxBulkBytes);
         this.maxArgs = Math.max(0, maxArgs);
         this.maxInlineBytes = Math.max(0, maxInlineBytes);
@@ -253,11 +249,6 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
     private static int saturatedAdd(int current, int len) {
         long next = (long) Math.max(0, current) + Math.max(0, len);
         return next >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) next;
-    }
-
-    private static int safeDiscardBytes(int maxBulkBytes, int maxInlineBytes) {
-        long sum = (long) Math.max(0, maxBulkBytes) + Math.max(0, maxInlineBytes);
-        return sum >= Integer.MAX_VALUE ? Integer.MAX_VALUE : Math.max(1024, (int) sum);
     }
 
     private static void emitProtocolError(List<Object> out, String message, boolean closeAfterReply) {
