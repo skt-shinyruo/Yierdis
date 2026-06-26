@@ -31,6 +31,26 @@ public class RespRequestDecoderTest {
     }
 
     @Test
+    public void decodesArrayCommandWithNullBulkString() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024));
+        try {
+            Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(
+                    "*2\r\n$4\r\nECHO\r\n$-1\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+
+            RespCommandRequest req = ch.readInbound();
+            Assert.assertEquals(2, req.argc());
+            Assert.assertArrayEquals(bytes("ECHO"), req.readOnlyArg(0));
+            Assert.assertNull(req.readOnlyArg(1));
+            Assert.assertEquals(4, req.retainedBytes());
+            Assert.assertNull(ch.readInbound());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void decodesPipelinedCommandsInOrder() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024));
         try {
@@ -111,6 +131,20 @@ public class RespRequestDecoderTest {
     }
 
     @Test
+    public void rejectsBulkLengthBelowNegativeOne() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024));
+        try {
+            Object msg = writeInboundAndReadFirst(ch, "*2\r\n$4\r\nECHO\r\n$-2\r\n");
+
+            Assert.assertTrue(msg instanceof RespProtocolError);
+            Assert.assertTrue(((RespProtocolError) msg).closeAfterReply());
+            Assert.assertNull(ch.readInbound());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void rejectsArrayLengthAboveHardLimitBeforeAllocatingArgv() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, Integer.MAX_VALUE, 1024));
         try {
@@ -155,6 +189,35 @@ public class RespRequestDecoderTest {
             request = (ExecutionRequest) msg;
             Assert.assertEquals(1, request.argc());
             Assert.assertArrayEquals(bytes("PING"), request.readOnlyByteArray(0));
+        } finally {
+            if (request != null) {
+                request.close();
+            }
+            ch.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    public void adapterPreservesNullBulkStringThroughExecutionRequest() {
+        EmbeddedChannel ch = new EmbeddedChannel(
+                new RespRequestDecoder(1024, 16, 1024),
+                new RespCommandAdapter()
+        );
+        ExecutionRequest request = null;
+        try {
+            Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(
+                    "*2\r\n$4\r\nECHO\r\n$-1\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+
+            Object msg = ch.readInbound();
+            Assert.assertTrue(msg instanceof ExecutionRequest);
+            request = (ExecutionRequest) msg;
+            Assert.assertEquals(2, request.argc());
+            Assert.assertArrayEquals(bytes("ECHO"), request.readOnlyByteArray(0));
+            Assert.assertTrue(request.isNull(1));
+            Assert.assertNull(request.readOnlyByteArray(1));
+            Assert.assertEquals(4, request.retainedBytes());
         } finally {
             if (request != null) {
                 request.close();

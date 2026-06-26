@@ -19,7 +19,8 @@ public final class RespCommandRequest {
         for (int i = 0; i < args.size(); i++) {
             byte[] arg = args.get(i);
             if (arg == null) {
-                throw new IllegalArgumentException("RESP command argv must not contain null bulk strings");
+                argv[i] = null;
+                continue;
             }
             argv[i] = arg.clone();
             retainedBytes = saturatedRetainedBytes(retainedBytes, arg.length);
@@ -39,9 +40,6 @@ public final class RespCommandRequest {
         Objects.requireNonNull(argv, "argv");
         byte[][] owned = new byte[argv.length][];
         for (int i = 0; i < argv.length; i++) {
-            if (argv[i] == null) {
-                throw new IllegalArgumentException("RESP command argv must not contain null bulk strings");
-            }
             owned[i] = argv[i];
         }
         return new RespCommandRequest(owned, Math.max(0, retainedBytes));

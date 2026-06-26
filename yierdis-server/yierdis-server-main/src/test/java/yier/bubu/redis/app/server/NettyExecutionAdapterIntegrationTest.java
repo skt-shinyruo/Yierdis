@@ -175,6 +175,77 @@ public class NettyExecutionAdapterIntegrationTest {
         }
     }
 
+    @Test
+    public void echoNullBulkStringSurvivesRespAdapterAndWritesNullReply() {
+        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build())) {
+            YierdisEngine engine = TestYierdisEngines.forInstance(instance);
+            NettyExecutionIoAdapter ioAdapter = new NettyExecutionIoAdapter();
+            CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
+                    instance::bindToCurrentThread,
+                    engine::execute,
+                    Runnable::run,
+                    new RespReplyWriterFactory(),
+                    ioAdapter,
+                    new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+            );
+            executor.start();
+
+            EmbeddedChannel channel = new EmbeddedChannel(
+                    new RespCommandAdapter(),
+                    new YierdisFastCommandHandler(executor, new RespReplyWriterFactory())
+            );
+            try {
+                NettyExecutionConnection.getOrCreate(channel, 16, 1024);
+                channel.writeInbound(RespCommandRequest.wrapReadOnly(
+                        new byte[][]{utf8("ECHO"), null},
+                        4
+                ));
+
+                Assert.assertArrayEquals("$-1\r\n".getBytes(StandardCharsets.UTF_8), readOutbound(channel));
+            } finally {
+                channel.finishAndReleaseAll();
+                executor.close();
+            }
+        }
+    }
+
+    @Test
+    public void setNullBulkStringSurvivesRespAdapterAndHitsCommandError() {
+        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build())) {
+            YierdisEngine engine = TestYierdisEngines.forInstance(instance);
+            NettyExecutionIoAdapter ioAdapter = new NettyExecutionIoAdapter();
+            CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
+                    instance::bindToCurrentThread,
+                    engine::execute,
+                    Runnable::run,
+                    new RespReplyWriterFactory(),
+                    ioAdapter,
+                    new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+            );
+            executor.start();
+
+            EmbeddedChannel channel = new EmbeddedChannel(
+                    new RespCommandAdapter(),
+                    new YierdisFastCommandHandler(executor, new RespReplyWriterFactory())
+            );
+            try {
+                NettyExecutionConnection.getOrCreate(channel, 16, 1024);
+                channel.writeInbound(RespCommandRequest.wrapReadOnly(
+                        new byte[][]{utf8("SET"), utf8("k"), null},
+                        4
+                ));
+
+                Assert.assertArrayEquals(
+                        "-ERR Protocol error: null bulk string\r\n".getBytes(StandardCharsets.UTF_8),
+                        readOutbound(channel)
+                );
+            } finally {
+                channel.finishAndReleaseAll();
+                executor.close();
+            }
+        }
+    }
+
     private static byte[] readOutbound(EmbeddedChannel channel) {
         ByteBuf out = channel.readOutbound();
         Assert.assertNotNull("expected reply", out);
