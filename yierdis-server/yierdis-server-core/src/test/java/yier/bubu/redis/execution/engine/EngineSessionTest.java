@@ -68,6 +68,63 @@ public class EngineSessionTest {
     }
 
     @Test
+    public void transactionRejectsWhenSnapshotBytesExceedBudgetEvenIfEstimatedBytesDoNot() {
+        EngineSession session = new EngineSession(4, 6);
+        session.transaction().begin();
+
+        ExecutionRequest underestimated = new ExecutionRequest() {
+            private final byte[][] argv = new byte[][]{
+                    "SET".getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+                    "k".getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+                    "value".getBytes(java.nio.charset.StandardCharsets.US_ASCII)
+            };
+
+            @Override
+            public int argc() {
+                return argv.length;
+            }
+
+            @Override
+            public boolean isNull(int index) {
+                return false;
+            }
+
+            @Override
+            public int len(int index) {
+                return argv[index].length;
+            }
+
+            @Override
+            public byte byteAt(int index, int offset) {
+                return argv[index][offset];
+            }
+
+            @Override
+            public void copyToByteArray(int index, byte[] dst, int dstOff) {
+                System.arraycopy(argv[index], 0, dst, dstOff, argv[index].length);
+            }
+
+            @Override
+            public byte[] toByteArray(int index) {
+                return argv[index].clone();
+            }
+
+            @Override
+            public int retainedBytes() {
+                return 0;
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+
+        Assert.assertEquals("ERR Transaction queue is full", session.transaction().tryEnqueue(underestimated));
+        Assert.assertTrue(session.transaction().aborted());
+        Assert.assertEquals(0, session.transaction().size());
+    }
+
+    @Test
     public void connectionStatsAreReadOnlyObservationNotOwnedSessionState() {
         EngineSession session = new EngineSession(4, 64);
         Assert.assertNull(session.connectionStats());

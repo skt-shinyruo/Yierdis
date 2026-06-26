@@ -29,7 +29,7 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
             }
             byte[] copy = arg.clone();
             argv[i] = copy;
-            retainedBytes += copy.length;
+            retainedBytes = saturatedRetainedBytes(retainedBytes, copy.length);
         }
         return new ByteArrayExecutionRequest(argv, retainedBytes, false);
     }
@@ -52,7 +52,7 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
                 request.copyToByteArray(i, copy, 0);
             }
             argv[i] = copy;
-            retainedBytes += copy.length;
+            retainedBytes = saturatedRetainedBytes(retainedBytes, copy.length);
         }
         return new ByteArrayExecutionRequest(argv, retainedBytes, false);
     }
@@ -72,7 +72,7 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
 
         byte[] commandBytes = commandName.getBytes(StandardCharsets.UTF_8);
         argv[0] = commandBytes;
-        retainedBytes += commandBytes.length;
+        retainedBytes = saturatedRetainedBytes(retainedBytes, commandBytes.length);
 
         for (int i = 0; i < args.size(); i++) {
             String arg = args.get(i);
@@ -81,9 +81,14 @@ public final class ByteArrayExecutionRequest implements ExecutionRequest {
             }
             byte[] bytes = arg.getBytes(StandardCharsets.UTF_8);
             argv[i + 1] = bytes;
-            retainedBytes += bytes.length;
+            retainedBytes = saturatedRetainedBytes(retainedBytes, bytes.length);
         }
         return new ByteArrayExecutionRequest(argv, retainedBytes, true);
+    }
+
+    static int saturatedRetainedBytes(int retainedBytes, int argLength) {
+        long next = (long) Math.max(0, retainedBytes) + Math.max(0, argLength);
+        return next >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) next;
     }
 
     @Override
