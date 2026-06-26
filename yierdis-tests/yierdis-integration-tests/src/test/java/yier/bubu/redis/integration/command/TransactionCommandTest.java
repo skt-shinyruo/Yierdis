@@ -228,6 +228,26 @@ public class TransactionCommandTest {
         });
     }
 
+    @Test
+    public void nullBulkStringInsideMultiAbortsBeforeExec() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            TestSession session = new TestSession();
+            try (FastTestClient client = new FastTestClient(processor, session)) {
+                Assert.assertEquals("OK", ((ReplySimpleString) client.execute(Arrays.asList(b("MULTI")))).value());
+
+                ReplyObject badNull = client.execute(Arrays.asList(b("SET"), b("k"), null));
+                Assert.assertTrue(badNull instanceof ReplyError);
+                Assert.assertEquals("ERR Protocol error: null bulk string", ((ReplyError) badNull).message());
+                Assert.assertEquals(0, session.transactionState().size());
+
+                ReplyObject exec = client.execute(Arrays.asList(b("EXEC")));
+                Assert.assertTrue(exec instanceof ReplyError);
+                Assert.assertEquals("EXECABORT Transaction discarded because of previous errors.", ((ReplyError) exec).message());
+            }
+        });
+    }
+
     private static final class TestSession implements
             yier.bubu.redis.execution.api.DbIndexSession,
             yier.bubu.redis.execution.api.ClientMetadataSession,
