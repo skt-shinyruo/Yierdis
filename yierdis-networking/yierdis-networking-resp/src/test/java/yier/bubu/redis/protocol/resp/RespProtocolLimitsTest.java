@@ -18,6 +18,6 @@ public class RespProtocolLimitsTest {
         Assert.assertTrue(RespProtocolLimits.DEFAULT_MAX_COMMAND_BYTES <= RespProtocolLimits.MAX_COMMAND_BYTES);
         Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_BULK_BYTES, RespProtocolLimits.MAX_BULK_BYTES);
         Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_ARGS, RespProtocolLimits.MAX_ARGS);
-        Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_COMMAND_BYTES, RespProtocolLimits.MAX_COMMAND_BYTES);
+        Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_BULK_BYTES, RespProtocolLimits.MAX_COMMAND_BYTES);
     }
 }
