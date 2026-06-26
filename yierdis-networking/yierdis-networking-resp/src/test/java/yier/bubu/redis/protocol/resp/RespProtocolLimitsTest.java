@@ -12,9 +12,12 @@ public class RespProtocolLimitsTest {
         Assert.assertEquals(512 * 1024 * 1024, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
         Assert.assertEquals(1024 * 1024, RespProtocolLimits.DEFAULT_MAX_ARGS);
         Assert.assertEquals(1024 * 1024, RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES);
+        Assert.assertEquals(64 * 1024 * 1024, RespProtocolLimits.DEFAULT_MAX_COMMAND_BYTES);
         Assert.assertTrue(RespProtocolLimits.DEFAULT_MAX_BULK_BYTES <= RespProtocolLimits.MAX_BULK_BYTES);
         Assert.assertTrue(RespProtocolLimits.DEFAULT_MAX_ARGS <= RespProtocolLimits.MAX_ARGS);
+        Assert.assertTrue(RespProtocolLimits.DEFAULT_MAX_COMMAND_BYTES <= RespProtocolLimits.MAX_COMMAND_BYTES);
         Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_BULK_BYTES, RespProtocolLimits.MAX_BULK_BYTES);
         Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_ARGS, RespProtocolLimits.MAX_ARGS);
+        Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_COMMAND_BYTES, RespProtocolLimits.MAX_COMMAND_BYTES);
     }
 }

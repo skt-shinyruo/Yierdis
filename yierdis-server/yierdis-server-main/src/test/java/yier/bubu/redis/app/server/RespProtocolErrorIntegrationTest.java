@@ -67,6 +67,28 @@ public class RespProtocolErrorIntegrationTest {
         }
     }
 
+    @Test
+    public void oversizedTotalCommandBytesReturnsProtocolErrorAndClosesConnection() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--protocolMaxCommandBytes", "4"
+        );
+             Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+            socket.setSoTimeout(2000);
+
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            out.write("*2\r\n$3\r\nGET\r\n$2\r\nab\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+
+            String error = readLine(in);
+            Assert.assertEquals("-ERR Protocol error: command is too large\r", error);
+            Assert.assertEquals(-1, in.read());
+        }
+    }
+
     private static String readLine(InputStream in) throws IOException {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         for (; ; ) {

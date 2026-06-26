@@ -23,12 +23,14 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
     private final int maxBulkBytes;
     private final int maxArgs;
     private final int maxInlineBytes;
+    private final int maxCommandBytes;
     private State state = State.READ_COMMAND;
 
-    public RespRequestDecoder(int maxBulkBytes, int maxArgs, int maxInlineBytes) {
+    public RespRequestDecoder(int maxBulkBytes, int maxArgs, int maxInlineBytes, int maxCommandBytes) {
         this.maxBulkBytes = Math.max(0, maxBulkBytes);
         this.maxArgs = Math.max(0, maxArgs);
         this.maxInlineBytes = Math.max(0, maxInlineBytes);
+        this.maxCommandBytes = Math.max(0, maxCommandBytes);
     }
 
     @Override
@@ -120,6 +122,11 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
                 state = State.CLOSING;
                 return ParseResult.ERROR;
             }
+            if (maxCommandBytes > 0 && retainedBytes > maxCommandBytes - len) {
+                emitProtocolError(out, "ERR Protocol error: command is too large", true);
+                state = State.CLOSING;
+                return ParseResult.ERROR;
+            }
             long requiredBytes = (long) len + 2L;
             if (in.readableBytes() < requiredBytes) {
                 return ParseResult.NEED_MORE;
@@ -163,6 +170,11 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
             InlineCommandParser.Decoded decoded = InlineCommandParser.parseUnlimited(line, 0, line.length);
             if (maxArgs > 0 && decoded.argc() > maxArgs) {
                 emitProtocolError(out, "ERR Protocol error: too many arguments", true);
+                state = State.CLOSING;
+                return ParseResult.ERROR;
+            }
+            if (maxCommandBytes > 0 && decoded.retainedBytes() > maxCommandBytes) {
+                emitProtocolError(out, "ERR Protocol error: command is too large", true);
                 state = State.CLOSING;
                 return ParseResult.ERROR;
             }

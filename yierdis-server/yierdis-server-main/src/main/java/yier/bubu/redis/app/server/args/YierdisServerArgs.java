@@ -18,6 +18,7 @@ public final class YierdisServerArgs {
     private static final int DEFAULT_PROTOCOL_MAX_BULK_BYTES = RespProtocolLimits.DEFAULT_MAX_BULK_BYTES;
     private static final int DEFAULT_PROTOCOL_MAX_ARGS = RespProtocolLimits.DEFAULT_MAX_ARGS;
     private static final int DEFAULT_PROTOCOL_MAX_LINE_BYTES = RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES;
+    private static final int DEFAULT_PROTOCOL_MAX_COMMAND_BYTES = RespProtocolLimits.DEFAULT_MAX_COMMAND_BYTES;
 
     private static final long DEFAULT_EXECUTOR_QUEUE_MAX_BYTES = 64L * 1024 * 1024; // 64 MiB
     private static final int DEFAULT_TRANSACTION_QUEUE_MAX_COMMANDS = 1024;
@@ -132,6 +133,13 @@ public final class YierdisServerArgs {
             description = "Protocol max header bytes."
     )
     public int protocolMaxLineBytes = DEFAULT_PROTOCOL_MAX_LINE_BYTES;
+
+    @Option(
+            names = YierdisServerArgNames.PROTOCOL_MAX_COMMAND_BYTES,
+            defaultValue = "" + DEFAULT_PROTOCOL_MAX_COMMAND_BYTES,
+            description = "Protocol max cumulative bytes per command."
+    )
+    public int protocolMaxCommandBytes = DEFAULT_PROTOCOL_MAX_COMMAND_BYTES;
 
     @Option(
             names = YierdisServerArgNames.CLIENT_IDLE_TIMEOUT_MILLIS,
@@ -289,6 +297,12 @@ public final class YierdisServerArgs {
         if (protocolMaxLineBytes <= 0) {
             throw new IllegalArgumentException("protocolMaxLineBytes must be > 0");
         }
+        if (protocolMaxCommandBytes <= 0) {
+            throw new IllegalArgumentException("protocolMaxCommandBytes must be > 0");
+        }
+        if (protocolMaxCommandBytes > RespProtocolLimits.MAX_COMMAND_BYTES) {
+            throw new IllegalArgumentException("protocolMaxCommandBytes must be <= " + RespProtocolLimits.MAX_COMMAND_BYTES);
+        }
         if (clientIdleTimeoutMillis < 0) {
             throw new IllegalArgumentException("clientIdleTimeoutMillis must be >= 0");
         }
@@ -354,6 +368,7 @@ public final class YierdisServerArgs {
         out.protocolMaxBulkBytes = protocolMaxBulkBytes;
         out.protocolMaxArgs = protocolMaxArgs;
         out.protocolMaxLineBytes = protocolMaxLineBytes;
+        out.protocolMaxCommandBytes = protocolMaxCommandBytes;
         out.clientIdleTimeoutMillis = clientIdleTimeoutMillis;
         out.clientOutputBufferLimitBytes = clientOutputBufferLimitBytes;
         out.clientOutputBufferOverLimitMillis = clientOutputBufferOverLimitMillis;
@@ -397,6 +412,7 @@ public final class YierdisServerArgs {
                 protocolMaxBulkBytes,
                 protocolMaxArgs,
                 protocolMaxLineBytes,
+                protocolMaxCommandBytes,
                 clientIdleTimeoutMillis,
                 clientOutputBufferLimitBytes,
                 clientOutputBufferOverLimitMillis,
@@ -473,6 +489,8 @@ public final class YierdisServerArgs {
         out.add(Integer.toString(protocolMaxArgs));
         out.add(YierdisServerArgNames.PROTOCOL_MAX_LINE_BYTES);
         out.add(Integer.toString(protocolMaxLineBytes));
+        out.add(YierdisServerArgNames.PROTOCOL_MAX_COMMAND_BYTES);
+        out.add(Integer.toString(protocolMaxCommandBytes));
 
         out.add(YierdisServerArgNames.CLIENT_IDLE_TIMEOUT_MILLIS);
         out.add(Long.toString(clientIdleTimeoutMillis));

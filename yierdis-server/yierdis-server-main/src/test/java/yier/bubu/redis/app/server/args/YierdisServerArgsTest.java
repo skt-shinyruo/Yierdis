@@ -47,6 +47,7 @@ public class YierdisServerArgsTest {
                 "--protocolMaxBulkBytes", "32768",
                 "--protocolMaxArgs", "128",
                 "--protocolMaxLineBytes", "4096",
+                "--protocolMaxCommandBytes", "65536",
                 "--maxmemoryBytes", "1048576",
                 "--maxmemoryScope", "Per_Db",
                 "--maxmemoryPolicy", "ALLKEYS-RANDOM",
@@ -87,6 +88,7 @@ public class YierdisServerArgsTest {
         Assert.assertEquals(32768, runtimeConfig.get("protocolMaxBulkBytes"));
         Assert.assertEquals(128, runtimeConfig.get("protocolMaxArgs"));
         Assert.assertEquals(4096, runtimeConfig.get("protocolMaxLineBytes"));
+        Assert.assertEquals(65536, runtimeConfig.get("protocolMaxCommandBytes"));
         Assert.assertEquals(1048576L, runtimeConfig.get("maxmemoryBytes"));
         Assert.assertEquals(YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB, runtimeConfig.get("maxmemoryScope"));
         Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_RANDOM, runtimeConfig.get("maxmemoryPolicy"));
@@ -192,6 +194,18 @@ public class YierdisServerArgsTest {
     }
 
     @Test
+    public void protocolCommandBytesParsesAndExportsToRuntimeConfig() {
+        YierdisServerArgs args = parse("--protocolMaxCommandBytes", "1234");
+
+        args.normalizeAndValidate();
+
+        Assert.assertEquals(1234, args.protocolMaxCommandBytes);
+        Assert.assertEquals(1234, args.copy().protocolMaxCommandBytes);
+        Assert.assertTrue(args.toArgv().contains("--protocolMaxCommandBytes"));
+        Assert.assertEquals(1234, args.toRuntimeConfig().protocolMaxCommandBytes());
+    }
+
+    @Test
     public void normalizeAcceptsCorePolicyUnderscoreAliases() {
         YierdisServerArgs args = parse("--maxmemoryPolicy", "ALLKEYS_RANDOM");
 
@@ -207,6 +221,7 @@ public class YierdisServerArgsTest {
         Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_BULK_BYTES, args.protocolMaxBulkBytes);
         Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_ARGS, args.protocolMaxArgs);
         Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_INLINE_BYTES, args.protocolMaxLineBytes);
+        Assert.assertEquals(RespProtocolLimits.DEFAULT_MAX_COMMAND_BYTES, args.protocolMaxCommandBytes);
     }
 
     private static YierdisServerArgs parse(String... argv) {
