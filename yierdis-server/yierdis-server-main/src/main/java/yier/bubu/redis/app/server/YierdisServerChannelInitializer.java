@@ -64,11 +64,11 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                         config.protocolMaxArgs(),
                         config.protocolMaxLineBytes()
                 ))
-                .addLast("respCommandAdapter", new RespCommandAdapter())
                 .addLast("respProtocolErrorReply", new RespProtocolErrorReplyHandler(
                         replyWriterFactory,
                         YierdisServerChannelInitializer::markProtocolErrorClosing
                 ))
+                .addLast("respCommandAdapter", new RespCommandAdapter())
                 .addLast("commandHandler", new YierdisFastCommandHandler(executor, replyWriterFactory));
     }
 
