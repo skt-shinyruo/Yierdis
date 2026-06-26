@@ -74,6 +74,7 @@ public class ServerConfigArgsTest {
                 "--protocolMaxBulkBytes", "32768",
                 "--protocolMaxArgs", "128",
                 "--protocolMaxLineBytes", "4096",
+                "--protocolMaxCommandBytes", "65536",
                 "--maxmemoryBytes", "1048576",
                 "--maxmemoryScope", "perdb",
                 "--maxmemoryPolicy", "ALLKEYS-RANDOM",
@@ -107,6 +108,7 @@ public class ServerConfigArgsTest {
         Assert.assertEquals(32768, runtimeConfig.get("protocolMaxBulkBytes"));
         Assert.assertEquals(128, runtimeConfig.get("protocolMaxArgs"));
         Assert.assertEquals(4096, runtimeConfig.get("protocolMaxLineBytes"));
+        Assert.assertEquals(65536, runtimeConfig.get("protocolMaxCommandBytes"));
         Assert.assertEquals(1048576L, runtimeConfig.get("maxmemoryBytes"));
         Assert.assertEquals(YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB, runtimeConfig.get("maxmemoryScope"));
         Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_RANDOM, runtimeConfig.get("maxmemoryPolicy"));

@@ -11,18 +11,18 @@ import java.nio.charset.StandardCharsets;
 
 public class RespRequestDecoderTest {
     @Test
-    public void exposesOnlyTheSupportedThreeArgumentConstructor() {
+    public void exposesOnlyTheSupportedFourArgumentConstructor() {
         java.lang.reflect.Constructor<?>[] constructors = RespRequestDecoder.class.getConstructors();
         Assert.assertEquals("decoder should expose one supported public constructor", 1, constructors.length);
         Assert.assertArrayEquals(
-                new Class<?>[]{int.class, int.class, int.class},
+                new Class<?>[]{int.class, int.class, int.class, int.class},
                 constructors[0].getParameterTypes()
         );
     }
 
     @Test
     public void decodesArrayCommand() {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(
                     "*2\r\n$4\r\nPING\r\n$3\r\nhey\r\n",
@@ -42,7 +42,7 @@ public class RespRequestDecoderTest {
 
     @Test
     public void decodesArrayCommandWithNullBulkString() {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(
                     "*2\r\n$4\r\nECHO\r\n$-1\r\n",
@@ -62,7 +62,7 @@ public class RespRequestDecoderTest {
 
     @Test
     public void decodesPipelinedCommandsInOrder() {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(
                     "*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nECHO\r\n",
@@ -79,7 +79,7 @@ public class RespRequestDecoderTest {
 
     @Test
     public void decodesInlineCommand() {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("SET a 1\r\n", StandardCharsets.US_ASCII)));
 
@@ -96,7 +96,7 @@ public class RespRequestDecoderTest {
 
     @Test
     public void decodesInlineHexEscapesLikeCli() {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("SET \"a\\x20b\" \"\\x41\"\r\n", StandardCharsets.US_ASCII)));
 
@@ -113,7 +113,7 @@ public class RespRequestDecoderTest {
 
     @Test
     public void emitsProtocolErrorForOversizedBulk() {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(2, 16, 1024));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(2, 16, 1024, 1024));
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("*1\r\n$3\r\nabc\r\n", StandardCharsets.US_ASCII)));
 
@@ -128,7 +128,7 @@ public class RespRequestDecoderTest {
 
     @Test
     public void rejectsBulkLengthAboveHardLimitBeforeAllocatingBody() {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(Integer.MAX_VALUE, 16, 1024));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(Integer.MAX_VALUE, 16, 1024, 1024));
         try {
             Object msg = writeInboundAndReadFirst(ch, "*1\r\n$" + Integer.MAX_VALUE + "\r\n");
 
@@ -142,7 +142,7 @@ public class RespRequestDecoderTest {
 
     @Test
     public void rejectsBulkLengthBelowNegativeOne() {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
         try {
             Object msg = writeInboundAndReadFirst(ch, "*2\r\n$4\r\nECHO\r\n$-2\r\n");
 
@@ -156,7 +156,7 @@ public class RespRequestDecoderTest {
 
     @Test
     public void rejectsArrayLengthAboveHardLimitBeforeAllocatingArgv() {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, Integer.MAX_VALUE, 1024));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, Integer.MAX_VALUE, 1024, 1024));
         try {
             Object msg = writeInboundAndReadFirst(ch, "*" + Integer.MAX_VALUE + "\r\n");
 
@@ -170,7 +170,7 @@ public class RespRequestDecoderTest {
 
     @Test
     public void protocolErrorDropsPipelinedCommandsInSameRead() {
-        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(4, 16, 1024));
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(4, 16, 1024, 1024));
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(
                     "*1\r\n$5\r\nabcde\r\n*1\r\n$4\r\nPING\r\n",
@@ -187,7 +187,7 @@ public class RespRequestDecoderTest {
     @Test
     public void adapterConvertsRespCommandRequestToExecutionRequest() {
         EmbeddedChannel ch = new EmbeddedChannel(
-                new RespRequestDecoder(1024, 16, 1024),
+                new RespRequestDecoder(1024, 16, 1024, 1024),
                 new RespCommandAdapter()
         );
         ExecutionRequest request = null;
@@ -210,7 +210,7 @@ public class RespRequestDecoderTest {
     @Test
     public void adapterPreservesNullBulkStringThroughExecutionRequest() {
         EmbeddedChannel ch = new EmbeddedChannel(
-                new RespRequestDecoder(1024, 16, 1024),
+                new RespRequestDecoder(1024, 16, 1024, 1024),
                 new RespCommandAdapter()
         );
         ExecutionRequest request = null;
@@ -247,5 +247,24 @@ public class RespRequestDecoderTest {
             Assert.fail("decoder attempted to allocate from an invalid RESP length: " + e.getMessage());
         }
         return ch.readInbound();
+    }
+
+    @Test
+    public void emitsProtocolErrorWhenTotalCommandBytesExceedLimit() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 4));
+        try {
+            Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(
+                    "*2\r\n$3\r\nGET\r\n$2\r\nab\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+
+            Object msg = ch.readInbound();
+            Assert.assertTrue(msg instanceof RespProtocolError);
+            Assert.assertEquals("ERR Protocol error: command is too large", ((RespProtocolError) msg).message());
+            Assert.assertTrue(((RespProtocolError) msg).closeAfterReply());
+            Assert.assertNull(ch.readInbound());
+        } finally {
+            ch.finishAndReleaseAll();
+        }
     }
 }

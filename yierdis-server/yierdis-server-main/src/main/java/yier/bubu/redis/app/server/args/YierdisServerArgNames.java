@@ -22,6 +22,7 @@ public final class YierdisServerArgNames {
     public static final String PROTOCOL_MAX_BULK_BYTES = "--protocolMaxBulkBytes";
     public static final String PROTOCOL_MAX_ARGS = "--protocolMaxArgs";
     public static final String PROTOCOL_MAX_LINE_BYTES = "--protocolMaxLineBytes";
+    public static final String PROTOCOL_MAX_COMMAND_BYTES = "--protocolMaxCommandBytes";
     public static final String CLIENT_IDLE_TIMEOUT_MILLIS = "--client-idle-timeout-millis";
     public static final String CLIENT_OUTPUT_BUFFER_LIMIT_BYTES = "--client-output-buffer-limit-bytes";
     public static final String CLIENT_OUTPUT_BUFFER_OVER_LIMIT_MILLIS = "--client-output-buffer-over-limit-millis";

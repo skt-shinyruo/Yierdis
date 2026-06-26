@@ -62,7 +62,8 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                 .addLast("respRequestDecoder", new RespRequestDecoder(
                         config.protocolMaxBulkBytes(),
                         config.protocolMaxArgs(),
-                        config.protocolMaxLineBytes()
+                        config.protocolMaxLineBytes(),
+                        config.protocolMaxCommandBytes()
                 ))
                 .addLast("respProtocolErrorReply", new RespProtocolErrorReplyHandler(
                         replyWriterFactory,

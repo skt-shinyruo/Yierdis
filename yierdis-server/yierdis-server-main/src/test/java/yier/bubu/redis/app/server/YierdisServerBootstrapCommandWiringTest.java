@@ -178,7 +178,7 @@ public class YierdisServerBootstrapCommandWiringTest {
     @Test
     public void channelInitializerUsesRuntimeConfigForSessionAndProtocolLimits() throws Exception {
         try (InitializerTestEnv env = new InitializerTestEnv()) {
-            YierdisServerRuntimeConfig commandLimitedConfig = runtimeConfig(1, 0, 3, 2, 4);
+            YierdisServerRuntimeConfig commandLimitedConfig = runtimeConfig(1, 0, 3, 2, 4, 5);
             NioSocketChannel commandLimitedChannel = new NioSocketChannel();
             try {
                 new YierdisServerChannelInitializer(commandLimitedConfig, env.executor, env.replyWriterFactory).initChannel(commandLimitedChannel);
@@ -193,7 +193,7 @@ public class YierdisServerBootstrapCommandWiringTest {
                 commandLimitedChannel.unsafe().closeForcibly();
             }
 
-            YierdisServerRuntimeConfig byteLimitedConfig = runtimeConfig(0, 4, 3, 2, 4);
+            YierdisServerRuntimeConfig byteLimitedConfig = runtimeConfig(0, 4, 3, 2, 4, 5);
             NioSocketChannel byteLimitedChannel = new NioSocketChannel();
             try {
                 new YierdisServerChannelInitializer(byteLimitedConfig, env.executor, env.replyWriterFactory).initChannel(byteLimitedChannel);
@@ -229,6 +229,7 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertEquals(3, intField(decoder, "maxBulkBytes"));
                 Assert.assertEquals(2, intField(decoder, "maxArgs"));
                 Assert.assertEquals(4, intField(decoder, "maxInlineBytes"));
+                Assert.assertEquals(5, intField(decoder, "maxCommandBytes"));
                 Assert.assertEquals(10000L, longField(backpressureHandler, "outputBufferOverLimitMillis"));
                 WriteBufferWaterMark waterMark = byteLimitedChannel.config().getWriteBufferWaterMark();
                 Assert.assertEquals(33554432, waterMark.low());
@@ -373,7 +374,8 @@ public class YierdisServerBootstrapCommandWiringTest {
             long transactionQueueMaxBytes,
             int protocolMaxBulkBytes,
             int protocolMaxArgs,
-            int protocolMaxLineBytes
+            int protocolMaxLineBytes,
+            int protocolMaxCommandBytes
     ) {
         return new YierdisServerRuntimeConfig(
                 0,
@@ -394,6 +396,7 @@ public class YierdisServerBootstrapCommandWiringTest {
                 protocolMaxBulkBytes,
                 protocolMaxArgs,
                 protocolMaxLineBytes,
+                protocolMaxCommandBytes,
                 300000,
                 67108864,
                 10000,

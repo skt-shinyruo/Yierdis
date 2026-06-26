@@ -24,6 +24,7 @@ public record YierdisServerRuntimeConfig(
         int protocolMaxBulkBytes,
         int protocolMaxArgs,
         int protocolMaxLineBytes,
+        int protocolMaxCommandBytes,
         long clientIdleTimeoutMillis,
         long clientOutputBufferLimitBytes,
         long clientOutputBufferOverLimitMillis,
