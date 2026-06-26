@@ -37,7 +37,9 @@ Yierdis 选择中立 bytes 层：
 
 ## `ExecutionRequest` 视图族怎么选
 
-`RespExecutionAdapter` 的默认选择是 `ByteArrayExecutionRequest.copyOf(...)`。只要请求要跨过 Netty decoder 生命周期、进入 executor queue、进入 transaction replay，或者作为 change-event / replay snapshot 保存，就要拿一份独立快照，而不是继续引用协议 DTO。
+`RespExecutionAdapter` 的生产路径默认选择是 `ByteArrayExecutionRequest.wrapReadOnly(...)`：它复制外层 argv 引用数组，但继续共享已经 materialize 完成的 heap `byte[]` 参数，并要求后续层按只读约定消费。这样请求跨过 Netty decoder 生命周期后就拥有稳定 argv 与 retained-bytes 元数据，同时避免在协议适配点做第二次逐参数复制。
+
+`ByteArrayExecutionRequest` 自己负责 retained bytes 的饱和计数。无论请求来自 RESP 适配、`copyOf(...)` 快照还是 `fromUtf8(...)` 测试构造，累计值都会封顶到 `Integer.MAX_VALUE`，不会因为 `int` 回绕变成负数。
 
 `wrapReadOnly(...)` 只适合调用方已经拥有 argv、并且能持续遵守只读约定的场景。`readOnlyByteArray(...)` 是 heap-backed immutable request 的快速读路径，不等于把内部数组的所有权暴露给外部。`fromUtf8(...)` 只是测试、CLI 和固定输入构造的便利函数。
 

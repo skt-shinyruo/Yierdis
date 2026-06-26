@@ -75,7 +75,7 @@ flowchart LR
 
 ## RESP 到 ExecutionRequest
 
-`RespExecutionAdapter` 是协议和执行层之间的转换器。它把 `RespCommandRequest` 的 argv 视图复制成 `ByteArrayExecutionRequest`，再以 `ExecutionRequest` 形式交给后续层。
+`RespExecutionAdapter` 是协议和执行层之间的转换器。它读取 `RespCommandRequest` 的 argv 视图，包装成 read-only `ByteArrayExecutionRequest`，再以 `ExecutionRequest` 形式交给后续层。RESP array 里的 null bulk string 会在这里原样保留为 null argv 元素；命令是否合法由后面的 command-kernel 决定。
 
 这里的意义有三个：
 

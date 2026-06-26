@@ -115,9 +115,9 @@ sanity checks
 这两类错误在 `YierdisFastCommandProcessor` 最前面直接处理：
 
 - `argc <= 0` 或 `argv[0]` 为空：`ERR empty command`
-- 非法 null bulk string：`ERR Protocol error: null bulk string`
+- RESP array 带进来的非法 null bulk string：`ERR Protocol error: null bulk string`
 
-这里的 null bulk string 特判只给 `PING` / `ECHO` 的单 message 参数开口子，避免更深层的 DB 或命令逻辑看到意外 null。
+RESP 协议层现在会把 array 里的 `$-1` 忠实解成 `ExecutionRequest` 里的 null argv 元素；真正决定这些 null 是否合法的是 command-kernel。当前只有 `PING` / `ECHO` 的单 message 参数允许为 null，其余命令都会在 processor 入口被拒绝。
 
 ### 未知命令
 
