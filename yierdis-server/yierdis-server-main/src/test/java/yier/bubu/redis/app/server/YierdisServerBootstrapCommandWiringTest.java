@@ -223,9 +223,9 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertTrue(idleTimeoutCloserIndex > idleTimeoutIndex);
                 Assert.assertTrue(decoderIndex > backpressureIndex);
                 Assert.assertTrue(decoderIndex > idleTimeoutCloserIndex);
-                Assert.assertTrue(adapterIndex > decoderIndex);
-                Assert.assertTrue(protocolErrorIndex > adapterIndex);
-                Assert.assertTrue(commandHandlerIndex > protocolErrorIndex);
+                Assert.assertTrue(protocolErrorIndex > decoderIndex);
+                Assert.assertTrue(adapterIndex > protocolErrorIndex);
+                Assert.assertTrue(commandHandlerIndex > adapterIndex);
                 Assert.assertEquals(3, intField(decoder, "maxBulkBytes"));
                 Assert.assertEquals(2, intField(decoder, "maxArgs"));
                 Assert.assertEquals(4, intField(decoder, "maxInlineBytes"));
