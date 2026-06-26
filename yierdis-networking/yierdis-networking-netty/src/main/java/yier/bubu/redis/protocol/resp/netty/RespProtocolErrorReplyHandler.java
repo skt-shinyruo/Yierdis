@@ -8,31 +8,67 @@ import io.netty.util.ReferenceCountUtil;
 import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
+import yier.bubu.redis.execution.api.Session;
 
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
 
 public final class RespProtocolErrorReplyHandler extends ChannelInboundHandlerAdapter {
     private final RedisReplyWriterFactory replyWriterFactory;
+    private final Function<ChannelHandlerContext, Session> sessionProvider;
+    private final Predicate<ChannelHandlerContext> closingStateProvider;
     private final Consumer<ChannelHandlerContext> closeAfterReplyObserver;
-    private boolean closing;
+    private final Consumer<Object> droppedMessageCloser;
+    private volatile boolean closingStarted;
 
     public RespProtocolErrorReplyHandler(RedisReplyWriterFactory replyWriterFactory) {
-        this(replyWriterFactory, ctx -> {});
+        this(replyWriterFactory, ctx -> null, ctx -> false, ctx -> {});
     }
 
     public RespProtocolErrorReplyHandler(
             RedisReplyWriterFactory replyWriterFactory,
             Consumer<ChannelHandlerContext> closeAfterReplyObserver
     ) {
+        this(replyWriterFactory, ctx -> null, ctx -> false, closeAfterReplyObserver);
+    }
+
+    public RespProtocolErrorReplyHandler(
+            RedisReplyWriterFactory replyWriterFactory,
+            Function<ChannelHandlerContext, Session> sessionProvider,
+            Predicate<ChannelHandlerContext> closingStateProvider,
+            Consumer<ChannelHandlerContext> closeAfterReplyObserver
+    ) {
+        this(
+                replyWriterFactory,
+                sessionProvider,
+                closingStateProvider,
+                closeAfterReplyObserver,
+                RespProtocolErrorReplyHandler::closeIfPossible
+        );
+    }
+
+    RespProtocolErrorReplyHandler(
+            RedisReplyWriterFactory replyWriterFactory,
+            Function<ChannelHandlerContext, Session> sessionProvider,
+            Predicate<ChannelHandlerContext> closingStateProvider,
+            Consumer<ChannelHandlerContext> closeAfterReplyObserver,
+            Consumer<Object> droppedMessageCloser
+    ) {
         this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
+        this.sessionProvider = sessionProvider == null ? ctx -> null : sessionProvider;
+        this.closingStateProvider = closingStateProvider == null ? ctx -> false : closingStateProvider;
         this.closeAfterReplyObserver = closeAfterReplyObserver == null ? ctx -> {} : closeAfterReplyObserver;
+        this.droppedMessageCloser = droppedMessageCloser == null
+                ? RespProtocolErrorReplyHandler::closeIfPossible
+                : droppedMessageCloser;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (closing) {
-            closeIfPossible(msg);
+        if (closingStarted || closingStateProvider.test(ctx)) {
+            droppedMessageCloser.accept(msg);
             return;
         }
         if (!(msg instanceof RespProtocolError error)) {
@@ -40,13 +76,16 @@ public final class RespProtocolErrorReplyHandler extends ChannelInboundHandlerAd
             return;
         }
         if (error.closeAfterReply()) {
-            closing = true;
+            closingStarted = true;
             safeDisableAutoRead(ctx);
             closeAfterReplyObserver.accept(ctx);
         }
         ByteBuf out = ctx.alloc().buffer();
         try {
-            RedisReplyWriter writer = replyWriterFactory.newWriter(new NettyByteBufSink(out));
+            Session session = sessionProvider.apply(ctx);
+            RedisReplyWriter writer = session == null
+                    ? replyWriterFactory.newWriter(new NettyByteBufSink(out))
+                    : replyWriterFactory.newWriter(session, new NettyByteBufSink(out));
             writer.protocolError(error.message());
             if (error.closeAfterReply()) {
                 ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
