@@ -45,10 +45,12 @@ public class RespExecutionAdapterTest {
     }
 
     @Test
-    public void rejectsNullArgvElement() {
-        Assert.assertThrows(IllegalArgumentException.class, () ->
-                RespCommandRequest.copyOf(java.util.Arrays.asList(bytes("GET"), null))
-        );
+    public void copyOfPreservesNullArgvElement() {
+        RespCommandRequest request = RespCommandRequest.copyOf(java.util.Arrays.asList(bytes("ECHO"), null));
+
+        Assert.assertArrayEquals(bytes("ECHO"), request.readOnlyArg(0));
+        Assert.assertNull(request.readOnlyArg(1));
+        Assert.assertEquals(4, request.retainedBytes());
     }
 
     @Test
@@ -79,10 +81,17 @@ public class RespExecutionAdapterTest {
     }
 
     @Test
-    public void wrapReadOnlyRejectsNullArgvElement() {
-        Assert.assertThrows(IllegalArgumentException.class, () ->
-                RespCommandRequest.wrapReadOnly(new byte[][]{bytes("GET"), null}, 3)
+    public void wrapReadOnlyPreservesNullArgvElement() {
+        RespCommandRequest request = RespCommandRequest.wrapReadOnly(
+                new byte[][]{bytes("ECHO"), null},
+                4
         );
+
+        ExecutionRequest out = RespExecutionAdapter.DEFAULT.toExecutionRequest(request);
+        Assert.assertArrayEquals(bytes("ECHO"), out.readOnlyByteArray(0));
+        Assert.assertTrue(out.isNull(1));
+        Assert.assertNull(out.readOnlyByteArray(1));
+        Assert.assertEquals(4, out.retainedBytes());
     }
 
     @Test

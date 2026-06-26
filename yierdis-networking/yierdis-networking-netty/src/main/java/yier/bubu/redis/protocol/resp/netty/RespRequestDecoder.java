@@ -105,10 +105,14 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
             }
 
             Long lenValue = parseInteger(in, bulkLineStart + 1, bulkLf - 1);
-            if (lenValue == null || lenValue < 0 || lenValue > RespProtocolLimits.MAX_BULK_BYTES) {
+            if (lenValue == null || lenValue < -1 || lenValue > RespProtocolLimits.MAX_BULK_BYTES) {
                 emitProtocolError(out, "ERR Protocol error: invalid bulk length", true);
                 state = State.CLOSING;
                 return ParseResult.ERROR;
+            }
+            if (lenValue == -1L) {
+                argv[i] = null;
+                continue;
             }
             int len = lenValue.intValue();
             if (maxBulkBytes > 0 && len > maxBulkBytes) {
