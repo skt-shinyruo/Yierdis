@@ -103,6 +103,14 @@ public class ExecutionRequestContractTest {
         Assert.assertTrue(request.isNull(2));
     }
 
+    @Test
+    public void byteArrayExecutionRequestRetainedBytesHelperSaturatesOnOverflow() {
+        Assert.assertEquals(Integer.MAX_VALUE, ByteArrayExecutionRequest.saturatedRetainedBytes(Integer.MAX_VALUE - 1, 2));
+        Assert.assertEquals(Integer.MAX_VALUE, ByteArrayExecutionRequest.saturatedRetainedBytes(Integer.MAX_VALUE, 1));
+        Assert.assertEquals(5, ByteArrayExecutionRequest.saturatedRetainedBytes(3, 2));
+        Assert.assertEquals(3, ByteArrayExecutionRequest.saturatedRetainedBytes(-4, 3));
+    }
+
     private static byte[] ascii(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
     }
