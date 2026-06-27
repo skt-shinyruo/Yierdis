@@ -25,9 +25,8 @@ public class YierdisFastCommandProcessorRegistrationTest {
                 (request, ctx) -> ctx.out().simpleString("TRACE-OK")
         );
 
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
-                extraModule
-        );
+        CommandRegistry registry = CommandRegistries.from(extraModule);
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
 
         Assert.assertEquals("ERR unknown command 'PING'", executeError(processor, "PING"));
         Assert.assertEquals("TRACE-OK", executeSimpleString(processor, "TRACE"));
@@ -62,7 +61,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
 
     @Test
     public void typedCommandSpecCanBeRegisteredAndExecuted() {
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+        CommandRegistry registry = CommandRegistries.from(
                 registration -> registration.register(
                         "TYPED",
                         CommandSpec.of(
@@ -72,6 +71,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
                         )
                 )
         );
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
 
         Assert.assertEquals("value", executeBulkString(processor, "TYPED", "value"));
     }
@@ -79,7 +79,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
     @Test
     public void processorReturnsParseErrorBeforeTypedHandlerRuns() {
         final boolean[] handlerCalled = {false};
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+        CommandRegistry registry = CommandRegistries.from(
                 registration -> registration.register(
                         "STRICT",
                         CommandSpec.of(
@@ -92,6 +92,7 @@ public class YierdisFastCommandProcessorRegistrationTest {
                         )
                 )
         );
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
 
         TestReplyWriter out = new TestReplyWriter();
         processor.execute(ByteArrayExecutionRequest.fromUtf8("STRICT", List.of()), TestCommandContexts.context(out));

@@ -14,8 +14,8 @@ import java.util.List;
 
 public class YierdisFastCommandProcessorModuleTest {
     @Test
-    public void kernelProcessorDoesNotRegisterDefaultDataCommands() {
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor();
+    public void emptyRegistryDoesNotRegisterDefaultDataCommands() {
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(new CommandRegistry());
 
         assertUnknownCommand(processor, "PING");
         assertUnknownCommand(processor, "GET");
@@ -23,8 +23,8 @@ public class YierdisFastCommandProcessorModuleTest {
     }
 
     @Test
-    public void modulesCanRegisterAdditionalCommands() {
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+    public void explicitRegistryCanRegisterAdditionalCommands() {
+        CommandRegistry registry = CommandRegistries.from(
                 registrar -> registrar.register(
                         "LOCAL",
                         CommandDescriptor.of(1, 0, 0, 0),
@@ -32,6 +32,7 @@ public class YierdisFastCommandProcessorModuleTest {
                         (request, ctx) -> ctx.out().simpleString("LOCAL")
                 )
         );
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
         ExecutionRequest request = ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of());
 
         CapturingReplyWriter out = new CapturingReplyWriter();
@@ -43,7 +44,7 @@ public class YierdisFastCommandProcessorModuleTest {
 
     @Test
     public void modulesCanRegisterTypedCommandSpecsDirectly() {
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+        CommandRegistry registry = CommandRegistries.from(
                 registrar -> registrar.register(
                         "LOCAL",
                         CommandSpec.of(
@@ -53,6 +54,7 @@ public class YierdisFastCommandProcessorModuleTest {
                         )
                 )
         );
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
 
         CapturingReplyWriter out = new CapturingReplyWriter();
         processor.execute(ByteArrayExecutionRequest.fromUtf8("LOCAL", List.of()), TestCommandContexts.context(out));
