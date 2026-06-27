@@ -68,13 +68,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar STATS
 
 ## protocol limits
 
-协议上限由三组参数控制：
-
-- `--protocolMaxBulkBytes`
-- `--protocolMaxArgs`
-- `--protocolMaxLineBytes`
-
-`YierdisServerChannelInitializer` 会把它们直接传给 `RespRequestDecoder`。含义分别是 RESP bulk string 最大字节数、单条命令最大参数个数、inline command / header 行最大字节数。它们是入口防护参数：暴露在不可信网络里时，优先收紧这里，再考虑更深层的内存调参。
+`--protocolMaxBulkBytes`、`--protocolMaxArgs`、`--protocolMaxLineBytes` 和 `--protocolMaxCommandBytes` 会直接传给 `RespRequestDecoder`。它们分别约束 bulk body、参数个数、header/inline 行长度，以及单条命令累计字节数。暴露在不可信网络里时，优先收紧这四个入口上限，再考虑更深层的内存调参。
 
 解析失败会走 RESP protocol error 路径：`RespRequestDecoder` 只负责 RESP 解析和限制，出错时产出 `RespProtocolError`；`RespProtocolErrorReplyHandler` 统一回协议错误并关闭连接，避免请求和回包错位。这个路径不会进入 `RespCommandAdapter` 或 `YierdisFastCommandHandler` 的命令提交主链。
 
