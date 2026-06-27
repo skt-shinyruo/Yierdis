@@ -163,15 +163,15 @@ public final class RespRequestDecoder extends ByteToMessageDecoder {
                 pendingBulkLength = len;
             }
 
-            if (in.readableBytes() < pendingBulkLength + 2L) {
-                return ParseResult.NEED_MORE;
-            }
-
             if (maxCommandBytes > 0 && pendingRetainedBytes > maxCommandBytes - pendingBulkLength) {
                 emitProtocolError(out, "ERR Protocol error: command is too large", true);
                 state = State.CLOSING;
                 resetPendingArray();
                 return ParseResult.ERROR;
+            }
+
+            if (in.readableBytes() < pendingBulkLength + 2L) {
+                return ParseResult.NEED_MORE;
             }
 
             byte[] arg = new byte[pendingBulkLength];
