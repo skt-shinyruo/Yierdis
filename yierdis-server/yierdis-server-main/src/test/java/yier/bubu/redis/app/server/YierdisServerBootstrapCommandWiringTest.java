@@ -6,9 +6,19 @@ import io.netty.util.concurrent.ImmediateEventExecutor;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
+import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
+import yier.bubu.redis.execution.api.ClientMetadataSession;
+import yier.bubu.redis.execution.api.ConnectionStatsSession;
+import yier.bubu.redis.execution.api.ConnectionStatsView;
+import yier.bubu.redis.execution.api.DbIndexSession;
+import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
+import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.Session;
+import yier.bubu.redis.execution.api.TransactionSession;
 import yier.bubu.redis.execution.api.TransactionState;
+import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
 import yier.bubu.redis.execution.engine.YierdisEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
@@ -16,6 +26,9 @@ import yier.bubu.redis.execution.executor.SchedulingPolicy;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
 import yier.bubu.redis.protocol.resp.netty.RespCommandAdapter;
 import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
+import yier.bubu.redis.command.api.SlowCommandGovernor;
+import yier.bubu.redis.command.kernel.YierdisCommandProcessorOptions;
+import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -92,6 +105,42 @@ public class YierdisServerBootstrapCommandWiringTest {
                 Assert.assertTrue(keyspace.contains("db0:keys=1,expires=1\r\n"));
                 Assert.assertTrue(keyspace.contains("db1:keys=1,expires=0\r\n"));
             }
+        }
+    }
+
+    @Test
+    public void serverCommandCompositionBuildsProcessorWithServerAndDefaultCommands() throws Exception {
+        try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(
+                YierdisInstanceConfig.builder().databases(1).build()
+        )) {
+            NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(
+                    runtimeConfig(0, 0, 1024, 0, 4, 5)
+            );
+            YierdisFastCommandProcessor processor = ServerCommandComposition.createProcessor(
+                    YierdisCommandProcessorOptions.DEFAULT,
+                    TestDbRouters.forInstance(instance),
+                    infoProvider,
+                    SlowCommandGovernor.DEFAULT
+            );
+            YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
+            });
+            EngineSession session = new EngineSession();
+
+            CapturingReplyWriter pingReply = new CapturingReplyWriter();
+            engine.execute(
+                    session,
+                    ByteArrayExecutionRequest.fromUtf8("PING", List.of()),
+                    pingReply
+            );
+            Assert.assertEquals("PONG", pingReply.simpleStringValue);
+
+            CapturingReplyWriter helloReply = new CapturingReplyWriter();
+            engine.execute(
+                    session,
+                    ByteArrayExecutionRequest.fromUtf8("HELLO", List.of()),
+                    helloReply
+            );
+            Assert.assertTrue(helloReply.mapHeaderCount != null && helloReply.mapHeaderCount > 0);
         }
     }
 
@@ -432,6 +481,258 @@ public class YierdisServerBootstrapCommandWiringTest {
     }
 
     private record RespError(String message) {
+    }
+
+    private static final class CapturingReplyWriter implements RedisReplyWriter {
+        private String simpleStringValue;
+        private Integer mapHeaderCount;
+
+        @Override
+        public void requestCloseAfterReply() {
+        }
+
+        @Override
+        public boolean closeAfterReplyRequested() {
+            return false;
+        }
+
+        @Override
+        public void simpleString(String value) {
+            this.simpleStringValue = value;
+        }
+
+        @Override
+        public void mapHeader(int count) {
+            this.mapHeaderCount = count;
+        }
+
+        @Override
+        public void error(String message) {
+            throw new AssertionError(message);
+        }
+
+        @Override
+        public void integer(long value) {
+        }
+
+        @Override
+        public void booleanValue(boolean value) {
+        }
+
+        @Override
+        public void doubleValue(double value) {
+        }
+
+        @Override
+        public void bigNumberAscii(String value) {
+        }
+
+        @Override
+        public void verbatimString(String format, byte[] data) {
+        }
+
+        @Override
+        public void blobError(String message) {
+            throw new AssertionError(message);
+        }
+
+        @Override
+        public void nullValue() {
+        }
+
+        @Override
+        public void nullArray() {
+        }
+
+        @Override
+        public void arrayHeader(int count) {
+        }
+
+        @Override
+        public void bulkStringArray(List<byte[]> values) {
+        }
+
+        @Override
+        public void emptyArray() {
+        }
+
+        @Override
+        public void setHeader(int count) {
+        }
+
+        @Override
+        public void pushHeader(int count) {
+        }
+
+        @Override
+        public void attributeHeader(int pairs) {
+        }
+
+        @Override
+        public void bulkString(byte[] data) {
+        }
+
+        @Override
+        public void bulkString(byte[] data, int off, int len) {
+        }
+
+        @Override
+        public void bulkString(BytesSlice slice) {
+        }
+
+        @Override
+        public void bulkStringLongAscii(long value) {
+        }
+    }
+
+    private static final class EngineSession implements DbIndexSession,
+            ClientMetadataSession,
+            TransactionSession,
+            ConnectionStatsSession,
+            ProtocolNegotiationSession {
+        private final TransactionState tx = new TransactionState() {
+            @Override
+            public boolean active() {
+                return false;
+            }
+
+            @Override
+            public void begin() {
+            }
+
+            @Override
+            public void discard() {
+            }
+
+            @Override
+            public void enqueue(yier.bubu.redis.execution.api.ExecutionRequest request) {
+            }
+
+            @Override
+            public int size() {
+                return 0;
+            }
+
+            @Override
+            public List<yier.bubu.redis.execution.api.ExecutionRequest> drain() {
+                return List.of();
+            }
+        };
+
+        private int dbIndex;
+        private String clientName;
+        private boolean authenticated;
+        private int respVersion = 2;
+
+        @Override
+        public int dbIndex() {
+            return dbIndex;
+        }
+
+        @Override
+        public void setDbIndex(int dbIndex) {
+            this.dbIndex = dbIndex;
+        }
+
+        @Override
+        public long clientId() {
+            return 1L;
+        }
+
+        @Override
+        public String clientName() {
+            return clientName;
+        }
+
+        @Override
+        public void setClientName(String name) {
+            this.clientName = name;
+        }
+
+        @Override
+        public boolean authenticated() {
+            return authenticated;
+        }
+
+        @Override
+        public void setAuthenticated(boolean authenticated) {
+            this.authenticated = authenticated;
+        }
+
+        @Override
+        public int respVersion() {
+            return respVersion;
+        }
+
+        @Override
+        public void setRespVersion(int respVersion) {
+            this.respVersion = respVersion;
+        }
+
+        @Override
+        public TransactionState transaction() {
+            return tx;
+        }
+
+        @Override
+        public ConnectionStatsView connectionStats() {
+            return new ConnectionStatsView() {
+                @Override
+                public int pending() {
+                    return 0;
+                }
+
+                @Override
+                public long pendingBytes() {
+                    return 0;
+                }
+
+                @Override
+                public boolean inputDisabledByExecutor() {
+                    return false;
+                }
+
+                @Override
+                public boolean closing() {
+                    return false;
+                }
+
+                @Override
+                public long commandsEnqueued() {
+                    return 0;
+                }
+
+                @Override
+                public long commandsExecuted() {
+                    return 0;
+                }
+
+                @Override
+                public long commandsRejected() {
+                    return 0;
+                }
+
+                @Override
+                public long commandsSkippedClosing() {
+                    return 0;
+                }
+
+                @Override
+                public long closeAfterReply() {
+                    return 0;
+                }
+
+                @Override
+                public long backpressureEnter() {
+                    return 0;
+                }
+
+                @Override
+                public long backpressureExit() {
+                    return 0;
+                }
+            };
+        }
     }
 
     private static final class InitializerTestEnv implements AutoCloseable {

@@ -41,4 +41,11 @@ public final class CommandRegistries {
             module.register(registry);
         }
     }
+
+    public static void registerTransactionSupport(CommandRegistry registry, QueuedCommandReplayer replayer) {
+        if (registry == null) {
+            throw new NullPointerException("registry");
+        }
+        new TransactionCommands(replayer).register(registry);
+    }
 }
