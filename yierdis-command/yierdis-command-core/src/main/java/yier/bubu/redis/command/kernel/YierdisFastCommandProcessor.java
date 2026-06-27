@@ -2,7 +2,6 @@ package yier.bubu.redis.command.kernel;
 
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandSpec;
-import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
@@ -27,22 +26,11 @@ public final class YierdisFastCommandProcessor {
         this(CommandChangeEmitter.noop(), registry);
     }
 
-    YierdisFastCommandProcessor(CommandModule... modules) {
-        this(CommandRegistries.from(modules));
-    }
-
     public YierdisFastCommandProcessor(
             YierdisCommandProcessorOptions options,
             CommandRegistry registry
     ) {
         this(CommandChangeEmitter.fromOptions(options), registry);
-    }
-
-    YierdisFastCommandProcessor(
-            YierdisCommandProcessorOptions options,
-            CommandModule... modules
-    ) {
-        this(options, CommandRegistries.from(modules));
     }
 
     private YierdisFastCommandProcessor(CommandChangeEmitter changeEmitter, CommandRegistry registry) {

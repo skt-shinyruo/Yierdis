@@ -13,11 +13,12 @@ import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 
 public class YierdisFastCommandProcessorRegistrationTest {
     @Test
-    public void constructorRegistersKernelAndCallerSuppliedModulesOnly() {
+    public void explicitRegistryRegistersCallerSuppliedModulesOnly() {
         CommandModule extraModule = registration -> registration.register(
                 "TRACE",
                 CommandDescriptor.of(1, 0, 0, 0),
@@ -30,6 +31,23 @@ public class YierdisFastCommandProcessorRegistrationTest {
 
         Assert.assertEquals("ERR unknown command 'PING'", executeError(processor, "PING"));
         Assert.assertEquals("TRACE-OK", executeSimpleString(processor, "TRACE"));
+    }
+
+    @Test
+    public void processorDoesNotExposeModuleAssemblyConstructors() {
+        Assert.assertFalse(Arrays.stream(YierdisFastCommandProcessor.class.getDeclaredConstructors())
+                .anyMatch(constructor -> {
+                    Class<?>[] parameterTypes = constructor.getParameterTypes();
+                    return parameterTypes.length == 1
+                            && parameterTypes[0].equals(CommandModule[].class);
+                }));
+        Assert.assertFalse(Arrays.stream(YierdisFastCommandProcessor.class.getDeclaredConstructors())
+                .anyMatch(constructor -> {
+                    Class<?>[] parameterTypes = constructor.getParameterTypes();
+                    return parameterTypes.length == 2
+                            && parameterTypes[0].equals(YierdisCommandProcessorOptions.class)
+                            && parameterTypes[1].equals(CommandModule[].class);
+                }));
     }
 
     @Test
