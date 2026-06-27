@@ -119,7 +119,7 @@ RESP3 下，已有专属形态的语义会换成 RESP3 编码：
 
 ## 协议错误和断连
 
-malformed RESP 没有可靠的重同步点。Yierdis 的策略是：尽量返回 RESP error reply，然后关闭当前连接。实现上，`RespRequestDecoder` 产出 `RespProtocolError`，`RespProtocolErrorReplyHandler` 使用正常 `RedisReplyWriter` 写出错误，并标记 `close-after-reply`，flush 后断开连接。
+malformed RESP 没有可靠的重同步点。Yierdis 的策略是：尽量返回 RESP error reply，然后关闭当前连接。实现上，`RespRequestDecoder` 产出 `RespProtocolError`，`RespProtocolErrorReplyHandler` 读取当前连接 session 的 RESP 版本来选定回写上下文并标记 `close-after-reply`；实际 `writer.protocolError(...)` 仍沿用现有 `-ERR ...` 协议错误格式，flush 后断开连接。
 
 常见协议错误包括：
 
@@ -142,6 +142,7 @@ malformed RESP 没有可靠的重同步点。Yierdis 的策略是：尽量返回
 | bulk string body | 512 MiB | `--protocolMaxBulkBytes` |
 | 单条请求参数数量 | 1,048,576 | `--protocolMaxArgs` |
 | inline/header 行长度 | 1 MiB | `--protocolMaxLineBytes` |
+| 单条请求累计字节数 | 64 MiB | `--protocolMaxCommandBytes` |
 
 这组参数会在 server 启动时传给 `YierdisServerChannelInitializer`，再进入 `RespRequestDecoder`。超过上限属于协议错误，会返回 error 并关闭连接。
 

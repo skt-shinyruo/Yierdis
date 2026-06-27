@@ -68,7 +68,7 @@ flowchart LR
 
 关键节点是：
 
-- `RespRequestDecoder`：从 `ByteBuf` 解析 RESP array 或 inline command，产出 `RespCommandRequest` 或协议错误
+- `RespRequestDecoder`：从 `ByteBuf` 解析 RESP array 或 inline command，执行 bulk/argc/line/command-bytes 四类入口限制，只产出 `RespCommandRequest` 或 `RespProtocolError`
 - `RespProtocolErrorReplyHandler`：统一回写 RESP protocol error，并在需要时标记 closing / close-after-reply
 - `RespCommandAdapter`：把 `RespCommandRequest` 转成 `ExecutionRequest`
 - `YierdisFastCommandHandler`：接收 `ExecutionRequest`，只调用 `CommandExecutor.trySubmit(...)`

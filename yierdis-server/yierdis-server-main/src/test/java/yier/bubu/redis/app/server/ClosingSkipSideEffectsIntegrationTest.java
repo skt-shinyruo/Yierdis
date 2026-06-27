@@ -110,7 +110,7 @@ public class ClosingSkipSideEffectsIntegrationTest {
     }
 
     @Test
-    public void commandHandlerTreatsDecoderWrappedProtocolFailuresAsInternalErrors() throws Exception {
+    public void commandHandlerFallbackStillTreatsThrownDecoderFailuresAsInternalErrors() throws Exception {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
         EventExecutor eventExecutor = group.next();
 
