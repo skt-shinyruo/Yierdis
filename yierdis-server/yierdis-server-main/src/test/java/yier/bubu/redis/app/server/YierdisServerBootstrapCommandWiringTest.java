@@ -12,6 +12,7 @@ import yier.bubu.redis.execution.api.ClientMetadataSession;
 import yier.bubu.redis.execution.api.ConnectionStatsSession;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.DbIndexSession;
+import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.ProtocolNegotiationSession;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
@@ -113,6 +114,7 @@ public class YierdisServerBootstrapCommandWiringTest {
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(
                 YierdisInstanceConfig.builder().databases(1).build()
         )) {
+            instance.bindToCurrentThread();
             NettyServerInfoProvider infoProvider = new NettyServerInfoProvider(
                     runtimeConfig(0, 0, 1024, 0, 4, 5)
             );
@@ -141,6 +143,30 @@ public class YierdisServerBootstrapCommandWiringTest {
                     helloReply
             );
             Assert.assertTrue(helloReply.mapHeaderCount != null && helloReply.mapHeaderCount > 0);
+
+            CapturingReplyWriter multiReply = new CapturingReplyWriter();
+            engine.execute(
+                    session,
+                    ByteArrayExecutionRequest.fromUtf8("MULTI", List.of()),
+                    multiReply
+            );
+            Assert.assertEquals("OK", multiReply.simpleStringValue);
+
+            CapturingReplyWriter queuedSetReply = new CapturingReplyWriter();
+            engine.execute(
+                    session,
+                    ByteArrayExecutionRequest.fromUtf8("SET", List.of("tx-key", "tx-value")),
+                    queuedSetReply
+            );
+            Assert.assertEquals("QUEUED", queuedSetReply.simpleStringValue);
+
+            CapturingReplyWriter execReply = new CapturingReplyWriter();
+            engine.execute(
+                    session,
+                    ByteArrayExecutionRequest.fromUtf8("EXEC", List.of()),
+                    execReply
+            );
+            Assert.assertEquals(List.of("OK"), execReply.arrayValues);
         }
     }
 
@@ -486,6 +512,8 @@ public class YierdisServerBootstrapCommandWiringTest {
     private static final class CapturingReplyWriter implements RedisReplyWriter {
         private String simpleStringValue;
         private Integer mapHeaderCount;
+        private List<Object> arrayValues;
+        private List<Object> activeAggregate;
 
         @Override
         public void requestCloseAfterReply() {
@@ -499,6 +527,7 @@ public class YierdisServerBootstrapCommandWiringTest {
         @Override
         public void simpleString(String value) {
             this.simpleStringValue = value;
+            addValue(value);
         }
 
         @Override
@@ -513,6 +542,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
         @Override
         public void integer(long value) {
+            addValue(value);
         }
 
         @Override
@@ -538,6 +568,7 @@ public class YierdisServerBootstrapCommandWiringTest {
 
         @Override
         public void nullValue() {
+            addValue(null);
         }
 
         @Override
@@ -546,6 +577,9 @@ public class YierdisServerBootstrapCommandWiringTest {
 
         @Override
         public void arrayHeader(int count) {
+            List<Object> values = new ArrayList<>(count);
+            this.arrayValues = values;
+            this.activeAggregate = values;
         }
 
         @Override
@@ -570,18 +604,30 @@ public class YierdisServerBootstrapCommandWiringTest {
 
         @Override
         public void bulkString(byte[] data) {
+            addValue(new String(data, StandardCharsets.UTF_8));
         }
 
         @Override
         public void bulkString(byte[] data, int off, int len) {
+            addValue(new String(data, off, len, StandardCharsets.UTF_8));
         }
 
         @Override
         public void bulkString(BytesSlice slice) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            slice.writeTo(bytes::write);
+            addValue(bytes.toString(StandardCharsets.UTF_8));
         }
 
         @Override
         public void bulkStringLongAscii(long value) {
+            addValue(Long.toString(value));
+        }
+
+        private void addValue(Object value) {
+            if (activeAggregate != null) {
+                activeAggregate.add(value);
+            }
         }
     }
 
@@ -591,31 +637,47 @@ public class YierdisServerBootstrapCommandWiringTest {
             ConnectionStatsSession,
             ProtocolNegotiationSession {
         private final TransactionState tx = new TransactionState() {
+            private final List<ExecutionRequest> queue = new ArrayList<>();
+            private boolean active;
+
             @Override
-            public boolean active() {
-                return false;
+            public synchronized boolean active() {
+                return active;
             }
 
             @Override
-            public void begin() {
+            public synchronized void begin() {
+                discard();
+                active = true;
             }
 
             @Override
-            public void discard() {
+            public synchronized void discard() {
+                for (ExecutionRequest request : queue) {
+                    request.close();
+                }
+                queue.clear();
+                active = false;
             }
 
             @Override
-            public void enqueue(yier.bubu.redis.execution.api.ExecutionRequest request) {
+            public synchronized void enqueue(ExecutionRequest request) {
+                if (request != null) {
+                    queue.add(ByteArrayExecutionRequest.copyOf(request));
+                }
             }
 
             @Override
-            public int size() {
-                return 0;
+            public synchronized int size() {
+                return queue.size();
             }
 
             @Override
-            public List<yier.bubu.redis.execution.api.ExecutionRequest> drain() {
-                return List.of();
+            public synchronized List<ExecutionRequest> drain() {
+                List<ExecutionRequest> drained = new ArrayList<>(queue);
+                queue.clear();
+                active = false;
+                return drained;
             }
         };
 
