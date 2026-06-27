@@ -19,10 +19,10 @@ import java.util.Objects;
  * - MULTI 态下，普通命令由 {@link YierdisFastCommandProcessor} 负责入队并返回 QUEUED
  */
 final class TransactionCommands implements CommandModule {
-    private final YierdisFastCommandProcessor processor;
+    private final QueuedCommandReplayer replayer;
 
-    TransactionCommands(YierdisFastCommandProcessor processor) {
-        this.processor = Objects.requireNonNull(processor, "processor");
+    TransactionCommands(QueuedCommandReplayer replayer) {
+        this.replayer = Objects.requireNonNull(replayer, "replayer");
     }
 
     @Override
@@ -85,7 +85,7 @@ final class TransactionCommands implements CommandModule {
         for (ExecutionRequest queuedRequest : queued) {
             try (ExecutionRequest replay = queuedRequest) {
                 CommandContext replayCtx = new CommandContext(ctx.sessionCapabilities(), out);
-                processor.execute(replay, replayCtx);
+                replayer.replay(replay, replayCtx);
             }
         }
     }

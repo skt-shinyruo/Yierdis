@@ -100,6 +100,48 @@ public class YierdisFastCommandProcessorRegistrationTest {
         Assert.assertEquals("ERR wrong number of arguments for 'strict' command", out.error());
     }
 
+    @Test
+    public void commandRegistriesRegistersModulesInOrder() {
+        CommandRegistry registry = CommandRegistries.from(
+                registration -> registration.register(
+                        "FIRST",
+                        CommandDescriptor.of(1, 0, 0, 0),
+                        CommandParsers.exactRequest(1, "first"),
+                        (request, ctx) -> ctx.out().simpleString("FIRST")
+                ),
+                registration -> registration.register(
+                        "SECOND",
+                        CommandDescriptor.of(1, 0, 0, 0),
+                        CommandParsers.exactRequest(1, "second"),
+                        (request, ctx) -> ctx.out().simpleString("SECOND")
+                )
+        );
+
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
+        Assert.assertEquals("FIRST", executeSimpleString(processor, "FIRST"));
+        Assert.assertEquals("SECOND", executeSimpleString(processor, "SECOND"));
+    }
+
+    @Test
+    public void commandRegistriesRejectNullModules() {
+        try {
+            CommandRegistries.from(
+                    java.util.Arrays.asList(
+                            registration -> registration.register(
+                                    "OK",
+                                    CommandDescriptor.of(1, 0, 0, 0),
+                                    CommandParsers.exactRequest(1, "ok"),
+                                    (request, ctx) -> ctx.out().simpleString("OK")
+                            ),
+                            null
+                    )
+            );
+            Assert.fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            Assert.assertEquals("modules must not contain null", e.getMessage());
+        }
+    }
+
     private static String executeSimpleString(YierdisFastCommandProcessor processor, String... argv) {
         TestReplyWriter writer = new TestReplyWriter();
         processor.execute(new ArrayExecutionRequest(argv), TestCommandContexts.context(writer));

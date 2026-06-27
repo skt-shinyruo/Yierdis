@@ -181,6 +181,39 @@ public class YierdisFastCommandProcessorPolicyTest {
         Assert.assertEquals("0:MUTATE", events.get(0));
     }
 
+    @Test
+    public void transactionCommandsReplayQueuedRequestsThroughNarrowReplayer() {
+        ArrayList<String> replayed = new ArrayList<>();
+        CommandRegistry registry = CommandRegistries.from(
+                new TransactionCommands((request, ctx) -> {
+                    replayed.add(arg(request, 0));
+                    ctx.out().simpleString("REPLAY_" + arg(request, 0));
+                }),
+                registration -> registration.register(
+                        "WRITE",
+                        CommandDescriptor.of(1, 0, 0, 0),
+                        CommandParsers.exactRequest(1, "write"),
+                        (request, ctx) -> ctx.out().simpleString("WRITE")
+                )
+        );
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
+        TestSession session = new TestSession();
+        CapturingReplyWriter out = new CapturingReplyWriter();
+        CommandContext ctx = context(session, out);
+
+        processor.execute(request("MULTI"), ctx);
+        out.clear();
+        processor.execute(request("WRITE"), ctx);
+        Assert.assertEquals("QUEUED", out.simpleString());
+
+        out.clear();
+        processor.execute(request("EXEC"), ctx);
+
+        Assert.assertEquals(Integer.valueOf(1), out.arrayHeader());
+        Assert.assertEquals(List.of("WRITE"), replayed);
+        Assert.assertEquals("REPLAY_WRITE", out.simpleString());
+    }
+
     private static YierdisFastCommandProcessor mutationAwareProcessor(ArrayList<String> events) {
         return new YierdisFastCommandProcessor(
                 YierdisCommandProcessorOptions.builder()
