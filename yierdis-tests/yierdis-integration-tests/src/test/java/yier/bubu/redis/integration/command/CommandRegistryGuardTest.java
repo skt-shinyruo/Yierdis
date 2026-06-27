@@ -22,7 +22,7 @@ public class CommandRegistryGuardTest {
     @Test
     public void minimalCommandSetIsRegistered() {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 assertNotUnknown(client.execute(cmd("PING")));
 
