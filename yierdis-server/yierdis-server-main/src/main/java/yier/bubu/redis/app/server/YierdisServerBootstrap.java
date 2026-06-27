@@ -14,10 +14,10 @@ import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
-import yier.bubu.redis.command.defaults.DefaultCommandModules;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
 import yier.bubu.redis.command.kernel.YierdisCommandProcessorOptions;
+import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
@@ -154,11 +154,15 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         YierdisCommandProcessorOptions commandProcessorOptions = YierdisCommandProcessorOptions.builder()
                 .changeObserver(RuntimeChangeSinkCommandChangeObserver.fromSink(instance.config().changeSink()))
                 .build();
-        YierdisEngine commandEngine = new DefaultYierdisEngine(
+        YierdisFastCommandProcessor commandProcessor = ServerCommandComposition.createProcessor(
                 commandProcessorOptions,
-                maintenanceTick,
-                DefaultCommandModules.create(dbRouter(instance), infoProvider, slowGovernor),
-                new ServerCommandModule(infoProvider)
+                dbRouter(instance),
+                infoProvider,
+                slowGovernor
+        );
+        YierdisEngine commandEngine = new DefaultYierdisEngine(
+                commandProcessor,
+                maintenanceTick
         );
         engine = commandEngine;
         commandGroup = new DefaultEventExecutorGroup(1);
