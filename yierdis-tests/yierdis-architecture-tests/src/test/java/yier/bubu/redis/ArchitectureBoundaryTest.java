@@ -2620,10 +2620,15 @@ public class ArchitectureBoundaryTest {
                 repoRoot,
                 bootstrapFile,
                 offenders,
-                "import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;",
                 "new YierdisFastCommandProcessor(",
                 "processor::execute",
                 "maintenance.maintenanceTick()"
+        );
+        assertFileContainsAllText(
+                repoRoot,
+                bootstrapFile,
+                offenders,
+                "ServerCommandComposition.createProcessor("
         );
 
         if (!offenders.isEmpty()) {
@@ -2640,11 +2645,14 @@ public class ArchitectureBoundaryTest {
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
 
         List<String> offenders = new ArrayList<>();
-        int scanned = scanForForbiddenText(
+        Path serverMainRoot = repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java").normalize();
+        int scanned = scanForForbiddenTextExcluding(
                 repoRoot,
-                repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java").normalize(),
+                serverMainRoot,
                 offenders,
-                "import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;",
+                List.of(
+                        serverMainRoot.resolve("yier/bubu/redis/app/server/ServerCommandComposition.java").normalize()
+                ),
                 "new YierdisFastCommandProcessor(",
                 "new CommandContext(",
                 ".execute(request, new CommandContext"
@@ -2655,6 +2663,88 @@ public class ArchitectureBoundaryTest {
             Assert.fail(
                     "检测到 server 生产代码绕过 YierdisEngine 构造命令处理器或命令上下文：\n"
                     + String.join("\n", offenders)
+            );
+        }
+    }
+
+    @Test
+    public void commandAssemblyMustStayInNamedCompositionRoots() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
+
+        List<String> offenders = new ArrayList<>();
+        scanFileForForbiddenText(
+                repoRoot,
+                commandKernelMain(repoRoot).resolve("yier/bubu/redis/command/kernel/YierdisFastCommandProcessor.java"),
+                offenders,
+                "new TransactionCommands(this)",
+                "registerExtraModules(",
+                "CommandModule..."
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                engineRoot(repoRoot).resolve("src/main/java/yier/bubu/redis/execution/engine/DefaultYierdisEngine.java"),
+                offenders,
+                "new YierdisFastCommandProcessor("
+        );
+
+        assertFileContainsAllText(
+                repoRoot,
+                repoRoot.resolve(
+                        "yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TestCommandProcessors.java"
+                ).normalize(),
+                offenders,
+                "TestCommandComposition"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                repoRoot.resolve(
+                        "yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/integration/command/TestCommandProcessors.java"
+                ).normalize(),
+                offenders,
+                "new YierdisFastCommandProcessor(",
+                "new DefaultYierdisEngine("
+        );
+
+        assertFileContainsAllText(
+                repoRoot,
+                repoRoot.resolve(
+                        "yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/TestYierdisEngines.java"
+                ).normalize(),
+                offenders,
+                "ServerCommandComposition"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                repoRoot.resolve(
+                        "yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/TestYierdisEngines.java"
+                ).normalize(),
+                offenders,
+                "new YierdisFastCommandProcessor("
+        );
+
+        assertFileContainsAllText(
+                repoRoot,
+                repoRoot.resolve(
+                        "yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/runtime/embedded/TestCommandProcessors.java"
+                ).normalize(),
+                offenders,
+                "EmbeddedCommandComposition"
+        );
+        scanFileForForbiddenText(
+                repoRoot,
+                repoRoot.resolve(
+                        "yierdis-tests/yierdis-integration-tests/src/test/java/yier/bubu/redis/runtime/embedded/TestCommandProcessors.java"
+                ).normalize(),
+                offenders,
+                "new YierdisFastCommandProcessor(",
+                "new DefaultYierdisEngine("
+        );
+
+        if (!offenders.isEmpty()) {
+            Assert.fail(
+                    "检测到命令装配逃离命名 composition root（steady state 必须经由 *CommandComposition 入口）：\n"
+                            + String.join("\n", offenders)
             );
         }
     }
@@ -3025,6 +3115,17 @@ public class ArchitectureBoundaryTest {
                 if (line.contains(snippet)) {
                     offenders.add(relativePath(repoRoot, file) + ":" + (i + 1) + " -> " + snippet);
                 }
+            }
+        }
+    }
+
+    private static void assertFileContainsAllText(Path repoRoot, Path file, List<String> offenders, String... requiredSnippets)
+            throws IOException {
+        Assert.assertTrue("missing expected file: " + relativePath(repoRoot, file), Files.isRegularFile(file));
+        String source = Files.readString(file, StandardCharsets.UTF_8);
+        for (String snippet : requiredSnippets) {
+            if (!source.contains(snippet)) {
+                offenders.add(relativePath(repoRoot, file) + " -> missing required text: " + snippet);
             }
         }
     }

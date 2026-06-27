@@ -35,19 +35,12 @@ public class YierdisFastCommandProcessorRegistrationTest {
 
     @Test
     public void processorDoesNotExposeModuleAssemblyConstructors() {
-        Assert.assertFalse(Arrays.stream(YierdisFastCommandProcessor.class.getDeclaredConstructors())
-                .anyMatch(constructor -> {
-                    Class<?>[] parameterTypes = constructor.getParameterTypes();
-                    return parameterTypes.length == 1
-                            && parameterTypes[0].equals(CommandModule[].class);
-                }));
-        Assert.assertFalse(Arrays.stream(YierdisFastCommandProcessor.class.getDeclaredConstructors())
-                .anyMatch(constructor -> {
-                    Class<?>[] parameterTypes = constructor.getParameterTypes();
-                    return parameterTypes.length == 2
-                            && parameterTypes[0].equals(YierdisCommandProcessorOptions.class)
-                            && parameterTypes[1].equals(CommandModule[].class);
-                }));
+        for (var constructor : YierdisFastCommandProcessor.class.getConstructors()) {
+            for (Class<?> parameterType : constructor.getParameterTypes()) {
+                Assert.assertNotEquals(CommandModule[].class, parameterType);
+                Assert.assertNotEquals(Iterable.class, parameterType);
+            }
+        }
     }
 
     @Test
