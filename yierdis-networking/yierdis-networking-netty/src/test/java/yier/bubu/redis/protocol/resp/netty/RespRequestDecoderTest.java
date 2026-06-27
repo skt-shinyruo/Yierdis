@@ -81,12 +81,13 @@ public class RespRequestDecoderTest {
     public void fragmentedOversizedCommandFailsOnceAndDropsRemainingInput() {
         EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 4));
         try {
-            Assert.assertFalse(ch.writeInbound(Unpooled.copiedBuffer("*2\r\n$3\r\nGET\r\n$2\r\n", StandardCharsets.US_ASCII)));
-            Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("ab\r\n*1\r\n$4\r\nPING\r\n", StandardCharsets.US_ASCII)));
+            Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("*2\r\n$3\r\nGET\r\n$2\r\n", StandardCharsets.US_ASCII)));
 
             Object msg = ch.readInbound();
             Assert.assertTrue(msg instanceof RespProtocolError);
             Assert.assertEquals("ERR Protocol error: command is too large", ((RespProtocolError) msg).message());
+            Assert.assertNull(ch.readInbound());
+            Assert.assertFalse(ch.writeInbound(Unpooled.copiedBuffer("ab\r\n*1\r\n$4\r\nPING\r\n", StandardCharsets.US_ASCII)));
             Assert.assertNull(ch.readInbound());
         } finally {
             ch.finishAndReleaseAll();
