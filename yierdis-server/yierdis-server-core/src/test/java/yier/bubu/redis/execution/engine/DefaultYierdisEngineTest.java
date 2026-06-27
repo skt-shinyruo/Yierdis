@@ -5,7 +5,10 @@ import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.command.api.CommandDescriptor;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.command.kernel.CommandRegistries;
+import yier.bubu.redis.command.kernel.CommandRegistry;
 import yier.bubu.redis.command.kernel.YierdisCommandProcessorOptions;
+import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
 import yier.bubu.redis.execution.api.ClientMetadataSession;
 import yier.bubu.redis.execution.api.ConnectionStatsSession;
@@ -47,9 +50,7 @@ public class DefaultYierdisEngineTest {
 
     @Test
     public void executeDelegatesThroughOwnedCommandProcessor() {
-        YierdisEngine engine = new DefaultYierdisEngine(
-                () -> {
-                },
+        CommandRegistry registry = CommandRegistries.from(
                 registration -> registration.register(
                         "LOCAL",
                         CommandDescriptor.of(1, 0, 0, 0),
@@ -57,6 +58,9 @@ public class DefaultYierdisEngineTest {
                         (request, ctx) -> ctx.out().simpleString("LOCAL_OK")
                 )
         );
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
+        YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
+        });
 
         CapturingReplyWriter out = new CapturingReplyWriter();
         engine.execute(
@@ -71,9 +75,7 @@ public class DefaultYierdisEngineTest {
 
     @Test
     public void executeAcceptsNarrowCommandSessionCapabilities() {
-        YierdisEngine engine = new DefaultYierdisEngine(
-                () -> {
-                },
+        CommandRegistry registry = CommandRegistries.from(
                 registration -> registration.register(
                         "LOCAL",
                         CommandDescriptor.of(1, 0, 0, 0),
@@ -81,6 +83,9 @@ public class DefaultYierdisEngineTest {
                         (request, ctx) -> ctx.out().simpleString("DB_" + ctx.dbIndexSession().dbIndex())
                 )
         );
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
+        YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
+        });
 
         NarrowEngineSession session = new NarrowEngineSession();
         session.setDbIndex(7);
@@ -99,13 +104,7 @@ public class DefaultYierdisEngineTest {
     @Test
     public void configuredChangeObserverReceivesUserCommandChangesFromCommandPath() {
         ArrayList<String> events = new ArrayList<>();
-        YierdisEngine engine = new DefaultYierdisEngine(
-                YierdisCommandProcessorOptions.builder()
-                        .changeObserver((dbIndex, request) ->
-                                events.add(dbIndex + ":" + utf8(request.toByteArray(0))))
-                        .build(),
-                () -> {
-                },
+        CommandRegistry registry = CommandRegistries.from(
                 registration -> registration.register(
                         "MUTATE",
                         CommandDescriptor.of(1, 0, 0, 0),
@@ -116,6 +115,15 @@ public class DefaultYierdisEngineTest {
                         }
                 )
         );
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+                YierdisCommandProcessorOptions.builder()
+                        .changeObserver((dbIndex, request) ->
+                                events.add(dbIndex + ":" + utf8(request.toByteArray(0))))
+                        .build(),
+                registry
+        );
+        YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
+        });
 
         EngineSession session = new EngineSession(16, 1024);
         session.setDbIndex(3);
@@ -137,9 +145,7 @@ public class DefaultYierdisEngineTest {
 
     @Test
     public void executeRejectsSessionWithoutCommandCapabilitiesBeforeCommandModulesRun() {
-        YierdisEngine engine = new DefaultYierdisEngine(
-                () -> {
-                },
+        CommandRegistry registry = CommandRegistries.from(
                 registration -> registration.register(
                         "LOCAL",
                         CommandDescriptor.of(1, 0, 0, 0),
@@ -147,6 +153,9 @@ public class DefaultYierdisEngineTest {
                         (request, ctx) -> ctx.out().simpleString("LOCAL_OK")
                 )
         );
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
+        YierdisEngine engine = new DefaultYierdisEngine(processor, () -> {
+        });
 
         CapturingReplyWriter out = new CapturingReplyWriter();
         try {
@@ -169,6 +178,7 @@ public class DefaultYierdisEngineTest {
     public void maintenanceTickDelegatesToOwnerThreadRuntimeHook() {
         AtomicInteger ticks = new AtomicInteger();
         YierdisEngine engine = new DefaultYierdisEngine(
+                new YierdisFastCommandProcessor(new CommandRegistry()),
                 ticks::incrementAndGet
         );
 

@@ -1,15 +1,13 @@
 package yier.bubu.redis.command.kernel;
 
-import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandSpec;
+import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.TransactionState;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -25,33 +23,26 @@ public final class YierdisFastCommandProcessor {
     private final CommandChangeEmitter changeEmitter;
     private final CommandExceptionTranslator exceptionTranslator = new CommandExceptionTranslator();
 
-    public YierdisFastCommandProcessor(CommandModule... modules) {
-        this(CommandChangeEmitter.noop(), modules);
-    }
-
-    public YierdisFastCommandProcessor(YierdisCommandProcessorOptions options, CommandModule... modules) {
-        this(CommandChangeEmitter.fromOptions(options), modules);
-    }
-
-    public YierdisFastCommandProcessor(
-            YierdisCommandProcessorOptions options,
-            Iterable<? extends CommandModule> modules
-    ) {
-        this(CommandChangeEmitter.fromOptions(options), toArray(modules));
-    }
-
     public YierdisFastCommandProcessor(CommandRegistry registry) {
         this(CommandChangeEmitter.noop(), registry);
     }
 
-    private YierdisFastCommandProcessor(CommandChangeEmitter changeEmitter, CommandModule[] modules) {
-        this.changeEmitter = Objects.requireNonNull(changeEmitter, "changeEmitter");
-        CommandRegistry registry = new CommandRegistry();
-        YierdisFastCommandProcessor[] self = new YierdisFastCommandProcessor[1];
-        new TransactionCommands((request, ctx) -> self[0].execute(request, ctx)).register(registry);
-        registerExtraModules(registry, modules);
-        this.registry = registry;
-        self[0] = this;
+    YierdisFastCommandProcessor(CommandModule... modules) {
+        this(CommandRegistries.from(modules));
+    }
+
+    public YierdisFastCommandProcessor(
+            YierdisCommandProcessorOptions options,
+            CommandRegistry registry
+    ) {
+        this(CommandChangeEmitter.fromOptions(options), registry);
+    }
+
+    YierdisFastCommandProcessor(
+            YierdisCommandProcessorOptions options,
+            CommandModule... modules
+    ) {
+        this(options, CommandRegistries.from(modules));
     }
 
     private YierdisFastCommandProcessor(CommandChangeEmitter changeEmitter, CommandRegistry registry) {
@@ -121,26 +112,4 @@ public final class YierdisFastCommandProcessor {
         spec.executeParsed(parsed, ctx);
     }
 
-    private static void registerExtraModules(CommandRegistry registry, CommandModule... extraModules) {
-        if (extraModules == null || extraModules.length == 0) {
-            return;
-        }
-        for (CommandModule extraModule : extraModules) {
-            if (extraModule == null) {
-                throw new IllegalArgumentException("extraModules must not contain null");
-            }
-            extraModule.register(registry);
-        }
-    }
-
-    private static CommandModule[] toArray(Iterable<? extends CommandModule> modules) {
-        if (modules == null) {
-            return new CommandModule[0];
-        }
-        List<CommandModule> collected = new ArrayList<>();
-        for (CommandModule module : modules) {
-            collected.add(module);
-        }
-        return collected.toArray(new CommandModule[0]);
-    }
 }
