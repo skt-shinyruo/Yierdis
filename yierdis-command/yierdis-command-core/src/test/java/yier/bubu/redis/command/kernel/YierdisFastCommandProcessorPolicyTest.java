@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.command.api.CommandDescriptor;
+import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.CommandSpec;
 import yier.bubu.redis.execution.api.ByteArrayExecutionRequest;
@@ -21,7 +22,7 @@ import java.util.List;
 public class YierdisFastCommandProcessorPolicyTest {
     @Test
     public void unknownCommandInMultiMarksTransactionAbortedAndExecDiscardsQueue() {
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+        YierdisFastCommandProcessor processor = processorWithTransactions(
                 registration -> registration.register(
                         "LOCAL",
                         CommandDescriptor.of(1, 0, 0, 0),
@@ -51,7 +52,7 @@ public class YierdisFastCommandProcessorPolicyTest {
     @Test
     public void disallowedInMultiMarksTransactionAbortedWithoutCallingHandler() {
         boolean[] handlerCalled = {false};
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+        YierdisFastCommandProcessor processor = processorWithTransactions(
                 registration -> registration.register(
                         "FORBIDDEN",
                         CommandSpec.disallowedInMulti(
@@ -85,27 +86,10 @@ public class YierdisFastCommandProcessorPolicyTest {
     @Test
     public void changeObserverReceivesUserCommandEventOnlyAfterMutationOutcome() {
         ArrayList<String> events = new ArrayList<>();
-        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(
+        YierdisFastCommandProcessor processor = mutationAwareProcessor(
                 YierdisCommandProcessorOptions.builder()
                         .changeObserver((dbIndex, request) -> events.add(dbIndex + ":" + arg(request, 0)))
-                        .build(),
-                registration -> {
-                    registration.register(
-                            "READONLY",
-                            CommandDescriptor.of(1, 0, 0, 0),
-                            CommandParsers.exactRequest(1, "readonly"),
-                            (request, ctx) -> ctx.out().simpleString("READONLY")
-                    );
-                    registration.register(
-                            "MUTATE",
-                            CommandDescriptor.of(1, 0, 0, 0),
-                            CommandParsers.exactRequest(1, "mutate"),
-                            (request, ctx) -> {
-                                ctx.recordMutation(true, false);
-                                ctx.out().simpleString("MUTATE");
-                            }
-                    );
-                }
+                        .build()
         );
         TestSession session = new TestSession();
         session.setDbIndex(2);
@@ -130,7 +114,11 @@ public class YierdisFastCommandProcessorPolicyTest {
     @Test
     public void execReplayEmitsQueuedMutationWithoutEmittingExec() {
         ArrayList<String> events = new ArrayList<>();
-        YierdisFastCommandProcessor processor = mutationAwareProcessor(events);
+        YierdisFastCommandProcessor processor = mutationAwareProcessor(
+                YierdisCommandProcessorOptions.builder()
+                        .changeObserver((dbIndex, request) -> events.add(dbIndex + ":" + arg(request, 0)))
+                        .build()
+        );
         TestSession session = new TestSession();
         CapturingReplyWriter out = new CapturingReplyWriter();
         CommandContext ctx = context(session, out);
@@ -157,7 +145,11 @@ public class YierdisFastCommandProcessorPolicyTest {
     @Test
     public void execReplayDoesNotCarryMutationOutcomeIntoFollowingReadOnlyCommand() {
         ArrayList<String> events = new ArrayList<>();
-        YierdisFastCommandProcessor processor = mutationAwareProcessor(events);
+        YierdisFastCommandProcessor processor = mutationAwareProcessor(
+                YierdisCommandProcessorOptions.builder()
+                        .changeObserver((dbIndex, request) -> events.add(dbIndex + ":" + arg(request, 0)))
+                        .build()
+        );
         TestSession session = new TestSession();
         CapturingReplyWriter out = new CapturingReplyWriter();
         CommandContext ctx = context(session, out);
@@ -214,11 +206,12 @@ public class YierdisFastCommandProcessorPolicyTest {
         Assert.assertEquals("REPLAY_WRITE", out.simpleString());
     }
 
-    private static YierdisFastCommandProcessor mutationAwareProcessor(ArrayList<String> events) {
-        return new YierdisFastCommandProcessor(
-                YierdisCommandProcessorOptions.builder()
-                        .changeObserver((dbIndex, request) -> events.add(dbIndex + ":" + arg(request, 0)))
-                        .build(),
+    private static YierdisFastCommandProcessor mutationAwareProcessor(
+            YierdisCommandProcessorOptions options
+    ) {
+        YierdisFastCommandProcessor[] self = new YierdisFastCommandProcessor[1];
+        CommandRegistry registry = CommandRegistries.from(
+                new TransactionCommands((request, ctx) -> self[0].execute(request, ctx)),
                 registration -> {
                     registration.register(
                             "READONLY",
@@ -237,6 +230,20 @@ public class YierdisFastCommandProcessorPolicyTest {
                     );
                 }
         );
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(options, registry);
+        self[0] = processor;
+        return processor;
+    }
+
+    private static YierdisFastCommandProcessor processorWithTransactions(CommandModule module) {
+        YierdisFastCommandProcessor[] self = new YierdisFastCommandProcessor[1];
+        CommandRegistry registry = CommandRegistries.from(
+                new TransactionCommands((request, ctx) -> self[0].execute(request, ctx)),
+                module
+        );
+        YierdisFastCommandProcessor processor = new YierdisFastCommandProcessor(registry);
+        self[0] = processor;
+        return processor;
     }
 
     private static ExecutionRequest request(String command, String... args) {
