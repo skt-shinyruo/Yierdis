@@ -40,12 +40,23 @@ public final class YierdisFastCommandProcessor {
         this(CommandChangeEmitter.fromOptions(options), toArray(modules));
     }
 
+    public YierdisFastCommandProcessor(CommandRegistry registry) {
+        this(CommandChangeEmitter.noop(), registry);
+    }
+
     private YierdisFastCommandProcessor(CommandChangeEmitter changeEmitter, CommandModule[] modules) {
         this.changeEmitter = Objects.requireNonNull(changeEmitter, "changeEmitter");
         CommandRegistry registry = new CommandRegistry();
-        new TransactionCommands(this).register(registry);
+        YierdisFastCommandProcessor[] self = new YierdisFastCommandProcessor[1];
+        new TransactionCommands((request, ctx) -> self[0].execute(request, ctx)).register(registry);
         registerExtraModules(registry, modules);
         this.registry = registry;
+        self[0] = this;
+    }
+
+    private YierdisFastCommandProcessor(CommandChangeEmitter changeEmitter, CommandRegistry registry) {
+        this.changeEmitter = Objects.requireNonNull(changeEmitter, "changeEmitter");
+        this.registry = Objects.requireNonNull(registry, "registry");
     }
 
     public void execute(ExecutionRequest request, CommandContext ctx) {
@@ -132,5 +143,4 @@ public final class YierdisFastCommandProcessor {
         }
         return collected.toArray(new CommandModule[0]);
     }
-
 }
