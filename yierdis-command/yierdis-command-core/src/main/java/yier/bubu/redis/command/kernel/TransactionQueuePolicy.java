@@ -10,6 +10,15 @@ import yier.bubu.redis.execution.api.TransactionState;
 import java.util.Objects;
 
 final class TransactionQueuePolicy {
+    void markActiveTransactionAborted(CommandContext ctx) {
+        Objects.requireNonNull(ctx, "ctx");
+
+        TransactionState tx = ctx.transactionSession().transaction();
+        if (tx.active()) {
+            tx.markAborted();
+        }
+    }
+
     boolean queueIfNeeded(ExecutionRequest request, CommandContext ctx, CommandRegistry registry) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(ctx, "ctx");

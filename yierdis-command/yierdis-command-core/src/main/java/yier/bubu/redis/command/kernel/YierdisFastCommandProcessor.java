@@ -42,7 +42,6 @@ public final class YierdisFastCommandProcessor {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(ctx, "ctx");
         RedisReplyWriter out = ctx.out();
-        TransactionState tx = ctx.transactionSession().transaction();
         int argc = request.argc();
         if (argc <= 0) {
             out.error("ERR empty command");
@@ -66,9 +65,7 @@ public final class YierdisFastCommandProcessor {
             if (allowNullMessage && argc == 2 && i == 1) {
                 continue;
             }
-            if (tx.active()) {
-                tx.markAborted();
-            }
+            transactionQueuePolicy.markActiveTransactionAborted(ctx);
             out.error(NULL_BULK_STRING_ERR);
             return;
         }
