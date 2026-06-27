@@ -51,6 +51,16 @@ public class DefaultCommandRegistrationTest {
     }
 
     @Test
+    public void testCommandCompositionListsEveryDefaultCommandIncludingTransactions() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                assertInteger(DEFAULT_COMMANDS.size(), client.execute(cmd("COMMAND", "COUNT")));
+            }
+        });
+    }
+
+    @Test
     public void commandRegistryReportsMetadataForEveryDefaultCommand() {
         withClient(client -> {
             ReplyArray info = assertArraySize(
@@ -168,7 +178,7 @@ public class DefaultCommandRegistrationTest {
 
     private static void withClient(ClientCase test) {
         forEachDb(db -> {
-            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            YierdisFastCommandProcessor processor = TestCommandComposition.createProcessor(db);
             try (FastTestClient client = new FastTestClient(processor)) {
                 test.run(client);
             }
