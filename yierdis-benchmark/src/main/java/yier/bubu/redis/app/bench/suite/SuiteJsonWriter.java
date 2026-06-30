@@ -46,7 +46,14 @@ public final class SuiteJsonWriter {
             SuiteArtifact artifact = result.artifacts().get(i);
             out.objectStart();
             out.name("label").string(artifact.label()).comma();
-            out.name("jarPath").string(artifact.jarPath().toString()).comma();
+            out.name("kind").string(artifact.kind().name()).comma();
+            if (artifact.kind() == SuiteArtifact.Kind.YIERDIS_JAR) {
+                out.name("jarPath").string(artifact.jarPath().toString()).comma();
+            } else {
+                out.name("host").string(artifact.host()).comma();
+                out.name("port").number(artifact.port()).comma();
+                out.name("db").number(artifact.db()).comma();
+            }
             out.name("commitLabel").string(artifact.commitLabel());
             out.objectEnd();
             if (i + 1 < result.artifacts().size()) {
