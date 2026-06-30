@@ -292,7 +292,23 @@ public class SuiteRunnerOrchestrationTest {
                 .findFirst()
                 .orElseThrow();
 
-        ScenarioPassResult redis = RedisSuiteTestSupport.cleanPass("redis", scenario);
+        ScenarioPassResult redis = RedisSuiteTestSupport.cleanPass("redis", SuiteArtifact.Kind.EXTERNAL_REDIS, scenario);
+        ScenarioPassResult current = RedisSuiteTestSupport.cleanPass("current", scenario);
+
+        ScenarioComparison comparison = ScenarioComparison.compare(scenario, redis, current);
+
+        Assert.assertFalse(comparison.comparable());
+        Assert.assertTrue(comparison.nonComparableReason().contains("external Redis config required"));
+    }
+
+    @Test
+    public void maxmemoryScenarioAgainstCustomLabeledRedisIsStillNotComparable() {
+        ScenarioDefinition scenario = SuiteProfileFactory.expand(SuiteProfileName.RELEASE).stream()
+                .filter(item -> item.id().equals("release-maxmemory-eviction"))
+                .findFirst()
+                .orElseThrow();
+
+        ScenarioPassResult redis = RedisSuiteTestSupport.cleanPass("redis-oss", SuiteArtifact.Kind.EXTERNAL_REDIS, scenario);
         ScenarioPassResult current = RedisSuiteTestSupport.cleanPass("current", scenario);
 
         ScenarioComparison comparison = ScenarioComparison.compare(scenario, redis, current);

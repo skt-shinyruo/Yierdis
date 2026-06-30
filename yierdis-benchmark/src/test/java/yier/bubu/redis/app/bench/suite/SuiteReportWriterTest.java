@@ -126,7 +126,7 @@ public class SuiteReportWriterTest {
         Map<String, String> after = new LinkedHashMap<>();
         after.put("z-after", "z");
         after.put("a-after", "a");
-        ScenarioPassResult pass = ScenarioPassResult.completed("current", scenario, List.of(
+        ScenarioPassResult pass = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
                 IterationResult.repeat(0, List.of(
                         new SuiteMetric("qps", 850.0),
                         new SuiteMetric("p95_ms", 10.0),
@@ -218,7 +218,7 @@ public class SuiteReportWriterTest {
     }
 
     private static ScenarioPassResult pass(String artifact, ScenarioDefinition scenario, double qps, double p95, double p99, double errors) {
-        return ScenarioPassResult.completed(artifact, scenario, List.of(
+        return ScenarioPassResult.completed(artifact, SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
                 IterationResult.warmup(0, List.of(
                         new SuiteMetric("qps", qps / 2.0),
                         new SuiteMetric("p95_ms", p95 * 2.0),

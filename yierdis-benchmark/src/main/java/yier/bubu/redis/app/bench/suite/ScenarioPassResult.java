@@ -9,6 +9,7 @@ import java.util.Objects;
 
 public record ScenarioPassResult(
         String artifactLabel,
+        SuiteArtifact.Kind artifactKind,
         ScenarioDefinition scenario,
         boolean failed,
         String failureMessage,
@@ -19,6 +20,7 @@ public record ScenarioPassResult(
 ) {
     public ScenarioPassResult {
         Objects.requireNonNull(artifactLabel, "artifactLabel");
+        Objects.requireNonNull(artifactKind, "artifactKind");
         Objects.requireNonNull(scenario, "scenario");
         failureMessage = failureMessage == null ? "" : failureMessage;
         iterations = iterations == null ? List.of() : List.copyOf(iterations);
@@ -33,16 +35,18 @@ public record ScenarioPassResult(
 
     public static ScenarioPassResult completed(
             String artifactLabel,
+            SuiteArtifact.Kind artifactKind,
             ScenarioDefinition scenario,
             List<IterationResult> iterations,
             ObservationSnapshot before,
             ObservationSnapshot after
     ) {
-        return new ScenarioPassResult(artifactLabel, scenario, false, "", iterations, before, after, null);
+        return new ScenarioPassResult(artifactLabel, artifactKind, scenario, false, "", iterations, before, after, null);
     }
 
-    public static ScenarioPassResult failed(String artifactLabel, ScenarioDefinition scenario, String failureMessage) {
-        return new ScenarioPassResult(artifactLabel, scenario, true, failureMessage, List.of(),
+    public static ScenarioPassResult failed(String artifactLabel, SuiteArtifact.Kind artifactKind,
+                                            ScenarioDefinition scenario, String failureMessage) {
+        return new ScenarioPassResult(artifactLabel, artifactKind, scenario, true, failureMessage, List.of(),
                 ObservationSnapshot.empty(), ObservationSnapshot.empty(), Map.of());
     }
 

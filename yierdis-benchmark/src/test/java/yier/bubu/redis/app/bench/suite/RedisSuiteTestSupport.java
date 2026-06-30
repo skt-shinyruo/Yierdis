@@ -30,6 +30,10 @@ public final class RedisSuiteTestSupport {
     }
 
     public static ScenarioPassResult cleanPass(String artifactLabel, ScenarioDefinition scenario) {
+        return cleanPass(artifactLabel, SuiteArtifact.Kind.YIERDIS_JAR, scenario);
+    }
+
+    public static ScenarioPassResult cleanPass(String artifactLabel, SuiteArtifact.Kind artifactKind, ScenarioDefinition scenario) {
         List<SuiteMetric> metrics = new ArrayList<>();
         metrics.add(new SuiteMetric("qps", 1000.0));
         metrics.add(new SuiteMetric("errors", 0.0));
@@ -39,6 +43,7 @@ public final class RedisSuiteTestSupport {
         }
         return new ScenarioPassResult(
                 artifactLabel,
+                artifactKind,
                 scenario,
                 false,
                 "",

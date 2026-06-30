@@ -78,9 +78,9 @@ public final class SuiteRunner {
                 iterations.add(requireIteration(harness.runIteration(server, scenario, i, IterationResult.Kind.REPEAT, config)));
             }
             ObservationSnapshot after = requireObservation(captureObservation(artifact, port));
-            pass = ScenarioPassResult.completed(artifact.label(), scenario, iterations, before, after);
+            pass = ScenarioPassResult.completed(artifact.label(), artifact.kind(), scenario, iterations, before, after);
         } catch (Exception e) {
-            pass = failedPass(artifact.label(), scenario, e, before);
+            pass = failedPass(artifact.label(), artifact.kind(), scenario, e, before);
         }
         if (server != null) {
             pass = stopServer(server, pass);
@@ -96,7 +96,7 @@ public final class SuiteRunner {
             String message = pass.failed()
                     ? pass.failureMessage() + "; stop failed: " + conciseFailureMessage(e)
                     : "stop failed: " + conciseFailureMessage(e);
-            return new ScenarioPassResult(pass.artifactLabel(), pass.scenario(), true, message,
+            return new ScenarioPassResult(pass.artifactLabel(), pass.artifactKind(), pass.scenario(), true, message,
                     pass.iterations(), pass.before(), pass.after(), null);
         }
     }
@@ -109,12 +109,13 @@ public final class SuiteRunner {
         return Objects.requireNonNull(iteration, "iteration");
     }
 
-    private static ScenarioPassResult failedPass(String artifactLabel, ScenarioDefinition scenario, Throwable failure, ObservationSnapshot before) {
+    private static ScenarioPassResult failedPass(String artifactLabel, SuiteArtifact.Kind artifactKind,
+                                                 ScenarioDefinition scenario, Throwable failure, ObservationSnapshot before) {
         String message = conciseFailureMessage(failure);
         if (before.values().isEmpty()) {
-            return ScenarioPassResult.failed(artifactLabel, scenario, message);
+            return ScenarioPassResult.failed(artifactLabel, artifactKind, scenario, message);
         }
-        return new ScenarioPassResult(artifactLabel, scenario, true, message, List.of(), before,
+        return new ScenarioPassResult(artifactLabel, artifactKind, scenario, true, message, List.of(), before,
                 ObservationSnapshot.empty(), null);
     }
 

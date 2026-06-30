@@ -31,7 +31,7 @@ public class SuiteMetricSummaryTest {
     public void passResultIsDirtyWhenFailedOrErrorsArePresent() {
         ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
                 10, 0, 100, 1, 1, 0, 1, true);
-        ScenarioPassResult clean = ScenarioPassResult.completed("current", scenario, List.of(
+        ScenarioPassResult clean = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
                 IterationResult.repeat(0, List.of(
                         new SuiteMetric("qps", 1000.0),
                         new SuiteMetric("errors", 0.0),
@@ -39,7 +39,7 @@ public class SuiteMetricSummaryTest {
                         new SuiteMetric("p99_ms", 2.0)
                 ))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
-        ScenarioPassResult dirty = ScenarioPassResult.completed("current", scenario, List.of(
+        ScenarioPassResult dirty = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
                 IterationResult.repeat(0, List.of(
                         new SuiteMetric("qps", 1000.0),
                         new SuiteMetric("errors", 2.0),
@@ -47,7 +47,7 @@ public class SuiteMetricSummaryTest {
                         new SuiteMetric("p99_ms", 2.0)
                 ))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
-        ScenarioPassResult failed = ScenarioPassResult.failed("current", scenario, "server did not become ready");
+        ScenarioPassResult failed = ScenarioPassResult.failed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, "server did not become ready");
 
         Assert.assertTrue(clean.clean());
         Assert.assertFalse(dirty.clean());
@@ -59,12 +59,12 @@ public class SuiteMetricSummaryTest {
         ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
                 10, 0, 100, 1, 1, 0, 1, true);
 
-        ScenarioPassResult empty = ScenarioPassResult.completed("current", scenario, List.of(),
+        ScenarioPassResult empty = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(),
                 ObservationSnapshot.empty(), ObservationSnapshot.empty());
-        ScenarioPassResult warmupOnly = ScenarioPassResult.completed("current", scenario, List.of(
+        ScenarioPassResult warmupOnly = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
                 IterationResult.warmup(0, List.of(new SuiteMetric("qps", 1000.0), new SuiteMetric("errors", 0.0)))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
-        ScenarioPassResult repeatWithoutMetrics = ScenarioPassResult.completed("current", scenario, List.of(
+        ScenarioPassResult repeatWithoutMetrics = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
                 IterationResult.repeat(0, List.of())
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
 
@@ -111,7 +111,7 @@ public class SuiteMetricSummaryTest {
     public void passResultCopiesAutoComputedSummaries() {
         ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
                 10, 0, 100, 1, 1, 0, 1, true);
-        ScenarioPassResult pass = ScenarioPassResult.completed("current", scenario, List.of(
+        ScenarioPassResult pass = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
                 IterationResult.repeat(0, List.of(new SuiteMetric("qps", 1000.0), new SuiteMetric("errors", 0.0)))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
 
@@ -148,10 +148,10 @@ public class SuiteMetricSummaryTest {
         ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
                 10, 0, 100, 1, 1, 0, 1, false);
 
-        ScenarioPassResult missingErrors = ScenarioPassResult.completed("current", scenario, List.of(
+        ScenarioPassResult missingErrors = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
                 IterationResult.repeat(0, List.of(new SuiteMetric("qps", 1000.0)))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
-        ScenarioPassResult missingQps = ScenarioPassResult.completed("current", scenario, List.of(
+        ScenarioPassResult missingQps = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
                 IterationResult.repeat(0, List.of(new SuiteMetric("errors", 0.0)))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
 
@@ -166,13 +166,13 @@ public class SuiteMetricSummaryTest {
         ScenarioDefinition noLatency = new ScenarioDefinition("release-ping-throughput", "PING", yier.bubu.redis.app.bench.BenchWorkloadKind.PING,
                 10, 0, 100, 1, 1, 0, 1, false);
 
-        ScenarioPassResult missingP95 = ScenarioPassResult.completed("current", latency, List.of(
+        ScenarioPassResult missingP95 = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, latency, List.of(
                 IterationResult.repeat(0, List.of(new SuiteMetric("qps", 1000.0), new SuiteMetric("errors", 0.0), new SuiteMetric("p99_ms", 2.0)))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
-        ScenarioPassResult missingP99 = ScenarioPassResult.completed("current", latency, List.of(
+        ScenarioPassResult missingP99 = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, latency, List.of(
                 IterationResult.repeat(0, List.of(new SuiteMetric("qps", 1000.0), new SuiteMetric("errors", 0.0), new SuiteMetric("p95_ms", 1.0)))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
-        ScenarioPassResult cleanNoLatency = ScenarioPassResult.completed("current", noLatency, List.of(
+        ScenarioPassResult cleanNoLatency = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, noLatency, List.of(
                 IterationResult.repeat(0, List.of(new SuiteMetric("qps", 1000.0), new SuiteMetric("errors", 0.0)))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
 
@@ -195,7 +195,7 @@ public class SuiteMetricSummaryTest {
                 "errors", new MetricSummary("errors", 1, 0.0, 0.0, 0.0, 0.0)
         );
 
-        Assert.assertThrows(IllegalArgumentException.class, () -> new ScenarioPassResult("current", scenario, false, "",
+        Assert.assertThrows(IllegalArgumentException.class, () -> new ScenarioPassResult("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, false, "",
                 List.of(), ObservationSnapshot.empty(), ObservationSnapshot.empty(), summaries));
     }
 
@@ -208,7 +208,7 @@ public class SuiteMetricSummaryTest {
                 "errors", new MetricSummary("errors", 1, 0.0, 0.0, 0.0, 0.0)
         );
 
-        Assert.assertThrows(IllegalArgumentException.class, () -> new ScenarioPassResult("current", scenario, false, "",
+        Assert.assertThrows(IllegalArgumentException.class, () -> new ScenarioPassResult("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, false, "",
                 List.of(), ObservationSnapshot.empty(), ObservationSnapshot.empty(), summaries));
     }
 
