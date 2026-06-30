@@ -269,6 +269,20 @@ public final class YierdisDb implements RuntimeDbEngine {
         runtimeState.attachMaxmemoryCoordinator(coordinator);
     }
 
+    @Override
+    public Object globalSharedOffHeapUsageIdentity() {
+        return runtimeState.hasNoMaxmemoryCoordinator() ? null : keyLifecycle.memoryRuntime();
+    }
+
+    @Override
+    public long globalSharedOffHeapUsedBytes() {
+        if (runtimeState.hasNoMaxmemoryCoordinator()) {
+            return 0L;
+        }
+        YierdisFfmMemoryRuntime runtime = keyLifecycle.memoryRuntime();
+        return runtime == null ? 0L : Math.max(0L, runtime.usedBytes());
+    }
+
     public void adjustUsedBytes(long deltaBytes) {
         runtimeState.adjustUsedBytes(deltaBytes);
     }
