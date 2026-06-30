@@ -233,6 +233,46 @@ GREEN result 2:
 - The new `MemoryOps.offHeapUsedBytes()` default implementation still falls back to `memoryStats()` for engines that do not override it. That preserves compatibility while leaving older implementations on the expensive path until they opt in.
 - I did not rerun the external Docker Redis smoke here; this fix is covered by focused runtime/db tests and the change is intentionally minimal.
 
+## Follow-Up: Cheap Allocator Hot Path Correction
+
+Date: 2026-06-30
+
+### Why This Follow-Up Was Needed
+
+- The first follow-up patch removed the `memoryStats()` call from the global shared off-heap path, but `YierdisDbMemoryReporter.safeNativeAllocatorLogicalBytes()` still reached `allocator.stats()`.
+- That meant the hottest maxmemory path could still pay the expensive allocator-stats cost that the Redis smoke had exposed.
+
+### Final Change
+
+- Added `NativeAllocator.logicalUsedBytes()` as a cheap seam in `yierdis-memory-api`.
+- Implemented the seam directly in `YierdisStableNativeAllocator` by returning the synchronized `logicalUsedBytes` field instead of building full allocator stats.
+- Switched `YierdisDbMemoryReporter.safeNativeAllocatorLogicalBytes()` to use `allocator.logicalUsedBytes()`.
+
+This keeps the global shared-runtime identity counting already added in the runtime layer, while also removing the expensive allocator-stats dependency from the DB-side native byte hot path.
+
+### Verification
+
+Command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+mvn -pl yierdis-server/yierdis-server-runtime,yierdis-db/yierdis-db-memory,yierdis-memory/yierdis-memory-ffm,yierdis-memory/yierdis-memory-api -am \
+  -Dtest=DbEngineFactoryInjectionTest#globalMaxmemoryUsesCheapSharedOffHeapUsagePath,YierdisDbMemoryReporterTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Result:
+
+- `BUILD SUCCESS`
+- `YierdisDbMemoryReporterTest`: `Tests run: 4, Failures: 0, Errors: 0, Skipped: 0`
+- `DbEngineFactoryInjectionTest`: `Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`
+
+### Files Changed In This Final Correction
+
+- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeAllocator.java`
+- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java`
+
 ## Follow-Up Refinement: Remove Allocator `stats()` From The Global Hot Path
 
 Date: 2026-06-30
