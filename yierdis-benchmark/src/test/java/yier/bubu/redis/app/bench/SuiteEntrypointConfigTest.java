@@ -104,6 +104,8 @@ public class SuiteEntrypointConfigTest {
         assertRejects("pipeline", () -> new BenchWorkloadRequest(BenchWorkloadKind.PING, "127.0.0.1", 6379, 1, 1, 0, 1, 0, false, true));
         assertRejects("keyspace", () -> new BenchWorkloadRequest(BenchWorkloadKind.PING, "127.0.0.1", 6379, 1, 1, 1, 0, 0, false, true));
         assertRejects("dataSize", () -> new BenchWorkloadRequest(BenchWorkloadKind.PING, "127.0.0.1", 6379, 1, 1, 1, 1, -1, false, true));
+        assertRejects("redisDb", () -> new BenchWorkloadRequest(BenchWorkloadKind.PING, "127.0.0.1", 6379, 1, 1, 1, 1, 0, false, true,
+                "bench-user", "bench-secret", -1));
     }
 
     @Test

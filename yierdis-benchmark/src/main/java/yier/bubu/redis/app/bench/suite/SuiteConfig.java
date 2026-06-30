@@ -106,12 +106,16 @@ public record SuiteConfig(
         if (args.includeRedis && args.baselineServerJar != null) {
             throw new IllegalArgumentException("suite does not support baselineServerJar with includeRedis");
         }
+        if (args.redisDb < 0) {
+            throw new IllegalArgumentException("redisDb must be >= 0");
+        }
 
         SuiteProfileName profile = SuiteProfileName.parse(args.suiteProfile);
         SuiteArtifact current = SuiteArtifact.yierdisJar("current", requireRegularFile(args.currentServerJar, "currentServerJar"), "");
         Optional<SuiteArtifact> baseline = args.baselineServerJar == null
                 ? Optional.empty()
                 : Optional.of(SuiteArtifact.yierdisJar("baseline", requireRegularFile(args.baselineServerJar, "baselineServerJar"), ""));
+        validateRedisLabel(args, baseline);
         List<SuiteArtifact> artifacts = new ArrayList<>();
         if (args.includeRedis) {
             artifacts.add(SuiteArtifact.externalRedis(
@@ -143,6 +147,16 @@ public record SuiteConfig(
                 serverArgs,
                 true
         );
+    }
+
+    private static void validateRedisLabel(YierdisBenchArgs args, Optional<SuiteArtifact> baseline) {
+        String label = Objects.requireNonNull(args.redisLabel, "redisLabel");
+        if ("current".equals(label) || "baseline".equals(label)) {
+            throw new IllegalArgumentException("redisLabel must not collide with current or baseline");
+        }
+        if (baseline.isPresent() && baseline.get().label().equals(label)) {
+            throw new IllegalArgumentException("redisLabel must not duplicate another artifact label");
+        }
     }
 
     public List<String> artifactLabels() {

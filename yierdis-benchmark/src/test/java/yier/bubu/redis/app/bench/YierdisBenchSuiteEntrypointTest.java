@@ -44,6 +44,14 @@ public class YierdisBenchSuiteEntrypointTest {
         Assert.assertFalse(captured.err(), captured.err().contains("suite requires currentServerJar"));
     }
 
+    @Test
+    public void nonSuiteModeRejectsExplicitRedisOptionsEvenWhenTheyMatchDefaults() throws Exception {
+        Captured captured = captureErr(() -> YierdisBench.main(new String[]{"--redisPort", "6379"}));
+
+        Assert.assertTrue(captured.err(), captured.err().contains("redis-specific options require --suite"));
+        Assert.assertTrue(captured.err(), captured.err().contains("--suite"));
+    }
+
     private static Captured captureErr(ThrowingRunnable runnable) throws Exception {
         PrintStream originalErr = System.err;
         ByteArrayOutputStream err = new ByteArrayOutputStream();

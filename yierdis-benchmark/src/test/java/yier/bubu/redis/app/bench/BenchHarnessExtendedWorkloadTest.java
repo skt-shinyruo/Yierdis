@@ -286,7 +286,7 @@ public class BenchHarnessExtendedWorkloadTest {
     public void redisArtifactStartServerFlushesDbAndDoesNotSpawnProcess() throws Exception {
         try (RedisSuiteTestSupport.RedisLikeObservationServer server = RedisSuiteTestSupport.RedisLikeObservationServer.start()) {
             Assert.assertTrue(server.awaitListening());
-            SuiteArtifact artifact = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "", "", 0);
+            SuiteArtifact artifact = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "bench-user", "bench-secret", 4);
             BenchHarness harness = new BenchHarness();
             ScenarioDefinition scenario = RedisSuiteTestSupport.scenario(
                     "release-set-get-128b-c32-p4", BenchWorkloadKind.SET_GET, 1, 1, true);
@@ -296,7 +296,92 @@ public class BenchHarnessExtendedWorkloadTest {
 
             Assert.assertNull(running.handle());
             Assert.assertEquals(artifact.port(), running.port());
-            Assert.assertTrue(server.awaitCommands(2).contains("FLUSHDB"));
+            Assert.assertEquals(List.of(
+                    "AUTH BENCH-USER BENCH-SECRET", "SELECT 4", "PING",
+                    "AUTH BENCH-USER BENCH-SECRET", "SELECT 4", "FLUSHDB"
+            ), server.awaitCommands(6));
+        }
+    }
+
+    @Test
+    public void captureObservationForExternalRedisAuthenticatesAndSelectsConfiguredDb() throws Exception {
+        try (RedisSuiteTestSupport.RedisLikeObservationServer server = RedisSuiteTestSupport.RedisLikeObservationServer.start()) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness();
+            SuiteArtifact artifact = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "bench-user", "bench-secret", 4);
+            ScenarioDefinition scenario = RedisSuiteTestSupport.scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
+            SuiteConfig config = RedisSuiteTestSupport.redisCurrentOnlyConfig(Path.of("target/redis-suite-test"), 16378, server.port());
+
+            harness.startServer(artifact, scenario, config, artifact.port(), Path.of("target/redis.log"));
+            harness.captureObservation("127.0.0.1", server.port());
+
+            Assert.assertEquals(List.of(
+                    "AUTH BENCH-USER BENCH-SECRET", "SELECT 4", "PING",
+                    "AUTH BENCH-USER BENCH-SECRET", "SELECT 4", "FLUSHDB",
+                    "AUTH BENCH-USER BENCH-SECRET", "SELECT 4", "INFO",
+                    "AUTH BENCH-USER BENCH-SECRET", "SELECT 4", "MEMORY STATS"
+            ), server.awaitCommands(12));
+        }
+    }
+
+    @Test
+    public void externalRedisWorkloadAuthenticatesAndSelectsConfiguredDbBeforeBenchmarkCommands() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("GET".equals(command)) {
+                return bulk("xxxx");
+            }
+            if ("SELECT 4".equals(command) || "AUTH bench-user bench-secret".equals(command)) {
+                return ok();
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.SET_GET,
+                    "127.0.0.1",
+                    server.port(),
+                    2,
+                    1,
+                    1,
+                    2,
+                    4,
+                    false,
+                    true,
+                    "bench-user",
+                    "bench-secret",
+                    4
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(2, result.ops());
+            Assert.assertEquals(0, result.errors());
+            Assert.assertEquals(List.of(
+                    "AUTH", "SELECT", "SET", "SET",
+                    "AUTH", "SELECT", "SET", "GET"
+            ), server.awaitCommands(8));
+        }
+    }
+
+    @Test
+    public void redisArtifactReadyCheckAuthenticatesAndSelectsBeforePing() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("PING".equals(command) && index == 2) {
+                return "+PONG\r\n".getBytes(StandardCharsets.US_ASCII);
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+
+            boolean ready = BenchHarness.waitReady(
+                    SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "bench-user", "bench-secret", 4),
+                    500,
+                    100
+            );
+
+            Assert.assertTrue(ready);
+            Assert.assertEquals(List.of("AUTH", "SELECT", "PING"), server.awaitCommands(3));
         }
     }
 

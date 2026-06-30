@@ -10,7 +10,11 @@ public record BenchWorkloadRequest(
         int keyspace,
         int dataSize,
         boolean latency,
-        boolean strictReplies
+        boolean strictReplies,
+        boolean externalRedis,
+        String redisUser,
+        String redisAuth,
+        int redisDb
 ) {
     public BenchWorkloadRequest {
         if (workload == null) {
@@ -37,5 +41,49 @@ public record BenchWorkloadRequest(
         if (dataSize < 0) {
             throw new IllegalArgumentException("dataSize must be >= 0");
         }
+        if (redisDb < 0) {
+            throw new IllegalArgumentException("redisDb must be >= 0");
+        }
+        if (!externalRedis && (!(redisUser == null || redisUser.isBlank())
+                || !(redisAuth == null || redisAuth.isBlank())
+                || redisDb != 0)) {
+            throw new IllegalArgumentException("redis auth/db options require externalRedis");
+        }
+        redisUser = redisUser == null ? "" : redisUser;
+        redisAuth = redisAuth == null ? "" : redisAuth;
+    }
+
+    public BenchWorkloadRequest(
+            BenchWorkloadKind workload,
+            String host,
+            int port,
+            int requests,
+            int clients,
+            int pipeline,
+            int keyspace,
+            int dataSize,
+            boolean latency,
+            boolean strictReplies
+    ) {
+        this(workload, host, port, requests, clients, pipeline, keyspace, dataSize, latency, strictReplies, false, "", "", 0);
+    }
+
+    public BenchWorkloadRequest(
+            BenchWorkloadKind workload,
+            String host,
+            int port,
+            int requests,
+            int clients,
+            int pipeline,
+            int keyspace,
+            int dataSize,
+            boolean latency,
+            boolean strictReplies,
+            String redisUser,
+            String redisAuth,
+            int redisDb
+    ) {
+        this(workload, host, port, requests, clients, pipeline, keyspace, dataSize, latency, strictReplies, true,
+                redisUser, redisAuth, redisDb);
     }
 }

@@ -2,7 +2,7 @@
 
 Date: 2026-07-01
 Worktree: `/home/feng/code/project/Yierdis/.worktrees/codex-redis-suite-comparison`
-Baseline HEAD: `07973922`
+Baseline HEAD: `6e1c02fc`
 
 ## Summary
 
@@ -16,6 +16,12 @@ Final outcome:
 - The override is only applied through explicit argv/override wiring in benchmark suite release scenarios
 - The old direct-constant-raise direction was revoked
 - Fresh Redis smoke completed and the 5 required release scenarios are now comparable instead of failing with `current is not clean`
+
+Post-review follow-up fixes completed after the smoke acceptance work:
+
+- external Redis `AUTH` / `SELECT` are now honored consistently in readiness checks, per-pass admin setup, observation capture, and benchmark workload connections
+- non-suite entrypoints now reject Redis-specific CLI options, including explicit uses that match the default values
+- suite validation now rejects negative `redisDb` values and Redis label collisions with `current` / `baseline`
 
 ## Adopted Fix
 
@@ -141,6 +147,20 @@ Result:
 - `BUILD SUCCESS`
 - `Tests run: 64, Failures: 0, Errors: 0, Skipped: 0`
 
+### Whole-Branch Follow-Up Verification
+
+Command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=SuiteConfigTest,SuiteEntrypointConfigTest,ObservationClientTest,BenchHarnessExtendedWorkloadTest,YierdisBenchSuiteEntrypointTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Result:
+
+- `BUILD SUCCESS`
+- `Tests run: 53, Failures: 0, Errors: 0, Skipped: 0`
+- this rerun had to execute unsandboxed because the benchmark test fixtures bind local `ServerSocket` ports
+
 ### Full Benchmark Module Tests
 
 Command:
@@ -173,6 +193,15 @@ Result:
 
 `redis-server` was not installed locally, so the smoke used the externally
 managed Redis endpoint already prepared for this task.
+
+Deviation from the task brief:
+
+- The briefed local command was `redis-server --save '' --appendonly no --port 6379`
+- That exact flow was not possible in this environment because `redis-server`
+  is not installed locally
+- The design and implementation both treat Redis as an externally managed
+  endpoint, so the acceptance smoke used a clean externally managed Redis
+  instance at `127.0.0.1:6380` instead
 
 Redis endpoint used for the final clean run:
 
@@ -209,6 +238,69 @@ caused `Address already in use` contamination.
 Discarded partial reruns:
 
 - `target/benchmark-reports/redis-comparison-smoke-clean-20260701-0104`
+
+## Follow-Up Fix: External Redis Auth/DB Suite Wiring
+
+Summary:
+
+- External Redis suite passes now authenticate and select the configured DB before readiness probes, `FLUSHDB`, observation capture, and benchmark traffic.
+- The same auth/select bootstrap now covers both extended `BenchHarness` workloads and core `YierdisBench` worker workloads when suite mode targets external Redis.
+- Redis suite options are rejected outside `--suite`, `redisDb` must be non-negative, and `redisLabel` collisions are rejected.
+
+Files changed for this follow-up:
+
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/BenchHarness.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/BenchWorkloadRequest.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBench.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBenchArgs.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/suite/ObservationClient.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/suite/SuiteConfig.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/BenchHarnessExtendedWorkloadTest.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/SuiteEntrypointConfigTest.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/YierdisBenchSuiteEntrypointTest.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/suite/ObservationClientTest.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/suite/SuiteConfigTest.java`
+- `docs/project-docs/client-and-bench-internals.md`
+
+RED evidence:
+
+Command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -Dtest=SuiteConfigTest,SuiteEntrypointConfigTest,BenchHarnessExtendedWorkloadTest,ObservationClientTest test
+```
+
+Result:
+
+- `BUILD FAILURE`
+- Initial RED point was compile-time failure because `BenchWorkloadRequest` could not yet carry Redis auth/db settings into workload connections.
+- After adding the failing tests, subsequent RED runs also showed missing auth/select ordering and suite-only validation gaps until the production wiring was added.
+
+GREEN evidence:
+
+Command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -Dtest=SuiteConfigTest,SuiteEntrypointConfigTest,BenchHarnessExtendedWorkloadTest,ObservationClientTest test
+```
+
+Result:
+
+- `BUILD SUCCESS`
+- `Tests run: 49, Failures: 0, Errors: 0, Skipped: 0`
+
+Notable verification detail:
+
+- The loopback socket tests require unsandboxed execution in this environment because sandboxed runs failed with `ServerSocket` `Operation not permitted`.
+
+Behavior verified by GREEN tests:
+
+- External Redis readiness/auth path sends `AUTH`/`SELECT` before `PING`.
+- External Redis per-pass reset sends `AUTH`/`SELECT` before `FLUSHDB`.
+- Observation capture and Redis environment metadata capture send `AUTH`/`SELECT` before `INFO` and `MEMORY STATS`.
+- Extended workloads authenticate/select before both prefill and timed commands.
+- Core workloads routed through `YierdisBench` workers authenticate/select only for external Redis requests.
+- Explicit Redis-specific CLI options are rejected outside `--suite`, even when a user explicitly passes default-valued flags such as `--redisPort 6379`.
 - `target/benchmark-reports/redis-comparison-smoke-rerun-20260701-0111`
 
 These runs did not reach final report artifact emission and were not used as

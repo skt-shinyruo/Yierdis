@@ -2,7 +2,9 @@ package yier.bubu.redis.app.bench;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
+import picocli.CommandLine.Spec;
 import picocli.CommandLine.Unmatched;
+import picocli.CommandLine.Model.CommandSpec;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -15,6 +17,9 @@ import java.util.List;
         usageHelpAutoWidth = true
 )
 public final class YierdisBenchArgs {
+    @Spec
+    CommandSpec spec;
+
     @Option(names = {"-h", "--help"}, usageHelp = true, description = "Show this help message and exit.")
     public boolean help;
 
@@ -126,4 +131,23 @@ public final class YierdisBenchArgs {
 
     @Unmatched
     public List<String> serverArgs = new ArrayList<>();
+
+    public boolean hasRedisSpecificOptions() {
+        if (spec == null || spec.commandLine() == null || spec.commandLine().getParseResult() == null) {
+            return includeRedis
+                    || !"127.0.0.1".equals(redisHost)
+                    || redisPort != 6379
+                    || !"redis".equals(redisLabel)
+                    || redisUser != null
+                    || redisAuth != null
+                    || redisDb != 0;
+        }
+        return spec.commandLine().getParseResult().hasMatchedOption("--includeRedis")
+                || spec.commandLine().getParseResult().hasMatchedOption("--redisHost")
+                || spec.commandLine().getParseResult().hasMatchedOption("--redisPort")
+                || spec.commandLine().getParseResult().hasMatchedOption("--redisLabel")
+                || spec.commandLine().getParseResult().hasMatchedOption("--redisUser")
+                || spec.commandLine().getParseResult().hasMatchedOption("--redisAuth")
+                || spec.commandLine().getParseResult().hasMatchedOption("--redisDb");
+    }
 }
