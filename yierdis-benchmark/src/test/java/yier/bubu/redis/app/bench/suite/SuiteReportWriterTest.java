@@ -239,6 +239,35 @@ public class SuiteReportWriterTest {
     }
 
     @Test
+    public void suiteResultJsonPreservesRedisScenarioComparabilityMetadata() {
+        List<ScenarioDefinition> scenarios = SuiteProfileFactory.expand(SuiteProfileName.RELEASE);
+        ScenarioDefinition maxmemory = scenarioById(scenarios, "release-maxmemory-eviction");
+        ScenarioDefinition defrag = scenarioById(scenarios, "release-native-defrag-append");
+
+        SuiteRunResult result = new SuiteRunResult(
+                "run-redis-metadata",
+                SuiteProfileName.RELEASE,
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:02Z"),
+                new SuiteEnvironment(Map.of()),
+                List.of(),
+                List.of(maxmemory, defrag),
+                List.of(),
+                List.of(),
+                List.of()
+        );
+
+        String json = SuiteJsonWriter.write(result);
+
+        Assert.assertTrue(json.contains("\"id\":\"release-maxmemory-eviction\""));
+        Assert.assertTrue(json.contains("\"redisComparable\":\"EXTERNAL_CONFIG_REQUIRED\""));
+        Assert.assertTrue(json.contains("\"redisNonComparableReason\":\"external Redis config required\""));
+        Assert.assertTrue(json.contains("\"id\":\"release-native-defrag-append\""));
+        Assert.assertTrue(json.contains("\"redisComparable\":\"NO\""));
+        Assert.assertTrue(json.contains("\"redisNonComparableReason\":\"yierdis-only native defrag scenario\""));
+    }
+
+    @Test
     public void suiteRunResultValidatesAndCopiesInputs() {
         Instant startedAt = Instant.parse("2026-01-01T00:00:00Z");
         Instant finishedAt = Instant.parse("2026-01-01T00:00:01Z");
@@ -297,6 +326,13 @@ public class SuiteReportWriterTest {
                 List.of(comparison),
                 findings
         );
+    }
+
+    private static ScenarioDefinition scenarioById(List<ScenarioDefinition> scenarios, String id) {
+        return scenarios.stream()
+                .filter(scenario -> scenario.id().equals(id))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("missing scenario " + id));
     }
 
     private static ScenarioPassResult pass(String artifact, ScenarioDefinition scenario, double qps, double p95, double p99, double errors) {
