@@ -16,6 +16,14 @@ public final class ObservationClient {
     private static final int CONNECT_TIMEOUT_MILLIS = 1000;
     private static final int READ_TIMEOUT_MILLIS = 1000;
 
+    public ObservationSnapshot capture(SuiteArtifact artifact) {
+        Objects.requireNonNull(artifact, "artifact");
+        if (artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS) {
+            return captureRedis(artifact.host(), artifact.port());
+        }
+        return capture(artifact.host(), artifact.port());
+    }
+
     public ObservationSnapshot capture(String host, int port) {
         validateEndpoint(host, port);
 
@@ -23,6 +31,15 @@ public final class ObservationClient {
         values.put("STATS", captureCommand(host, port, "STATS"));
         values.put("MEMORY STATS", captureCommand(host, port, "MEMORY", "STATS"));
         values.put("INFO", captureCommand(host, port, "INFO"));
+        return new ObservationSnapshot(values);
+    }
+
+    private ObservationSnapshot captureRedis(String host, int port) {
+        validateEndpoint(host, port);
+
+        Map<String, String> values = new LinkedHashMap<>();
+        values.put("INFO", captureCommand(host, port, "INFO"));
+        values.put("MEMORY STATS", captureCommand(host, port, "MEMORY", "STATS"));
         return new ObservationSnapshot(values);
     }
 

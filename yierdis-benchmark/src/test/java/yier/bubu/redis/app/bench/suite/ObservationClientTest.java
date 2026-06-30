@@ -83,6 +83,22 @@ public class ObservationClientTest {
         Assert.assertThrows(IllegalArgumentException.class, () -> client.capture("localhost", 65536));
     }
 
+    @Test
+    public void captureRedisObservationDoesNotRequireStats() throws Exception {
+        try (RedisSuiteTestSupport.RedisLikeObservationServer server = RedisSuiteTestSupport.RedisLikeObservationServer.start()) {
+            Assert.assertTrue(server.awaitListening());
+            SuiteArtifact artifact = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "", "", 0);
+
+            ObservationSnapshot snapshot = new ObservationClient().capture(artifact);
+
+            Assert.assertTrue(snapshot.values().containsKey("INFO"));
+            Assert.assertTrue(snapshot.values().containsKey("MEMORY STATS"));
+            Assert.assertFalse(snapshot.values().containsKey("STATS"));
+            Assert.assertEquals(List.of("INFO", "MEMORY STATS"), List.copyOf(snapshot.values().keySet()));
+            Assert.assertTrue(server.awaitCommands(2).containsAll(List.of("INFO", "MEMORY STATS")));
+        }
+    }
+
     private static RespClientCodec.RespReply simple(String text) {
         return new RespClientCodec.RespReply(RespClientCodec.RespReply.Kind.SIMPLE_STRING, text, null, null, null);
     }

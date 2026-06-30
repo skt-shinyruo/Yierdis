@@ -225,6 +225,41 @@ public class SuiteRunnerOrchestrationTest {
         Assert.assertTrue(harness.lifecycle.isEmpty());
     }
 
+    @Test
+    public void runUsesConfiguredArtifactOrderAndArtifactEndpointsForObservations() throws Exception {
+        ScenarioDefinition scenario = RedisSuiteTestSupport.scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
+        SuiteArtifact current = new SuiteArtifact("current", TestSuiteConfigs.regularTempJar("current"), "head");
+        SuiteArtifact baseline = new SuiteArtifact("baseline", TestSuiteConfigs.regularTempJar("baseline"), "base");
+        SuiteArtifact redis = SuiteArtifact.externalRedis("redis", "127.0.0.9", 6389, "", "", 0);
+        SuiteConfig config = TestSuiteConfigs.config(
+                Files.createTempDirectory("suite-runner-artifact-order-"),
+                16378,
+                Optional.of(baseline),
+                current,
+                List.of(current, redis, baseline)
+        );
+        FakeHarness harness = new FakeHarness();
+
+        SuiteRunResult result = new SuiteRunner(config, harness, List.of(scenario)).run();
+
+        Assert.assertEquals(List.of("current", "redis", "baseline"),
+                result.artifacts().stream().map(SuiteArtifact::label).toList());
+        Assert.assertEquals(List.of(
+                "start current release-ping-latency", "stop current release-ping-latency",
+                "start redis release-ping-latency", "stop redis release-ping-latency",
+                "start baseline release-ping-latency", "stop baseline release-ping-latency"
+        ), harness.lifecycle);
+        Assert.assertEquals(List.of(
+                "current@127.0.0.1:16378",
+                "current@127.0.0.1:16378",
+                "redis@127.0.0.9:6389",
+                "redis@127.0.0.9:6389",
+                "baseline@127.0.0.1:16380",
+                "baseline@127.0.0.1:16380"
+        ), harness.observations);
+        Assert.assertEquals(3, result.passes().size());
+    }
+
     private static ScenarioDefinition scenario(String id, BenchWorkloadKind workload, int warmups, int repeats, boolean latency) {
         return new ScenarioDefinition(id, id, workload, 100, workload == BenchWorkloadKind.PING ? 0 : 256,
                 1000, 8, 4, warmups, repeats, latency);
@@ -240,6 +275,7 @@ public class SuiteRunnerOrchestrationTest {
         private boolean failStopCheckedOnce;
         private List<SuiteMetric> repeatMetrics;
         private int observationCount;
+        private final List<String> observations = new ArrayList<>();
 
         @Override
         public SuiteHarness.RunningServer startServer(
@@ -262,8 +298,8 @@ public class SuiteRunnerOrchestrationTest {
 
         @Override
         public ObservationSnapshot captureObservation(String host, int port) {
-            Assert.assertEquals("127.0.0.1", host);
             Assert.assertNotNull(active);
+            observations.add(active.artifactLabel() + "@" + host + ":" + port);
             observationCount++;
             String phase = observationCount == 1 ? "before" : "after";
             return new ObservationSnapshot(Map.of("phase",
@@ -320,13 +356,24 @@ final class TestSuiteConfigs {
         return config(reportDir, portBase, Optional.empty());
     }
 
-    private static SuiteConfig config(Path reportDir, int portBase, Optional<SuiteArtifact> baseline) throws Exception {
+    static SuiteConfig config(Path reportDir, int portBase, Optional<SuiteArtifact> baseline) throws Exception {
+        return config(reportDir, portBase, baseline, new SuiteArtifact("current", regularTempJar("current"), "head"), null);
+    }
+
+    static SuiteConfig config(
+            Path reportDir,
+            int portBase,
+            Optional<SuiteArtifact> baseline,
+            SuiteArtifact current,
+            List<SuiteArtifact> artifactsInRunOrder
+    ) throws Exception {
         YierdisBenchServerArgs serverArgs = new YierdisBenchServerArgs();
         serverArgs.normalizeAndValidate();
         return new SuiteConfig(
                 SuiteProfileName.RELEASE,
-                new SuiteArtifact("current", regularTempJar("current"), "head"),
+                current,
                 baseline,
+                artifactsInRunOrder == null ? defaultArtifacts(current, baseline) : artifactsInRunOrder,
                 reportDir,
                 "127.0.0.1",
                 portBase,
@@ -339,7 +386,14 @@ final class TestSuiteConfigs {
         );
     }
 
-    private static Path regularTempJar(String prefix) throws Exception {
+    private static List<SuiteArtifact> defaultArtifacts(SuiteArtifact current, Optional<SuiteArtifact> baseline) {
+        List<SuiteArtifact> artifacts = new ArrayList<>();
+        baseline.ifPresent(artifacts::add);
+        artifacts.add(current);
+        return artifacts;
+    }
+
+    static Path regularTempJar(String prefix) throws Exception {
         Path jar = Files.createTempFile(prefix, ".jar");
         Files.writeString(jar, "stub", StandardCharsets.US_ASCII);
         return jar;
