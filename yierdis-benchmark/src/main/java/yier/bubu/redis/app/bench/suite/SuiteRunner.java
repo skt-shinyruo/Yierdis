@@ -60,10 +60,7 @@ public final class SuiteRunner {
     }
 
     private List<SuiteArtifact> artifactsInRunOrder() {
-        List<SuiteArtifact> artifacts = new ArrayList<>();
-        config.baseline().ifPresent(artifacts::add);
-        artifacts.add(config.current());
-        return List.copyOf(artifacts);
+        return config.artifactsInRunOrder();
     }
 
     private ScenarioPassResult runPass(SuiteArtifact artifact, ScenarioDefinition scenario, int port, Path logFile) {
@@ -72,7 +69,7 @@ public final class SuiteRunner {
         ScenarioPassResult pass;
         try {
             server = harness.startServer(artifact, scenario, config, port, logFile);
-            before = requireObservation(harness.captureObservation(config.host(), port));
+            before = requireObservation(harness.captureObservation(observationHost(artifact, config), observationPort(artifact, port)));
             List<IterationResult> iterations = new ArrayList<>();
             for (int i = 0; i < scenario.warmupIterations(); i++) {
                 iterations.add(requireIteration(harness.runIteration(server, scenario, i, IterationResult.Kind.WARMUP, config)));
@@ -80,7 +77,7 @@ public final class SuiteRunner {
             for (int i = 0; i < scenario.repeatIterations(); i++) {
                 iterations.add(requireIteration(harness.runIteration(server, scenario, i, IterationResult.Kind.REPEAT, config)));
             }
-            ObservationSnapshot after = requireObservation(harness.captureObservation(config.host(), port));
+            ObservationSnapshot after = requireObservation(harness.captureObservation(observationHost(artifact, config), observationPort(artifact, port)));
             pass = ScenarioPassResult.completed(artifact.label(), scenario, iterations, before, after);
         } catch (Exception e) {
             pass = failedPass(artifact.label(), scenario, e, before);
@@ -119,6 +116,14 @@ public final class SuiteRunner {
         }
         return new ScenarioPassResult(artifactLabel, scenario, true, message, List.of(), before,
                 ObservationSnapshot.empty(), null);
+    }
+
+    private static String observationHost(SuiteArtifact artifact, SuiteConfig config) {
+        return artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS ? artifact.host() : config.host();
+    }
+
+    private static int observationPort(SuiteArtifact artifact, int allocatedPort) {
+        return artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS ? artifact.port() : allocatedPort;
     }
 
     private static String conciseFailureMessage(Throwable failure) {

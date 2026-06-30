@@ -83,6 +83,15 @@ public final class BenchHarness implements SuiteHarness {
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(logFile, "logFile");
 
+        if (artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS) {
+            if (!waitReady(artifact.host(), artifact.port(), READY_TIMEOUT_MILLIS, READY_READ_TIMEOUT_MILLIS)) {
+                throw new IllegalStateException("suite server not ready within "
+                        + READY_TIMEOUT_MILLIS + " ms: " + artifact.host() + ":" + artifact.port());
+            }
+            prepareExternalRedisPass(artifact);
+            return new SuiteHarness.RunningServer(artifact.label(), scenario.id(), artifact.port(), logFile, null);
+        }
+
         YierdisBenchServerArgs serverArgs = config.baseServerArgs();
         scenario.applyServerOverrides(serverArgs);
         serverArgs.port = port;
@@ -157,6 +166,27 @@ public final class BenchHarness implements SuiteHarness {
         }
         process.stop();
         preparedPasses.removeIf(pass -> pass.matches(server));
+    }
+
+    private static void prepareExternalRedisPass(SuiteArtifact artifact) {
+        runAdminCommand(artifact, List.of(bytes("FLUSHDB")));
+    }
+
+    private static void runAdminCommand(SuiteArtifact artifact, List<byte[]> command) {
+        try (Socket socket = new Socket()) {
+            socket.setTcpNoDelay(true);
+            socket.connect(new InetSocketAddress(artifact.host(), artifact.port()), READY_CONNECT_TIMEOUT_MILLIS);
+            socket.setSoTimeout(READY_READ_TIMEOUT_MILLIS);
+            RespClientCodec.writeCommand(socket.getOutputStream(), command);
+            RespClientCodec.readReply(socket.getInputStream(), RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        } catch (IOException e) {
+            throw new IllegalStateException("failed admin command for " + artifact.label()
+                    + " at " + artifact.host() + ":" + artifact.port(), e);
+        }
+    }
+
+    private static byte[] bytes(String value) {
+        return value.getBytes(StandardCharsets.US_ASCII);
     }
 
     BenchWorkloadResult runWorkload(BenchWorkloadRequest request) throws InterruptedException {

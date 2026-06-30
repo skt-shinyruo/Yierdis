@@ -2,6 +2,11 @@ package yier.bubu.redis.app.bench;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.app.bench.suite.RedisSuiteTestSupport;
+import yier.bubu.redis.app.bench.suite.ScenarioDefinition;
+import yier.bubu.redis.app.bench.suite.SuiteArtifact;
+import yier.bubu.redis.app.bench.suite.SuiteConfig;
+import yier.bubu.redis.app.bench.suite.SuiteHarness;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
@@ -11,6 +16,7 @@ import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -269,6 +275,24 @@ public class BenchHarnessExtendedWorkloadTest {
 
             Assert.assertEquals(2, result.ops());
             Assert.assertTrue("errors=" + result.errors(), result.errors() > 0);
+        }
+    }
+
+    @Test
+    public void redisArtifactStartServerFlushesDbAndDoesNotSpawnProcess() throws Exception {
+        try (RedisSuiteTestSupport.RedisLikeObservationServer server = RedisSuiteTestSupport.RedisLikeObservationServer.start()) {
+            Assert.assertTrue(server.awaitListening());
+            SuiteArtifact artifact = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "", "", 0);
+            BenchHarness harness = new BenchHarness();
+            ScenarioDefinition scenario = RedisSuiteTestSupport.scenario(
+                    "release-set-get-128b-c32-p4", BenchWorkloadKind.SET_GET, 1, 1, true);
+            SuiteConfig config = RedisSuiteTestSupport.redisCurrentOnlyConfig(Path.of("target/redis-suite-test"), 16378, server.port());
+
+            SuiteHarness.RunningServer running = harness.startServer(artifact, scenario, config, artifact.port(), Path.of("target/redis.log"));
+
+            Assert.assertNull(running.handle());
+            Assert.assertEquals(artifact.port(), running.port());
+            Assert.assertTrue(server.awaitCommands(2).contains("FLUSHDB"));
         }
     }
 
