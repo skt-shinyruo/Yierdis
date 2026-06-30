@@ -159,7 +159,9 @@ public final class SuiteJsonWriter {
         out.name("pipeline").number(scenario.pipeline()).comma();
         out.name("warmupIterations").number(scenario.warmupIterations()).comma();
         out.name("repeatIterations").number(scenario.repeatIterations()).comma();
-        out.name("latency").bool(scenario.latency());
+        out.name("latency").bool(scenario.latency()).comma();
+        out.name("redisComparable").string(scenario.redisComparable().name()).comma();
+        out.name("redisNonComparableReason").string(scenario.redisNonComparableReason());
         out.objectEnd();
     }
 
