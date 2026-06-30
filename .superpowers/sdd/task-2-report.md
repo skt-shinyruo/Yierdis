@@ -99,3 +99,49 @@ Final GREEN result after rework:
 
 - `BUILD SUCCESS`
 - `Tests run: 37, Failures: 0, Errors: 0, Skipped: 0`
+
+### Final Task 2 Fix
+
+#### Remaining High Finding: real suite observation path still bypassed Redis-safe capture
+
+RED:
+
+- Added `SuiteRunnerOrchestrationTest.realRedisPassUsesArtifactAwareObservationCapture`.
+- This uses the real orchestration path:
+  - `SuiteRunner`
+  - `BenchHarness`
+  - `RedisSuiteTestSupport.RedisLikeObservationServer`
+- The test failed before the fix on the actual suite path because Redis pass observations still included `STATS`, proving the system was bypassing the Redis-safe capture semantics during real orchestration.
+
+Focused RED command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=SuiteRunnerOrchestrationTest#realRedisPassUsesArtifactAwareObservationCapture -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Escalated RED evidence:
+
+- The new orchestration test failed with an assertion on `STATS` still being present for the Redis pass.
+
+GREEN:
+
+- `SuiteRunner` now routes actual observation capture by artifact kind:
+  - external Redis passes use artifact host/port
+  - Yierdis passes preserve the existing `config.host()` plus allocated port behavior
+- `BenchHarness.captureObservation(String host, int port)` now recognizes endpoints started as external Redis passes and dispatches them through `ObservationClient.capture(SuiteArtifact.externalRedis(...))`, which avoids `STATS`.
+- Existing Yierdis observation behavior remains unchanged.
+
+Focused GREEN evidence:
+
+- The same single-test command passed after the fix.
+
+Required covering command after the fix:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=ObservationClientTest,SuiteRunnerOrchestrationTest,BenchHarnessExtendedWorkloadTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Final GREEN result:
+
+- `BUILD SUCCESS`
+- `Tests run: 38, Failures: 0, Errors: 0, Skipped: 0`

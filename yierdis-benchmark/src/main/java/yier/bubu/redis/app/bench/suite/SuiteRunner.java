@@ -69,7 +69,7 @@ public final class SuiteRunner {
         ScenarioPassResult pass;
         try {
             server = harness.startServer(artifact, scenario, config, port, logFile);
-            before = requireObservation(harness.captureObservation(observationHost(artifact, config), observationPort(artifact, port)));
+            before = requireObservation(captureObservation(artifact, port));
             List<IterationResult> iterations = new ArrayList<>();
             for (int i = 0; i < scenario.warmupIterations(); i++) {
                 iterations.add(requireIteration(harness.runIteration(server, scenario, i, IterationResult.Kind.WARMUP, config)));
@@ -77,7 +77,7 @@ public final class SuiteRunner {
             for (int i = 0; i < scenario.repeatIterations(); i++) {
                 iterations.add(requireIteration(harness.runIteration(server, scenario, i, IterationResult.Kind.REPEAT, config)));
             }
-            ObservationSnapshot after = requireObservation(harness.captureObservation(observationHost(artifact, config), observationPort(artifact, port)));
+            ObservationSnapshot after = requireObservation(captureObservation(artifact, port));
             pass = ScenarioPassResult.completed(artifact.label(), scenario, iterations, before, after);
         } catch (Exception e) {
             pass = failedPass(artifact.label(), scenario, e, before);
@@ -118,12 +118,11 @@ public final class SuiteRunner {
                 ObservationSnapshot.empty(), null);
     }
 
-    private static String observationHost(SuiteArtifact artifact, SuiteConfig config) {
-        return artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS ? artifact.host() : config.host();
-    }
-
-    private static int observationPort(SuiteArtifact artifact, int allocatedPort) {
-        return artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS ? artifact.port() : allocatedPort;
+    private ObservationSnapshot captureObservation(SuiteArtifact artifact, int allocatedPort) {
+        if (artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS) {
+            return harness.captureObservation(artifact.host(), artifact.port());
+        }
+        return harness.captureObservation(config.host(), allocatedPort);
     }
 
     private static String conciseFailureMessage(Throwable failure) {
