@@ -161,6 +161,36 @@ public class DbEngineFactoryInjectionTest {
         Assert.assertEquals("global shared-off-heap hot path must not touch engine memory ops", 0, first.memoryAccessCalls.get() + second.memoryAccessCalls.get());
     }
 
+    @Test
+    public void globalObservabilityCountsSharedOffHeapOnceAcrossDatabases() {
+        Object sharedIdentity = new Object();
+        ObservabilityTrackingEngine first = new ObservabilityTrackingEngine(sharedIdentity, 40L, 10L, 1, 1);
+        ObservabilityTrackingEngine second = new ObservabilityTrackingEngine(sharedIdentity, 40L, 20L, 2, 0);
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(2)
+                .engineFactory((dbIndex,
+                                maxmemoryBytes,
+                                maxmemoryPolicy,
+                                maxmemorySamples,
+                                evictionTimeLimitMillis,
+                                expireCleanupTimeLimitMillis) -> dbIndex == 0 ? first : second)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
+                .maxmemoryBytes(100L)
+                .build();
+
+        try (YierdisInstance instance = YierdisInstance.create(config)) {
+            YierdisMemoryStats stats = instance.observability().memoryStats();
+
+            Assert.assertEquals("instance/global off-heap should count the shared runtime once", 40L, stats.offHeapUsedBytes());
+            Assert.assertEquals("global usedBytesForMaxmemory should be heap plus shared off-heap once", 70L, stats.usedBytesForMaxmemory());
+            Assert.assertEquals("global effectiveUsedBytesForMaxmemory should include reserved bytes on top of shared off-heap once", 70L, stats.effectiveUsedBytesForMaxmemory());
+            Assert.assertEquals(30L, stats.heapDataBytesEstimate());
+            Assert.assertEquals(3, stats.keyCount());
+            Assert.assertEquals(1, stats.expireCount());
+            Assert.assertEquals("shared off-heap usage should be sampled once for observability too", 1, first.sharedOffHeapUsageCalls.get() + second.sharedOffHeapUsageCalls.get());
+        }
+    }
+
     private static final class StubEngine implements RuntimeDbEngine {
         @Override
         public void bindToCurrentThread() {
@@ -334,6 +364,121 @@ public class DbEngineFactoryInjectionTest {
 
         @Override
         public String objectEncoding(yier.bubu.redis.bytes.BytesView keyView) {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class ObservabilityTrackingEngine implements RuntimeDbEngine {
+        private final Object sharedIdentity;
+        private final long sharedOffHeapUsedBytes;
+        private final YierdisMemoryStats stats;
+        private final AtomicInteger sharedOffHeapUsageCalls = new AtomicInteger();
+
+        private ObservabilityTrackingEngine(
+                Object sharedIdentity,
+                long sharedOffHeapUsedBytes,
+                long heapBytes,
+                int keyCount,
+                int expireCount
+        ) {
+            this.sharedIdentity = sharedIdentity;
+            this.sharedOffHeapUsedBytes = sharedOffHeapUsedBytes;
+            this.stats = new YierdisMemoryStats(
+                    100L,
+                    heapBytes,
+                    heapBytes,
+                    sharedOffHeapUsedBytes,
+                    0L,
+                    heapBytes,
+                    false,
+                    true,
+                    keyCount,
+                    expireCount,
+                    false,
+                    0,
+                    0,
+                    0L,
+                    false,
+                    0,
+                    0,
+                    0L,
+                    0L,
+                    heapBytes + sharedOffHeapUsedBytes,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L
+            );
+        }
+
+        @Override
+        public void bindToCurrentThread() {
+        }
+
+        @Override
+        public void enforceMaxmemoryMaintenance() {
+        }
+
+        @Override
+        public void shutdown() {
+        }
+
+        @Override
+        public Object globalSharedOffHeapUsageIdentity() {
+            return sharedIdentity;
+        }
+
+        @Override
+        public long globalSharedOffHeapUsedBytes() {
+            sharedOffHeapUsageCalls.incrementAndGet();
+            return sharedOffHeapUsedBytes;
+        }
+
+        @Override
+        public DbReads reads() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbWrites writes() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ExpirationManager expiration() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public MemoryOps memory() {
+            return new MemoryOps() {
+                @Override
+                public long memoryUsage(yier.bubu.redis.bytes.BytesView keyView) {
+                    throw new UnsupportedOperationException();
+                }
+
+                @Override
+                public YierdisMemoryStats memoryStats() {
+                    return stats;
+                }
+
+                @Override
+                public String objectEncoding(yier.bubu.redis.bytes.BytesView keyView) {
+                    throw new UnsupportedOperationException();
+                }
+            };
+        }
+
+        @Override
+        public DbLifecycleOps lifecycle() {
             throw new UnsupportedOperationException();
         }
     }
