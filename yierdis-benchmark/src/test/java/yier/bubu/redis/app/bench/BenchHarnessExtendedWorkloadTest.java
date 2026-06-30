@@ -15,6 +15,7 @@ import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.Field;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -335,6 +336,25 @@ public class BenchHarnessExtendedWorkloadTest {
     }
 
     @Test
+    public void stoppingRedisPassClearsEndpointClassificationForReusedPort() throws Exception {
+        try (RedisSuiteTestSupport.RedisLikeObservationServer server = RedisSuiteTestSupport.RedisLikeObservationServer.start()) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness();
+            SuiteArtifact artifact = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "", "", 0);
+            ScenarioDefinition scenario = RedisSuiteTestSupport.scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
+            SuiteConfig config = RedisSuiteTestSupport.redisCurrentOnlyConfig(Path.of("target/redis-suite-test"), 16378, server.port());
+
+            SuiteHarness.RunningServer running = harness.startServer(artifact, scenario, config, artifact.port(), Path.of("target/redis.log"));
+
+            Assert.assertEquals(1, externalRedisEndpoints(harness).size());
+
+            harness.stopServer(running);
+
+            Assert.assertTrue(externalRedisEndpoints(harness).isEmpty());
+        }
+    }
+
+    @Test
     public void setGetCountsNullGetReplyAsStrictFailure() throws Exception {
         try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
             if ("GET".equals(command)) {
@@ -537,6 +557,14 @@ public class BenchHarnessExtendedWorkloadTest {
                 serverArgs,
                 true
         );
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<String> externalRedisEndpoints(BenchHarness harness) throws Exception {
+        Field field = BenchHarness.class.getDeclaredField("externalRedisEndpoints");
+        field.setAccessible(true);
+        java.util.Set<Object> endpoints = (java.util.Set<Object>) field.get(harness);
+        return endpoints.stream().map(Object::toString).toList();
     }
 
     private static final class RecordingDenseHllPreparer implements BenchHarness.DenseHllPreparer {
