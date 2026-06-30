@@ -130,6 +130,27 @@ java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar \
   --reportDir target/benchmark-reports/release-comparison
 ```
 
+Redis/current 对比报告：
+
+```bash
+java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar \
+  --suite \
+  --suiteProfile release \
+  --includeRedis \
+  --redisHost 127.0.0.1 \
+  --redisPort 6379 \
+  --currentServerJar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
+  --reportDir target/benchmark-reports/redis-comparison
+```
+
+建议用专门的 Redis 实例运行对比，并固定配置，避免后台持久化或淘汰策略影响结果：
+
+```text
+save ""
+appendonly no
+maxmemory-policy noeviction
+```
+
 快速 smoke：
 
 ```bash

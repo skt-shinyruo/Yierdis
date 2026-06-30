@@ -5,8 +5,10 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 
 public final class SuiteRunner {
@@ -18,11 +20,17 @@ public final class SuiteRunner {
     private final SuiteConfig config;
     private final SuiteHarness harness;
     private final List<ScenarioDefinition> scenarios;
+    private final ObservationClient observationClient;
 
     public SuiteRunner(SuiteConfig config, SuiteHarness harness, List<ScenarioDefinition> scenarios) {
+        this(config, harness, scenarios, new ObservationClient());
+    }
+
+    SuiteRunner(SuiteConfig config, SuiteHarness harness, List<ScenarioDefinition> scenarios, ObservationClient observationClient) {
         this.config = Objects.requireNonNull(config, "config");
         this.harness = Objects.requireNonNull(harness, "harness");
         this.scenarios = List.copyOf(Objects.requireNonNull(scenarios, "scenarios"));
+        this.observationClient = Objects.requireNonNull(observationClient, "observationClient");
     }
 
     public SuiteRunResult run() {
@@ -50,7 +58,7 @@ public final class SuiteRunner {
                 config.profile(),
                 startedAt,
                 finishedAt,
-                SuiteEnvironment.capture(),
+                captureEnvironment(artifacts),
                 artifacts,
                 scenarios,
                 passes,
@@ -124,6 +132,21 @@ public final class SuiteRunner {
             return harness.captureObservation(artifact.host(), artifact.port());
         }
         return harness.captureObservation(config.host(), allocatedPort);
+    }
+
+    private SuiteEnvironment captureEnvironment(List<SuiteArtifact> artifacts) {
+        SuiteEnvironment environment = SuiteEnvironment.capture();
+        Map<String, String> values = new LinkedHashMap<>(environment.values());
+        artifacts.stream()
+                .filter(artifact -> artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS)
+                .findFirst()
+                .ifPresent(artifact -> {
+                    values.put("redis.host", artifact.host());
+                    values.put("redis.port", Integer.toString(artifact.port()));
+                    values.put("redis.db", Integer.toString(artifact.db()));
+                    values.putAll(observationClient.captureEnvironmentMetadata(artifact));
+                });
+        return new SuiteEnvironment(values);
     }
 
     private static String conciseFailureMessage(Throwable failure) {

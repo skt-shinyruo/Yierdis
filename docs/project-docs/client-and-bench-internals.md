@@ -117,6 +117,10 @@ SET raw "\x00\x01"
 
 `--currentServerJar` is required. `--baselineServerJar` is optional. When both jars are present, suite mode compares only clean baseline/current scenario pairs. A scenario with startup failure, protocol/reply errors, benchmark errors, or missing measurements is marked `non-comparable`.
 
+`--includeRedis` adds an externally managed Redis artifact to the suite run. Redis is not launched by the benchmark process; operators provide `--redisHost`, `--redisPort`, optional auth, and DB selection. Suite mode records Redis endpoint metadata in the environment block (`redis.host`, `redis.port`, `redis.db`) and captures Redis `INFO` text under `redis.info.server` so reports preserve the external baseline context.
+
+Redis comparisons are rendered explicitly: `comparisons.csv` includes `baseline_artifact`, `current_artifact`, `comparable`, `reason`, and ratio fields so a `redis -> current` row is distinguishable from Yierdis jar comparisons. `report.md` adds a Redis comparison summary when an external Redis artifact participates. Redis-incompatible scenarios, such as operator-dependent maxmemory or native-defrag cases, remain `non-comparable` with the scenario reason rather than being treated as performance conclusions.
+
 The first version uses soft thresholds: QPS drops, p95/p99 latency increases, errors, and non-comparable scenarios are reported as warnings or critical observations but do not fail the process by default.
 
 `yierdis-benchmark` 是真实协议路径 benchmark，不是 JMH microbenchmark，也不是直接调用 DB API。

@@ -2,6 +2,10 @@ package yier.bubu.redis.app.bench;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.app.bench.suite.RedisSuiteTestSupport;
+import yier.bubu.redis.app.bench.suite.SuiteCsvWriter;
+import yier.bubu.redis.app.bench.suite.SuiteMarkdownWriter;
+import yier.bubu.redis.app.bench.suite.SuiteRunResult;
 
 import java.nio.file.Path;
 import java.time.Instant;
@@ -159,6 +163,27 @@ public class YierdisBenchComparisonRenderTest {
         Assert.assertFalse(rendered.contains("PING_p95(ms)"));
         Assert.assertFalse(rendered.contains("PING_delta_pct"));
         Assert.assertTrue(rendered.contains("commit labels unavailable for supplied artifacts"));
+    }
+
+    @Test
+    public void comparisonsCsvIncludesRedisBaselineLabelAndReason() {
+        SuiteRunResult result = RedisSuiteTestSupport.redisComparisonResult(false, "external Redis config required");
+
+        String csv = SuiteCsvWriter.comparisonsCsv(result);
+
+        Assert.assertTrue(csv.contains("baseline_artifact,current_artifact"));
+        Assert.assertTrue(csv.contains("redis,current"));
+        Assert.assertTrue(csv.contains("external Redis config required"));
+    }
+
+    @Test
+    public void markdownReportIncludesRedisSummarySection() {
+        SuiteRunResult result = RedisSuiteTestSupport.redisComparisonResult(true, "");
+
+        String markdown = SuiteMarkdownWriter.write(result);
+
+        Assert.assertTrue(markdown.contains("## Redis Comparison Summary"));
+        Assert.assertTrue(markdown.contains("redis -> current"));
     }
 
     private static YierdisBench.BackendResult fullResult(String label, int port, double setQps, double getQps, long[] latencyNanos) {

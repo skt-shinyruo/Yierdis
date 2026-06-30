@@ -83,6 +83,21 @@ public final class SuiteMarkdownWriter {
                         comparisonStatus(metric, entry.getValue()).toUpperCase(java.util.Locale.ROOT));
             }
         }
+        out.append('\n');
+
+        if (result.artifacts().stream().anyMatch(artifact -> artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS)) {
+            out.append("## Redis Comparison Summary\n\n");
+            for (ScenarioComparison comparison : result.comparisons()) {
+                if (comparison.baseline().artifactKind() == SuiteArtifact.Kind.EXTERNAL_REDIS) {
+                    out.append("- ")
+                            .append(escape(comparison.baseline().artifactLabel()))
+                            .append(" -> ")
+                            .append(escape(comparison.current().artifactLabel()))
+                            .append('\n');
+                }
+            }
+            out.append("- External Redis configuration is operator-managed.\n");
+        }
         return out.toString();
     }
 

@@ -55,11 +55,22 @@ public final class SuiteCsvWriter {
 
     public static String comparisonsCsv(SuiteRunResult result) {
         StringBuilder out = new StringBuilder();
-        out.append("scenario,metric,baseline,current,delta_percent,status\n");
+        out.append("scenario_id,baseline_artifact,current_artifact,metric,baseline_value,current_value,delta_percent,ratio,comparable,reason,status\n");
         for (ScenarioComparison comparison : result.comparisons()) {
             if (!comparison.comparable()) {
-                appendRow(out, List.of(comparison.scenario().id(), "comparability", "", "", "",
-                        "non-comparable"));
+                appendRow(out, List.of(
+                        comparison.scenario().id(),
+                        comparison.baseline().artifactLabel(),
+                        comparison.current().artifactLabel(),
+                        "comparability",
+                        "",
+                        "",
+                        "",
+                        "",
+                        Boolean.toString(false),
+                        comparison.nonComparableReason(),
+                        "non-comparable"
+                ));
                 continue;
             }
             for (Map.Entry<String, Double> entry : comparison.deltaPercentByMetric().entrySet()) {
@@ -71,10 +82,15 @@ public final class SuiteCsvWriter {
                 }
                 appendRow(out, List.of(
                         comparison.scenario().id(),
+                        comparison.baseline().artifactLabel(),
+                        comparison.current().artifactLabel(),
                         metric,
                         number(baseline.mean()),
                         number(current.mean()),
                         number(entry.getValue()),
+                        ratio(baseline.mean(), current.mean()),
+                        Boolean.toString(true),
+                        comparison.nonComparableReason(),
                         status(metric, entry.getValue())
                 ));
             }
@@ -95,6 +111,13 @@ public final class SuiteCsvWriter {
 
     static String number(double value) {
         return String.format(Locale.ROOT, "%.3f", value);
+    }
+
+    private static String ratio(double baseline, double current) {
+        if (baseline == 0.0) {
+            return "";
+        }
+        return number(current / baseline);
     }
 
     private static void appendRow(StringBuilder out, List<String> cells) {
