@@ -2,6 +2,7 @@ package yier.bubu.redis.app.bench.suite;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.app.bench.BenchHarness;
 import yier.bubu.redis.app.bench.BenchWorkloadKind;
 import yier.bubu.redis.app.bench.YierdisBenchServerArgs;
 
@@ -282,6 +283,32 @@ public class SuiteRunnerOrchestrationTest {
         Assert.assertTrue(comparison.comparable());
         Assert.assertEquals(scenario.id(), comparison.scenario().id());
         Assert.assertEquals(List.of("redis", "current"), result.artifacts().stream().map(SuiteArtifact::label).toList());
+    }
+
+    @Test
+    public void realRedisPassUsesArtifactAwareObservationCapture() throws Exception {
+        try (RedisSuiteTestSupport.RedisLikeObservationServer server = RedisSuiteTestSupport.RedisLikeObservationServer.start()) {
+            Assert.assertTrue(server.awaitListening());
+            SuiteArtifact redis = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "", "", 0);
+            SuiteConfig config = TestSuiteConfigs.config(
+                    Files.createTempDirectory("suite-runner-real-redis-"),
+                    16378,
+                    Optional.empty(),
+                    redis,
+                    List.of(redis)
+            );
+            ScenarioDefinition scenario = RedisSuiteTestSupport.scenario("release-ping-latency", BenchWorkloadKind.PING, 0, 1, true);
+
+            SuiteRunResult result = new SuiteRunner(config, new BenchHarness(), List.of(scenario)).run();
+
+            Assert.assertEquals(1, result.passes().size());
+            ScenarioPassResult pass = result.passes().get(0);
+            Assert.assertFalse(pass.before().values().containsKey("STATS"));
+            Assert.assertFalse(pass.after().values().containsKey("STATS"));
+            Assert.assertEquals(List.of("INFO", "MEMORY STATS"), List.copyOf(pass.before().values().keySet()));
+            Assert.assertEquals(List.of("INFO", "MEMORY STATS"), List.copyOf(pass.after().values().keySet()));
+            Assert.assertFalse(server.awaitCommands(5).contains("STATS"));
+        }
     }
 
     private static ScenarioDefinition scenario(String id, BenchWorkloadKind workload, int warmups, int repeats, boolean latency) {

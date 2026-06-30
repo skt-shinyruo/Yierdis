@@ -53,6 +53,7 @@ public final class BenchHarness implements SuiteHarness {
     private final DenseHllPreparer denseHllPreparer;
     private final int workloadReadTimeoutMillis;
     private final Set<PreparedPass> preparedPasses = ConcurrentHashMap.newKeySet();
+    private final Set<ExternalRedisEndpoint> externalRedisEndpoints = ConcurrentHashMap.newKeySet();
 
     public BenchHarness() {
         this(YierdisBench::prefillDenseHll, WORKLOAD_READ_TIMEOUT_MILLIS);
@@ -88,6 +89,7 @@ public final class BenchHarness implements SuiteHarness {
                 throw new IllegalStateException("suite server not ready within "
                         + READY_TIMEOUT_MILLIS + " ms: " + artifact.host() + ":" + artifact.port());
             }
+            externalRedisEndpoints.add(new ExternalRedisEndpoint(artifact.host(), artifact.port()));
             prepareExternalRedisPass(artifact);
             return new SuiteHarness.RunningServer(artifact.label(), scenario.id(), artifact.port(), logFile, null);
         }
@@ -121,6 +123,9 @@ public final class BenchHarness implements SuiteHarness {
 
     @Override
     public ObservationSnapshot captureObservation(String host, int port) {
+        if (externalRedisEndpoints.contains(new ExternalRedisEndpoint(host, port))) {
+            return observationClient.capture(SuiteArtifact.externalRedis("redis", host, port, "", "", 0));
+        }
         return observationClient.capture(host, port);
     }
 
@@ -730,6 +735,12 @@ public final class BenchHarness implements SuiteHarness {
                     && scenarioId.equals(server.scenarioId())
                     && port == server.port()
                     && logFile.equals(server.logFile());
+        }
+    }
+
+    private record ExternalRedisEndpoint(String host, int port) {
+        private ExternalRedisEndpoint {
+            Objects.requireNonNull(host, "host");
         }
     }
 
