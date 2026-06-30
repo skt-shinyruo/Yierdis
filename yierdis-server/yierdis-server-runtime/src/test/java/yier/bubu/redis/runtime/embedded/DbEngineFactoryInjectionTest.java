@@ -9,8 +9,10 @@ import yier.bubu.redis.storage.api.RuntimeDbEngine;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.storage.api.ExpirationManager;
+import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MemoryOps;
+import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
 import java.util.ArrayList;
@@ -130,6 +132,35 @@ public class DbEngineFactoryInjectionTest {
         Assert.assertEquals(Arrays.asList("db-0", "runtime"), closeOrder);
     }
 
+    @Test
+    public void globalMaxmemoryUsesCheapSharedOffHeapUsagePath() {
+        Object sharedIdentity = new Object();
+        SharedOffHeapTrackingEngine first = new SharedOffHeapTrackingEngine(sharedIdentity, 40L);
+        SharedOffHeapTrackingEngine second = new SharedOffHeapTrackingEngine(sharedIdentity, 40L);
+        YierdisInstanceConfig config = YierdisInstanceConfig.builder()
+                .databases(2)
+                .engineFactory((dbIndex,
+                                maxmemoryBytes,
+                                maxmemoryPolicy,
+                                maxmemorySamples,
+                                evictionTimeLimitMillis,
+                                expireCleanupTimeLimitMillis) -> dbIndex == 0 ? first : second)
+                .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
+                .maxmemoryBytes(100L)
+                .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
+                .build();
+
+        try (YierdisInstance ignored = YierdisInstance.create(config)) {
+            MaxmemoryCoordinator coordinator = first.attachedCoordinator;
+            Assert.assertNotNull("global scope should attach a coordinator", coordinator);
+            Assert.assertSame("all DBs should share the same coordinator", coordinator, second.attachedCoordinator);
+            coordinator.prepareWrite(50L);
+        }
+
+        Assert.assertEquals("shared runtime bytes should be sampled once for the shared identity", 1, first.sharedOffHeapUsageCalls.get() + second.sharedOffHeapUsageCalls.get());
+        Assert.assertEquals("global shared-off-heap hot path must not touch engine memory ops", 0, first.memoryAccessCalls.get() + second.memoryAccessCalls.get());
+    }
+
     private static final class StubEngine implements RuntimeDbEngine {
         @Override
         public void bindToCurrentThread() {
@@ -213,6 +244,96 @@ public class DbEngineFactoryInjectionTest {
 
         @Override
         public DbLifecycleOps lifecycle() {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class SharedOffHeapTrackingEngine implements RuntimeDbEngine {
+        private final Object sharedIdentity;
+        private final long sharedOffHeapUsedBytes;
+
+        private MaxmemoryCoordinator attachedCoordinator;
+        private final AtomicInteger sharedOffHeapUsageCalls = new AtomicInteger();
+        private final AtomicInteger memoryAccessCalls = new AtomicInteger();
+
+        private SharedOffHeapTrackingEngine(Object sharedIdentity, long sharedOffHeapUsedBytes) {
+            this.sharedIdentity = sharedIdentity;
+            this.sharedOffHeapUsedBytes = sharedOffHeapUsedBytes;
+        }
+
+        @Override
+        public void bindToCurrentThread() {
+        }
+
+        @Override
+        public void enforceMaxmemoryMaintenance() {
+        }
+
+        @Override
+        public void shutdown() {
+        }
+
+        @Override
+        public void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
+            this.attachedCoordinator = coordinator;
+        }
+
+        @Override
+        public long usedBytesForMaxmemory() {
+            return 0L;
+        }
+
+        @Override
+        public Object globalSharedOffHeapUsageIdentity() {
+            return sharedIdentity;
+        }
+
+        @Override
+        public long globalSharedOffHeapUsedBytes() {
+            sharedOffHeapUsageCalls.incrementAndGet();
+            return sharedOffHeapUsedBytes;
+        }
+
+        @Override
+        public DbReads reads() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DbWrites writes() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ExpirationManager expiration() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public MemoryOps memory() {
+            memoryAccessCalls.incrementAndGet();
+            return new TrackingMemoryOps();
+        }
+
+        @Override
+        public DbLifecycleOps lifecycle() {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class TrackingMemoryOps implements MemoryOps {
+        @Override
+        public long memoryUsage(yier.bubu.redis.bytes.BytesView keyView) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public YierdisMemoryStats memoryStats() {
+            throw new AssertionError("memoryStats() should not be used for shared off-heap maxmemory accounting");
+        }
+
+        @Override
+        public String objectEncoding(yier.bubu.redis.bytes.BytesView keyView) {
             throw new UnsupportedOperationException();
         }
     }

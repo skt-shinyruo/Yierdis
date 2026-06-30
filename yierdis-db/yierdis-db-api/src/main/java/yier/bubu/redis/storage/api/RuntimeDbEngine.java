@@ -35,6 +35,22 @@ public interface RuntimeDbEngine extends DbEngine, MaxmemoryParticipant, Maxmemo
         // Optional for test doubles and lightweight runtimes.
     }
 
+    /**
+     * Returns an identity object for shared off-heap bytes that should be counted once across DBs,
+     * or {@code null} when this engine does not participate in instance-level shared off-heap accounting.
+     */
+    default Object globalSharedOffHeapUsageIdentity() {
+        return null;
+    }
+
+    /**
+     * Returns the current shared off-heap bytes for the identity exposed by
+     * {@link #globalSharedOffHeapUsageIdentity()}.
+     */
+    default long globalSharedOffHeapUsedBytes() {
+        return 0L;
+    }
+
     @Override
     default long usedBytesForMaxmemory() {
         return 0L;

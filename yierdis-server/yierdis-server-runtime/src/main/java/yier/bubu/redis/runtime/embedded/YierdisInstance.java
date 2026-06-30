@@ -11,6 +11,7 @@ import yier.bubu.redis.runtime.api.YierdisChangeEventBridge;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -145,13 +146,18 @@ public final class YierdisInstance implements AutoCloseable {
             return 0L;
         }
         long total = 0L;
+        IdentityHashMap<Object, Boolean> seen = new IdentityHashMap<>();
         for (RuntimeDbEngine engine : dbs) {
             if (engine == null) {
                 continue;
             }
+            Object identity = engine.globalSharedOffHeapUsageIdentity();
+            if (identity == null || seen.put(identity, Boolean.TRUE) != null) {
+                continue;
+            }
             long used;
             try {
-                used = engine.memory().memoryStats().offHeapUsedBytes();
+                used = engine.globalSharedOffHeapUsedBytes();
             } catch (Throwable ignored) {
                 used = 0L;
             }

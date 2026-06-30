@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
@@ -63,6 +64,7 @@ public class YierdisDbMemoryReporterTest {
             db.bindToCurrentThread();
             try {
                 db.writes().strings().setString(bytes("k"), bytes("value"), SetMode.NORMAL, null);
+                db.attachMaxmemoryCoordinator(TestMaxmemoryCoordinator.INSTANCE);
 
                 YierdisDbKeyLifecycle lifecycle = db.keyLifecycle();
                 long entryBytes = lifecycle.entryTable().nativeBytes();
@@ -75,6 +77,25 @@ public class YierdisDbMemoryReporterTest {
 
                 Assert.assertTrue("entry records must be present for double-count regression coverage", entryBytes > 0L);
                 Assert.assertEquals(expectedNative, db.memory().memoryStats().offHeapUsedBytes());
+                Assert.assertEquals(runtime.usedBytes(), db.globalSharedOffHeapUsedBytes());
+            } finally {
+                db.shutdown();
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
+    @Test
+    public void globalSharedOffHeapUsedBytesUsesSharedRuntimeCounter() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("memory-shared-runtime-counter")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 1_000_000L, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+            db.bindToCurrentThread();
+            try {
+                db.writes().strings().setString(bytes("k"), bytes("value"), SetMode.NORMAL, null);
+                db.attachMaxmemoryCoordinator(TestMaxmemoryCoordinator.INSTANCE);
+
+                Assert.assertSame(runtime, db.globalSharedOffHeapUsageIdentity());
+                Assert.assertEquals(runtime.usedBytes(), db.globalSharedOffHeapUsedBytes());
             } finally {
                 db.shutdown();
             }
@@ -98,5 +119,18 @@ public class YierdisDbMemoryReporterTest {
                 return data[index];
             }
         };
+    }
+
+    private enum TestMaxmemoryCoordinator implements MaxmemoryCoordinator {
+        INSTANCE;
+
+        @Override
+        public void prepareWrite(long estimatedExtraBytes) {
+        }
+
+        @Override
+        public long nextLruClock() {
+            return 0L;
+        }
     }
 }
