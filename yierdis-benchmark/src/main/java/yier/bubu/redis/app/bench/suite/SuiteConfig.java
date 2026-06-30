@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -17,6 +18,7 @@ public record SuiteConfig(
         SuiteProfileName profile,
         SuiteArtifact current,
         Optional<SuiteArtifact> baseline,
+        List<SuiteArtifact> artifactsInRunOrder,
         Path reportDir,
         String host,
         int portBase,
@@ -34,6 +36,8 @@ public record SuiteConfig(
         Objects.requireNonNull(profile, "profile");
         Objects.requireNonNull(current, "current");
         baseline = baseline == null ? Optional.empty() : baseline;
+        Objects.requireNonNull(artifactsInRunOrder, "artifactsInRunOrder");
+        artifactsInRunOrder = List.copyOf(artifactsInRunOrder);
         Objects.requireNonNull(reportDir, "reportDir");
         Objects.requireNonNull(host, "host");
         Objects.requireNonNull(javaCmd, "javaCmd");
@@ -45,6 +49,37 @@ public record SuiteConfig(
         if (portBase < 0 || portBase > 65535) {
             throw new IllegalArgumentException("portBase must be in range 0..65535");
         }
+    }
+
+    public SuiteConfig(
+            SuiteProfileName profile,
+            SuiteArtifact current,
+            Optional<SuiteArtifact> baseline,
+            Path reportDir,
+            String host,
+            int portBase,
+            String javaCmd,
+            String xms,
+            String xmx,
+            String maxDirectMemory,
+            YierdisBenchServerArgs baseServerArgs,
+            boolean strictReplies
+    ) {
+        this(
+                profile,
+                current,
+                baseline,
+                defaultArtifacts(current, baseline),
+                reportDir,
+                host,
+                portBase,
+                javaCmd,
+                xms,
+                xmx,
+                maxDirectMemory,
+                baseServerArgs,
+                strictReplies
+        );
     }
 
     public static SuiteConfig from(YierdisBenchArgs args, YierdisBenchServerArgs serverArgs) {
@@ -68,18 +103,36 @@ public record SuiteConfig(
         if (args.nativeEval) {
             throw new IllegalArgumentException("suite does not support nativeEval");
         }
+        if (args.includeRedis && args.baselineServerJar != null) {
+            throw new IllegalArgumentException("suite does not support baselineServerJar with includeRedis");
+        }
 
         SuiteProfileName profile = SuiteProfileName.parse(args.suiteProfile);
-        SuiteArtifact current = new SuiteArtifact("current", requireRegularFile(args.currentServerJar, "currentServerJar"), "");
+        SuiteArtifact current = SuiteArtifact.yierdisJar("current", requireRegularFile(args.currentServerJar, "currentServerJar"), "");
         Optional<SuiteArtifact> baseline = args.baselineServerJar == null
                 ? Optional.empty()
-                : Optional.of(new SuiteArtifact("baseline", requireRegularFile(args.baselineServerJar, "baselineServerJar"), ""));
+                : Optional.of(SuiteArtifact.yierdisJar("baseline", requireRegularFile(args.baselineServerJar, "baselineServerJar"), ""));
+        List<SuiteArtifact> artifacts = new ArrayList<>();
+        if (args.includeRedis) {
+            artifacts.add(SuiteArtifact.externalRedis(
+                    args.redisLabel,
+                    args.redisHost,
+                    args.redisPort,
+                    args.redisUser,
+                    args.redisAuth,
+                    args.redisDb
+            ));
+        } else {
+            baseline.ifPresent(artifacts::add);
+        }
+        artifacts.add(current);
         Path reportDir = normalizeReportDir(args.reportDir, profile);
 
         return new SuiteConfig(
                 profile,
                 current,
                 baseline,
+                artifacts,
                 reportDir,
                 args.host,
                 args.portBase,
@@ -94,9 +147,15 @@ public record SuiteConfig(
 
     public List<String> artifactLabels() {
         List<String> labels = new ArrayList<>();
-        baseline.ifPresent(artifact -> labels.add(artifact.label()));
-        labels.add(current.label());
+        for (SuiteArtifact artifact : artifactsInRunOrder) {
+            labels.add(artifact.label());
+        }
         return labels;
+    }
+
+    @Override
+    public List<SuiteArtifact> artifactsInRunOrder() {
+        return Collections.unmodifiableList(artifactsInRunOrder);
     }
 
     @Override
@@ -123,5 +182,12 @@ public record SuiteConfig(
             throw new IllegalArgumentException(optionName + " does not exist or is not a regular file: " + normalized);
         }
         return normalized;
+    }
+
+    private static List<SuiteArtifact> defaultArtifacts(SuiteArtifact current, Optional<SuiteArtifact> baseline) {
+        List<SuiteArtifact> artifacts = new ArrayList<>();
+        baseline.ifPresent(artifacts::add);
+        artifacts.add(current);
+        return artifacts;
     }
 }

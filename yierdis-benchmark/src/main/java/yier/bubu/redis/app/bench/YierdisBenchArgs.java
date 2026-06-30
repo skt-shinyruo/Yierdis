@@ -52,6 +52,27 @@ public final class YierdisBenchArgs {
     @Option(names = "--reportDir", description = "Directory for suite JSON, CSV, and Markdown report artifacts.")
     public Path reportDir;
 
+    @Option(names = "--includeRedis", description = "Include an external Redis target in suite mode.")
+    public boolean includeRedis;
+
+    @Option(names = "--redisHost", defaultValue = "127.0.0.1", description = "External Redis host for suite comparison.")
+    public String redisHost = "127.0.0.1";
+
+    @Option(names = "--redisPort", defaultValue = "6379", description = "External Redis port for suite comparison.")
+    public int redisPort = 6379;
+
+    @Option(names = "--redisLabel", defaultValue = "redis", description = "Artifact label used for external Redis in reports.")
+    public String redisLabel = "redis";
+
+    @Option(names = "--redisUser", description = "Optional ACL username for external Redis in suite mode.")
+    public String redisUser;
+
+    @Option(names = "--redisAuth", description = "Optional password for external Redis in suite mode.")
+    public String redisAuth;
+
+    @Option(names = "--redisDb", defaultValue = "0", description = "Logical DB selected on external Redis before each suite pass.")
+    public int redisDb = 0;
+
     @Option(names = "--javaCmd", defaultValue = "java", description = "Java command used to start server (only used when starting server).")
     public String javaCmd = "java";
 

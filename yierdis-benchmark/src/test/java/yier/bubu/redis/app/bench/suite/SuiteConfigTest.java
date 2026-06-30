@@ -55,6 +55,40 @@ public class SuiteConfigTest {
     }
 
     @Test
+    public void suiteIncludeRedisBuildsExternalRedisArtifact() throws Exception {
+        Path current = regularTempJar("current");
+
+        SuiteConfig config = config(
+                "--suite",
+                "--includeRedis",
+                "--redisHost", "127.0.0.1",
+                "--redisPort", "6379",
+                "--currentServerJar", current.toString()
+        );
+
+        Assert.assertEquals(List.of("redis", "current"), config.artifactLabels());
+        Assert.assertEquals(SuiteArtifact.Kind.EXTERNAL_REDIS, config.artifactsInRunOrder().get(0).kind());
+        Assert.assertEquals("127.0.0.1", config.artifactsInRunOrder().get(0).host());
+        Assert.assertEquals(6379, config.artifactsInRunOrder().get(0).port());
+    }
+
+    @Test
+    public void suiteIncludeRedisRejectsBaselineJarCombination() throws Exception {
+        Path current = regularTempJar("current");
+        Path baseline = regularTempJar("baseline");
+
+        IllegalArgumentException rejected = assertRejects(
+                "--suite",
+                "--includeRedis",
+                "--baselineServerJar", baseline.toString(),
+                "--currentServerJar", current.toString()
+        );
+
+        Assert.assertTrue(rejected.getMessage().contains("baselineServerJar"));
+        Assert.assertTrue(rejected.getMessage().contains("includeRedis"));
+    }
+
+    @Test
     public void suiteCopiesBaseServerArgs() throws Exception {
         Path current = regularTempJar("current");
         YierdisBenchArgs args = new YierdisBenchArgs();
@@ -76,6 +110,7 @@ public class SuiteConfigTest {
                 SuiteProfileName.RELEASE,
                 new SuiteArtifact("current", current, ""),
                 java.util.Optional.empty(),
+                List.of(new SuiteArtifact("current", current, "")),
                 Files.createTempDirectory("suite-constructor-report-"),
                 "127.0.0.1",
                 16378,
@@ -110,14 +145,14 @@ public class SuiteConfigTest {
         Path current = regularTempJar("current");
         Path single = regularTempJar("single");
 
-        assertRejects("suite requires currentServerJar", "--suite");
-        assertRejects("suite does not support serverJar",
+        assertRejectsWithMessage("suite requires currentServerJar", "--suite");
+        assertRejectsWithMessage("suite does not support serverJar",
                 "--suite", "--currentServerJar", current.toString(), "--serverJar", single.toString());
-        assertRejects("suite does not support noStartServer",
+        assertRejectsWithMessage("suite does not support noStartServer",
                 "--suite", "--currentServerJar", current.toString(), "--noStartServer");
-        assertRejects("suite does not support comparisonMode",
+        assertRejectsWithMessage("suite does not support comparisonMode",
                 "--suite", "--currentServerJar", current.toString(), "--comparisonMode");
-        assertRejects("suite does not support nativeEval",
+        assertRejectsWithMessage("suite does not support nativeEval",
                 "--suite", "--currentServerJar", current.toString(), "--nativeEval");
     }
 
@@ -125,15 +160,15 @@ public class SuiteConfigTest {
     public void suiteRejectsMissingJarAndBadReportDir() throws Exception {
         Path missing = Files.createTempDirectory("suite-missing-").resolve("server.jar");
         IllegalArgumentException missingJar = assertRejects(
-                "currentServerJar",
                 "--suite",
                 "--currentServerJar", missing.toString()
         );
+        Assert.assertTrue(missingJar.getMessage().contains("currentServerJar"));
         Assert.assertTrue(missingJar.getMessage().contains(missing.toAbsolutePath().toString()));
 
         Path current = regularTempJar("current");
         Path reportFile = Files.createTempFile("suite-report", ".txt");
-        assertRejects("reportDir must be a directory",
+        assertRejectsWithMessage("reportDir must be a directory",
                 "--suite", "--currentServerJar", current.toString(), "--reportDir", reportFile.toString());
     }
 
@@ -150,7 +185,7 @@ public class SuiteConfigTest {
                 config("--suite", "--currentServerJar", current.toString(), "--suiteProfile", "FULL").profile()
         );
 
-        assertRejects("suiteProfile must be one of",
+        assertRejectsWithMessage("suiteProfile must be one of",
                 "--suite", "--currentServerJar", current.toString(), "--suiteProfile", "nightly");
     }
 
@@ -162,15 +197,20 @@ public class SuiteConfigTest {
         return SuiteConfig.from(args, serverArgs);
     }
 
-    private static IllegalArgumentException assertRejects(String messagePart, String... argv) {
+    private static IllegalArgumentException assertRejects(String... argv) {
         try {
             config(argv);
-            Assert.fail("expected rejection containing " + messagePart);
+            Assert.fail("expected rejection");
             return null;
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage(), e.getMessage().contains(messagePart));
             return e;
         }
+    }
+
+    private static IllegalArgumentException assertRejectsWithMessage(String messagePart, String... argv) {
+        IllegalArgumentException failure = assertRejects(argv);
+        Assert.assertTrue(failure.getMessage(), failure.getMessage().contains(messagePart));
+        return failure;
     }
 
     private static Path regularTempJar(String prefix) throws Exception {
