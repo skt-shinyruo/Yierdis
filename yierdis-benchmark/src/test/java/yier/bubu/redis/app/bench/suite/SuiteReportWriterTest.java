@@ -49,8 +49,8 @@ public class SuiteReportWriterTest {
         Assert.assertTrue(metricsCsv.contains("current,release-ping-latency,iteration,REPEAT,0,qps,,,,,,850.000\n"));
 
         String comparisonsCsv = Files.readString(comparisonsPath, StandardCharsets.UTF_8);
-        Assert.assertTrue(comparisonsCsv.startsWith("scenario,metric,baseline,current,delta_percent,status\n"));
-        Assert.assertTrue(comparisonsCsv.contains("release-ping-latency,qps,1000.000,850.000,-15.000,warning"));
+        Assert.assertTrue(comparisonsCsv.startsWith("scenario_id,baseline_artifact,current_artifact,metric,baseline_value,current_value,delta_percent,ratio,comparable,reason,status\n"));
+        Assert.assertTrue(comparisonsCsv.contains("release-ping-latency,baseline,current,qps,1000.000,850.000,-15.000,0.850,true,,warning"));
 
         String markdown = Files.readString(markdownPath, StandardCharsets.UTF_8);
         Assert.assertTrue(markdown.contains("# Yierdis Benchmark Suite Report"));
@@ -88,6 +88,42 @@ public class SuiteReportWriterTest {
         String markdown = SuiteMarkdownWriter.write(result);
         Assert.assertTrue(markdown.contains("PING, \"latency\"<br>case"));
         Assert.assertTrue(markdown.contains("pipe \\| newline<br>message"));
+    }
+
+    @Test
+    public void jsonWriterRendersExternalRedisArtifactWithoutSecrets() {
+        ScenarioDefinition scenario = new ScenarioDefinition("redis-set", "Redis SET",
+                BenchWorkloadKind.SET_GET, 10, 128, 100, 1, 1, 0, 1, false);
+        ScenarioPassResult redis = ScenarioPassResult.completed("redis", SuiteArtifact.Kind.EXTERNAL_REDIS, scenario, List.of(
+                IterationResult.repeat(0, List.of(
+                        new SuiteMetric("qps", 1000.0),
+                        new SuiteMetric("errors", 0.0)
+                ))
+        ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
+        SuiteRunResult result = new SuiteRunResult(
+                "run-redis",
+                SuiteProfileName.RELEASE,
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:01Z"),
+                new SuiteEnvironment(Map.of("redis.info.server", "redis_version:8.0.0")),
+                List.of(SuiteArtifact.externalRedis("redis", "127.0.0.1", 6379, "bench-user", "bench-secret", 2)),
+                List.of(scenario),
+                List.of(redis),
+                List.of(),
+                List.of()
+        );
+
+        String json = SuiteJsonWriter.write(result);
+
+        Assert.assertTrue(json.contains("\"label\":\"redis\""));
+        Assert.assertTrue(json.contains("\"kind\":\"EXTERNAL_REDIS\""));
+        Assert.assertTrue(json.contains("\"host\":\"127.0.0.1\""));
+        Assert.assertTrue(json.contains("\"port\":6379"));
+        Assert.assertTrue(json.contains("\"db\":2"));
+        Assert.assertTrue(json.contains("\"commitLabel\":\"\""));
+        Assert.assertFalse(json.contains("\"jarPath\""));
+        Assert.assertFalse(json.contains("bench-user"));
+        Assert.assertFalse(json.contains("bench-secret"));
     }
 
     @Test
@@ -154,6 +190,52 @@ public class SuiteReportWriterTest {
         Assert.assertTrue(json.indexOf("\"a-before\":\"a\"") < json.indexOf("\"z-before\":\"z\""));
         Assert.assertTrue(json.indexOf("\"a-after\":\"a\"") < json.indexOf("\"z-after\":\"z\""));
         Assert.assertTrue(markdown.indexOf("| a-key | a |") < markdown.indexOf("| z-key | z |"));
+    }
+
+    @Test
+    public void reportWriterWritesSuiteResultJsonForExternalRedisArtifact() throws Exception {
+        Path reportDir = Files.createTempDirectory("suite-report-writer-redis");
+        ScenarioDefinition scenario = new ScenarioDefinition("redis-get", "Redis GET",
+                BenchWorkloadKind.SET_GET, 10, 128, 100, 1, 1, 0, 1, false);
+        ScenarioPassResult redis = ScenarioPassResult.completed("redis", SuiteArtifact.Kind.EXTERNAL_REDIS, scenario, List.of(
+                IterationResult.repeat(0, List.of(
+                        new SuiteMetric("qps", 950.0),
+                        new SuiteMetric("errors", 0.0)
+                ))
+        ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
+        ScenarioPassResult current = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
+                IterationResult.repeat(0, List.of(
+                        new SuiteMetric("qps", 900.0),
+                        new SuiteMetric("errors", 0.0)
+                ))
+        ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
+        ScenarioComparison comparison = ScenarioComparison.compare(scenario, redis, current);
+        SuiteRunResult result = new SuiteRunResult(
+                "run-redis-report",
+                SuiteProfileName.RELEASE,
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:02Z"),
+                new SuiteEnvironment(Map.of("redis.info.server", "redis_version:8.0.0")),
+                List.of(
+                        SuiteArtifact.externalRedis("redis", "127.0.0.1", 6380, "", "hidden-secret", 0),
+                        SuiteArtifact.yierdisJar("current", Path.of("/tmp/current.jar"), "head")
+                ),
+                List.of(scenario),
+                List.of(redis, current),
+                List.of(comparison),
+                ThresholdEvaluator.evaluate(comparison, ThresholdPolicy.defaults())
+        );
+
+        SuiteReportWriter.writeAll(result, reportDir);
+
+        String json = Files.readString(reportDir.resolve("suite-result.json"), StandardCharsets.UTF_8);
+        Assert.assertTrue(json.contains("\"kind\":\"EXTERNAL_REDIS\""));
+        Assert.assertTrue(json.contains("\"host\":\"127.0.0.1\""));
+        Assert.assertTrue(json.contains("\"port\":6380"));
+        Assert.assertTrue(json.contains("\"db\":0"));
+        Assert.assertTrue(json.contains("\"kind\":\"YIERDIS_JAR\""));
+        Assert.assertTrue(json.contains("\"jarPath\":\"/tmp/current.jar\""));
+        Assert.assertFalse(json.contains("hidden-secret"));
     }
 
     @Test
