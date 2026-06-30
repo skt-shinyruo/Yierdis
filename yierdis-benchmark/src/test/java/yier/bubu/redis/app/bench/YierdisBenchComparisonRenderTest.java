@@ -101,6 +101,45 @@ public class YierdisBenchComparisonRenderTest {
     }
 
     @Test
+    public void renderFailureComparisonIncludesRedisSpecificNonComparableReason() {
+        YierdisBench.BackendResult baseline = fullResult("redis", 16378, 1000.0, 2000.0, new long[]{1_000_000, 1_500_000, 2_000_000});
+        YierdisBench.BackendResult current = fullResult("current", 16379, 1250.0, 1500.0, new long[]{1_000_000, 1_250_000, 1_500_000});
+
+        YierdisBench.ComparisonResult result = new YierdisBench.ComparisonResult(
+                YierdisBench.ComparisonSideResult.failure(
+                        "redis",
+                        Path.of("/tmp/redis"),
+                        List.of("redis-server", "--port", "16378"),
+                        "redis-7.2.0",
+                        baseline,
+                        true,
+                        "comparison skipped: external Redis config required"
+                ),
+                YierdisBench.ComparisonSideResult.success(
+                        "current",
+                        Path.of("/tmp/current.jar"),
+                        List.of("java", "-jar", "/tmp/current.jar", "--port", "16379"),
+                        "9b9f58c",
+                        current
+                ),
+                false,
+                "external Redis config required"
+        );
+
+        String rendered = YierdisBench.renderComparison(result);
+
+        Assert.assertTrue(rendered.contains("status: non-comparable"));
+        Assert.assertTrue(rendered.contains("environment: external Redis config required"));
+        Assert.assertTrue(rendered.contains("baseline jar: /tmp/redis"));
+        Assert.assertTrue(rendered.contains("baseline command: redis-server --port 16378"));
+        Assert.assertTrue(rendered.contains("baseline commit: redis-7.2.0"));
+        Assert.assertTrue(rendered.contains("baseline status: failed-partial"));
+        Assert.assertTrue(rendered.contains("baseline failure: comparison skipped: external Redis config required"));
+        Assert.assertTrue(rendered.contains("current status: ok"));
+        Assert.assertTrue(rendered.contains("n/a"));
+    }
+
+    @Test
     public void renderSkipLatencyComparisonOmitsLatencyColumns() {
         YierdisBench.ComparisonResult result = new YierdisBench.ComparisonResult(
                 YierdisBench.ComparisonSideResult.success(

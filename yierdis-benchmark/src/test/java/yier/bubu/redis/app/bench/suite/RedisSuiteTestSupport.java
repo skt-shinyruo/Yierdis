@@ -29,6 +29,26 @@ public final class RedisSuiteTestSupport {
                 1000, 8, 4, warmups, repeats, latency);
     }
 
+    public static ScenarioPassResult cleanPass(String artifactLabel, ScenarioDefinition scenario) {
+        List<SuiteMetric> metrics = new ArrayList<>();
+        metrics.add(new SuiteMetric("qps", 1000.0));
+        metrics.add(new SuiteMetric("errors", 0.0));
+        if (scenario.latency()) {
+            metrics.add(new SuiteMetric("p95_ms", 10.0));
+            metrics.add(new SuiteMetric("p99_ms", 20.0));
+        }
+        return new ScenarioPassResult(
+                artifactLabel,
+                scenario,
+                false,
+                "",
+                List.of(IterationResult.repeat(0, metrics)),
+                ObservationSnapshot.empty(),
+                ObservationSnapshot.empty(),
+                null
+        );
+    }
+
     public static SuiteConfig redisCurrentOnlyConfig(Path reportDir, int portBase, int redisPort) throws Exception {
         YierdisBenchServerArgs serverArgs = new YierdisBenchServerArgs();
         serverArgs.normalizeAndValidate();
