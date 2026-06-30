@@ -119,6 +119,10 @@ SET raw "\x00\x01"
 
 `--includeRedis` adds an externally managed Redis artifact to the suite run. Redis is not launched by the benchmark process; operators provide `--redisHost`, `--redisPort`, optional auth, and DB selection. Suite mode records Redis endpoint metadata in the environment block (`redis.host`, `redis.port`, `redis.db`) and captures Redis `INFO` text under `redis.info.server` so reports preserve the external baseline context.
 
+When Redis auth or a non-zero Redis DB is configured, suite mode does not treat those values as report-only metadata. The suite harness authenticates and selects the configured DB before readiness checks, before the per-pass `FLUSHDB`, before observation capture, and before benchmark workload traffic. That same auth/select bootstrap is applied to both the extended socket-based workloads in `BenchHarness` and the core worker-based workloads that reuse `YierdisBench` workers, so external Redis runs measure the configured logical DB instead of always falling back to DB 0.
+
+Redis-specific CLI options are also validated as suite-only inputs. An explicit `--redisHost`, `--redisPort`, `--redisLabel`, `--redisUser`, `--redisAuth`, `--redisDb`, or `--includeRedis` outside `--suite` is rejected instead of being silently ignored. `redisDb` must be non-negative, and `redisLabel` must not collide with `current`, `baseline`, or another suite artifact label.
+
 Redis comparisons are rendered explicitly: `comparisons.csv` includes `baseline_artifact`, `current_artifact`, `comparable`, `reason`, and ratio fields so a `redis -> current` row is distinguishable from Yierdis jar comparisons. `report.md` adds a Redis comparison summary when an external Redis artifact participates. Redis-incompatible scenarios, such as operator-dependent maxmemory or native-defrag cases, remain `non-comparable` with the scenario reason rather than being treated as performance conclusions.
 
 The first version uses soft thresholds: QPS drops, p95/p99 latency increases, errors, and non-comparable scenarios are reported as warnings or critical observations but do not fail the process by default.
@@ -142,6 +146,16 @@ YierdisBenchArgs
 
 `YierdisBenchServerArgs` 是 bench-local server launch argv 模型。它覆盖 port、DB 数量、cleanup、executor/backpressure、transaction queue、protocol limits、maxmemory、eviction、expire cleanup、native defrag 和 `KEYS` budget。它会归一化 `executorSchedulingPolicy`、`maxmemoryScope` 和 `maxmemoryPolicy`，再由 `toArgv()` 生成子进程 server 参数。
 
+Redis suite comparison also relies on this bench-local argv model for
+current-side server overrides. The release profile keeps the production
+default shared native slot capacity unchanged at `256 * 1024`; it does not
+silently raise the server default just because Redis suite mode is enabled.
+When the release smoke needs a larger shared native slot budget for the
+current-side Yierdis artifact, the benchmark passes an explicit
+`--nativeSlotCapacity` override through `YierdisBenchServerArgs` together
+with `--databases 1`. That override is scenario-scoped, not a global server
+default change.
+
 重要 caveat：bench launch argv model 不是完整 server args model。`SERVER_ARGS_EXTRA` 会先通过 `YierdisBenchServerArgs` 的 picocli parser，再由 `toArgv()` 传给 server child process；当前不包含 server-only 的 `--client-idle-timeout-millis`、`--client-output-buffer-limit-bytes`、`--client-output-buffer-over-limit-millis`。要验证慢客户端保护，应直接启动 server，或先扩展 bench model。
 
 ## ServerProcess
@@ -158,6 +172,15 @@ YierdisBenchArgs
 这意味着 benchmark 的默认模式会覆盖真实进程启动、真实 Netty server、真实 RESP decode/execute/reply 路径。`--noStartServer` 则连接已有 server，适合手工启动特殊参数后跑同一 workload。
 
 comparison mode 会分别启动 baseline/current jar。只有双方完成同一组必要测量且没有 workload/protocol/reply errors 时，结果才标记 comparable；否则 summary 里会标记 `non-comparable`。
+
+Redis suite mode follows the same comparability rule. A `redis -> current`
+comparison is only `comparable` when both passes complete cleanly with the
+same workload shape and `errors == 0`. Redis-only or Yierdis-only operational
+differences are carried as explicit non-comparable reasons instead of being
+flattened into performance numbers. In the current design, native-defrag
+scenarios remain Yierdis-only, and operator-dependent Redis maxmemory
+scenarios remain `EXTERNAL_CONFIG_REQUIRED` until an explicit acknowledgement
+flow exists.
 
 benchmark 的结果聚合也有边界：吞吐和延迟样本只是观测值，不是 correctness oracle。`summary`、`comparison` 和 `strictReplies` 的组合用来判断“跑得快不快”以及“这次结果能不能拿来比较”，但不替代协议测试、命令测试或 DB direct ops。
 

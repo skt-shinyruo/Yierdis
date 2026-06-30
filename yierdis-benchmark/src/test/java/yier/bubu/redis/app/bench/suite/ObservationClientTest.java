@@ -99,6 +99,36 @@ public class ObservationClientTest {
         }
     }
 
+    @Test
+    public void captureRedisObservationAuthenticatesAndSelectsConfiguredDb() throws Exception {
+        try (RedisSuiteTestSupport.RedisLikeObservationServer server = RedisSuiteTestSupport.RedisLikeObservationServer.start()) {
+            Assert.assertTrue(server.awaitListening());
+            SuiteArtifact artifact = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "bench-user", "bench-secret", 4);
+
+            ObservationSnapshot snapshot = new ObservationClient().capture(artifact);
+
+            Assert.assertTrue(snapshot.values().containsKey("INFO"));
+            Assert.assertTrue(snapshot.values().containsKey("MEMORY STATS"));
+            Assert.assertEquals(List.of(
+                    "AUTH BENCH-USER BENCH-SECRET", "SELECT 4", "INFO",
+                    "AUTH BENCH-USER BENCH-SECRET", "SELECT 4", "MEMORY STATS"
+            ), server.awaitCommands(6));
+        }
+    }
+
+    @Test
+    public void captureEnvironmentMetadataAuthenticatesAndSelectsConfiguredDb() throws Exception {
+        try (RedisSuiteTestSupport.RedisLikeObservationServer server = RedisSuiteTestSupport.RedisLikeObservationServer.start()) {
+            Assert.assertTrue(server.awaitListening());
+            SuiteArtifact artifact = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "bench-user", "bench-secret", 4);
+
+            Map<String, String> metadata = new ObservationClient().captureEnvironmentMetadata(artifact);
+
+            Assert.assertTrue(metadata.containsKey("redis.info.server"));
+            Assert.assertEquals(List.of("AUTH BENCH-USER BENCH-SECRET", "SELECT 4", "INFO"), server.awaitCommands(3));
+        }
+    }
+
     private static RespClientCodec.RespReply simple(String text) {
         return new RespClientCodec.RespReply(RespClientCodec.RespReply.Kind.SIMPLE_STRING, text, null, null, null);
     }

@@ -1566,6 +1566,7 @@ public final class YierdisBench {
         static BenchConfig from(YierdisBenchArgs args, YierdisBenchServerArgs baseServerArgs) {
             Objects.requireNonNull(args, "args");
             Objects.requireNonNull(baseServerArgs, "baseServerArgs");
+            validateNonSuiteRedisOptions(args);
 
             Path serverJar = args.serverJar;
             Path baselineServerJar = args.baselineServerJar;
@@ -1628,6 +1629,12 @@ public final class YierdisBench {
                     args.nativeEval,
                     args.nativeEvalIterations
             );
+        }
+
+        private static void validateNonSuiteRedisOptions(YierdisBenchArgs args) {
+            if (args.hasRedisSpecificOptions()) {
+                throw new IllegalArgumentException("redis-specific options require --suite");
+            }
         }
     }
 
@@ -1942,7 +1949,11 @@ public final class YierdisBench {
         private final byte[] value;
         private final int seqStartIndex;
         private final boolean strictReplies;
+        private final boolean externalRedis;
         private final int readTimeoutMillis;
+        private final String redisUser;
+        private final String redisAuth;
+        private final int redisDb;
 
         ThroughputWorker(
                 String host,
@@ -1970,8 +1981,31 @@ public final class YierdisBench {
                 boolean strictReplies,
                 int readTimeoutMillis
         ) {
+            this(host, port, workload, requests, pipeline, keyspace, value, seqStartIndex, strictReplies,
+                    false, readTimeoutMillis, "", "", 0);
+        }
+
+        ThroughputWorker(
+                String host,
+                int port,
+                Workload workload,
+                int requests,
+                int pipeline,
+                int keyspace,
+                byte[] value,
+                int seqStartIndex,
+                boolean strictReplies,
+                boolean externalRedis,
+                int readTimeoutMillis,
+                String redisUser,
+                String redisAuth,
+                int redisDb
+        ) {
             if (readTimeoutMillis < 0) {
                 throw new IllegalArgumentException("readTimeoutMillis must be >= 0");
+            }
+            if (redisDb < 0) {
+                throw new IllegalArgumentException("redisDb must be >= 0");
             }
             this.host = host;
             this.port = port;
@@ -1982,7 +2016,11 @@ public final class YierdisBench {
             this.value = value;
             this.seqStartIndex = seqStartIndex;
             this.strictReplies = strictReplies;
+            this.externalRedis = externalRedis;
             this.readTimeoutMillis = readTimeoutMillis;
+            this.redisUser = redisUser == null ? "" : redisUser;
+            this.redisAuth = redisAuth == null ? "" : redisAuth;
+            this.redisDb = redisDb;
         }
 
         @Override
@@ -2003,6 +2041,9 @@ public final class YierdisBench {
                 }
                 try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                      BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
+                    if (externalRedis) {
+                        authenticateAndSelect(out, in, redisUser, redisAuth, redisDb);
+                    }
                     try (RespCommandWriter writer = new RespCommandWriter(out)) {
                         byte[] keyBuf = new byte[9]; // "k" + 8 digits
                         byte[] hllSparseKeyBuf = new byte[HLL_SPARSE_KEY_PREFIX.length + HLL_FIXED_DIGITS];
@@ -2090,7 +2131,11 @@ public final class YierdisBench {
         private final int keyspace;
         private final byte[] value;
         private final boolean strictReplies;
+        private final boolean externalRedis;
         private final int readTimeoutMillis;
+        private final String redisUser;
+        private final String redisAuth;
+        private final int redisDb;
 
         LatencyWorker(String host, int port, Workload workload, int requests, int keyspace, byte[] value, boolean strictReplies) {
             this(host, port, workload, requests, keyspace, value, strictReplies, 0);
@@ -2106,8 +2151,28 @@ public final class YierdisBench {
                 boolean strictReplies,
                 int readTimeoutMillis
         ) {
+            this(host, port, workload, requests, keyspace, value, strictReplies, false, readTimeoutMillis, "", "", 0);
+        }
+
+        LatencyWorker(
+                String host,
+                int port,
+                Workload workload,
+                int requests,
+                int keyspace,
+                byte[] value,
+                boolean strictReplies,
+                boolean externalRedis,
+                int readTimeoutMillis,
+                String redisUser,
+                String redisAuth,
+                int redisDb
+        ) {
             if (readTimeoutMillis < 0) {
                 throw new IllegalArgumentException("readTimeoutMillis must be >= 0");
+            }
+            if (redisDb < 0) {
+                throw new IllegalArgumentException("redisDb must be >= 0");
             }
             this.host = host;
             this.port = port;
@@ -2116,7 +2181,11 @@ public final class YierdisBench {
             this.keyspace = keyspace;
             this.value = value;
             this.strictReplies = strictReplies;
+            this.externalRedis = externalRedis;
             this.readTimeoutMillis = readTimeoutMillis;
+            this.redisUser = redisUser == null ? "" : redisUser;
+            this.redisAuth = redisAuth == null ? "" : redisAuth;
+            this.redisDb = redisDb;
         }
 
         @Override
@@ -2142,6 +2211,9 @@ public final class YierdisBench {
                 }
                 try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                      BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
+                    if (externalRedis) {
+                        authenticateAndSelect(out, in, redisUser, redisAuth, redisDb);
+                    }
                     try (RespCommandWriter writer = new RespCommandWriter(out)) {
                         for (int i = 0; i < requests; i++) {
                             int keyIndex = rnd.nextInt(keyspace);
@@ -2301,6 +2373,37 @@ public final class YierdisBench {
                 return size;
             }
         }
+    }
+
+    private static void authenticateAndSelect(
+            OutputStream out,
+            InputStream in,
+            String redisUser,
+            String redisAuth,
+            int redisDb
+    ) throws IOException {
+        if (redisAuth != null && !redisAuth.isBlank()) {
+            if (redisUser == null || redisUser.isBlank()) {
+                RespClientCodec.writeCommand(out, List.of(
+                        "AUTH".getBytes(StandardCharsets.US_ASCII),
+                        redisAuth.getBytes(StandardCharsets.US_ASCII)
+                ));
+            } else {
+                RespClientCodec.writeCommand(out, List.of(
+                        "AUTH".getBytes(StandardCharsets.US_ASCII),
+                        redisUser.getBytes(StandardCharsets.US_ASCII),
+                        redisAuth.getBytes(StandardCharsets.US_ASCII)
+                ));
+            }
+            out.flush();
+            RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        }
+        RespClientCodec.writeCommand(out, List.of(
+                "SELECT".getBytes(StandardCharsets.US_ASCII),
+                Integer.toString(redisDb).getBytes(StandardCharsets.US_ASCII)
+        ));
+        out.flush();
+        RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
     }
 
     static final class WorkerCounter {

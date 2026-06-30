@@ -89,6 +89,55 @@ public class SuiteConfigTest {
     }
 
     @Test
+    public void suiteIncludeRedisRejectsNegativeDbAndReservedOrDuplicateLabels() throws Exception {
+        Path current = regularTempJar("current");
+        Path baseline = regularTempJar("baseline");
+
+        assertRejectsWithMessage("redisDb",
+                "--suite",
+                "--includeRedis",
+                "--currentServerJar", current.toString(),
+                "--redisDb", "-1");
+        assertRejectsWithMessage("redisLabel",
+                "--suite",
+                "--includeRedis",
+                "--currentServerJar", current.toString(),
+                "--redisLabel", "current");
+        assertRejectsWithMessage("redisLabel",
+                "--suite",
+                "--includeRedis",
+                "--currentServerJar", current.toString(),
+                "--redisLabel", "baseline");
+    }
+
+    @Test
+    public void nonSuiteModeRejectsRedisSpecificOptions() throws Exception {
+        Path current = regularTempJar("current");
+
+        assertRejectsWithMessage("suite",
+                "--currentServerJar", current.toString(),
+                "--includeRedis");
+        assertRejectsWithMessage("suite",
+                "--currentServerJar", current.toString(),
+                "--redisHost", "127.0.0.9");
+        assertRejectsWithMessage("suite",
+                "--currentServerJar", current.toString(),
+                "--redisPort", "6389");
+        assertRejectsWithMessage("suite",
+                "--currentServerJar", current.toString(),
+                "--redisLabel", "redis-alt");
+        assertRejectsWithMessage("suite",
+                "--currentServerJar", current.toString(),
+                "--redisUser", "bench-user");
+        assertRejectsWithMessage("suite",
+                "--currentServerJar", current.toString(),
+                "--redisAuth", "bench-secret");
+        assertRejectsWithMessage("suite",
+                "--currentServerJar", current.toString(),
+                "--redisDb", "1");
+    }
+
+    @Test
     public void suiteCopiesBaseServerArgs() throws Exception {
         Path current = regularTempJar("current");
         YierdisBenchArgs args = new YierdisBenchArgs();

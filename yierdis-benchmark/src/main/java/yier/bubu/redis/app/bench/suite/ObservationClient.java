@@ -19,7 +19,7 @@ public final class ObservationClient {
     public ObservationSnapshot capture(SuiteArtifact artifact) {
         Objects.requireNonNull(artifact, "artifact");
         if (artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS) {
-            return captureRedis(artifact.host(), artifact.port());
+            return captureRedis(artifact);
         }
         return capture(artifact.host(), artifact.port());
     }
@@ -39,16 +39,16 @@ public final class ObservationClient {
         if (artifact.kind() != SuiteArtifact.Kind.EXTERNAL_REDIS) {
             return Map.of();
         }
-        String info = captureCommand(artifact.host(), artifact.port(), "INFO");
+        String info = captureCommand(artifact, "INFO");
         return Map.of("redis.info.server", info);
     }
 
-    private ObservationSnapshot captureRedis(String host, int port) {
-        validateEndpoint(host, port);
+    private ObservationSnapshot captureRedis(SuiteArtifact artifact) {
+        validateEndpoint(artifact.host(), artifact.port());
 
         Map<String, String> values = new LinkedHashMap<>();
-        values.put("INFO", captureCommand(host, port, "INFO"));
-        values.put("MEMORY STATS", captureCommand(host, port, "MEMORY", "STATS"));
+        values.put("INFO", captureCommand(artifact, "INFO"));
+        values.put("MEMORY STATS", captureCommand(artifact, "MEMORY", "STATS"));
         return new ObservationSnapshot(values);
     }
 
@@ -77,6 +77,34 @@ public final class ObservationClient {
         } catch (IOException | RuntimeException e) {
             return formatError(e);
         }
+    }
+
+    private static String captureCommand(SuiteArtifact artifact, String... args) {
+        try (Socket socket = new Socket()) {
+            socket.setTcpNoDelay(true);
+            socket.connect(new InetSocketAddress(artifact.host(), artifact.port()), CONNECT_TIMEOUT_MILLIS);
+            socket.setSoTimeout(READ_TIMEOUT_MILLIS);
+            bootstrapRedisSession(socket, artifact);
+            RespClientCodec.writeCommand(socket.getOutputStream(), utf8Args(args));
+            RespClientCodec.RespReply reply = RespClientCodec.readReply(socket.getInputStream(),
+                    RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+            return formatReply(reply);
+        } catch (IOException | RuntimeException e) {
+            return formatError(e);
+        }
+    }
+
+    private static void bootstrapRedisSession(Socket socket, SuiteArtifact artifact) throws IOException {
+        if (!artifact.authPassword().isBlank()) {
+            if (artifact.authUser().isBlank()) {
+                RespClientCodec.writeCommand(socket.getOutputStream(), utf8Args("AUTH", artifact.authPassword()));
+            } else {
+                RespClientCodec.writeCommand(socket.getOutputStream(), utf8Args("AUTH", artifact.authUser(), artifact.authPassword()));
+            }
+            RespClientCodec.readReply(socket.getInputStream(), RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        }
+        RespClientCodec.writeCommand(socket.getOutputStream(), utf8Args("SELECT", Integer.toString(artifact.db())));
+        RespClientCodec.readReply(socket.getInputStream(), RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
     }
 
     private static String formatArray(List<RespClientCodec.RespReply> values) {

@@ -85,11 +85,11 @@ public final class BenchHarness implements SuiteHarness {
         Objects.requireNonNull(logFile, "logFile");
 
         if (artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS) {
-            if (!waitReady(artifact.host(), artifact.port(), READY_TIMEOUT_MILLIS, READY_READ_TIMEOUT_MILLIS)) {
+            if (!waitReady(artifact, READY_TIMEOUT_MILLIS, READY_READ_TIMEOUT_MILLIS)) {
                 throw new IllegalStateException("suite server not ready within "
                         + READY_TIMEOUT_MILLIS + " ms: " + artifact.host() + ":" + artifact.port());
             }
-            externalRedisEndpoints.add(new ExternalRedisEndpoint(artifact.host(), artifact.port()));
+            externalRedisEndpoints.add(ExternalRedisEndpoint.from(artifact));
             prepareExternalRedisPass(artifact);
             return new SuiteHarness.RunningServer(artifact.label(), scenario.id(), artifact.port(), logFile, null);
         }
@@ -123,8 +123,10 @@ public final class BenchHarness implements SuiteHarness {
 
     @Override
     public ObservationSnapshot captureObservation(String host, int port) {
-        if (externalRedisEndpoints.contains(new ExternalRedisEndpoint(host, port))) {
-            return observationClient.capture(SuiteArtifact.externalRedis("redis", host, port, "", "", 0));
+        for (ExternalRedisEndpoint endpoint : externalRedisEndpoints) {
+            if (endpoint.host().equals(host) && endpoint.port() == port) {
+                return observationClient.capture(endpoint.toArtifact());
+            }
         }
         return observationClient.capture(host, port);
     }
@@ -153,7 +155,11 @@ public final class BenchHarness implements SuiteHarness {
                 scenario.keyspace(),
                 scenario.dataSize(),
                 scenario.latency(),
-                config.strictReplies()
+                config.strictReplies(),
+                workloadIsExternalRedis(server, config),
+                workloadRedisUser(server, config),
+                workloadRedisAuth(server, config),
+                workloadRedisDb(server, config)
         );
         BenchWorkloadResult result = runWorkload(request);
         return new IterationResult(kind, index, result.toMetrics());
@@ -184,6 +190,8 @@ public final class BenchHarness implements SuiteHarness {
             socket.setTcpNoDelay(true);
             socket.connect(new InetSocketAddress(artifact.host(), artifact.port()), READY_CONNECT_TIMEOUT_MILLIS);
             socket.setSoTimeout(READY_READ_TIMEOUT_MILLIS);
+            bootstrapRedisSession(socket.getOutputStream(), socket.getInputStream(),
+                    artifact.authUser(), artifact.authPassword(), artifact.db());
             RespClientCodec.writeCommand(socket.getOutputStream(), command);
             RespClientCodec.readReply(socket.getInputStream(), RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
         } catch (IOException e) {
@@ -244,7 +252,46 @@ public final class BenchHarness implements SuiteHarness {
         return config.host();
     }
 
+    private static String workloadRedisUser(SuiteHarness.RunningServer server, SuiteConfig config) {
+        SuiteArtifact artifact = workloadArtifact(server, config);
+        return artifact == null ? "" : artifact.authUser();
+    }
+
+    private static String workloadRedisAuth(SuiteHarness.RunningServer server, SuiteConfig config) {
+        SuiteArtifact artifact = workloadArtifact(server, config);
+        return artifact == null ? "" : artifact.authPassword();
+    }
+
+    private static int workloadRedisDb(SuiteHarness.RunningServer server, SuiteConfig config) {
+        SuiteArtifact artifact = workloadArtifact(server, config);
+        return artifact == null ? 0 : artifact.db();
+    }
+
+    private static boolean workloadIsExternalRedis(SuiteHarness.RunningServer server, SuiteConfig config) {
+        SuiteArtifact artifact = workloadArtifact(server, config);
+        return artifact != null && artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS;
+    }
+
+    private static SuiteArtifact workloadArtifact(SuiteHarness.RunningServer server, SuiteConfig config) {
+        for (SuiteArtifact artifact : config.artifactsInRunOrder()) {
+            if (artifact.label().equals(server.artifactLabel())) {
+                return artifact;
+            }
+        }
+        return null;
+    }
+
     static boolean waitReady(String host, int port, int timeoutMillis, int readTimeoutMillis) throws InterruptedException {
+        return waitReady(SuiteArtifact.externalRedis("redis", host, port, "", "", 0), timeoutMillis, readTimeoutMillis);
+    }
+
+    static boolean waitReady(SuiteArtifact artifact, int timeoutMillis, int readTimeoutMillis) throws InterruptedException {
+        Objects.requireNonNull(artifact, "artifact");
+        if (artifact.kind() != SuiteArtifact.Kind.EXTERNAL_REDIS) {
+            throw new IllegalArgumentException("waitReady artifact must be EXTERNAL_REDIS");
+        }
+        String host = artifact.host();
+        int port = artifact.port();
         Objects.requireNonNull(host, "host");
         if (host.isBlank()) {
             throw new IllegalArgumentException("host must not be blank");
@@ -267,7 +314,7 @@ public final class BenchHarness implements SuiteHarness {
             }
             int attemptReadTimeout = (int) Math.max(1, Math.min(readTimeoutMillis, remainingMillis));
             int attemptConnectTimeout = (int) Math.max(1, Math.min(READY_CONNECT_TIMEOUT_MILLIS, remainingMillis));
-            if (pingOnce(host, port, attemptConnectTimeout, attemptReadTimeout)) {
+            if (pingOnce(artifact, attemptConnectTimeout, attemptReadTimeout)) {
                 return true;
             }
             remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
@@ -279,11 +326,13 @@ public final class BenchHarness implements SuiteHarness {
         return false;
     }
 
-    private static boolean pingOnce(String host, int port, int connectTimeoutMillis, int readTimeoutMillis) {
+    private static boolean pingOnce(SuiteArtifact artifact, int connectTimeoutMillis, int readTimeoutMillis) {
         try (Socket socket = new Socket()) {
             socket.setTcpNoDelay(true);
-            socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis);
+            socket.connect(new InetSocketAddress(artifact.host(), artifact.port()), connectTimeoutMillis);
             socket.setSoTimeout(readTimeoutMillis);
+            bootstrapRedisSession(socket.getOutputStream(), socket.getInputStream(),
+                    artifact.authUser(), artifact.authPassword(), artifact.db());
             RespClientCodec.writeCommand(socket.getOutputStream(), List.of(PING));
             RespClientCodec.RespReply reply = RespClientCodec.readReply(socket.getInputStream(),
                     RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
@@ -320,7 +369,11 @@ public final class BenchHarness implements SuiteHarness {
                         value,
                         0,
                         request.strictReplies(),
-                        readTimeoutMillis
+                        request.externalRedis(),
+                        readTimeoutMillis,
+                        request.redisUser(),
+                        request.redisAuth(),
+                        request.redisDb()
                 )));
             }
             waitForPool(pool);
@@ -372,7 +425,11 @@ public final class BenchHarness implements SuiteHarness {
                         request.keyspace(),
                         value,
                         request.strictReplies(),
-                        readTimeoutMillis
+                        request.externalRedis(),
+                        readTimeoutMillis,
+                        request.redisUser(),
+                        request.redisAuth(),
+                        request.redisDb()
                 )));
             }
             waitForPool(pool);
@@ -471,7 +528,11 @@ public final class BenchHarness implements SuiteHarness {
                         request.strictReplies(),
                         request.dataSize(),
                         readTimeoutMillis,
-                        latency
+                        latency,
+                        request.externalRedis(),
+                        request.redisUser(),
+                        request.redisAuth(),
+                        request.redisDb()
                 )));
             }
             waitForPool(pool);
@@ -520,7 +581,11 @@ public final class BenchHarness implements SuiteHarness {
             boolean strictReplies,
             int expectedDataSize,
             int readTimeoutMillis,
-            boolean latency
+            boolean latency,
+            boolean externalRedis,
+            String redisUser,
+            String redisAuth,
+            int redisDb
     ) {
         if (requests <= 0) {
             return new ExtendedClientResult(0, 0, new long[0]);
@@ -537,6 +602,9 @@ public final class BenchHarness implements SuiteHarness {
             socket.setSoTimeout(readTimeoutMillis);
             try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                  BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
+                if (externalRedis) {
+                    bootstrapRedisSession(out, in, redisUser, redisAuth, redisDb);
+                }
                 int remaining = requests;
                 while (remaining > 0) {
                     int batch = Math.min(pipeline, remaining);
@@ -616,6 +684,9 @@ public final class BenchHarness implements SuiteHarness {
             socket.setSoTimeout(readTimeoutMillis);
             try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                  BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024)) {
+                if (request.externalRedis()) {
+                    bootstrapRedisSession(out, in, request.redisUser(), request.redisAuth(), request.redisDb());
+                }
                 int remaining = request.keyspace();
                 int keyIndex = 0;
                 while (remaining > 0) {
@@ -715,6 +786,27 @@ public final class BenchHarness implements SuiteHarness {
         return value.getBytes(StandardCharsets.US_ASCII);
     }
 
+    private static void bootstrapRedisSession(
+            java.io.OutputStream out,
+            java.io.InputStream in,
+            String redisUser,
+            String redisAuth,
+            int redisDb
+    ) throws IOException {
+        if (redisAuth != null && !redisAuth.isBlank()) {
+            if (redisUser == null || redisUser.isBlank()) {
+                RespClientCodec.writeCommand(out, List.of(bytes("AUTH"), bytes(redisAuth)));
+            } else {
+                RespClientCodec.writeCommand(out, List.of(bytes("AUTH"), bytes(redisUser), bytes(redisAuth)));
+            }
+            out.flush();
+            RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        }
+        RespClientCodec.writeCommand(out, List.of(bytes("SELECT"), bytes(Integer.toString(redisDb))));
+        out.flush();
+        RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+    }
+
     private static byte[] extendedKey(BenchWorkloadKind workload, int keyIndex) {
         return ascii(workload.name() + ":key:" + keyIndex);
     }
@@ -740,9 +832,23 @@ public final class BenchHarness implements SuiteHarness {
         }
     }
 
-    private record ExternalRedisEndpoint(String host, int port) {
+    private record ExternalRedisEndpoint(String host, int port, String authUser, String authPassword, int db) {
         private ExternalRedisEndpoint {
             Objects.requireNonNull(host, "host");
+        }
+
+        private static ExternalRedisEndpoint from(SuiteArtifact artifact) {
+            return new ExternalRedisEndpoint(
+                    artifact.host(),
+                    artifact.port(),
+                    artifact.authUser(),
+                    artifact.authPassword(),
+                    artifact.db()
+            );
+        }
+
+        private SuiteArtifact toArtifact() {
+            return SuiteArtifact.externalRedis("redis", host, port, authUser, authPassword, db);
         }
     }
 
