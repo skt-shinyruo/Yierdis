@@ -165,6 +165,7 @@ public final class BenchHarness implements SuiteHarness {
         Object handle = server.handle();
         if (handle == null) {
             externalRedisEndpoints.removeIf(endpoint -> endpoint.port() == server.port());
+            preparedPasses.removeIf(pass -> pass.matches(server));
             return;
         }
         if (!(handle instanceof YierdisBench.ServerProcess process)) {

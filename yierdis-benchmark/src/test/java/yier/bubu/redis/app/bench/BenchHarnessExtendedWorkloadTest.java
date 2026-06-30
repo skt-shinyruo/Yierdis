@@ -355,6 +355,31 @@ public class BenchHarnessExtendedWorkloadTest {
     }
 
     @Test
+    public void stoppingRedisPassClearsPreparedStateForRepeatedHarnessReuse() throws Exception {
+        try (RedisSuiteTestSupport.RedisLikeObservationServer server = RedisSuiteTestSupport.RedisLikeObservationServer.start()) {
+            Assert.assertTrue(server.awaitListening());
+            RecordingDenseHllPreparer preparer = new RecordingDenseHllPreparer();
+            BenchHarness harness = new BenchHarness(preparer, 1_000);
+            SuiteArtifact artifact = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "", "", 0);
+            SuiteConfig config = RedisSuiteTestSupport.redisCurrentOnlyConfig(Path.of("target/redis-suite-test"), 16378, server.port());
+            ScenarioDefinition scenario = RedisSuiteTestSupport.scenario("release-hll-dense-c64-p8", BenchWorkloadKind.HLL_DENSE, 1, 1, false);
+            Path logFile = Path.of("target/redis.log");
+
+            SuiteHarness.RunningServer firstRun = harness.startServer(artifact, scenario, config, artifact.port(), logFile);
+            harness.prepareScenario(firstRun, scenario, config);
+            harness.stopServer(firstRun);
+
+            SuiteHarness.RunningServer secondRun = harness.startServer(artifact, scenario, config, artifact.port(), logFile);
+            harness.prepareScenario(secondRun, scenario, config);
+
+            Assert.assertEquals(List.of(
+                    "127.0.0.1:" + server.port() + ":100:4",
+                    "127.0.0.1:" + server.port() + ":100:4"
+            ), preparer.calls);
+        }
+    }
+
+    @Test
     public void setGetCountsNullGetReplyAsStrictFailure() throws Exception {
         try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
             if ("GET".equals(command)) {

@@ -191,3 +191,53 @@ Final GREEN result:
 
 - `BUILD SUCCESS`
 - `Tests run: 39, Failures: 0, Errors: 0, Skipped: 0`
+
+### Prepared State Reuse Fix
+
+#### Remaining High Finding: external Redis stop did not clear dense-HLL prepared pass state
+
+RED:
+
+- Added `BenchHarnessExtendedWorkloadTest.stoppingRedisPassClearsPreparedStateForRepeatedHarnessReuse`.
+- The regression uses one `BenchHarness` instance across two external Redis `HLL_DENSE` lifecycle passes with the same pass identity:
+  - start Redis pass
+  - run `prepareScenario(...)`
+  - stop Redis pass
+  - start the same Redis pass again
+  - run `prepareScenario(...)` again
+- Before the fix, the second pass skipped prefill because `preparedPasses` still contained the first Redis pass entry after external teardown.
+
+Focused RED command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=BenchHarnessExtendedWorkloadTest#stoppingRedisPassClearsPreparedStateForRepeatedHarnessReuse -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Escalated RED evidence:
+
+- `BUILD FAILURE`
+- `Tests run: 1, Failures: 1, Errors: 0, Skipped: 0`
+- Failure at `BenchHarnessExtendedWorkloadTest:375`
+- Expected two prefill calls for the repeated Redis pass, but only one occurred
+
+GREEN:
+
+- `BenchHarness.stopServer(...)` now removes `preparedPasses` for external Redis passes (`handle == null`) in addition to clearing Redis endpoint classification.
+- This preserves the prior Redis endpoint cleanup while ensuring repeated suite runs on the same harness instance do not skip Redis `HLL_DENSE`/`HLL_PFCOUNT` preparation.
+
+Focused GREEN evidence:
+
+- The same single-test command passed after the teardown change:
+  - `BUILD SUCCESS`
+  - `Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`
+
+Required covering command after the fix:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=ObservationClientTest,SuiteRunnerOrchestrationTest,BenchHarnessExtendedWorkloadTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Final GREEN result:
+
+- `BUILD SUCCESS`
+- `Tests run: 40, Failures: 0, Errors: 0, Skipped: 0`
