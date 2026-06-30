@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import picocli.CommandLine;
 import yier.bubu.redis.app.bench.suite.ScenarioDefinition;
+import yier.bubu.redis.app.bench.suite.SuiteArtifact;
 import yier.bubu.redis.app.bench.suite.SuiteConfig;
 import yier.bubu.redis.app.bench.suite.SuiteHarness;
 import yier.bubu.redis.app.bench.suite.SuiteProfileName;
@@ -59,6 +60,38 @@ public class SuiteEntrypointConfigTest {
         Assert.assertEquals(6381, config.baseServerArgs().port);
         Assert.assertEquals(1_048_576L, config.baseServerArgs().maxmemoryBytes);
         Assert.assertTrue(config.strictReplies());
+    }
+
+    @Test
+    public void suiteConfigFromEntrypointArgsCarriesRedisSettings() throws Exception {
+        Path current = regularTempJar("current");
+
+        YierdisBenchArgs benchArgs = new YierdisBenchArgs();
+        new CommandLine(benchArgs).parseArgs(
+                "--suite",
+                "--includeRedis",
+                "--currentServerJar", current.toString(),
+                "--redisHost", "127.0.0.9",
+                "--redisPort", "6389",
+                "--redisLabel", "redis",
+                "--redisUser", "bench-user",
+                "--redisAuth", "bench-secret",
+                "--redisDb", "4"
+        );
+
+        YierdisBenchServerArgs serverArgs = new YierdisBenchServerArgs();
+        serverArgs.normalizeAndValidate();
+
+        SuiteConfig config = SuiteConfig.from(benchArgs, serverArgs);
+
+        Assert.assertEquals(List.of("redis", "current"), config.artifactLabels());
+        Assert.assertEquals("redis", config.artifactsInRunOrder().get(0).label());
+        Assert.assertEquals(SuiteArtifact.Kind.EXTERNAL_REDIS, config.artifactsInRunOrder().get(0).kind());
+        Assert.assertEquals("127.0.0.9", config.artifactsInRunOrder().get(0).host());
+        Assert.assertEquals(6389, config.artifactsInRunOrder().get(0).port());
+        Assert.assertEquals("bench-user", config.artifactsInRunOrder().get(0).authUser());
+        Assert.assertEquals("bench-secret", config.artifactsInRunOrder().get(0).authPassword());
+        Assert.assertEquals(4, config.artifactsInRunOrder().get(0).db());
     }
 
     @Test
