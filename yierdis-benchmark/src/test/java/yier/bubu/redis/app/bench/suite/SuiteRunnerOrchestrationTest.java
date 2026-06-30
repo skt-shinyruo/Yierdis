@@ -350,6 +350,10 @@ public class SuiteRunnerOrchestrationTest {
             Assert.assertEquals(List.of("INFO", "MEMORY STATS"), List.copyOf(pass.before().values().keySet()));
             Assert.assertEquals(List.of("INFO", "MEMORY STATS"), List.copyOf(pass.after().values().keySet()));
             Assert.assertFalse(server.awaitCommands(5).contains("STATS"));
+            Assert.assertEquals("127.0.0.1", result.environment().values().get("redis.host"));
+            Assert.assertEquals(Integer.toString(server.port()), result.environment().values().get("redis.port"));
+            Assert.assertEquals("0", result.environment().values().get("redis.db"));
+            Assert.assertTrue(result.environment().values().get("redis.info.server").contains("redis_version:7.2.0"));
         }
     }
 

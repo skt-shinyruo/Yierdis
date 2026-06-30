@@ -13,9 +13,12 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -75,6 +78,84 @@ public final class RedisSuiteTestSupport {
                 serverArgs,
                 true
         );
+    }
+
+    public static SuiteRunResult redisComparisonResult(boolean comparable, String reason) {
+        ScenarioDefinition scenario = comparable
+                ? scenario("release-ping-latency", BenchWorkloadKind.PING, 0, 1, true)
+                : SuiteProfileFactory.expand(SuiteProfileName.RELEASE).stream()
+                .filter(item -> item.id().equals("release-maxmemory-eviction"))
+                .findFirst()
+                .orElseThrow();
+        ScenarioPassResult redis = cleanPass("redis", SuiteArtifact.Kind.EXTERNAL_REDIS, scenario);
+        ScenarioPassResult current = currentPass(scenario);
+        ScenarioComparison comparison = ScenarioComparison.compare(scenario,
+                comparable ? redis : failedRedisPass(scenario, reason), current);
+        Map<String, String> environment = new LinkedHashMap<>();
+        environment.put("java.version", "25");
+        environment.put("os.name", "Linux");
+        environment.put("redis.host", "127.0.0.1");
+        environment.put("redis.port", "6379");
+        environment.put("redis.db", "0");
+        environment.put("redis.info.server", "# Server\nredis_version:7.2.0\n");
+        return new SuiteRunResult(
+                "redis-run-1",
+                SuiteProfileName.RELEASE,
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:05Z"),
+                new SuiteEnvironment(environment),
+                List.of(
+                        SuiteArtifact.externalRedis("redis", "127.0.0.1", 6379, "", "", 0),
+                        SuiteArtifact.yierdisJar("current", tempJarUnchecked("current"), "head")
+                ),
+                List.of(scenario),
+                List.of(comparison.baseline(), comparison.current()),
+                List.of(comparison),
+                List.of()
+        );
+    }
+
+    private static ScenarioPassResult currentPass(ScenarioDefinition scenario) {
+        List<SuiteMetric> metrics = new ArrayList<>();
+        metrics.add(new SuiteMetric("qps", 1100.0));
+        metrics.add(new SuiteMetric("errors", 0.0));
+        if (scenario.latency()) {
+            metrics.add(new SuiteMetric("p95_ms", 9.0));
+            metrics.add(new SuiteMetric("p99_ms", 18.0));
+        }
+        return new ScenarioPassResult(
+                "current",
+                SuiteArtifact.Kind.YIERDIS_JAR,
+                scenario,
+                false,
+                "",
+                List.of(IterationResult.repeat(0, metrics)),
+                ObservationSnapshot.empty(),
+                ObservationSnapshot.empty(),
+                null
+        );
+    }
+
+    private static ScenarioPassResult failedRedisPass(ScenarioDefinition scenario, String failureMessage) {
+        return new ScenarioPassResult(
+                "redis",
+                SuiteArtifact.Kind.EXTERNAL_REDIS,
+                scenario,
+                true,
+                failureMessage,
+                List.of(),
+                ObservationSnapshot.empty(),
+                ObservationSnapshot.empty(),
+                Map.of()
+        );
+    }
+
+    private static Path tempJarUnchecked(String prefix) {
+        try {
+            return regularTempJar(prefix);
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static Path regularTempJar(String prefix) throws IOException {

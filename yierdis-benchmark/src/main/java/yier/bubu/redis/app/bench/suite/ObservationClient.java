@@ -34,6 +34,15 @@ public final class ObservationClient {
         return new ObservationSnapshot(values);
     }
 
+    public Map<String, String> captureEnvironmentMetadata(SuiteArtifact artifact) {
+        Objects.requireNonNull(artifact, "artifact");
+        if (artifact.kind() != SuiteArtifact.Kind.EXTERNAL_REDIS) {
+            return Map.of();
+        }
+        String info = captureCommand(artifact.host(), artifact.port(), "INFO");
+        return Map.of("redis.info.server", info);
+    }
+
     private ObservationSnapshot captureRedis(String host, int port) {
         validateEndpoint(host, port);
 
