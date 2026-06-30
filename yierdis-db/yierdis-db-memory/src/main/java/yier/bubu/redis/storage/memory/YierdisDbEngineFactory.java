@@ -22,25 +22,44 @@ import java.util.Objects;
 public final class YierdisDbEngineFactory implements DbEngineFactory {
     private final YierdisFfmMemoryRuntime memoryRuntime;
     private final NativeDefragOptions nativeDefragOptions;
+    private final int nativeSlotCapacity;
 
     public YierdisDbEngineFactory() {
         this.memoryRuntime = null;
         this.nativeDefragOptions = null;
+        this.nativeSlotCapacity = 0;
     }
 
     public YierdisDbEngineFactory(NativeDefragOptions nativeDefragOptions) {
         this.memoryRuntime = null;
         this.nativeDefragOptions = nativeDefragOptions;
+        this.nativeSlotCapacity = 0;
+    }
+
+    public YierdisDbEngineFactory(NativeDefragOptions nativeDefragOptions, int nativeSlotCapacity) {
+        this.memoryRuntime = null;
+        this.nativeDefragOptions = nativeDefragOptions;
+        this.nativeSlotCapacity = nativeSlotCapacity;
     }
 
     public YierdisDbEngineFactory(YierdisFfmMemoryRuntime memoryRuntime) {
         this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
         this.nativeDefragOptions = null;
+        this.nativeSlotCapacity = 0;
     }
 
     public YierdisDbEngineFactory(YierdisFfmMemoryRuntime memoryRuntime, NativeDefragOptions nativeDefragOptions) {
+        this(memoryRuntime, nativeDefragOptions, 0);
+    }
+
+    public YierdisDbEngineFactory(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            NativeDefragOptions nativeDefragOptions,
+            int nativeSlotCapacity
+    ) {
         this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
         this.nativeDefragOptions = nativeDefragOptions;
+        this.nativeSlotCapacity = nativeSlotCapacity;
     }
 
     @Override
@@ -54,6 +73,18 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
     ) {
         MaxmemoryPolicy policy = Objects.requireNonNull(maxmemoryPolicy, "maxmemoryPolicy");
         if (memoryRuntime == null) {
+            if (nativeSlotCapacity > 0) {
+                return YierdisDb.createWithOwnedFfmRuntime(
+                        maxmemoryBytes,
+                        policy,
+                        maxmemorySamples,
+                        evictionTimeLimitMillis,
+                        expireCleanupTimeLimitMillis,
+                        nativeDefragOptions,
+                        nativeSlotCapacity,
+                        dbIndex
+                );
+            }
             return YierdisDb.createWithOwnedFfmRuntime(
                     maxmemoryBytes,
                     policy,
@@ -64,6 +95,18 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
                     dbIndex
             );
         }
+        if (nativeSlotCapacity <= 0) {
+            return YierdisDb.createWithSharedFfmRuntime(
+                    memoryRuntime,
+                    maxmemoryBytes,
+                    policy,
+                    maxmemorySamples,
+                    evictionTimeLimitMillis,
+                    expireCleanupTimeLimitMillis,
+                    nativeDefragOptions,
+                    dbIndex
+                );
+        }
         return YierdisDb.createWithSharedFfmRuntime(
                 memoryRuntime,
                 maxmemoryBytes,
@@ -72,6 +115,7 @@ public final class YierdisDbEngineFactory implements DbEngineFactory {
                 evictionTimeLimitMillis,
                 expireCleanupTimeLimitMillis,
                 nativeDefragOptions,
+                nativeSlotCapacity,
                 dbIndex
         );
     }

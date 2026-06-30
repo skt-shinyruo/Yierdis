@@ -62,15 +62,26 @@ public final class YierdisDbStorageComponents {
             YierdisFfmMemoryRuntime memoryRuntime,
             boolean ownsMemoryRuntime
     ) {
+        return create(memoryRuntime, ownsMemoryRuntime, 0);
+    }
+
+    static YierdisDbStorageComponents create(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            boolean ownsMemoryRuntime,
+            int nativeSlotCapacity
+    ) {
         YierdisFfmMemoryRuntime resolvedRuntime =
                 memoryRuntime == null ? new YierdisFfmMemoryRuntime("db") : memoryRuntime;
         boolean resolvedOwnsRuntime = memoryRuntime == null || ownsMemoryRuntime;
+        int resolvedNativeSlotCapacity = nativeSlotCapacity > 0
+                ? nativeSlotCapacity
+                : sharedNativeSlotCapacity();
 
         // Entry、key bytes、string bytes 和 collection roots 共享一个 stable allocator，
         // 使 defrag/释放时可以按统一的 native handle 域验证对象类型与存活状态。
         NativeAllocator nativeAllocator = new YierdisStableNativeAllocator(
                 resolvedRuntime,
-                sharedNativeSlotCapacity()
+                resolvedNativeSlotCapacity
         );
         YierdisDbOwnedResources resources = new YierdisDbOwnedResources(
                 resolvedRuntime,

@@ -49,7 +49,7 @@ public final class YierdisDb implements RuntimeDbEngine {
     private final DbLifecycleOps lifecycleOps;
 
     public YierdisDb() {
-        this(null, false, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5, null);
+        this(null, false, 0, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5, null);
     }
 
     public static YierdisDb createWithSharedFfmRuntime(
@@ -60,7 +60,7 @@ public final class YierdisDb implements RuntimeDbEngine {
             long evictionTimeLimitMillis,
             long expireCleanupTimeLimitMillis
     ) {
-        return new YierdisDb(memoryRuntime, false, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis, null);
+        return new YierdisDb(memoryRuntime, false, 0, maxmemoryBytes, maxmemoryPolicy, maxmemorySamples, evictionTimeLimitMillis, expireCleanupTimeLimitMillis, null);
     }
 
     public static YierdisDb createWithSharedFfmRuntime(
@@ -72,9 +72,32 @@ public final class YierdisDb implements RuntimeDbEngine {
             long expireCleanupTimeLimitMillis,
             NativeDefragOptions nativeDefragOptions
     ) {
+        return createWithSharedFfmRuntimeAndNativeSlotCapacity(
+                memoryRuntime,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions,
+                0
+        );
+    }
+
+    public static YierdisDb createWithSharedFfmRuntimeAndNativeSlotCapacity(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions,
+            int nativeSlotCapacity
+    ) {
         return new YierdisDb(
                 memoryRuntime,
                 false,
+                nativeSlotCapacity,
                 maxmemoryBytes,
                 maxmemoryPolicy,
                 maxmemorySamples,
@@ -94,9 +117,34 @@ public final class YierdisDb implements RuntimeDbEngine {
             NativeDefragOptions nativeDefragOptions,
             int dbIndex
     ) {
+        return createWithSharedFfmRuntime(
+                memoryRuntime,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions,
+                0,
+                dbIndex
+        );
+    }
+
+    static YierdisDb createWithSharedFfmRuntime(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions,
+            int nativeSlotCapacity,
+            int dbIndex
+    ) {
         return new YierdisDb(
                 memoryRuntime,
                 false,
+                nativeSlotCapacity,
                 maxmemoryBytes,
                 maxmemoryPolicy,
                 maxmemorySamples,
@@ -117,6 +165,7 @@ public final class YierdisDb implements RuntimeDbEngine {
         return new YierdisDb(
                 null,
                 true,
+                0,
                 maxmemoryBytes,
                 maxmemoryPolicy,
                 maxmemorySamples,
@@ -134,9 +183,30 @@ public final class YierdisDb implements RuntimeDbEngine {
             long expireCleanupTimeLimitMillis,
             NativeDefragOptions nativeDefragOptions
     ) {
+        return createWithOwnedFfmRuntimeAndNativeSlotCapacity(
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions,
+                0
+        );
+    }
+
+    public static YierdisDb createWithOwnedFfmRuntimeAndNativeSlotCapacity(
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions,
+            int nativeSlotCapacity
+    ) {
         return new YierdisDb(
                 null,
                 true,
+                nativeSlotCapacity,
                 maxmemoryBytes,
                 maxmemoryPolicy,
                 maxmemorySamples,
@@ -155,9 +225,32 @@ public final class YierdisDb implements RuntimeDbEngine {
             NativeDefragOptions nativeDefragOptions,
             int dbIndex
     ) {
+        return createWithOwnedFfmRuntime(
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                maxmemorySamples,
+                evictionTimeLimitMillis,
+                expireCleanupTimeLimitMillis,
+                nativeDefragOptions,
+                0,
+                dbIndex
+        );
+    }
+
+    static YierdisDb createWithOwnedFfmRuntime(
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int maxmemorySamples,
+            long evictionTimeLimitMillis,
+            long expireCleanupTimeLimitMillis,
+            NativeDefragOptions nativeDefragOptions,
+            int nativeSlotCapacity,
+            int dbIndex
+    ) {
         return new YierdisDb(
                 null,
                 true,
+                nativeSlotCapacity,
                 maxmemoryBytes,
                 maxmemoryPolicy,
                 maxmemorySamples,
@@ -171,6 +264,7 @@ public final class YierdisDb implements RuntimeDbEngine {
     private YierdisDb(
             YierdisFfmMemoryRuntime memoryRuntime,
             boolean ownsMemoryRuntime,
+            int nativeSlotCapacity,
             long maxmemoryBytes,
             MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
@@ -181,6 +275,7 @@ public final class YierdisDb implements RuntimeDbEngine {
         this(
                 memoryRuntime,
                 ownsMemoryRuntime,
+                nativeSlotCapacity,
                 maxmemoryBytes,
                 maxmemoryPolicy,
                 maxmemorySamples,
@@ -194,6 +289,7 @@ public final class YierdisDb implements RuntimeDbEngine {
     private YierdisDb(
             YierdisFfmMemoryRuntime memoryRuntime,
             boolean ownsMemoryRuntime,
+            int nativeSlotCapacity,
             long maxmemoryBytes,
             MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
@@ -218,6 +314,7 @@ public final class YierdisDb implements RuntimeDbEngine {
                 runtimeState,
                 memoryRuntime,
                 ownsMemoryRuntime,
+                nativeSlotCapacity,
                 maxmemoryBytes,
                 maxmemoryPolicy,
                 maxmemorySamples,

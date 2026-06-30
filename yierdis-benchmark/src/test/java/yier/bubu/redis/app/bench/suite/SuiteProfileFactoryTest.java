@@ -73,6 +73,17 @@ public class SuiteProfileFactoryTest {
     }
 
     @Test
+    public void releaseSmokeStringAndSparseHllScenariosCarryExplicitNativeSlotOverride() {
+        List<ScenarioDefinition> scenarios = SuiteProfileFactory.expand(SuiteProfileName.RELEASE);
+
+        assertNativeSlotOverrideScenario(scenarios, "release-set-get-128b-c32-p4");
+        assertNativeSlotOverrideScenario(scenarios, "release-set-get-256b-c64-p8");
+        assertNativeSlotOverrideScenario(scenarios, "release-set-get-1024b-c64-p8");
+        assertNativeSlotOverrideScenario(scenarios, "release-append-256b-c64-p8");
+        assertNativeSlotOverrideScenario(scenarios, "release-hll-sparse-c64-p8");
+    }
+
+    @Test
     public void fullProfileIncludesReleaseScenariosAndExtendedFamilies() {
         List<ScenarioDefinition> release = SuiteProfileFactory.expand(SuiteProfileName.RELEASE);
         List<ScenarioDefinition> full = SuiteProfileFactory.expand(SuiteProfileName.FULL);
@@ -203,6 +214,15 @@ public class SuiteProfileFactoryTest {
         } catch (NullPointerException e) {
             Assert.assertEquals("workload", e.getMessage());
         }
+    }
+
+    private static void assertNativeSlotOverrideScenario(List<ScenarioDefinition> scenarios, String id) {
+        YierdisBenchServerArgs args = new YierdisBenchServerArgs();
+        scenario(scenarios, id).applyServerOverrides(args);
+        args.normalizeAndValidate();
+
+        Assert.assertEquals("scenario " + id + " should pin current-side smoke to one DB", 1, args.databases);
+        Assert.assertEquals("scenario " + id + " should raise current-side native slots", 2_097_152, args.nativeSlotCapacity);
     }
 
     private static IllegalArgumentException assertRejectsScenario(String messagePart, String id, String displayName) {

@@ -116,6 +116,8 @@ public record ScenarioDefinition(
     }
 
     public record ServerOverrides(
+            int databases,
+            int nativeSlotCapacity,
             boolean nativeDefragEnabled,
             long nativeDefragMaxMoveBytes,
             long nativeDefragMaxObjects,
@@ -126,6 +128,12 @@ public record ScenarioDefinition(
             long evictionTimeLimitMillis
     ) {
         public ServerOverrides {
+            if (databases < 0) {
+                throw new IllegalArgumentException("databases must be >= 0");
+            }
+            if (nativeSlotCapacity < 0) {
+                throw new IllegalArgumentException("nativeSlotCapacity must be >= 0");
+            }
             if (nativeDefragMaxMoveBytes < 0) {
                 throw new IllegalArgumentException("nativeDefragMaxMoveBytes must be >= 0");
             }
@@ -151,19 +159,29 @@ public record ScenarioDefinition(
         }
 
         public static ServerOverrides none() {
-            return new ServerOverrides(false, 0, 0, 0, 0, "", 0, 0);
+            return new ServerOverrides(0, 0, false, 0, 0, 0, 0, "", 0, 0);
         }
 
         public static ServerOverrides nativeDefrag(long maxMoveBytes, long maxObjects, long timeLimitMillis) {
-            return new ServerOverrides(true, maxMoveBytes, maxObjects, timeLimitMillis, 0, "", 0, 0);
+            return new ServerOverrides(0, 0, true, maxMoveBytes, maxObjects, timeLimitMillis, 0, "", 0, 0);
         }
 
         public static ServerOverrides maxmemory(long bytes, String policy, int samples, long evictionTimeLimitMillis) {
-            return new ServerOverrides(false, 0, 0, 0, bytes, policy, samples, evictionTimeLimitMillis);
+            return new ServerOverrides(0, 0, false, 0, 0, 0, bytes, policy, samples, evictionTimeLimitMillis);
+        }
+
+        public static ServerOverrides databasesAndNativeSlots(int databases, int nativeSlotCapacity) {
+            return new ServerOverrides(databases, nativeSlotCapacity, false, 0, 0, 0, 0, "", 0, 0);
         }
 
         private void applyTo(YierdisBenchServerArgs serverArgs) {
             Objects.requireNonNull(serverArgs, "serverArgs");
+            if (databases > 0) {
+                serverArgs.databases = databases;
+            }
+            if (nativeSlotCapacity > 0) {
+                serverArgs.nativeSlotCapacity = nativeSlotCapacity;
+            }
             if (nativeDefragEnabled) {
                 serverArgs.nativeDefragEnabled = true;
                 if (nativeDefragMaxMoveBytes > 0) {

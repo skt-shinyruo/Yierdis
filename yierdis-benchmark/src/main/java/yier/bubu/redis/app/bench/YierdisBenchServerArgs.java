@@ -152,6 +152,9 @@ public final class YierdisBenchServerArgs {
     @Option(names = ArgNames.NATIVE_DEFRAG_TIME_LIMIT_MILLIS, defaultValue = "1", description = "Native defrag time budget per maintenance tick in milliseconds.")
     public long nativeDefragTimeLimitMillis = 1L;
 
+    @Option(names = ArgNames.NATIVE_SLOT_CAPACITY, defaultValue = "0", description = "Override DB shared native object slot capacity (0 keeps default).")
+    public int nativeSlotCapacity;
+
     @Option(
             names = ArgNames.KEYS_TIME_BUDGET_MILLIS,
             defaultValue = "20",
@@ -264,6 +267,9 @@ public final class YierdisBenchServerArgs {
         if (nativeDefragTimeLimitMillis < 0) {
             throw new IllegalArgumentException("nativeDefragTimeLimitMillis must be >= 0");
         }
+        if (nativeSlotCapacity < 0) {
+            throw new IllegalArgumentException("nativeSlotCapacity must be >= 0");
+        }
         if (keysTimeBudgetMillis < 0) {
             throw new IllegalArgumentException("keysTimeBudgetMillis must be >= 0");
         }
@@ -304,6 +310,7 @@ public final class YierdisBenchServerArgs {
         out.nativeDefragMaxMoveBytes = nativeDefragMaxMoveBytes;
         out.nativeDefragMaxObjects = nativeDefragMaxObjects;
         out.nativeDefragTimeLimitMillis = nativeDefragTimeLimitMillis;
+        out.nativeSlotCapacity = nativeSlotCapacity;
         out.keysTimeBudgetMillis = keysTimeBudgetMillis;
         out.keysMaxResults = keysMaxResults;
         return out;
@@ -377,6 +384,8 @@ public final class YierdisBenchServerArgs {
         out.add(Long.toString(nativeDefragMaxObjects));
         out.add(ArgNames.NATIVE_DEFRAG_TIME_LIMIT_MILLIS);
         out.add(Long.toString(nativeDefragTimeLimitMillis));
+        out.add(ArgNames.NATIVE_SLOT_CAPACITY);
+        out.add(Integer.toString(nativeSlotCapacity));
         out.add(ArgNames.KEYS_TIME_BUDGET_MILLIS);
         out.add(Long.toString(keysTimeBudgetMillis));
         out.add(ArgNames.KEYS_MAX_RESULTS);
@@ -443,6 +452,7 @@ public final class YierdisBenchServerArgs {
         private static final String NATIVE_DEFRAG_MAX_MOVE_BYTES = "--nativeDefragMaxMoveBytes";
         private static final String NATIVE_DEFRAG_MAX_OBJECTS = "--nativeDefragMaxObjects";
         private static final String NATIVE_DEFRAG_TIME_LIMIT_MILLIS = "--nativeDefragTimeLimitMillis";
+        private static final String NATIVE_SLOT_CAPACITY = "--nativeSlotCapacity";
         private static final String KEYS_TIME_BUDGET_MILLIS = "--keysTimeBudgetMillis";
         private static final String KEYS_MAX_RESULTS = "--keysMaxResults";
 

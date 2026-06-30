@@ -6,6 +6,31 @@ import picocli.CommandLine;
 
 public class YierdisBenchServerArgsTest {
     @Test
+    public void nativeSlotCapacityRoundTripsThroughNormalizeCopyAndArgv() {
+        YierdisBenchServerArgs args = parse(
+                "--databases", "1",
+                "--nativeSlotCapacity", "2097152"
+        );
+
+        args.normalizeAndValidate();
+
+        Assert.assertEquals(1, args.databases);
+        Assert.assertEquals(2_097_152, args.nativeSlotCapacity);
+        Assert.assertEquals(args.toArgv(), args.copy().toArgv());
+        Assert.assertTrue(args.toArgv().contains("--nativeSlotCapacity"));
+    }
+
+    @Test
+    public void nativeSlotCapacityAllowsZeroAsDefaultSentinelAndRejectsNegativeValues() {
+        YierdisBenchServerArgs zero = parse("--nativeSlotCapacity", "0");
+        zero.normalizeAndValidate();
+        Assert.assertEquals(0, zero.nativeSlotCapacity);
+
+        YierdisBenchServerArgs negative = parse("--nativeSlotCapacity", "-1");
+        assertThrows(IllegalArgumentException.class, negative::normalizeAndValidate);
+    }
+
+    @Test
     public void protocolLimitsRejectValuesAboveDecoderSafeMaximum() {
         YierdisBenchServerArgs bulkArgs = parse("--protocolMaxBulkBytes", Integer.toString(Integer.MAX_VALUE));
         assertThrows(IllegalArgumentException.class, bulkArgs::normalizeAndValidate);

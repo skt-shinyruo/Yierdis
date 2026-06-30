@@ -22,6 +22,7 @@ public final class YierdisDbComponentFactory {
             YierdisDbRuntimeState runtimeState,
             YierdisFfmMemoryRuntime memoryRuntime,
             boolean ownsMemoryRuntime,
+            int nativeSlotCapacity,
             long maxmemoryBytes,
             MaxmemoryPolicy maxmemoryPolicy,
             int maxmemorySamples,
@@ -31,7 +32,8 @@ public final class YierdisDbComponentFactory {
     ) {
         YierdisDbStorageComponents storage = YierdisDbStorageComponents.create(
                 memoryRuntime,
-                ownsMemoryRuntime
+                ownsMemoryRuntime,
+                nativeSlotCapacity
         );
         YierdisDbConfig config = YierdisDbConfig.create(
                 maxmemoryBytes,

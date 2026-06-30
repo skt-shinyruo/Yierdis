@@ -486,6 +486,7 @@ public class YierdisServerBootstrapCommandWiringTest {
                 64,
                 1,
                 0,
+                0,
                 0
         );
     }

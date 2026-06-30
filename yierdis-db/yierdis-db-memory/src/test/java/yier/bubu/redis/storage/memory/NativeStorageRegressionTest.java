@@ -9,6 +9,7 @@ import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
+import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.ExpireOption;
@@ -464,6 +465,67 @@ public class NativeStorageRegressionTest {
     }
 
     @Test
+    public void defaultSharedNativeSlotCapacityStillOverflowsAroundNinetyThousandStringKeys() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-string-slot-capacity-default")) {
+            YierdisDb db = createNativeRegressionDb(runtime, 0, MaxmemoryPolicy.NOEVICTION);
+            db.bindToCurrentThread();
+            int keyCount = 90_000;
+            try {
+                try {
+                    for (int i = 0; i < keyCount; i++) {
+                        Assert.assertTrue(db.writes().strings().setString(
+                                b("slot:string:" + i),
+                                b("v"),
+                                SetMode.NORMAL,
+                                null
+                        ).value());
+                    }
+                    Assert.fail("expected default shared native slot capacity to overflow before 90k string keys");
+                } catch (NativeMemoryException e) {
+                    Assert.assertTrue(e.getMessage().contains("native object slot limit exceeded"));
+                }
+            } finally {
+                db.shutdown();
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
+    @Test
+    public void explicitNativeSlotCapacitySupportsNinetyThousandStringKeysWithoutLeaks() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-string-slot-capacity-override")) {
+            YierdisDb db = createNativeRegressionDb(runtime, 0, MaxmemoryPolicy.NOEVICTION, 512 * 1024);
+            db.bindToCurrentThread();
+            int keyCount = 90_000;
+            try {
+                for (int i = 0; i < keyCount; i++) {
+                    Assert.assertTrue(db.writes().strings().setString(
+                            b("slot:string:" + i),
+                            b("v"),
+                            SetMode.NORMAL,
+                            null
+                    ).value());
+                }
+
+                Assert.assertEquals(keyCount, db.size());
+                NativeAllocatorStats populated = db.keyLifecycle().nativeAllocator().stats();
+                Assert.assertEquals(keyCount, populated.objectCount(NativeObjectKind.ENTRY_RECORD));
+                Assert.assertEquals(keyCount, populated.objectCount(NativeObjectKind.KEY_BYTES));
+                Assert.assertEquals(keyCount, populated.objectCount(NativeObjectKind.STRING_BYTES));
+
+                Assert.assertEquals(
+                        Long.valueOf(keyCount),
+                        Long.valueOf(deleteDeterministicKeysInBatches(db, "slot:string:", keyCount, 1024))
+                );
+                assertNativeDbEmpty(db);
+            } finally {
+                db.shutdown();
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
+    @Test
     public void stringPublicOpsUseNativeRecordsWithoutCompatibilityStoreEntries() {
         YierdisDb db = new YierdisDb();
         try {
@@ -652,15 +714,50 @@ public class NativeStorageRegressionTest {
             long maxmemoryBytes,
             MaxmemoryPolicy maxmemoryPolicy
     ) {
-        return YierdisDb.createWithSharedFfmRuntime(
+        return YierdisDb.createWithSharedFfmRuntimeAndNativeSlotCapacity(
                 runtime,
                 maxmemoryBytes,
                 maxmemoryPolicy,
                 5,
                 5,
                 5,
-                new NativeDefragOptions(1_000_000L, 1_000L, Long.MAX_VALUE)
+                new NativeDefragOptions(1_000_000L, 1_000L, Long.MAX_VALUE),
+                0
         );
+    }
+
+    private static YierdisDb createNativeRegressionDb(
+            YierdisFfmMemoryRuntime runtime,
+            long maxmemoryBytes,
+            MaxmemoryPolicy maxmemoryPolicy,
+            int nativeSlotCapacity
+    ) {
+        return YierdisDb.createWithSharedFfmRuntimeAndNativeSlotCapacity(
+                runtime,
+                maxmemoryBytes,
+                maxmemoryPolicy,
+                5,
+                5,
+                5,
+                new NativeDefragOptions(1_000_000L, 1_000L, Long.MAX_VALUE),
+                nativeSlotCapacity
+        );
+    }
+
+    private static long deleteDeterministicKeysInBatches(YierdisDb db, String keyPrefix, int keyCount, int batchSize) {
+        long deleted = 0L;
+        List<byte[]> batch = new ArrayList<>(batchSize);
+        for (int i = 0; i < keyCount; i++) {
+            batch.add(b(keyPrefix + i));
+            if (batch.size() == batchSize) {
+                deleted += db.writes().keyspace().del(batch).value();
+                batch = new ArrayList<>(batchSize);
+            }
+        }
+        if (!batch.isEmpty()) {
+            deleted += db.writes().keyspace().del(batch).value();
+        }
+        return deleted;
     }
 
     private static void runDeterministicMixedNativeDbChurn(YierdisDb db, long seed, int operationCount) {
