@@ -101,10 +101,18 @@ public final class ObservationClient {
             } else {
                 RespClientCodec.writeCommand(socket.getOutputStream(), utf8Args("AUTH", artifact.authUser(), artifact.authPassword()));
             }
-            RespClientCodec.readReply(socket.getInputStream(), RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+            requireSimpleStringReply(socket, "OK", "AUTH");
         }
         RespClientCodec.writeCommand(socket.getOutputStream(), utf8Args("SELECT", Integer.toString(artifact.db())));
-        RespClientCodec.readReply(socket.getInputStream(), RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        requireSimpleStringReply(socket, "OK", "SELECT");
+    }
+
+    private static void requireSimpleStringReply(Socket socket, String expected, String command) throws IOException {
+        RespClientCodec.RespReply reply = RespClientCodec.readReply(socket.getInputStream(),
+                RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        if (!reply.isSimpleString(expected)) {
+            throw new IllegalStateException(command + " failed: " + formatReply(reply));
+        }
     }
 
     private static String formatArray(List<RespClientCodec.RespReply> values) {

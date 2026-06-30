@@ -129,6 +129,38 @@ public class ObservationClientTest {
         }
     }
 
+    @Test
+    public void captureRedisObservationReportsBootstrapSelectFailure() throws Exception {
+        try (RedisSuiteTestSupport.RedisLikeObservationServer server =
+                     RedisSuiteTestSupport.RedisLikeObservationServer.start(Map.of("SELECT 4", errorBytes("ERR DB index is out of range")))) {
+            Assert.assertTrue(server.awaitListening());
+            SuiteArtifact artifact = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "bench-user", "bench-secret", 4);
+
+            ObservationSnapshot snapshot = new ObservationClient().capture(artifact);
+
+            Assert.assertTrue(snapshot.values().get("INFO").contains("ERR DB index is out of range"));
+            Assert.assertTrue(snapshot.values().get("MEMORY STATS").contains("ERR DB index is out of range"));
+            Assert.assertEquals(List.of(
+                    "AUTH BENCH-USER BENCH-SECRET", "SELECT 4",
+                    "AUTH BENCH-USER BENCH-SECRET", "SELECT 4"
+            ), server.awaitCommands(4));
+        }
+    }
+
+    @Test
+    public void captureEnvironmentMetadataReportsBootstrapAuthFailure() throws Exception {
+        try (RedisSuiteTestSupport.RedisLikeObservationServer server =
+                     RedisSuiteTestSupport.RedisLikeObservationServer.start(Map.of("AUTH BENCH-USER BENCH-SECRET", errorBytes("WRONGPASS invalid username-password pair")))) {
+            Assert.assertTrue(server.awaitListening());
+            SuiteArtifact artifact = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "bench-user", "bench-secret", 4);
+
+            Map<String, String> metadata = new ObservationClient().captureEnvironmentMetadata(artifact);
+
+            Assert.assertTrue(metadata.get("redis.info.server").contains("WRONGPASS invalid username-password pair"));
+            Assert.assertEquals(List.of("AUTH BENCH-USER BENCH-SECRET"), server.awaitCommands(1));
+        }
+    }
+
     private static RespClientCodec.RespReply simple(String text) {
         return new RespClientCodec.RespReply(RespClientCodec.RespReply.Kind.SIMPLE_STRING, text, null, null, null);
     }
@@ -155,5 +187,9 @@ public class ObservationClientTest {
 
     private static RespClientCodec.RespReply array(RespClientCodec.RespReply... values) {
         return new RespClientCodec.RespReply(RespClientCodec.RespReply.Kind.ARRAY, null, null, null, List.of(values));
+    }
+
+    private static byte[] errorBytes(String message) {
+        return ("-" + message + "\r\n").getBytes(StandardCharsets.US_ASCII);
     }
 }

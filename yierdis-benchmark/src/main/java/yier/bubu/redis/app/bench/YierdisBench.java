@@ -478,7 +478,10 @@ public final class YierdisBench {
                 config.host,
                 port,
                 hllDenseKeyspace,
-                config.pipeline
+                config.pipeline,
+                "",
+                "",
+                0
         );
         ThroughputResult pfaddDenseQps = runThroughput(
                 config.host,
@@ -677,7 +680,7 @@ public final class YierdisBench {
         return new LatencyResult(workload, all.length, errors, seconds, qps, stats);
     }
 
-    static void prefillDenseHll(String host, int port, int keyspace, int pipeline) {
+    static void prefillDenseHll(String host, int port, int keyspace, int pipeline, String redisUser, String redisAuth, int redisDb) {
         if (keyspace <= 0) {
             throw new IllegalArgumentException("keyspace must be > 0");
         }
@@ -690,6 +693,7 @@ public final class YierdisBench {
             try (BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
                  BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024);
                  RespCommandWriter writer = new RespCommandWriter(out)) {
+                authenticateAndSelect(out, in, redisUser, redisAuth, redisDb);
                 byte[] sourceKey = hllKey("src", 0);
                 byte[] denseKey = new byte[HLL_DENSE_KEY_PREFIX.length + HLL_FIXED_DIGITS];
                 writer.writePfadd(sourceKey, hllElement("seed", 0, 0));
@@ -2396,14 +2400,37 @@ public final class YierdisBench {
                 ));
             }
             out.flush();
-            RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+            requireSimpleStringReply(in, "OK", "AUTH");
         }
         RespClientCodec.writeCommand(out, List.of(
                 "SELECT".getBytes(StandardCharsets.US_ASCII),
                 Integer.toString(redisDb).getBytes(StandardCharsets.US_ASCII)
         ));
         out.flush();
-        RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        requireSimpleStringReply(in, "OK", "SELECT");
+    }
+
+    private static void requireSimpleStringReply(InputStream in, String expected, String command) throws IOException {
+        RespClientCodec.RespReply reply = RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        if (!reply.isSimpleString(expected)) {
+            throw new IllegalStateException(command + " failed: " + describeReply(reply));
+        }
+    }
+
+    private static String describeReply(RespClientCodec.RespReply reply) {
+        if (reply == null) {
+            return "null reply";
+        }
+        if (reply.text() != null && !reply.text().isBlank()) {
+            return reply.text();
+        }
+        if (reply.integer() != null) {
+            return Long.toString(reply.integer());
+        }
+        if (reply.bytes() != null) {
+            return new String(reply.bytes(), StandardCharsets.UTF_8);
+        }
+        return reply.kind().name();
     }
 
     static final class WorkerCounter {

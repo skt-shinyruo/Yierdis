@@ -176,15 +176,21 @@ public final class RedisSuiteTestSupport {
         private final CountDownLatch listening = new CountDownLatch(1);
         private final List<Socket> accepted = new ArrayList<>();
         private final List<String> commands = Collections.synchronizedList(new ArrayList<>());
+        private final Map<String, byte[]> scriptedReplies;
         private volatile boolean closed;
         private Thread thread;
 
-        private RedisLikeObservationServer(ServerSocket serverSocket) {
+        private RedisLikeObservationServer(ServerSocket serverSocket, Map<String, byte[]> scriptedReplies) {
             this.serverSocket = serverSocket;
+            this.scriptedReplies = Map.copyOf(scriptedReplies);
         }
 
         public static RedisLikeObservationServer start() throws IOException {
-            RedisLikeObservationServer server = new RedisLikeObservationServer(new ServerSocket(0));
+            return start(Map.of());
+        }
+
+        public static RedisLikeObservationServer start(Map<String, byte[]> scriptedReplies) throws IOException {
+            RedisLikeObservationServer server = new RedisLikeObservationServer(new ServerSocket(0), scriptedReplies);
             server.thread = new Thread(server::acceptLoop, "redis-suite-test-server");
             server.thread.setDaemon(true);
             server.thread.start();
@@ -249,7 +255,7 @@ public final class RedisSuiteTestSupport {
                 synchronized (commands) {
                     commands.add(normalized);
                 }
-                out.write(responseFor(normalized));
+                out.write(scriptedReplies.getOrDefault(normalized, responseFor(normalized)));
                 out.flush();
             }
         }

@@ -121,6 +121,14 @@ SET raw "\x00\x01"
 
 When Redis auth or a non-zero Redis DB is configured, suite mode does not treat those values as report-only metadata. The suite harness authenticates and selects the configured DB before readiness checks, before the per-pass `FLUSHDB`, before observation capture, and before benchmark workload traffic. That same auth/select bootstrap is applied to both the extended socket-based workloads in `BenchHarness` and the core worker-based workloads that reuse `YierdisBench` workers, so external Redis runs measure the configured logical DB instead of always falling back to DB 0.
 
+For interpretable Redis comparison runs, operators should keep the Redis side as close to an isolated benchmark target as possible:
+
+- start Redis with persistence disabled, e.g. `redis-server --save '' --appendonly no`
+- use a dedicated Redis instance or a dedicated logical DB that the suite is allowed to `FLUSHDB`
+- keep the configured `--redisUser` / `--redisAuth` / `--redisDb` aligned with the actual benchmark target, because the suite now treats `AUTH`, `SELECT`, and lifecycle `FLUSHDB` failures as hard pass failures
+- avoid sharing the target DB with unrelated traffic during the run, or the before/after observations and per-pass cleanup lose meaning
+- keep Redis-side operator policies explicit when comparing scenarios that depend on runtime policy, such as maxmemory/eviction; if the external Redis policy is not intentionally matched, the scenario should be treated as environment-limited rather than a clean performance comparison
+
 Redis-specific CLI options are also validated as suite-only inputs. An explicit `--redisHost`, `--redisPort`, `--redisLabel`, `--redisUser`, `--redisAuth`, `--redisDb`, or `--includeRedis` outside `--suite` is rejected instead of being silently ignored. `redisDb` must be non-negative, and `redisLabel` must not collide with `current`, `baseline`, or another suite artifact label.
 
 Redis comparisons are rendered explicitly: `comparisons.csv` includes `baseline_artifact`, `current_artifact`, `comparable`, `reason`, and ratio fields so a `redis -> current` row is distinguishable from Yierdis jar comparisons. `report.md` adds a Redis comparison summary when an external Redis artifact participates. Redis-incompatible scenarios, such as operator-dependent maxmemory or native-defrag cases, remain `non-comparable` with the scenario reason rather than being treated as performance conclusions.
