@@ -28,7 +28,7 @@ public class SuiteThresholdEvaluatorTest {
         ScenarioDefinition scenario = scenario();
         ScenarioPassResult baseline = pass("baseline", scenario, 1000.0, 10.0, 20.0, 0.0);
         ScenarioPassResult currentWithErrors = pass("current", scenario, 1000.0, 10.0, 20.0, 1.0);
-        ScenarioPassResult failed = ScenarioPassResult.failed("current", scenario, "workload failed");
+        ScenarioPassResult failed = ScenarioPassResult.failed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, "workload failed");
 
         List<ThresholdFinding> dirtyFindings = ThresholdEvaluator.evaluate(
                 ScenarioComparison.compare(scenario, baseline, currentWithErrors),
@@ -48,7 +48,7 @@ public class SuiteThresholdEvaluatorTest {
     public void emptyCompletedPassIsNonComparable() {
         ScenarioDefinition scenario = scenario();
         ScenarioPassResult baseline = pass("baseline", scenario, 1000.0, 10.0, 20.0, 0.0);
-        ScenarioPassResult current = ScenarioPassResult.completed("current", scenario, List.of(),
+        ScenarioPassResult current = ScenarioPassResult.completed("current", SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(),
                 ObservationSnapshot.empty(), ObservationSnapshot.empty());
 
         ScenarioComparison comparison = ScenarioComparison.compare(scenario, baseline, current);
@@ -205,7 +205,7 @@ public class SuiteThresholdEvaluatorTest {
     }
 
     private static ScenarioPassResult pass(String artifact, ScenarioDefinition scenario, double qps, double p95, double p99, double errors) {
-        return ScenarioPassResult.completed(artifact, scenario, List.of(
+        return ScenarioPassResult.completed(artifact, SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
                 IterationResult.repeat(0, List.of(
                         new SuiteMetric("qps", qps),
                         new SuiteMetric("p95_ms", p95),
@@ -216,7 +216,7 @@ public class SuiteThresholdEvaluatorTest {
     }
 
     private static ScenarioPassResult passWithMetrics(String artifact, ScenarioDefinition scenario, SuiteMetric... metrics) {
-        return ScenarioPassResult.completed(artifact, scenario, List.of(
+        return ScenarioPassResult.completed(artifact, SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
                 IterationResult.repeat(0, List.of(metrics))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
     }

@@ -67,7 +67,7 @@ public record ScenarioComparison(
     }
 
     private static void addRedisScenarioCompatibility(List<String> reasons, ScenarioDefinition scenario, ScenarioPassResult baseline) {
-        if (!"redis".equals(baseline.artifactLabel())) {
+        if (baseline.artifactKind() != SuiteArtifact.Kind.EXTERNAL_REDIS) {
             return;
         }
         if (scenario.redisComparable() != ScenarioDefinition.RedisComparable.YES) {
