@@ -135,16 +135,36 @@ public final class SuiteRunner {
     }
 
     private List<ScenarioComparison> comparisons(List<ScenarioPassResult> passes) {
-        if (config.baseline().isEmpty()) {
+        ComparisonArtifacts artifacts = comparisonArtifacts();
+        if (artifacts == null) {
             return List.of();
         }
         List<ScenarioComparison> comparisons = new ArrayList<>();
         for (ScenarioDefinition scenario : scenarios) {
-            ScenarioPassResult baseline = findPass(passes, "baseline", scenario);
-            ScenarioPassResult current = findPass(passes, "current", scenario);
+            ScenarioPassResult baseline = findPass(passes, artifacts.baselineLabel(), scenario);
+            ScenarioPassResult current = findPass(passes, artifacts.currentLabel(), scenario);
             comparisons.add(ScenarioComparison.compare(scenario, baseline, current));
         }
         return List.copyOf(comparisons);
+    }
+
+    private ComparisonArtifacts comparisonArtifacts() {
+        List<SuiteArtifact> artifacts = config.artifactsInRunOrder();
+        if (artifacts.size() < 2) {
+            return null;
+        }
+        String currentLabel = config.current().label();
+        SuiteArtifact baselineArtifact = null;
+        for (SuiteArtifact artifact : artifacts) {
+            if (!artifact.label().equals(currentLabel)) {
+                baselineArtifact = artifact;
+                break;
+            }
+        }
+        if (baselineArtifact == null) {
+            return null;
+        }
+        return new ComparisonArtifacts(baselineArtifact.label(), currentLabel);
     }
 
     private static ScenarioPassResult findPass(List<ScenarioPassResult> passes, String artifactLabel, ScenarioDefinition scenario) {
@@ -225,5 +245,8 @@ public final class SuiteRunner {
         String sanitized = value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9._-]+", "-");
         sanitized = sanitized.replaceAll("^[.-]+", "").replaceAll("[.-]+$", "");
         return sanitized.isBlank() ? "item" : sanitized;
+    }
+
+    private record ComparisonArtifacts(String baselineLabel, String currentLabel) {
     }
 }

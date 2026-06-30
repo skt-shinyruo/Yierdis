@@ -2,11 +2,13 @@ package yier.bubu.redis.app.bench;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.app.bench.suite.IterationResult;
 import yier.bubu.redis.app.bench.suite.RedisSuiteTestSupport;
 import yier.bubu.redis.app.bench.suite.ScenarioDefinition;
 import yier.bubu.redis.app.bench.suite.SuiteArtifact;
 import yier.bubu.redis.app.bench.suite.SuiteConfig;
 import yier.bubu.redis.app.bench.suite.SuiteHarness;
+import yier.bubu.redis.app.bench.suite.SuiteProfileName;
 import yier.bubu.redis.protocol.resp.RespClientCodec;
 import yier.bubu.redis.protocol.resp.RespProtocolLimits;
 
@@ -21,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
@@ -297,6 +300,41 @@ public class BenchHarnessExtendedWorkloadTest {
     }
 
     @Test
+    public void redisWorkloadHostUsesArtifactHost() throws Exception {
+        SuiteConfig config = redisCurrentConfig("203.0.113.10", 6380);
+        SuiteHarness.RunningServer server = new SuiteHarness.RunningServer("redis", "release-hash-hset-c64-p8", 6380, Path.of("target/redis.log"));
+
+        Assert.assertEquals("127.0.0.1", BenchHarness.workloadHost(server, config));
+    }
+
+    @Test
+    public void redisDensePrefillUsesArtifactHost() throws Exception {
+        RecordingDenseHllPreparer preparer = new RecordingDenseHllPreparer();
+        BenchHarness harness = new BenchHarness(preparer, 1_000);
+        SuiteConfig config = redisCurrentConfig("203.0.113.10", 6380);
+        ScenarioDefinition scenario = RedisSuiteTestSupport.scenario("release-hll-dense-c64-p8", BenchWorkloadKind.HLL_DENSE, 1, 1, false);
+        SuiteHarness.RunningServer server = new SuiteHarness.RunningServer("redis", scenario.id(), 6380, Path.of("target/redis.log"));
+
+        harness.prepareScenario(server, scenario, config);
+
+        Assert.assertEquals(List.of("127.0.0.1:6380:100:4"), preparer.calls);
+    }
+
+    @Test
+    public void redisDensePrefillRunsOnlyOncePerPass() throws Exception {
+        RecordingDenseHllPreparer preparer = new RecordingDenseHllPreparer();
+        BenchHarness harness = new BenchHarness(preparer, 1_000);
+        SuiteConfig config = redisCurrentConfig("203.0.113.10", 6380);
+        ScenarioDefinition scenario = RedisSuiteTestSupport.scenario("release-hll-dense-c64-p8", BenchWorkloadKind.HLL_DENSE, 1, 1, false);
+        SuiteHarness.RunningServer server = new SuiteHarness.RunningServer("redis", scenario.id(), 6380, Path.of("target/redis.log"));
+
+        harness.prepareScenario(server, scenario, config);
+        harness.prepareScenario(server, scenario, config);
+
+        Assert.assertEquals(List.of("127.0.0.1:6380:100:4"), preparer.calls);
+    }
+
+    @Test
     public void setGetCountsNullGetReplyAsStrictFailure() throws Exception {
         try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
             if ("GET".equals(command)) {
@@ -468,6 +506,46 @@ public class BenchHarnessExtendedWorkloadTest {
     private static Map<String, Double> metricsByName(BenchWorkloadResult result) {
         return result.toMetrics().stream()
                 .collect(java.util.stream.Collectors.toMap(metric -> metric.name(), metric -> metric.value()));
+    }
+
+    private static double metric(IterationResult result, String name) {
+        return result.metrics().stream()
+                .filter(metric -> metric.name().equals(name))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("missing metric " + name))
+                .value();
+    }
+
+    private static SuiteConfig redisCurrentConfig(String suiteHost, int redisPort) throws Exception {
+        yier.bubu.redis.app.bench.YierdisBenchServerArgs serverArgs = new yier.bubu.redis.app.bench.YierdisBenchServerArgs();
+        serverArgs.normalizeAndValidate();
+        SuiteArtifact redis = SuiteArtifact.externalRedis("redis", "127.0.0.1", redisPort, "", "", 0);
+        SuiteArtifact current = SuiteArtifact.yierdisJar("current", RedisSuiteTestSupport.redisCurrentOnlyConfig(
+                Path.of("target/redis-suite-test"), 16378, redisPort).current().jarPath(), "head");
+        return new SuiteConfig(
+                SuiteProfileName.RELEASE,
+                current,
+                Optional.empty(),
+                List.of(redis, current),
+                Path.of("target/redis-suite-test"),
+                suiteHost,
+                16378,
+                "java",
+                "4g",
+                "4g",
+                "6g",
+                serverArgs,
+                true
+        );
+    }
+
+    private static final class RecordingDenseHllPreparer implements BenchHarness.DenseHllPreparer {
+        private final List<String> calls = new ArrayList<>();
+
+        @Override
+        public void prefill(String host, int port, int keyspace, int pipeline) {
+            calls.add(host + ":" + port + ":" + keyspace + ":" + pipeline);
+        }
     }
 
     private static final class NoopDenseHllPreparer implements BenchHarness.DenseHllPreparer {

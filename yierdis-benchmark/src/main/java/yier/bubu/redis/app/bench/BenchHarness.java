@@ -140,7 +140,7 @@ public final class BenchHarness implements SuiteHarness {
         prepareScenario(server, scenario, config);
         BenchWorkloadRequest request = new BenchWorkloadRequest(
                 scenario.workload(),
-                config.host(),
+                workloadHost(server, config),
                 server.port(),
                 scenario.requests(),
                 scenario.clients(),
@@ -224,8 +224,17 @@ public final class BenchHarness implements SuiteHarness {
         }
         PreparedPass pass = PreparedPass.from(server);
         if (preparedPasses.add(pass)) {
-            denseHllPreparer.prefill(config.host(), server.port(), scenario.keyspace(), scenario.pipeline());
+            denseHllPreparer.prefill(workloadHost(server, config), server.port(), scenario.keyspace(), scenario.pipeline());
         }
+    }
+
+    static String workloadHost(SuiteHarness.RunningServer server, SuiteConfig config) {
+        for (SuiteArtifact artifact : config.artifactsInRunOrder()) {
+            if (artifact.label().equals(server.artifactLabel())) {
+                return artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS ? artifact.host() : config.host();
+            }
+        }
+        return config.host();
     }
 
     static boolean waitReady(String host, int port, int timeoutMillis, int readTimeoutMillis) throws InterruptedException {
