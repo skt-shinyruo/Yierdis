@@ -260,6 +260,30 @@ public class SuiteRunnerOrchestrationTest {
         Assert.assertEquals(3, result.passes().size());
     }
 
+    @Test
+    public void redisCurrentRunProducesComparisonBetweenRedisAndCurrent() throws Exception {
+        ScenarioDefinition scenario = RedisSuiteTestSupport.scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
+        SuiteArtifact current = new SuiteArtifact("current", TestSuiteConfigs.regularTempJar("current"), "head");
+        SuiteArtifact redis = SuiteArtifact.externalRedis("redis", "127.0.0.9", 6389, "", "", 0);
+        SuiteConfig config = TestSuiteConfigs.config(
+                Files.createTempDirectory("suite-runner-redis-current-"),
+                16378,
+                Optional.empty(),
+                current,
+                List.of(redis, current)
+        );
+        FakeHarness harness = new FakeHarness();
+
+        SuiteRunResult result = new SuiteRunner(config, harness, List.of(scenario)).run();
+
+        Assert.assertEquals(2, result.passes().size());
+        Assert.assertEquals(1, result.comparisons().size());
+        ScenarioComparison comparison = result.comparisons().get(0);
+        Assert.assertTrue(comparison.comparable());
+        Assert.assertEquals(scenario.id(), comparison.scenario().id());
+        Assert.assertEquals(List.of("redis", "current"), result.artifacts().stream().map(SuiteArtifact::label).toList());
+    }
+
     private static ScenarioDefinition scenario(String id, BenchWorkloadKind workload, int warmups, int repeats, boolean latency) {
         return new ScenarioDefinition(id, id, workload, 100, workload == BenchWorkloadKind.PING ? 0 : 256,
                 1000, 8, 4, warmups, repeats, latency);

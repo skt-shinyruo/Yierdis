@@ -56,3 +56,46 @@ Escalated GREEN command result:
 - Existing Yierdis-only behavior remains intact.
 - `SuiteRunner` now performs the Task 1 required integration by using `SuiteConfig.artifactsInRunOrder()` for actual run order.
 - JaCoCo emitted a non-fatal warning about execution data mismatch for `BenchHarness$PreparedPass` during report generation; Maven test execution still succeeded.
+
+### Review Rework
+
+#### High Finding 1: Redis workloads used `config.host()`
+
+RED:
+
+- Added Redis-specific coverage in `BenchHarnessExtendedWorkloadTest` for:
+  - `redisWorkloadHostUsesArtifactHost`
+  - `redisDensePrefillUsesArtifactHost`
+- Initial focused run in the sandbox confirmed the new suite comparison test was green but could not finish socket-backed workload coverage because `ServerSocket` creation is blocked there (`Operation not permitted`).
+- An escalated run exposed that the first workload-path test approach was too broad and failed for protocol reasons, so the test was narrowed to the actual host-selection seam and dense-prefill path.
+
+GREEN:
+
+- `BenchHarness.runIteration(...)` now routes workload requests through `workloadHost(server, config)` instead of unconditionally using `config.host()`.
+- Dense HLL prefill in `prepareScenario(...)` now also routes through `workloadHost(server, config)`.
+- `BenchHarness.workloadHost(...)` resolves the pass label against `config.artifactsInRunOrder()` and uses the external Redis artifact host for Redis passes while preserving existing Yierdis host behavior.
+
+#### High Finding 2: Redis/current produced no comparisons
+
+RED:
+
+- Added `SuiteRunnerOrchestrationTest.redisCurrentRunProducesComparisonBetweenRedisAndCurrent`.
+- This failed before the fix with `expected:<1> but was:<0>` comparisons because `SuiteRunner.comparisons(...)` bailed out when `config.baseline()` was empty and assumed `"baseline"`/`"current"` labels.
+
+GREEN:
+
+- `SuiteRunner.comparisons(...)` now derives the comparison pair from `config.artifactsInRunOrder()` rather than `config.baseline()`.
+- Redis/current runs now emit a comparison between the first non-current artifact and the configured current artifact, while baseline/current behavior remains unchanged.
+
+#### Rework Verification
+
+Focused/required command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=ObservationClientTest,SuiteRunnerOrchestrationTest,BenchHarnessExtendedWorkloadTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Final GREEN result after rework:
+
+- `BUILD SUCCESS`
+- `Tests run: 37, Failures: 0, Errors: 0, Skipped: 0`
