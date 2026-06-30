@@ -200,6 +200,37 @@ public class SuiteRunnerOrchestrationTest {
     }
 
     @Test
+    public void redisArtifactDoesNotConsumeGeneratedPortHeadroomOrOffsets() throws Exception {
+        ScenarioDefinition scenario = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
+        SuiteArtifact redis = SuiteArtifact.externalRedis("redis", "127.0.0.9", 6389, "", "", 0);
+        SuiteArtifact current = new SuiteArtifact("current", TestSuiteConfigs.regularTempJar("current"), "head");
+        SuiteConfig config = TestSuiteConfigs.config(
+                Files.createTempDirectory("suite-runner-redis-port-gap-"),
+                65535,
+                Optional.empty(),
+                current,
+                List.of(redis, current)
+        );
+        FakeHarness harness = new FakeHarness();
+
+        SuiteRunResult result = new SuiteRunner(config, harness, List.of(scenario)).run();
+
+        Assert.assertEquals(List.of(65535, 65535), harness.ports);
+        Assert.assertEquals(List.of(
+                "start redis release-ping-latency", "stop redis release-ping-latency",
+                "start current release-ping-latency", "stop current release-ping-latency"
+        ), harness.lifecycle);
+        Assert.assertEquals(List.of(
+                "redis@127.0.0.9:6389",
+                "redis@127.0.0.9:6389",
+                "current@127.0.0.1:65535",
+                "current@127.0.0.1:65535"
+        ), harness.observations);
+        Assert.assertEquals(2, result.passes().size());
+        Assert.assertEquals(List.of("redis", "current"), result.artifacts().stream().map(SuiteArtifact::label).toList());
+    }
+
+    @Test
     public void lowPortBaseFailsClearlyBeforeStartingServers() throws Exception {
         ScenarioDefinition scenario = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
         SuiteConfig config = TestSuiteConfigs.currentOnly(Files.createTempDirectory("suite-runner-low-port-"), 1023);
@@ -255,8 +286,8 @@ public class SuiteRunnerOrchestrationTest {
                 "current@127.0.0.1:16378",
                 "redis@127.0.0.9:6389",
                 "redis@127.0.0.9:6389",
-                "baseline@127.0.0.1:16380",
-                "baseline@127.0.0.1:16380"
+                "baseline@127.0.0.1:16379",
+                "baseline@127.0.0.1:16379"
         ), harness.observations);
         Assert.assertEquals(3, result.passes().size());
     }

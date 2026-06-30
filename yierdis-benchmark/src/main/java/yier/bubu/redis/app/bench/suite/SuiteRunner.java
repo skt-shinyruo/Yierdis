@@ -37,14 +37,18 @@ public final class SuiteRunner {
         Instant startedAt = Instant.now();
         String runId = RUN_ID_TIME.format(startedAt) + "-" + config.profile().cliName();
         List<SuiteArtifact> artifacts = artifactsInRunOrder();
-        validatePortHeadroom(artifacts.size());
+        List<SuiteArtifact> generatedPortArtifacts = generatedPortArtifacts(artifacts);
+        validatePortHeadroom(generatedPortArtifacts.size());
         List<ScenarioPassResult> passes = new ArrayList<>();
 
         for (int scenarioIndex = 0; scenarioIndex < scenarios.size(); scenarioIndex++) {
+            int generatedPortIndex = 0;
             ScenarioDefinition scenario = scenarios.get(scenarioIndex);
-            for (int artifactIndex = 0; artifactIndex < artifacts.size(); artifactIndex++) {
-                SuiteArtifact artifact = artifacts.get(artifactIndex);
-                int port = portFor(scenarioIndex, artifactIndex, artifacts.size());
+            for (SuiteArtifact artifact : artifacts) {
+                int port = portFor(scenarioIndex, generatedPortIndex, generatedPortArtifacts.size(), artifact.kind());
+                if (artifact.kind() == SuiteArtifact.Kind.YIERDIS_JAR) {
+                    generatedPortIndex++;
+                }
                 Path logFile = logFileFor(artifact, scenario);
                 passes.add(runPass(artifact, scenario, port, logFile));
             }
@@ -69,6 +73,16 @@ public final class SuiteRunner {
 
     private List<SuiteArtifact> artifactsInRunOrder() {
         return config.artifactsInRunOrder();
+    }
+
+    private static List<SuiteArtifact> generatedPortArtifacts(List<SuiteArtifact> artifacts) {
+        List<SuiteArtifact> generatedPortArtifacts = new ArrayList<>();
+        for (SuiteArtifact artifact : artifacts) {
+            if (artifact.kind() == SuiteArtifact.Kind.YIERDIS_JAR) {
+                generatedPortArtifacts.add(artifact);
+            }
+        }
+        return List.copyOf(generatedPortArtifacts);
     }
 
     private ScenarioPassResult runPass(SuiteArtifact artifact, ScenarioDefinition scenario, int port, Path logFile) {
@@ -241,8 +255,8 @@ public final class SuiteRunner {
         return String.format(Locale.ROOT, "%.3f", value);
     }
 
-    private void validatePortHeadroom(int artifactCount) {
-        long requiredPorts = (long) scenarios.size() * artifactCount;
+    private void validatePortHeadroom(int generatedPortArtifactCount) {
+        long requiredPorts = (long) scenarios.size() * generatedPortArtifactCount;
         if (requiredPorts == 0) {
             return;
         }
@@ -250,12 +264,15 @@ public final class SuiteRunner {
         if (config.portBase() < MIN_SUITE_PORT || lastPort > MAX_PORT) {
             throw new IllegalArgumentException("portBase " + config.portBase()
                     + " does not have headroom for " + requiredPorts
-                    + " contiguous suite ports within " + MIN_SUITE_PORT + ".." + MAX_PORT);
+                    + " contiguous jar-backed suite ports within " + MIN_SUITE_PORT + ".." + MAX_PORT);
         }
     }
 
-    private int portFor(int scenarioIndex, int artifactIndex, int artifactCount) {
-        long offset = (long) scenarioIndex * artifactCount + artifactIndex;
+    private int portFor(int scenarioIndex, int generatedPortIndex, int generatedPortArtifactCount, SuiteArtifact.Kind kind) {
+        if (kind == SuiteArtifact.Kind.EXTERNAL_REDIS) {
+            return config.portBase();
+        }
+        long offset = (long) scenarioIndex * generatedPortArtifactCount + generatedPortIndex;
         return (int) ((long) config.portBase() + offset);
     }
 

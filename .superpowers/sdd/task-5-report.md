@@ -445,3 +445,49 @@ The previously observed in-flight direct-constant-raise direction was removed fr
 - Required 5 release scenarios: comparable again, no longer failing due to `current is not clean`
 
 Overall task status: `DONE`
+
+---
+
+# Task 5 Follow-Up Report: Redis Suite Port Headroom Fix
+
+Date: 2026-07-01
+Worktree: `/home/feng/code/project/Yierdis/.worktrees/codex-redis-suite-comparison`
+Base HEAD for this fix: `b8dd5978`
+
+## Summary
+
+Implemented the reviewer-approved Redis suite port fix in `SuiteRunner`.
+
+What changed:
+
+- Port headroom validation now counts only `SuiteArtifact.Kind.YIERDIS_JAR` artifacts.
+- Generated suite port allocation now advances only across jar-backed artifacts.
+- External Redis artifacts keep their configured host/port authoritative and do not consume generated suite port headroom.
+- Added a regression test proving a `redis + current` run at `portBase = 65535` succeeds with only one generated port and that Redis skips the generated port sequence.
+
+## Files Changed
+
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/suite/SuiteRunner.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/suite/SuiteRunnerOrchestrationTest.java`
+
+## Verification
+
+Command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=SuiteRunnerOrchestrationTest,SuiteReportWriterTest,SuiteProfileFactoryTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Result:
+
+- `BUILD SUCCESS`
+- `Tests run: 37, Failures: 0, Errors: 0, Skipped: 0`
+
+Notes:
+
+- The first sandboxed run reproduced the same test suite and showed the expected stale assertion in `runUsesConfiguredArtifactOrderAndArtifactEndpointsForObservations`, which was corrected during the fix.
+- The benchmark test suite also includes a socket-binding Redis fixture, so the final verification was rerun unsandboxed with the same JDK 25 command.
+
+## Commit
+
+- Pending at report time
