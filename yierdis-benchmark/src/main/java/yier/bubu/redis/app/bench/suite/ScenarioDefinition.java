@@ -19,7 +19,9 @@ public record ScenarioDefinition(
         int warmupIterations,
         int repeatIterations,
         boolean latency,
-        ServerOverrides serverOverrides
+        ServerOverrides serverOverrides,
+        RedisComparable redisComparable,
+        String redisNonComparableReason
 ) {
     private static final Pattern STABLE_ID_PATTERN = Pattern.compile("[a-z0-9]+(?:-[a-z0-9]+)*");
 
@@ -52,6 +54,14 @@ public record ScenarioDefinition(
             throw new IllegalArgumentException("repeatIterations must be > 0");
         }
         serverOverrides = serverOverrides == null ? ServerOverrides.none() : serverOverrides;
+        redisComparable = redisComparable == null ? RedisComparable.YES : redisComparable;
+        redisNonComparableReason = redisNonComparableReason == null ? "" : redisNonComparableReason;
+        if (redisComparable == RedisComparable.YES && !redisNonComparableReason.isBlank()) {
+            throw new IllegalArgumentException("redisNonComparableReason must be blank when redisComparable is YES");
+        }
+        if (redisComparable != RedisComparable.YES && redisNonComparableReason.isBlank()) {
+            throw new IllegalArgumentException("redisNonComparableReason must be provided when redisComparable is not YES");
+        }
     }
 
     public ScenarioDefinition(
@@ -68,7 +78,31 @@ public record ScenarioDefinition(
             boolean latency
     ) {
         this(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
-                warmupIterations, repeatIterations, latency, ServerOverrides.none());
+                warmupIterations, repeatIterations, latency, ServerOverrides.none(), RedisComparable.YES, "");
+    }
+
+    public ScenarioDefinition(
+            String id,
+            String displayName,
+            BenchWorkloadKind workload,
+            int keyspace,
+            int dataSize,
+            int requests,
+            int clients,
+            int pipeline,
+            int warmupIterations,
+            int repeatIterations,
+            boolean latency,
+            ServerOverrides serverOverrides
+    ) {
+        this(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
+                warmupIterations, repeatIterations, latency, serverOverrides, RedisComparable.YES, "");
+    }
+
+    public enum RedisComparable {
+        YES,
+        EXTERNAL_CONFIG_REQUIRED,
+        NO
     }
 
     public void applyServerOverrides(YierdisBenchServerArgs serverArgs) {

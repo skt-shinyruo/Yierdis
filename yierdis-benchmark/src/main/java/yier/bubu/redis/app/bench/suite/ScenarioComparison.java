@@ -51,6 +51,7 @@ public record ScenarioComparison(
         List<String> reasons = new ArrayList<>();
         addScenarioMismatch(reasons, "baseline", scenario, baseline.scenario());
         addScenarioMismatch(reasons, "current", scenario, current.scenario());
+        addRedisScenarioCompatibility(reasons, scenario, baseline);
         if (!baseline.clean()) {
             reasons.add(baseline.artifactLabel() + " is not clean" + dirtySuffix(baseline));
         }
@@ -63,6 +64,15 @@ public record ScenarioComparison(
             addZeroBaselineDenominator(reasons, scenario, baseline, "p99_ms");
         }
         return String.join("; ", reasons);
+    }
+
+    private static void addRedisScenarioCompatibility(List<String> reasons, ScenarioDefinition scenario, ScenarioPassResult baseline) {
+        if (!"redis".equals(baseline.artifactLabel())) {
+            return;
+        }
+        if (scenario.redisComparable() != ScenarioDefinition.RedisComparable.YES) {
+            reasons.add(scenario.redisNonComparableReason());
+        }
     }
 
     private static void addScenarioMismatch(List<String> reasons, String side, ScenarioDefinition expected, ScenarioDefinition actual) {
