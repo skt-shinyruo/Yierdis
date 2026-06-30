@@ -143,136 +143,6 @@ Concern summary:
 - The required manual Redis smoke could not be completed on 2026-06-30 because `redis-server` is not installed in the execution environment.
 - Socket-binding test verification also required unsandboxed execution because the managed sandbox rejects local listening sockets with `Operation not permitted`.
 
-## Follow-Up: Global Shared Off-Heap Maxmemory Runtime Performance Fix
-
-Date: 2026-06-30
-Baseline HEAD for follow-up: `07973922`
-
-### What Changed
-
-- Added a focused runtime regression in `yierdis-server/yierdis-server-runtime/src/test/java/yier/bubu/redis/runtime/embedded/DbEngineFactoryInjectionTest.java` that attaches a global maxmemory coordinator to a stub engine and proves shared off-heap accounting must not call `memoryStats()`.
-- Added a cheap `MemoryOps.offHeapUsedBytes()` seam in `yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/MemoryOps.java`.
-- Implemented the cheap path in `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java` and `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryOps.java` by reusing the existing direct native byte accounting path instead of building full `YierdisMemoryStats`.
-- Switched `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java` shared global accounting from `engine.memory().memoryStats().offHeapUsedBytes()` to `engine.memory().offHeapUsedBytes()`.
-- Extended `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporterTest.java` so the shared-runtime native accounting boundary is asserted through the new cheap API as well.
-
-The accounting boundary remains unchanged:
-
-- Per-DB `usedBytesForMaxmemory()` still excludes shared FFM off-heap when a global coordinator is attached.
-- Shared off-heap is still counted once at the instance/global layer.
-
-### TDD Evidence
-
-RED command:
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-server/yierdis-server-runtime -am \
-  -Dtest=DbEngineFactoryInjectionTest#globalMaxmemoryUsesCheapSharedOffHeapUsagePath \
-  -Dsurefire.failIfNoSpecifiedTests=false test
-```
-
-RED result:
-
-- `BUILD FAILURE`
-- Failure was the expected pre-fix compile break proving the seam did not exist yet:
-
-```text
-/yierdis-server-runtime/src/test/java/yier/bubu/redis/runtime/embedded/DbEngineFactoryInjectionTest.java:[334,9]
-method does not override or implement a method from a supertype
-```
-
-GREEN command 1:
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-server/yierdis-server-runtime -am \
-  -Dtest=DbEngineFactoryInjectionTest#globalMaxmemoryUsesCheapSharedOffHeapUsagePath \
-  -Dsurefire.failIfNoSpecifiedTests=false test
-```
-
-GREEN result 1:
-
-- `BUILD SUCCESS`
-- Runtime regression summary: `Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`
-
-GREEN command 2:
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-server/yierdis-server-runtime,yierdis-db/yierdis-db-memory -am \
-  -Dtest=DbEngineFactoryInjectionTest#globalMaxmemoryUsesCheapSharedOffHeapUsagePath,YierdisDbMemoryReporterTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
-```
-
-GREEN result 2:
-
-- `BUILD SUCCESS`
-- `YierdisDbMemoryReporterTest`: `Tests run: 3, Failures: 0, Errors: 0, Skipped: 0`
-- `DbEngineFactoryInjectionTest`: `Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`
-
-### Files Changed
-
-- `yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/MemoryOps.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryOps.java`
-- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporterTest.java`
-- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
-- `yierdis-server/yierdis-server-runtime/src/test/java/yier/bubu/redis/runtime/embedded/DbEngineFactoryInjectionTest.java`
-- `.superpowers/sdd/task-5-report.md`
-
-### Test Commands And Results
-
-- `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-runtime -am -Dtest=DbEngineFactoryInjectionTest#globalMaxmemoryUsesCheapSharedOffHeapUsagePath -Dsurefire.failIfNoSpecifiedTests=false test`
-  Result: RED before implementation (`BUILD FAILURE`), then GREEN after implementation (`BUILD SUCCESS`, `Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`)
-- `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-runtime,yierdis-db/yierdis-db-memory -am -Dtest=DbEngineFactoryInjectionTest#globalMaxmemoryUsesCheapSharedOffHeapUsagePath,YierdisDbMemoryReporterTest -Dsurefire.failIfNoSpecifiedTests=false test`
-  Result: GREEN (`BUILD SUCCESS`; db-memory `Tests run: 3, Failures: 0, Errors: 0, Skipped: 0`; runtime `Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`)
-
-### Self-Review Concerns
-
-- The new `MemoryOps.offHeapUsedBytes()` default implementation still falls back to `memoryStats()` for engines that do not override it. That preserves compatibility while leaving older implementations on the expensive path until they opt in.
-- I did not rerun the external Docker Redis smoke here; this fix is covered by focused runtime/db tests and the change is intentionally minimal.
-
-## Follow-Up: Cheap Allocator Hot Path Correction
-
-Date: 2026-06-30
-
-### Why This Follow-Up Was Needed
-
-- The first follow-up patch removed the `memoryStats()` call from the global shared off-heap path, but `YierdisDbMemoryReporter.safeNativeAllocatorLogicalBytes()` still reached `allocator.stats()`.
-- That meant the hottest maxmemory path could still pay the expensive allocator-stats cost that the Redis smoke had exposed.
-
-### Final Change
-
-- Added `NativeAllocator.logicalUsedBytes()` as a cheap seam in `yierdis-memory-api`.
-- Implemented the seam directly in `YierdisStableNativeAllocator` by returning the synchronized `logicalUsedBytes` field instead of building full allocator stats.
-- Switched `YierdisDbMemoryReporter.safeNativeAllocatorLogicalBytes()` to use `allocator.logicalUsedBytes()`.
-
-This keeps the global shared-runtime identity counting already added in the runtime layer, while also removing the expensive allocator-stats dependency from the DB-side native byte hot path.
-
-### Verification
-
-Command:
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-server/yierdis-server-runtime,yierdis-db/yierdis-db-memory,yierdis-memory/yierdis-memory-ffm,yierdis-memory/yierdis-memory-api -am \
-  -Dtest=DbEngineFactoryInjectionTest#globalMaxmemoryUsesCheapSharedOffHeapUsagePath,YierdisDbMemoryReporterTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
-```
-
-Result:
-
-- `BUILD SUCCESS`
-- `YierdisDbMemoryReporterTest`: `Tests run: 4, Failures: 0, Errors: 0, Skipped: 0`
-- `DbEngineFactoryInjectionTest`: `Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`
-
-### Files Changed In This Final Correction
-
-- `yierdis-memory/yierdis-memory-api/src/main/java/yier/bubu/redis/memory/api/NativeAllocator.java`
-- `yierdis-memory/yierdis-memory-ffm/src/main/java/yier/bubu/redis/memory/foreign/YierdisStableNativeAllocator.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporter.java`
-
 ## Follow-Up Refinement: Remove Allocator `stats()` From The Global Hot Path
 
 Date: 2026-06-30
@@ -353,3 +223,65 @@ GREEN result:
 
 - The runtime seam intentionally reports shared off-heap bytes only when a global coordinator is attached, so standalone/per-DB uses still rely on existing `memoryStats()` observability rather than this hot-path helper.
 - I kept the behavior minimal and local to runtime admission; no broader observability refactor was done.
+
+## Follow-Up Fix: Global Observability Shared Off-Heap Deduplication
+
+Date: 2026-06-30
+
+### Review Finding Addressed
+
+- `YierdisInstanceObservability.memoryStats()` still summed per-DB `offHeapUsedBytes()` in global maxmemory scope, which double-counted shared runtime off-heap when multiple DBs pointed at the same shared runtime.
+
+### What Changed
+
+- Added a focused runtime regression in `yierdis-server/yierdis-server-runtime/src/test/java/yier/bubu/redis/runtime/embedded/DbEngineFactoryInjectionTest.java` that builds a global-scope instance with two DBs sharing the same runtime identity while each DB-level `memoryStats()` still reports the shared off-heap bytes.
+- Updated `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceObservability.java` so global observability:
+  - does not sum per-DB `offHeapUsedBytes()`
+  - dedupes by `RuntimeDbEngine.globalSharedOffHeapUsageIdentity()`
+  - counts `globalSharedOffHeapUsedBytes()` once per shared identity
+  - preserves the intended boundary where per-DB accounting excludes shared off-heap and instance/global accounting includes it once
+
+### TDD Evidence
+
+RED command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+mvn -pl yierdis-server/yierdis-server-runtime -am \
+  -Dtest=DbEngineFactoryInjectionTest#globalObservabilityCountsSharedOffHeapOnceAcrossDatabases \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+RED result:
+
+- `BUILD FAILURE`
+- Expected assertion failure before the fix:
+
+```text
+instance/global off-heap should count the shared runtime once expected:<40> but was:<80>
+```
+
+GREEN command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+mvn -pl yierdis-server/yierdis-server-runtime -am \
+  -Dtest=DbEngineFactoryInjectionTest#globalObservabilityCountsSharedOffHeapOnceAcrossDatabases,DbEngineFactoryInjectionTest#globalMaxmemoryUsesCheapSharedOffHeapUsagePath \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+GREEN result:
+
+- `BUILD SUCCESS`
+- `DbEngineFactoryInjectionTest`: `Tests run: 2, Failures: 0, Errors: 0, Skipped: 0`
+
+### Files Changed
+
+- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceObservability.java`
+- `yierdis-server/yierdis-server-runtime/src/test/java/yier/bubu/redis/runtime/embedded/DbEngineFactoryInjectionTest.java`
+- `.superpowers/sdd/task-5-report.md`
+
+### Self-Review Concerns
+
+- I did not run the manual Redis smoke per instruction; this follow-up is verified with focused runtime tests only.
+- The fix is intentionally local to global observability aggregation and reuses the existing runtime shared-off-heap seam rather than introducing another accounting path.

@@ -4,6 +4,7 @@ import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
 
@@ -33,7 +34,6 @@ public final class YierdisInstanceObservability {
         long expireOverhead = 0;
         long expireValueObjects = 0;
         long offHeap = 0;
-        long globalOffHeapFallback = 0;
         long reserved = 0;
         long usedBytesForMaxmemory = 0;
         long effectiveUsedBytesForMaxmemory = 0;
@@ -68,7 +68,8 @@ public final class YierdisInstanceObservability {
             expireValueObjects += s.expireValueObjectsBytesEstimate();
             long dbOffHeap = Math.max(0L, s.offHeapUsedBytes());
             if (globalScope) {
-                globalOffHeapFallback = addSaturating(globalOffHeapFallback, dbOffHeap);
+                // Per-DB stats in global scope may still expose shared off-heap; instance/global aggregation
+                // must source that shared usage once at the runtime identity boundary instead of summing DB views.
             } else {
                 // PER_DB: each DB owns its runtime, so sum.
                 offHeap = addSaturating(offHeap, dbOffHeap);
@@ -104,7 +105,7 @@ public final class YierdisInstanceObservability {
 
         if (globalScope) {
             // GLOBAL: DB participants exclude off-heap while the shared source counts actual native usage once.
-            offHeap = globalOffHeapFallback;
+            offHeap = sharedOffHeapUsedBytes(databases);
             usedBytesForMaxmemory = addSaturating(heap, offHeap);
             effectiveUsedBytesForMaxmemory = addSaturating(usedBytesForMaxmemory, Math.max(0L, reserved));
             offHeapIncludedInMaxmemory = true;
@@ -209,5 +210,27 @@ public final class YierdisInstanceObservability {
             return Long.MAX_VALUE;
         }
         return left + right;
+    }
+
+    private long sharedOffHeapUsedBytes(int databases) {
+        long total = 0L;
+        IdentityHashMap<Object, Boolean> seen = new IdentityHashMap<>();
+        for (int dbIndex = 0; dbIndex < databases; dbIndex++) {
+            Object identity = instance.runtimeEngine(dbIndex).globalSharedOffHeapUsageIdentity();
+            if (identity == null || seen.put(identity, Boolean.TRUE) != null) {
+                continue;
+            }
+            long used;
+            try {
+                used = instance.runtimeEngine(dbIndex).globalSharedOffHeapUsedBytes();
+            } catch (Throwable ignored) {
+                used = 0L;
+            }
+            if (used <= 0L) {
+                continue;
+            }
+            total = addSaturating(total, used);
+        }
+        return total;
     }
 }
