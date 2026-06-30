@@ -19,6 +19,10 @@ public interface NativeAllocator extends AutoCloseable {
 
     NativeDefragReport defragCycle(NativeDefragOptions options);
 
+    default long logicalUsedBytes() {
+        return Math.max(0L, stats().logicalUsedBytes());
+    }
+
     NativeAllocatorStats stats();
 
     @Override

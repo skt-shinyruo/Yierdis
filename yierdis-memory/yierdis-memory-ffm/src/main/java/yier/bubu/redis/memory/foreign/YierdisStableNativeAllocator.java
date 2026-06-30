@@ -292,6 +292,11 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     }
 
     @Override
+    public synchronized long logicalUsedBytes() {
+        return Math.max(0L, logicalUsedBytes);
+    }
+
+    @Override
     public synchronized NativeAllocatorStats stats() {
         YierdisNativePageAllocatorStats pageStats = pageAllocator.stats();
         return new NativeAllocatorStats(

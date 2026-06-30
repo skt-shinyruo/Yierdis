@@ -241,8 +241,15 @@ public final class YierdisDbMemoryReporter {
     }
 
     private long safeNativeAllocatorLogicalBytes() {
-        NativeAllocatorStats stats = safeNativeAllocatorStats();
-        return stats == null ? 0L : Math.max(0L, stats.logicalUsedBytes());
+        var allocator = keyLifecycle.nativeAllocator();
+        if (allocator == null) {
+            return 0L;
+        }
+        try {
+            return Math.max(0L, allocator.logicalUsedBytes());
+        } catch (Throwable ignored) {
+            return 0L;
+        }
     }
 
     private NativeAllocatorStats safeNativeAllocatorStats() {
