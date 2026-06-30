@@ -145,3 +145,49 @@ Final GREEN result:
 
 - `BUILD SUCCESS`
 - `Tests run: 38, Failures: 0, Errors: 0, Skipped: 0`
+
+### Endpoint Reuse Fix
+
+#### Remaining High Finding: Redis endpoint classification leaked across reused ports
+
+RED:
+
+- Added `BenchHarnessExtendedWorkloadTest.stoppingRedisPassClearsEndpointClassificationForReusedPort`.
+- The test exercises the real harness lifecycle on a single `BenchHarness` instance:
+  - start an external Redis pass
+  - confirm the Redis endpoint is tracked
+  - stop that pass
+  - assert the tracked Redis endpoint set is cleared
+- Before the fix, the focused regression failed because `externalRedisEndpoints` still contained the stopped Redis endpoint after `stopServer(...)`.
+
+Focused RED command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=BenchHarnessExtendedWorkloadTest#stoppingRedisPassClearsEndpointClassificationForReusedPort -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Escalated RED evidence:
+
+- Failure at `BenchHarnessExtendedWorkloadTest:349`
+- Assertion showed the endpoint tracking set was still non-empty after stopping the Redis pass
+
+GREEN:
+
+- `BenchHarness.stopServer(...)` now removes tracked external Redis endpoint classification when stopping an external Redis pass (`handle == null`).
+- This preserves the Redis-safe observation path for active Redis passes while preventing a later Yierdis pass reusing the same port from being misclassified as Redis and skipping `STATS`.
+
+Focused GREEN evidence:
+
+- The same single-test command passed after the cleanup change:
+  - `Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`
+
+Required covering command after the fix:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=ObservationClientTest,SuiteRunnerOrchestrationTest,BenchHarnessExtendedWorkloadTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Final GREEN result:
+
+- `BUILD SUCCESS`
+- `Tests run: 39, Failures: 0, Errors: 0, Skipped: 0`
