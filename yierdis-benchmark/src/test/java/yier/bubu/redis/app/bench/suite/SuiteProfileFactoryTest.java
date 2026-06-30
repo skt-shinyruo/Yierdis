@@ -5,6 +5,9 @@ import org.junit.Test;
 import yier.bubu.redis.app.bench.BenchWorkloadKind;
 import yier.bubu.redis.app.bench.YierdisBenchServerArgs;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -81,6 +84,18 @@ public class SuiteProfileFactoryTest {
         assertNativeSlotOverrideScenario(scenarios, "release-set-get-1024b-c64-p8");
         assertNativeSlotOverrideScenario(scenarios, "release-append-256b-c64-p8");
         assertNativeSlotOverrideScenario(scenarios, "release-hll-sparse-c64-p8");
+    }
+
+    @Test
+    public void currentOnlySuiteRunsDoNotApplyRedisComparisonNativeSlotOverrides() {
+        List<ScenarioDefinition> scenarios = SuiteProfileFactory.expand(SuiteProfileName.RELEASE);
+        YierdisBenchServerArgs args = new YierdisBenchServerArgs();
+
+        scenario(scenarios, "release-set-get-256b-c64-p8").applyServerOverrides(args);
+        args.normalizeAndValidate();
+
+        Assert.assertEquals(16, args.databases);
+        Assert.assertEquals(0, args.nativeSlotCapacity);
     }
 
     @Test
@@ -217,12 +232,37 @@ public class SuiteProfileFactoryTest {
     }
 
     private static void assertNativeSlotOverrideScenario(List<ScenarioDefinition> scenarios, String id) {
-        YierdisBenchServerArgs args = new YierdisBenchServerArgs();
-        scenario(scenarios, id).applyServerOverrides(args);
-        args.normalizeAndValidate();
+        try {
+            Path currentJar = Files.createTempFile("suite-current-", ".jar");
+            Files.writeString(currentJar, "stub", StandardCharsets.US_ASCII);
+            YierdisBenchServerArgs baseArgs = new YierdisBenchServerArgs();
+            baseArgs.normalizeAndValidate();
+            SuiteArtifact current = SuiteArtifact.yierdisJar("current", currentJar, "head");
+            SuiteArtifact redis = SuiteArtifact.externalRedis("redis", "127.0.0.1", 6379, "", "", 0);
+            SuiteConfig config = new SuiteConfig(
+                    SuiteProfileName.RELEASE,
+                    current,
+                    java.util.Optional.empty(),
+                    List.of(redis, current),
+                    Files.createTempDirectory("suite-profile-factory-"),
+                    "127.0.0.1",
+                    16378,
+                    "java",
+                    "4g",
+                    "4g",
+                    "6g",
+                    baseArgs,
+                    true
+            );
+            YierdisBenchServerArgs args = new YierdisBenchServerArgs();
+            scenario(scenarios, id).applyServerOverrides(args, current, config);
+            args.normalizeAndValidate();
 
-        Assert.assertEquals("scenario " + id + " should pin current-side smoke to one DB", 1, args.databases);
-        Assert.assertEquals("scenario " + id + " should raise current-side native slots", 2_097_152, args.nativeSlotCapacity);
+            Assert.assertEquals("scenario " + id + " should pin current-side smoke to one DB", 1, args.databases);
+            Assert.assertEquals("scenario " + id + " should raise current-side native slots", 2_097_152, args.nativeSlotCapacity);
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
     }
 
     private static IllegalArgumentException assertRejectsScenario(String messagePart, String id, String displayName) {

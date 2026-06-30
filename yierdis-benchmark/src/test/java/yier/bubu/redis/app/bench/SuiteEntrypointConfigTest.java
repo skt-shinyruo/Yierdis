@@ -188,8 +188,8 @@ public class SuiteEntrypointConfigTest {
         harness.prepareScenario(setGet, scenario("release-set-get-128b-c32-p4", BenchWorkloadKind.SET_GET), config);
 
         Assert.assertEquals(List.of(
-                "127.0.0.1:17379:4096:4",
-                "127.0.0.1:17380:4096:4"
+                "127.0.0.1:17379:4096:4:::0",
+                "127.0.0.1:17380:4096:4:::0"
         ), preparer.calls);
     }
 
@@ -234,8 +234,9 @@ public class SuiteEntrypointConfigTest {
         private final List<String> calls = new ArrayList<>();
 
         @Override
-        public void prefill(String host, int port, int keyspace, int pipeline) {
-            calls.add(host + ":" + port + ":" + keyspace + ":" + pipeline);
+        public void prefill(String host, int port, int keyspace, int pipeline, String redisUser, String redisAuth, int redisDb) {
+            calls.add(host + ":" + port + ":" + keyspace + ":" + pipeline
+                    + ":" + redisUser + ":" + redisAuth + ":" + redisDb);
         }
     }
 

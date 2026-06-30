@@ -109,6 +109,10 @@ public record ScenarioDefinition(
         serverOverrides.applyTo(serverArgs);
     }
 
+    public void applyServerOverrides(YierdisBenchServerArgs serverArgs, SuiteArtifact artifact, SuiteConfig config) {
+        serverOverrides.applyTo(serverArgs, artifact, config);
+    }
+
     private static void requireStableId(String id) {
         if (id == null || !STABLE_ID_PATTERN.matcher(id).matches()) {
             throw new IllegalArgumentException("scenario id must be lowercase kebab-case");
@@ -125,7 +129,8 @@ public record ScenarioDefinition(
             long maxmemoryBytes,
             String maxmemoryPolicy,
             int maxmemorySamples,
-            long evictionTimeLimitMillis
+            long evictionTimeLimitMillis,
+            OverrideScope scope
     ) {
         public ServerOverrides {
             if (databases < 0) {
@@ -156,26 +161,37 @@ public record ScenarioDefinition(
             if (evictionTimeLimitMillis < 0) {
                 throw new IllegalArgumentException("evictionTimeLimitMillis must be >= 0");
             }
+            scope = scope == null ? OverrideScope.UNIVERSAL : scope;
         }
 
         public static ServerOverrides none() {
-            return new ServerOverrides(0, 0, false, 0, 0, 0, 0, "", 0, 0);
+            return new ServerOverrides(0, 0, false, 0, 0, 0, 0, "", 0, 0, OverrideScope.UNIVERSAL);
         }
 
         public static ServerOverrides nativeDefrag(long maxMoveBytes, long maxObjects, long timeLimitMillis) {
-            return new ServerOverrides(0, 0, true, maxMoveBytes, maxObjects, timeLimitMillis, 0, "", 0, 0);
+            return new ServerOverrides(0, 0, true, maxMoveBytes, maxObjects, timeLimitMillis, 0, "", 0, 0,
+                    OverrideScope.UNIVERSAL);
         }
 
         public static ServerOverrides maxmemory(long bytes, String policy, int samples, long evictionTimeLimitMillis) {
-            return new ServerOverrides(0, 0, false, 0, 0, 0, bytes, policy, samples, evictionTimeLimitMillis);
+            return new ServerOverrides(0, 0, false, 0, 0, 0, bytes, policy, samples, evictionTimeLimitMillis,
+                    OverrideScope.UNIVERSAL);
         }
 
-        public static ServerOverrides databasesAndNativeSlots(int databases, int nativeSlotCapacity) {
-            return new ServerOverrides(databases, nativeSlotCapacity, false, 0, 0, 0, 0, "", 0, 0);
+        public static ServerOverrides redisComparisonCurrentSideDatabasesAndNativeSlots(int databases, int nativeSlotCapacity) {
+            return new ServerOverrides(databases, nativeSlotCapacity, false, 0, 0, 0, 0, "", 0, 0,
+                    OverrideScope.REDIS_COMPARISON_CURRENT_ONLY);
         }
 
         private void applyTo(YierdisBenchServerArgs serverArgs) {
+            applyTo(serverArgs, null, null);
+        }
+
+        private void applyTo(YierdisBenchServerArgs serverArgs, SuiteArtifact artifact, SuiteConfig config) {
             Objects.requireNonNull(serverArgs, "serverArgs");
+            if (!scope.appliesTo(artifact, config)) {
+                return;
+            }
             if (databases > 0) {
                 serverArgs.databases = databases;
             }
@@ -205,6 +221,32 @@ public record ScenarioDefinition(
             }
             if (evictionTimeLimitMillis > 0) {
                 serverArgs.evictionTimeLimitMillis = evictionTimeLimitMillis;
+            }
+        }
+
+        enum OverrideScope {
+            UNIVERSAL,
+            REDIS_COMPARISON_CURRENT_ONLY;
+
+            private boolean appliesTo(SuiteArtifact artifact, SuiteConfig config) {
+                if (this == UNIVERSAL) {
+                    return true;
+                }
+                if (artifact == null || config == null) {
+                    return false;
+                }
+                if (artifact.kind() != SuiteArtifact.Kind.YIERDIS_JAR) {
+                    return false;
+                }
+                if (!artifact.label().equals(config.current().label())) {
+                    return false;
+                }
+                for (SuiteArtifact runArtifact : config.artifactsInRunOrder()) {
+                    if (runArtifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS) {
+                        return true;
+                    }
+                }
+                return false;
             }
         }
     }

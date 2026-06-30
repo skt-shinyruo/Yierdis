@@ -258,6 +258,72 @@ Files changed for this follow-up:
 - `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/BenchHarnessExtendedWorkloadTest.java`
 - `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/SuiteEntrypointConfigTest.java`
 - `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/YierdisBenchSuiteEntrypointTest.java`
+
+## Fix Wave: Task 5 Review Findings
+
+Summary:
+
+- Scoped the `databases = 1` and `nativeSlotCapacity = 2_097_152` override so it only applies to Redis comparison current-side suite passes.
+- Hardened Redis bootstrap/admin handling so failed `AUTH`, `SELECT`, and lifecycle `FLUSHDB` replies fail the pass instead of continuing on the wrong session/DB.
+- Routed dense HLL prefill for external Redis through the configured auth/db bootstrap path.
+- Added focused regressions for bootstrap failure handling, dense HLL auth/db session use, and override scoping.
+- Updated the internal benchmark docs with Redis operator guidance for interpretable comparison runs.
+
+Files changed in this fix wave:
+
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/BenchHarness.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBench.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/suite/ObservationClient.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/suite/ScenarioDefinition.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/suite/SuiteProfileFactory.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/BenchHarnessExtendedWorkloadTest.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/SuiteEntrypointConfigTest.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/suite/ObservationClientTest.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/suite/RedisSuiteTestSupport.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/suite/SuiteProfileFactoryTest.java`
+- `docs/project-docs/client-and-bench-internals.md`
+
+Behavioral notes:
+
+- The release smoke override remains explicit and unchanged in value, but now carries a scope marker so plain current-only suite runs and ordinary jar-vs-jar comparison wiring keep the existing default server behavior.
+- `BenchHarness` and `YierdisBench` now validate bootstrap replies as `+OK` for `AUTH` and `SELECT`; `BenchHarness` also validates lifecycle `FLUSHDB` as `+OK`.
+- Observation capture now surfaces bootstrap failures as observation error text rather than silently issuing `INFO` / `MEMORY STATS` on the wrong DB/session.
+- Dense HLL prefill for external Redis now authenticates/selects before `PFADD` / `PFMERGE`.
+
+Verification:
+
+RED confirmation before the fix used the focused regression subset and showed the intended failures:
+
+- `SuiteProfileFactoryTest.currentOnlySuiteRunsDoNotApplyRedisComparisonNativeSlotOverrides` failed because the release override still forced `databases = 1` for an ordinary current-only path.
+- `BenchHarnessExtendedWorkloadTest.redisArtifactStartServerFailsWhenSelectReplyIsError` showed readiness polling continuing past a failed bootstrap reply.
+- `BenchHarnessExtendedWorkloadTest.redisDensePrefillUsesConfiguredAuthAndDb` showed `PFADD` / `PFMERGE` prefill bypassing auth/select.
+- `ObservationClientTest` bootstrap failure regressions showed auth/select failures being masked instead of surfaced.
+
+Focused regression subset after the fix:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=SuiteProfileFactoryTest,BenchHarnessExtendedWorkloadTest,ObservationClientTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Result:
+
+- `BUILD SUCCESS`
+- `Tests run: 48, Failures: 0, Errors: 0, Skipped: 0`
+
+Required focused benchmark suite for this fix wave:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=SuiteProfileFactoryTest,SuiteRunnerOrchestrationTest,BenchHarnessExtendedWorkloadTest,ObservationClientTest,SuiteConfigTest,SuiteEntrypointConfigTest,YierdisBenchSuiteEntrypointTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Result:
+
+- `BUILD SUCCESS`
+- `Tests run: 85, Failures: 0, Errors: 0, Skipped: 0`
+
+Execution note:
+
+- The benchmark-focused test commands had to run unsandboxed because the fixture servers bind local `ServerSocket` ports; sandboxed execution failed with `java.net.SocketException: Operation not permitted`.
 - `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/suite/ObservationClientTest.java`
 - `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/suite/SuiteConfigTest.java`
 - `docs/project-docs/client-and-bench-internals.md`

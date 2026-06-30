@@ -95,7 +95,7 @@ public final class BenchHarness implements SuiteHarness {
         }
 
         YierdisBenchServerArgs serverArgs = config.baseServerArgs();
-        scenario.applyServerOverrides(serverArgs);
+        scenario.applyServerOverrides(serverArgs, artifact, config);
         serverArgs.port = port;
         serverArgs.normalizeAndValidate();
 
@@ -193,8 +193,10 @@ public final class BenchHarness implements SuiteHarness {
             bootstrapRedisSession(socket.getOutputStream(), socket.getInputStream(),
                     artifact.authUser(), artifact.authPassword(), artifact.db());
             RespClientCodec.writeCommand(socket.getOutputStream(), command);
-            RespClientCodec.readReply(socket.getInputStream(), RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
-        } catch (IOException e) {
+            socket.getOutputStream().flush();
+            requireSimpleStringReply(socket.getInputStream(), RespProtocolLimits.DEFAULT_MAX_BULK_BYTES, "OK",
+                    "admin command " + describeCommand(command));
+        } catch (IOException | RuntimeException e) {
             throw new IllegalStateException("failed admin command for " + artifact.label()
                     + " at " + artifact.host() + ":" + artifact.port(), e);
         }
@@ -239,7 +241,14 @@ public final class BenchHarness implements SuiteHarness {
         }
         PreparedPass pass = PreparedPass.from(server);
         if (preparedPasses.add(pass)) {
-            denseHllPreparer.prefill(workloadHost(server, config), server.port(), scenario.keyspace(), scenario.pipeline());
+            SuiteArtifact artifact = workloadArtifact(server, config);
+            if (artifact != null && artifact.kind() == SuiteArtifact.Kind.EXTERNAL_REDIS) {
+                denseHllPreparer.prefill(artifact.host(), artifact.port(), scenario.keyspace(), scenario.pipeline(),
+                        artifact.authUser(), artifact.authPassword(), artifact.db());
+            } else {
+                denseHllPreparer.prefill(workloadHost(server, config), server.port(), scenario.keyspace(), scenario.pipeline(),
+                        "", "", 0);
+            }
         }
     }
 
@@ -800,11 +809,47 @@ public final class BenchHarness implements SuiteHarness {
                 RespClientCodec.writeCommand(out, List.of(bytes("AUTH"), bytes(redisUser), bytes(redisAuth)));
             }
             out.flush();
-            RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+            requireSimpleStringReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES, "OK", "AUTH");
         }
         RespClientCodec.writeCommand(out, List.of(bytes("SELECT"), bytes(Integer.toString(redisDb))));
         out.flush();
-        RespClientCodec.readReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES);
+        requireSimpleStringReply(in, RespProtocolLimits.DEFAULT_MAX_BULK_BYTES, "OK", "SELECT");
+    }
+
+    private static void requireSimpleStringReply(
+            java.io.InputStream in,
+            int maxBulkBytes,
+            String expected,
+            String command
+    ) throws IOException {
+        RespClientCodec.RespReply reply = RespClientCodec.readReply(in, maxBulkBytes);
+        if (!reply.isSimpleString(expected)) {
+            throw new IllegalStateException(command + " failed: " + describeReply(reply));
+        }
+    }
+
+    private static String describeReply(RespClientCodec.RespReply reply) {
+        if (reply == null) {
+            return "null reply";
+        }
+        if (reply.text() != null && !reply.text().isBlank()) {
+            return reply.text();
+        }
+        if (reply.integer() != null) {
+            return Long.toString(reply.integer());
+        }
+        if (reply.bytes() != null) {
+            return new String(reply.bytes(), StandardCharsets.UTF_8);
+        }
+        return reply.kind().name();
+    }
+
+    private static String describeCommand(List<byte[]> command) {
+        List<String> parts = new ArrayList<>(command.size());
+        for (byte[] arg : command) {
+            parts.add(new String(arg, StandardCharsets.US_ASCII));
+        }
+        return String.join(" ", parts);
     }
 
     private static byte[] extendedKey(BenchWorkloadKind workload, int keyIndex) {
@@ -816,7 +861,7 @@ public final class BenchHarness implements SuiteHarness {
     }
 
     interface DenseHllPreparer {
-        void prefill(String host, int port, int keyspace, int pipeline);
+        void prefill(String host, int port, int keyspace, int pipeline, String redisUser, String redisAuth, int redisDb);
     }
 
     private record PreparedPass(String artifactLabel, String scenarioId, int port, Path logFile) {

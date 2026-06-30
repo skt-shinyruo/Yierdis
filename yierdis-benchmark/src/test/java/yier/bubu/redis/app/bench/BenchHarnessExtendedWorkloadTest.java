@@ -304,6 +304,73 @@ public class BenchHarnessExtendedWorkloadTest {
     }
 
     @Test
+    public void redisArtifactStartServerFailsWhenSelectReplyIsError() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("AUTH".equals(command)) {
+                return ok();
+            }
+            if ("SELECT".equals(command)) {
+                return error("ERR DB index is out of range");
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            SuiteArtifact artifact = SuiteArtifact.externalRedis("redis", "127.0.0.1", server.port(), "bench-user", "bench-secret", 4);
+            BenchHarness harness = new BenchHarness();
+            ScenarioDefinition scenario = RedisSuiteTestSupport.scenario(
+                    "release-set-get-128b-c32-p4", BenchWorkloadKind.SET_GET, 1, 1, true);
+            SuiteConfig config = RedisSuiteTestSupport.redisCurrentOnlyConfig(Path.of("target/redis-suite-test"), 16378, server.port());
+
+            IllegalStateException failure = Assert.assertThrows(IllegalStateException.class,
+                    () -> harness.startServer(artifact, scenario, config, artifact.port(), Path.of("target/redis.log")));
+
+            Assert.assertTrue(failure.getMessage(), failure.getMessage().contains("suite server not ready"));
+            List<String> commands = server.awaitCommands(2);
+            Assert.assertTrue(commands.size() >= 2);
+            Assert.assertEquals("AUTH", commands.get(0));
+            Assert.assertEquals("SELECT", commands.get(1));
+            Assert.assertFalse(commands.contains("PING"));
+        }
+    }
+
+    @Test
+    public void externalRedisWorkloadCountsBootstrapSelectFailureAsError() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("AUTH".equals(command)) {
+                return ok();
+            }
+            if ("SELECT".equals(command)) {
+                return error("ERR DB index is out of range");
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.SET_GET,
+                    "127.0.0.1",
+                    server.port(),
+                    2,
+                    1,
+                    1,
+                    2,
+                    4,
+                    false,
+                    true,
+                    "bench-user",
+                    "bench-secret",
+                    4
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(0, result.ops());
+            Assert.assertTrue("errors=" + result.errors(), result.errors() > 0);
+            Assert.assertEquals(List.of("AUTH", "SELECT"), server.awaitCommands(2));
+        }
+    }
+
+    @Test
     public void captureObservationForExternalRedisAuthenticatesAndSelectsConfiguredDb() throws Exception {
         try (RedisSuiteTestSupport.RedisLikeObservationServer server = RedisSuiteTestSupport.RedisLikeObservationServer.start()) {
             Assert.assertTrue(server.awaitListening());
@@ -386,6 +453,39 @@ public class BenchHarnessExtendedWorkloadTest {
     }
 
     @Test
+    public void redisDensePrefillUsesConfiguredAuthAndDb() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("AUTH".equals(command) || "SELECT".equals(command)) {
+                return ok();
+            }
+            if ("PFADD".equals(command)) {
+                return integer(1);
+            }
+            if ("PFMERGE".equals(command)) {
+                return ok();
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness();
+            SuiteConfig config = redisCurrentConfig("203.0.113.10", server.port(), "bench-user", "bench-secret", 4);
+            ScenarioDefinition scenario = RedisSuiteTestSupport.scenario("release-hll-dense-c64-p8", BenchWorkloadKind.HLL_DENSE, 1, 1, false);
+            SuiteHarness.RunningServer running = new SuiteHarness.RunningServer("redis", scenario.id(), server.port(), Path.of("target/redis.log"));
+
+            harness.prepareScenario(running, scenario, config);
+
+            List<String> commands = server.awaitCommands(103);
+            Assert.assertEquals("AUTH", commands.get(0));
+            Assert.assertEquals("SELECT", commands.get(1));
+            Assert.assertEquals("PFADD", commands.get(2));
+            Assert.assertEquals(103, commands.size());
+            for (int i = 3; i < commands.size(); i++) {
+                Assert.assertEquals("PFMERGE", commands.get(i));
+            }
+        }
+    }
+
+    @Test
     public void redisWorkloadHostUsesArtifactHost() throws Exception {
         SuiteConfig config = redisCurrentConfig("203.0.113.10", 6380);
         SuiteHarness.RunningServer server = new SuiteHarness.RunningServer("redis", "release-hash-hset-c64-p8", 6380, Path.of("target/redis.log"));
@@ -403,7 +503,7 @@ public class BenchHarnessExtendedWorkloadTest {
 
         harness.prepareScenario(server, scenario, config);
 
-        Assert.assertEquals(List.of("127.0.0.1:6380:100:4"), preparer.calls);
+        Assert.assertEquals(List.of("127.0.0.1:6380:100:4:::0"), preparer.calls);
     }
 
     @Test
@@ -417,7 +517,7 @@ public class BenchHarnessExtendedWorkloadTest {
         harness.prepareScenario(server, scenario, config);
         harness.prepareScenario(server, scenario, config);
 
-        Assert.assertEquals(List.of("127.0.0.1:6380:100:4"), preparer.calls);
+        Assert.assertEquals(List.of("127.0.0.1:6380:100:4:::0"), preparer.calls);
     }
 
     @Test
@@ -458,8 +558,8 @@ public class BenchHarnessExtendedWorkloadTest {
             harness.prepareScenario(secondRun, scenario, config);
 
             Assert.assertEquals(List.of(
-                    "127.0.0.1:" + server.port() + ":100:4",
-                    "127.0.0.1:" + server.port() + ":100:4"
+                    "127.0.0.1:" + server.port() + ":100:4:::0",
+                    "127.0.0.1:" + server.port() + ":100:4:::0"
             ), preparer.calls);
         }
     }
@@ -633,6 +733,10 @@ public class BenchHarnessExtendedWorkloadTest {
         return "$-1\r\n".getBytes(StandardCharsets.US_ASCII);
     }
 
+    private static byte[] error(String value) {
+        return ("-" + value + "\r\n").getBytes(StandardCharsets.US_ASCII);
+    }
+
     private static Map<String, Double> metricsByName(BenchWorkloadResult result) {
         return result.toMetrics().stream()
                 .collect(java.util.stream.Collectors.toMap(metric -> metric.name(), metric -> metric.value()));
@@ -647,9 +751,13 @@ public class BenchHarnessExtendedWorkloadTest {
     }
 
     private static SuiteConfig redisCurrentConfig(String suiteHost, int redisPort) throws Exception {
+        return redisCurrentConfig(suiteHost, redisPort, "", "", 0);
+    }
+
+    private static SuiteConfig redisCurrentConfig(String suiteHost, int redisPort, String redisUser, String redisAuth, int redisDb) throws Exception {
         yier.bubu.redis.app.bench.YierdisBenchServerArgs serverArgs = new yier.bubu.redis.app.bench.YierdisBenchServerArgs();
         serverArgs.normalizeAndValidate();
-        SuiteArtifact redis = SuiteArtifact.externalRedis("redis", "127.0.0.1", redisPort, "", "", 0);
+        SuiteArtifact redis = SuiteArtifact.externalRedis("redis", "127.0.0.1", redisPort, redisUser, redisAuth, redisDb);
         SuiteArtifact current = SuiteArtifact.yierdisJar("current", RedisSuiteTestSupport.redisCurrentOnlyConfig(
                 Path.of("target/redis-suite-test"), 16378, redisPort).current().jarPath(), "head");
         return new SuiteConfig(
@@ -681,14 +789,15 @@ public class BenchHarnessExtendedWorkloadTest {
         private final List<String> calls = new ArrayList<>();
 
         @Override
-        public void prefill(String host, int port, int keyspace, int pipeline) {
-            calls.add(host + ":" + port + ":" + keyspace + ":" + pipeline);
+        public void prefill(String host, int port, int keyspace, int pipeline, String redisUser, String redisAuth, int redisDb) {
+            calls.add(host + ":" + port + ":" + keyspace + ":" + pipeline
+                    + ":" + redisUser + ":" + redisAuth + ":" + redisDb);
         }
     }
 
     private static final class NoopDenseHllPreparer implements BenchHarness.DenseHllPreparer {
         @Override
-        public void prefill(String host, int port, int keyspace, int pipeline) {
+        public void prefill(String host, int port, int keyspace, int pipeline, String redisUser, String redisAuth, int redisDb) {
         }
     }
 
