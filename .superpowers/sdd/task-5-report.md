@@ -1,287 +1,289 @@
-# Task 5 Report: Verify Full Benchmark Module Behavior And Manual Redis Flow
+# Task 5 Report: Native Slot Capacity Override, Verification, And Redis Smoke
 
-Date: 2026-06-30
+Date: 2026-07-01
 Worktree: `/home/feng/code/project/Yierdis/.worktrees/codex-redis-suite-comparison`
 Baseline HEAD: `07973922`
 
-## Scope
+## Summary
 
-Task 5 required:
+Task 5 was completed by replacing the rejected "raise default native slot constants" direction with an explicit `nativeSlotCapacity` override path.
 
-1. Focused benchmark verification tests
-2. Full benchmark module tests
-3. Packaging benchmark and server jars
-4. Manual Redis suite smoke
-5. Minimal doc correction only if verification proved one was needed
+Final outcome:
 
-No documentation change was required from the observed results.
+- Default `YierdisDbStorageComponents.sharedNativeSlotCapacity()` remains `256 * 1024` (`262144`)
+- The explicit benchmark/smoke override value is `2_097_152`
+- Release suite current-side server overrides also set `databases = 1`
+- The override is only applied through explicit argv/override wiring in benchmark suite release scenarios
+- The old direct-constant-raise direction was revoked
+- Fresh Redis smoke completed and the 5 required release scenarios are now comparable instead of failing with `current is not clean`
 
-## Environment Notes
+## Adopted Fix
 
-- All Maven commands used JDK 25 via:
-  `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH`
-- In the managed sandbox, socket-binding tests failed with `java.net.SocketException: Operation not permitted`.
-- Because Task 5 explicitly requires local socket/process verification, the relevant Maven verification commands were rerun unsandboxed.
+The accepted solution was:
 
-## Step 1: Focused Benchmark Verification Tests
+1. Keep production defaults unchanged
+2. Add explicit `nativeSlotCapacity` override plumbing from benchmark args to server args/runtime config to bootstrap to engine factory to db/storage construction
+3. Apply the higher slot capacity only where benchmark comparison smoke needs it
+4. Keep the override explicit in argv/override paths rather than hidden code paths
+
+Chosen release smoke override:
+
+- `nativeSlotCapacity = 2_097_152`
+- `databases = 1`
+
+Where it applies:
+
+- Release-suite scenario overrides for suite-started current-side Yierdis runs in benchmark comparison flow
+- Specifically for:
+  - `release-set-get-128b-c32-p4`
+  - `release-set-get-256b-c64-p8`
+  - `release-set-get-1024b-c64-p8`
+  - `release-append-256b-c64-p8`
+  - `release-hll-sparse-c64-p8`
+
+What was explicitly not done:
+
+- No production default slot increase
+- No hidden bootstrap-only special case
+- No spec/plan file modifications
+
+## Files Changed
+
+Production:
+
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/YierdisBenchServerArgs.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/suite/ScenarioDefinition.java`
+- `yierdis-benchmark/src/main/java/yier/bubu/redis/app/bench/suite/SuiteProfileFactory.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbComponentFactory.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbEngineFactory.java`
+- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDbStorageComponents.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/args/YierdisServerArgNames.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/args/YierdisServerArgs.java`
+- `yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/args/YierdisServerRuntimeConfig.java`
+
+Tests:
+
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/YierdisBenchComparisonExecutionTest.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/YierdisBenchServerArgsTest.java`
+- `yierdis-benchmark/src/test/java/yier/bubu/redis/app/bench/suite/SuiteProfileFactoryTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/NativeStorageRegressionTest.java`
+- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/YierdisDbConstructionTest.java`
+- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/TestYierdisEngines.java`
+- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/YierdisServerBootstrapCommandWiringTest.java`
+- `yierdis-server/yierdis-server-main/src/test/java/yier/bubu/redis/app/server/args/YierdisServerArgsTest.java`
+
+## RED Test Evidence
+
+The old in-flight direction had incorrectly changed the default slot constants and related assertions. Before the override fix:
+
+1. `YierdisDbConstructionTest` failed because default shared capacity had been changed from the intended `262144` to `524288`
+2. `NativeStorageRegressionTest.defaultSharedNativeSlotCapacityStillOverflowsAroundNinetyThousandStringKeys` failed because the direct constant raise made the "default still overflows" regression unexpectedly pass
+
+This established the required RED proof for the rejected default-raise direction.
+
+## GREEN Test Evidence
+
+After implementing the explicit override path and restoring defaults:
+
+- `YierdisDbStorageComponents.sharedNativeSlotCapacity()` again returns `256 * 1024`
+- Default behavior still overflows around the prior ceiling
+- Explicit override behavior supports the larger smoke workload without the prior slot-limit failure
+- Benchmark/server arg round-trip and scenario override wiring are preserved
+
+Key GREEN-tested behaviors:
+
+- default shared slot capacity unchanged
+- `nativeSlotCapacity = 0` means "use default"
+- negative `nativeSlotCapacity` is rejected
+- explicit `nativeSlotCapacity` survives benchmark args -> server argv -> runtime config -> bootstrap -> engine factory -> db creation
+- release smoke scenarios carry explicit `databases = 1` and `nativeSlotCapacity = 2_097_152`
+
+## Verification Commands And Results
+
+All Java/Maven commands used JDK 25 as required.
+
+### Targeted RED/GREEN-Related Verification
 
 Command:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-benchmark -am \
-  -Dtest=SuiteConfigTest,SuiteEntrypointConfigTest,SuiteRunnerOrchestrationTest,ObservationClientTest,BenchHarnessExtendedWorkloadTest,YierdisBenchComparisonRenderTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory,yierdis-benchmark,yierdis-server/yierdis-server-main -am -Dtest=NativeStorageRegressionTest#defaultSharedNativeSlotCapacityStillOverflowsAroundNinetyThousandStringKeys+explicitNativeSlotCapacitySupportsNinetyThousandStringKeysWithoutLeaks,YierdisDbConstructionTest#storageComponentsReserveNativeSlotsForEntriesStringsKeysAndCollectionRoots+sharedRuntimeEngineFactoryPreservesDbIndexWhenNativeSlotCapacityOverridesDefault,YierdisBenchServerArgsTest,YierdisServerArgsTest#normalizedArgsConvertToRuntimeConfigWithoutLegacyOffheapFields+nativeSlotCapacityParsesCopiesAndRoundTrips+nativeSlotCapacityAllowsZeroAsDefaultSentinelAndRejectsNegativeValues,SuiteProfileFactoryTest#releaseSmokeStringAndSparseHllScenariosCarryExplicitNativeSlotOverride,YierdisBenchComparisonExecutionTest#comparisonSideContextPreservesExplicitNativeSlotCapacityInServerArgv -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Result:
 
-- Initial sandboxed attempt failed because local socket-binding was blocked by the environment, not because of assertion failures.
-- Unsandboxed rerun succeeded.
-- Final result: `BUILD SUCCESS`
-- Test summary: `Tests run: 64, Failures: 0, Errors: 0, Skipped: 0`
+- `BUILD SUCCESS`
 
-## Step 2: Full Benchmark Module Tests
+### Related Test Classes
 
 Command:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-benchmark -am test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-db/yierdis-db-memory,yierdis-benchmark,yierdis-server/yierdis-server-main -am -Dtest=NativeStorageRegressionTest,YierdisDbConstructionTest,YierdisServerArgsTest,YierdisBenchServerArgsTest,SuiteProfileFactoryTest,YierdisBenchComparisonExecutionTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Result:
 
-- Initial sandboxed attempt failed for the same socket-binding restriction.
-- Unsandboxed rerun succeeded.
-- Final result: `BUILD SUCCESS`
-- Test summary: `Tests run: 146, Failures: 0, Errors: 0, Skipped: 0`
+- `BUILD SUCCESS`
 
-## Step 3: Package Benchmark And Server Jars
+### Focused Benchmark Tests
 
 Command:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-benchmark,yierdis-server/yierdis-server-main -am -DskipTests package
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am -Dtest=SuiteConfigTest,SuiteEntrypointConfigTest,SuiteRunnerOrchestrationTest,ObservationClientTest,BenchHarnessExtendedWorkloadTest,YierdisBenchComparisonRenderTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Result:
+
+- `BUILD SUCCESS`
+- `Tests run: 64, Failures: 0, Errors: 0, Skipped: 0`
+
+### Full Benchmark Module Tests
+
+Command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark -am test
+```
+
+Result:
+
+- `BUILD SUCCESS`
+- `Tests run: 150, Failures: 0, Errors: 0, Skipped: 0`
+
+### Package
+
+Command:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-benchmark,yierdis-server/yierdis-server-main -am -DskipTests package
 ```
 
 Result:
 
 - `BUILD SUCCESS`
 - Produced:
-  - `yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar`
-  - `yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar`
+  - `/home/feng/code/project/Yierdis/.worktrees/codex-redis-suite-comparison/yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar`
+  - `/home/feng/code/project/Yierdis/.worktrees/codex-redis-suite-comparison/yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar`
 
-Verified artifact paths:
+## Fresh Redis Smoke
 
-```text
-/home/feng/code/project/Yierdis/.worktrees/codex-redis-suite-comparison/yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar
-/home/feng/code/project/Yierdis/.worktrees/codex-redis-suite-comparison/yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar
-```
+`redis-server` was not installed locally, so the smoke used the externally
+managed Redis endpoint already prepared for this task.
 
-## Step 4: Manual Redis Suite Smoke
+Redis endpoint used for the final clean run:
 
-Required command sequence from brief:
+- host: `127.0.0.1`
+- port: `6380`
+
+Acceptance smoke command:
 
 ```bash
-redis-server --save '' --appendonly no --port 6379
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar \
-  --suite \
-  --suiteProfile release \
-  --includeRedis \
-  --redisHost 127.0.0.1 \
-  --redisPort 6379 \
-  --currentServerJar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
-  --reportDir target/benchmark-reports/redis-comparison-smoke
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH java -jar yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar --suite --suiteProfile release --includeRedis --redisHost 127.0.0.1 --redisPort 6380 --currentServerJar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar --reportDir target/benchmark-reports/redis-comparison-smoke-clean-20260701-012628
 ```
 
 Result:
 
-- Could not execute because `redis-server` is not installed in this environment.
-- Exact evidence:
+- Completed successfully
+- Produced:
+  - `target/benchmark-reports/redis-comparison-smoke-clean-20260701-012628/suite-result.json`
+  - `target/benchmark-reports/redis-comparison-smoke-clean-20260701-012628/metrics.csv`
+  - `target/benchmark-reports/redis-comparison-smoke-clean-20260701-012628/comparisons.csv`
+  - `target/benchmark-reports/redis-comparison-smoke-clean-20260701-012628/report.md`
 
-```text
-$ which redis-server || type redis-server || ls /usr/bin/redis-server /usr/local/bin/redis-server
-redis-server not found
-redis-server not found
-ls: cannot access '/usr/bin/redis-server': No such file or directory
-ls: cannot access '/usr/local/bin/redis-server': No such file or directory
-```
+Smoke artifact directory:
 
-- Because the binary is absent, the manual Redis smoke was blocked before launch.
-- No Redis smoke output directory or Redis-generated report artifacts were created.
+- `/home/feng/code/project/Yierdis/.worktrees/codex-redis-suite-comparison/target/benchmark-reports/redis-comparison-smoke-clean-20260701-012628`
 
-## Documentation Review
+Discarded prior smoke attempts:
 
-- Reviewed the task outcome against the allowed doc touch target:
-  `docs/project-docs/client-and-bench-internals.md`
-- Verification did not reveal a content mismatch that required correction.
-- No documentation file was modified.
+- `target/benchmark-reports/redis-comparison-smoke-rerun-20260701-0044`
+- `target/benchmark-reports/redis-comparison-smoke-rerun-2`
 
-## Git / Commit Outcome
+These were discarded because overlapping host-side benchmark parent processes
+caused `Address already in use` contamination.
 
-- No task-scoped file changes were needed.
-- No commit was created.
-- Unrelated pre-existing untracked files remained untouched:
-  - `docs/superpowers/plans/2026-06-29-redis-suite-comparison.md`
-  - `docs/superpowers/specs/2026-06-28-redis-suite-comparison-design.md`
+Discarded partial reruns:
+
+- `target/benchmark-reports/redis-comparison-smoke-clean-20260701-0104`
+- `target/benchmark-reports/redis-comparison-smoke-rerun-20260701-0111`
+
+These runs did not reach final report artifact emission and were not used as
+acceptance evidence.
+
+## Required Comparability Checks
+
+The task required confirming that the following scenarios no longer fail because `current is not clean`:
+
+- `release-set-get-128b-c32-p4`
+- `release-set-get-256b-c64-p8`
+- `release-set-get-1024b-c64-p8`
+- `release-append-256b-c64-p8`
+- `release-hll-sparse-c64-p8`
+
+Final clean smoke result from `comparisons.csv` and `suite-result.json`:
+
+- `release-set-get-128b-c32-p4`: `comparable=true`
+- `release-set-get-256b-c64-p8`: `comparable=true`
+- `release-set-get-1024b-c64-p8`: `comparable=true`
+- `release-append-256b-c64-p8`: `comparable=true`
+- `release-hll-sparse-c64-p8`: `comparable=true`
+
+These scenarios also recorded `errors = 0` for current-side repeat runs in `report.md`.
+
+Important scope note:
+
+- `release-maxmemory-eviction` remains non-comparable with reason `external Redis config required; current is not clean`
+- That scenario was already expected to need special external Redis config and is not one of the 5 required release smoke scenarios called out by the task
+
+## Final Task Status
+
+- Task 5 status: `DONE`
+- Acceptance evidence directory: `target/benchmark-reports/redis-comparison-smoke-clean-20260701-012628`
+- The 5 required release scenarios are now comparable on the current-side path
+- Default shared native slot capacity remains unchanged at `262144`
+
+## Default And Override Values
+
+Required final state:
+
+- Default shared slot capacity: `256 * 1024` (`262144`)
+- Override slot capacity used for release smoke current-side path: `2_097_152`
+- Release smoke current-side explicit DB count override: `1`
+
+Where default remains in force:
+
+- Regular production/default db construction
+- Any path not explicitly passing a positive `nativeSlotCapacity`
+- Any path using `nativeSlotCapacity = 0`
+
+Where override applies:
+
+- Benchmark suite release scenarios with explicit `ServerOverrides.databasesAndNativeSlots(1, 2_097_152)`
+
+## Old Direction Revoked
+
+The previously observed in-flight direct-constant-raise direction was removed from the accepted solution:
+
+- shared slot default is no longer raised above `256 * 1024`
+- tests no longer assert the inflated default
+- the accepted implementation uses only explicit override wiring
+
+## Commit Status
+
+- No commit created
 
 ## Final Assessment
 
-- Focused benchmark verification: passed
+- RED evidence: captured from the rejected direct-default-raise direction
+- GREEN evidence: captured for restored default behavior and explicit override behavior
+- Focused benchmark tests: passed
 - Full benchmark module tests: passed
-- Benchmark/server packaging: passed
-- Manual Redis suite smoke: blocked by missing `redis-server` binary
-- Documentation correction: not needed
+- Package: passed
+- Fresh Redis smoke: passed
+- Required 5 release scenarios: comparable again, no longer failing due to `current is not clean`
 
-Overall task status: `DONE_WITH_CONCERNS`
-
-Concern summary:
-
-- The required manual Redis smoke could not be completed on 2026-06-30 because `redis-server` is not installed in the execution environment.
-- Socket-binding test verification also required unsandboxed execution because the managed sandbox rejects local listening sockets with `Operation not permitted`.
-
-## Follow-Up Refinement: Remove Allocator `stats()` From The Global Hot Path
-
-Date: 2026-06-30
-
-### Review Finding Addressed
-
-- The first follow-up patch removed `memoryStats()` from the global path, but `YierdisDbMemoryReporter.offHeapUsedBytes()` still reached `nativeAllocator.stats()`.
-- That meant the hot path still traversed the expensive allocator stats/object-scan path.
-
-### What Changed
-
-- Removed the earlier `MemoryOps.offHeapUsedBytes()` hot-path seam entirely.
-- Added a runtime-only shared-off-heap seam to `RuntimeDbEngine`:
-  - `globalSharedOffHeapUsageIdentity()`
-  - `globalSharedOffHeapUsedBytes()`
-- Implemented the seam in `YierdisDb` by exposing the shared `YierdisFfmMemoryRuntime` identity and its cheap `usedBytes()` counter, but only when a global maxmemory coordinator is attached.
-- Updated `YierdisInstance.sharedOffHeapUsedBytes(...)` to:
-  - dedupe DBs by shared-runtime identity with `IdentityHashMap`
-  - count each shared FFM runtime once
-  - avoid calling `engine.memory()` or allocator stats on the hot path
-- Strengthened the runtime regression so it proves:
-  - the global hot path does not touch `memory()`
-  - shared off-heap is sampled once even when multiple DBs share the same runtime
-- Updated db-memory tests to assert the runtime seam under an attached coordinator, preserving the accounting boundary.
-
-### TDD Evidence For The Refinement
-
-RED command 1:
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-server/yierdis-server-runtime,yierdis-db/yierdis-db-memory -am \
-  -Dtest=DbEngineFactoryInjectionTest#globalMaxmemoryUsesCheapSharedOffHeapUsagePath,YierdisDbMemoryReporterTest#globalSharedOffHeapUsedBytesUsesSharedRuntimeCounter \
-  -Dsurefire.failIfNoSpecifiedTests=false test
-```
-
-RED result 1:
-
-- `BUILD FAILURE`
-- Expected missing-seam compile failures before production changes:
-
-```text
-cannot find symbol: method globalSharedOffHeapUsageIdentity()
-cannot find symbol: method globalSharedOffHeapUsedBytes()
-```
-
-RED result 2 during refinement:
-
-- Additional transient failures were resolved while tightening the new test shape:
-  - stale test reference to removed `MemoryOps.offHeapUsedBytes()`
-  - db-memory assertions that needed an attached coordinator to match the preserved boundary
-  - a stale runtime-test `@Override` after removing the `MemoryOps` helper
-
-GREEN command:
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-server/yierdis-server-runtime,yierdis-db/yierdis-db-memory -am \
-  -Dtest=DbEngineFactoryInjectionTest#globalMaxmemoryUsesCheapSharedOffHeapUsagePath,YierdisDbMemoryReporterTest#globalSharedOffHeapUsedBytesUsesSharedRuntimeCounter,YierdisDbMemoryReporterTest#memoryStatsCountsSharedNativeAllocatorLogicalBytesOnce \
-  -Dsurefire.failIfNoSpecifiedTests=false test
-```
-
-GREEN result:
-
-- `BUILD SUCCESS`
-- `YierdisDbMemoryReporterTest`: `Tests run: 2, Failures: 0, Errors: 0, Skipped: 0`
-- `DbEngineFactoryInjectionTest`: `Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`
-
-### Files Changed In This Refinement
-
-- `yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/RuntimeDbEngine.java`
-- `yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/YierdisDb.java`
-- `yierdis-db/yierdis-db-memory/src/test/java/yier/bubu/redis/storage/memory/YierdisDbMemoryReporterTest.java`
-- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstance.java`
-- `yierdis-server/yierdis-server-runtime/src/test/java/yier/bubu/redis/runtime/embedded/DbEngineFactoryInjectionTest.java`
-
-### Self-Review Concerns For The Refinement
-
-- The runtime seam intentionally reports shared off-heap bytes only when a global coordinator is attached, so standalone/per-DB uses still rely on existing `memoryStats()` observability rather than this hot-path helper.
-- I kept the behavior minimal and local to runtime admission; no broader observability refactor was done.
-
-## Follow-Up Fix: Global Observability Shared Off-Heap Deduplication
-
-Date: 2026-06-30
-
-### Review Finding Addressed
-
-- `YierdisInstanceObservability.memoryStats()` still summed per-DB `offHeapUsedBytes()` in global maxmemory scope, which double-counted shared runtime off-heap when multiple DBs pointed at the same shared runtime.
-
-### What Changed
-
-- Added a focused runtime regression in `yierdis-server/yierdis-server-runtime/src/test/java/yier/bubu/redis/runtime/embedded/DbEngineFactoryInjectionTest.java` that builds a global-scope instance with two DBs sharing the same runtime identity while each DB-level `memoryStats()` still reports the shared off-heap bytes.
-- Updated `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceObservability.java` so global observability:
-  - does not sum per-DB `offHeapUsedBytes()`
-  - dedupes by `RuntimeDbEngine.globalSharedOffHeapUsageIdentity()`
-  - counts `globalSharedOffHeapUsedBytes()` once per shared identity
-  - preserves the intended boundary where per-DB accounting excludes shared off-heap and instance/global accounting includes it once
-
-### TDD Evidence
-
-RED command:
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-server/yierdis-server-runtime -am \
-  -Dtest=DbEngineFactoryInjectionTest#globalObservabilityCountsSharedOffHeapOnceAcrossDatabases \
-  -Dsurefire.failIfNoSpecifiedTests=false test
-```
-
-RED result:
-
-- `BUILD FAILURE`
-- Expected assertion failure before the fix:
-
-```text
-instance/global off-heap should count the shared runtime once expected:<40> but was:<80>
-```
-
-GREEN command:
-
-```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-mvn -pl yierdis-server/yierdis-server-runtime -am \
-  -Dtest=DbEngineFactoryInjectionTest#globalObservabilityCountsSharedOffHeapOnceAcrossDatabases,DbEngineFactoryInjectionTest#globalMaxmemoryUsesCheapSharedOffHeapUsagePath \
-  -Dsurefire.failIfNoSpecifiedTests=false test
-```
-
-GREEN result:
-
-- `BUILD SUCCESS`
-- `DbEngineFactoryInjectionTest`: `Tests run: 2, Failures: 0, Errors: 0, Skipped: 0`
-
-### Files Changed
-
-- `yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/YierdisInstanceObservability.java`
-- `yierdis-server/yierdis-server-runtime/src/test/java/yier/bubu/redis/runtime/embedded/DbEngineFactoryInjectionTest.java`
-- `.superpowers/sdd/task-5-report.md`
-
-### Self-Review Concerns
-
-- I did not run the manual Redis smoke per instruction; this follow-up is verified with focused runtime tests only.
-- The fix is intentionally local to global observability aggregation and reuses the existing runtime shared-off-heap seam rather than introducing another accounting path.
+Overall task status: `DONE`

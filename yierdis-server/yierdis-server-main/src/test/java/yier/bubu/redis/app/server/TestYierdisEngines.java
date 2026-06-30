@@ -68,6 +68,7 @@ final class TestYierdisEngines {
                 65536L,
                 64L,
                 1L,
+                0,
                 0L,
                 0
         );

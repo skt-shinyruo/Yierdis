@@ -66,6 +66,35 @@ public class YierdisBenchComparisonExecutionTest {
     }
 
     @Test
+    public void comparisonSideContextPreservesExplicitNativeSlotCapacityInServerArgv() throws Exception {
+        Path currentJar = regularTempJar("current");
+        Path runDir = Files.createTempDirectory("bench-comparison-run-native-slots-");
+
+        YierdisBenchServerArgs serverArgs = new YierdisBenchServerArgs();
+        new CommandLine(serverArgs).parseArgs(
+                "--databases", "1",
+                "--nativeSlotCapacity", "2097152"
+        );
+        serverArgs.normalizeAndValidate();
+
+        YierdisBench.BenchConfig config = config(serverArgs,
+                "--comparisonMode",
+                "--baselineServerJar", currentJar.toString(),
+                "--currentServerJar", currentJar.toString(),
+                "--javaCmd", "/usr/lib/jvm/java-25-openjdk-amd64/bin/java",
+                "--xms", "512m",
+                "--xmx", "512m",
+                "--maxDirectMemory", "1g",
+                "--portBase", "17378"
+        );
+
+        YierdisBench.ComparisonSideContext current = YierdisBench.comparisonSideContext(config, "current", currentJar, 1, runDir);
+
+        assertArgValue(current.serverArgs.toArgv(), "--databases", "1");
+        assertArgValue(current.serverArgs.toArgv(), "--nativeSlotCapacity", "2097152");
+    }
+
+    @Test
     public void comparisonSideValidationDetectsMissingMeasurementsAndErrors() {
         YierdisBench.BackendResult empty = new YierdisBench.BackendResult("baseline", 16378);
         Assert.assertFalse(YierdisBench.comparisonSideHasAnyMeasurements(empty));

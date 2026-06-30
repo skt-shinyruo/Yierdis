@@ -224,14 +224,15 @@ public final class YierdisServerBootstrap implements AutoCloseable {
             YierdisServerRuntimeConfig runtimeConfig
     ) {
         NativeDefragOptions nativeDefragOptions = nativeDefragOptions(runtimeConfig);
+        int nativeSlotCapacity = runtimeConfig.nativeSlotCapacity();
         if (scope == YierdisInstanceConfig.MaxmemoryScope.PER_DB) {
-            instanceConfig.engineFactory(new YierdisDbEngineFactory(nativeDefragOptions));
+            instanceConfig.engineFactory(new YierdisDbEngineFactory(nativeDefragOptions, nativeSlotCapacity));
             return;
         }
         YierdisFfmMemoryRuntime memoryRuntime = new YierdisFfmMemoryRuntime("instance");
         instanceConfig
                 .engineFactoryBinding(new YierdisInstanceConfig.EngineFactoryBinding(
-                        new YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions),
+                        new YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions, nativeSlotCapacity),
                         memoryRuntime
                 ));
     }

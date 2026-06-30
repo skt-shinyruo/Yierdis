@@ -37,6 +37,7 @@ public final class YierdisServerArgNames {
     public static final String NATIVE_DEFRAG_MAX_MOVE_BYTES = "--nativeDefragMaxMoveBytes";
     public static final String NATIVE_DEFRAG_MAX_OBJECTS = "--nativeDefragMaxObjects";
     public static final String NATIVE_DEFRAG_TIME_LIMIT_MILLIS = "--nativeDefragTimeLimitMillis";
+    public static final String NATIVE_SLOT_CAPACITY = "--nativeSlotCapacity";
     public static final String KEYS_TIME_BUDGET_MILLIS = "--keysTimeBudgetMillis";
     public static final String KEYS_MAX_RESULTS = "--keysMaxResults";
 

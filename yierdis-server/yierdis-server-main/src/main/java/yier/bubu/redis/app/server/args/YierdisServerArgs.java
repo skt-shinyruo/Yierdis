@@ -209,6 +209,13 @@ public final class YierdisServerArgs {
     public long nativeDefragTimeLimitMillis = 1L;
 
     @Option(
+            names = YierdisServerArgNames.NATIVE_SLOT_CAPACITY,
+            defaultValue = "0",
+            description = "Override DB shared native object slot capacity (0 keeps default)."
+    )
+    public int nativeSlotCapacity;
+
+    @Option(
             names = YierdisServerArgNames.KEYS_TIME_BUDGET_MILLIS,
             defaultValue = "20",
             description = "KEYS time budget in milliseconds (0 disables; use SCAN for large datasets)."
@@ -338,6 +345,9 @@ public final class YierdisServerArgs {
         if (nativeDefragTimeLimitMillis < 0) {
             throw new IllegalArgumentException("nativeDefragTimeLimitMillis must be >= 0");
         }
+        if (nativeSlotCapacity < 0) {
+            throw new IllegalArgumentException("nativeSlotCapacity must be >= 0");
+        }
         if (keysTimeBudgetMillis < 0) {
             throw new IllegalArgumentException("keysTimeBudgetMillis must be >= 0");
         }
@@ -382,6 +392,7 @@ public final class YierdisServerArgs {
         out.nativeDefragMaxMoveBytes = nativeDefragMaxMoveBytes;
         out.nativeDefragMaxObjects = nativeDefragMaxObjects;
         out.nativeDefragTimeLimitMillis = nativeDefragTimeLimitMillis;
+        out.nativeSlotCapacity = nativeSlotCapacity;
         out.keysTimeBudgetMillis = keysTimeBudgetMillis;
         out.keysMaxResults = keysMaxResults;
         return out;
@@ -426,6 +437,7 @@ public final class YierdisServerArgs {
                 nativeDefragMaxMoveBytes,
                 nativeDefragMaxObjects,
                 nativeDefragTimeLimitMillis,
+                nativeSlotCapacity,
                 keysTimeBudgetMillis,
                 keysMaxResults
         );
@@ -522,6 +534,8 @@ public final class YierdisServerArgs {
         out.add(Long.toString(nativeDefragMaxObjects));
         out.add(YierdisServerArgNames.NATIVE_DEFRAG_TIME_LIMIT_MILLIS);
         out.add(Long.toString(nativeDefragTimeLimitMillis));
+        out.add(YierdisServerArgNames.NATIVE_SLOT_CAPACITY);
+        out.add(Integer.toString(nativeSlotCapacity));
 
         out.add(YierdisServerArgNames.KEYS_TIME_BUDGET_MILLIS);
         out.add(Long.toString(keysTimeBudgetMillis));

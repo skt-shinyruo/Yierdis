@@ -38,6 +38,7 @@ public record YierdisServerRuntimeConfig(
         long nativeDefragMaxMoveBytes,
         long nativeDefragMaxObjects,
         long nativeDefragTimeLimitMillis,
+        int nativeSlotCapacity,
         long keysTimeBudgetMillis,
         int keysMaxResults
 ) {
@@ -53,6 +54,9 @@ public record YierdisServerRuntimeConfig(
         }
         if (nativeDefragTimeLimitMillis < 0) {
             throw new IllegalArgumentException("nativeDefragTimeLimitMillis must be >= 0");
+        }
+        if (nativeSlotCapacity < 0) {
+            throw new IllegalArgumentException("nativeSlotCapacity must be >= 0");
         }
     }
 

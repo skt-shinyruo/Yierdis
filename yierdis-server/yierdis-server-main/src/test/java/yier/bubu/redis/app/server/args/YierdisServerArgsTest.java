@@ -58,6 +58,7 @@ public class YierdisServerArgsTest {
                 "--nativeDefragMaxMoveBytes", "1024",
                 "--nativeDefragMaxObjects", "7",
                 "--nativeDefragTimeLimitMillis", "3",
+                "--nativeSlotCapacity", "2097152",
                 "--keysTimeBudgetMillis", "17",
                 "--keysMaxResults", "23"
         );
@@ -99,6 +100,7 @@ public class YierdisServerArgsTest {
         Assert.assertEquals(1024L, runtimeConfig.get("nativeDefragMaxMoveBytes"));
         Assert.assertEquals(7L, runtimeConfig.get("nativeDefragMaxObjects"));
         Assert.assertEquals(3L, runtimeConfig.get("nativeDefragTimeLimitMillis"));
+        Assert.assertEquals(2_097_152, runtimeConfig.get("nativeSlotCapacity"));
         Assert.assertEquals(17L, runtimeConfig.get("keysTimeBudgetMillis"));
         Assert.assertEquals(23, runtimeConfig.get("keysMaxResults"));
         Assert.assertFalse(runtimeConfig.containsKey("offheapBackend"));
@@ -203,6 +205,28 @@ public class YierdisServerArgsTest {
         Assert.assertEquals(1234, args.copy().protocolMaxCommandBytes);
         Assert.assertTrue(args.toArgv().contains("--protocolMaxCommandBytes"));
         Assert.assertEquals(1234, args.toRuntimeConfig().protocolMaxCommandBytes());
+    }
+
+    @Test
+    public void nativeSlotCapacityParsesCopiesAndRoundTrips() {
+        YierdisServerArgs args = parse("--nativeSlotCapacity", "2097152");
+
+        args.normalizeAndValidate();
+
+        Assert.assertEquals(2_097_152, args.nativeSlotCapacity);
+        Assert.assertEquals(2_097_152, args.copy().nativeSlotCapacity);
+        Assert.assertTrue(args.toArgv().contains("--nativeSlotCapacity"));
+        Assert.assertEquals(2_097_152, args.toRuntimeConfig().nativeSlotCapacity());
+    }
+
+    @Test
+    public void nativeSlotCapacityAllowsZeroAsDefaultSentinelAndRejectsNegativeValues() {
+        YierdisServerArgs zero = parse("--nativeSlotCapacity", "0");
+        zero.normalizeAndValidate();
+        Assert.assertEquals(0, zero.nativeSlotCapacity);
+
+        YierdisServerArgs negative = parse("--nativeSlotCapacity", "-1");
+        assertThrows(IllegalArgumentException.class, negative::normalizeAndValidate);
     }
 
     @Test

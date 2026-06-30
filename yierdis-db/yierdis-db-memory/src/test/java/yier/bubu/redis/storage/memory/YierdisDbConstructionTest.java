@@ -533,6 +533,20 @@ public class YierdisDbConstructionTest {
         }
     }
 
+    @Test
+    public void sharedRuntimeEngineFactoryPreservesDbIndexWhenNativeSlotCapacityOverridesDefault() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("shared-runtime-engine-factory-db-index")) {
+            YierdisDbEngineFactory factory = new YierdisDbEngineFactory(runtime, null, 512 * 1024);
+            YierdisDb db = (YierdisDb) factory.create(7, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+            try {
+                Assert.assertEquals(7, runtimeState(db).dbIndex());
+            } finally {
+                db.shutdown();
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
     private static void assertInvalid(
             long maxmemoryBytes,
             MaxmemoryPolicy policy,
@@ -578,6 +592,16 @@ public class YierdisDbConstructionTest {
             return (NativeAllocator) allocator.invoke(owner);
         } catch (ReflectiveOperationException e) {
             throw new AssertionError("allocator accessor should be available", e);
+        }
+    }
+
+    private static YierdisDbRuntimeState runtimeState(YierdisDb db) {
+        try {
+            java.lang.reflect.Field field = YierdisDb.class.getDeclaredField("runtimeState");
+            field.setAccessible(true);
+            return (YierdisDbRuntimeState) field.get(db);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("runtimeState field should be available", e);
         }
     }
 
