@@ -2,6 +2,7 @@ package yier.bubu.redis.memory.foreign;
 
 import java.util.Arrays;
 import java.util.Objects;
+import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeHandleDomain;
 import yier.bubu.redis.memory.api.NativeMemoryException;
@@ -270,7 +271,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
             segmentIndex++;
         }
         if (remaining > 0) {
-            throw new NativeMemoryException("native object slot limit exceeded");
+            throw new NativeCapacityExceededException("native object slot limit exceeded");
         }
         return additionalSegments;
     }
@@ -363,7 +364,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
             }
         }
         if (activeSegments >= maxSegments) {
-            throw new NativeMemoryException("native object slot limit exceeded");
+            throw new NativeCapacityExceededException("native object slot limit exceeded");
         }
         int segmentIndex = activeSegments;
         int validSlots = Math.min(
