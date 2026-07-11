@@ -19,5 +19,6 @@
 
     <modules>
         <module>yierdis-common-bytes</module>
+        <module>yierdis-common-memory</module>
     </modules>
 </project>

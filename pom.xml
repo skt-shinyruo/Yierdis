@@ -89,6 +89,11 @@
             </dependency>
             <dependency>
                 <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-common-memory</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
                 <artifactId>yierdis-server-api</artifactId>
                 <version>${project.version}</version>
             </dependency>

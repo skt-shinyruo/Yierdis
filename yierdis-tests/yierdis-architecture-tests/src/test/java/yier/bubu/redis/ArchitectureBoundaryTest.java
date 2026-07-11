@@ -21,6 +21,60 @@ import javax.xml.parsers.DocumentBuilderFactory;
 
 public class ArchitectureBoundaryTest {
     @Test
+    public void commonMemoryMustRemainAProductionDependencyFreeContractModule() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("cannot locate repository root", repoRoot);
+
+        Path commonPom = repoRoot.resolve("yierdis-common/pom.xml");
+        Path modulePom = repoRoot.resolve("yierdis-common/yierdis-common-memory/pom.xml");
+        Path rootPom = repoRoot.resolve("pom.xml");
+        Assert.assertTrue(Files.readString(commonPom).contains("<module>yierdis-common-memory</module>"));
+        Assert.assertTrue(Files.readString(rootPom).contains("<artifactId>yierdis-common-memory</artifactId>"));
+        Assert.assertTrue(pomProductionDependencyArtifactIds(modulePom).isEmpty());
+
+        Path policyFile = repoRoot.resolve(
+                "yierdis-tests/yierdis-architecture-tests/src/test/resources/architecture-policy.yml"
+        );
+        String policy = Files.readString(policyFile, StandardCharsets.UTF_8);
+        String section = policySection(policy, "yierdis-common-memory");
+        Assert.assertTrue(section.contains("allowed_dependencies: []"));
+        for (String forbidden : List.of(
+                "yierdis-memory-api",
+                "yierdis-memory-ffm",
+                "yierdis-db-api",
+                "yierdis-db-memory",
+                "yierdis-server-api",
+                "yierdis-server-runtime",
+                "yierdis-networking-resp",
+                "yierdis-networking-netty",
+                "netty-all",
+                "yier.bubu.redis.memory",
+                "yier.bubu.redis.storage",
+                "yier.bubu.redis.execution",
+                "yier.bubu.redis.runtime",
+                "yier.bubu.redis.protocol",
+                "io.netty"
+        )) {
+            Assert.assertTrue("common-memory policy must forbid " + forbidden, section.contains(forbidden));
+        }
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-common/yierdis-common-memory/src/main/java"),
+                offenders,
+                "import yier.bubu.redis.memory",
+                "import yier.bubu.redis.storage",
+                "import yier.bubu.redis.execution",
+                "import yier.bubu.redis.runtime",
+                "import yier.bubu.redis.protocol",
+                "import io.netty"
+        );
+        Assert.assertTrue("common-memory source guard scanned no Java files", scanned > 0);
+        Assert.assertTrue("common-memory leaked upper-layer imports: " + offenders, offenders.isEmpty());
+    }
+
+    @Test
     public void dbOpsAndCoreCommandMustNotImportProtocolModel() throws IOException {
         List<String> offenders = new ArrayList<>();
         Path repoRoot = resolveRepoRoot();
