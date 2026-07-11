@@ -35,7 +35,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
     }
 
-    public synchronized YierdisNativeBlock allocate(int requestedBytes) {
+    public YierdisNativeBlock allocate(int requestedBytes) {
         ensureOpen();
         if (requestedBytes <= 0) {
             throw new IllegalArgumentException("requestedBytes must be > 0");
@@ -46,7 +46,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         return allocateSpan(requestedBytes);
     }
 
-    public synchronized MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget) {
+    public MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget) {
         ensureOpen();
         Objects.requireNonNull(budget, "budget");
         long startedNanos = System.nanoTime();
@@ -92,7 +92,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         );
     }
 
-    public synchronized YierdisNativePageAllocatorStats stats() {
+    public YierdisNativePageAllocatorStats stats() {
         return new YierdisNativePageAllocatorStats(
                 committedBytes,
                 usedBytes,
@@ -111,7 +111,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         );
     }
 
-    synchronized PageGrowth estimateAdditionalGrowth(int... requestedBytes) {
+    PageGrowth estimateAdditionalGrowth(int... requestedBytes) {
         Objects.requireNonNull(requestedBytes, "requestedBytes");
         long[] availableBlocks = freeBlocksByClass.clone();
         int additionalEntries = 0;
@@ -153,7 +153,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         return new PageGrowth(heapBytes, dataBytes);
     }
 
-    synchronized long heapEstimatedBytes() {
+    long heapEstimatedBytes() {
         long bytes = pageDirectory.heapEstimatedBytes();
         bytes = MemoryUsageSnapshot.addSaturating(bytes, (long) nonFullHeads.length * 8L);
         bytes = MemoryUsageSnapshot.addSaturating(bytes, (long) emptyByClass.length * 8L);
@@ -171,7 +171,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
+    public void close() {
         if (closed) {
             return;
         }
@@ -197,7 +197,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         }
     }
 
-    synchronized void free(YierdisNativeBlock block) {
+    void free(YierdisNativeBlock block) {
         if (closed) {
             return;
         }
@@ -213,7 +213,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         throw new IllegalStateException("unknown native block allocation");
     }
 
-    synchronized YierdisNativeBlock view(YierdisNativeObjectMeta meta) {
+    YierdisNativeBlock view(YierdisNativeObjectMeta meta) {
         ensureOpen();
         Objects.requireNonNull(meta, "meta");
         return blockAt(
@@ -225,16 +225,16 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         );
     }
 
-    synchronized YierdisNativeBlock moveSource(YierdisNativeObjectMeta meta) {
+    YierdisNativeBlock moveSource(YierdisNativeObjectMeta meta) {
         return view(meta);
     }
 
-    synchronized void free(YierdisNativeObjectMeta meta) {
+    void free(YierdisNativeObjectMeta meta) {
         YierdisNativeBlock block = view(meta);
         block.close();
     }
 
-    synchronized void free(int pageId, int pageOffset, int capacity, int pageClass) {
+    void free(int pageId, int pageOffset, int capacity, int pageClass) {
         YierdisNativeBlock block = blockAt(pageId, pageOffset, capacity, pageClass, Math.max(1, capacity));
         block.close();
     }
