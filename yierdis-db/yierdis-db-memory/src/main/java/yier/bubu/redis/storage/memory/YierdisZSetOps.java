@@ -41,7 +41,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         }
         long now = System.currentTimeMillis();
         long upperBound = estimateZSetWriteUpperBoundForMutation(keyBytes, scoreMemberPairs);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -163,7 +163,7 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
     }
 
     private WriteResult<Long> removeInternal(byte[] keyBytes, long now, ZSetRemoval removal) {
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return 0;

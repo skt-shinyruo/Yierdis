@@ -57,7 +57,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         }
         final long finalUpperBound = setReservationUpperBound(keyBytes, mode, upperBound, now, keepTtl);
 
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return finalUpperBound;
@@ -160,7 +160,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 keyBytes == null ? 0 : keyBytes.length,
                 suffix.length
         );
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -224,7 +224,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
                 keyBytes == null ? 0 : keyBytes.length,
                 (int) growth
         );
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Integer>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Integer>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -291,7 +291,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         internals.checkThread();
         long now = System.currentTimeMillis();
         long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, 32);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;

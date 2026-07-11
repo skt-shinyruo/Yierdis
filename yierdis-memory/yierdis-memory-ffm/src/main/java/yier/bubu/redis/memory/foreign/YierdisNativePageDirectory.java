@@ -132,6 +132,31 @@ final class YierdisNativePageDirectory {
         return bytes;
     }
 
+    AllocationScopeCheckpoint allocationScopeCheckpoint() {
+        return new AllocationScopeCheckpoint(
+                segments.clone(),
+                segmentCounts.clone(),
+                freeIds.clone(),
+                freeIdCount,
+                nextId,
+                liveEntries
+        );
+    }
+
+    void restoreAllocationScopeCheckpoint(AllocationScopeCheckpoint checkpoint) {
+        if (checkpoint == null) {
+            throw new NullPointerException("checkpoint");
+        }
+        if (liveEntries != checkpoint.liveEntries) {
+            throw new IllegalStateException("allocation scope left a live native page");
+        }
+        segments = checkpoint.segments.clone();
+        segmentCounts = checkpoint.segmentCounts.clone();
+        freeIds = checkpoint.freeIds.clone();
+        freeIdCount = checkpoint.freeIdCount;
+        nextId = checkpoint.nextId;
+    }
+
     void clear() {
         segments = new Object[INITIAL_DIRECTORY_SEGMENTS][];
         segmentCounts = new int[INITIAL_DIRECTORY_SEGMENTS];
@@ -175,5 +200,15 @@ final class YierdisNativePageDirectory {
 
     private static int segmentOffset(int pageId) {
         return (pageId - 1) % ENTRIES_PER_SEGMENT;
+    }
+
+    record AllocationScopeCheckpoint(
+            Object[][] segments,
+            int[] segmentCounts,
+            int[] freeIds,
+            int freeIdCount,
+            int nextId,
+            int liveEntries
+    ) {
     }
 }

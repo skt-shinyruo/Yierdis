@@ -20,6 +20,10 @@ public interface NativeAllocator extends AutoCloseable {
 
     NativeEpochScope beginEpoch(NativeEpochKind kind);
 
+    default NativeAllocationScope beginAllocationScope() {
+        throw new UnsupportedOperationException("native allocation scopes are not supported");
+    }
+
     NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode);
 
     NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes);

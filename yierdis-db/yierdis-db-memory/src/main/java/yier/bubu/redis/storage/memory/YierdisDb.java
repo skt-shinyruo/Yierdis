@@ -13,6 +13,7 @@ import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
+import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbLifecycleOps;
 import yier.bubu.redis.storage.api.DbReads;
@@ -464,6 +465,10 @@ public final class YierdisDb implements RuntimeDbEngine {
 
     public YierdisDbMemoryLedger memoryLedger() {
         return ledger;
+    }
+
+    public NativeAllocator nativeAllocator() {
+        return keyLifecycle.nativeAllocator();
     }
 
     public void shutdown() {

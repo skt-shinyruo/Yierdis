@@ -52,5 +52,18 @@ public class MemoryLedgerContractTest {
             // expected
         }
     }
-}
 
+    @Test
+    public void reconcileCanReduceButNeverGrowAReservation() {
+        InMemoryLedger ledger = new InMemoryLedger(10);
+        MemoryReservation reservation = ledger.reserve(8);
+
+        ledger.reconcile(reservation, 3);
+        Assert.assertEquals(3L, reservation.reservedBytes());
+        Assert.assertEquals(3L, ledger.reservedBytes());
+        Assert.assertThrows(IllegalStateException.class, () -> ledger.reconcile(reservation, 4));
+
+        ledger.rollback(reservation);
+        Assert.assertEquals(0L, ledger.reservedBytes());
+    }
+}

@@ -41,7 +41,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
         }
         long now = System.currentTimeMillis();
         long upperBound = estimateHashWriteUpperBoundForMutation(keyBytes, fieldValuePairs);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -123,7 +123,7 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
     public WriteResult<Long> hdel(byte[] keyBytes, List<byte[]> fields) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return 0;

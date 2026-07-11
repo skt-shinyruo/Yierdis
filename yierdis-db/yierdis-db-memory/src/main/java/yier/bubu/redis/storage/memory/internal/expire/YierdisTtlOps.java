@@ -44,7 +44,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
 
         long expireAtMillis = safeExpireAtMillis(System.currentTimeMillis(), seconds);
         long upperBound = keyLifecycle.expireAtMillis(handle) == null ? ttlEntryBytesEstimate() : 0;
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Boolean>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -80,7 +80,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
 
         long expireAtMillis = safeAddMillis(System.currentTimeMillis(), milliseconds);
         long upperBound = keyLifecycle.expireAtMillis(handle) == null ? ttlEntryBytesEstimate() : 0;
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Boolean>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -127,7 +127,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         }
 
         long upperBound = keyLifecycle.expireAtMillis(handle) == null ? ttlEntryBytesEstimate() : 0;
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Boolean>>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -161,7 +161,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         if (expireAtMillis == null) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Boolean>>() {
             @Override
             public long upperBoundBytes() {
                 return 0;
@@ -224,7 +224,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
     }
 
     private WriteResult<Boolean> deleteImmediately(KeyHandle handle, EntryRecord record) {
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Boolean>>() {
             @Override
             public long upperBoundBytes() {
                 return 0;

@@ -9,6 +9,7 @@ import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
+import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
@@ -96,6 +97,11 @@ public final class FailOnAllocationNativeAllocator implements NativeAllocator {
     @Override
     public NativeEpochScope beginEpoch(NativeEpochKind kind) {
         return delegate.beginEpoch(kind);
+    }
+
+    @Override
+    public NativeAllocationScope beginAllocationScope() {
+        return delegate.beginAllocationScope();
     }
 
     @Override

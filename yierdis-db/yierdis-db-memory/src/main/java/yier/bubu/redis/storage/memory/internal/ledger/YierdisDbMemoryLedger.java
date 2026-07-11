@@ -121,6 +121,27 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
     }
 
     @Override
+    public void reconcile(MemoryReservation reservation, long requiredBytes) {
+        if (requiredBytes < 0) {
+            throw new IllegalArgumentException("requiredBytes must be >= 0");
+        }
+        ReservationToken token = ReservationToken.validate(reservation, this);
+        long reserved = token == null ? 0L : token.reservedBytes;
+        if (requiredBytes > reserved) {
+            throw new IllegalStateException("prepared mutation exceeded its reservation");
+        }
+        if (token != null && requiredBytes < reserved) {
+            reservedBytes -= reserved - requiredBytes;
+            token.reservedBytes = requiredBytes;
+        }
+    }
+
+    @Override
+    public MemoryReservation beginReclamation() {
+        return new ReservationToken(this, 0L);
+    }
+
+    @Override
     public void commit(MemoryReservation reservation, long actualDeltaBytes) {
         ReservationToken token = ReservationToken.validate(reservation, this);
         if (token != null) {
@@ -169,7 +190,7 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
 
     private static final class ReservationToken implements MemoryReservation {
         private final YierdisDbMemoryLedger owner;
-        private final long reservedBytes;
+        private long reservedBytes;
         private boolean finished;
 
         private ReservationToken(YierdisDbMemoryLedger owner, long reservedBytes) {
