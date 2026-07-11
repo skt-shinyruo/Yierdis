@@ -1,6 +1,7 @@
 package yier.bubu.redis.memory.foreign;
 
 import java.util.Arrays;
+import yier.bubu.redis.memory.api.OffHeapOutOfMemoryException;
 
 final class YierdisNativePageDirectory {
     private static final int ENTRIES_PER_SEGMENT = 1_024;
@@ -21,7 +22,16 @@ final class YierdisNativePageDirectory {
         if (entry == null) {
             throw new NullPointerException("entry");
         }
-        int pageId = freeIdCount > 0 ? freeIds[--freeIdCount] : nextId++;
+        int pageId;
+        if (freeIdCount > 0) {
+            pageId = freeIds[--freeIdCount];
+        } else {
+            if (nextId <= 0) {
+                throw new OffHeapOutOfMemoryException("native page id space exhausted");
+            }
+            pageId = nextId;
+            nextId = nextId == Integer.MAX_VALUE ? -1 : nextId + 1;
+        }
         int segmentIndex = segmentIndex(pageId);
         ensureDirectoryCapacity(segmentIndex + 1);
         Object[] segment = segments[segmentIndex];

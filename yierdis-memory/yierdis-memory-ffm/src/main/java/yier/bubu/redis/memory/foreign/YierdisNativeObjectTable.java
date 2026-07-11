@@ -68,6 +68,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
             NativeObjectKind kind,
             int size,
             int capacity,
+            int segmentId,
             long address,
             int pageClass,
             long allocEpoch
@@ -86,7 +87,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         slot.segment.writeLong(slot.offset, ADDRESS_OFFSET, address);
         slot.segment.writeInt(slot.offset, SIZE_OFFSET, size);
         slot.segment.writeInt(slot.offset, CAPACITY_OFFSET, capacity);
-        slot.segment.writeInt(slot.offset, SEGMENT_ID_OFFSET, 0);
+        slot.segment.writeInt(slot.offset, SEGMENT_ID_OFFSET, segmentId);
         slot.segment.writeInt(slot.offset, PAGE_CLASS_OFFSET, pageClass);
         slot.segment.writeInt(slot.offset, DOMAIN_OFFSET, kind.domain().code());
         slot.segment.writeInt(slot.offset, KIND_OFFSET, kind.code());
@@ -172,7 +173,14 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         releaseSlot(slot, slot.segment.readLong(slot.offset, FREE_EPOCH_OFFSET));
     }
 
-    public synchronized void updateLocation(NativeHandle handle, int size, int capacity, long address, int pageClass) {
+    public synchronized void updateLocation(
+            NativeHandle handle,
+            int size,
+            int capacity,
+            int segmentId,
+            long address,
+            int pageClass
+    ) {
         ensureOpen();
         SegmentSlot slot = requireLiveSlot(handle, false);
         if (size < 0) {
@@ -184,6 +192,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         slot.segment.writeLong(slot.offset, ADDRESS_OFFSET, address);
         slot.segment.writeInt(slot.offset, SIZE_OFFSET, size);
         slot.segment.writeInt(slot.offset, CAPACITY_OFFSET, capacity);
+        slot.segment.writeInt(slot.offset, SEGMENT_ID_OFFSET, segmentId);
         slot.segment.writeInt(slot.offset, PAGE_CLASS_OFFSET, pageClass);
     }
 
@@ -200,7 +209,14 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         return meta;
     }
 
-    public synchronized void publishMoved(NativeHandle handle, int size, int capacity, long address, int pageClass) {
+    public synchronized void publishMoved(
+            NativeHandle handle,
+            int size,
+            int capacity,
+            int segmentId,
+            long address,
+            int pageClass
+    ) {
         ensureOpen();
         SegmentSlot slot = requireSlotInState(handle, STATE_MOVING);
         if (size < 0) {
@@ -212,6 +228,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         slot.segment.writeLong(slot.offset, ADDRESS_OFFSET, address);
         slot.segment.writeInt(slot.offset, SIZE_OFFSET, size);
         slot.segment.writeInt(slot.offset, CAPACITY_OFFSET, capacity);
+        slot.segment.writeInt(slot.offset, SEGMENT_ID_OFFSET, segmentId);
         slot.segment.writeInt(slot.offset, PAGE_CLASS_OFFSET, pageClass);
         transitionState(slot, STATE_ALLOCATED);
     }
@@ -278,6 +295,43 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         bytes += (long) (segmentCapacity - segments.length) * 8L;
         bytes += (long) (availableCapacity - availableSegments.length) * Integer.BYTES;
         return bytes;
+    }
+
+    synchronized int firstOccupiedSlot() {
+        return nextOccupiedSlot(0);
+    }
+
+    synchronized int nextOccupiedSlot(int afterSlotId) {
+        ensureOpen();
+        int last = Math.min(maxSlots, activeSegments * YierdisNativeObjectSegment.SLOTS_PER_SEGMENT);
+        if (afterSlotId >= last) {
+            return 0;
+        }
+        int first = Math.max(1, afterSlotId + 1);
+        for (int slotId = first; slotId <= last; slotId++) {
+            SegmentSlot slot = slotRef(slotId);
+            int state = slot.segment.readInt(slot.offset, STATE_OFFSET);
+            if (state != STATE_FREE && !slot.segment.isRetired(slot.offset)) {
+                return slotId;
+            }
+        }
+        return 0;
+    }
+
+    synchronized YierdisNativeObjectMeta occupiedMeta(int slotId) {
+        ensureOpen();
+        if (slotId <= 0 || slotId > maxSlots) {
+            return null;
+        }
+        SegmentSlot slot = slotRef(slotId);
+        if (slot.segmentIndex >= activeSegments) {
+            return null;
+        }
+        int state = slot.segment.readInt(slot.offset, STATE_OFFSET);
+        if (state == STATE_FREE || slot.segment.isRetired(slot.offset)) {
+            return null;
+        }
+        return readMeta(slot);
     }
 
     @Override

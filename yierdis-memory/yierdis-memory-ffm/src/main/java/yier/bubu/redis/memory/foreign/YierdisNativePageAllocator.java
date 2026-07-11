@@ -202,8 +202,8 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
             return;
         }
         Object allocation = block.allocation();
-        if (allocation instanceof SmallAllocation small) {
-            freeSmall(block, small);
+        if (allocation instanceof SmallPage page) {
+            freeSmall(block, page);
             return;
         }
         if (allocation instanceof SpanAllocation span) {
@@ -211,6 +211,32 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
             return;
         }
         throw new IllegalStateException("unknown native block allocation");
+    }
+
+    synchronized YierdisNativeBlock view(YierdisNativeObjectMeta meta) {
+        ensureOpen();
+        Objects.requireNonNull(meta, "meta");
+        return blockAt(
+                meta.segmentId(),
+                Math.toIntExact(meta.address()),
+                meta.capacity(),
+                meta.pageClass(),
+                Math.max(1, meta.size())
+        );
+    }
+
+    synchronized YierdisNativeBlock moveSource(YierdisNativeObjectMeta meta) {
+        return view(meta);
+    }
+
+    synchronized void free(YierdisNativeObjectMeta meta) {
+        YierdisNativeBlock block = view(meta);
+        block.close();
+    }
+
+    synchronized void free(int pageId, int pageOffset, int capacity, int pageClass) {
+        YierdisNativeBlock block = blockAt(pageId, pageOffset, capacity, pageClass, Math.max(1, capacity));
+        block.close();
     }
 
     private YierdisNativeBlock allocateSmall(int requestedBytes) {
@@ -232,7 +258,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         usedBytes += sizeClass.bytes();
         return new YierdisNativeBlock(
                 this,
-                new SmallAllocation(page),
+                page,
                 page.region,
                 offset,
                 requestedBytes,
@@ -291,8 +317,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         return page;
     }
 
-    private void freeSmall(YierdisNativeBlock block, SmallAllocation allocation) {
-        SmallPage page = allocation.page;
+    private void freeSmall(YierdisNativeBlock block, SmallPage page) {
         if (page.closed) {
             return;
         }
@@ -339,6 +364,69 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         }
         span.closed = true;
         span.region.close();
+    }
+
+    private YierdisNativeBlock blockAt(
+            int pageId,
+            int pageOffset,
+            int capacity,
+            int pageClassOrdinal,
+            int requestedBytes
+    ) {
+        if (pageId <= 0) {
+            throw new IllegalStateException("invalid native page id: " + pageId);
+        }
+        if (pageOffset < 0 || capacity <= 0) {
+            throw new IllegalStateException("invalid native block location");
+        }
+        YierdisNativePageClass[] pageClasses = YierdisNativePageClass.values();
+        if (pageClassOrdinal < 0 || pageClassOrdinal >= pageClasses.length) {
+            throw new IllegalStateException("invalid native page class: " + pageClassOrdinal);
+        }
+        YierdisNativePageClass pageClass = pageClasses[pageClassOrdinal];
+        Object entry = pageDirectory.get(pageId);
+        if (entry instanceof SmallPage page) {
+            if (page.closed || pageClass != YierdisNativePageClass.SMALL) {
+                throw new IllegalStateException("native small page location is not live");
+            }
+            if (capacity != page.sizeClass.bytes()
+                    || pageOffset % capacity != 0
+                    || pageOffset > PAGE_BYTES - capacity) {
+                throw new IllegalStateException("native small block location mismatch");
+            }
+            return new YierdisNativeBlock(
+                    this,
+                    page,
+                    page.region,
+                    pageOffset,
+                    requestedBytes,
+                    capacity,
+                    pageId,
+                    pageOffset,
+                    1,
+                    pageClass,
+                    page.sizeClass
+            );
+        }
+        if (entry instanceof SpanAllocation span) {
+            if (span.closed || pageClass != span.pageClass || pageOffset != 0 || capacity != span.capacity) {
+                throw new IllegalStateException("native span location mismatch");
+            }
+            return new YierdisNativeBlock(
+                    this,
+                    span,
+                    span.region,
+                    0,
+                    requestedBytes,
+                    capacity,
+                    pageId,
+                    0,
+                    span.pageCount,
+                    pageClass,
+                    null
+            );
+        }
+        throw new IllegalStateException("unknown or closed native page id: " + pageId);
     }
 
     private void closeSmallPage(SmallPage page) {
@@ -570,12 +658,6 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
                 throw new IllegalStateException("small page free stack overflow");
             }
             freeOffsets[freeCount++] = offset;
-        }
-    }
-
-    private record SmallAllocation(SmallPage page) {
-        private SmallAllocation {
-            Objects.requireNonNull(page, "page");
         }
     }
 

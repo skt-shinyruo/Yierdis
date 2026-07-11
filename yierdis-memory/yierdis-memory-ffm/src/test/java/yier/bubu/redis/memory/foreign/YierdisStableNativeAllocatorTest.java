@@ -1,7 +1,9 @@
 package yier.bubu.redis.memory.foreign;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import org.junit.Assert;
 import org.junit.Test;
@@ -20,6 +22,30 @@ import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public class YierdisStableNativeAllocatorTest {
+    @Test
+    public void allocatorHasNoPerObjectAllocationMap() {
+        Assert.assertFalse(Arrays.stream(YierdisStableNativeAllocator.class.getDeclaredFields())
+                .anyMatch(field -> Map.class.isAssignableFrom(field.getType())));
+    }
+
+    @Test
+    public void objectCanResolveReallocateDefragAndFreeFromMetadataLocation() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("metadata-location");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32)) {
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
+                view.setByte(0, (byte) 42);
+            }
+            allocator.realloc(handle, 128, NativeReallocPolicy.PRESERVE_PREFIX);
+            allocator.defragOne(handle, 1_024);
+            try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
+                Assert.assertEquals(42, view.getByte(0));
+            }
+            allocator.free(handle);
+            Assert.assertEquals(0L, allocator.stats().liveObjects());
+        }
+    }
+
     @Test
     public void allocatesFromPageAllocatorAndRecordsNativeMetadata() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-test");
@@ -42,7 +68,8 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(8, meta.size());
             Assert.assertEquals(16, meta.capacity());
             Assert.assertEquals(YierdisNativePageClass.SMALL.ordinal(), meta.pageClass());
-            Assert.assertTrue(meta.address() != 0L);
+            Assert.assertTrue(meta.segmentId() > 0);
+            Assert.assertTrue(meta.address() >= 0L);
 
             NativeAllocatorStats stats = allocator.stats();
             Assert.assertEquals(8L, stats.logicalUsedBytes());
@@ -481,7 +508,7 @@ public class YierdisStableNativeAllocatorTest {
                 view.setByte(2, (byte) 3);
                 view.setByte(3, (byte) 4);
             }
-            long beforeAddress = allocator.objectMeta(handle, false).address();
+            NativeLocation beforeLocation = locationOf(allocator.objectMeta(handle, false));
 
             NativeHandle resized = allocator.realloc(handle, 24, NativeReallocPolicy.PRESERVE_PREFIX);
             Assert.assertEquals(handle, resized);
@@ -489,7 +516,7 @@ public class YierdisStableNativeAllocatorTest {
             YierdisNativeObjectMeta after = allocator.objectMeta(handle, false);
             Assert.assertEquals(24, after.size());
             Assert.assertEquals(24, after.capacity());
-            Assert.assertNotEquals(beforeAddress, after.address());
+            Assert.assertNotEquals(beforeLocation, locationOf(after));
 
             try (NativeObjectView view = allocator.resolve(resized, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(24, view.size());
@@ -590,7 +617,7 @@ public class YierdisStableNativeAllocatorTest {
                 view.setByte(1, (byte) 2);
                 view.setByte(2, (byte) 3);
             }
-            long beforeAddress = allocator.objectMeta(handle, false).address();
+            NativeLocation beforeLocation = locationOf(allocator.objectMeta(handle, false));
 
             NativeDefragResult result = allocator.defragOne(handle, 24);
 
@@ -600,7 +627,7 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(handle.slotId(), after.slotId());
             Assert.assertEquals(handle.generation(), after.generation());
             Assert.assertEquals(24, after.size());
-            Assert.assertNotEquals(beforeAddress, after.address());
+            Assert.assertNotEquals(beforeLocation, locationOf(after));
 
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(1, view.getByte(0));
@@ -670,14 +697,14 @@ public class YierdisStableNativeAllocatorTest {
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 1024)) {
 
             NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
-            long address = allocator.objectMeta(handle, false).address();
+            NativeLocation location = locationOf(allocator.objectMeta(handle, false));
 
             NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY);
             try {
                 NativeDefragResult pinned = allocator.defragOne(handle, 24);
                 Assert.assertFalse(pinned.moved());
                 Assert.assertTrue(pinned.skippedPinned());
-                Assert.assertEquals(address, allocator.objectMeta(handle, false).address());
+                Assert.assertEquals(location, locationOf(allocator.objectMeta(handle, false)));
                 Assert.assertEquals(1L, allocator.stats().defragSkippedPinnedObjects());
             } finally {
                 view.close();
@@ -686,7 +713,7 @@ public class YierdisStableNativeAllocatorTest {
             NativeDefragResult budget = allocator.defragOne(handle, 23);
             Assert.assertFalse(budget.moved());
             Assert.assertTrue(budget.skippedBudget());
-            Assert.assertEquals(address, allocator.objectMeta(handle, false).address());
+            Assert.assertEquals(location, locationOf(allocator.objectMeta(handle, false)));
         }
     }
 
@@ -698,9 +725,9 @@ public class YierdisStableNativeAllocatorTest {
             NativeHandle first = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
             NativeHandle second = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
             NativeHandle third = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
-            long firstAddress = allocator.objectMeta(first, false).address();
-            long secondAddress = allocator.objectMeta(second, false).address();
-            long thirdAddress = allocator.objectMeta(third, false).address();
+            NativeLocation firstLocation = locationOf(allocator.objectMeta(first, false));
+            NativeLocation secondLocation = locationOf(allocator.objectMeta(second, false));
+            NativeLocation thirdLocation = locationOf(allocator.objectMeta(third, false));
 
             NativeDefragReport report = allocator.defragCycle(new NativeDefragOptions(48, 10, Long.MAX_VALUE));
 
@@ -708,9 +735,9 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(48L, report.movedBytes());
             Assert.assertEquals(1L, report.skippedBudgetObjects());
             Assert.assertTrue(report.stoppedByByteBudget());
-            Assert.assertNotEquals(firstAddress, allocator.objectMeta(first, false).address());
-            Assert.assertNotEquals(secondAddress, allocator.objectMeta(second, false).address());
-            Assert.assertEquals(thirdAddress, allocator.objectMeta(third, false).address());
+            Assert.assertNotEquals(firstLocation, locationOf(allocator.objectMeta(first, false)));
+            Assert.assertNotEquals(secondLocation, locationOf(allocator.objectMeta(second, false)));
+            Assert.assertEquals(thirdLocation, locationOf(allocator.objectMeta(third, false)));
         }
     }
 
@@ -721,8 +748,8 @@ public class YierdisStableNativeAllocatorTest {
 
             NativeHandle pinned = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
             NativeHandle movable = allocator.allocate(NativeObjectKind.STRING_BYTES, 24);
-            long pinnedAddress = allocator.objectMeta(pinned, false).address();
-            long movableAddress = allocator.objectMeta(movable, false).address();
+            NativeLocation pinnedLocation = locationOf(allocator.objectMeta(pinned, false));
+            NativeLocation movableLocation = locationOf(allocator.objectMeta(movable, false));
             allocator.pin(pinned);
 
             NativeDefragReport report = allocator.defragCycle(new NativeDefragOptions(48, 10, Long.MAX_VALUE));
@@ -730,8 +757,8 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(1L, report.movedObjects());
             Assert.assertEquals(24L, report.movedBytes());
             Assert.assertEquals(1L, report.skippedPinnedObjects());
-            Assert.assertEquals(pinnedAddress, allocator.objectMeta(pinned, false).address());
-            Assert.assertNotEquals(movableAddress, allocator.objectMeta(movable, false).address());
+            Assert.assertEquals(pinnedLocation, locationOf(allocator.objectMeta(pinned, false)));
+            Assert.assertNotEquals(movableLocation, locationOf(allocator.objectMeta(movable, false)));
         }
     }
 
@@ -750,13 +777,13 @@ public class YierdisStableNativeAllocatorTest {
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_WRITE)) {
                 view.setByte(0, (byte) 7);
             }
-            long beforeAddress = allocator.objectMeta(handle, false).address();
+            NativeLocation beforeLocation = locationOf(allocator.objectMeta(handle, false));
 
             NativeDefragReport report = allocator.defragCycle(new NativeDefragOptions(24, 10, Long.MAX_VALUE));
 
             Assert.assertEquals(0L, report.movedObjects());
             Assert.assertEquals(1L, report.failedMoves());
-            Assert.assertEquals(beforeAddress, allocator.objectMeta(handle, false).address());
+            Assert.assertEquals(beforeLocation, locationOf(allocator.objectMeta(handle, false)));
             Assert.assertEquals(0L, allocator.stats().defragMovedBytes());
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(7, view.getByte(0));
@@ -1174,5 +1201,12 @@ public class YierdisStableNativeAllocatorTest {
                 Assert.assertTrue(expected.getMessage().contains("stale native handle"));
             }
         }
+    }
+
+    private static NativeLocation locationOf(YierdisNativeObjectMeta meta) {
+        return new NativeLocation(meta.segmentId(), meta.address());
+    }
+
+    private record NativeLocation(int pageId, long pageOffset) {
     }
 }

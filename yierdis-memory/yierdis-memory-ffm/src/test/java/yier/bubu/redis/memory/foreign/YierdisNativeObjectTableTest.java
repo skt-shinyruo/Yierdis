@@ -47,7 +47,7 @@ public class YierdisNativeObjectTableTest {
              YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 4_097, 0)) {
             List<NativeHandle> handles = new ArrayList<>();
             for (int i = 0; i < 4_097; i++) {
-                handles.add(table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, i + 1L, 1, 0));
+                handles.add(table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 1, i + 1L, 1, 0));
             }
 
             Assert.assertEquals(2, table.stats().activeSegments());
@@ -62,7 +62,7 @@ public class YierdisNativeObjectTableTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-basic");
              YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 4, 77)) {
 
-            NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 32, 48, 1234L, 3, 9L);
+            NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 32, 48, 55, 1234L, 3, 9L);
             YierdisNativeObjectMeta meta = table.resolve(handle);
 
             Assert.assertEquals(NativeObjectKind.STRING_BYTES.domain(), handle.domain());
@@ -72,6 +72,7 @@ public class YierdisNativeObjectTableTest {
             Assert.assertEquals(32, meta.size());
             Assert.assertEquals(48, meta.capacity());
             Assert.assertEquals(1234L, meta.address());
+            Assert.assertEquals(55, meta.segmentId());
             Assert.assertEquals(3, meta.pageClass());
             Assert.assertEquals(77, meta.ownerShardId());
             Assert.assertEquals(9L, meta.allocEpoch());
@@ -80,11 +81,21 @@ public class YierdisNativeObjectTableTest {
     }
 
     @Test
+    public void occupiedSlotCursorDoesNotWrapAfterMaximumInteger() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-cursor-wrap");
+             YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 1, 0)) {
+            table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 1, 0L, 1, 1L);
+
+            Assert.assertEquals(0, table.nextOccupiedSlot(Integer.MAX_VALUE));
+        }
+    }
+
+    @Test
     public void freeIncrementsGenerationBeforeReuse() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-reuse");
              YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 1, 7)) {
 
-            NativeHandle first = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 11L, 1, 1L);
+            NativeHandle first = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
             table.free(first, 2L);
 
             try {
@@ -94,7 +105,7 @@ public class YierdisNativeObjectTableTest {
                 Assert.assertTrue(expected.getMessage().contains("stale native handle"));
             }
 
-            NativeHandle second = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 22L, 1, 3L);
+            NativeHandle second = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 2, 22L, 1, 3L);
             Assert.assertEquals(first.slotId(), second.slotId());
             Assert.assertEquals(first.generation() + 1, second.generation());
         }
@@ -106,13 +117,13 @@ public class YierdisNativeObjectTableTest {
              YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 1, 7)) {
 
             for (int generation = 1; generation <= 0x0fff; generation++) {
-                NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, generation, 1, generation);
+                NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, generation, 1, generation);
                 Assert.assertEquals(generation, handle.generation());
                 table.free(handle, generation);
             }
 
             try {
-                table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1L, 1, 1L);
+                table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 1L, 1, 1L);
                 Assert.fail("expected retired slot exhaustion");
             } catch (NativeMemoryException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
@@ -128,8 +139,8 @@ public class YierdisNativeObjectTableTest {
     public void statsTrackLiveFreeAndPerStateTransitions() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-stats");
              YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 2, 7)) {
-            NativeHandle first = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 11L, 1, 1L);
-            NativeHandle second = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 22L, 1, 1L);
+            NativeHandle first = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
+            NativeHandle second = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 2, 22L, 1, 1L);
             table.pin(first);
             table.free(first, 2L);
 
@@ -155,7 +166,7 @@ public class YierdisNativeObjectTableTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-quarantine");
              YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 1, 7)) {
 
-            NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 11L, 1, 1L);
+            NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
             table.pin(handle);
             table.free(handle, 2L);
 
@@ -179,7 +190,7 @@ public class YierdisNativeObjectTableTest {
             }
 
             try {
-                table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 22L, 1, 3L);
+                table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 2, 22L, 1, 3L);
                 Assert.fail("expected slot limit while quarantined");
             } catch (NativeMemoryException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
@@ -187,7 +198,7 @@ public class YierdisNativeObjectTableTest {
 
             table.unpin(handle);
 
-            NativeHandle second = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 22L, 1, 3L);
+            NativeHandle second = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 2, 22L, 1, 3L);
             Assert.assertEquals(handle.slotId(), second.slotId());
             Assert.assertEquals(handle.generation() + 1, second.generation());
         }
@@ -198,7 +209,7 @@ public class YierdisNativeObjectTableTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-invalid");
              YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 2, 7)) {
 
-            NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 11L, 1, 1L);
+            NativeHandle handle = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 11L, 1, 1L);
             NativeHandle wrongKind = NativeHandle.of(handle.domain(), NativeObjectKind.GENERIC, handle.slotId(), handle.generation(), 0);
             NativeHandle wrongDomain = NativeHandle.of(NativeObjectKind.ENTRY_RECORD.domain(), NativeObjectKind.ENTRY_RECORD, handle.slotId(), handle.generation(), 0);
 
@@ -232,7 +243,7 @@ public class YierdisNativeObjectTableTest {
         YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-native");
         YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 4, 7);
         try {
-            table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 1L, 1, 0L);
+            table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 1, 1L, 1, 0L);
             Assert.assertEquals(4_096L * YierdisNativeObjectTable.META_BYTES, runtime.usedBytes());
         } finally {
             table.close();
