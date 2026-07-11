@@ -1,4 +1,23 @@
 modules:
+  yierdis-common-memory:
+    allowed_dependencies: []
+    forbidden_dependencies:
+      - yierdis-memory-api
+      - yierdis-memory-ffm
+      - yierdis-db-api
+      - yierdis-db-memory
+      - yierdis-server-api
+      - yierdis-server-runtime
+      - yierdis-networking-resp
+      - yierdis-networking-netty
+      - netty-all
+    forbidden_imports:
+      - yier.bubu.redis.memory
+      - yier.bubu.redis.storage
+      - yier.bubu.redis.execution
+      - yier.bubu.redis.runtime
+      - yier.bubu.redis.protocol
+      - io.netty
   yierdis-command-api:
     allowed_dependencies:
       - yierdis-server-api
