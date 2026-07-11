@@ -184,6 +184,7 @@ modules:
   yierdis-memory-api:
     allowed_dependencies:
       - yierdis-common-bytes
+      - yierdis-common-memory
     forbidden_dependencies:
       - yierdis-core-api
       - yierdis-core-command

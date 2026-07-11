@@ -28,7 +28,12 @@ public record NativeAllocatorStats(
         long doubleFreeDetections,
         long defragReclaimedPages,
         NativeObjectKindCounts objectKindCounts,
-        NativeAllocationLatencyHistogram allocationLatencyHistogram
+        NativeAllocationLatencyHistogram allocationLatencyHistogram,
+        long metadataCommittedBytes,
+        long activeMetadataSegments,
+        long freeSlots,
+        long retiredSlots,
+        long peakLiveSlots
 ) {
     public NativeAllocatorStats(
             long logicalUsedBytes,
@@ -74,7 +79,75 @@ public record NativeAllocatorStats(
                 0,
                 0,
                 NativeObjectKindCounts.empty(),
-                NativeAllocationLatencyHistogram.empty()
+                NativeAllocationLatencyHistogram.empty(),
+                0,
+                0,
+                0,
+                0,
+                0
+        );
+    }
+
+    public NativeAllocatorStats(
+            long logicalUsedBytes,
+            long reservedBytes,
+            long committedBytes,
+            long freeBytes,
+            long internalFragmentationBytes,
+            long liveSmallPages,
+            long liveMediumSpanPages,
+            long liveLargeSpanPages,
+            long liveObjects,
+            long pinnedObjects,
+            long quarantinedObjects,
+            long staleHandleDetections,
+            long reallocInPlaceCount,
+            long reallocMovedCount,
+            long defragMovedBytes,
+            long defragSkippedPinnedObjects,
+            long externalFragmentationBytes,
+            long smallFreeBytes,
+            long mediumFreeBytes,
+            long largeFreeBytes,
+            long freePages,
+            long quarantineBytes,
+            long doubleFreeDetections,
+            long defragReclaimedPages,
+            NativeObjectKindCounts objectKindCounts,
+            NativeAllocationLatencyHistogram allocationLatencyHistogram
+    ) {
+        this(
+                logicalUsedBytes,
+                reservedBytes,
+                committedBytes,
+                freeBytes,
+                internalFragmentationBytes,
+                liveSmallPages,
+                liveMediumSpanPages,
+                liveLargeSpanPages,
+                liveObjects,
+                pinnedObjects,
+                quarantinedObjects,
+                staleHandleDetections,
+                reallocInPlaceCount,
+                reallocMovedCount,
+                defragMovedBytes,
+                defragSkippedPinnedObjects,
+                externalFragmentationBytes,
+                smallFreeBytes,
+                mediumFreeBytes,
+                largeFreeBytes,
+                freePages,
+                quarantineBytes,
+                doubleFreeDetections,
+                defragReclaimedPages,
+                objectKindCounts,
+                allocationLatencyHistogram,
+                0,
+                0,
+                0,
+                0,
+                0
         );
     }
 

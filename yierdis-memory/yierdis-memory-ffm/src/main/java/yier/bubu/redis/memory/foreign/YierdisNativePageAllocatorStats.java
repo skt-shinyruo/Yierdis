@@ -10,7 +10,11 @@ public record YierdisNativePageAllocatorStats(
         long smallFreeBytes,
         long mediumFreeBytes,
         long largeFreeBytes,
-        long freePages
+        long freePages,
+        long emptySmallPages,
+        long livePageDirectoryEntries,
+        long liveSpanDescriptors,
+        long pageDirectoryHeapBytes
 ) {
     public YierdisNativePageAllocatorStats(
             long committedBytes,
@@ -28,6 +32,10 @@ public record YierdisNativePageAllocatorStats(
                 liveMediumSpanPages,
                 liveLargeSpanPages,
                 freeBytes,
+                0,
+                0,
+                0,
+                0,
                 0,
                 0,
                 0

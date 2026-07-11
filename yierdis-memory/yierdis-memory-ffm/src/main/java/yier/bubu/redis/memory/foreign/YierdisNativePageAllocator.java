@@ -1,21 +1,35 @@
 package yier.bubu.redis.memory.foreign;
 
-import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Objects;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
 public final class YierdisNativePageAllocator implements AutoCloseable {
     public static final int PAGE_BYTES = 64 * 1024;
     private static final int MEDIUM_MAX_BYTES = 1024 * 1024;
+    private static final long SMALL_PAGE_HEAP_BYTES = 160L;
+    private static final long SPAN_HEAP_BYTES = 112L;
+    private static final long REGION_WRAPPER_HEAP_BYTES = 128L;
 
     private final YierdisFfmMemoryRuntime runtime;
-    private final ArrayList<SmallPage> smallPages = new ArrayList<>();
-    private final ArrayList<SpanAllocation> spans = new ArrayList<>();
+    private final YierdisNativePageDirectory pageDirectory = new YierdisNativePageDirectory();
+    private final SmallPage[] nonFullHeads = new SmallPage[YierdisNativeSizeClass.values().length];
+    private final SmallPage[] emptyByClass = new SmallPage[YierdisNativeSizeClass.values().length];
+    private final long[] freeBlocksByClass = new long[YierdisNativeSizeClass.values().length];
 
+    private SmallPage liveSmallHead;
+    private SmallPage emptyHead;
+    private SpanAllocation liveSpanHead;
     private boolean closed;
-    private int nextPageId = 1;
     private long committedBytes;
     private long usedBytes;
+    private long smallFreeBytes;
+    private long liveSmallPages;
+    private long liveMediumSpanPages;
+    private long liveLargeSpanPages;
+    private long emptySmallPages;
+    private long liveSpanDescriptors;
 
     public YierdisNativePageAllocator(YierdisFfmMemoryRuntime runtime) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -32,44 +46,128 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         return allocateSpan(requestedBytes);
     }
 
+    public synchronized MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget) {
+        ensureOpen();
+        Objects.requireNonNull(budget, "budget");
+        long startedNanos = System.nanoTime();
+        long inspected = 0L;
+        long reclaimedUnits = 0L;
+        long reclaimedBytes = 0L;
+        while (emptyHead != null) {
+            if (inspected >= budget.maxInspectedUnits()) {
+                return new MemoryReclaimResult(
+                        inspected,
+                        reclaimedUnits,
+                        reclaimedBytes,
+                        MemoryReclaimResult.StopReason.INSPECTION_LIMIT
+                );
+            }
+            if (elapsedNanos(startedNanos) >= budget.timeLimitNanos()) {
+                return new MemoryReclaimResult(
+                        inspected,
+                        reclaimedUnits,
+                        reclaimedBytes,
+                        MemoryReclaimResult.StopReason.TIME_LIMIT
+                );
+            }
+            SmallPage page = emptyHead;
+            inspected++;
+            if (reclaimedBytes > budget.maxReclaimedBytes() - PAGE_BYTES) {
+                return new MemoryReclaimResult(
+                        inspected,
+                        reclaimedUnits,
+                        reclaimedBytes,
+                        MemoryReclaimResult.StopReason.BYTE_LIMIT
+                );
+            }
+            closeSmallPage(page);
+            reclaimedUnits++;
+            reclaimedBytes += PAGE_BYTES;
+        }
+        return new MemoryReclaimResult(
+                inspected,
+                reclaimedUnits,
+                reclaimedBytes,
+                MemoryReclaimResult.StopReason.COMPLETE
+        );
+    }
+
     public synchronized YierdisNativePageAllocatorStats stats() {
-        long smallFreeBytes = 0;
-        long freePages = 0;
-        for (int i = 0; i < smallPages.size(); i++) {
-            SmallPage page = smallPages.get(i);
-            if (page.closed) {
-                continue;
-            }
-            smallFreeBytes += (long) page.freeOffsets.size() * page.sizeClass.bytes();
-            if (page.liveBlocks == 0) {
-                freePages++;
-            }
-        }
-        long mediumPages = 0;
-        long largePages = 0;
-        for (int i = 0; i < spans.size(); i++) {
-            SpanAllocation span = spans.get(i);
-            if (span.closed) {
-                continue;
-            }
-            if (span.pageClass == YierdisNativePageClass.MEDIUM_SPAN) {
-                mediumPages += span.pageCount;
-            } else if (span.pageClass == YierdisNativePageClass.LARGE_SPAN) {
-                largePages += span.pageCount;
-            }
-        }
         return new YierdisNativePageAllocatorStats(
                 committedBytes,
                 usedBytes,
                 committedBytes - usedBytes,
-                smallPages.size(),
-                mediumPages,
-                largePages,
+                liveSmallPages,
+                liveMediumSpanPages,
+                liveLargeSpanPages,
                 smallFreeBytes,
                 0,
                 0,
-                freePages
+                emptySmallPages,
+                emptySmallPages,
+                pageDirectory.liveEntries(),
+                liveSpanDescriptors,
+                pageDirectory.heapEstimatedBytes()
         );
+    }
+
+    synchronized PageGrowth estimateAdditionalGrowth(int... requestedBytes) {
+        Objects.requireNonNull(requestedBytes, "requestedBytes");
+        long[] availableBlocks = freeBlocksByClass.clone();
+        int additionalEntries = 0;
+        long heapBytes = 0L;
+        long dataBytes = 0L;
+        for (int requested : requestedBytes) {
+            if (requested <= 0) {
+                throw new IllegalArgumentException("requestedBytes must contain only positive values");
+            }
+            if (requested <= YierdisNativeSizeClass.MAX_SMALL_BYTES) {
+                YierdisNativeSizeClass sizeClass = YierdisNativeSizeClass.forSize(requested);
+                int index = sizeClass.ordinal();
+                if (availableBlocks[index] > 0) {
+                    availableBlocks[index]--;
+                    continue;
+                }
+                int blockCount = PAGE_BYTES / sizeClass.bytes();
+                availableBlocks[index] = blockCount - 1L;
+                additionalEntries++;
+                dataBytes = MemoryUsageSnapshot.addSaturating(dataBytes, PAGE_BYTES);
+                heapBytes = MemoryUsageSnapshot.addSaturating(
+                        heapBytes,
+                        SMALL_PAGE_HEAP_BYTES + REGION_WRAPPER_HEAP_BYTES + (long) blockCount * Integer.BYTES
+                );
+            } else {
+                int capacity = Math.multiplyExact(pagesFor(requested), PAGE_BYTES);
+                additionalEntries++;
+                dataBytes = MemoryUsageSnapshot.addSaturating(dataBytes, capacity);
+                heapBytes = MemoryUsageSnapshot.addSaturating(
+                        heapBytes,
+                        SPAN_HEAP_BYTES + REGION_WRAPPER_HEAP_BYTES
+                );
+            }
+        }
+        heapBytes = MemoryUsageSnapshot.addSaturating(
+                heapBytes,
+                pageDirectory.estimateAdditionalHeapBytes(additionalEntries)
+        );
+        return new PageGrowth(heapBytes, dataBytes);
+    }
+
+    synchronized long heapEstimatedBytes() {
+        long bytes = pageDirectory.heapEstimatedBytes();
+        bytes = MemoryUsageSnapshot.addSaturating(bytes, (long) nonFullHeads.length * 8L);
+        bytes = MemoryUsageSnapshot.addSaturating(bytes, (long) emptyByClass.length * 8L);
+        bytes = MemoryUsageSnapshot.addSaturating(bytes, (long) freeBlocksByClass.length * Long.BYTES);
+        for (SmallPage page = liveSmallHead; page != null; page = page.liveNext) {
+            bytes = MemoryUsageSnapshot.addSaturating(
+                    bytes,
+                    SMALL_PAGE_HEAP_BYTES + REGION_WRAPPER_HEAP_BYTES + (long) page.freeOffsets.length * Integer.BYTES
+            );
+        }
+        for (SpanAllocation span = liveSpanHead; span != null; span = span.liveNext) {
+            bytes = MemoryUsageSnapshot.addSaturating(bytes, SPAN_HEAP_BYTES + REGION_WRAPPER_HEAP_BYTES);
+        }
+        return bytes;
     }
 
     @Override
@@ -79,20 +177,21 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         }
         closed = true;
         RuntimeException failure = null;
-        for (int i = 0; i < smallPages.size(); i++) {
-            failure = closeRegion(smallPages.get(i).region, failure);
+        while (liveSmallHead != null) {
+            failure = closeSmallPageOnShutdown(liveSmallHead, failure);
         }
-        for (int i = 0; i < spans.size(); i++) {
-            SpanAllocation span = spans.get(i);
-            if (!span.closed) {
-                span.closed = true;
-                failure = closeRegion(span.region, failure);
-            }
+        while (liveSpanHead != null) {
+            failure = closeSpanOnShutdown(liveSpanHead, failure);
         }
-        smallPages.clear();
-        spans.clear();
-        committedBytes = 0;
-        usedBytes = 0;
+        pageDirectory.clear();
+        committedBytes = 0L;
+        usedBytes = 0L;
+        smallFreeBytes = 0L;
+        liveSmallPages = 0L;
+        liveMediumSpanPages = 0L;
+        liveLargeSpanPages = 0L;
+        emptySmallPages = 0L;
+        liveSpanDescriptors = 0L;
         if (failure != null) {
             throw failure;
         }
@@ -116,13 +215,20 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
 
     private YierdisNativeBlock allocateSmall(int requestedBytes) {
         YierdisNativeSizeClass sizeClass = YierdisNativeSizeClass.forSize(requestedBytes);
-        SmallPage page = findSmallPage(sizeClass);
+        SmallPage page = nonFullHeads[sizeClass.ordinal()];
         if (page == null) {
             page = newSmallPage(sizeClass);
         }
-
-        int offset = page.freeOffsets.removeFirst();
+        if (page.inEmptyList) {
+            unlinkEmpty(page);
+        }
+        int offset = page.popFreeOffset();
+        freeBlocksByClass[sizeClass.ordinal()]--;
+        smallFreeBytes -= sizeClass.bytes();
         page.liveBlocks++;
+        if (page.freeCount == 0) {
+            unlinkNonFull(page);
+        }
         usedBytes += sizeClass.bytes();
         return new YierdisNativeBlock(
                 this,
@@ -146,11 +252,17 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
                 ? YierdisNativePageClass.MEDIUM_SPAN
                 : YierdisNativePageClass.LARGE_SPAN;
         YierdisFfmRegion region = runtime.allocateRegion(pageClass.name().toLowerCase(), capacity);
-        SpanAllocation span = new SpanAllocation(nextPageId, pageCount, pageClass, region, capacity);
-        nextPageId += pageCount;
-        spans.add(span);
+        SpanAllocation span = new SpanAllocation(pageCount, pageClass, region, capacity);
+        span.pageId = pageDirectory.add(span);
+        linkLiveSpan(span);
         committedBytes += capacity;
         usedBytes += capacity;
+        liveSpanDescriptors++;
+        if (pageClass == YierdisNativePageClass.MEDIUM_SPAN) {
+            liveMediumSpanPages += pageCount;
+        } else {
+            liveLargeSpanPages += pageCount;
+        }
         return new YierdisNativeBlock(
                 this,
                 span,
@@ -166,26 +278,16 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         );
     }
 
-    private SmallPage findSmallPage(YierdisNativeSizeClass sizeClass) {
-        for (int i = 0; i < smallPages.size(); i++) {
-            SmallPage page = smallPages.get(i);
-            if (page.sizeClass == sizeClass && !page.freeOffsets.isEmpty()) {
-                return page;
-            }
-        }
-        return null;
-    }
-
     private SmallPage newSmallPage(YierdisNativeSizeClass sizeClass) {
         YierdisFfmRegion region = runtime.allocateRegion("native-small-page", PAGE_BYTES);
-        SmallPage page = new SmallPage(nextPageId++, sizeClass, region);
-        int blockBytes = sizeClass.bytes();
-        int blockCount = PAGE_BYTES / blockBytes;
-        for (int i = 0; i < blockCount; i++) {
-            page.freeOffsets.addLast(i * blockBytes);
-        }
-        smallPages.add(page);
+        SmallPage page = new SmallPage(sizeClass, region);
+        page.pageId = pageDirectory.add(page);
+        linkLiveSmall(page);
+        linkNonFull(page);
         committedBytes += PAGE_BYTES;
+        liveSmallPages++;
+        freeBlocksByClass[sizeClass.ordinal()] += page.freeCount;
+        smallFreeBytes += (long) page.freeCount * sizeClass.bytes();
         return page;
     }
 
@@ -195,19 +297,31 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
             return;
         }
         long next = usedBytes - block.capacity();
-        if (next < 0) {
+        if (next < 0 || page.liveBlocks <= 0) {
             throw new IllegalStateException("native page allocator accounting underflow");
         }
+        boolean wasFull = page.freeCount == 0;
         usedBytes = next;
         page.liveBlocks--;
-        page.freeOffsets.addFirst(block.pageOffset());
+        page.pushFreeOffset(block.pageOffset());
+        freeBlocksByClass[page.sizeClass.ordinal()]++;
+        smallFreeBytes += page.sizeClass.bytes();
+        if (wasFull) {
+            linkNonFull(page);
+        }
+        if (page.liveBlocks == 0) {
+            SmallPage oldWarmPage = emptyByClass[page.sizeClass.ordinal()];
+            if (oldWarmPage != null && oldWarmPage != page) {
+                closeSmallPage(oldWarmPage);
+            }
+            linkEmpty(page);
+        }
     }
 
     private void freeSpan(YierdisNativeBlock block, SpanAllocation span) {
         if (span.closed) {
             return;
         }
-        span.closed = true;
         long nextUsed = usedBytes - block.capacity();
         long nextCommitted = committedBytes - block.capacity();
         if (nextUsed < 0 || nextCommitted < 0) {
@@ -215,7 +329,172 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         }
         usedBytes = nextUsed;
         committedBytes = nextCommitted;
+        unlinkLiveSpan(span);
+        pageDirectory.remove(span.pageId, span);
+        liveSpanDescriptors--;
+        if (span.pageClass == YierdisNativePageClass.MEDIUM_SPAN) {
+            liveMediumSpanPages -= span.pageCount;
+        } else {
+            liveLargeSpanPages -= span.pageCount;
+        }
+        span.closed = true;
         span.region.close();
+    }
+
+    private void closeSmallPage(SmallPage page) {
+        if (page.closed || page.liveBlocks != 0) {
+            throw new IllegalStateException("only an empty live small page can be closed");
+        }
+        unlinkEmpty(page);
+        unlinkNonFull(page);
+        unlinkLiveSmall(page);
+        pageDirectory.remove(page.pageId, page);
+        committedBytes -= PAGE_BYTES;
+        smallFreeBytes -= (long) page.freeCount * page.sizeClass.bytes();
+        freeBlocksByClass[page.sizeClass.ordinal()] -= page.freeCount;
+        liveSmallPages--;
+        page.closed = true;
+        page.region.close();
+    }
+
+    private RuntimeException closeSmallPageOnShutdown(SmallPage page, RuntimeException failure) {
+        unlinkEmptyIfPresent(page);
+        unlinkNonFullIfPresent(page);
+        unlinkLiveSmall(page);
+        pageDirectory.remove(page.pageId, page);
+        page.closed = true;
+        return closeRegion(page.region, failure);
+    }
+
+    private RuntimeException closeSpanOnShutdown(SpanAllocation span, RuntimeException failure) {
+        unlinkLiveSpan(span);
+        pageDirectory.remove(span.pageId, span);
+        span.closed = true;
+        return closeRegion(span.region, failure);
+    }
+
+    private void linkLiveSmall(SmallPage page) {
+        page.liveNext = liveSmallHead;
+        if (liveSmallHead != null) {
+            liveSmallHead.livePrev = page;
+        }
+        liveSmallHead = page;
+    }
+
+    private void unlinkLiveSmall(SmallPage page) {
+        if (page.livePrev == null) {
+            liveSmallHead = page.liveNext;
+        } else {
+            page.livePrev.liveNext = page.liveNext;
+        }
+        if (page.liveNext != null) {
+            page.liveNext.livePrev = page.livePrev;
+        }
+        page.livePrev = null;
+        page.liveNext = null;
+    }
+
+    private void linkNonFull(SmallPage page) {
+        int index = page.sizeClass.ordinal();
+        if (page.inNonFullList) {
+            return;
+        }
+        page.nonFullNext = nonFullHeads[index];
+        if (page.nonFullNext != null) {
+            page.nonFullNext.nonFullPrev = page;
+        }
+        nonFullHeads[index] = page;
+        page.inNonFullList = true;
+    }
+
+    private void unlinkNonFull(SmallPage page) {
+        if (!page.inNonFullList) {
+            throw new IllegalStateException("page is not in non-full list");
+        }
+        unlinkNonFullIfPresent(page);
+    }
+
+    private void unlinkNonFullIfPresent(SmallPage page) {
+        if (!page.inNonFullList) {
+            return;
+        }
+        int index = page.sizeClass.ordinal();
+        if (page.nonFullPrev == null) {
+            nonFullHeads[index] = page.nonFullNext;
+        } else {
+            page.nonFullPrev.nonFullNext = page.nonFullNext;
+        }
+        if (page.nonFullNext != null) {
+            page.nonFullNext.nonFullPrev = page.nonFullPrev;
+        }
+        page.nonFullPrev = null;
+        page.nonFullNext = null;
+        page.inNonFullList = false;
+    }
+
+    private void linkEmpty(SmallPage page) {
+        if (page.inEmptyList) {
+            return;
+        }
+        int index = page.sizeClass.ordinal();
+        emptyByClass[index] = page;
+        page.emptyNext = emptyHead;
+        if (emptyHead != null) {
+            emptyHead.emptyPrev = page;
+        }
+        emptyHead = page;
+        page.inEmptyList = true;
+        emptySmallPages++;
+    }
+
+    private void unlinkEmpty(SmallPage page) {
+        if (!page.inEmptyList) {
+            throw new IllegalStateException("page is not in empty list");
+        }
+        unlinkEmptyIfPresent(page);
+    }
+
+    private void unlinkEmptyIfPresent(SmallPage page) {
+        if (!page.inEmptyList) {
+            return;
+        }
+        if (page.emptyPrev == null) {
+            emptyHead = page.emptyNext;
+        } else {
+            page.emptyPrev.emptyNext = page.emptyNext;
+        }
+        if (page.emptyNext != null) {
+            page.emptyNext.emptyPrev = page.emptyPrev;
+        }
+        int index = page.sizeClass.ordinal();
+        if (emptyByClass[index] == page) {
+            emptyByClass[index] = null;
+        }
+        page.emptyPrev = null;
+        page.emptyNext = null;
+        page.inEmptyList = false;
+        emptySmallPages--;
+    }
+
+    private void linkLiveSpan(SpanAllocation span) {
+        span.liveNext = liveSpanHead;
+        if (liveSpanHead != null) {
+            liveSpanHead.livePrev = span;
+        }
+        liveSpanHead = span;
+    }
+
+    private void unlinkLiveSpan(SpanAllocation span) {
+        if (span.livePrev == null) {
+            liveSpanHead = span.liveNext;
+        } else {
+            span.livePrev.liveNext = span.liveNext;
+        }
+        if (span.liveNext != null) {
+            span.liveNext.livePrev = span.livePrev;
+        }
+        span.livePrev = null;
+        span.liveNext = null;
     }
 
     private static int pagesFor(int bytes) {
@@ -224,6 +503,10 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
             throw new IllegalArgumentException("allocation is too large: " + bytes);
         }
         return (int) pages;
+    }
+
+    private static long elapsedNanos(long startedNanos) {
+        return Math.max(0L, System.nanoTime() - startedNanos);
     }
 
     private void ensureOpen() {
@@ -245,18 +528,48 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         }
     }
 
+    record PageGrowth(long heapEstimatedBytes, long nativeDataCommittedBytes) {
+    }
+
     private static final class SmallPage {
-        private final int pageId;
+        private int pageId;
         private final YierdisNativeSizeClass sizeClass;
         private final YierdisFfmRegion region;
-        private final ArrayDeque<Integer> freeOffsets = new ArrayDeque<>();
+        private final int[] freeOffsets;
+        private int freeCount;
         private int liveBlocks;
         private boolean closed;
+        private boolean inNonFullList;
+        private boolean inEmptyList;
+        private SmallPage livePrev;
+        private SmallPage liveNext;
+        private SmallPage nonFullPrev;
+        private SmallPage nonFullNext;
+        private SmallPage emptyPrev;
+        private SmallPage emptyNext;
 
-        private SmallPage(int pageId, YierdisNativeSizeClass sizeClass, YierdisFfmRegion region) {
-            this.pageId = pageId;
+        private SmallPage(YierdisNativeSizeClass sizeClass, YierdisFfmRegion region) {
             this.sizeClass = Objects.requireNonNull(sizeClass, "sizeClass");
             this.region = Objects.requireNonNull(region, "region");
+            int blockCount = PAGE_BYTES / sizeClass.bytes();
+            this.freeOffsets = new int[blockCount];
+            for (int i = blockCount - 1; i >= 0; i--) {
+                freeOffsets[freeCount++] = i * sizeClass.bytes();
+            }
+        }
+
+        private int popFreeOffset() {
+            if (freeCount <= 0) {
+                throw new IllegalStateException("small page has no free block");
+            }
+            return freeOffsets[--freeCount];
+        }
+
+        private void pushFreeOffset(int offset) {
+            if (freeCount >= freeOffsets.length) {
+                throw new IllegalStateException("small page free stack overflow");
+            }
+            freeOffsets[freeCount++] = offset;
         }
     }
 
@@ -267,21 +580,21 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
     }
 
     private static final class SpanAllocation {
-        private final int pageId;
+        private int pageId;
         private final int pageCount;
         private final YierdisNativePageClass pageClass;
         private final YierdisFfmRegion region;
         private final int capacity;
         private boolean closed;
+        private SpanAllocation livePrev;
+        private SpanAllocation liveNext;
 
         private SpanAllocation(
-                int pageId,
                 int pageCount,
                 YierdisNativePageClass pageClass,
                 YierdisFfmRegion region,
                 int capacity
         ) {
-            this.pageId = pageId;
             this.pageCount = pageCount;
             this.pageClass = Objects.requireNonNull(pageClass, "pageClass");
             this.region = Objects.requireNonNull(region, "region");

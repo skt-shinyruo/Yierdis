@@ -1,9 +1,93 @@
 package yier.bubu.redis.memory.foreign;
 
+import java.lang.reflect.Field;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
+import yier.bubu.redis.memory.api.NativeAllocationGrowth;
+import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 
 public class YierdisNativePageAllocatorTest {
+    @Test
+    public void normalFreeRetainsOneWarmPageAndPressureTrimClosesIt() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("page-trim");
+             YierdisNativePageAllocator allocator = new YierdisNativePageAllocator(runtime)) {
+            YierdisNativeBlock block = allocator.allocate(32);
+            block.close();
+            Assert.assertEquals(1L, allocator.stats().emptySmallPages());
+            Assert.assertEquals(YierdisNativePageAllocator.PAGE_BYTES, runtime.usedBytes());
+
+            MemoryReclaimResult result = allocator.trimEmptyPages(MemoryPressureBudget.unlimited());
+            Assert.assertEquals(1L, result.reclaimedUnits());
+            Assert.assertEquals(YierdisNativePageAllocator.PAGE_BYTES, result.reclaimedBytes());
+            Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
+    @Test
+    public void trimUsesTheEmptyPageIndexAndHonorsInspectionBudget() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("bounded-trim");
+             YierdisNativePageAllocator allocator = new YierdisNativePageAllocator(runtime)) {
+            YierdisNativeBlock first = allocator.allocate(16);
+            YierdisNativeBlock second = allocator.allocate(32);
+            first.close();
+            second.close();
+            MemoryReclaimResult result = allocator.trimEmptyPages(
+                    new MemoryPressureBudget(1, Long.MAX_VALUE, Long.MAX_VALUE)
+            );
+            Assert.assertEquals(1L, result.inspectedUnits());
+            Assert.assertEquals(YierdisNativePageAllocator.PAGE_BYTES, result.reclaimedBytes());
+            Assert.assertEquals(MemoryReclaimResult.StopReason.INSPECTION_LIMIT, result.stopReason());
+        }
+    }
+
+    @Test
+    public void allocationEstimateIncludesOnlyNewSegmentsAndPages() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("allocation-estimate");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 8_192)) {
+            NativeAllocationGrowth first = allocator.estimateAdditionalGrowth(32);
+            Assert.assertEquals(4_096L * YierdisNativeObjectTable.META_BYTES,
+                    first.nativeMetadataCommittedBytes());
+            Assert.assertEquals(YierdisNativePageAllocator.PAGE_BYTES,
+                    first.nativeDataCommittedBytes());
+            Assert.assertTrue(first.heapEstimatedBytes() > 0L);
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
+            Assert.assertEquals(NativeAllocationGrowth.zero(), allocator.estimateAdditionalGrowth(32));
+            allocator.free(handle);
+        }
+    }
+
+    @Test
+    public void spanChurnDoesNotRetainHistoricalDescriptorsOrPageIds() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("span-churn");
+             YierdisNativePageAllocator allocator = new YierdisNativePageAllocator(runtime)) {
+            long baselineDirectoryBytes = allocator.stats().pageDirectoryHeapBytes();
+            for (int i = 0; i < 100_000; i++) {
+                allocator.allocate((i & 1) == 0 ? 32_769 : 1_048_577).close();
+            }
+            Assert.assertEquals(0L, allocator.stats().livePageDirectoryEntries());
+            Assert.assertEquals(0L, allocator.stats().liveSpanDescriptors());
+            Assert.assertEquals(baselineDirectoryBytes, allocator.stats().pageDirectoryHeapBytes());
+            Assert.assertEquals(0L, runtime.liveRegionCount());
+        }
+    }
+
+    @Test
+    public void allocatorsDoNotRetainHistoricalCollectionsOrRegions() {
+        Assert.assertFalse(Arrays.stream(YierdisNativePageAllocator.class.getDeclaredFields())
+                .map(Field::getType)
+                .anyMatch(type -> List.class.isAssignableFrom(type) || Map.class.isAssignableFrom(type)));
+        Assert.assertFalse(Arrays.stream(YierdisFfmMemoryRuntime.class.getDeclaredFields())
+                .map(Field::getType)
+                .anyMatch(type -> Set.class.isAssignableFrom(type) || Map.class.isAssignableFrom(type)));
+    }
+
     @Test
     public void choosesSmallSizeClasses() {
         Assert.assertEquals(16, YierdisNativeSizeClass.forSize(1).bytes());
