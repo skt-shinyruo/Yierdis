@@ -186,4 +186,12 @@ public class NativeAllocatorContractTest {
         Assert.assertEquals("base", base.getMessage());
         Assert.assertEquals("stale", stale.getMessage());
     }
+
+    @Test
+    public void nativeCapacityExceptionIsAnOffHeapOom() {
+        Assert.assertTrue(OffHeapOutOfMemoryException.class
+                .isAssignableFrom(NativeCapacityExceededException.class));
+        Assert.assertFalse(NativeMemoryException.class
+                .isAssignableFrom(NativeCapacityExceededException.class));
+    }
 }

@@ -8,11 +8,24 @@ import java.util.List;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeHandle;
+import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeMemoryException;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public class YierdisNativeObjectTableTest {
+    @Test
+    public void slotExhaustionUsesCapacityHierarchy() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("slot-capacity");
+             YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 1, 0)) {
+            table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 1, 1, 1, 0);
+            Assert.assertThrows(
+                    NativeCapacityExceededException.class,
+                    () -> table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 1, 2, 1, 0)
+            );
+        }
+    }
+
     @Test
     public void metadataBookkeepingUsesSegmentLocalPrimitiveStructures() {
         Assert.assertFalse(Arrays.stream(YierdisNativeObjectTable.class.getDeclaredFields())
@@ -125,7 +138,7 @@ public class YierdisNativeObjectTableTest {
             try {
                 table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 1, 1L, 1, 1L);
                 Assert.fail("expected retired slot exhaustion");
-            } catch (NativeMemoryException expected) {
+            } catch (NativeCapacityExceededException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
             }
             Assert.assertEquals(0L, table.stats().liveSlots());
@@ -192,7 +205,7 @@ public class YierdisNativeObjectTableTest {
             try {
                 table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 2, 22L, 1, 3L);
                 Assert.fail("expected slot limit while quarantined");
-            } catch (NativeMemoryException expected) {
+            } catch (NativeCapacityExceededException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
             }
 

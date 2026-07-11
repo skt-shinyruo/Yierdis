@@ -11,6 +11,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeDefragResult;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
@@ -153,7 +154,7 @@ public class YierdisStableNativeAllocatorTest {
             try {
                 allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
                 Assert.fail("expected quarantined object to keep slot unavailable");
-            } catch (NativeMemoryException expected) {
+            } catch (NativeCapacityExceededException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
             }
 
@@ -259,7 +260,7 @@ public class YierdisStableNativeAllocatorTest {
             try {
                 allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
                 Assert.fail("expected active epoch to keep freed slot unavailable");
-            } catch (NativeMemoryException expected) {
+            } catch (NativeCapacityExceededException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
             }
 
@@ -297,7 +298,7 @@ public class YierdisStableNativeAllocatorTest {
             try {
                 allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
                 Assert.fail("expected active epoch to keep freed slot unavailable");
-            } catch (NativeMemoryException expected) {
+            } catch (NativeCapacityExceededException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
             }
 
@@ -421,7 +422,7 @@ public class YierdisStableNativeAllocatorTest {
             try {
                 allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
                 Assert.fail("expected open resolved view to keep slot quarantined");
-            } catch (NativeMemoryException expected) {
+            } catch (NativeCapacityExceededException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
             }
 
@@ -473,7 +474,7 @@ public class YierdisStableNativeAllocatorTest {
             try {
                 allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
                 Assert.fail("expected resolved view to keep slot unavailable");
-            } catch (NativeMemoryException expected) {
+            } catch (NativeCapacityExceededException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
             }
 
@@ -1114,7 +1115,7 @@ public class YierdisStableNativeAllocatorTest {
             try {
                 oomAllocator.allocate(NativeObjectKind.STRING_BYTES, 8);
                 Assert.fail("expected deterministic slot-limit OOM");
-            } catch (NativeMemoryException expected) {
+            } catch (NativeCapacityExceededException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
             } finally {
                 oomAllocator.free(only);
@@ -1180,7 +1181,7 @@ public class YierdisStableNativeAllocatorTest {
             try {
                 allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
                 Assert.fail("expected retired slot exhaustion");
-            } catch (NativeMemoryException expected) {
+            } catch (NativeCapacityExceededException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
             }
         }

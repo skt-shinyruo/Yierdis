@@ -4,6 +4,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
+import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 
 public final class YierdisFfmMemoryRuntime implements AutoCloseable {
     private final String name;
@@ -26,8 +27,20 @@ public final class YierdisFfmMemoryRuntime implements AutoCloseable {
 
         // Regions can be created during bootstrap and released on the DB owner thread, so they must be
         // closable from any thread.
-        Arena arena = Arena.ofShared();
-        MemorySegment segment = arena.allocate(bytes);
+        Arena arena = null;
+        MemorySegment segment;
+        try {
+            arena = Arena.ofShared();
+            segment = arena.allocate(bytes);
+        } catch (OutOfMemoryError failure) {
+            if (arena != null) {
+                arena.close();
+            }
+            throw new NativeCapacityExceededException(
+                    "native region allocation failed for " + bytes + " bytes",
+                    failure
+            );
+        }
         YierdisFfmRegion region = new YierdisFfmRegion(this, owner, arena, segment, bytes);
         liveRegionCount.incrementAndGet();
         usedBytes.addAndGet(bytes);
