@@ -1,5 +1,10 @@
 package yier.bubu.redis.memory.foreign;
 
+import java.lang.reflect.Field;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeHandle;
@@ -8,6 +13,50 @@ import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public class YierdisNativeObjectTableTest {
+    @Test
+    public void metadataBookkeepingUsesSegmentLocalPrimitiveStructures() {
+        Assert.assertFalse(Arrays.stream(YierdisNativeObjectTable.class.getDeclaredFields())
+                .map(Field::getType)
+                .anyMatch(ArrayDeque.class::equals));
+        Assert.assertFalse(Arrays.stream(YierdisNativeObjectTable.class.getDeclaredFields())
+                .map(Field::getType)
+                .anyMatch(boolean[].class::equals));
+        Assert.assertTrue(Arrays.stream(YierdisNativeObjectSegment.class.getDeclaredFields())
+                .map(Field::getType)
+                .anyMatch(int[].class::equals));
+        Assert.assertTrue(Arrays.stream(YierdisNativeObjectSegment.class.getDeclaredFields())
+                .map(Field::getType)
+                .anyMatch(long[].class::equals));
+    }
+
+    @Test
+    public void emptyTableCommitsNoMetadataRegardlessOfMaximumSlots() {
+        for (int maxSlots : new int[]{1, 4_096, 262_144}) {
+            try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("lazy-table-" + maxSlots);
+                 YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, maxSlots, 0)) {
+                Assert.assertEquals(0L, runtime.usedBytes());
+                Assert.assertEquals(0L, table.stats().metadataCommittedBytes());
+                Assert.assertEquals(0, table.stats().activeSegments());
+            }
+        }
+    }
+
+    @Test
+    public void allocationCrossing4096SlotsCommitsExactlyTwoSegments() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("segment-boundary");
+             YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 4_097, 0)) {
+            List<NativeHandle> handles = new ArrayList<>();
+            for (int i = 0; i < 4_097; i++) {
+                handles.add(table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, i + 1L, 1, 0));
+            }
+
+            Assert.assertEquals(2, table.stats().activeSegments());
+            Assert.assertEquals(4_097L, table.stats().liveSlots());
+            Assert.assertEquals(2L * 4_096L * YierdisNativeObjectTable.META_BYTES,
+                    table.stats().metadataCommittedBytes());
+        }
+    }
+
     @Test
     public void allocatesGenerationBearingHandlesAndStoresMetadata() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-basic");
@@ -68,6 +117,36 @@ public class YierdisNativeObjectTableTest {
             } catch (NativeMemoryException expected) {
                 Assert.assertTrue(expected.getMessage().contains("slot limit"));
             }
+            Assert.assertEquals(0L, table.stats().liveSlots());
+            Assert.assertEquals(0L, table.stats().freeSlots());
+            Assert.assertEquals(1L, table.stats().retiredSlots());
+            Assert.assertEquals(1L, table.stats().peakLiveSlots());
+        }
+    }
+
+    @Test
+    public void statsTrackLiveFreeAndPerStateTransitions() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-stats");
+             YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 2, 7)) {
+            NativeHandle first = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 11L, 1, 1L);
+            NativeHandle second = table.allocate(NativeObjectKind.STRING_BYTES, 16, 16, 22L, 1, 1L);
+            table.pin(first);
+            table.free(first, 2L);
+
+            YierdisNativeObjectTableStats quarantined = table.stats();
+            Assert.assertEquals(2L, quarantined.liveSlots());
+            Assert.assertEquals(0L, quarantined.freeSlots());
+            Assert.assertEquals(2L, quarantined.peakLiveSlots());
+            Assert.assertEquals(1L, quarantined.stateCount(YierdisNativeObjectTable.STATE_ALLOCATED));
+            Assert.assertEquals(1L, quarantined.stateCount(YierdisNativeObjectTable.STATE_FREED_QUARANTINED));
+
+            table.unpin(first);
+            table.free(second, 3L);
+
+            YierdisNativeObjectTableStats released = table.stats();
+            Assert.assertEquals(0L, released.liveSlots());
+            Assert.assertEquals(2L, released.freeSlots());
+            Assert.assertEquals(2L, released.stateCount(YierdisNativeObjectTable.STATE_FREE));
         }
     }
 
@@ -153,7 +232,8 @@ public class YierdisNativeObjectTableTest {
         YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("object-table-native");
         YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 4, 7);
         try {
-            Assert.assertTrue(runtime.usedBytes() >= YierdisNativeObjectTable.META_BYTES * 4L);
+            table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 1L, 1, 0L);
+            Assert.assertEquals(4_096L * YierdisNativeObjectTable.META_BYTES, runtime.usedBytes());
         } finally {
             table.close();
             runtime.close();
