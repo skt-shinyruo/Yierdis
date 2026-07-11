@@ -20,5 +20,6 @@
     <modules>
         <module>yierdis-memory-api</module>
         <module>yierdis-memory-ffm</module>
+        <module>yierdis-memory-testkit</module>
     </modules>
 </project>
