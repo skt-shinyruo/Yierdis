@@ -420,7 +420,10 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
         closed = true;
 
-        RuntimeException failure = null;
+        long leakedObjects = liveObjects;
+        RuntimeException failure = leakedObjects == 0L
+                ? null
+                : new IllegalStateException("native allocator closed with " + leakedObjects + " live objects");
         retainedPageIds = new int[0];
         retainedPageOffsets = new int[0];
         retainedCapacities = new int[0];

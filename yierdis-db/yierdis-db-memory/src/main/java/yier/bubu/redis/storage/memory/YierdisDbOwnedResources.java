@@ -11,6 +11,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
+import yier.bubu.redis.storage.api.ValueType;
 
 public final class YierdisDbOwnedResources implements AutoCloseable {
     private final YierdisFfmMemoryRuntime memoryRuntime;
@@ -49,12 +50,31 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
                 failure = recordFailure(failure, t);
             }
         }
-        if (entries != null) {
+        if (entries != null && keyDirectory != null) {
+            Throwable[] entryFailure = new Throwable[1];
             try {
-                entries.clear();
+                keyDirectory.forEachEntry((keyHandle, entryHandle) -> {
+                    EntryRecord record = null;
+                    try {
+                        record = entries.get(entryHandle);
+                    } catch (Throwable t) {
+                        entryFailure[0] = recordFailure(entryFailure[0], t);
+                    }
+                    try {
+                        releaseValue(record, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
+                    } catch (Throwable t) {
+                        entryFailure[0] = recordFailure(entryFailure[0], t);
+                    }
+                    try {
+                        entries.release(entryHandle);
+                    } catch (Throwable t) {
+                        entryFailure[0] = recordFailure(entryFailure[0], t);
+                    }
+                });
             } catch (Throwable t) {
-                failure = recordFailure(failure, t);
+                entryFailure[0] = recordFailure(entryFailure[0], t);
             }
+            failure = recordFailure(failure, entryFailure[0]);
         }
         if (keyDirectory != null) {
             try {
@@ -63,11 +83,6 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
                 failure = recordFailure(failure, t);
             }
         }
-        failure = clearRoot(failure, stringRoot);
-        failure = clearRoot(failure, listRoot);
-        failure = clearRoot(failure, hashRoot);
-        failure = clearRoot(failure, setRoot);
-        failure = clearRoot(failure, zsetRoot);
         throwIfFailure(failure);
     }
 
@@ -97,7 +112,7 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
         Throwable failure = null;
         try {
             // shutdown 先清 key/entry/ttl 图；value roots 稍后 close，确保它们还可以在 allocator 关闭前释放子对象。
-            clearData(expires, entries, keyDirectory, null, null, null, null, null);
+            clearData(expires, entries, keyDirectory, stringRoot, listRoot, hashRoot, setRoot, zsetRoot);
         } catch (Throwable t) {
             failure = recordFailure(failure, t);
         }
@@ -159,16 +174,25 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
         throwIfFailure(failure);
     }
 
-    private static Throwable clearRoot(Throwable failure, TypeRoot root) {
-        if (root == null) {
-            return failure;
+    private static void releaseValue(
+            EntryRecord record,
+            StringRoot stringRoot,
+            ListRoot listRoot,
+            HashRoot hashRoot,
+            SetRoot setRoot,
+            ZSetRoot zsetRoot
+    ) {
+        if (record == null || record.valueHandle() == null || record.valueHandle().isNull()) {
+            return;
         }
-        try {
-            root.clear();
-        } catch (Throwable t) {
-            return recordFailure(failure, t);
+        ValueType type = record.type();
+        switch (type) {
+            case STRING -> stringRoot.release(record.valueHandle());
+            case LIST -> listRoot.release(record.valueHandle());
+            case HASH -> hashRoot.release(record.valueHandle());
+            case SET -> setRoot.release(record.valueHandle());
+            case ZSET -> zsetRoot.release(record.valueHandle());
         }
-        return failure;
     }
 
     @Override

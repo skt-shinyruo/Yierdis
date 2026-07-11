@@ -18,6 +18,7 @@ import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -29,9 +30,12 @@ public class NativeKeyDirectoryTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-test")) {
             NativeKeyDirectory directory = new NativeKeyDirectory(runtime);
             EntryTable entryTable = new EntryTable(runtime, 64);
+            ArrayList<EntryHandle> allocatedEntries = new ArrayList<>();
             try {
                 EntryHandle first = entryTable.allocate(entryRecord(1L));
                 EntryHandle second = entryTable.allocate(entryRecord(2L));
+                allocatedEntries.add(first);
+                allocatedEntries.add(second);
 
                 directory.compute(bytes("k1"), (key, old) -> first);
                 directory.compute(bytes("k2"), (key, old) -> second);
@@ -41,6 +45,7 @@ public class NativeKeyDirectoryTest {
 
                 for (int i = 0; i < 200; i++) {
                     EntryHandle next = entryTable.allocate(entryRecord(3L + i));
+                    allocatedEntries.add(next);
                     directory.compute(bytes("k" + (i + 3)), (key, old) -> next);
                 }
 
@@ -51,6 +56,7 @@ public class NativeKeyDirectoryTest {
                 Assert.assertNull(directory.get(bytes("k1")));
             } finally {
                 directory.close();
+                allocatedEntries.forEach(entryTable::release);
                 entryTable.close();
             }
 
@@ -88,9 +94,12 @@ public class NativeKeyDirectoryTest {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-iteration-test")) {
             NativeKeyDirectory directory = new NativeKeyDirectory(runtime);
             EntryTable entryTable = new EntryTable(runtime, 64);
+            ArrayList<EntryHandle> allocatedEntries = new ArrayList<>();
             try {
                 EntryHandle first = entryTable.allocate(entryRecord(11L));
                 EntryHandle second = entryTable.allocate(entryRecord(12L));
+                allocatedEntries.add(first);
+                allocatedEntries.add(second);
                 directory.compute(bytes("first"), (key, old) -> first);
                 directory.compute(bytes("second"), (key, old) -> second);
 
@@ -126,6 +135,7 @@ public class NativeKeyDirectoryTest {
                 Assert.assertNull(directory.getKeyHandle(bytes("missing")));
             } finally {
                 directory.close();
+                allocatedEntries.forEach(entryTable::release);
                 entryTable.close();
             }
 

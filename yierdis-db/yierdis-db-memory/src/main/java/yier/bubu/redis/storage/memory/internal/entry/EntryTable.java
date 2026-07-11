@@ -1,7 +1,6 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
 import java.util.Objects;
-import java.util.HashSet;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
@@ -32,8 +31,6 @@ public final class EntryTable implements AutoCloseable {
     private final YierdisFfmMemoryRuntime runtime;
     private final NativeAllocator allocator;
     private final boolean ownsAllocator;
-    private final HashSet<Long> liveHandles = new HashSet<>();
-
     private boolean closed;
 
     public EntryTable(YierdisFfmMemoryRuntime runtime, int initialCapacity) {
@@ -53,7 +50,7 @@ public final class EntryTable implements AutoCloseable {
         this.ownsAllocator = ownsAllocator;
     }
 
-    public synchronized EntryHandle allocate(EntryRecord record) {
+    public EntryHandle allocate(EntryRecord record) {
         Objects.requireNonNull(record, "record");
         ensureOpen();
         NativeHandle nativeHandle = allocator.allocate(NativeObjectKind.ENTRY_RECORD, RECORD_BYTES);
@@ -61,7 +58,6 @@ public final class EntryTable implements AutoCloseable {
         try {
             EntryHandle handle = EntryHandle.fromNativeHandle(nativeHandle);
             write(nativeHandle, record);
-            liveHandles.add(handle.raw());
             ok = true;
             return handle;
         } finally {
@@ -71,13 +67,12 @@ public final class EntryTable implements AutoCloseable {
         }
     }
 
-    public synchronized EntryHandle reserve() {
+    public EntryHandle reserve() {
         ensureOpen();
         NativeHandle nativeHandle = allocator.allocate(NativeObjectKind.ENTRY_RECORD, RECORD_BYTES);
         boolean ok = false;
         try {
             EntryHandle handle = EntryHandle.fromNativeHandle(nativeHandle);
-            liveHandles.add(handle.raw());
             ok = true;
             return handle;
         } finally {
@@ -87,17 +82,14 @@ public final class EntryTable implements AutoCloseable {
         }
     }
 
-    public synchronized void writeReserved(EntryHandle handle, EntryRecord record) {
+    public void writeReserved(EntryHandle handle, EntryRecord record) {
         Objects.requireNonNull(handle, "handle");
         Objects.requireNonNull(record, "record");
         ensureOpen();
-        if (!liveHandles.contains(handle.raw())) {
-            throw new IllegalArgumentException("entry handle is not reserved by this table");
-        }
         write(handle.nativeHandle(), record);
     }
 
-    public synchronized EntryRecord get(EntryHandle handle) {
+    public EntryRecord get(EntryHandle handle) {
         if (handle == null) {
             return null;
         }
@@ -114,7 +106,7 @@ public final class EntryTable implements AutoCloseable {
         }
     }
 
-    public synchronized EntryRecord replace(EntryHandle handle, EntryRecord record) {
+    public EntryRecord replace(EntryHandle handle, EntryRecord record) {
         Objects.requireNonNull(handle, "handle");
         Objects.requireNonNull(record, "record");
         ensureOpen();
@@ -123,42 +115,29 @@ public final class EntryTable implements AutoCloseable {
         return previous;
     }
 
-    public synchronized void release(EntryHandle handle) {
+    public void release(EntryHandle handle) {
         Objects.requireNonNull(handle, "handle");
         ensureOpen();
         allocator.free(handle.nativeHandle());
-        liveHandles.remove(handle.raw());
     }
 
-    public synchronized int size() {
+    public int size() {
         ensureOpen();
-        return liveHandles.size();
+        return Math.toIntExact(allocator.stats().objectCount(NativeObjectKind.ENTRY_RECORD));
     }
 
-    public synchronized long nativeBytes() {
+    public long nativeBytes() {
         ensureOpen();
-        return (long) liveHandles.size() * RECORD_BYTES;
+        return Math.multiplyExact(allocator.stats().objectCount(NativeObjectKind.ENTRY_RECORD), RECORD_BYTES);
     }
 
-    public synchronized void clear() {
+    public void clear() {
         ensureOpen();
-        RuntimeException failure = null;
-        Long[] handles = liveHandles.toArray(Long[]::new);
-        for (long raw : handles) {
-            try {
-                allocator.free(NativeHandle.fromRaw(raw));
-                liveHandles.remove(raw);
-            } catch (RuntimeException e) {
-                failure = addFailure(failure, e);
-            }
-        }
-        if (failure != null) {
-            throw failure;
-        }
+        // EntryTable 不枚举共享 allocator；key directory 才拥有本 DB 的 entry graph。
     }
 
     @Override
-    public synchronized void close() {
+    public void close() {
         if (closed) {
             return;
         }

@@ -25,7 +25,6 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 public class ListValueTest {
     @Test
@@ -555,16 +554,20 @@ public class ListValueTest {
         return quicklist(root, handle).peekFirst();
     }
 
-    @SuppressWarnings("unchecked")
     private static ArrayDeque<?> quicklist(ListRoot root, ValueHandle handle) {
         try {
             Field listsField = ListRoot.class.getDeclaredField("lists");
             listsField.setAccessible(true);
             Object lists = listsField.get(root);
-            Field adaptersField = lists.getClass().getDeclaredField("adapters");
-            adaptersField.setAccessible(true);
-            Map<Long, ListValue> adapters = (Map<Long, ListValue>) adaptersField.get(lists);
-            ListValue value = adapters.get(handle.raw());
+            Field adapterSegmentsField = lists.getClass().getDeclaredField("adapterSegments");
+            adapterSegmentsField.setAccessible(true);
+            Object[][] adapterSegments = (Object[][]) adapterSegmentsField.get(lists);
+            NativeHandle nativeHandle = handle.nativeHandle();
+            int zeroBasedSlot = Math.toIntExact(nativeHandle.slotId() - 1L);
+            Object slot = adapterSegments[zeroBasedSlot >>> 12][zeroBasedSlot & 0x0fff];
+            Field adapterField = slot.getClass().getDeclaredField("adapter");
+            adapterField.setAccessible(true);
+            ListValue value = (ListValue) adapterField.get(slot);
             Field quicklistField = ListValue.class.getDeclaredField("quicklist");
             quicklistField.setAccessible(true);
             return (ArrayDeque<?>) quicklistField.get(value);

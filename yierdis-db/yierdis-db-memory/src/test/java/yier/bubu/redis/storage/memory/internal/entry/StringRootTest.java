@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
+import java.util.Arrays;
+import java.util.Set;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
@@ -9,6 +11,12 @@ import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 public class StringRootTest {
+    @Test
+    public void stringRootDoesNotMirrorEveryLiveHandle() {
+        Assert.assertFalse(Arrays.stream(StringRoot.class.getDeclaredFields())
+                .anyMatch(field -> Set.class.isAssignableFrom(field.getType())));
+    }
+
     @Test
     public void stringRootOverwritesWithoutReintroducingHeapPayloads() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("string-root");
@@ -23,6 +31,7 @@ public class StringRootTest {
 
             root.overwrite(handle, new byte[] { 'w', 'o', 'r', 'l', 'd' });
             Assert.assertArrayEquals(new byte[] { 'w', 'o', 'r', 'l', 'd' }, root.copy(handle));
+            root.release(handle);
         }
     }
 
@@ -36,6 +45,7 @@ public class StringRootTest {
             Assert.assertEquals(4, root.length(handle));
             Assert.assertEquals('1', root.byteAt(handle, 0));
             Assert.assertArrayEquals(new byte[] { '1', '2', '3', '4' }, root.copy(handle));
+            root.release(handle);
         }
     }
 
@@ -51,6 +61,7 @@ public class StringRootTest {
             Assert.assertEquals(2, root.length(handle));
             Assert.assertEquals(allocatedBytes, root.estimatedBytes(handle));
             Assert.assertArrayEquals(new byte[] { 'o', 'k' }, root.copy(handle));
+            root.release(handle);
         }
     }
 
@@ -66,6 +77,7 @@ public class StringRootTest {
             Assert.assertEquals(4, root.length(handle));
             Assert.assertArrayEquals(new byte[] { (byte) 0x80, 0, 0, 1 }, root.copy(handle));
             Assert.assertTrue(root.estimatedBytes(handle) >= 4L);
+            root.release(handle);
         }
     }
 
@@ -88,6 +100,7 @@ public class StringRootTest {
             Assert.assertEquals('a', root.byteAt(handle, 0));
             Assert.assertEquals('b', root.byteAt(handle, suffix.length));
             Assert.assertTrue(allocator.stats().reallocMovedCount() > 0L);
+            root.release(handle);
         }
     }
 
@@ -127,32 +140,21 @@ public class StringRootTest {
             } catch (RuntimeException expected) {
                 Assert.assertTrue(expected.getMessage().contains("stale native handle"));
             }
+            root.release(second);
         }
     }
 
     @Test
-    public void liveStringHandleFromAnotherRootIsRejectedWithoutFreeingIt() {
+    public void allocatorRecognizesLiveStringHandleAcrossRootAdapters() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("string-root-foreign-handle");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32);
              StringRoot firstRoot = new StringRoot(allocator);
              StringRoot secondRoot = new StringRoot(allocator)) {
             ValueHandle secondHandle = secondRoot.store(new byte[] { 'b' });
 
-            try {
-                firstRoot.copy(secondHandle);
-                Assert.fail("expected foreign string handle to be rejected");
-            } catch (IllegalArgumentException expected) {
-                Assert.assertTrue(expected.getMessage().contains("unknown string value handle"));
-            }
-
-            try {
-                firstRoot.release(secondHandle);
-                Assert.fail("expected foreign string handle release to be rejected");
-            } catch (IllegalArgumentException expected) {
-                Assert.assertTrue(expected.getMessage().contains("unknown string value handle"));
-            }
-
-            Assert.assertArrayEquals(new byte[] { 'b' }, secondRoot.copy(secondHandle));
+            Assert.assertArrayEquals(new byte[] { 'b' }, firstRoot.copy(secondHandle));
+            firstRoot.release(secondHandle);
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.STRING_BYTES));
         }
     }
 
@@ -175,6 +177,7 @@ public class StringRootTest {
             Assert.assertEquals(raw, handle.raw());
             Assert.assertEquals(0, root.length(handle));
             Assert.assertArrayEquals(new byte[0], root.copy(handle));
+            root.release(handle);
         }
     }
 }

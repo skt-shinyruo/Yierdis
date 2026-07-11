@@ -149,10 +149,10 @@ public class YierdisDbConstructionTest {
             Assert.assertSame(storage.nativeAllocator, nativeAllocator(storage.setRoot));
             Assert.assertSame(storage.nativeAllocator, nativeAllocator(storage.zsetRoot));
 
-            storage.stringRoot.store(bytes("value"));
-            storage.entries.allocate(new EntryRecord(
+            ValueHandle value = storage.stringRoot.store(bytes("value"));
+            EntryHandle entry = storage.entries.allocate(new EntryRecord(
                     1L,
-                    valueHandle(2L),
+                    value,
                     3,
                     ValueType.STRING,
                     ValueEncoding.STRING_RAW,
@@ -161,6 +161,7 @@ public class YierdisDbConstructionTest {
                     0L,
                     0L
             ));
+            storage.keyDirectory.compute(bytes("shared-components"), (key, old) -> entry);
 
             Assert.assertTrue(storage.nativeAllocator.stats().objectCount(NativeObjectKind.ENTRY_RECORD) > 0L);
             Assert.assertTrue(storage.nativeAllocator.stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
@@ -406,9 +407,10 @@ public class YierdisDbConstructionTest {
         YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db-entry-graph-test");
         YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
         db.bindToCurrentThread();
+        ValueHandle value = db.keyLifecycle().stringRoot().store(bytes("native-value"));
         EntryHandle handle = db.keyLifecycle().entryTable().allocate(new EntryRecord(
                 1L,
-                valueHandle(2L),
+                value,
                 3,
                 ValueType.STRING,
                 ValueEncoding.STRING_RAW,

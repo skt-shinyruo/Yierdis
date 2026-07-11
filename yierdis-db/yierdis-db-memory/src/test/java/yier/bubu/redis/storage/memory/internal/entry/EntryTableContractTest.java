@@ -1,5 +1,7 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
+import java.util.Arrays;
+import java.util.Set;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeHandle;
@@ -9,6 +11,12 @@ import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import yier.bubu.redis.storage.api.ValueType;
 
 public class EntryTableContractTest {
+    @Test
+    public void entryTableDoesNotMirrorEveryLiveHandle() {
+        Assert.assertFalse(Arrays.stream(EntryTable.class.getDeclaredFields())
+                .anyMatch(field -> Set.class.isAssignableFrom(field.getType())));
+    }
+
     @Test
     public void entryRecordCarriesNativeMetadata() {
         EntryRecord record = new EntryRecord(
@@ -71,6 +79,7 @@ public class EntryTableContractTest {
             Assert.assertEquals(22L, current.valueHandle().nativeHandle().slotId());
             Assert.assertEquals(ValueEncoding.STRING_EMBSTR, current.encoding());
 
+            table.release(handle);
             table.close();
             Assert.assertEquals(0L, runtime.usedBytes());
         }
@@ -106,6 +115,7 @@ public class EntryTableContractTest {
                 Assert.assertTrue(expected.getMessage().contains("stale native handle"));
             }
 
+            table.release(second);
             table.close();
             Assert.assertEquals(0L, runtime.usedBytes());
         }

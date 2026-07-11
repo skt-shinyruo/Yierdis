@@ -27,6 +27,7 @@ public class YierdisHyperLogLogTest {
             YierdisHyperLogLog.mergeHllIntoRegisters(root.copy(handle), registers);
 
             Assert.assertTrue(YierdisHyperLogLog.estimateCardinality(registers) >= 3L);
+            root.release(handle);
         }
     }
 
@@ -45,6 +46,7 @@ public class YierdisHyperLogLogTest {
             YierdisHyperLogLog.mergeHllIntoRegisters(root.slice(handle), registers);
 
             Assert.assertTrue(YierdisHyperLogLog.estimateCardinality(registers) >= 2L);
+            root.release(handle);
         }
     }
 
