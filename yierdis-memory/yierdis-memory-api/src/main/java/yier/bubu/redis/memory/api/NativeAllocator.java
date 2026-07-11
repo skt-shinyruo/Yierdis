@@ -1,6 +1,13 @@
 package yier.bubu.redis.memory.api;
 
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+
 public interface NativeAllocator extends AutoCloseable {
+    default void bindToCurrentThread() {
+    }
+
     NativeHandle allocate(NativeObjectKind kind, int size);
 
     NativeHandle realloc(NativeHandle handle, int newSize, NativeReallocPolicy policy);
@@ -24,6 +31,19 @@ public interface NativeAllocator extends AutoCloseable {
     }
 
     NativeAllocatorStats stats();
+
+    default MemoryUsageSnapshot memoryUsage() {
+        NativeAllocatorStats stats = stats();
+        return new MemoryUsageSnapshot(0, 0, stats.committedBytes(), stats.reservedBytes(), stats.freeBytes());
+    }
+
+    default MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget) {
+        return MemoryReclaimResult.empty();
+    }
+
+    default NativeAllocationGrowth estimateAdditionalGrowth(int... requestedBytes) {
+        throw new UnsupportedOperationException("native allocation growth estimation is not supported");
+    }
 
     @Override
     void close();

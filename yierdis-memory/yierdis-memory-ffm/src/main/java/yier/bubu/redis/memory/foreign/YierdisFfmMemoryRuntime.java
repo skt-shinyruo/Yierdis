@@ -2,17 +2,13 @@ package yier.bubu.redis.memory.foreign;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.util.Collections;
 import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class YierdisFfmMemoryRuntime implements AutoCloseable {
     private final String name;
     private final AtomicLong usedBytes = new AtomicLong();
-    private final Set<YierdisFfmRegion> liveRegions =
-            Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private final AtomicLong liveRegionCount = new AtomicLong();
 
     private volatile boolean closed;
 
@@ -33,14 +29,16 @@ public final class YierdisFfmMemoryRuntime implements AutoCloseable {
         Arena arena = Arena.ofShared();
         MemorySegment segment = arena.allocate(bytes);
         YierdisFfmRegion region = new YierdisFfmRegion(this, owner, arena, segment, bytes);
-        liveRegions.add(region);
+        liveRegionCount.incrementAndGet();
         usedBytes.addAndGet(bytes);
         return region;
     }
 
     void onRegionClosed(YierdisFfmRegion region) {
-        if (liveRegions.remove(region)) {
-            usedBytes.addAndGet(-region.size());
+        long regions = liveRegionCount.decrementAndGet();
+        long bytes = usedBytes.addAndGet(-region.size());
+        if (regions < 0 || bytes < 0) {
+            throw new IllegalStateException("native memory runtime accounting underflow");
         }
     }
 
@@ -48,11 +46,16 @@ public final class YierdisFfmMemoryRuntime implements AutoCloseable {
         return usedBytes.get();
     }
 
+    public long liveRegionCount() {
+        return liveRegionCount.get();
+    }
+
     @Override
     public void close() {
         closed = true;
-        if (!liveRegions.isEmpty()) {
-            throw new IllegalStateException("native memory leak in " + name + ": " + liveRegions.size() + " live regions");
+        long regions = liveRegionCount.get();
+        if (regions != 0) {
+            throw new IllegalStateException("native memory leak in " + name + ": " + regions + " live regions");
         }
     }
 }

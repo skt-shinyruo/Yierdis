@@ -5,7 +5,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAccessMode;
+import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationLatencyHistogram;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
@@ -299,6 +303,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     @Override
     public synchronized NativeAllocatorStats stats() {
         YierdisNativePageAllocatorStats pageStats = pageAllocator.stats();
+        YierdisNativeObjectTableStats tableStats = objectTable.stats();
         return new NativeAllocatorStats(
                 logicalUsedBytes,
                 reservedBytes,
@@ -325,8 +330,64 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                 doubleFreeDetections,
                 defragReclaimedPages,
                 objectKindCounts(),
-                allocationLatencyHistogram()
+                allocationLatencyHistogram(),
+                tableStats.metadataCommittedBytes(),
+                tableStats.activeSegments(),
+                tableStats.freeSlots(),
+                tableStats.retiredSlots(),
+                tableStats.peakLiveSlots()
         );
+    }
+
+    @Override
+    public synchronized MemoryUsageSnapshot memoryUsage() {
+        ensureOpen();
+        YierdisNativePageAllocatorStats pageStats = pageAllocator.stats();
+        YierdisNativeObjectTableStats tableStats = objectTable.stats();
+        long heapBytes = MemoryUsageSnapshot.addSaturating(
+                objectTable.heapEstimatedBytes(),
+                pageAllocator.heapEstimatedBytes()
+        );
+        heapBytes = MemoryUsageSnapshot.addSaturating(heapBytes, estimateMirrorHeapBytes());
+        return new MemoryUsageSnapshot(
+                heapBytes,
+                tableStats.metadataCommittedBytes(),
+                pageStats.committedBytes(),
+                pageStats.usedBytes(),
+                (long) pageStats.emptySmallPages() * YierdisNativePageAllocator.PAGE_BYTES
+        );
+    }
+
+    @Override
+    public synchronized MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget) {
+        ensureOpen();
+        MemoryReclaimResult result = pageAllocator.trimEmptyPages(budget);
+        defragReclaimedPages = MemoryUsageSnapshot.addSaturating(
+                defragReclaimedPages,
+                result.reclaimedUnits()
+        );
+        return result;
+    }
+
+    @Override
+    public synchronized NativeAllocationGrowth estimateAdditionalGrowth(int... requestedBytes) {
+        ensureOpen();
+        Objects.requireNonNull(requestedBytes, "requestedBytes");
+        for (int requested : requestedBytes) {
+            if (requested <= 0) {
+                throw new IllegalArgumentException("requestedBytes must contain only positive values");
+            }
+        }
+        int additionalSegments = objectTable.estimateAdditionalSegments(requestedBytes.length);
+        long metadataBytes = (long) additionalSegments
+                * YierdisNativeObjectSegment.SLOTS_PER_SEGMENT
+                * YierdisNativeObjectTable.META_BYTES;
+        YierdisNativePageAllocator.PageGrowth pageGrowth = pageAllocator.estimateAdditionalGrowth(requestedBytes);
+        long heapBytes = MemoryUsageSnapshot.addSaturating(
+                objectTable.estimateAdditionalHeapBytes(requestedBytes.length),
+                pageGrowth.heapEstimatedBytes()
+        );
+        return new NativeAllocationGrowth(heapBytes, metadataBytes, pageGrowth.nativeDataCommittedBytes());
     }
 
     @Override
@@ -571,6 +632,13 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         for (RetainedBlock retained : retainedMovedBlocks) {
             bytes += retained.block.capacity();
         }
+        return bytes;
+    }
+
+    private long estimateMirrorHeapBytes() {
+        long bytes = 256L;
+        bytes = MemoryUsageSnapshot.addSaturating(bytes, (long) allocations.size() * 96L);
+        bytes = MemoryUsageSnapshot.addSaturating(bytes, (long) retainedMovedBlocks.size() * 48L);
         return bytes;
     }
 

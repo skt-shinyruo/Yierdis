@@ -235,6 +235,51 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         );
     }
 
+    synchronized int estimateAdditionalSegments(int requestedObjects) {
+        ensureOpen();
+        if (requestedObjects < 0) {
+            throw new IllegalArgumentException("requestedObjects must be >= 0");
+        }
+        long remaining = requestedObjects - Math.min((long) requestedObjects, freeSlots);
+        int additionalSegments = 0;
+        int segmentIndex = activeSegments;
+        while (remaining > 0 && segmentIndex < maxSegments) {
+            int validSlots = Math.min(
+                    YierdisNativeObjectSegment.SLOTS_PER_SEGMENT,
+                    maxSlots - segmentIndex * YierdisNativeObjectSegment.SLOTS_PER_SEGMENT
+            );
+            remaining -= validSlots;
+            additionalSegments++;
+            segmentIndex++;
+        }
+        if (remaining > 0) {
+            throw new NativeMemoryException("native object slot limit exceeded");
+        }
+        return additionalSegments;
+    }
+
+    synchronized long heapEstimatedBytes() {
+        long bytes = 192L;
+        bytes += 16L + (long) segments.length * 8L;
+        bytes += 16L + (long) availableSegments.length * Integer.BYTES;
+        bytes += 16L + (long) stateCounts.length * Long.BYTES;
+        for (int i = 0; i < activeSegments; i++) {
+            bytes += objectSegmentHeapBytes();
+        }
+        return bytes;
+    }
+
+    synchronized long estimateAdditionalHeapBytes(int requestedObjects) {
+        int additionalSegments = estimateAdditionalSegments(requestedObjects);
+        long bytes = (long) additionalSegments * objectSegmentHeapBytes();
+        int requiredSegments = activeSegments + additionalSegments;
+        int segmentCapacity = estimatedGrownCapacity(segments.length, requiredSegments);
+        int availableCapacity = estimatedGrownCapacity(availableSegments.length, requiredSegments);
+        bytes += (long) (segmentCapacity - segments.length) * 8L;
+        bytes += (long) (availableCapacity - availableSegments.length) * Integer.BYTES;
+        return bytes;
+    }
+
     @Override
     public synchronized void close() {
         if (closed) {
@@ -412,6 +457,20 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
     private static int growCapacity(int current, int required) {
         int grown = current == 0 ? 1 : current + Math.max(1, current >>> 1);
         return Math.max(required, grown);
+    }
+
+    private int estimatedGrownCapacity(int current, int required) {
+        int capacity = current;
+        while (capacity < required) {
+            capacity = Math.min(maxSegments, growCapacity(capacity, capacity + 1));
+        }
+        return capacity;
+    }
+
+    private static long objectSegmentHeapBytes() {
+        return 160L
+                + 16L + (long) YierdisNativeObjectSegment.SLOTS_PER_SEGMENT * Integer.BYTES
+                + 16L + (long) (YierdisNativeObjectSegment.SLOTS_PER_SEGMENT / Long.SIZE) * Long.BYTES;
     }
 
     private SegmentSlot slotRef(int slotId) {
