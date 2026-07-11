@@ -1,10 +1,12 @@
 package yier.bubu.redis.memory.foreign;
 
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAccessMode;
@@ -22,6 +24,32 @@ import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public class YierdisStableNativeAllocatorTest {
+    @Test
+    public void productionAllocatorMethodsAreNotSynchronized() {
+        for (String name : List.of("allocate", "realloc", "free", "pin", "unpin", "resolve", "stats")) {
+            Assert.assertFalse(Modifier.isSynchronized(Arrays.stream(YierdisStableNativeAllocator.class.getMethods())
+                    .filter(method -> method.getName().equals(name)).findFirst().orElseThrow().getModifiers()));
+        }
+    }
+
+    @Test
+    public void crossThreadProductionAccessFailsFast() throws Exception {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("owner-guard");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 16)) {
+            allocator.bindToCurrentThread();
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            Thread thread = Thread.ofPlatform().start(() -> {
+                try {
+                    allocator.stats();
+                } catch (Throwable t) {
+                    failure.set(t);
+                }
+            });
+            thread.join();
+            Assert.assertTrue(failure.get() instanceof IllegalStateException);
+        }
+    }
+
     @Test
     public void allocatorHasNoPerObjectAllocationMap() {
         Assert.assertFalse(Arrays.stream(YierdisStableNativeAllocator.class.getDeclaredFields())

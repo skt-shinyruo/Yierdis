@@ -47,8 +47,30 @@ import java.util.Collections;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class YierdisDbConstructionTest {
+    @Test
+    public void bindingDbAlsoBindsItsNativeAllocator() throws Exception {
+        YierdisDb db = new YierdisDb();
+        try {
+            db.bindToCurrentThread();
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            Thread thread = Thread.ofPlatform().start(() -> {
+                try {
+                    db.keyLifecycle().nativeAllocator().stats();
+                } catch (Throwable t) {
+                    failure.set(t);
+                }
+            });
+            thread.join();
+
+            Assert.assertTrue(failure.get() instanceof IllegalStateException);
+        } finally {
+            db.shutdown();
+        }
+    }
+
     @Test
     public void typedConfigDefaultsNullPolicyToNoeviction() {
         YierdisDbConfig config = YierdisDbConfig.create(0, null, 5, 5, 5);

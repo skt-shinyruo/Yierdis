@@ -59,6 +59,7 @@ final class YierdisDbRuntimeState {
 
     void bindToCurrentThread() {
         threadGuard.bindToCurrentThread();
+        keyLifecycle().nativeAllocator().bindToCurrentThread();
     }
 
     void checkThread() {

@@ -64,7 +64,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         this.ownerShardId = ownerShardId;
     }
 
-    public synchronized NativeHandle allocate(
+    public NativeHandle allocate(
             NativeObjectKind kind,
             int size,
             int capacity,
@@ -103,23 +103,23 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         return NativeHandle.of(kind.domain(), kind, slot.slotId, generation, 0);
     }
 
-    public synchronized YierdisNativeObjectMeta resolve(NativeHandle handle) {
+    public YierdisNativeObjectMeta resolve(NativeHandle handle) {
         ensureOpen();
         SegmentSlot slot = requireLiveSlot(handle, false);
         return readMeta(slot);
     }
 
-    public synchronized YierdisNativeObjectMeta snapshot(NativeHandle handle, boolean allowQuarantined) {
+    public YierdisNativeObjectMeta snapshot(NativeHandle handle, boolean allowQuarantined) {
         ensureOpen();
         SegmentSlot slot = requireLiveSlot(handle, allowQuarantined);
         return readMeta(slot);
     }
 
-    public synchronized void free(NativeHandle handle, long freeEpoch) {
+    public void free(NativeHandle handle, long freeEpoch) {
         free(handle, freeEpoch, false);
     }
 
-    public synchronized void free(NativeHandle handle, long freeEpoch, boolean forceQuarantine) {
+    public void free(NativeHandle handle, long freeEpoch, boolean forceQuarantine) {
         ensureOpen();
         SegmentSlot slot = requireLiveSlot(handle, false);
         int pinCount = slot.segment.readInt(slot.offset, PIN_COUNT_OFFSET);
@@ -131,7 +131,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         releaseSlot(slot, freeEpoch);
     }
 
-    public synchronized void pin(NativeHandle handle) {
+    public void pin(NativeHandle handle) {
         ensureOpen();
         SegmentSlot slot = requireLiveSlot(handle, false);
         int pinCount = slot.segment.readInt(slot.offset, PIN_COUNT_OFFSET);
@@ -139,11 +139,11 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         transitionState(slot, STATE_PINNED);
     }
 
-    public synchronized void unpin(NativeHandle handle) {
+    public void unpin(NativeHandle handle) {
         unpin(handle, true);
     }
 
-    public synchronized void unpin(NativeHandle handle, boolean releaseQuarantinedOnZero) {
+    public void unpin(NativeHandle handle, boolean releaseQuarantinedOnZero) {
         ensureOpen();
         SegmentSlot slot = requireLiveSlot(handle, true);
         int pinCount = slot.segment.readInt(slot.offset, PIN_COUNT_OFFSET);
@@ -160,7 +160,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         }
     }
 
-    public synchronized void releaseQuarantined(NativeHandle handle) {
+    public void releaseQuarantined(NativeHandle handle) {
         ensureOpen();
         SegmentSlot slot = requireLiveSlot(handle, true);
         int state = slot.segment.readInt(slot.offset, STATE_OFFSET);
@@ -173,7 +173,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         releaseSlot(slot, slot.segment.readLong(slot.offset, FREE_EPOCH_OFFSET));
     }
 
-    public synchronized void updateLocation(
+    public void updateLocation(
             NativeHandle handle,
             int size,
             int capacity,
@@ -196,7 +196,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         slot.segment.writeInt(slot.offset, PAGE_CLASS_OFFSET, pageClass);
     }
 
-    public synchronized YierdisNativeObjectMeta beginMove(NativeHandle handle) {
+    public YierdisNativeObjectMeta beginMove(NativeHandle handle) {
         ensureOpen();
         SegmentSlot slot = requireLiveSlot(handle, false);
         int state = slot.segment.readInt(slot.offset, STATE_OFFSET);
@@ -209,7 +209,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         return meta;
     }
 
-    public synchronized void publishMoved(
+    public void publishMoved(
             NativeHandle handle,
             int size,
             int capacity,
@@ -233,13 +233,13 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         transitionState(slot, STATE_ALLOCATED);
     }
 
-    public synchronized void abortMove(NativeHandle handle) {
+    public void abortMove(NativeHandle handle) {
         ensureOpen();
         SegmentSlot slot = requireSlotInState(handle, STATE_MOVING);
         transitionState(slot, STATE_ALLOCATED);
     }
 
-    public synchronized YierdisNativeObjectTableStats stats() {
+    public YierdisNativeObjectTableStats stats() {
         ensureOpen();
         return new YierdisNativeObjectTableStats(
                 (long) activeSegments * YierdisNativeObjectSegment.SLOTS_PER_SEGMENT * META_BYTES,
@@ -252,7 +252,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         );
     }
 
-    synchronized int estimateAdditionalSegments(int requestedObjects) {
+    int estimateAdditionalSegments(int requestedObjects) {
         ensureOpen();
         if (requestedObjects < 0) {
             throw new IllegalArgumentException("requestedObjects must be >= 0");
@@ -275,7 +275,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         return additionalSegments;
     }
 
-    synchronized long heapEstimatedBytes() {
+    long heapEstimatedBytes() {
         long bytes = 192L;
         bytes += 16L + (long) segments.length * 8L;
         bytes += 16L + (long) availableSegments.length * Integer.BYTES;
@@ -286,7 +286,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         return bytes;
     }
 
-    synchronized long estimateAdditionalHeapBytes(int requestedObjects) {
+    long estimateAdditionalHeapBytes(int requestedObjects) {
         int additionalSegments = estimateAdditionalSegments(requestedObjects);
         long bytes = (long) additionalSegments * objectSegmentHeapBytes();
         int requiredSegments = activeSegments + additionalSegments;
@@ -297,11 +297,11 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         return bytes;
     }
 
-    synchronized int firstOccupiedSlot() {
+    int firstOccupiedSlot() {
         return nextOccupiedSlot(0);
     }
 
-    synchronized int nextOccupiedSlot(int afterSlotId) {
+    int nextOccupiedSlot(int afterSlotId) {
         ensureOpen();
         int last = Math.min(maxSlots, activeSegments * YierdisNativeObjectSegment.SLOTS_PER_SEGMENT);
         if (afterSlotId >= last) {
@@ -318,7 +318,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         return 0;
     }
 
-    synchronized YierdisNativeObjectMeta occupiedMeta(int slotId) {
+    YierdisNativeObjectMeta occupiedMeta(int slotId) {
         ensureOpen();
         if (slotId <= 0 || slotId > maxSlots) {
             return null;
@@ -335,7 +335,7 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
+    public void close() {
         if (closed) {
             return;
         }
