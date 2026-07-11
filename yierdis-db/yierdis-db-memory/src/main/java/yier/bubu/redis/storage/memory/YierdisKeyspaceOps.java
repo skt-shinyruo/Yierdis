@@ -45,6 +45,11 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
             }
 
             @Override
+            public AdmissionMode admissionMode() {
+                return AdmissionMode.RECLAMATION;
+            }
+
+            @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 long now = System.currentTimeMillis();
                 long removed = 0;

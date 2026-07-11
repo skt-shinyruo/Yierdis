@@ -22,6 +22,8 @@ import yier.bubu.redis.memory.api.NativeReallocPolicy;
 public final class SynchronizedNativeAllocator implements NativeAllocator {
     private final Object lock = new Object();
     private final NativeAllocator delegate;
+    private Thread allocationScopeOwner;
+    private SynchronizedAllocationScope activeAllocationScope;
 
     public SynchronizedNativeAllocator(YierdisFfmMemoryRuntime runtime, int maxSlots) {
         this(new YierdisStableNativeAllocator(
@@ -47,6 +49,7 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     @Override
     public NativeHandle allocate(NativeObjectKind kind, int size) {
         synchronized (lock) {
+            requireAllocationScopeOwner();
             return delegate.allocate(kind, size);
         }
     }
@@ -54,6 +57,7 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     @Override
     public NativeHandle realloc(NativeHandle handle, int newSize, NativeReallocPolicy policy) {
         synchronized (lock) {
+            requireAllocationScopeOwner();
             return delegate.realloc(handle, newSize, policy);
         }
     }
@@ -61,6 +65,7 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     @Override
     public void free(NativeHandle handle) {
         synchronized (lock) {
+            requireAllocationScopeOwner();
             delegate.free(handle);
         }
     }
@@ -89,7 +94,19 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     @Override
     public NativeAllocationScope beginAllocationScope() {
         synchronized (lock) {
-            return new SynchronizedAllocationScope(delegate.beginAllocationScope());
+            if (allocationScopeOwner != null) {
+                throw new IllegalStateException("native allocation scope is already active");
+            }
+            NativeAllocationScope scope = delegate.beginAllocationScope();
+            allocationScopeOwner = Thread.currentThread();
+            activeAllocationScope = new SynchronizedAllocationScope(scope, allocationScopeOwner);
+            return activeAllocationScope;
+        }
+    }
+
+    private void requireAllocationScopeOwner() {
+        if (allocationScopeOwner != null && allocationScopeOwner != Thread.currentThread()) {
+            throw new IllegalStateException("native allocation scope belongs to another thread");
         }
     }
 
@@ -187,14 +204,18 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
 
     private final class SynchronizedAllocationScope implements NativeAllocationScope {
         private final NativeAllocationScope delegateScope;
+        private final Thread owner;
+        private boolean terminal;
 
-        private SynchronizedAllocationScope(NativeAllocationScope delegateScope) {
+        private SynchronizedAllocationScope(NativeAllocationScope delegateScope, Thread owner) {
             this.delegateScope = delegateScope;
+            this.owner = owner;
         }
 
         @Override
         public NativeAllocationGrowth growth() {
             synchronized (lock) {
+                requireOwner();
                 return delegateScope.growth();
             }
         }
@@ -202,14 +223,38 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
         @Override
         public void promote() {
             synchronized (lock) {
+                requireOwner();
+                if (terminal) {
+                    return;
+                }
                 delegateScope.promote();
+                finish();
             }
         }
 
         @Override
         public void abort() {
             synchronized (lock) {
+                requireOwner();
+                if (terminal) {
+                    return;
+                }
                 delegateScope.abort();
+                finish();
+            }
+        }
+
+        private void finish() {
+            terminal = true;
+            if (activeAllocationScope == this) {
+                activeAllocationScope = null;
+                allocationScopeOwner = null;
+            }
+        }
+
+        private void requireOwner() {
+            if (owner != Thread.currentThread()) {
+                throw new IllegalStateException("native allocation scope belongs to another thread");
             }
         }
     }

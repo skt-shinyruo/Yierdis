@@ -18,6 +18,10 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
     public static final int STATE_CORRUPT = 5;
 
     public static final int META_BYTES = 72;
+    private static final long ARRAY_HEADER_BYTES = 16L;
+    private static final long CHECKPOINT_OBJECT_BYTES = 32L;
+    private static final long INT_BYTES = Integer.BYTES;
+    private static final long REFERENCE_BYTES = 8L;
 
     static final int ADDRESS_OFFSET = 0;
     static final int SIZE_OFFSET = 8;
@@ -278,9 +282,9 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
 
     long heapEstimatedBytes() {
         long bytes = 192L;
-        bytes += 16L + (long) segments.length * 8L;
-        bytes += 16L + (long) availableSegments.length * Integer.BYTES;
-        bytes += 16L + (long) stateCounts.length * Long.BYTES;
+        bytes += arrayHeapBytes(segments.length, REFERENCE_BYTES);
+        bytes += arrayHeapBytes(availableSegments.length, INT_BYTES);
+        bytes += arrayHeapBytes(stateCounts.length, Long.BYTES);
         for (int i = 0; i < activeSegments; i++) {
             bytes += objectSegmentHeapBytes();
         }
@@ -300,7 +304,11 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
 
     AllocationScopeCheckpoint allocationScopeCheckpoint() {
         ensureOpen();
-        return new AllocationScopeCheckpoint(activeSegments, segments.length, availableSegments.length);
+        return new AllocationScopeCheckpoint(
+                activeSegments,
+                segments.clone(),
+                availableSegments.clone()
+        );
     }
 
     void restoreAllocationScopeCheckpoint(AllocationScopeCheckpoint checkpoint) {
@@ -331,8 +339,8 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
             segments[segmentIndex] = null;
         }
         activeSegments = checkpoint.activeSegments;
-        segments = Arrays.copyOf(segments, checkpoint.segmentArrayLength);
-        availableSegments = Arrays.copyOf(availableSegments, checkpoint.availableArrayLength);
+        segments = checkpoint.segments;
+        availableSegments = checkpoint.availableSegments;
         availableSegmentCount = 0;
         for (int segmentIndex = 0; segmentIndex < activeSegments; segmentIndex++) {
             YierdisNativeObjectSegment segment = segments[segmentIndex];
@@ -559,6 +567,10 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         return Math.max(required, grown);
     }
 
+    private static long arrayHeapBytes(int length, long elementBytes) {
+        return ARRAY_HEADER_BYTES + (long) length * elementBytes;
+    }
+
     private int estimatedGrownCapacity(int current, int required) {
         int capacity = current;
         while (capacity < required) {
@@ -605,8 +617,13 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
 
     record AllocationScopeCheckpoint(
             int activeSegments,
-            int segmentArrayLength,
-            int availableArrayLength
+            YierdisNativeObjectSegment[] segments,
+            int[] availableSegments
     ) {
+        long heapEstimatedBytes() {
+            return CHECKPOINT_OBJECT_BYTES
+                    + arrayHeapBytes(segments.length, REFERENCE_BYTES)
+                    + arrayHeapBytes(availableSegments.length, INT_BYTES);
+        }
     }
 }

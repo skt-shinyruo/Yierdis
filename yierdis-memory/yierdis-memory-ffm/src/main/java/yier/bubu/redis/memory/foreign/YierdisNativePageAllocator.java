@@ -11,6 +11,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
     private static final long SMALL_PAGE_HEAP_BYTES = 160L;
     private static final long SPAN_HEAP_BYTES = 112L;
     private static final long REGION_WRAPPER_HEAP_BYTES = 128L;
+    private static final long ALLOCATION_SCOPE_CHECKPOINT_HEAP_BYTES = 40L;
 
     private final YierdisFfmMemoryRuntime runtime;
     private final YierdisNativePageDirectory pageDirectory = new YierdisNativePageDirectory();
@@ -686,6 +687,9 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
             long nextPageSequence,
             YierdisNativePageDirectory.AllocationScopeCheckpoint directoryCheckpoint
     ) {
+        long heapEstimatedBytes() {
+            return ALLOCATION_SCOPE_CHECKPOINT_HEAP_BYTES + directoryCheckpoint.heapEstimatedBytes();
+        }
     }
 
     private static final class SmallPage {
