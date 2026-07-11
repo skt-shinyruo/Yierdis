@@ -48,6 +48,8 @@ public class OffHeapStringStorageTest {
                 Assert.assertEquals(0, db.size());
                 Assert.assertEquals(0L, db.usedBytesForMaxmemory());
                 Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES));
+                Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
+                Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().liveObjects());
             } finally {
                 db.shutdown();
             }

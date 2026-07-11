@@ -107,6 +107,7 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(8L, stats.internalFragmentationBytes());
             Assert.assertEquals(1L, stats.liveObjects());
             Assert.assertEquals(1L, stats.liveSmallPages());
+            allocator.free(handle);
         }
     }
 
@@ -273,6 +274,7 @@ public class YierdisStableNativeAllocatorTest {
             NativeHandle second = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
             Assert.assertEquals(first.slotId(), second.slotId());
             Assert.assertEquals(first.generation() + 1, second.generation());
+            allocator.free(second);
         }
     }
 
@@ -310,6 +312,7 @@ public class YierdisStableNativeAllocatorTest {
             NativeHandle second = allocator.allocate(NativeObjectKind.STRING_BYTES, 4);
             Assert.assertEquals(first.slotId(), second.slotId());
             Assert.assertEquals(first.generation() + 1, second.generation());
+            allocator.free(second);
         }
     }
 
@@ -326,6 +329,7 @@ public class YierdisStableNativeAllocatorTest {
             } catch (NativeMemoryException expected) {
                 Assert.assertTrue(expected.getMessage().contains("not pinned"));
             }
+            allocator.free(handle);
         }
     }
 
@@ -368,6 +372,7 @@ public class YierdisStableNativeAllocatorTest {
             }
 
             allocator.unpin(handle);
+            allocator.free(handle);
         }
     }
 
@@ -444,6 +449,7 @@ public class YierdisStableNativeAllocatorTest {
             try (NativeObjectView view = allocator.resolve(second, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(22, view.getByte(0));
             }
+            allocator.free(second);
         }
     }
 
@@ -487,6 +493,7 @@ public class YierdisStableNativeAllocatorTest {
 
             NativeHandle reused = allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
             Assert.assertNotEquals(handle.generation(), reused.generation());
+            allocator.free(reused);
         }
     }
 
@@ -504,6 +511,7 @@ public class YierdisStableNativeAllocatorTest {
                     Assert.assertTrue(expected.getMessage().contains("read-only"));
                 }
             }
+            allocator.free(handle);
         }
     }
 
@@ -521,6 +529,7 @@ public class YierdisStableNativeAllocatorTest {
                     Assert.assertNotNull(expected);
                 }
             }
+            allocator.free(handle);
         }
     }
 
@@ -559,6 +568,7 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(24L, stats.reservedBytes());
             Assert.assertEquals(1L, stats.liveObjects());
             Assert.assertEquals(1L, stats.reallocMovedCount());
+            allocator.free(resized);
         }
     }
 
@@ -594,6 +604,7 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(6L, stats.logicalUsedBytes());
             Assert.assertEquals(2L, stats.reallocInPlaceCount());
             Assert.assertEquals(0L, stats.reallocMovedCount());
+            allocator.free(grown);
         }
     }
 
@@ -631,6 +642,7 @@ public class YierdisStableNativeAllocatorTest {
                 Assert.assertEquals(3, view.getByte(2));
                 Assert.assertEquals(4, view.getByte(3));
             }
+            allocator.free(handle);
         }
     }
 
@@ -666,6 +678,7 @@ public class YierdisStableNativeAllocatorTest {
             NativeAllocatorStats stats = allocator.stats();
             Assert.assertEquals(24L, stats.defragMovedBytes());
             Assert.assertEquals(0L, stats.defragSkippedPinnedObjects());
+            allocator.free(handle);
         }
     }
 
@@ -691,6 +704,7 @@ public class YierdisStableNativeAllocatorTest {
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(1, view.getByte(0));
             }
+            allocator.free(handle);
         }
     }
 
@@ -716,6 +730,7 @@ public class YierdisStableNativeAllocatorTest {
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(7, view.getByte(0));
             }
+            allocator.free(handle);
         }
     }
 
@@ -742,6 +757,7 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertFalse(budget.moved());
             Assert.assertTrue(budget.skippedBudget());
             Assert.assertEquals(location, locationOf(allocator.objectMeta(handle, false)));
+            allocator.free(handle);
         }
     }
 
@@ -766,6 +782,9 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertNotEquals(firstLocation, locationOf(allocator.objectMeta(first, false)));
             Assert.assertNotEquals(secondLocation, locationOf(allocator.objectMeta(second, false)));
             Assert.assertEquals(thirdLocation, locationOf(allocator.objectMeta(third, false)));
+            allocator.free(first);
+            allocator.free(second);
+            allocator.free(third);
         }
     }
 
@@ -787,6 +806,9 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(1L, report.skippedPinnedObjects());
             Assert.assertEquals(pinnedLocation, locationOf(allocator.objectMeta(pinned, false)));
             Assert.assertNotEquals(movableLocation, locationOf(allocator.objectMeta(movable, false)));
+            allocator.unpin(pinned);
+            allocator.free(pinned);
+            allocator.free(movable);
         }
     }
 
@@ -816,6 +838,7 @@ public class YierdisStableNativeAllocatorTest {
             try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {
                 Assert.assertEquals(7, view.getByte(0));
             }
+            allocator.free(handle);
         }
     }
 
@@ -856,6 +879,7 @@ public class YierdisStableNativeAllocatorTest {
 
             Assert.assertEquals(1L, allocator.stats().doubleFreeDetections());
             allocator.unpin(string);
+            allocator.free(entry);
         }
     }
 
@@ -1128,6 +1152,7 @@ public class YierdisStableNativeAllocatorTest {
             Assert.assertEquals(6L, stats.logicalUsedBytes());
             Assert.assertEquals(2L, stats.reallocInPlaceCount());
             Assert.assertEquals(0L, stats.reallocMovedCount());
+            allocator.free(grown);
         }
     }
 
@@ -1181,6 +1206,29 @@ public class YierdisStableNativeAllocatorTest {
             } catch (IllegalStateException expected) {
                 Assert.assertTrue(expected.getMessage().contains("closed"));
             }
+        } finally {
+            allocator.close();
+            runtime.close();
+        }
+    }
+
+    @Test
+    public void closeReportsLiveObjectLeakAfterForcingRuntimeCleanup() {
+        YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("stable-close-live-leak");
+        YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4);
+        try {
+            allocator.allocate(NativeObjectKind.STRING_BYTES, 8);
+            allocator.allocate(NativeObjectKind.ENTRY_RECORD, 56);
+
+            try {
+                allocator.close();
+                Assert.fail("expected live object leak diagnostic");
+            } catch (IllegalStateException expected) {
+                Assert.assertTrue(expected.getMessage().contains("native allocator closed with 2 live objects"));
+            }
+
+            Assert.assertEquals(0L, runtime.usedBytes());
+            allocator.close();
         } finally {
             allocator.close();
             runtime.close();

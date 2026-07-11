@@ -8,13 +8,13 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
+import yier.bubu.redis.memory.api.StaleNativeHandleException;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.Objects;
 
 public final class StringRoot implements TypeRoot {
@@ -25,7 +25,6 @@ public final class StringRoot implements TypeRoot {
 
     private final NativeAllocator allocator;
     private final boolean ownsAllocator;
-    private final HashSet<Long> liveHandles = new HashSet<>();
     private boolean closed;
 
     public StringRoot(YierdisFfmMemoryRuntime runtime) {
@@ -55,18 +54,31 @@ public final class StringRoot implements TypeRoot {
         return ValueEncoding.STRING_RAW;
     }
 
-    public synchronized ValueEncoding encoding(ValueHandle handle) {
-        try (NativeObjectView ignored = allocator.resolve(requireOwnedStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+    public ValueEncoding encoding(ValueHandle handle) {
+        try (NativeObjectView ignored = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
             return ValueEncoding.STRING_RAW;
         }
     }
 
-    public synchronized boolean contains(ValueHandle handle) {
+    public boolean contains(ValueHandle handle) {
         ensureOpen();
-        return handle != null && liveHandles.contains(handle.raw());
+        if (handle == null || handle.isNull()) {
+            return false;
+        }
+        NativeHandle nativeHandle;
+        try {
+            nativeHandle = requireStringHandle(handle);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+        try (NativeObjectView ignored = allocator.resolve(nativeHandle, NativeAccessMode.READ_ONLY)) {
+            return true;
+        } catch (StaleNativeHandleException e) {
+            return false;
+        }
     }
 
-    public synchronized ValueHandle store(byte[] value) {
+    public ValueHandle store(byte[] value) {
         ensureOpen();
         int len = value == null ? 0 : value.length;
         NativeHandle nativeHandle = allocator.allocate(NativeObjectKind.STRING_BYTES, len);
@@ -77,10 +89,8 @@ public final class StringRoot implements TypeRoot {
                     view.setBytes(0, value, 0, len);
                 }
             }
-            ValueHandle handle = ValueHandle.fromNativeHandle(nativeHandle);
-            liveHandles.add(handle.raw());
             ok = true;
-            return handle;
+            return ValueHandle.fromNativeHandle(nativeHandle);
         } finally {
             if (!ok) {
                 allocator.free(nativeHandle);
@@ -88,7 +98,7 @@ public final class StringRoot implements TypeRoot {
         }
     }
 
-    public synchronized ValueHandle store(BytesSlice value) {
+    public ValueHandle store(BytesSlice value) {
         ensureOpen();
         int len = value == null ? 0 : value.length();
         NativeHandle nativeHandle = allocator.allocate(NativeObjectKind.STRING_BYTES, len);
@@ -99,10 +109,8 @@ public final class StringRoot implements TypeRoot {
                     setBytes(view, 0, value, len);
                 }
             }
-            ValueHandle handle = ValueHandle.fromNativeHandle(nativeHandle);
-            liveHandles.add(handle.raw());
             ok = true;
-            return handle;
+            return ValueHandle.fromNativeHandle(nativeHandle);
         } finally {
             if (!ok) {
                 allocator.free(nativeHandle);
@@ -110,29 +118,29 @@ public final class StringRoot implements TypeRoot {
         }
     }
 
-    public synchronized void overwrite(ValueHandle handle, byte[] value) {
+    public void overwrite(ValueHandle handle, byte[] value) {
         ensureOpen();
         int len = value == null ? 0 : value.length;
         resizePreservingHandle(handle, len);
         if (len > 0) {
-            try (NativeObjectView view = allocator.resolve(requireOwnedStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+            try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
                 view.setBytes(0, value, 0, len);
             }
         }
     }
 
-    public synchronized void overwrite(ValueHandle handle, BytesSlice value) {
+    public void overwrite(ValueHandle handle, BytesSlice value) {
         ensureOpen();
         int len = value == null ? 0 : value.length();
         resizePreservingHandle(handle, len);
         if (len > 0) {
-            try (NativeObjectView view = allocator.resolve(requireOwnedStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+            try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
                 setBytes(view, 0, value, len);
             }
         }
     }
 
-    public synchronized int append(ValueHandle handle, byte[] suffix) {
+    public int append(ValueHandle handle, byte[] suffix) {
         ensureOpen();
         if (suffix == null || suffix.length == 0) {
             return length(handle);
@@ -140,13 +148,13 @@ public final class StringRoot implements TypeRoot {
         int oldLen = length(handle);
         int nextLen = Math.addExact(oldLen, suffix.length);
         resizePreservingHandle(handle, nextLen);
-        try (NativeObjectView view = allocator.resolve(requireOwnedStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
             view.setBytes(oldLen, suffix, 0, suffix.length);
         }
         return nextLen;
     }
 
-    public synchronized int append(ValueHandle handle, BytesSlice suffix) {
+    public int append(ValueHandle handle, BytesSlice suffix) {
         ensureOpen();
         if (suffix == null || suffix.length() == 0) {
             return length(handle);
@@ -155,13 +163,13 @@ public final class StringRoot implements TypeRoot {
         int suffixLen = suffix.length();
         int nextLen = Math.addExact(oldLen, suffixLen);
         resizePreservingHandle(handle, nextLen);
-        try (NativeObjectView view = allocator.resolve(requireOwnedStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
             setBytes(view, oldLen, suffix, suffixLen);
         }
         return nextLen;
     }
 
-    public synchronized void ensureLength(ValueHandle handle, int requiredLen) {
+    public void ensureLength(ValueHandle handle, int requiredLen) {
         ensureOpen();
         if (requiredLen < 0) {
             throw new IllegalArgumentException("requiredLen must be >= 0");
@@ -171,14 +179,14 @@ public final class StringRoot implements TypeRoot {
             return;
         }
         resizePreservingHandle(handle, requiredLen);
-        try (NativeObjectView view = allocator.resolve(requireOwnedStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
             zeroFill(view, oldLen, requiredLen);
         }
     }
 
-    public synchronized byte byteAt(ValueHandle handle, int index) {
+    public byte byteAt(ValueHandle handle, int index) {
         ensureOpen();
-        try (NativeObjectView view = allocator.resolve(requireOwnedStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
             if (index < 0 || index >= view.size()) {
                 throw new IndexOutOfBoundsException();
             }
@@ -186,9 +194,9 @@ public final class StringRoot implements TypeRoot {
         }
     }
 
-    public synchronized void setByteAt(ValueHandle handle, int index, byte value) {
+    public void setByteAt(ValueHandle handle, int index, byte value) {
         ensureOpen();
-        try (NativeObjectView view = allocator.resolve(requireOwnedStringHandle(handle), NativeAccessMode.READ_WRITE)) {
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_WRITE)) {
             if (index < 0 || index >= view.size()) {
                 throw new IndexOutOfBoundsException();
             }
@@ -196,7 +204,7 @@ public final class StringRoot implements TypeRoot {
         }
     }
 
-    public synchronized BytesSlice slice(ValueHandle handle) {
+    public BytesSlice slice(ValueHandle handle) {
         ensureOpen();
         byte[] copy = copy(handle);
         if (copy.length == 0) {
@@ -205,9 +213,9 @@ public final class StringRoot implements TypeRoot {
         return new HeapBackedBytesSlice(copy);
     }
 
-    public synchronized byte[] copy(ValueHandle handle) {
+    public byte[] copy(ValueHandle handle) {
         ensureOpen();
-        try (NativeObjectView view = allocator.resolve(requireOwnedStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
             int len = view.size();
             if (len == 0) {
                 return new byte[0];
@@ -218,55 +226,37 @@ public final class StringRoot implements TypeRoot {
         }
     }
 
-    public synchronized int length(ValueHandle handle) {
+    public int length(ValueHandle handle) {
         ensureOpen();
-        try (NativeObjectView view = allocator.resolve(requireOwnedStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
             return view.size();
         }
     }
 
     @Override
-    public synchronized long estimatedBytes(ValueHandle handle) {
+    public long estimatedBytes(ValueHandle handle) {
         ensureOpen();
-        try (NativeObjectView view = allocator.resolve(requireOwnedStringHandle(handle), NativeAccessMode.READ_ONLY)) {
+        try (NativeObjectView view = allocator.resolve(requireStringHandle(handle), NativeAccessMode.READ_ONLY)) {
             return view.capacity();
         }
     }
 
     @Override
-    public synchronized void release(ValueHandle handle) {
+    public void release(ValueHandle handle) {
         if (handle == null) {
             return;
         }
-        NativeHandle nativeHandle = requireOwnedStringHandle(handle);
-        allocator.free(nativeHandle);
-        liveHandles.remove(handle.raw());
+        allocator.free(requireStringHandle(handle));
     }
 
     @Override
-    public synchronized void clear() {
+    public void clear() {
         ensureOpen();
-        RuntimeException failure = null;
-        Long[] handles = liveHandles.toArray(Long[]::new);
-        for (Long raw : handles) {
-            try {
-                allocator.free(NativeHandle.fromRaw(raw));
-                liveHandles.remove(raw);
-            } catch (RuntimeException e) {
-                if (failure == null) {
-                    failure = e;
-                } else {
-                    failure.addSuppressed(e);
-                }
-            }
-        }
-        if (failure != null) {
-            throw failure;
-        }
+        // StringRoot 不拥有共享 allocator 中 STRING_BYTES 的实例集合；DB 生命周期必须沿 entry graph 逐项释放。
     }
 
     @Override
-    public synchronized void close() {
+    public void close() {
         if (closed) {
             return;
         }
@@ -304,21 +294,11 @@ public final class StringRoot implements TypeRoot {
         return nativeHandle;
     }
 
-    private NativeHandle requireOwnedStringHandle(ValueHandle handle) {
-        NativeHandle nativeHandle = requireStringHandle(handle);
-        if (liveHandles.contains(handle.raw())) {
-            return nativeHandle;
-        }
-        try (NativeObjectView ignored = allocator.resolve(nativeHandle, NativeAccessMode.READ_ONLY)) {
-            throw new IllegalArgumentException("unknown string value handle: " + handle.raw());
-        }
-    }
-
     private void resizePreservingHandle(ValueHandle handle, int len) {
         if (len < 0) {
             throw new IllegalArgumentException("len must be >= 0");
         }
-        NativeHandle nativeHandle = requireOwnedStringHandle(handle);
+        NativeHandle nativeHandle = requireStringHandle(handle);
         NativeHandle resized = allocator.realloc(nativeHandle, len, NativeReallocPolicy.PRESERVE_PREFIX);
         if (resized.raw() != nativeHandle.raw()) {
             throw new IllegalStateException("string realloc changed stable handle");

@@ -4,6 +4,8 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.SetMode;
 
@@ -62,6 +64,10 @@ public class TtlLifecycleDirectOpsTest {
             Assert.assertNull(db.reads().keyspace().typeOf(view("s")));
             Assert.assertEquals(-1L, db.memory().memoryUsage(view("s")));
             Assert.assertEquals(0L, db.memory().memoryStats().keyCount());
+            NativeAllocatorStats empty = db.keyLifecycle().nativeAllocator().stats();
+            Assert.assertEquals(0L, empty.objectCount(NativeObjectKind.ENTRY_RECORD));
+            Assert.assertEquals(0L, empty.objectCount(NativeObjectKind.STRING_BYTES));
+            Assert.assertEquals(0L, empty.liveObjects());
             Assert.assertSame(MutationOutcome.NONE, db.lifecycle().flushDb());
         });
     }

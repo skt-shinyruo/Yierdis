@@ -1,5 +1,8 @@
 package yier.bubu.redis.storage.memory.internal.entry;
 
+import java.util.Arrays;
+import java.util.Map;
+import java.util.Set;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAccessMode;
@@ -25,6 +28,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public class CollectionRootTest {
+    @Test
+    public void collectionRootTableDoesNotOwnBoxedHandleMapsOrSets() {
+        Assert.assertFalse(Arrays.stream(NativeCollectionRootTable.class.getDeclaredFields())
+                .anyMatch(field -> Map.class.isAssignableFrom(field.getType())
+                        || Set.class.isAssignableFrom(field.getType())));
+    }
+
     @Test
     public void hashSetAndZsetRootsRoundTripMembers() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root");
@@ -73,6 +83,94 @@ public class CollectionRootTest {
             assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.HASH_ROOT, hash.create(), hash::contains, hash::size);
             assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.SET_ROOT, set.create(), set::contains, set::size);
             assertAllocatorRemainsLivenessAuthority(allocator, NativeObjectKind.ZSET_ROOT, zset.create(), zset::contains, zset::size);
+        }
+    }
+
+    @Test
+    public void hashSetAndZsetAdaptersCrossNativeObjectTableSegments() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root-segments");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 8192);
+             HashRoot hash = new HashRoot(allocator);
+             SetRoot set = new SetRoot(allocator);
+             ZSetRoot zset = new ZSetRoot(allocator)) {
+            NativeHandle[] fillers = new NativeHandle[4095];
+            for (int i = 0; i < fillers.length; i++) {
+                fillers[i] = allocator.allocate(NativeObjectKind.GENERIC, 1);
+            }
+
+            ValueHandle hashHandle = hash.create();
+            ValueHandle setHandle = set.create();
+            ValueHandle zsetHandle = zset.create();
+
+            Assert.assertEquals(4096L, hashHandle.nativeHandle().slotId());
+            Assert.assertEquals(4097L, setHandle.nativeHandle().slotId());
+            Assert.assertEquals(4098L, zsetHandle.nativeHandle().slotId());
+            Assert.assertTrue(hash.contains(hashHandle));
+            Assert.assertTrue(set.contains(setHandle));
+            Assert.assertTrue(zset.contains(zsetHandle));
+
+            hash.release(hashHandle);
+            set.release(setHandle);
+            zset.release(zsetHandle);
+            for (NativeHandle filler : fillers) {
+                allocator.free(filler);
+            }
+        }
+    }
+
+    @Test
+    public void reusedAdapterSlotDoesNotReviveStaleGeneration() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root-adapter-generation");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 32)) {
+            NativeCollectionRootTable<CountingListValue> table = new NativeCollectionRootTable<>(
+                    allocator,
+                    NativeObjectKind.LIST_ROOT,
+                    "list",
+                    false
+            );
+            ValueHandle first = table.create(ignored -> new CountingListValue());
+            table.release(first);
+            ValueHandle second = table.create(ignored -> new CountingListValue());
+
+            Assert.assertEquals(first.nativeHandle().slotId(), second.nativeHandle().slotId());
+            Assert.assertNotEquals(first.raw(), second.raw());
+            Assert.assertFalse(table.contains(first));
+            try {
+                table.require(first);
+                Assert.fail("expected stale native handle");
+            } catch (StaleNativeHandleException expected) {
+                // expected
+            }
+            Assert.assertTrue(table.contains(second));
+            table.release(second);
+        }
+    }
+
+    @Test
+    public void clearClosesEachAdapterOnceAndReleasesEmptyDirectorySegments() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("collection-root-adapter-clear");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 8192)) {
+            NativeCollectionRootTable<CountingListValue> table = new NativeCollectionRootTable<>(
+                    allocator,
+                    NativeObjectKind.LIST_ROOT,
+                    "list",
+                    false
+            );
+            CountingListValue[] values = new CountingListValue[4097];
+            for (int i = 0; i < values.length; i++) {
+                values[i] = new CountingListValue();
+                CountingListValue value = values[i];
+                table.create(ignored -> value);
+            }
+
+            Assert.assertEquals(2, table.adapterSegmentCount());
+            table.clear();
+
+            for (CountingListValue value : values) {
+                Assert.assertEquals(1, value.closeCalls());
+            }
+            Assert.assertEquals(0, table.adapterSegmentCount());
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.LIST_ROOT));
         }
     }
 

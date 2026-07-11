@@ -567,14 +567,6 @@ public final class YierdisDbKeyLifecycle {
         }
     }
 
-    public void clearValues() {
-        stringRoot.clear();
-        listRoot.clear();
-        hashRoot.clear();
-        setRoot.clear();
-        zsetRoot.clear();
-    }
-
     private void releaseReplacedValue(EntryRecord oldRecord, EntryRecord newRecord) {
         if (oldRecord == null || newRecord == null) {
             return;

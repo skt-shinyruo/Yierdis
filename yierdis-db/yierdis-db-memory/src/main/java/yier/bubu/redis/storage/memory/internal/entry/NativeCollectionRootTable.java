@@ -8,8 +8,7 @@ import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
 import yier.bubu.redis.storage.memory.internal.value.YierdisValue;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -17,12 +16,16 @@ import java.util.function.ToLongFunction;
 
 final class NativeCollectionRootTable<T extends YierdisValue> {
     private static final int ROOT_RECORD_BYTES = Long.BYTES;
+    private static final int ADAPTER_SLOTS_PER_SEGMENT = 4096;
+    private static final int INITIAL_DIRECTORY_SEGMENTS = 4;
 
     private final NativeAllocator allocator;
     private final NativeObjectKind kind;
     private final String label;
     private final boolean ownsAllocator;
-    private final Map<Long, T> adapters = new HashMap<>();
+    private Object[][] adapterSegments = new Object[INITIAL_DIRECTORY_SEGMENTS][];
+    private int[] adapterSegmentLiveCounts = new int[INITIAL_DIRECTORY_SEGMENTS];
+    private int adapterSegmentCount;
 
     NativeCollectionRootTable(
             NativeAllocator allocator,
@@ -52,7 +55,7 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
         try {
             writeRootRecord(nativeHandle);
             adapter = adapterFactory.apply(nativeHandle);
-            adapters.put(nativeHandle.raw(), adapter);
+            putAdapter(nativeHandle, adapter);
             return ValueHandle.fromNativeHandle(nativeHandle);
         } catch (RuntimeException | Error e) {
             if (adapter != null) {
@@ -73,12 +76,12 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
 
     boolean contains(ValueHandle handle) {
         NativeHandle nativeHandle = nativeHandleOrNull(handle);
-        if (nativeHandle == null || !adapters.containsKey(nativeHandle.raw())) {
+        if (nativeHandle == null) {
             return false;
         }
         try {
             validateRootRecord(nativeHandle);
-            return true;
+            return adapterSlot(nativeHandle) != null;
         } catch (StaleNativeHandleException e) {
             return false;
         }
@@ -87,18 +90,26 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
     T require(ValueHandle handle) {
         NativeHandle nativeHandle = requireNativeHandle(handle);
         validateRootRecord(nativeHandle);
-        T adapter = adapters.get(nativeHandle.raw());
-        if (adapter == null) {
+        AdapterSlot<T> slot = adapterSlot(nativeHandle);
+        if (slot == null) {
             throw new IllegalArgumentException("unknown " + label + " value handle: " + handle.raw());
         }
-        return adapter;
+        return slot.adapter;
     }
 
     long adapterBytes(ToLongFunction<? super T> estimator) {
         Objects.requireNonNull(estimator, "estimator");
         long total = 0L;
-        for (T adapter : adapters.values()) {
-            total = addSaturating(total, estimator.applyAsLong(adapter));
+        for (Object[] segment : adapterSegments) {
+            if (segment == null) {
+                continue;
+            }
+            for (Object value : segment) {
+                if (value != null) {
+                    AdapterSlot<T> slot = castSlot(value);
+                    total = addSaturating(total, estimator.applyAsLong(slot.adapter));
+                }
+            }
         }
         return total;
     }
@@ -108,15 +119,15 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
             return;
         }
         NativeHandle nativeHandle = requireNativeHandle(handle);
-        T adapter = adapters.get(nativeHandle.raw());
-        if (adapter == null) {
+        AdapterSlot<T> slot = adapterSlot(nativeHandle);
+        if (slot == null) {
             return;
         }
         RuntimeException failure = null;
         boolean adapterClosed = false;
         boolean rootFreed = false;
         try {
-            adapter.close();
+            slot.adapter.close();
             adapterClosed = true;
         } catch (RuntimeException e) {
             failure = addFailure(failure, e);
@@ -131,7 +142,7 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
             failure = addFailure(failure, e);
         }
         if (adapterClosed && rootFreed) {
-            adapters.remove(nativeHandle.raw());
+            removeAdapter(nativeHandle, slot);
         }
         if (failure != null) {
             throw failure;
@@ -140,17 +151,109 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
 
     void clear() {
         RuntimeException failure = null;
-        Long[] handles = adapters.keySet().toArray(Long[]::new);
-        for (long raw : handles) {
-            try {
-                release(ValueHandle.fromRaw(raw));
-            } catch (RuntimeException e) {
-                failure = addFailure(failure, e);
+        for (Object[] segment : adapterSegments) {
+            if (segment == null) {
+                continue;
+            }
+            for (Object value : segment) {
+                if (value == null) {
+                    continue;
+                }
+                AdapterSlot<T> slot = castSlot(value);
+                try {
+                    release(ValueHandle.fromRaw(slot.rawHandle));
+                } catch (RuntimeException e) {
+                    failure = addFailure(failure, e);
+                }
             }
         }
         if (failure != null) {
             throw failure;
         }
+    }
+
+    int adapterSegmentCount() {
+        return adapterSegmentCount;
+    }
+
+    private void putAdapter(NativeHandle handle, T adapter) {
+        int segmentIndex = adapterSegmentIndex(handle);
+        ensureDirectoryCapacity(segmentIndex);
+        Object[] segment = adapterSegments[segmentIndex];
+        if (segment == null) {
+            segment = new Object[ADAPTER_SLOTS_PER_SEGMENT];
+            adapterSegments[segmentIndex] = segment;
+            adapterSegmentCount++;
+        }
+        int offset = adapterSegmentOffset(handle);
+        if (segment[offset] != null) {
+            throw new IllegalStateException(label + " adapter slot is already occupied: " + handle.slotId());
+        }
+        segment[offset] = new AdapterSlot<>(handle.raw(), adapter);
+        adapterSegmentLiveCounts[segmentIndex]++;
+    }
+
+    private AdapterSlot<T> adapterSlot(NativeHandle handle) {
+        int segmentIndex = adapterSegmentIndex(handle);
+        if (segmentIndex >= adapterSegments.length) {
+            return null;
+        }
+        Object[] segment = adapterSegments[segmentIndex];
+        if (segment == null) {
+            return null;
+        }
+        Object value = segment[adapterSegmentOffset(handle)];
+        if (value == null) {
+            return null;
+        }
+        AdapterSlot<T> slot = castSlot(value);
+        return slot.rawHandle == handle.raw() ? slot : null;
+    }
+
+    private void removeAdapter(NativeHandle handle, AdapterSlot<T> expected) {
+        int segmentIndex = adapterSegmentIndex(handle);
+        if (segmentIndex >= adapterSegments.length) {
+            return;
+        }
+        Object[] segment = adapterSegments[segmentIndex];
+        if (segment == null) {
+            return;
+        }
+        int offset = adapterSegmentOffset(handle);
+        if (segment[offset] != expected) {
+            return;
+        }
+        segment[offset] = null;
+        int remaining = --adapterSegmentLiveCounts[segmentIndex];
+        if (remaining == 0) {
+            adapterSegments[segmentIndex] = null;
+            adapterSegmentCount--;
+        }
+    }
+
+    private void ensureDirectoryCapacity(int segmentIndex) {
+        if (segmentIndex < adapterSegments.length) {
+            return;
+        }
+        int nextLength = adapterSegments.length;
+        while (nextLength <= segmentIndex) {
+            nextLength = Math.multiplyExact(nextLength, 2);
+        }
+        adapterSegments = Arrays.copyOf(adapterSegments, nextLength);
+        adapterSegmentLiveCounts = Arrays.copyOf(adapterSegmentLiveCounts, nextLength);
+    }
+
+    private static int adapterSegmentIndex(NativeHandle handle) {
+        return Math.toIntExact((handle.slotId() - 1L) / ADAPTER_SLOTS_PER_SEGMENT);
+    }
+
+    private static int adapterSegmentOffset(NativeHandle handle) {
+        return Math.toIntExact((handle.slotId() - 1L) % ADAPTER_SLOTS_PER_SEGMENT);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends YierdisValue> AdapterSlot<T> castSlot(Object value) {
+        return (AdapterSlot<T>) value;
     }
 
     void close() {
@@ -240,5 +343,15 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
         }
         failure.addSuppressed(next);
         return failure;
+    }
+
+    private static final class AdapterSlot<T extends YierdisValue> {
+        private final long rawHandle;
+        private final T adapter;
+
+        private AdapterSlot(long rawHandle, T adapter) {
+            this.rawHandle = rawHandle;
+            this.adapter = Objects.requireNonNull(adapter, "adapter");
+        }
     }
 }
