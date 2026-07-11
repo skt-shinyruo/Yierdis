@@ -2,10 +2,10 @@ package yier.bubu.redis.storage.memory.internal.ledger;
 
 import java.util.Objects;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
-import yier.bubu.redis.memory.api.OffHeapOutOfMemoryException;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.YierdisCommandException;
@@ -63,14 +63,16 @@ public final class YierdisDbMutationExecutor {
                     : ledger.reserve(Math.max(0L, plan.upperBoundBytes()));
             allocations = nativeAllocator.beginAllocationScope();
             prepared = Objects.requireNonNull(plan.prepare(), "prepared mutation");
+            NativeAllocationGrowth nativeGrowth = allocations.growth();
             long preparedPeakBytes = MemoryUsageSnapshot.addSaturating(
-                    allocations.growth().effectiveBytes(),
+                    nativeGrowth.effectiveBytes(),
                     prepared.stagedNonNativeGrowthBytes()
             );
             if (plan.admissionMode() == MutationPlan.AdmissionMode.RECLAMATION) {
                 requireReclamationInvariants(
                         plan.upperBoundBytes(),
-                        preparedPeakBytes,
+                        nativeGrowth,
+                        prepared.stagedNonNativeGrowthBytes(),
                         prepared.actualDeltaBytes()
                 );
             } else {
@@ -124,11 +126,21 @@ public final class YierdisDbMutationExecutor {
     private <T> T executeLegacy(LegacyMutationPlan<T> plan) {
         MemoryReservation reservation = null;
         try {
-            reservation = ledger.reserve(Math.max(0L, plan.upperBoundBytes()));
+            boolean reclamation = plan.admissionMode() == MutationPlan.AdmissionMode.RECLAMATION;
+            if (reclamation && plan.upperBoundBytes() != 0L) {
+                throw new IllegalStateException("reclamation mutation must have a zero upper bound");
+            }
+            reservation = reclamation
+                    ? ledger.beginReclamation()
+                    : ledger.reserve(Math.max(0L, plan.upperBoundBytes()));
             MutationResult<T> result = Objects.requireNonNull(plan.apply(), "mutation result");
+            if (reclamation && result.actualDeltaBytes() > 0L) {
+                throw new IllegalStateException("reclamation mutation must not commit positive growth");
+            }
+            requireLedgerDeltaInvariant(ledger.usedBytes(), result.actualDeltaBytes());
             ledger.commit(reservation, result.actualDeltaBytes());
             return result.value();
-        } catch (MemoryLedgerOutOfMemoryException | OffHeapOutOfMemoryException expected) {
+        } catch (MemoryLedgerOutOfMemoryException | NativeCapacityExceededException expected) {
             ledger.rollback(reservation);
             throw new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
         } catch (RuntimeException | Error failure) {
@@ -147,19 +159,19 @@ public final class YierdisDbMutationExecutor {
             if (prepared != null) {
                 prepared.abort();
             }
-        } catch (RuntimeException abortFailure) {
+        } catch (RuntimeException | Error abortFailure) {
             failure.addSuppressed(abortFailure);
         }
         try {
             if (allocations != null) {
                 allocations.abort();
             }
-        } catch (RuntimeException abortFailure) {
+        } catch (RuntimeException | Error abortFailure) {
             failure.addSuppressed(abortFailure);
         }
         try {
             ledger.rollback(reservation);
-        } catch (RuntimeException rollbackFailure) {
+        } catch (RuntimeException | Error rollbackFailure) {
             failure.addSuppressed(rollbackFailure);
         }
     }
@@ -175,14 +187,14 @@ public final class YierdisDbMutationExecutor {
         if (!allocationsPromoted && allocations != null) {
             try {
                 allocations.promote();
-            } catch (RuntimeException promotionFailure) {
+            } catch (RuntimeException | Error promotionFailure) {
                 failure.addSuppressed(promotionFailure);
             }
         }
         if (!ledgerSettled && prepared != null) {
             try {
                 ledger.commit(reservation, prepared.actualDeltaBytes());
-            } catch (RuntimeException settlementFailure) {
+            } catch (RuntimeException | Error settlementFailure) {
                 failure.addSuppressed(settlementFailure);
             }
         }
@@ -190,13 +202,16 @@ public final class YierdisDbMutationExecutor {
 
     private static void requireReclamationInvariants(
             long upperBoundBytes,
-            long preparedPeakBytes,
+            NativeAllocationGrowth nativeGrowth,
+            long stagedNonNativeGrowthBytes,
             long actualDeltaBytes
     ) {
         if (upperBoundBytes != 0L) {
             throw new IllegalStateException("reclamation mutation must have a zero upper bound");
         }
-        if (preparedPeakBytes != 0L) {
+        if (nativeGrowth.nativeMetadataCommittedBytes() != 0L
+                || nativeGrowth.nativeDataCommittedBytes() != 0L
+                || stagedNonNativeGrowthBytes != 0L) {
             throw new IllegalStateException("reclamation mutation must not stage positive growth");
         }
         if (actualDeltaBytes > 0L) {

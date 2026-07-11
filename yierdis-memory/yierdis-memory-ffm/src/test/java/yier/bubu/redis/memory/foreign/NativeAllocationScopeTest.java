@@ -29,4 +29,22 @@ public class NativeAllocationScopeTest {
             Assert.assertEquals(0L, allocator.stats().liveObjects());
         }
     }
+
+    @Test
+    public void scopedSnapshotCountsCheckpointAndScopeBookkeepingHeap() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-bookkeeping-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 128)) {
+            allocator.bindToCurrentThread();
+            NativeHandle warmPageValue = allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
+            allocator.free(warmPageValue);
+            MemoryUsageSnapshot before = allocator.memoryUsage();
+            try (NativeAllocationScope scope = allocator.beginAllocationScope()) {
+                MemoryUsageSnapshot scoped = allocator.memoryUsage();
+                Assert.assertTrue(scoped.heapEstimatedBytes() > before.heapEstimatedBytes());
+                Assert.assertTrue(scope.growth().heapEstimatedBytes() > 0L);
+            }
+            Assert.assertEquals(before, allocator.memoryUsage());
+            Assert.assertEquals(0L, allocator.stats().liveObjects());
+        }
+    }
 }

@@ -93,6 +93,11 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
             }
 
             @Override
+            public AdmissionMode admissionMode() {
+                return AdmissionMode.RECLAMATION;
+            }
+
+            @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
                 YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> mutation =
                         keyLifecycle.computeIfPresentWithHandleResult(keyBytes, (k, oldRecord) -> {

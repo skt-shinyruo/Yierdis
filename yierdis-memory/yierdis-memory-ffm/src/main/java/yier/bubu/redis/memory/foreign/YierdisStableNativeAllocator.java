@@ -26,6 +26,8 @@ import yier.bubu.redis.memory.api.StaleNativeHandleException;
 
 public final class YierdisStableNativeAllocator implements NativeAllocator {
     private static final int REALLOC_COPY_CHUNK_BYTES = 64 * 1024;
+    private static final long ALLOCATION_SCOPE_HEAP_BYTES = 96L;
+    private static final long ARRAY_HEADER_BYTES = 16L;
 
     private final YierdisNativePageAllocator pageAllocator;
     private final YierdisNativeObjectTable objectTable;
@@ -180,6 +182,9 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             reserveMovedBlock(previous, next.capacity(), epochManager.nextEpoch());
             reallocMovedCount++;
             moved = true;
+            if (activeAllocationScope != null) {
+                activeAllocationScope.recordGrowth();
+            }
             return handle;
         } finally {
             if (!moved) {
@@ -191,6 +196,9 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     @Override
     public void free(NativeHandle handle) {
         ensureOpen();
+        if (activeAllocationScope != null) {
+            activeAllocationScope.recordGrowth();
+        }
         YierdisNativeObjectMeta meta = requireLiveMetaForFree(handle);
         long freeEpoch = epochManager.nextEpoch();
         boolean delayRelease = meta.pinCount() > 0 || !epochManager.canReclaim(freeEpoch);
@@ -398,6 +406,12 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                 pageAllocator.heapEstimatedBytes()
         );
         heapBytes = MemoryUsageSnapshot.addSaturating(heapBytes, retainedLocationHeapBytes());
+        if (activeAllocationScope != null) {
+            heapBytes = MemoryUsageSnapshot.addSaturating(
+                    heapBytes,
+                    activeAllocationScope.heapEstimatedBytes()
+            );
+        }
         return new MemoryUsageSnapshot(
                 heapBytes,
                 tableStats.metadataCommittedBytes(),
@@ -919,6 +933,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         private final YierdisNativePageAllocator.AllocationScopeCheckpoint pageCheckpoint;
         private long[] handles = new long[0];
         private int handleCount;
+        private NativeAllocationGrowth peakGrowth = NativeAllocationGrowth.zero();
         private boolean terminal;
 
         private AllocatorAllocationScope(
@@ -936,16 +951,29 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             if (terminal) {
                 return NativeAllocationGrowth.zero();
             }
+            recordGrowth();
+            return peakGrowth;
+        }
+
+        private void recordGrowth() {
             MemoryUsageSnapshot current = memoryUsage();
-            return new NativeAllocationGrowth(
+            NativeAllocationGrowth currentGrowth = new NativeAllocationGrowth(
                     positiveDifference(current.heapEstimatedBytes(), baseline.heapEstimatedBytes()),
-                    positiveDifference(
-                            current.nativeMetadataCommittedBytes(),
-                            baseline.nativeMetadataCommittedBytes()
-                    ),
+                    positiveDifference(current.nativeMetadataCommittedBytes(), baseline.nativeMetadataCommittedBytes()),
                     positiveDifference(
                             current.nativeDataCommittedBytes(),
                             baseline.nativeDataCommittedBytes()
+                    )
+            );
+            peakGrowth = new NativeAllocationGrowth(
+                    Math.max(peakGrowth.heapEstimatedBytes(), currentGrowth.heapEstimatedBytes()),
+                    Math.max(
+                            peakGrowth.nativeMetadataCommittedBytes(),
+                            currentGrowth.nativeMetadataCommittedBytes()
+                    ),
+                    Math.max(
+                            peakGrowth.nativeDataCommittedBytes(),
+                            currentGrowth.nativeDataCommittedBytes()
                     )
             );
         }
@@ -1000,6 +1028,14 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                 handles = Arrays.copyOf(handles, Math.max(8, handles.length << 1));
             }
             handles[handleCount++] = handle.raw();
+            recordGrowth();
+        }
+
+        private long heapEstimatedBytes() {
+            return ALLOCATION_SCOPE_HEAP_BYTES
+                    + arrayHeapBytes(handles.length, Long.BYTES)
+                    + tableCheckpoint.heapEstimatedBytes()
+                    + pageCheckpoint.heapEstimatedBytes();
         }
 
         private void untrack(NativeHandle handle) {
@@ -1016,6 +1052,10 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         private long positiveDifference(long current, long before) {
             return current > before ? current - before : 0L;
         }
+    }
+
+    private static long arrayHeapBytes(int length, long elementBytes) {
+        return ARRAY_HEADER_BYTES + (long) length * elementBytes;
     }
 
     private final class StableObjectView implements NativeObjectView {

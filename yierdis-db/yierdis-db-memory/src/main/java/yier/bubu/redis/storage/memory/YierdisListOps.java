@@ -156,6 +156,11 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             }
 
             @Override
+            public AdmissionMode admissionMode() {
+                return AdmissionMode.RECLAMATION;
+            }
+
+            @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<List<byte[]>>> apply() {
                 YierdisDbMutationExecutor.MutationResult<WriteResult<List<byte[]>>> mutation =
                         keyLifecycle.computeIfPresentWithHandleResult(keyBytes, (k, oldRecord) -> {

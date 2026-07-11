@@ -8,6 +8,7 @@ final class YierdisNativePageDirectory {
     private static final int INITIAL_DIRECTORY_SEGMENTS = 16;
     private static final int INITIAL_FREE_IDS = 16;
     private static final long ARRAY_HEADER_BYTES = 16L;
+    private static final long CHECKPOINT_OBJECT_BYTES = 48L;
     private static final long REFERENCE_BYTES = 8L;
     private static final long INT_BYTES = 4L;
 
@@ -150,9 +151,9 @@ final class YierdisNativePageDirectory {
         if (liveEntries != checkpoint.liveEntries) {
             throw new IllegalStateException("allocation scope left a live native page");
         }
-        segments = checkpoint.segments.clone();
-        segmentCounts = checkpoint.segmentCounts.clone();
-        freeIds = checkpoint.freeIds.clone();
+        segments = checkpoint.segments;
+        segmentCounts = checkpoint.segmentCounts;
+        freeIds = checkpoint.freeIds;
         freeIdCount = checkpoint.freeIdCount;
         nextId = checkpoint.nextId;
     }
@@ -210,5 +211,15 @@ final class YierdisNativePageDirectory {
             int nextId,
             int liveEntries
     ) {
+        long heapEstimatedBytes() {
+            return CHECKPOINT_OBJECT_BYTES
+                    + arrayHeapBytes(segments.length, REFERENCE_BYTES)
+                    + arrayHeapBytes(segmentCounts.length, INT_BYTES)
+                    + arrayHeapBytes(freeIds.length, INT_BYTES);
+        }
+    }
+
+    private static long arrayHeapBytes(int length, long elementBytes) {
+        return ARRAY_HEADER_BYTES + (long) length * elementBytes;
     }
 }

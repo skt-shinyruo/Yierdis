@@ -168,6 +168,11 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             }
 
             @Override
+            public AdmissionMode admissionMode() {
+                return AdmissionMode.RECLAMATION;
+            }
+
+            @Override
             public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
                 keyLifecycle.removeExpire(handle);
                 keyLifecycle.touchRecord(handle, record);
@@ -228,6 +233,11 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             @Override
             public long upperBoundBytes() {
                 return 0;
+            }
+
+            @Override
+            public AdmissionMode admissionMode() {
+                return AdmissionMode.RECLAMATION;
             }
 
             @Override
