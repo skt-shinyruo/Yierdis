@@ -101,7 +101,8 @@ public final class DbMemoryAccounting {
                 nativeAllocatorStats == null ? 0L : nativeAllocatorStats.quarantinedObjects(),
                 nativeAllocatorStats == null ? 0L : nativeAllocatorStats.quarantineBytes(),
                 nativeAllocatorStats == null ? 0L : nativeAllocatorStats.staleHandleDetections(),
-                nativeAllocatorStats == null ? 0L : nativeAllocatorStats.defragReclaimedPages()
+                nativeAllocatorStats == null ? 0L : nativeAllocatorStats.defragReclaimedPages(),
+                nativeAllocatorStats == null ? 0L : nativeAllocatorStats.metadataCommittedBytes()
         );
     }
 
