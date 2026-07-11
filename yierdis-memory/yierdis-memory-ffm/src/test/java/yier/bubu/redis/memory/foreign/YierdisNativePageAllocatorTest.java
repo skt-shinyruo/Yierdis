@@ -12,8 +12,24 @@ import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
+import yier.bubu.redis.memory.api.OffHeapOutOfMemoryException;
 
 public class YierdisNativePageAllocatorTest {
+    @Test
+    public void pageDirectoryReportsCheckedIdExhaustion() throws Exception {
+        YierdisNativePageDirectory directory = new YierdisNativePageDirectory();
+        Field nextId = YierdisNativePageDirectory.class.getDeclaredField("nextId");
+        nextId.setAccessible(true);
+        nextId.setInt(directory, -1);
+
+        try {
+            directory.add(new Object());
+            Assert.fail("expected page id exhaustion");
+        } catch (OffHeapOutOfMemoryException expected) {
+            Assert.assertTrue(expected.getMessage().contains("page id"));
+        }
+    }
+
     @Test
     public void normalFreeRetainsOneWarmPageAndPressureTrimClosesIt() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("page-trim");

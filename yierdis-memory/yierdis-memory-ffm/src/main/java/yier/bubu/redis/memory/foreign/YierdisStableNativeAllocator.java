@@ -1,9 +1,6 @@
 package yier.bubu.redis.memory.foreign;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.Arrays;
 import java.util.Objects;
 import yier.bubu.redis.common.memory.MemoryPressureBudget;
 import yier.bubu.redis.common.memory.MemoryReclaimResult;
@@ -33,8 +30,12 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     private final YierdisNativeObjectTable objectTable;
     private final YierdisNativeEpochManager epochManager = new YierdisNativeEpochManager();
     private final YierdisNativeDefragValidator defragValidator;
-    private final Map<Long, Allocation> allocations = new HashMap<>();
-    private final List<RetainedBlock> retainedMovedBlocks = new ArrayList<>();
+    private int[] retainedPageIds = new int[0];
+    private int[] retainedPageOffsets = new int[0];
+    private int[] retainedCapacities = new int[0];
+    private int[] retainedPageClasses = new int[0];
+    private long[] retainedEpochs = new long[0];
+    private int retainedBlockCount;
 
     private boolean closed;
     private long logicalUsedBytes;
@@ -85,13 +86,11 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                     kind,
                     size,
                     block.capacity(),
-                    packedAddress(block),
+                    block.pageId(),
+                    block.pageOffset(),
                     block.pageClass().ordinal(),
                     epochManager.nextEpoch()
             );
-            Allocation allocation = new Allocation(block);
-            allocation.lastHandle = handle;
-            allocations.put(handle.slotId(), allocation);
             logicalUsedBytes += size;
             reservedBytes += block.capacity();
             liveObjects++;
@@ -118,15 +117,15 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             throw new NativeMemoryException("native object is pinned");
         }
 
-        Allocation allocation = allocationFor(handle);
         int oldSize = meta.size();
-        if (newSize <= allocation.current.capacity()) {
+        if (newSize <= meta.capacity()) {
             objectTable.updateLocation(
                     handle,
                     newSize,
-                    allocation.current.capacity(),
-                    packedAddress(allocation.current),
-                    allocation.current.pageClass().ordinal()
+                    meta.capacity(),
+                    meta.segmentId(),
+                    meta.address(),
+                    meta.pageClass()
             );
             logicalUsedBytes += (long) newSize - oldSize;
             reallocInPlaceCount++;
@@ -137,19 +136,19 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             throw new NativeMemoryException("native object cannot grow in place");
         }
 
+        YierdisNativeBlock previous = pageAllocator.moveSource(meta);
         YierdisNativeBlock next = pageAllocator.allocate(physicalAllocationBytes(newSize));
         boolean moved = false;
         try {
-            copyPrefix(allocation.current, next, oldSize);
-            YierdisNativeBlock previous = allocation.current;
+            copyPrefix(previous, next, oldSize);
             objectTable.updateLocation(
                     handle,
                     newSize,
                     next.capacity(),
-                    packedAddress(next),
+                    next.pageId(),
+                    next.pageOffset(),
                     next.pageClass().ordinal()
             );
-            allocation.current = next;
             logicalUsedBytes += (long) newSize - oldSize;
             reserveMovedBlock(previous, next.capacity(), epochManager.nextEpoch());
             reallocMovedCount++;
@@ -166,17 +165,14 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     public synchronized void free(NativeHandle handle) {
         ensureOpen();
         YierdisNativeObjectMeta meta = requireLiveMetaForFree(handle);
-        Allocation allocation = allocationFor(handle);
         long freeEpoch = epochManager.nextEpoch();
         boolean delayRelease = meta.pinCount() > 0 || !epochManager.canReclaim(freeEpoch);
         objectTable.free(handle, freeEpoch, delayRelease);
         if (delayRelease) {
-            allocation.quarantined = true;
-            allocation.retiredEpoch = freeEpoch;
             reclaimEligibleQuarantine();
             return;
         }
-        releaseAllocation(handle.slotId(), allocation, meta.size());
+        releaseAllocation(meta);
     }
 
     @Override
@@ -192,10 +188,8 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     public synchronized void unpin(NativeHandle handle) {
         ensureOpen();
         YierdisNativeObjectMeta before = objectMeta(handle, true);
-        Allocation allocation = allocationFor(handle);
         objectTable.unpin(trackStale(handle), false);
         if (before.state() == YierdisNativeObjectTable.STATE_FREED_QUARANTINED && before.pinCount() == 1) {
-            allocation.retiredEpoch = before.freeEpoch();
             reclaimEligibleQuarantine();
         }
     }
@@ -211,10 +205,14 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     public synchronized NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode) {
         ensureOpen();
         Objects.requireNonNull(mode, "mode");
-        requireLiveMeta(handle);
-        Allocation allocation = allocationFor(handle);
+        YierdisNativeObjectMeta meta = requireLiveMeta(handle);
         objectTable.pin(trackStale(handle));
-        return new StableObjectView(handle, allocation, mode);
+        try {
+            return new StableObjectView(handle, pageAllocator.view(meta), mode);
+        } catch (RuntimeException e) {
+            objectTable.unpin(handle);
+            throw e;
+        }
     }
 
     @Override
@@ -246,8 +244,12 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         long skippedBudgetObjects = 0L;
         long failedMoves = 0L;
 
-        for (NativeHandle handle : candidateHandles()) {
-            YierdisNativeObjectMeta meta = objectTable.snapshot(handle, true);
+        for (int slotId = objectTable.firstOccupiedSlot(); slotId != 0;
+             slotId = objectTable.nextOccupiedSlot(slotId)) {
+            YierdisNativeObjectMeta meta = objectTable.occupiedMeta(slotId);
+            if (meta == null) {
+                continue;
+            }
             if (meta.state() == YierdisNativeObjectTable.STATE_FREED_QUARANTINED) {
                 continue;
             }
@@ -271,6 +273,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             }
 
             try {
+                NativeHandle handle = handleFor(meta);
                 NativeDefragResult result = moveLiveObject(handle);
                 if (result.moved()) {
                     movedObjects++;
@@ -348,7 +351,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                 objectTable.heapEstimatedBytes(),
                 pageAllocator.heapEstimatedBytes()
         );
-        heapBytes = MemoryUsageSnapshot.addSaturating(heapBytes, estimateMirrorHeapBytes());
+        heapBytes = MemoryUsageSnapshot.addSaturating(heapBytes, retainedLocationHeapBytes());
         return new MemoryUsageSnapshot(
                 heapBytes,
                 tableStats.metadataCommittedBytes(),
@@ -398,14 +401,12 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         closed = true;
 
         RuntimeException failure = null;
-        for (Allocation allocation : allocations.values()) {
-            failure = closeBlock(allocation.current, failure);
-        }
-        for (RetainedBlock retained : retainedMovedBlocks) {
-            failure = closeBlock(retained.block, failure);
-        }
-        allocations.clear();
-        retainedMovedBlocks.clear();
+        retainedPageIds = new int[0];
+        retainedPageOffsets = new int[0];
+        retainedCapacities = new int[0];
+        retainedPageClasses = new int[0];
+        retainedEpochs = new long[0];
+        retainedBlockCount = 0;
         logicalUsedBytes = 0L;
         reservedBytes = 0L;
         liveObjects = 0L;
@@ -453,26 +454,26 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     }
 
     private NativeDefragResult moveLiveObject(NativeHandle handle) {
-        Allocation allocation = allocationFor(handle);
         YierdisNativeObjectMeta sourceMeta = objectTable.beginMove(handle);
+        YierdisNativeBlock previous = null;
         YierdisNativeBlock target = null;
         boolean published = false;
         try {
+            previous = pageAllocator.moveSource(sourceMeta);
             target = pageAllocator.allocate(physicalAllocationBytes(sourceMeta.size()));
-            copyPrefix(allocation.current, target, sourceMeta.size());
+            copyPrefix(previous, target, sourceMeta.size());
             defragValidator.validate(handle, sourceMeta, target);
 
-            YierdisNativeBlock previous = allocation.current;
             int targetCapacity = target.capacity();
             objectTable.publishMoved(
                     handle,
                     sourceMeta.size(),
                     targetCapacity,
-                    packedAddress(target),
+                    target.pageId(),
+                    target.pageOffset(),
                     target.pageClass().ordinal()
             );
             published = true;
-            allocation.current = target;
             target = null;
             long retiredBytes = previous.capacity();
             reserveMovedBlock(previous, targetCapacity, epochManager.nextEpoch());
@@ -516,29 +517,16 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
     }
 
-    private Allocation allocationFor(NativeHandle handle) {
-        Allocation allocation = allocations.get(trackStale(handle).slotId());
-        if (allocation == null) {
-            staleHandleDetections++;
-            throw new StaleNativeHandleException("stale native handle: missing allocation " + handle.slotId());
-        }
-        return allocation;
-    }
-
-    private void releaseAllocation(long slotId, Allocation allocation, int logicalSize) {
-        if (allocations.remove(slotId) == null) {
-            staleHandleDetections++;
-            throw new StaleNativeHandleException("stale native handle: missing allocation " + slotId);
-        }
-        logicalUsedBytes -= logicalSize;
-        reservedBytes -= allocation.current.capacity();
+    private void releaseAllocation(YierdisNativeObjectMeta meta) {
+        logicalUsedBytes -= meta.size();
+        reservedBytes -= meta.capacity();
         liveObjects--;
-        allocation.current.close();
+        pageAllocator.free(meta);
     }
 
-    private void releaseQuarantinedAllocation(long slotId, Allocation allocation, int logicalSize) {
-        objectTable.releaseQuarantined(allocation.lastHandle);
-        releaseAllocation(slotId, allocation, logicalSize);
+    private void releaseQuarantinedAllocation(YierdisNativeObjectMeta meta) {
+        objectTable.releaseQuarantined(handleFor(meta));
+        releaseAllocation(meta);
     }
 
     private void reserveMovedBlock(YierdisNativeBlock block, int nextCapacity, long retiredEpoch) {
@@ -547,13 +535,14 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             reservedBytes += (long) nextCapacity - block.capacity();
             return;
         }
-        for (Allocation allocation : allocations.values()) {
-            if (allocation.current == block) {
-                throw new IllegalStateException("cannot quarantine current native block");
-            }
-        }
         reservedBytes += nextCapacity;
-        retainedMovedBlocks.add(new RetainedBlock(block, retiredEpoch));
+        ensureRetainedCapacity(retainedBlockCount + 1);
+        retainedPageIds[retainedBlockCount] = block.pageId();
+        retainedPageOffsets[retainedBlockCount] = block.pageOffset();
+        retainedCapacities[retainedBlockCount] = block.capacity();
+        retainedPageClasses[retainedBlockCount] = block.pageClass().ordinal();
+        retainedEpochs[retainedBlockCount] = retiredEpoch;
+        retainedBlockCount++;
     }
 
     private void reclaimEligibleQuarantine() {
@@ -562,44 +551,44 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     }
 
     private void reclaimEligibleFreedObjects() {
-        Long[] slotIds = allocations.keySet().toArray(Long[]::new);
-        for (Long slotId : slotIds) {
-            Allocation allocation = allocations.get(slotId);
-            if (allocation == null || !allocation.quarantined || allocation.retiredEpoch <= 0) {
+        for (int slotId = objectTable.firstOccupiedSlot(); slotId != 0;
+             slotId = objectTable.nextOccupiedSlot(slotId)) {
+            YierdisNativeObjectMeta meta = objectTable.occupiedMeta(slotId);
+            if (meta == null || meta.state() != YierdisNativeObjectTable.STATE_FREED_QUARANTINED) {
                 continue;
             }
-            if (!epochManager.canReclaim(allocation.retiredEpoch)) {
+            if (!epochManager.canReclaim(meta.freeEpoch())) {
                 continue;
             }
-            YierdisNativeObjectMeta meta = objectTable.snapshot(allocation.lastHandle, true);
             if (meta.pinCount() != 0) {
                 continue;
             }
-            releaseQuarantinedAllocation(slotId, allocation, meta.size());
+            releaseQuarantinedAllocation(meta);
         }
     }
 
     private void reclaimEligibleMovedBlocks() {
-        for (int i = 0; i < retainedMovedBlocks.size(); ) {
-            RetainedBlock retained = retainedMovedBlocks.get(i);
-            if (!epochManager.canReclaim(retained.retiredEpoch)) {
+        for (int i = 0; i < retainedBlockCount; ) {
+            if (!epochManager.canReclaim(retainedEpochs[i])) {
                 i++;
                 continue;
             }
-            reservedBytes -= retained.block.capacity();
-            retained.block.close();
-            retainedMovedBlocks.remove(i);
+            reservedBytes -= retainedCapacities[i];
+            pageAllocator.free(
+                    retainedPageIds[i],
+                    retainedPageOffsets[i],
+                    retainedCapacities[i],
+                    retainedPageClasses[i]
+            );
+            removeRetainedLocation(i);
         }
     }
 
     private long pinnedObjects() {
         long count = 0L;
-        for (Long slotId : allocations.keySet()) {
-            NativeHandle handle = handleForSlot(slotId);
-            if (handle == null) {
-                continue;
-            }
-            YierdisNativeObjectMeta meta = objectTable.snapshot(handle, true);
+        for (int slotId = objectTable.firstOccupiedSlot(); slotId != 0;
+             slotId = objectTable.nextOccupiedSlot(slotId)) {
+            YierdisNativeObjectMeta meta = objectTable.occupiedMeta(slotId);
             if (meta.pinCount() > 0) {
                 count++;
             }
@@ -609,8 +598,10 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
     private long quarantinedObjects() {
         long count = 0L;
-        for (Allocation allocation : allocations.values()) {
-            if (allocation.quarantined) {
+        for (int slotId = objectTable.firstOccupiedSlot(); slotId != 0;
+             slotId = objectTable.nextOccupiedSlot(slotId)) {
+            YierdisNativeObjectMeta meta = objectTable.occupiedMeta(slotId);
+            if (meta.state() == YierdisNativeObjectTable.STATE_FREED_QUARANTINED) {
                 count++;
             }
         }
@@ -619,9 +610,11 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
     private long quarantineBytes() {
         long bytes = retainedMovedBlockBytes();
-        for (Allocation allocation : allocations.values()) {
-            if (allocation.quarantined) {
-                bytes += allocation.current.capacity();
+        for (int slotId = objectTable.firstOccupiedSlot(); slotId != 0;
+             slotId = objectTable.nextOccupiedSlot(slotId)) {
+            YierdisNativeObjectMeta meta = objectTable.occupiedMeta(slotId);
+            if (meta.state() == YierdisNativeObjectTable.STATE_FREED_QUARANTINED) {
+                bytes += meta.capacity();
             }
         }
         return bytes;
@@ -629,17 +622,19 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
     private long retainedMovedBlockBytes() {
         long bytes = 0L;
-        for (RetainedBlock retained : retainedMovedBlocks) {
-            bytes += retained.block.capacity();
+        for (int i = 0; i < retainedBlockCount; i++) {
+            bytes += retainedCapacities[i];
         }
         return bytes;
     }
 
-    private long estimateMirrorHeapBytes() {
-        long bytes = 256L;
-        bytes = MemoryUsageSnapshot.addSaturating(bytes, (long) allocations.size() * 96L);
-        bytes = MemoryUsageSnapshot.addSaturating(bytes, (long) retainedMovedBlocks.size() * 48L);
-        return bytes;
+    private long retainedLocationHeapBytes() {
+        return 80L
+                + (long) retainedPageIds.length * Integer.BYTES
+                + (long) retainedPageOffsets.length * Integer.BYTES
+                + (long) retainedCapacities.length * Integer.BYTES
+                + (long) retainedPageClasses.length * Integer.BYTES
+                + (long) retainedEpochs.length * Long.BYTES;
     }
 
     private NativeObjectKindCounts objectKindCounts() {
@@ -664,11 +659,13 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         long zsetNodes = 0;
         long indexNodes = 0;
         long metadataRecords = 0;
-        for (Allocation allocation : allocations.values()) {
-            if (allocation.lastHandle == null || allocation.quarantined) {
+        for (int slotId = objectTable.firstOccupiedSlot(); slotId != 0;
+             slotId = objectTable.nextOccupiedSlot(slotId)) {
+            YierdisNativeObjectMeta meta = objectTable.occupiedMeta(slotId);
+            if (meta == null || meta.state() == YierdisNativeObjectTable.STATE_FREED_QUARANTINED) {
                 continue;
             }
-            NativeObjectKind kind = kindFor(allocation.lastHandle);
+            NativeObjectKind kind = kindFor(meta);
             if (kind == null) {
                 continue;
             }
@@ -752,38 +749,51 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         }
     }
 
-    private static NativeObjectKind kindFor(NativeHandle handle) {
+    private static NativeObjectKind kindFor(YierdisNativeObjectMeta meta) {
         for (NativeObjectKind kind : NativeObjectKind.values()) {
-            if (kind.domain() == handle.domain() && kind.code() == handle.kindCode()) {
+            if (kind.domain() == meta.domain() && kind.code() == meta.kindCode()) {
                 return kind;
             }
         }
         return null;
     }
 
-    private NativeHandle handleForSlot(long slotId) {
-        Allocation allocation = allocations.get(slotId);
-        if (allocation == null || allocation.lastHandle == null) {
-            return null;
+    private static NativeHandle handleFor(YierdisNativeObjectMeta meta) {
+        NativeObjectKind kind = kindFor(meta);
+        if (kind == null) {
+            throw new NativeMemoryException("unknown native object kind: " + meta.kindCode());
         }
-        return allocation.lastHandle;
+        return NativeHandle.of(meta.domain(), kind, meta.slotId(), meta.generation(), meta.flags() & 0x0f);
     }
 
-    private List<NativeHandle> candidateHandles() {
-        List<Long> slotIds = new ArrayList<>(allocations.keySet());
-        slotIds.sort(Long::compare);
-        List<NativeHandle> handles = new ArrayList<>(slotIds.size());
-        for (Long slotId : slotIds) {
-            NativeHandle handle = handleForSlot(slotId);
-            if (handle != null) {
-                handles.add(handle);
-            }
+    private void ensureRetainedCapacity(int required) {
+        if (required <= retainedPageIds.length) {
+            return;
         }
-        return handles;
+        int capacity = retainedPageIds.length == 0
+                ? Math.max(4, required)
+                : Math.max(required, retainedPageIds.length + Math.max(1, retainedPageIds.length >>> 1));
+        retainedPageIds = Arrays.copyOf(retainedPageIds, capacity);
+        retainedPageOffsets = Arrays.copyOf(retainedPageOffsets, capacity);
+        retainedCapacities = Arrays.copyOf(retainedCapacities, capacity);
+        retainedPageClasses = Arrays.copyOf(retainedPageClasses, capacity);
+        retainedEpochs = Arrays.copyOf(retainedEpochs, capacity);
     }
 
-    private static long packedAddress(YierdisNativeBlock block) {
-        return ((long) block.pageId() << 32) | Integer.toUnsignedLong(block.pageOffset());
+    private void removeRetainedLocation(int index) {
+        int last = --retainedBlockCount;
+        if (index != last) {
+            retainedPageIds[index] = retainedPageIds[last];
+            retainedPageOffsets[index] = retainedPageOffsets[last];
+            retainedCapacities[index] = retainedCapacities[last];
+            retainedPageClasses[index] = retainedPageClasses[last];
+            retainedEpochs[index] = retainedEpochs[last];
+        }
+        retainedPageIds[last] = 0;
+        retainedPageOffsets[last] = 0;
+        retainedCapacities[last] = 0;
+        retainedPageClasses[last] = 0;
+        retainedEpochs[last] = 0L;
     }
 
     private static void copyPrefix(YierdisNativeBlock src, YierdisNativeBlock dst, int len) {
@@ -800,15 +810,6 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     private void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("stable native allocator is closed");
-        }
-    }
-
-    private static RuntimeException closeBlock(YierdisNativeBlock block, RuntimeException failure) {
-        try {
-            block.close();
-            return failure;
-        } catch (RuntimeException e) {
-            return addFailure(failure, e);
         }
     }
 
@@ -855,14 +856,13 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
 
     private final class StableObjectView implements NativeObjectView {
         private final NativeHandle handle;
-        private final Allocation allocation;
+        private final YierdisNativeBlock block;
         private final NativeAccessMode mode;
         private boolean closedView;
 
-        private StableObjectView(NativeHandle handle, Allocation allocation, NativeAccessMode mode) {
+        private StableObjectView(NativeHandle handle, YierdisNativeBlock block, NativeAccessMode mode) {
             this.handle = handle;
-            this.allocation = allocation;
-            this.allocation.lastHandle = handle;
+            this.block = block;
             this.mode = mode;
         }
 
@@ -886,7 +886,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         public int capacity() {
             synchronized (YierdisStableNativeAllocator.this) {
                 ensureLive();
-                return allocation.current.capacity();
+                return block.capacity();
             }
         }
 
@@ -895,7 +895,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             synchronized (YierdisStableNativeAllocator.this) {
                 YierdisNativeObjectMeta meta = ensureLive();
                 checkRange(index, 1, meta.size());
-                return allocation.current.getByte(index);
+                return block.getByte(index);
             }
         }
 
@@ -904,7 +904,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             synchronized (YierdisStableNativeAllocator.this) {
                 YierdisNativeObjectMeta meta = ensureWritable();
                 checkRange(index, 1, meta.size());
-                allocation.current.setByte(index, value);
+                block.setByte(index, value);
             }
         }
 
@@ -913,7 +913,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             synchronized (YierdisStableNativeAllocator.this) {
                 YierdisNativeObjectMeta meta = ensureLive();
                 checkRange(index, len, meta.size());
-                allocation.current.getBytes(index, dst, dstOff, len);
+                block.getBytes(index, dst, dstOff, len);
             }
         }
 
@@ -922,7 +922,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             synchronized (YierdisStableNativeAllocator.this) {
                 YierdisNativeObjectMeta meta = ensureWritable();
                 checkRange(index, len, meta.size());
-                allocation.current.setBytes(index, src, srcOff, len);
+                block.setBytes(index, src, srcOff, len);
             }
         }
 
@@ -952,33 +952,18 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                 throw new IllegalStateException("native object view is closed");
             }
             YierdisNativeObjectMeta meta = requireLiveMeta(handle);
-            allocationFor(handle);
+            if (meta.segmentId() != block.pageId()
+                    || meta.address() != block.pageOffset()
+                    || meta.capacity() != block.capacity()
+                    || meta.pageClass() != block.pageClass().ordinal()) {
+                throw new NativeMemoryException("resolved native object location changed while pinned");
+            }
             return meta;
         }
 
         private void checkRange(int index, int len, int size) {
             if (len < 0 || index < 0 || index > size - len) {
                 throw new IndexOutOfBoundsException();
-            }
-        }
-    }
-
-    private static final class Allocation {
-        private YierdisNativeBlock current;
-        private NativeHandle lastHandle;
-        private boolean quarantined;
-        private long retiredEpoch;
-
-        private Allocation(YierdisNativeBlock current) {
-            this.current = Objects.requireNonNull(current, "current");
-        }
-    }
-
-    private record RetainedBlock(YierdisNativeBlock block, long retiredEpoch) {
-        private RetainedBlock {
-            Objects.requireNonNull(block, "block");
-            if (retiredEpoch <= 0) {
-                throw new IllegalArgumentException("retiredEpoch must be > 0");
             }
         }
     }
