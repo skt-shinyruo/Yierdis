@@ -13,6 +13,7 @@ import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
+import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.memory.api.NativeDefragResult;
@@ -30,8 +31,10 @@ import yier.bubu.redis.storage.api.DbChangeContext;
 import yier.bubu.redis.storage.api.DbChangeKind;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
+import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ValueType;
+import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
@@ -235,7 +238,7 @@ public class YierdisDbConstructionTest {
                     return YierdisDbKeyLifecycle.EntryMutationResult.of(next, null);
                 });
                 Assert.fail("entry allocation should fail when the shared native allocator has no free slots");
-            } catch (NativeMemoryException e) {
+            } catch (NativeCapacityExceededException e) {
                 Assert.assertTrue(e.getMessage().contains("native object slot limit exceeded"));
             }
 
@@ -381,8 +384,8 @@ public class YierdisDbConstructionTest {
             try {
                 strings.setBit(key, 128L, 1);
                 Assert.fail("setbit should fail when string growth cannot realloc");
-            } catch (NativeMemoryException e) {
-                Assert.assertTrue(e.getMessage().contains("native object slot limit exceeded"));
+            } catch (YierdisCommandException e) {
+                Assert.assertEquals(MaxmemoryErrors.OOM_ERR, e.getMessage());
             }
 
             Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.STRING_BYTES));

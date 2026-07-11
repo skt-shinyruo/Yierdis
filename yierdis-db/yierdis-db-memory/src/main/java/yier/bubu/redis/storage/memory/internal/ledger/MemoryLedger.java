@@ -30,6 +30,10 @@ public interface MemoryLedger {
 
     MemoryReservation reserve(long estimatedExtraBytes);
 
+    void reconcile(MemoryReservation reservation, long requiredBytes);
+
+    MemoryReservation beginReclamation();
+
     public default void commit(MemoryReservation reservation) {
         commit(reservation, reservation == null ? 0 : reservation.reservedBytes());
     }
@@ -39,7 +43,7 @@ public interface MemoryLedger {
      * <p>
      * 契约：
      * - {@code actualDeltaBytes} 可以为负，例如覆盖为更小值、删除 key 或过期清理。
-     * - {@code reservation.reservedBytes()} 是写入前的 best-effort 上界，具体实现可选择严格校验或接受估算漂移。
+     * - {@code reservation.reservedBytes()} 已由 reconcile 收敛为提交前确认的物理增长预算。
      */
     void commit(MemoryReservation reservation, long actualDeltaBytes);
 

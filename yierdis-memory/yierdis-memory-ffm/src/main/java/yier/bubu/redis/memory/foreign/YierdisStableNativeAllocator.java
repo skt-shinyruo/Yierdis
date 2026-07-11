@@ -7,6 +7,7 @@ import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
+import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeAllocationLatencyHistogram;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
@@ -57,6 +58,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     private long allocationUnder100Micros;
     private long allocationUnder1Millis;
     private long allocationAtLeast1Millis;
+    private AllocatorAllocationScope activeAllocationScope;
 
     public YierdisStableNativeAllocator(YierdisFfmMemoryRuntime runtime, int maxSlots) {
         this(runtime, maxSlots, (handle, sourceMeta, target) -> {
@@ -112,6 +114,14 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             reservedBytes += block.capacity();
             liveObjects++;
             allocated = true;
+            if (activeAllocationScope != null) {
+                try {
+                    activeAllocationScope.track(handle);
+                } catch (RuntimeException | Error failure) {
+                    free(handle);
+                    throw failure;
+                }
+            }
             return handle;
         } finally {
             recordAllocationLatency(System.nanoTime() - startedNanos);
@@ -187,9 +197,11 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         objectTable.free(handle, freeEpoch, delayRelease);
         if (delayRelease) {
             reclaimEligibleQuarantine();
+            untrackScopedHandle(handle);
             return;
         }
         releaseAllocation(meta);
+        untrackScopedHandle(handle);
     }
 
     @Override
@@ -216,6 +228,21 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         ensureOpen();
         NativeEpochScope delegate = epochManager.begin(kind);
         return new AllocatorEpochScope(delegate);
+    }
+
+    @Override
+    public NativeAllocationScope beginAllocationScope() {
+        ensureOpen();
+        if (activeAllocationScope != null) {
+            throw new IllegalStateException("native allocation scope is already active");
+        }
+        AllocatorAllocationScope scope = new AllocatorAllocationScope(
+                memoryUsage(),
+                objectTable.allocationScopeCheckpoint(),
+                pageAllocator.beginAllocationScope()
+        );
+        activeAllocationScope = scope;
+        return scope;
     }
 
     @Override
@@ -418,6 +445,9 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         if (closed) {
             return;
         }
+        if (activeAllocationScope != null) {
+            activeAllocationScope.abort();
+        }
         closed = true;
 
         long leakedObjects = liveObjects;
@@ -545,6 +575,12 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         reservedBytes -= meta.capacity();
         liveObjects--;
         pageAllocator.free(meta);
+    }
+
+    private void untrackScopedHandle(NativeHandle handle) {
+        if (activeAllocationScope != null) {
+            activeAllocationScope.untrack(handle);
+        }
     }
 
     private void releaseQuarantinedAllocation(YierdisNativeObjectMeta meta) {
@@ -874,6 +910,111 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
             if (!closed) {
                 reclaimEligibleQuarantine();
             }
+        }
+    }
+
+    private final class AllocatorAllocationScope implements NativeAllocationScope {
+        private final MemoryUsageSnapshot baseline;
+        private final YierdisNativeObjectTable.AllocationScopeCheckpoint tableCheckpoint;
+        private final YierdisNativePageAllocator.AllocationScopeCheckpoint pageCheckpoint;
+        private long[] handles = new long[0];
+        private int handleCount;
+        private boolean terminal;
+
+        private AllocatorAllocationScope(
+                MemoryUsageSnapshot baseline,
+                YierdisNativeObjectTable.AllocationScopeCheckpoint tableCheckpoint,
+                YierdisNativePageAllocator.AllocationScopeCheckpoint pageCheckpoint
+        ) {
+            this.baseline = baseline;
+            this.tableCheckpoint = tableCheckpoint;
+            this.pageCheckpoint = pageCheckpoint;
+        }
+
+        @Override
+        public NativeAllocationGrowth growth() {
+            if (terminal) {
+                return NativeAllocationGrowth.zero();
+            }
+            MemoryUsageSnapshot current = memoryUsage();
+            return new NativeAllocationGrowth(
+                    positiveDifference(current.heapEstimatedBytes(), baseline.heapEstimatedBytes()),
+                    positiveDifference(
+                            current.nativeMetadataCommittedBytes(),
+                            baseline.nativeMetadataCommittedBytes()
+                    ),
+                    positiveDifference(
+                            current.nativeDataCommittedBytes(),
+                            baseline.nativeDataCommittedBytes()
+                    )
+            );
+        }
+
+        @Override
+        public void promote() {
+            if (terminal) {
+                return;
+            }
+            pageAllocator.promoteAllocationScope(pageCheckpoint);
+            terminal = true;
+            handleCount = 0;
+            activeAllocationScope = null;
+        }
+
+        @Override
+        public void abort() {
+            if (terminal) {
+                return;
+            }
+            terminal = true;
+            activeAllocationScope = null;
+            RuntimeException failure = null;
+            for (int i = handleCount - 1; i >= 0; i--) {
+                try {
+                    free(NativeHandle.fromRaw(handles[i]));
+                } catch (RuntimeException releaseFailure) {
+                    failure = addFailure(failure, releaseFailure);
+                }
+            }
+            handleCount = 0;
+            try {
+                pageAllocator.restoreAllocationScope(pageCheckpoint);
+            } catch (RuntimeException trimFailure) {
+                failure = addFailure(failure, trimFailure);
+            }
+            try {
+                objectTable.restoreAllocationScopeCheckpoint(tableCheckpoint);
+            } catch (RuntimeException trimFailure) {
+                failure = addFailure(failure, trimFailure);
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
+
+        private void track(NativeHandle handle) {
+            if (terminal) {
+                throw new IllegalStateException("native allocation scope is closed");
+            }
+            if (handleCount == handles.length) {
+                handles = Arrays.copyOf(handles, Math.max(8, handles.length << 1));
+            }
+            handles[handleCount++] = handle.raw();
+        }
+
+        private void untrack(NativeHandle handle) {
+            long raw = handle.raw();
+            for (int i = handleCount - 1; i >= 0; i--) {
+                if (handles[i] != raw) {
+                    continue;
+                }
+                handles[i] = handles[--handleCount];
+                return;
+            }
+        }
+
+        private long positiveDifference(long current, long before) {
+            return current > before ? current - before : 0L;
         }
     }
 

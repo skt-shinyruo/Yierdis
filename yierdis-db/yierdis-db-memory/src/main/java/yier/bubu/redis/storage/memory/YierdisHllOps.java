@@ -36,7 +36,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         internals.checkThread();
         long now = System.currentTimeMillis();
         long upperBound = estimatePfaddUpperBound(keyBytes, elements);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -121,7 +121,7 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         byte[] mergedDense = YierdisHyperLogLog.denseBytesFromRegisters(registers);
         long now = System.currentTimeMillis();
         long upperBound = estimatePfmergeUpperBound(destKeyBytes, mergedDense.length);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;

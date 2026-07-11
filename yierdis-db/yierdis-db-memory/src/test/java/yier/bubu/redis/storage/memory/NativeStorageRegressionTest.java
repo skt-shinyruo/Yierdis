@@ -14,6 +14,7 @@ import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
+import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ValueType;
@@ -481,8 +482,8 @@ public class NativeStorageRegressionTest {
                         ).value());
                     }
                     Assert.fail("expected default shared native slot capacity to overflow before 90k string keys");
-                } catch (NativeMemoryException e) {
-                    Assert.assertTrue(e.getMessage().contains("native object slot limit exceeded"));
+                } catch (YierdisCommandException e) {
+                    Assert.assertEquals(MaxmemoryErrors.OOM_ERR, e.getMessage());
                 }
             } finally {
                 db.shutdown();

@@ -38,7 +38,7 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
     @Override
     public WriteResult<Long> del(Collection<byte[]> keys) {
         internals.checkThread();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
                 return 0;

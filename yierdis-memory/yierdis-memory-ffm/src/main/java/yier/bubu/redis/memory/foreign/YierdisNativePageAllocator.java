@@ -30,6 +30,8 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
     private long liveLargeSpanPages;
     private long emptySmallPages;
     private long liveSpanDescriptors;
+    private long nextPageSequence;
+    private AllocationScopeCheckpoint activeAllocationScope;
 
     public YierdisNativePageAllocator(YierdisFfmMemoryRuntime runtime) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -170,6 +172,49 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         return bytes;
     }
 
+    AllocationScopeCheckpoint beginAllocationScope() {
+        ensureOpen();
+        if (activeAllocationScope != null) {
+            throw new IllegalStateException("native page allocation scope is already active");
+        }
+        AllocationScopeCheckpoint checkpoint = new AllocationScopeCheckpoint(
+                liveSmallHead,
+                liveSpanHead,
+                nextPageSequence,
+                pageDirectory.allocationScopeCheckpoint()
+        );
+        activeAllocationScope = checkpoint;
+        return checkpoint;
+    }
+
+    void promoteAllocationScope(AllocationScopeCheckpoint checkpoint) {
+        if (activeAllocationScope == checkpoint) {
+            activeAllocationScope = null;
+        }
+    }
+
+    void restoreAllocationScope(AllocationScopeCheckpoint checkpoint) {
+        ensureOpen();
+        if (activeAllocationScope != checkpoint) {
+            throw new IllegalStateException("native page allocation scope is not active");
+        }
+        try {
+            while (liveSmallHead != checkpoint.smallPageHead) {
+                if (liveSmallHead == null || liveSmallHead.liveBlocks != 0) {
+                    throw new IllegalStateException("allocation scope left a live native small page");
+                }
+                closeSmallPage(liveSmallHead);
+            }
+            if (liveSpanHead != checkpoint.spanHead) {
+                throw new IllegalStateException("allocation scope left a live native span");
+            }
+            pageDirectory.restoreAllocationScopeCheckpoint(checkpoint.directoryCheckpoint);
+            nextPageSequence = checkpoint.nextPageSequence;
+        } finally {
+            activeAllocationScope = null;
+        }
+    }
+
     @Override
     public void close() {
         if (closed) {
@@ -278,7 +323,13 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
                 ? YierdisNativePageClass.MEDIUM_SPAN
                 : YierdisNativePageClass.LARGE_SPAN;
         YierdisFfmRegion region = runtime.allocateRegion(pageClass.name().toLowerCase(), capacity);
-        SpanAllocation span = new SpanAllocation(pageCount, pageClass, region, capacity);
+        SpanAllocation span = new SpanAllocation(
+                nextPageSequence++,
+                pageCount,
+                pageClass,
+                region,
+                capacity
+        );
         span.pageId = pageDirectory.add(span);
         linkLiveSpan(span);
         committedBytes += capacity;
@@ -306,7 +357,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
 
     private SmallPage newSmallPage(YierdisNativeSizeClass sizeClass) {
         YierdisFfmRegion region = runtime.allocateRegion("native-small-page", PAGE_BYTES);
-        SmallPage page = new SmallPage(sizeClass, region);
+        SmallPage page = new SmallPage(nextPageSequence++, sizeClass, region);
         page.pageId = pageDirectory.add(page);
         linkLiveSmall(page);
         linkNonFull(page);
@@ -337,6 +388,11 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         if (page.liveBlocks == 0) {
             SmallPage oldWarmPage = emptyByClass[page.sizeClass.ordinal()];
             if (oldWarmPage != null && oldWarmPage != page) {
+                if (createdInActiveScope(page) && !createdInActiveScope(oldWarmPage)) {
+                    // abort 只能回收本 scope 新建的页，不能让临时 warm page 淘汰命令前的基线页。
+                    closeSmallPage(page);
+                    return;
+                }
                 closeSmallPage(oldWarmPage);
             }
             linkEmpty(page);
@@ -597,6 +653,11 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         return Math.max(0L, System.nanoTime() - startedNanos);
     }
 
+    private boolean createdInActiveScope(SmallPage page) {
+        return activeAllocationScope != null
+                && page.creationSequence >= activeAllocationScope.nextPageSequence;
+    }
+
     private void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("native page allocator is closed");
@@ -619,8 +680,17 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
     record PageGrowth(long heapEstimatedBytes, long nativeDataCommittedBytes) {
     }
 
+    record AllocationScopeCheckpoint(
+            SmallPage smallPageHead,
+            SpanAllocation spanHead,
+            long nextPageSequence,
+            YierdisNativePageDirectory.AllocationScopeCheckpoint directoryCheckpoint
+    ) {
+    }
+
     private static final class SmallPage {
         private int pageId;
+        private final long creationSequence;
         private final YierdisNativeSizeClass sizeClass;
         private final YierdisFfmRegion region;
         private final int[] freeOffsets;
@@ -636,7 +706,12 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         private SmallPage emptyPrev;
         private SmallPage emptyNext;
 
-        private SmallPage(YierdisNativeSizeClass sizeClass, YierdisFfmRegion region) {
+        private SmallPage(
+                long creationSequence,
+                YierdisNativeSizeClass sizeClass,
+                YierdisFfmRegion region
+        ) {
+            this.creationSequence = creationSequence;
             this.sizeClass = Objects.requireNonNull(sizeClass, "sizeClass");
             this.region = Objects.requireNonNull(region, "region");
             int blockCount = PAGE_BYTES / sizeClass.bytes();
@@ -663,6 +738,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
 
     private static final class SpanAllocation {
         private int pageId;
+        private final long creationSequence;
         private final int pageCount;
         private final YierdisNativePageClass pageClass;
         private final YierdisFfmRegion region;
@@ -672,11 +748,13 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         private SpanAllocation liveNext;
 
         private SpanAllocation(
+                long creationSequence,
                 int pageCount,
                 YierdisNativePageClass pageClass,
                 YierdisFfmRegion region,
                 int capacity
         ) {
+            this.creationSequence = creationSequence;
             this.pageCount = pageCount;
             this.pageClass = Objects.requireNonNull(pageClass, "pageClass");
             this.region = Objects.requireNonNull(region, "region");

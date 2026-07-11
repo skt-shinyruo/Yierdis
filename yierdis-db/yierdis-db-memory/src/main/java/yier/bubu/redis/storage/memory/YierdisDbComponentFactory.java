@@ -55,7 +55,11 @@ public final class YierdisDbComponentFactory {
                 memoryBudgetCallbacks::usedBytesForMaxmemory,
                 runtimeState::maxmemoryCoordinator
         );
-        YierdisDbMutationExecutor mutationExecutor = new YierdisDbMutationExecutor(owner::checkThread, ledger);
+        YierdisDbMutationExecutor mutationExecutor = new YierdisDbMutationExecutor(
+                owner::checkThread,
+                ledger,
+                storage.nativeAllocator
+        );
         YierdisDbKeyLifecycle keyLifecycle = new YierdisDbKeyLifecycle(
                 storage.expires,
                 storage.nativeAllocator,

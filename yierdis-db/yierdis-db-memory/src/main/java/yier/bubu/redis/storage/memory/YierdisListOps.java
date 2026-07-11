@@ -71,7 +71,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
     private WriteResult<Long> pushInternal(byte[] keyBytes, List<byte[]> values, boolean left, long upperBound) {
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -149,7 +149,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             throw new IllegalArgumentException("count must be >= 0");
         }
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return 0;

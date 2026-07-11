@@ -24,6 +24,8 @@ public final class InMemoryLedger implements MemoryLedger {
     private final long limitBytes;
     private long usedBytes;
     private long reservedBytes;
+    private int normalReservations;
+    private int reclamationBegins;
 
     public InMemoryLedger(long limitBytes) {
         if (limitBytes < 0) {
@@ -49,6 +51,7 @@ public final class InMemoryLedger implements MemoryLedger {
 
     @Override
     public MemoryReservation reserve(long estimatedExtraBytes) {
+        normalReservations++;
         if (estimatedExtraBytes < 0) {
             throw new IllegalArgumentException("estimatedExtraBytes must be >= 0");
         }
@@ -65,6 +68,28 @@ public final class InMemoryLedger implements MemoryLedger {
 
         reservedBytes += estimatedExtraBytes;
         return new ReservationToken(this, estimatedExtraBytes);
+    }
+
+    @Override
+    public void reconcile(MemoryReservation reservation, long requiredBytes) {
+        if (requiredBytes < 0) {
+            throw new IllegalArgumentException("requiredBytes must be >= 0");
+        }
+        ReservationToken token = ReservationToken.validate(reservation, this);
+        long reserved = token == null ? 0L : token.reservedBytes;
+        if (requiredBytes > reserved) {
+            throw new IllegalStateException("prepared mutation exceeded its reservation");
+        }
+        if (token != null && requiredBytes < reserved) {
+            reservedBytes -= reserved - requiredBytes;
+            token.reservedBytes = requiredBytes;
+        }
+    }
+
+    @Override
+    public MemoryReservation beginReclamation() {
+        reclamationBegins++;
+        return new ReservationToken(this, 0L);
     }
 
     @Override
@@ -101,6 +126,14 @@ public final class InMemoryLedger implements MemoryLedger {
         }
     }
 
+    int normalReservations() {
+        return normalReservations;
+    }
+
+    int reclamationBegins() {
+        return reclamationBegins;
+    }
+
     private enum NoopReservation implements MemoryReservation {
         INSTANCE;
 
@@ -112,7 +145,7 @@ public final class InMemoryLedger implements MemoryLedger {
 
     private static final class ReservationToken implements MemoryReservation {
         private final InMemoryLedger owner;
-        private final long reservedBytes;
+        private long reservedBytes;
         private boolean finished;
 
         private ReservationToken(InMemoryLedger owner, long reservedBytes) {

@@ -36,7 +36,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
         internals.checkThread();
         long now = System.currentTimeMillis();
         long upperBound = estimateSetWriteUpperBoundForMutation(keyBytes, members);
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return upperBound;
@@ -86,7 +86,7 @@ public final class YierdisSetOps implements SetReadOps, SetWriteOps {
     public WriteResult<Long> srem(byte[] keyBytes, List<byte[]> members) {
         internals.checkThread();
         long now = System.currentTimeMillis();
-        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
             @Override
             public long upperBoundBytes() {
                 return 0;

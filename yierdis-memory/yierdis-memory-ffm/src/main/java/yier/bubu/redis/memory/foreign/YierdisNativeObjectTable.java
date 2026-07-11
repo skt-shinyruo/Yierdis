@@ -298,6 +298,51 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
         return bytes;
     }
 
+    AllocationScopeCheckpoint allocationScopeCheckpoint() {
+        ensureOpen();
+        return new AllocationScopeCheckpoint(activeSegments, segments.length, availableSegments.length);
+    }
+
+    void restoreAllocationScopeCheckpoint(AllocationScopeCheckpoint checkpoint) {
+        ensureOpen();
+        Objects.requireNonNull(checkpoint, "checkpoint");
+        if (checkpoint.activeSegments > activeSegments) {
+            throw new IllegalStateException("allocation scope checkpoint is ahead of the object table");
+        }
+        for (int segmentIndex = activeSegments - 1; segmentIndex >= checkpoint.activeSegments; segmentIndex--) {
+            YierdisNativeObjectSegment segment = segments[segmentIndex];
+            int reusableSlots = 0;
+            int retired = 0;
+            for (int offset = 0; offset < segment.validSlots(); offset++) {
+                int state = segment.readInt(offset, STATE_OFFSET);
+                if (state != STATE_FREE) {
+                    throw new IllegalStateException("allocation scope left a live native object");
+                }
+                if (segment.isRetired(offset)) {
+                    retired++;
+                } else {
+                    reusableSlots++;
+                }
+            }
+            freeSlots -= reusableSlots;
+            retiredSlots -= retired;
+            stateCounts[STATE_FREE] -= segment.validSlots();
+            segment.close();
+            segments[segmentIndex] = null;
+        }
+        activeSegments = checkpoint.activeSegments;
+        segments = Arrays.copyOf(segments, checkpoint.segmentArrayLength);
+        availableSegments = Arrays.copyOf(availableSegments, checkpoint.availableArrayLength);
+        availableSegmentCount = 0;
+        for (int segmentIndex = 0; segmentIndex < activeSegments; segmentIndex++) {
+            YierdisNativeObjectSegment segment = segments[segmentIndex];
+            segment.availableQueued(false);
+            if (segment.hasFreeSlot()) {
+                enqueueAvailable(segmentIndex, segment);
+            }
+        }
+    }
+
     int firstOccupiedSlot() {
         return nextOccupiedSlot(0);
     }
@@ -555,6 +600,13 @@ public final class YierdisNativeObjectTable implements AutoCloseable {
             int segmentIndex,
             int offset,
             YierdisNativeObjectSegment segment
+    ) {
+    }
+
+    record AllocationScopeCheckpoint(
+            int activeSegments,
+            int segmentArrayLength,
+            int availableArrayLength
     ) {
     }
 }

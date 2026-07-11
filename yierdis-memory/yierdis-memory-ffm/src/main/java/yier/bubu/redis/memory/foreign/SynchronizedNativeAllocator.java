@@ -6,6 +6,7 @@ import yier.bubu.redis.common.memory.MemoryReclaimResult;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocationGrowth;
+import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
@@ -82,6 +83,13 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     public NativeEpochScope beginEpoch(NativeEpochKind kind) {
         synchronized (lock) {
             return new SynchronizedEpochScope(delegate.beginEpoch(kind));
+        }
+    }
+
+    @Override
+    public NativeAllocationScope beginAllocationScope() {
+        synchronized (lock) {
+            return new SynchronizedAllocationScope(delegate.beginAllocationScope());
         }
     }
 
@@ -173,6 +181,35 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
         public void close() {
             synchronized (lock) {
                 delegateScope.close();
+            }
+        }
+    }
+
+    private final class SynchronizedAllocationScope implements NativeAllocationScope {
+        private final NativeAllocationScope delegateScope;
+
+        private SynchronizedAllocationScope(NativeAllocationScope delegateScope) {
+            this.delegateScope = delegateScope;
+        }
+
+        @Override
+        public NativeAllocationGrowth growth() {
+            synchronized (lock) {
+                return delegateScope.growth();
+            }
+        }
+
+        @Override
+        public void promote() {
+            synchronized (lock) {
+                delegateScope.promote();
+            }
+        }
+
+        @Override
+        public void abort() {
+            synchronized (lock) {
+                delegateScope.abort();
             }
         }
     }
