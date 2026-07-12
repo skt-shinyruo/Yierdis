@@ -52,6 +52,11 @@ public final class NativeByteStore {
         nativeBytes -= len;
     }
 
+    void forget(NativeHandle handle) {
+        Objects.requireNonNull(handle, "handle");
+        nativeBytes -= allocatedBytes(handle);
+    }
+
     public byte[] toByteArray(NativeHandle handle) {
         Objects.requireNonNull(handle, "handle");
         try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {

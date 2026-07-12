@@ -111,6 +111,27 @@ public class CollectionDirectOpsTest {
     }
 
     @Test
+    public void partialListPopRetainsOnlyPoppedNativePayloads() {
+        withDb(db -> {
+            byte[] left = repeatedBytes('a', 128);
+            byte[] middle = repeatedBytes('b', 128);
+            byte[] right = repeatedBytes('c', 128);
+            Assert.assertEquals(3L, db.writes().lists().rpush(b("list"), List.of(left, middle, right)).value().longValue());
+
+            try (PoppedValueSequence popped = db.writes().lists().lpop(b("list"), 1).value()) {
+                Assert.assertEquals(1, popped.count());
+                Assert.assertEquals(136L, popped.encodedElementBytes());
+                Assert.assertEquals(128L, popped.retainedMemoryBytes());
+                Assert.assertEquals(
+                        List.of(new String(middle, StandardCharsets.UTF_8), new String(right, StandardCharsets.UTF_8)),
+                        sequence(db.reads().lists().lrange(b("list"), 0, -1))
+                );
+                Assert.assertEquals(List.of(new String(left, StandardCharsets.UTF_8)), sequence(popped));
+            }
+        });
+    }
+
+    @Test
     public void setSremCoversMissingNoOpWrongTypeTtlAndEmptyDeletion() {
         withDb(db -> {
             Assert.assertEquals(0, db.reads().sets().smembers(b("missing")).count());
@@ -266,6 +287,12 @@ public class CollectionDirectOpsTest {
 
     private static BytesSlice view(String text) {
         return new ArrayBytesSlice(b(text));
+    }
+
+    private static byte[] repeatedBytes(char value, int count) {
+        byte[] bytes = new byte[count];
+        Arrays.fill(bytes, (byte) value);
+        return bytes;
     }
 
     private static void sleepPastTtl() {

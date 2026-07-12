@@ -165,6 +165,50 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
         return out;
     }
 
+    public NativeListEntryRef[] popEntries(int count, boolean left) {
+        int remaining = Math.min(Math.max(0, count), totalSize);
+        if (remaining == 0) {
+            return new NativeListEntryRef[0];
+        }
+        NativeListEntryRef[] out = new NativeListEntryRef[remaining];
+        if (quicklist == null) {
+            if (left) {
+                for (int i = 0; i < remaining; i++) {
+                    out[i] = listpack.entryRefAt(i);
+                }
+            } else {
+                int start = totalSize - remaining;
+                for (int i = totalSize - 1, next = 0; i >= start; i--, next++) {
+                    out[next] = listpack.entryRefAt(i);
+                }
+            }
+            return out;
+        }
+
+        if (left) {
+            int next = 0;
+            for (ListNode node : quicklist) {
+                for (int i = 0; i < node.size() && next < remaining; i++) {
+                    out[next++] = node.entryRefAt(i);
+                }
+                if (next == remaining) {
+                    return out;
+                }
+            }
+            return out;
+        }
+
+        int next = 0;
+        java.util.Iterator<ListNode> iterator = quicklist.descendingIterator();
+        while (iterator.hasNext() && next < remaining) {
+            ListNode node = iterator.next();
+            for (int i = node.size() - 1; i >= 0 && next < remaining; i--) {
+                out[next++] = node.entryRefAt(i);
+            }
+        }
+        return out;
+    }
+
     public List<byte[]> rpop(int count) {
         if (count <= 0) {
             return new ArrayList<>();
@@ -365,6 +409,35 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
             }
         }
         return total;
+    }
+
+    public void releaseExcept(NativeHandle[] retained) {
+        RuntimeException failure = null;
+        if (listpack != null) {
+            try {
+                listpack.closeExcept(retained);
+            } catch (RuntimeException e) {
+                failure = e;
+            } finally {
+                listpack = null;
+            }
+        }
+        if (quicklist != null) {
+            java.util.Iterator<ListNode> iterator = quicklist.iterator();
+            while (iterator.hasNext()) {
+                ListNode n = iterator.next();
+                try {
+                    n.closeExcept(retained);
+                    iterator.remove();
+                } catch (RuntimeException e) {
+                    failure = addFailure(failure, e);
+                }
+            }
+            quicklist = null;
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     @Override
@@ -841,6 +914,10 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
             return liveListpack().copyNativePayloadSizes(target, offset);
         }
 
+        NativeListEntryRef entryRefAt(int index) {
+            return liveListpack().entryRefAt(index);
+        }
+
         byte[] removeFirst() {
             return liveListpack().removeFirst();
         }
@@ -879,6 +956,37 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
                     appended--;
                 }
                 throw e;
+            }
+        }
+
+        void closeExcept(NativeHandle[] retained) {
+            if (payloadClosed && nodeFreed) {
+                return;
+            }
+            RuntimeException failure = null;
+            if (!payloadClosed) {
+                try {
+                    listpack.closeExcept(retained);
+                    payloadClosed = true;
+                } catch (RuntimeException e) {
+                    failure = e;
+                }
+            }
+            if (allocator != null && nodeHandle != null && !nodeFreed) {
+                try {
+                    allocator.free(nodeHandle);
+                    nodeFreed = true;
+                    nodeHandle = null;
+                } catch (RuntimeException e) {
+                    if (failure == null) {
+                        failure = e;
+                    } else {
+                        failure.addSuppressed(e);
+                    }
+                }
+            }
+            if (failure != null) {
+                throw failure;
             }
         }
 
