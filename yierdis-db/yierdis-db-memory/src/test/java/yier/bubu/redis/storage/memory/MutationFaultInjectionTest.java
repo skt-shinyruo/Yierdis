@@ -24,6 +24,7 @@ import yier.bubu.redis.storage.api.StringWriteOps;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.api.result.BulkStringMapPairs;
 import yier.bubu.redis.storage.api.result.BulkStringSequence;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
@@ -215,6 +216,72 @@ public class MutationFaultInjectionTest {
         );
     }
 
+    @Test
+    public void hashAndSetMutationFamiliesAreFailureAtomic() {
+        assertFailureAtomic(
+                new MutationCase(
+                        "new HSET many",
+                        fixture -> {
+                        },
+                        fixture -> fixture.hashOps.hset(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("a"), b("1"), b("b"), b("2"), b("c"), b("3"))
+                        )
+                ),
+                new MutationCase(
+                        "existing HSET replace and add",
+                        fixture -> fixture.hashOps.hset(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("a"), b("old"), b("b"), b("keep"))
+                        ),
+                        fixture -> fixture.hashOps.hset(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("a"), b("new"), b("c"), b("3"), b("d"), b("4"))
+                        )
+                ),
+                new MutationCase(
+                        "HSET listpack promotion",
+                        fixture -> fixture.hashOps.hset(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("a"), b("1"), b("b"), b("2"))
+                        ),
+                        fixture -> fixture.hashOps.hset(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("large"), repeatedBytes('x', 65), b("next"), b("3"))
+                        )
+                ),
+                new MutationCase(
+                        "new SADD many",
+                        fixture -> {
+                        },
+                        fixture -> fixture.setOps.sadd(PRIMARY_KEY, Arrays.asList(b("1"), b("2"), b("3")))
+                ),
+                new MutationCase(
+                        "SADD intset promotion",
+                        fixture -> fixture.setOps.sadd(PRIMARY_KEY, Arrays.asList(b("1"), b("2"), b("3"))),
+                        fixture -> fixture.setOps.sadd(PRIMARY_KEY, Arrays.asList(b("alpha"), b("beta"), b("gamma")))
+                ),
+                new MutationCase(
+                        "SADD hashtable members",
+                        fixture -> fixture.setOps.sadd(PRIMARY_KEY, Arrays.asList(b("seed"), b("1"))),
+                        fixture -> fixture.setOps.sadd(PRIMARY_KEY, Arrays.asList(b("alpha"), b("beta"), b("gamma")))
+                ),
+                new MutationCase(
+                        "HDEL fields",
+                        fixture -> fixture.hashOps.hset(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("a"), b("1"), b("b"), b("2"), b("c"), b("3"))
+                        ),
+                        fixture -> fixture.hashOps.hdel(PRIMARY_KEY, Arrays.asList(b("a"), b("c")))
+                ),
+                new MutationCase(
+                        "SREM members",
+                        fixture -> fixture.setOps.sadd(PRIMARY_KEY, Arrays.asList(b("alpha"), b("beta"), b("gamma"))),
+                        fixture -> fixture.setOps.srem(PRIMARY_KEY, Arrays.asList(b("alpha"), b("gamma")))
+                )
+        );
+    }
+
     private static void assertFailureAtomic(MutationCase... cases) {
         for (MutationCase caseUnderTest : cases) {
             for (long failAt = 1; failAt <= 128; failAt++) {
@@ -270,6 +337,8 @@ public class MutationFaultInjectionTest {
         private final YierdisDbMemoryLedger ledger;
         private final YierdisStringOps stringOps;
         private final YierdisListOps listOps;
+        private final YierdisHashOps hashOps;
+        private final YierdisSetOps setOps;
         private final YierdisTtlOps ttlOps;
         private final YierdisDbOwnedResources resources;
 
@@ -289,6 +358,8 @@ public class MutationFaultInjectionTest {
                 YierdisDbMemoryLedger ledger,
                 YierdisStringOps stringOps,
                 YierdisListOps listOps,
+                YierdisHashOps hashOps,
+                YierdisSetOps setOps,
                 YierdisTtlOps ttlOps,
                 YierdisDbOwnedResources resources
         ) {
@@ -307,6 +378,8 @@ public class MutationFaultInjectionTest {
             this.ledger = ledger;
             this.stringOps = stringOps;
             this.listOps = listOps;
+            this.hashOps = hashOps;
+            this.setOps = setOps;
             this.ttlOps = ttlOps;
             this.resources = resources;
         }
@@ -366,6 +439,8 @@ public class MutationFaultInjectionTest {
             YierdisDbOwnedResources resources = new YierdisDbOwnedResources(runtime, allocator, true, true);
             YierdisStringOps stringOps = new YierdisStringOps(internals);
             YierdisListOps listOps = new YierdisListOps(internals);
+            YierdisHashOps hashOps = new YierdisHashOps(internals);
+            YierdisSetOps setOps = new YierdisSetOps(internals);
             YierdisTtlOps ttlOps = new YierdisTtlOps(internals);
             return new FaultFixture(
                     runtime,
@@ -383,6 +458,8 @@ public class MutationFaultInjectionTest {
                     ledger,
                     stringOps,
                     listOps,
+                    hashOps,
+                    setOps,
                     ttlOps,
                     resources
             );
@@ -399,10 +476,19 @@ public class MutationFaultInjectionTest {
                     allocator.stats().objectCount(NativeObjectKind.LIST_ROOT),
                     allocator.stats().objectCount(NativeObjectKind.LIST_NODE),
                     allocator.stats().objectCount(NativeObjectKind.LISTPACK_BYTES),
+                    allocator.stats().objectCount(NativeObjectKind.HASH_ROOT),
+                    allocator.stats().objectCount(NativeObjectKind.HASH_FIELD_BYTES),
+                    allocator.stats().objectCount(NativeObjectKind.HASH_VALUE_BYTES),
+                    allocator.stats().objectCount(NativeObjectKind.HASH_TABLE),
+                    allocator.stats().objectCount(NativeObjectKind.SET_ROOT),
+                    allocator.stats().objectCount(NativeObjectKind.SET_MEMBER_BYTES),
+                    allocator.stats().objectCount(NativeObjectKind.SET_TABLE),
                     keyDirectory.size(),
                     expires.size(),
                     primaryStringValue(),
                     primaryListValues(),
+                    primaryHashPairs(),
+                    primarySetMembers(),
                     expires.get(PRIMARY_KEY)
             );
         }
@@ -418,10 +504,19 @@ public class MutationFaultInjectionTest {
             Assert.assertEquals(before.listRoots, after.listRoots);
             Assert.assertEquals(before.listNodes, after.listNodes);
             Assert.assertEquals(before.listpackBytes, after.listpackBytes);
+            Assert.assertEquals(before.hashRoots, after.hashRoots);
+            Assert.assertEquals(before.hashFields, after.hashFields);
+            Assert.assertEquals(before.hashValues, after.hashValues);
+            Assert.assertEquals(before.hashTables, after.hashTables);
+            Assert.assertEquals(before.setRoots, after.setRoots);
+            Assert.assertEquals(before.setMembers, after.setMembers);
+            Assert.assertEquals(before.setTables, after.setTables);
             Assert.assertEquals(before.keyCount, after.keyCount);
             Assert.assertEquals(before.expireCount, after.expireCount);
             Assert.assertArrayEquals(before.primaryValue, after.primaryValue);
             Assert.assertEquals(before.primaryListValues, after.primaryListValues);
+            Assert.assertEquals(before.primaryHashPairs, after.primaryHashPairs);
+            Assert.assertEquals(before.primarySetMembers, after.primarySetMembers);
             Assert.assertEquals(before.expireAtMillis, after.expireAtMillis);
         }
 
@@ -439,6 +534,24 @@ public class MutationFaultInjectionTest {
                 return null;
             }
             return strings(listOps.lrange(PRIMARY_KEY, 0, -1));
+        }
+
+        private List<String> primaryHashPairs() {
+            EntryRecord record = keyLifecycle.entryRecord(PRIMARY_KEY);
+            if (record == null || record.type() != ValueType.HASH) {
+                return null;
+            }
+            return strings(hashOps.hgetall(PRIMARY_KEY));
+        }
+
+        private List<String> primarySetMembers() {
+            EntryRecord record = keyLifecycle.entryRecord(PRIMARY_KEY);
+            if (record == null || record.type() != ValueType.SET) {
+                return null;
+            }
+            List<String> values = strings(setOps.smembers(PRIMARY_KEY));
+            values.sort(String::compareTo);
+            return values;
         }
 
         @Override
@@ -489,21 +602,38 @@ public class MutationFaultInjectionTest {
             long listRoots,
             long listNodes,
             long listpackBytes,
+            long hashRoots,
+            long hashFields,
+            long hashValues,
+            long hashTables,
+            long setRoots,
+            long setMembers,
+            long setTables,
             int keyCount,
             int expireCount,
             byte[] primaryValue,
             List<String> primaryListValues,
+            List<String> primaryHashPairs,
+            List<String> primarySetMembers,
             Long expireAtMillis
     ) {
         private DbStateSnapshot {
             primaryValue = primaryValue == null ? null : Arrays.copyOf(primaryValue, primaryValue.length);
             primaryListValues = primaryListValues == null ? null : List.copyOf(primaryListValues);
+            primaryHashPairs = primaryHashPairs == null ? null : List.copyOf(primaryHashPairs);
+            primarySetMembers = primarySetMembers == null ? null : List.copyOf(primarySetMembers);
         }
     }
 
     private static List<String> strings(BulkStringSequence sequence) {
         RecordingBulkStringSink sink = new RecordingBulkStringSink();
         sequence.emitTo(sink);
+        return sink.values;
+    }
+
+    private static List<String> strings(BulkStringMapPairs pairs) {
+        RecordingBulkStringSink sink = new RecordingBulkStringSink();
+        pairs.emitPairsTo(sink);
         return sink.values;
     }
 
@@ -543,6 +673,12 @@ public class MutationFaultInjectionTest {
 
     private static BytesSlice view(byte[] value) {
         return new ArrayBytesSlice(Arrays.copyOf(value, value.length));
+    }
+
+    private static byte[] repeatedBytes(char value, int count) {
+        byte[] bytes = new byte[count];
+        Arrays.fill(bytes, (byte) value);
+        return bytes;
     }
 
     private static final class ArrayBytesSlice implements BytesSlice {

@@ -8,6 +8,7 @@ import yier.bubu.redis.storage.api.result.BulkStringSink;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -114,6 +115,55 @@ public final class SetValue implements YierdisValue, NativeHandleOwner {
         return out;
     }
 
+    public int[] nativePayloadSizes() {
+        if (members != null) {
+            if (members.size() == 0) {
+                return new int[0];
+            }
+            int[] out = new int[members.size()];
+            final int[] next = {0};
+            members.forEach((memberRef, ignored) -> out[next[0]++] = memberStore.allocatedBytes(memberRef));
+            return out;
+        }
+
+        int[] out = new int[intsetSize];
+        for (int i = 0; i < intsetSize; i++) {
+            out[i] = Math.max(1, longStringByteLength(intsetLongAt(i)));
+        }
+        return out;
+    }
+
+    public int countAdditions(List<byte[]> candidates) {
+        Objects.requireNonNull(candidates, "candidates");
+        int count = 0;
+        for (int i = 0; i < candidates.size(); i++) {
+            byte[] member = candidates.get(i);
+            Objects.requireNonNull(member, "member");
+            if (containsDuplicateBefore(candidates, i, member)) {
+                continue;
+            }
+            if (!contains(member)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public int countExistingMembers(List<byte[]> candidates) {
+        Objects.requireNonNull(candidates, "candidates");
+        int count = 0;
+        for (int i = 0; i < candidates.size(); i++) {
+            byte[] member = candidates.get(i);
+            if (member == null || containsDuplicateBefore(candidates, i, member)) {
+                continue;
+            }
+            if (contains(member)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     public void membersInto(BulkStringSink out) {
         Objects.requireNonNull(out, "out");
 
@@ -180,9 +230,17 @@ public final class SetValue implements YierdisValue, NativeHandleOwner {
             return;
         }
         NativeByteMap<Object> out = new NativeByteMap<>(memberStore, NativeObjectKind.SET_MEMBER_BYTES);
-        for (int i = 0; i < intsetSize; i++) {
-            byte[] member = Long.toString(intsetLongAt(i)).getBytes(StandardCharsets.US_ASCII);
-            out.put(member, PRESENT);
+        boolean ok = false;
+        try {
+            for (int i = 0; i < intsetSize; i++) {
+                byte[] member = Long.toString(intsetLongAt(i)).getBytes(StandardCharsets.US_ASCII);
+                out.put(member, PRESENT);
+            }
+            ok = true;
+        } finally {
+            if (!ok) {
+                out.close();
+            }
         }
 
         this.members = out;
@@ -442,6 +500,15 @@ public final class SetValue implements YierdisValue, NativeHandleOwner {
             digits++;
         }
         return v < 0 ? digits + 1 : digits;
+    }
+
+    private static boolean containsDuplicateBefore(List<byte[]> values, int endExclusive, byte[] candidate) {
+        for (int i = 0; i < endExclusive; i++) {
+            if (Arrays.equals(values.get(i), candidate)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

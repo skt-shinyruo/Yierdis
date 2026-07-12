@@ -7,6 +7,7 @@ import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -138,11 +139,27 @@ public final class HashValue implements YierdisValue, NativeHandleOwner {
             if (pairIndex < 0) {
                 continue;
             }
-            packed.removeAt(pairIndex + 1);
-            packed.removeAt(pairIndex);
+            packed.removeAtDiscard(pairIndex + 1);
+            packed.removeAtDiscard(pairIndex);
             removed++;
         }
         return removed;
+    }
+
+    public int countExistingFields(List<byte[]> fields) {
+        Objects.requireNonNull(fields, "fields");
+        int count = 0;
+        for (int i = 0; i < fields.size(); i++) {
+            byte[] field = fields.get(i);
+            Objects.requireNonNull(field, "field");
+            if (containsDuplicateBefore(fields, i, field)) {
+                continue;
+            }
+            if (containsField(field)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     public List<byte[]> hgetallPairs() {
@@ -159,6 +176,30 @@ public final class HashValue implements YierdisValue, NativeHandleOwner {
         List<byte[]> out = new ArrayList<>(pairs * 2);
         for (int i = 0; i < packed.size(); i++) {
             out.add(packed.get(i));
+        }
+        return out;
+    }
+
+    public int[] nativePayloadSizes() {
+        List<Integer> sizes = new ArrayList<>();
+        if (map != null) {
+            map.forEach((fieldRef, valueRef) -> {
+                sizes.add(fieldStore.allocatedBytes(fieldRef));
+                if (valueRef != null) {
+                    sizes.add(valueStore.allocatedBytes(valueRef));
+                }
+            });
+        } else if (packed != null) {
+            int[] packedSizes = new int[packed.nativePayloadCount()];
+            packed.copyNativePayloadSizes(packedSizes, 0);
+            for (int size : packedSizes) {
+                sizes.add(size);
+            }
+        }
+
+        int[] out = new int[sizes.size()];
+        for (int i = 0; i < sizes.size(); i++) {
+            out[i] = sizes.get(i);
         }
         return out;
     }
@@ -259,6 +300,10 @@ public final class HashValue implements YierdisValue, NativeHandleOwner {
         return -1;
     }
 
+    private boolean containsField(byte[] field) {
+        return map != null ? map.containsKey(field) : indexOfFieldPair(field) >= 0;
+    }
+
     private void convertToHashMap() {
         if (map != null) {
             return;
@@ -299,5 +344,14 @@ public final class HashValue implements YierdisValue, NativeHandleOwner {
 
     private static boolean isOversize(byte[] b) {
         return b != null && b.length > YierdisEncodingThresholds.HASH_MAX_LISTPACK_VALUE_BYTES;
+    }
+
+    private static boolean containsDuplicateBefore(List<byte[]> values, int endExclusive, byte[] candidate) {
+        for (int i = 0; i < endExclusive; i++) {
+            if (Arrays.equals(values.get(i), candidate)) {
+                return true;
+            }
+        }
+        return false;
     }
 }
