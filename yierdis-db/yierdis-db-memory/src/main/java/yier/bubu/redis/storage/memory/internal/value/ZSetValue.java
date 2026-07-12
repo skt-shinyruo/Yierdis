@@ -61,6 +61,21 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
         return memberStore.nativeBytes() + skiplistLevels * (REF_BYTES + Integer.BYTES);
     }
 
+    public int[] nativePayloadSizes() {
+        List<byte[]> memberScorePairs = zrange(0, -1, true);
+        int[] sizes = new int[memberScorePairs.size() / 2];
+        int next = 0;
+        for (int i = 0; i + 1 < memberScorePairs.size(); i += 2) {
+            byte[] member = memberScorePairs.get(i);
+            sizes[next++] = member == null ? 0 : member.length;
+        }
+        return sizes;
+    }
+
+    public ZAddResult prepareAdd(List<byte[]> scoreMemberPairs) {
+        return prepareAddInternal(scoreMemberPairs);
+    }
+
     @Override
     public void forEachNativeHandle(Consumer<NativeHandle> consumer) {
         Objects.requireNonNull(consumer, "consumer");
@@ -77,10 +92,14 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
     }
 
     public int zaddMany(List<byte[]> scoreMemberPairs) {
-        return zaddManyResult(scoreMemberPairs).added();
+        return prepareAdd(scoreMemberPairs).added();
     }
 
     public ZAddResult zaddManyResult(List<byte[]> scoreMemberPairs) {
+        return prepareAddInternal(scoreMemberPairs);
+    }
+
+    private ZAddResult prepareAddInternal(List<byte[]> scoreMemberPairs) {
         int added = 0;
         boolean changedAny = false;
         for (int i = 0; i < scoreMemberPairs.size(); i += 2) {
@@ -1088,16 +1107,55 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
             if (Double.compare(old.score, score) == 0) {
                 return 0;
             }
-            skiplistLevels -= old.forward.length;
-            byScore.delete(old.score, old.member);
-            memberStore.release(old.member);
         }
 
         NativeHandle member = memberStore.store(memberBytes);
-        ZSkipList.Node next = byScore.insert(score, member);
-        skiplistLevels += next.forward.length;
-        byMember.put(memberBytes, next);
-        return old == null ? 1 : -1;
+        boolean linked = false;
+        ZSkipList.Node next = null;
+        try {
+            next = byScore.insert(score, member);
+            linked = true;
+            skiplistLevels += next.forward.length;
+            if (old == null) {
+                byMember.put(memberBytes, next);
+                return 1;
+            }
+        } catch (RuntimeException | Error failure) {
+            if (linked && next != null) {
+                try {
+                    if (byScore.delete(score, member)) {
+                        skiplistLevels -= next.forward.length;
+                    }
+                } catch (RuntimeException | Error deleteFailure) {
+                    failure.addSuppressed(deleteFailure);
+                }
+            }
+            try {
+                memberStore.release(member);
+            } catch (RuntimeException | Error releaseFailure) {
+                failure.addSuppressed(releaseFailure);
+            }
+            throw failure;
+        }
+        ZSkipList.Node replaced = byMember.replace(memberBytes, next);
+        if (replaced != old) {
+            if (byScore.delete(score, member)) {
+                skiplistLevels -= next.forward.length;
+            }
+            memberStore.release(member);
+            throw new IllegalStateException("zset member index changed during score update");
+        }
+        if (!byScore.delete(old.score, old.member)) {
+            byMember.replace(memberBytes, old);
+            if (byScore.delete(score, member)) {
+                skiplistLevels -= next.forward.length;
+            }
+            memberStore.release(member);
+            throw new IllegalStateException("zset score index missing old member");
+        }
+        skiplistLevels -= old.forward.length;
+        memberStore.release(old.member);
+        return -1;
     }
 
     private int listpackZadd(double score, byte[] memberBytes) {

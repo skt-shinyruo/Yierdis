@@ -9,11 +9,17 @@ import yier.bubu.redis.storage.api.ZSetReadOps;
 import yier.bubu.redis.storage.api.ZSetWriteOps;
 import yier.bubu.redis.storage.api.result.BulkStringSequence;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.EntryMutationResult;
+import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
+import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
+import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import yier.bubu.redis.storage.memory.internal.value.ZSetValue.ZAddResult;
@@ -23,6 +29,9 @@ import java.util.Objects;
 import java.util.function.IntSupplier;
 
 public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
+    private static final int ENTRY_RECORD_NATIVE_BYTES = 56;
+    private static final int ZSET_ROOT_NATIVE_BYTES = Long.BYTES;
+
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final ZSetRoot zsetRoot;
@@ -39,52 +48,311 @@ public final class YierdisZSetOps implements ZSetReadOps, ZSetWriteOps {
         if (scoreMemberPairs.size() % 2 != 0) {
             throw new IllegalArgumentException("scoreMemberPairs must contain score/member pairs");
         }
+        Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
-        long upperBound = estimateZSetWriteUpperBoundForMutation(keyBytes, scoreMemberPairs);
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
-                return upperBound;
+                return estimateZSetWriteUpperBoundForMutation(keyBytes, scoreMemberPairs, now);
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
-                return keyLifecycle.computeWithHandleResult(keyBytes, (k, oldRecord) -> {
-                    EntryRecord current = oldRecord;
-                    long oldEstimate = estimateRecordBytes(k, current);
-                    long deltaBytes = 0L;
-                    if (current != null && keyLifecycle.isKeyExpired(k, now)) {
-                        keyLifecycle.removeExpire(k);
-                        deltaBytes -= oldEstimate;
-                        current = null;
-                        oldEstimate = 0L;
-                    }
+            public PreparedDbMutation<WriteResult<Long>> prepare() {
+                CurrentEntry currentEntry = currentEntry(keyBytes);
+                EntryRecord current = currentEntry.record();
+                if (current != null && keyLifecycle.isKeyExpired(currentEntry.keyHandle(), now)) {
+                    keyLifecycle.removeIfExpired(currentEntry.keyHandle(), current, now);
+                    currentEntry = currentEntry(keyBytes);
+                    current = currentEntry.record();
+                }
+                if (current != null) {
+                    requireZSet(current);
+                }
 
-                    ValueHandle handle;
+                StagedEntry staged = null;
+                ValueHandle replacement = null;
+                try {
+                    KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        handle = zsetRoot.create();
-                    } else {
-                        requireZSet(current);
-                        handle = requireZSetHandle(current);
+                        staged = stageNewEntry(keyBytes);
+                        targetKey = staged.keyHandle();
+                    }
+                    ZSetRoot.PreparedAddResult preparedAdd = zsetRoot.prepareAdd(
+                            current == null ? null : requireZSetHandle(current),
+                            scoreMemberPairs
+                    );
+                    replacement = preparedAdd.handle();
+                    ZAddResult added = preparedAdd.result();
+                    MutationOutcome outcome = added.changedAny()
+                            ? MutationOutcome.VALUE_CHANGED
+                            : MutationOutcome.NONE;
+                    if (replacement == null) {
+                        return preparedNoEntry(WriteResult.of(0L, outcome), outcome);
                     }
 
-                    boolean ok = false;
-                    try {
-                        ZAddResult added = zsetRoot.zaddResult(handle, scoreMemberPairs);
-                        EntryRecord next = zsetRecord(k, handle, current == null ? -1L : current.expireAtMillis(), current);
-                        deltaBytes -= oldEstimate;
-                        deltaBytes += estimateRecordBytes(k, next);
-                        ok = true;
-                        MutationOutcome outcome = added.changedAny() ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
-                        return mutationResult(next, WriteResult.of((long) added.added(), outcome), deltaBytes);
-                    } finally {
-                        if (!ok && current == null) {
-                            zsetRoot.release(handle);
-                        }
-                    }
-                });
+                    EntryRecord next = zsetRecord(
+                            targetKey,
+                            replacement,
+                            current == null ? -1L : current.expireAtMillis(),
+                            current
+                    );
+                    WriteResult<Long> result = WriteResult.of((long) added.added(), outcome);
+                    long deltaBytes = estimateRecordBytes(targetKey, next)
+                            - estimateRecordBytes(targetKey, current);
+                    PreparedEntryMutation<WriteResult<Long>> prepared = new PreparedEntryMutation<>(
+                            keyLifecycle,
+                            result,
+                            deltaBytes,
+                            staged == null ? 0L : staged.stagedHeapBytes(),
+                            outcome,
+                            currentEntry.entryHandle(),
+                            staged == null ? null : staged.entryHandle(),
+                            staged == null ? null : staged.stagedKey(),
+                            current,
+                            next,
+                            true,
+                            PreparedTtlMutation.NONE
+                    );
+                    staged = null;
+                    replacement = null;
+                    return prepared;
+                } catch (RuntimeException | Error failure) {
+                    abortStaged(staged, replacement, failure);
+                    throw failure;
+                }
             }
         });
+    }
+
+    private CurrentEntry currentEntry(byte[] keyBytes) {
+        EntryHandle entryHandle = keyLifecycle.entryHandle(keyBytes);
+        EntryRecord record = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
+        KeyHandle keyHandle = entryHandle == null ? null : keyLifecycle.keyHandle(keyBytes);
+        return new CurrentEntry(entryHandle, keyHandle, record);
+    }
+
+    private StagedEntry stageNewEntry(byte[] keyBytes) {
+        EntryHandle entryHandle = keyLifecycle.entryTable().reserve();
+        NativeKeyDirectory.StagedInsert stagedKey = null;
+        try {
+            stagedKey = keyLifecycle.keyDirectory().stageInsert(keyBytes);
+            return new StagedEntry(entryHandle, stagedKey);
+        } catch (RuntimeException | Error failure) {
+            try {
+                keyLifecycle.entryTable().release(entryHandle);
+            } catch (RuntimeException | Error releaseFailure) {
+                failure.addSuppressed(releaseFailure);
+            }
+            if (stagedKey != null) {
+                try {
+                    stagedKey.close();
+                } catch (RuntimeException | Error closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+            throw failure;
+        }
+    }
+
+    private <T> PreparedEntryMutation<T> preparedNoEntry(T result, MutationOutcome outcome) {
+        return new PreparedEntryMutation<>(
+                keyLifecycle,
+                result,
+                0L,
+                0L,
+                outcome,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
+                PreparedTtlMutation.NONE
+        );
+    }
+
+    private void abortStaged(StagedEntry staged, ValueHandle replacement, Throwable failure) {
+        if (replacement != null) {
+            try {
+                zsetRoot.release(replacement);
+            } catch (RuntimeException | Error releaseFailure) {
+                failure.addSuppressed(releaseFailure);
+            }
+        }
+        if (staged != null) {
+            try {
+                staged.close();
+            } catch (RuntimeException | Error closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            try {
+                keyLifecycle.entryTable().release(staged.entryHandle());
+            } catch (RuntimeException | Error releaseFailure) {
+                failure.addSuppressed(releaseFailure);
+            }
+        }
+    }
+
+    private long nativePeak(long heapGrowthBytes, int... nativeAllocationSizes) {
+        return MutationMemoryEstimator.peakAdditionalBytes(
+                keyLifecycle.nativeAllocator(),
+                0L,
+                Math.max(0L, heapGrowthBytes),
+                nativeAllocationSizes
+        );
+    }
+
+    private static long withScopeBookkeeping(long upperBound) {
+        return Math.max(
+                Math.max(0L, upperBound),
+                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes()
+        );
+    }
+
+    private static int appendPayloadSizes(int[] sizes, int offset, int[] payloadSizes) {
+        if (payloadSizes == null || payloadSizes.length == 0) {
+            return offset;
+        }
+        int next = offset;
+        for (int size : payloadSizes) {
+            sizes[next++] = Math.max(1, size);
+        }
+        return next;
+    }
+
+    private static int appendMemberPayloadSizes(int[] sizes, int offset, List<byte[]> scoreMemberPairs) {
+        if (scoreMemberPairs == null || scoreMemberPairs.isEmpty()) {
+            return offset;
+        }
+        int next = offset;
+        for (int i = 1; i < scoreMemberPairs.size(); i += 2) {
+            byte[] member = scoreMemberPairs.get(i);
+            if (member != null) {
+                sizes[next++] = Math.max(1, member.length);
+            }
+        }
+        return next;
+    }
+
+    private static int nonNullMemberCount(List<byte[]> scoreMemberPairs) {
+        if (scoreMemberPairs == null || scoreMemberPairs.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (int i = 1; i < scoreMemberPairs.size(); i += 2) {
+            if (scoreMemberPairs.get(i) != null) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private int[] zsetAllocationSizes(
+            boolean includeKeyAndEntry,
+            byte[] keyBytes,
+            int[] existingPayloadSizes,
+            List<byte[]> scoreMemberPairs
+    ) {
+        int existingCount = existingPayloadSizes == null ? 0 : existingPayloadSizes.length;
+        int newCount = nonNullMemberCount(scoreMemberPairs);
+        int metadataCount = includeKeyAndEntry ? 2 : 0;
+        int[] sizes = new int[metadataCount + 1 + existingCount * 3 + newCount * 3];
+        int next = 0;
+        if (includeKeyAndEntry) {
+            sizes[next++] = Math.max(1, keyBytes.length);
+            sizes[next++] = ENTRY_RECORD_NATIVE_BYTES;
+        }
+        sizes[next++] = ZSET_ROOT_NATIVE_BYTES;
+        next = appendPayloadSizes(sizes, next, existingPayloadSizes);
+        next = appendPayloadSizes(sizes, next, existingPayloadSizes);
+        next = appendPayloadSizes(sizes, next, existingPayloadSizes);
+        next = appendMemberPayloadSizes(sizes, next, scoreMemberPairs);
+        next = appendMemberPayloadSizes(sizes, next, scoreMemberPairs);
+        next = appendMemberPayloadSizes(sizes, next, scoreMemberPairs);
+        if (next != sizes.length) {
+            throw new IllegalStateException("zset allocation size estimate count mismatch");
+        }
+        return sizes;
+    }
+
+    private long newZSetUpperBound(byte[] keyBytes, List<byte[]> scoreMemberPairs) {
+        long stagedHeapBytes = keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes();
+        int[] allocationSizes = zsetAllocationSizes(
+                true,
+                keyBytes,
+                new int[0],
+                scoreMemberPairs
+        );
+        long nativeUpperBound = nativePeak(stagedHeapBytes, allocationSizes);
+        long logicalUpperBound = YierdisDbMemoryEstimator.estimateZSetWriteUpperBound(
+                keyBytes.length,
+                scoreMemberPairs
+        );
+        return withScopeBookkeeping(Math.max(logicalUpperBound, nativeUpperBound));
+    }
+
+    private long existingZSetUpperBound(
+            byte[] keyBytes,
+            EntryRecord existing,
+            List<byte[]> scoreMemberPairs
+    ) {
+        ValueHandle handle = requireZSetHandle(existing);
+        int[] allocationSizes = zsetAllocationSizes(
+                false,
+                keyBytes,
+                zsetRoot.nativePayloadSizes(handle),
+                scoreMemberPairs
+        );
+        long nativeUpperBound = nativePeak(0L, allocationSizes);
+        long logicalUpperBound = addSaturating(
+                YierdisDbMemoryEstimator.estimateZSetWriteUpperBound(0, scoreMemberPairs),
+                zsetRoot.estimatedBytes(handle)
+        );
+        return withScopeBookkeeping(Math.max(logicalUpperBound, nativeUpperBound));
+    }
+
+    private long estimateZSetWriteUpperBoundForMutation(
+            byte[] keyBytes,
+            List<byte[]> scoreMemberPairs,
+            long nowMillis
+    ) {
+        EntryRecord existing = keyLifecycle.entryRecord(keyBytes);
+        if (existing == null) {
+            return newZSetUpperBound(keyBytes, scoreMemberPairs);
+        }
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+            return newZSetUpperBound(keyBytes, scoreMemberPairs);
+        }
+        if (existing.type() != ValueType.ZSET) {
+            return withScopeBookkeeping(0L);
+        }
+        return existingZSetUpperBound(keyBytes, existing, scoreMemberPairs);
+    }
+
+    private record CurrentEntry(
+            EntryHandle entryHandle,
+            KeyHandle keyHandle,
+            EntryRecord record
+    ) {
+    }
+
+    private record StagedEntry(
+            EntryHandle entryHandle,
+            NativeKeyDirectory.StagedInsert stagedKey
+    ) implements AutoCloseable {
+        private KeyHandle keyHandle() {
+            return stagedKey.keyHandle();
+        }
+
+        private long stagedHeapBytes() {
+            return stagedKey.stagedHeapBytes();
+        }
+
+        @Override
+        public void close() {
+            stagedKey.close();
+        }
     }
 
     @Override

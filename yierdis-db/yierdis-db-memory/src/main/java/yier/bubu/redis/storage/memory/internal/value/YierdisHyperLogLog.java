@@ -1,22 +1,14 @@
 package yier.bubu.redis.storage.memory.internal.value;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
-// HyperLogLog（PFADD/PFCOUNT/PFMERGE）实现：以 STRING bytes 存储，并通过固定 header 区分普通 string 与 HLL string。
-
-import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 
+import java.util.Arrays;
 import java.util.List;
 
+// HyperLogLog（PFADD/PFCOUNT/PFMERGE）实现：以 STRING bytes 存储，并通过固定 header 区分普通 string 与 HLL string。
 public final class YierdisHyperLogLog {
     public static final int P = 14;
     public static final int REGISTERS = 1 << P;
@@ -234,6 +226,99 @@ public final class YierdisHyperLogLog {
             denseSetRegister(out, i, v);
         }
         return out;
+    }
+
+    /**
+     * 计算 PFADD 的替换表示，不修改当前 native value。
+     *
+     * @return 替换后的 HLL bytes；寄存器没有变化时返回 {@code null}
+     */
+    public static byte[] prepareAdd(byte[] current, List<byte[]> elements) {
+        byte[] base = current == null ? newSparse() : current;
+        if (!isValidHllBytes(base)) {
+            throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
+
+        int[] registers = new int[REGISTERS];
+        mergeHllIntoRegisters(base, registers);
+        boolean changed = applyElements(registers, elements);
+        return changed ? bytesFromRegisters(registers) : null;
+    }
+
+    /**
+     * 计算 PFMERGE 的 dense 替换表示，不修改目标 key。
+     *
+     * @return 替换后的 HLL bytes；目标寄存器已经一致时返回 {@code null}
+     */
+    public static byte[] prepareMerge(byte[] current, int[] mergedRegisters) {
+        if (mergedRegisters == null || mergedRegisters.length != REGISTERS) {
+            throw new IllegalArgumentException("mergedRegisters must be length " + REGISTERS);
+        }
+        if (current != null) {
+            if (!isValidHllBytes(current)) {
+                throw new YierdisCommandException("WRONGTYPE Operation against a key holding the wrong kind of value");
+            }
+            int[] existing = new int[REGISTERS];
+            mergeHllIntoRegisters(current, existing);
+            if (Arrays.equals(existing, mergedRegisters)) {
+                return null;
+            }
+        }
+        return denseBytesFromRegisters(mergedRegisters);
+    }
+
+    private static byte[] bytesFromRegisters(int[] registers) {
+        int entries = 0;
+        for (int value : registers) {
+            if (value > 0) {
+                entries++;
+            }
+        }
+        int sparseLength = HEADER_BYTES + entries * SPARSE_ENTRY_BYTES;
+        if (sparseLength >= denseLength()) {
+            return denseBytesFromRegisters(registers);
+        }
+
+        byte[] out = new byte[sparseLength];
+        writeHeader(out, ENCODING_SPARSE);
+        int pos = HEADER_BYTES;
+        for (int index = 0; index < REGISTERS; index++) {
+            int value = registers[index];
+            if (value <= 0) {
+                continue;
+            }
+            out[pos] = (byte) (index >>> 8);
+            out[pos + 1] = (byte) index;
+            out[pos + 2] = (byte) value;
+            pos += SPARSE_ENTRY_BYTES;
+        }
+        return out;
+    }
+
+    private static boolean applyElements(int[] registers, List<byte[]> elements) {
+        if (elements == null || elements.isEmpty()) {
+            return false;
+        }
+        boolean changed = false;
+        for (byte[] element : elements) {
+            if (element == null || element.length == 0) {
+                continue;
+            }
+            long hash = murmurHash3_x64_128_h1(element);
+            int registerIndex = (int) (hash & (REGISTERS - 1));
+            long word = hash >>> P;
+            int rank = (Long.numberOfLeadingZeros(word) + 1) - P;
+            if (rank < 1) {
+                rank = 1;
+            } else if (rank > MAX_REGISTER) {
+                rank = MAX_REGISTER;
+            }
+            if (rank > registers[registerIndex]) {
+                registers[registerIndex] = rank;
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     private static void writeHeader(byte[] raw, int encoding) {
