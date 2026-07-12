@@ -3,11 +3,15 @@ package yier.bubu.redis.storage.memory;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
+import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.WrongTypeException;
+import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.BulkStringSequence;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -60,8 +64,8 @@ public class CollectionDirectOpsTest {
     @Test
     public void listPushPopCoverBothEndsMissingWrongTypeAndTtl() {
         withDb(db -> {
-            Assert.assertNull(db.writes().lists().lpop(b("missing"), 1).value());
-            Assert.assertNull(db.writes().lists().rpop(b("missing"), 1).value());
+            Assert.assertTrue(isNullPop(db.writes().lists().lpop(b("missing"), 1).value()));
+            Assert.assertTrue(isNullPop(db.writes().lists().rpop(b("missing"), 1).value()));
             Assert.assertTrue(db.writes().lists().lpop(b("missing"), 1).mutationOutcome() == MutationOutcome.NONE);
 
             Assert.assertEquals(2L, db.writes().lists().lpush(b("list"), List.of(b("b"), b("a"))).value().longValue());
@@ -78,12 +82,31 @@ public class CollectionDirectOpsTest {
             db.writes().lists().rpush(b("ttl-list"), List.of(b("x")));
             db.writes().ttl().pexpire(view("ttl-list"), 1);
             sleepPastTtl();
-            Assert.assertNull(db.writes().lists().rpop(b("ttl-list"), 1).value());
+            Assert.assertTrue(isNullPop(db.writes().lists().rpop(b("ttl-list"), 1).value()));
             Assert.assertNull(db.reads().keyspace().typeOf(view("ttl-list")));
 
             db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null);
             expectWrongType(() -> db.writes().lists().lpush(b("s"), List.of(b("x"))));
             expectWrongType(() -> db.writes().lists().rpop(b("s"), 1));
+        });
+    }
+
+    @Test
+    public void listDeletionPopBypassesPositiveGrowthAdmission() {
+        withDb(db -> {
+            Assert.assertEquals(2L, db.writes().lists().rpush(b("drop"), List.of(b("a"), b("b"))).value().longValue());
+            Assert.assertEquals(1L, db.writes().lists().rpush(b("expired"), List.of(b("x"))).value().longValue());
+            db.writes().ttl().pexpire(view("expired"), 1);
+            sleepPastTtl();
+
+            RejectingMaxmemoryCoordinator coordinator = new RejectingMaxmemoryCoordinator();
+            db.attachMaxmemoryCoordinator(coordinator);
+
+            Assert.assertEquals(List.of("a", "b"), strings(db.writes().lists().lpop(b("drop"), 10).value()));
+            Assert.assertNull(db.reads().keyspace().typeOf(view("drop")));
+            Assert.assertTrue(isNullPop(db.writes().lists().rpop(b("expired"), 1).value()));
+            Assert.assertNull(db.reads().keyspace().typeOf(view("expired")));
+            Assert.assertEquals(0, coordinator.prepareWrites());
         });
     }
 
@@ -223,15 +246,22 @@ public class CollectionDirectOpsTest {
         return sink.values;
     }
 
-    private static List<String> strings(List<byte[]> values) {
+    private static boolean isNullPop(PoppedValueSequence values) {
+        try (PoppedValueSequence owned = values) {
+            return owned == null || owned.isNull();
+        }
+    }
+
+    private static List<String> strings(PoppedValueSequence values) {
         if (values == null) {
             return null;
         }
-        List<String> out = new ArrayList<>();
-        for (byte[] value : values) {
-            out.add(new String(value, StandardCharsets.UTF_8));
+        try (PoppedValueSequence owned = values) {
+            if (owned.isNull()) {
+                return null;
+            }
+            return sequence(owned);
         }
-        return out;
     }
 
     private static BytesSlice view(String text) {
@@ -264,6 +294,27 @@ public class CollectionDirectOpsTest {
     @FunctionalInterface
     private interface ThrowingRunnable {
         void run();
+    }
+
+    private static final class RejectingMaxmemoryCoordinator implements MaxmemoryCoordinator {
+        private int prepareWrites;
+
+        @Override
+        public void prepareWrite(long estimatedExtraBytes) {
+            prepareWrites++;
+            if (estimatedExtraBytes > 0) {
+                throw new YierdisCommandException(MaxmemoryErrors.OOM_ERR);
+            }
+        }
+
+        @Override
+        public long nextLruClock() {
+            return 0L;
+        }
+
+        private int prepareWrites() {
+            return prepareWrites;
+        }
     }
 
     private static final class RecordingBulkStringSink implements BulkStringSink {

@@ -126,6 +126,32 @@ public final class NativeListpack implements AutoCloseable {
         out.bulkString(byteStore.slice(handle));
     }
 
+    public long encodedElementBytesAt(int index) {
+        NativeHandle handle = entries.get(index);
+        return handle == null ? 5L : bulkStringEncodedBytes(byteStore.length(handle));
+    }
+
+    public int nativePayloadCount() {
+        int count = 0;
+        for (NativeHandle handle : entries) {
+            if (handle != null) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public int copyNativePayloadSizes(int[] target, int offset) {
+        Objects.requireNonNull(target, "target");
+        int next = offset;
+        for (NativeHandle handle : entries) {
+            if (handle != null) {
+                target[next++] = Math.max(1, byteStore.length(handle));
+            }
+        }
+        return next;
+    }
+
     public boolean equalsAt(int index, byte[] other) {
         NativeHandle handle = entries.get(index);
         if (handle == null) {
@@ -203,6 +229,23 @@ public final class NativeListpack implements AutoCloseable {
     private static int entryEncodedBytes(int len) {
         int headerValue = len < 0 ? 0 : len + 1;
         return varIntSize(headerValue) + Math.max(0, len);
+    }
+
+    private static long bulkStringEncodedBytes(int len) {
+        if (len < 0) {
+            return 5L;
+        }
+        return 1L + decimalDigits(len) + 2L + len + 2L;
+    }
+
+    private static int decimalDigits(int value) {
+        int digits = 1;
+        int v = value;
+        while (v >= 10) {
+            v /= 10;
+            digits++;
+        }
+        return digits;
     }
 
     private static int varIntSize(int value) {

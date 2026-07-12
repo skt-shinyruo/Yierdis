@@ -23,6 +23,7 @@ import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.result.BulkStringSequence;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
@@ -1089,6 +1090,15 @@ public class NativeStorageRegressionTest {
                 return data[index];
             }
         };
+    }
+
+    private static List<String> strings(PoppedValueSequence values) {
+        try (PoppedValueSequence owned = values) {
+            if (owned == null || owned.isNull()) {
+                return null;
+            }
+            return strings((BulkStringSequence) owned);
+        }
     }
 
     private static List<String> strings(List<byte[]> values) {
