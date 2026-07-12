@@ -111,6 +111,18 @@ public final class NativeListpack implements AutoCloseable {
         return out;
     }
 
+    public void removeAtDiscard(int index) {
+        NativeHandle handle = entries.remove(index);
+        encodedBytes -= entryEncodedBytes(handle == null ? -1 : byteStore.length(handle));
+        if (handle == null) {
+            return;
+        }
+        int len = byteStore.length(handle);
+        allocatedBytes -= byteStore.allocatedBytes(handle);
+        rawBytes -= len;
+        byteStore.release(handle);
+    }
+
     public NativeListEntryRef entryRefAt(int index) {
         NativeHandle handle = entries.get(index);
         if (handle == null) {

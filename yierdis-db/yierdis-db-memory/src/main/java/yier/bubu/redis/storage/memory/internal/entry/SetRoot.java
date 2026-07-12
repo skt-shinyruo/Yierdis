@@ -79,6 +79,26 @@ public final class SetRoot implements TypeRoot {
         return requireSet(handle).removeAll(members);
     }
 
+    public synchronized int countAdditions(ValueHandle handle, List<byte[]> members) {
+        ensureOpen();
+        return requireSet(handle).countAdditions(members);
+    }
+
+    public synchronized int countExistingMembers(ValueHandle handle, List<byte[]> members) {
+        ensureOpen();
+        return requireSet(handle).countExistingMembers(members);
+    }
+
+    public synchronized List<byte[]> members(ValueHandle handle) {
+        ensureOpen();
+        return requireSet(handle).members();
+    }
+
+    public synchronized int[] nativePayloadSizes(ValueHandle handle) {
+        ensureOpen();
+        return requireSet(handle).nativePayloadSizes();
+    }
+
     public synchronized boolean contains(ValueHandle handle, byte[] member) {
         ensureOpen();
         return requireSet(handle).contains(member);

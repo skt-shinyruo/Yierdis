@@ -89,14 +89,29 @@ public final class HashRoot implements TypeRoot {
         return requireHash(handle).hdel(fields);
     }
 
+    public synchronized int countExistingFields(ValueHandle handle, List<byte[]> fields) {
+        ensureOpen();
+        return requireHash(handle).countExistingFields(fields);
+    }
+
     public synchronized int hgetallCount(ValueHandle handle) {
         ensureOpen();
         return requireHash(handle).hgetallCount();
     }
 
+    public synchronized List<byte[]> hgetallPairs(ValueHandle handle) {
+        ensureOpen();
+        return requireHash(handle).hgetallPairs();
+    }
+
     public synchronized void hgetallPairsInto(ValueHandle handle, BulkStringSink out) {
         ensureOpen();
         requireHash(handle).hgetallPairsInto(out);
+    }
+
+    public synchronized int[] nativePayloadSizes(ValueHandle handle) {
+        ensureOpen();
+        return requireHash(handle).nativePayloadSizes();
     }
 
     public synchronized int size(ValueHandle handle) {
