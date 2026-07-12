@@ -73,6 +73,15 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
         return byteStore.nativeBytes() + nodeBytes;
     }
 
+    public int[] nativePayloadSizes() {
+        int[] sizes = new int[nativePayloadCount()];
+        int next = copyNativePayloadSizes(sizes, 0);
+        if (next != sizes.length) {
+            throw new IllegalStateException("native list payload size count changed during collection");
+        }
+        return sizes;
+    }
+
     @Override
     public void forEachNativeHandle(Consumer<NativeHandle> consumer) {
         Objects.requireNonNull(consumer, "consumer");
@@ -269,6 +278,95 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
         }
     }
 
+    public void emitPopRange(int count, boolean left, BulkStringSink out) {
+        if (out == null) {
+            throw new IllegalArgumentException("out must not be null");
+        }
+        int remaining = Math.min(Math.max(0, count), totalSize);
+        if (remaining == 0) {
+            return;
+        }
+        if (quicklist == null) {
+            if (left) {
+                for (int i = 0; i < remaining; i++) {
+                    listpack.writeAt(i, out);
+                }
+            } else {
+                int start = totalSize - remaining;
+                for (int i = totalSize - 1; i >= start; i--) {
+                    listpack.writeAt(i, out);
+                }
+            }
+            return;
+        }
+
+        if (left) {
+            for (ListNode node : quicklist) {
+                for (int i = 0; i < node.size() && remaining > 0; i++) {
+                    node.writeAt(i, out);
+                    remaining--;
+                }
+                if (remaining == 0) {
+                    return;
+                }
+            }
+            return;
+        }
+
+        java.util.Iterator<ListNode> iterator = quicklist.descendingIterator();
+        while (iterator.hasNext() && remaining > 0) {
+            ListNode node = iterator.next();
+            for (int i = node.size() - 1; i >= 0 && remaining > 0; i--) {
+                node.writeAt(i, out);
+                remaining--;
+            }
+        }
+    }
+
+    public long encodedPopElementBytes(int count, boolean left) {
+        int remaining = Math.min(Math.max(0, count), totalSize);
+        if (remaining == 0) {
+            return 0L;
+        }
+        long total = 0L;
+        if (quicklist == null) {
+            if (left) {
+                for (int i = 0; i < remaining; i++) {
+                    total = addSaturating(total, listpack.encodedElementBytesAt(i));
+                }
+            } else {
+                int start = totalSize - remaining;
+                for (int i = totalSize - 1; i >= start; i--) {
+                    total = addSaturating(total, listpack.encodedElementBytesAt(i));
+                }
+            }
+            return total;
+        }
+
+        if (left) {
+            for (ListNode node : quicklist) {
+                for (int i = 0; i < node.size() && remaining > 0; i++) {
+                    total = addSaturating(total, node.encodedElementBytesAt(i));
+                    remaining--;
+                }
+                if (remaining == 0) {
+                    return total;
+                }
+            }
+            return total;
+        }
+
+        java.util.Iterator<ListNode> iterator = quicklist.descendingIterator();
+        while (iterator.hasNext() && remaining > 0) {
+            ListNode node = iterator.next();
+            for (int i = node.size() - 1; i >= 0 && remaining > 0; i--) {
+                    total = addSaturating(total, node.encodedElementBytesAt(i));
+                remaining--;
+            }
+        }
+        return total;
+    }
+
     @Override
     public void close() {
         RuntimeException failure = null;
@@ -311,6 +409,28 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
             }
         }
         return predicted > QUICKLIST_NODE_MAX_BYTES;
+    }
+
+    private int nativePayloadCount() {
+        if (quicklist == null) {
+            return listpack.nativePayloadCount();
+        }
+        int count = 0;
+        for (ListNode node : quicklist) {
+            count += node.nativePayloadCount();
+        }
+        return count;
+    }
+
+    private int copyNativePayloadSizes(int[] target, int offset) {
+        if (quicklist == null) {
+            return listpack.copyNativePayloadSizes(target, offset);
+        }
+        int next = offset;
+        for (ListNode node : quicklist) {
+            next = node.copyNativePayloadSizes(target, next);
+        }
+        return next;
     }
 
     private void convertToQuickList() {
@@ -611,6 +731,16 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
         return bytes;
     }
 
+    private static long addSaturating(long left, long right) {
+        if (right <= 0L) {
+            return left;
+        }
+        if (Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
+    }
+
     private record RangeBounds(int start, int stop) {
     }
 
@@ -689,6 +819,26 @@ public final class ListValue implements YierdisValue, NativeHandleOwner {
 
         void addLast(byte[] v) {
             liveListpack().addLast(v);
+        }
+
+        int size() {
+            return liveListpack().size();
+        }
+
+        void writeAt(int index, BulkStringSink out) {
+            liveListpack().writeAt(index, out);
+        }
+
+        long encodedElementBytesAt(int index) {
+            return liveListpack().encodedElementBytesAt(index);
+        }
+
+        int nativePayloadCount() {
+            return liveListpack().nativePayloadCount();
+        }
+
+        int copyNativePayloadSizes(int[] target, int offset) {
+            return liveListpack().copyNativePayloadSizes(target, offset);
         }
 
         byte[] removeFirst() {

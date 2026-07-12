@@ -96,6 +96,11 @@ public final class ListRoot implements TypeRoot {
         return requireList(handle).rpop(count);
     }
 
+    public synchronized List<byte[]> range(ValueHandle handle, int start, int stop) {
+        ensureOpen();
+        return requireList(handle).range(start, stop);
+    }
+
     public synchronized int rangeCount(ValueHandle handle, int start, int stop) {
         ensureOpen();
         return requireList(handle).rangeCount(start, stop);
@@ -104,6 +109,26 @@ public final class ListRoot implements TypeRoot {
     public synchronized void rangeInto(ValueHandle handle, int start, int stop, BulkStringSink out) {
         ensureOpen();
         requireList(handle).rangeInto(start, stop, out);
+    }
+
+    public synchronized void emitPopRange(ValueHandle handle, int count, boolean left, BulkStringSink out) {
+        ensureOpen();
+        requireList(handle).emitPopRange(count, left, out);
+    }
+
+    public synchronized long encodedPopElementBytes(ValueHandle handle, int count, boolean left) {
+        ensureOpen();
+        return requireList(handle).encodedPopElementBytes(count, left);
+    }
+
+    public synchronized long retainedBytes(ValueHandle handle) {
+        ensureOpen();
+        return Long.BYTES + requireList(handle).estimatedBytes();
+    }
+
+    public synchronized int[] nativePayloadSizes(ValueHandle handle) {
+        ensureOpen();
+        return requireList(handle).nativePayloadSizes();
     }
 
     public synchronized int size(ValueHandle handle) {

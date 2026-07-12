@@ -13,11 +13,11 @@ import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
 import yier.bubu.redis.storage.api.result.BulkStringSequence;
+import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 
-import java.util.List;
 import java.util.Objects;
 
 public final class ListCommands implements CommandModule {
@@ -113,28 +113,37 @@ public final class ListCommands implements CommandModule {
             }
         }
 
-        List<byte[]> popped = support.recordWriteValue(
+        PoppedValueSequence popped = support.recordWriteValue(
                 ctx,
                 left
                         ? support.commandDb(ctx).writes().lists().lpop(request.readOnlyByteArray(1), count)
                         : support.commandDb(ctx).writes().lists().rpop(request.readOnlyByteArray(1), count)
         );
-        popResponse(out, popped, hasCount);
+        try {
+            popResponse(out, popped, hasCount);
+        } finally {
+            if (popped != null) {
+                popped.close();
+            }
+        }
     }
 
-    private static void popResponse(RedisReplyWriter out, List<byte[]> popped, boolean hasCount) {
+    private static void popResponse(RedisReplyWriter out, PoppedValueSequence popped, boolean hasCount) {
         if (!hasCount) {
-            if (popped == null || popped.isEmpty()) {
+            if (popped == null || popped.isNull() || popped.count() == 0) {
                 out.bulkString((byte[]) null);
                 return;
             }
-            out.bulkString(popped.get(0));
+            popped.emitTo(new BulkStringReplyAdapter(out));
             return;
         }
-        if (popped == null) {
+        if (popped == null || popped.isNull()) {
             out.nullArray();
             return;
         }
-        out.bulkStringArray(popped);
+        out.arrayHeader(popped.count());
+        if (popped.count() > 0) {
+            popped.emitTo(new BulkStringReplyAdapter(out));
+        }
     }
 }

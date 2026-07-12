@@ -57,6 +57,10 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
 
     @Override
     protected T commitPrepared() {
+        boolean deletingEntry = newRecord == null && existingEntryHandle != null;
+        if (deletingEntry) {
+            ttlMutation.commit();
+        }
         if (newRecord != null) {
             if (existingEntryHandle != null) {
                 keyLifecycle.entryTable().replace(existingEntryHandle, newRecord);
@@ -68,8 +72,14 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 stagedEntryHandle = null;
                 entryPublished = true;
             }
+        } else if (deletingEntry) {
+            keyLifecycle.keyDirectory().remove(existingEntryHandle);
+            keyLifecycle.entryTable().release(existingEntryHandle);
+            entryPublished = true;
         }
-        ttlMutation.commit();
+        if (!deletingEntry) {
+            ttlMutation.commit();
+        }
         return result;
     }
 
@@ -81,7 +91,9 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         } catch (RuntimeException | Error e) {
             failure = e;
         }
-        if (releaseReplacedValue && oldRecord != null && newRecord != null && !sameValue(oldRecord, newRecord)) {
+        if (releaseReplacedValue
+                && oldRecord != null
+                && (newRecord == null || !sameValue(oldRecord, newRecord))) {
             try {
                 keyLifecycle.releaseValue(oldRecord);
             } catch (RuntimeException | Error e) {
