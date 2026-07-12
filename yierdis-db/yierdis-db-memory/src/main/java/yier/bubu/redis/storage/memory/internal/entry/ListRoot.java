@@ -6,6 +6,7 @@ import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.value.ListValue;
+import yier.bubu.redis.storage.memory.internal.value.NativeListEntryRef;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.List;
@@ -116,6 +117,11 @@ public final class ListRoot implements TypeRoot {
         requireList(handle).emitPopRange(count, left, out);
     }
 
+    public synchronized NativeListEntryRef[] popEntries(ValueHandle handle, int count, boolean left) {
+        ensureOpen();
+        return requireList(handle).popEntries(count, left);
+    }
+
     public synchronized long encodedPopElementBytes(ValueHandle handle, int count, boolean left) {
         ensureOpen();
         return requireList(handle).encodedPopElementBytes(count, left);
@@ -153,6 +159,16 @@ public final class ListRoot implements TypeRoot {
 
     @Override
     public synchronized void release(ValueHandle handle) {
+        lists.release(handle);
+    }
+
+    public synchronized void releaseExcept(ValueHandle handle, NativeHandle[] retained) {
+        ensureOpen();
+        if (handle == null) {
+            return;
+        }
+        ListValue value = requireList(handle);
+        value.releaseExcept(retained);
         lists.release(handle);
     }
 

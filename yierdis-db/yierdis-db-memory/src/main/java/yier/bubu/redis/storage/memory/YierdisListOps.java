@@ -218,9 +218,13 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 }
 
                 int popCount = Math.min(count, oldSize);
-                PoppedValueSequence popped = PreparedPoppedValueSequence.owned(listRoot, oldHandle, popCount, left);
+                PreparedPoppedValueSequence popped = PreparedPoppedValueSequence.owned(
+                        keyLifecycle.nativeAllocator(),
+                        listRoot.popEntries(oldHandle, popCount, left)
+                );
                 WriteResult<PoppedValueSequence> result = WriteResult.of(popped, MutationOutcome.VALUE_CHANGED);
                 int remaining = oldSize - popCount;
+                Runnable releaseOldListToPopped = releaseOldListToPopped(oldHandle, popped);
                 if (remaining == 0) {
                     PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
                     try {
@@ -231,7 +235,8 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                                 result,
                                 MutationOutcome.VALUE_CHANGED,
                                 false,
-                                ttlMutation
+                                ttlMutation,
+                                releaseOldListToPopped
                         );
                     } catch (RuntimeException | Error failure) {
                         abortTtl(ttlMutation, failure);
@@ -263,6 +268,7 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                             current,
                             next,
                             false,
+                            releaseOldListToPopped,
                             PreparedTtlMutation.NONE
                     );
                     replacement = null;
@@ -528,6 +534,26 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
             boolean releaseOldValue,
             PreparedTtlMutation ttlMutation
     ) {
+        return preparedDelete(
+                currentEntry,
+                current,
+                result,
+                outcome,
+                releaseOldValue,
+                ttlMutation,
+                null
+        );
+    }
+
+    private <T> PreparedEntryMutation<T> preparedDelete(
+            CurrentEntry currentEntry,
+            EntryRecord current,
+            T result,
+            MutationOutcome outcome,
+            boolean releaseOldValue,
+            PreparedTtlMutation ttlMutation,
+            Runnable releaseReplacedValueHook
+    ) {
         long deltaBytes = -estimateRecordBytes(currentEntry.keyHandle(), current);
         return new PreparedEntryMutation<>(
                 keyLifecycle,
@@ -541,8 +567,16 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 current,
                 null,
                 releaseOldValue,
+                releaseReplacedValueHook,
                 ttlMutation
         );
+    }
+
+    private Runnable releaseOldListToPopped(ValueHandle oldHandle, PreparedPoppedValueSequence popped) {
+        return () -> {
+            listRoot.releaseExcept(oldHandle, popped.retainedHandles());
+            popped.activateOwnership();
+        };
     }
 
     private void abortStaged(

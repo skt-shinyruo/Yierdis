@@ -111,6 +111,15 @@ public final class NativeListpack implements AutoCloseable {
         return out;
     }
 
+    public NativeListEntryRef entryRefAt(int index) {
+        NativeHandle handle = entries.get(index);
+        if (handle == null) {
+            return NativeListEntryRef.nullValue();
+        }
+        int payloadLength = byteStore.length(handle);
+        return NativeListEntryRef.handle(handle, payloadLength, byteStore.allocatedBytes(handle));
+    }
+
     public byte[] get(int index) {
         NativeHandle handle = entries.get(index);
         return handle == null ? null : byteStore.toByteArray(handle);
@@ -204,6 +213,31 @@ public final class NativeListpack implements AutoCloseable {
         }
     }
 
+    public void closeExcept(NativeHandle[] retained) {
+        RuntimeException failure = null;
+        for (NativeHandle handle : entries) {
+            if (handle == null) {
+                continue;
+            }
+            if (isRetained(handle, retained)) {
+                byteStore.forget(handle);
+                continue;
+            }
+            try {
+                byteStore.release(handle);
+            } catch (RuntimeException e) {
+                failure = addFailure(failure, e);
+            }
+        }
+        entries.clear();
+        encodedBytes = 0;
+        allocatedBytes = 0;
+        rawBytes = 0;
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
     @Override
     public void close() {
         clear();
@@ -224,6 +258,27 @@ public final class NativeListpack implements AutoCloseable {
         if (handle != null) {
             byteStore.release(handle);
         }
+    }
+
+    private static boolean isRetained(NativeHandle handle, NativeHandle[] retained) {
+        if (handle == null || retained == null || retained.length == 0) {
+            return false;
+        }
+        long raw = handle.raw();
+        for (NativeHandle candidate : retained) {
+            if (candidate != null && candidate.raw() == raw) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static RuntimeException addFailure(RuntimeException failure, RuntimeException next) {
+        if (failure == null) {
+            return next;
+        }
+        failure.addSuppressed(next);
+        return failure;
     }
 
     private static int entryEncodedBytes(int len) {

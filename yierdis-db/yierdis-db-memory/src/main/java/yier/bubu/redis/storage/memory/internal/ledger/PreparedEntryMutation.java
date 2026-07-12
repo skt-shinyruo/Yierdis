@@ -15,6 +15,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
     private final EntryRecord oldRecord;
     private final EntryRecord newRecord;
     private final boolean releaseReplacedValue;
+    private final Runnable releaseReplacedValueHook;
     private final PreparedTtlMutation ttlMutation;
 
     private EntryHandle existingEntryHandle;
@@ -36,6 +37,38 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             boolean releaseReplacedValue,
             PreparedTtlMutation ttlMutation
     ) {
+        this(
+                keyLifecycle,
+                result,
+                actualDeltaBytes,
+                stagedNonNativeGrowthBytes,
+                outcome,
+                existingEntryHandle,
+                stagedEntryHandle,
+                stagedKey,
+                oldRecord,
+                newRecord,
+                releaseReplacedValue,
+                null,
+                ttlMutation
+        );
+    }
+
+    public PreparedEntryMutation(
+            YierdisDbKeyLifecycle keyLifecycle,
+            T result,
+            long actualDeltaBytes,
+            long stagedNonNativeGrowthBytes,
+            MutationOutcome outcome,
+            EntryHandle existingEntryHandle,
+            EntryHandle stagedEntryHandle,
+            NativeKeyDirectory.StagedInsert stagedKey,
+            EntryRecord oldRecord,
+            EntryRecord newRecord,
+            boolean releaseReplacedValue,
+            Runnable releaseReplacedValueHook,
+            PreparedTtlMutation ttlMutation
+    ) {
         super(
                 actualDeltaBytes,
                 MemoryUsageSnapshot.addSaturating(
@@ -52,6 +85,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         this.oldRecord = oldRecord;
         this.newRecord = newRecord;
         this.releaseReplacedValue = releaseReplacedValue;
+        this.releaseReplacedValueHook = releaseReplacedValueHook;
         this.ttlMutation = ttlMutation == null ? PreparedTtlMutation.NONE : ttlMutation;
     }
 
@@ -91,7 +125,13 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         } catch (RuntimeException | Error e) {
             failure = e;
         }
-        if (releaseReplacedValue
+        if (releaseReplacedValueHook != null) {
+            try {
+                releaseReplacedValueHook.run();
+            } catch (RuntimeException | Error e) {
+                failure = addFailure(failure, e);
+            }
+        } else if (releaseReplacedValue
                 && oldRecord != null
                 && (newRecord == null || !sameValue(oldRecord, newRecord))) {
             try {
