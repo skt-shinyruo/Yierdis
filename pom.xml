@@ -153,6 +153,11 @@
                 <artifactId>yierdis-memory-api</artifactId>
                 <version>${project.version}</version>
             </dependency>
+            <dependency>
+                <groupId>yier.bubu.redis</groupId>
+                <artifactId>yierdis-memory-testkit</artifactId>
+                <version>${project.version}</version>
+            </dependency>
 
             <dependency>
                 <groupId>yier.bubu.redis</groupId>

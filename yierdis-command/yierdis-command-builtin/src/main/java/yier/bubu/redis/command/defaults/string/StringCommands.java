@@ -134,7 +134,7 @@ public final class StringCommands implements CommandModule {
 
     private void set(SetArgs args, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        var result = support.recordWriteValue(
+        try (var result = support.recordWriteValue(
                 ctx,
                 support.commandDb(ctx).writes().strings().set(
                         args.key(),
@@ -143,16 +143,17 @@ public final class StringCommands implements CommandModule {
                         args.expire(),
                         args.getOld()
                 )
-        );
-        if (!result.applied()) {
-            out.bulkString((byte[]) null);
-            return;
+        )) {
+            if (!result.applied()) {
+                out.bulkString((byte[]) null);
+                return;
+            }
+            if (args.getOld()) {
+                result.oldValue().writeTo(new BulkStringReplyAdapter(out));
+                return;
+            }
+            out.simpleString("OK");
         }
-        if (args.getOld()) {
-            out.bulkString(result.oldValue());
-            return;
-        }
-        out.simpleString("OK");
     }
 
     private void get(ArgReader args, CommandContext ctx) {

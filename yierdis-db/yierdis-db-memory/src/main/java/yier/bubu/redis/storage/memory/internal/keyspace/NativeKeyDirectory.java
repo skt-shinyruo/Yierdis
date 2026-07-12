@@ -9,10 +9,10 @@ import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
-import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
 
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiFunction;
@@ -24,6 +24,8 @@ public final class NativeKeyDirectory implements AutoCloseable {
     private static final byte STATE_EMPTY = 0;
     private static final byte STATE_FILLED = 1;
     private static final byte STATE_TOMBSTONE = 2;
+    private static final long ARRAY_HEADER_BYTES = 16L;
+    private static final long REFERENCE_BYTES = 8L;
 
     private final NativeAllocator allocator;
     private final boolean ownsAllocator;
@@ -60,6 +62,14 @@ public final class NativeKeyDirectory implements AutoCloseable {
     public synchronized long nativeBytes() {
         ensureOpen();
         return 0L;
+    }
+
+    public synchronized long estimatedInsertHeapGrowthBytes() {
+        ensureOpen();
+        if (size + tombstones + 1 <= threshold()) {
+            return 0L;
+        }
+        return heapBytesForCapacity(keyHandles.length << 1);
     }
 
     public synchronized EntryHandle get(byte[] keyBytes) {
@@ -162,6 +172,44 @@ public final class NativeKeyDirectory implements AutoCloseable {
         return newHandle;
     }
 
+    public StagedInsert stageInsert(byte[] keyBytes) {
+        Objects.requireNonNull(keyBytes, "keyBytes");
+        byte[] stableKeyBytes = Arrays.copyOf(keyBytes, keyBytes.length);
+        NativeHandle keyHandle;
+        int hash = hash(stableKeyBytes);
+        synchronized (this) {
+            ensureOpen();
+            if (findIndex(stableKeyBytes, hash) >= 0) {
+                throw new IllegalStateException("native key already exists during staged insert");
+            }
+            keyHandle = allocateKey(stableKeyBytes);
+        }
+        StagedDirectory stagedDirectory = stageDirectoryForInsert();
+        return new StagedInsert(stableKeyBytes, hash, keyHandle, stagedDirectory);
+    }
+
+    public synchronized void publishStagedInsert(StagedInsert staged, EntryHandle entryHandle) {
+        Objects.requireNonNull(staged, "staged");
+        Objects.requireNonNull(entryHandle, "entryHandle");
+        ensureOpen();
+        staged.ensureActive();
+        if (findIndex(staged.keyBytes, staged.hash) >= 0) {
+            throw new IllegalStateException("native key appeared during staged insert");
+        }
+        if (staged.directory != null) {
+            publishStagedDirectory(staged.directory);
+        }
+        int insertIndex = findInsertIndex(staged.keyBytes, staged.hash);
+        if (states[insertIndex] == STATE_TOMBSTONE) {
+            tombstones--;
+        }
+        keyHandles[insertIndex] = staged.publish();
+        handles[insertIndex] = entryHandle;
+        hashes[insertIndex] = staged.hash;
+        states[insertIndex] = STATE_FILLED;
+        size++;
+    }
+
     public synchronized EntryHandle remove(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         ensureOpen();
@@ -207,22 +255,22 @@ public final class NativeKeyDirectory implements AutoCloseable {
         if (closed) {
             return;
         }
-        RuntimeException failure = null;
+        Throwable failure = null;
         try {
             clearInternal();
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
             failure = e;
         }
         if (ownsAllocator) {
             try {
                 allocator.close();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | Error e) {
                 failure = addFailure(failure, e);
             }
         }
         closed = true;
         if (failure != null) {
-            throw failure;
+            rethrow(failure);
         }
     }
 
@@ -241,12 +289,12 @@ public final class NativeKeyDirectory implements AutoCloseable {
     }
 
     private void clearInternal() {
-        RuntimeException failure = null;
+        Throwable failure = null;
         for (int i = 0; i < keyHandles.length; i++) {
             if (states[i] == STATE_FILLED) {
                 try {
                     allocator.free(keyHandles[i]);
-                } catch (RuntimeException e) {
+                } catch (RuntimeException | Error e) {
                     failure = addFailure(failure, e);
                     continue;
                 }
@@ -260,7 +308,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
         tombstones = 0;
         if (failure != null) {
             recomputeCounts();
-            throw failure;
+            rethrow(failure);
         }
     }
 
@@ -269,6 +317,36 @@ public final class NativeKeyDirectory implements AutoCloseable {
             return;
         }
         rehash(keyHandles.length << 1);
+    }
+
+    private StagedDirectory stageDirectoryForInsert() {
+        if (size + tombstones + 1 <= threshold()) {
+            return null;
+        }
+        int newCapacity = keyHandles.length << 1;
+        NativeHandle[] stagedKeyHandles = new NativeHandle[newCapacity];
+        EntryHandle[] stagedHandles = new EntryHandle[newCapacity];
+        int[] stagedHashes = new int[newCapacity];
+        byte[] stagedStates = new byte[newCapacity];
+        for (int i = 0; i < keyHandles.length; i++) {
+            if (states[i] != STATE_FILLED) {
+                continue;
+            }
+            int insertIndex = findInsertIndexInStates(stagedStates, hashes[i]);
+            stagedKeyHandles[insertIndex] = keyHandles[i];
+            stagedHandles[insertIndex] = handles[i];
+            stagedHashes[insertIndex] = hashes[i];
+            stagedStates[insertIndex] = STATE_FILLED;
+        }
+        return new StagedDirectory(stagedKeyHandles, stagedHandles, stagedHashes, stagedStates);
+    }
+
+    private void publishStagedDirectory(StagedDirectory staged) {
+        keyHandles = staged.keyHandles;
+        handles = staged.handles;
+        hashes = staged.hashes;
+        states = staged.states;
+        tombstones = 0;
     }
 
     private void rehash(int newCapacity) {
@@ -357,6 +435,17 @@ public final class NativeKeyDirectory implements AutoCloseable {
         }
     }
 
+    private int findInsertIndexInStates(byte[] targetStates, int hash) {
+        int mask = targetStates.length - 1;
+        int index = hash & mask;
+        while (true) {
+            if (targetStates[index] == STATE_EMPTY) {
+                return index;
+            }
+            index = (index + 1) & mask;
+        }
+    }
+
     private void removeAt(int index) {
         if (states[index] != STATE_FILLED) {
             return;
@@ -424,12 +513,30 @@ public final class NativeKeyDirectory implements AutoCloseable {
         }
     }
 
-    private static RuntimeException addFailure(RuntimeException failure, RuntimeException next) {
+    private static Throwable addFailure(Throwable failure, Throwable next) {
         if (failure == null) {
             return next;
         }
         failure.addSuppressed(next);
         return failure;
+    }
+
+    private static void rethrow(Throwable failure) {
+        if (failure instanceof RuntimeException e) {
+            throw e;
+        }
+        if (failure instanceof Error e) {
+            throw e;
+        }
+        throw new IllegalStateException(failure);
+    }
+
+    private static long heapBytesForCapacity(int capacity) {
+        long keyHandleArray = ARRAY_HEADER_BYTES + (long) capacity * REFERENCE_BYTES;
+        long entryHandleArray = ARRAY_HEADER_BYTES + (long) capacity * REFERENCE_BYTES;
+        long hashArray = ARRAY_HEADER_BYTES + (long) capacity * Integer.BYTES;
+        long stateArray = ARRAY_HEADER_BYTES + capacity;
+        return keyHandleArray + entryHandleArray + hashArray + stateArray;
     }
 
     @FunctionalInterface
@@ -440,5 +547,64 @@ public final class NativeKeyDirectory implements AutoCloseable {
     @FunctionalInterface
     public interface ScanConsumer {
         boolean accept(KeyHandle keyHandle, EntryHandle entryHandle);
+    }
+
+    public final class StagedInsert implements AutoCloseable {
+        private final byte[] keyBytes;
+        private final int hash;
+        private final StagedDirectory directory;
+        private NativeHandle keyHandle;
+        private boolean terminal;
+
+        private StagedInsert(byte[] keyBytes, int hash, NativeHandle keyHandle, StagedDirectory directory) {
+            this.keyBytes = keyBytes;
+            this.hash = hash;
+            this.keyHandle = Objects.requireNonNull(keyHandle, "keyHandle");
+            this.directory = directory;
+        }
+
+        public KeyHandle keyHandle() {
+            ensureActive();
+            return KeyHandle.forNative(allocator, keyHandle, hash);
+        }
+
+        public long stagedHeapBytes() {
+            return directory == null ? 0L : heapBytesForCapacity(directory.keyHandles.length);
+        }
+
+        private NativeHandle publish() {
+            ensureActive();
+            NativeHandle published = keyHandle;
+            keyHandle = null;
+            terminal = true;
+            return published;
+        }
+
+        private void ensureActive() {
+            if (terminal || keyHandle == null) {
+                throw new IllegalStateException("staged native key insert is closed");
+            }
+        }
+
+        @Override
+        public void close() {
+            if (terminal) {
+                return;
+            }
+            terminal = true;
+            NativeHandle handle = keyHandle;
+            keyHandle = null;
+            if (handle != null) {
+                allocator.free(handle);
+            }
+        }
+    }
+
+    private record StagedDirectory(
+            NativeHandle[] keyHandles,
+            EntryHandle[] handles,
+            int[] hashes,
+            byte[] states
+    ) {
     }
 }

@@ -19,10 +19,13 @@ import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
+import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
+import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.keyspace.YierdisKeyspace;
+import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.util.Objects;
@@ -32,9 +35,17 @@ import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 
 public final class YierdisDbKeyLifecycle {
-    public record EntryMutationResult<R>(EntryRecord record, R result) {
+    public record EntryMutationResult<R>(EntryRecord record, R result, boolean releaseReplacedValue) {
+        public EntryMutationResult(EntryRecord record, R result) {
+            this(record, result, true);
+        }
+
         public static <R> EntryMutationResult<R> of(EntryRecord record, R result) {
-            return new EntryMutationResult<>(record, result);
+            return new EntryMutationResult<>(record, result, true);
+        }
+
+        public static <R> EntryMutationResult<R> of(EntryRecord record, R result, boolean releaseReplacedValue) {
+            return new EntryMutationResult<>(record, result, releaseReplacedValue);
         }
     }
 
@@ -113,7 +124,7 @@ public final class YierdisDbKeyLifecycle {
         this.dbIndex = Math.max(0, dbIndex);
     }
 
-    NativeAllocator nativeAllocator() {
+    public NativeAllocator nativeAllocator() {
         return nativeAllocator;
     }
 
@@ -302,6 +313,38 @@ public final class YierdisDbKeyLifecycle {
         return keyHandle == null ? null : expires.get(keyHandle);
     }
 
+    public long estimateExpireSetUpperBound(KeyHandle keyHandle, boolean addingNewTtl) {
+        if (keyHandle == null) {
+            return 0L;
+        }
+        return MutationMemoryEstimator.peakAdditionalBytes(
+                nativeAllocator,
+                0L,
+                estimateExpireSetNonNativeGrowthBytes(addingNewTtl)
+        );
+    }
+
+    public long estimateExpireSetNonNativeGrowthBytes(boolean addingNewTtl) {
+        if (expires instanceof YierdisFfmExpireIndex ffmExpires) {
+            return ffmExpires.estimatedSetReplacementNonNativeGrowthBytes(addingNewTtl);
+        }
+        return 0L;
+    }
+
+    public PreparedTtlMutation prepareSetExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
+        if (keyHandle == null) {
+            return PreparedTtlMutation.NONE;
+        }
+        return expires.prepareSetExpireAtMillis(keyHandle, expireAtMillis);
+    }
+
+    public PreparedTtlMutation prepareRemoveExpire(KeyHandle keyHandle) {
+        if (keyHandle == null) {
+            return PreparedTtlMutation.NONE;
+        }
+        return expires.prepareRemoveExpire(keyHandle);
+    }
+
     public <R> R computeWithHandleResult(
             byte[] keyBytes,
             BiFunction<? super KeyHandle, ? super EntryRecord, EntryMutationResult<R>> remappingFunction
@@ -328,7 +371,9 @@ public final class YierdisDbKeyLifecycle {
             return mutation.result();
         }
         entryTable.replace(existingHandle, newRecord);
-        releaseReplacedValue(oldRecord, newRecord);
+        if (mutation.releaseReplacedValue()) {
+            releaseReplacedValue(oldRecord, newRecord);
+        }
         return mutation.result();
     }
 
@@ -362,7 +407,9 @@ public final class YierdisDbKeyLifecycle {
             return mutation.result();
         }
         entryTable.replace(existingHandle, newRecord);
-        releaseReplacedValue(oldRecord, newRecord);
+        if (mutation.releaseReplacedValue()) {
+            releaseReplacedValue(oldRecord, newRecord);
+        }
         return mutation.result();
     }
 
@@ -542,6 +589,23 @@ public final class YierdisDbKeyLifecycle {
         return touched;
     }
 
+    public EntryRecord withExpireAtMillis(KeyHandle keyHandle, EntryRecord record, long expireAtMillis) {
+        if (keyHandle == null || record == null) {
+            return record;
+        }
+        return new EntryRecord(
+                record.keyHandle(),
+                record.valueHandle(),
+                record.keyHash(),
+                record.type(),
+                record.encoding(),
+                record.flags(),
+                expireAtMillis,
+                record.version(),
+                accessClock(record.lruOrLfu())
+        );
+    }
+
     public void releaseValue(EntryRecord record) {
         if (record == null || record.valueHandle() == null || record.valueHandle().raw() == 0L) {
             return;
@@ -621,20 +685,16 @@ public final class YierdisDbKeyLifecycle {
             byte[] keyBytes,
             BiFunction<? super KeyHandle, ? super EntryRecord, EntryMutationResult<R>> remappingFunction
     ) {
-        EntryHandle created = entryTable.reserve();
+        EntryHandle created = null;
+        NativeKeyDirectory.StagedInsert stagedKey = null;
         boolean published = false;
         boolean initialized = false;
+        boolean entryWritten = false;
         EntryRecord newRecord = null;
         try {
-            keyDirectory.compute(keyBytes, (key, oldHandle) -> {
-                if (oldHandle != null) {
-                    throw new IllegalStateException("native entry appeared during remapping");
-                }
-                return created;
-            });
-            published = true;
-
-            KeyHandle keyHandle = keyDirectory.getKeyHandle(keyBytes);
+            created = entryTable.reserve();
+            stagedKey = keyDirectory.stageInsert(keyBytes);
+            KeyHandle keyHandle = stagedKey.keyHandle();
             EntryMutationResult<R> mutation = Objects.requireNonNull(
                     remappingFunction.apply(keyHandle, null),
                     "entry mutation result"
@@ -645,14 +705,21 @@ public final class YierdisDbKeyLifecycle {
             }
 
             entryTable.writeReserved(created, newRecord);
+            entryWritten = true;
+            keyDirectory.publishStagedInsert(stagedKey, created);
+            published = true;
             initialized = true;
             return mutation.result();
         } finally {
             if (!initialized) {
                 if (published) {
                     keyDirectory.remove(keyBytes, created);
+                } else if (stagedKey != null) {
+                    stagedKey.close();
                 }
-                entryTable.release(created);
+                if (created != null) {
+                    entryTable.release(created);
+                }
                 if (newRecord != null) {
                     releaseValue(newRecord);
                 }

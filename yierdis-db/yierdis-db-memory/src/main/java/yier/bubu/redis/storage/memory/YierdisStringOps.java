@@ -14,12 +14,17 @@ import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.EntryMutationResult;
+import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
+import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
+import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
+import yier.bubu.redis.storage.memory.internal.value.NativeBytesSlice;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
 import java.nio.charset.StandardCharsets;
@@ -28,6 +33,7 @@ import java.util.Objects;
 
 public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     private static final long TTL_ENTRY_BYTES_ESTIMATE = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+    private static final int ENTRY_RECORD_NATIVE_BYTES = 56;
     private static final int MAX_STRING_BYTES = 512 * 1024 * 1024;
     private static final int EMBSTR_BYTES_LIMIT = 44;
     private static final String INTEGER_RANGE_ERROR = "ERR value is not an integer or out of range";
@@ -45,96 +51,118 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     @Override
     public WriteResult<SetStringValue> set(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption, boolean returnOldValue) {
         internals.checkThread();
+        Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         boolean keepTtl = expireOption != null && expireOption.isKeepTtl();
         Long expireAtMillis = (expireOption == null || keepTtl) ? null : expireOption.toExpireAtMillis(now);
+        int newValueLength = valueLength(value);
         long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(
                 keyBytes == null ? 0 : keyBytes.length,
-                valueLength(value)
+                newValueLength
         );
         if (expireAtMillis != null) {
-            upperBound += TTL_ENTRY_BYTES_ESTIMATE;
+            upperBound = addSaturating(upperBound, TTL_ENTRY_BYTES_ESTIMATE);
         }
-        final long finalUpperBound = setReservationUpperBound(keyBytes, mode, upperBound, now, keepTtl);
+        final long estimatedUpperBound = upperBound;
 
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
-                return finalUpperBound;
+                long nativeUpperBound = addSaturating(
+                        setNativeUpperBound(keyBytes, mode, newValueLength, now),
+                        setStagedNonNativeGrowthUpperBound(keyBytes, mode, now, expireAtMillis)
+                );
+                return withScopeBookkeeping(Math.max(
+                        setReservationUpperBound(keyBytes, mode, estimatedUpperBound, now, keepTtl),
+                        nativeUpperBound
+                ));
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<SetStringValue>> apply() {
-                record SetComputation(boolean didSet, boolean existed, KeyHandle keyHandle, long deltaBytes, byte[] oldValue) {
+            public PreparedEntryMutation<WriteResult<SetStringValue>> prepare() {
+                CurrentEntry currentEntry = currentEntry(keyBytes);
+                EntryRecord current = currentEntry.record();
+                if (current != null && keyLifecycle.isKeyExpired(currentEntry.keyHandle(), now)) {
+                    keyLifecycle.removeIfExpired(currentEntry.keyHandle(), current, now);
+                    currentEntry = currentEntry(keyBytes);
+                    current = currentEntry.record();
                 }
 
-                SetComputation computation = keyLifecycle.computeWithHandleResult(keyBytes, (k, oldRecord) -> {
-                    EntryRecord current = oldRecord;
-                    long oldEstimate = estimateRecordBytes(k, current);
-                    long deltaBytes = 0L;
-                    if (current != null && keyLifecycle.isKeyExpired(k, now)) {
-                        keyLifecycle.removeExpire(k);
-                        deltaBytes -= oldEstimate;
-                        current = null;
-                        oldEstimate = 0L;
+                if (mode == SetMode.NX && current != null) {
+                    WriteResult<SetStringValue> result = WriteResult.unchanged(
+                            new SetStringValue(false, BulkStringValue.nullValue())
+                    );
+                    return preparedNoEntry(result, MutationOutcome.NONE);
+                }
+                if (mode == SetMode.XX && current == null) {
+                    WriteResult<SetStringValue> result = WriteResult.unchanged(
+                            new SetStringValue(false, BulkStringValue.nullValue())
+                    );
+                    return preparedNoEntry(result, MutationOutcome.NONE);
+                }
+                if (returnOldValue && current != null && current.type() != ValueType.STRING) {
+                    throw new WrongTypeException();
+                }
+
+                StagedEntry staged = null;
+                StoredString stored = null;
+                PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
+                try {
+                    KeyHandle targetKey = currentEntry.keyHandle();
+                    if (current == null) {
+                        staged = stageNewEntry(keyBytes);
+                        targetKey = staged.keyHandle();
                     }
 
-                    boolean existed = current != null;
-                    if (mode == SetMode.NX && current != null) {
-                        return EntryMutationResult.of(current, new SetComputation(false, true, k, deltaBytes, null));
-                    }
-                    if (mode == SetMode.XX && current == null) {
-                        return EntryMutationResult.of(null, new SetComputation(false, false, k, deltaBytes, null));
-                    }
-                    if (returnOldValue && current != null && current.type() != ValueType.STRING) {
-                        throw new WrongTypeException();
-                    }
-                    byte[] oldValue = null;
+                    BulkStringValue oldValue = BulkStringValue.nullValue();
+                    boolean transferOldValue = false;
                     if (returnOldValue && current != null) {
-                        byte[] raw = copyStringBytes(current);
-                        oldValue = raw == null ? null : Arrays.copyOf(raw, raw.length);
+                        ValueHandle oldHandle = requireStringHandle(current);
+                        int payloadLength = stringRoot.length(oldHandle);
+                        oldValue = BulkStringValue.owned(
+                                new NativeBytesSlice(keyLifecycle.nativeAllocator(), oldHandle.nativeHandle(), 0, payloadLength),
+                                payloadLength,
+                                stringRoot.estimatedBytes(oldHandle),
+                                () -> stringRoot.release(oldHandle)
+                        );
+                        transferOldValue = true;
                     }
 
-                    StoredString stored = storeSetValue(current, value);
+                    stored = storeSetValue(current, value);
                     long expireForRecord = keepTtl && current != null
                             ? current.expireAtMillis()
                             : expireAtMillis == null ? -1L : expireAtMillis;
-                    EntryRecord next = stringRecord(k, stored.handle(), stored.encoding(), expireForRecord, current);
-
-                    deltaBytes -= oldEstimate;
-                    deltaBytes += estimateRecordBytes(k, next);
-                    return EntryMutationResult.of(next, new SetComputation(true, existed, k, deltaBytes, oldValue));
-                });
-
-                boolean ttlChanged = false;
-                if (computation.didSet()) {
-                    KeyHandle keyHandle = currentKeyHandle(keyBytes, computation.keyHandle());
-                    if (keepTtl && computation.existed()) {
-                        MutationOutcome outcome = MutationOutcome.VALUE_CHANGED;
-                        return YierdisDbMutationExecutor.MutationResult.of(
-                                WriteResult.of(new SetStringValue(true, computation.oldValue()), outcome),
-                                computation.deltaBytes()
-                        );
-                    }
-                    if (expireAtMillis != null) {
-                        keyLifecycle.setExpireAtMillis(keyHandle, expireAtMillis);
-                        MutationOutcome outcome = MutationOutcome.VALUE_AND_TTL_CHANGED;
-                        return YierdisDbMutationExecutor.MutationResult.of(
-                                WriteResult.of(new SetStringValue(true, computation.oldValue()), outcome),
-                                computation.deltaBytes()
-                        );
-                    }
-                    Long beforeTtl = keyLifecycle.expireAtMillis(keyHandle);
-                    keyLifecycle.removeExpire(keyHandle);
-                    if (beforeTtl != null) {
-                        ttlChanged = true;
-                    }
+                    EntryRecord next = stringRecord(targetKey, stored.handle(), stored.encoding(), expireForRecord, current);
+                    ttlMutation = setTtlMutation(targetKey, current, keepTtl, expireAtMillis);
+                    boolean ttlChanged = ttlChangedForSet(targetKey, current, keepTtl, expireAtMillis);
+                    MutationOutcome outcome = MutationOutcome.of(true, ttlChanged);
+                    WriteResult<SetStringValue> result = WriteResult.of(
+                            new SetStringValue(true, oldValue),
+                            outcome
+                    );
+                    long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
+                    PreparedEntryMutation<WriteResult<SetStringValue>> prepared = new PreparedEntryMutation<>(
+                            keyLifecycle,
+                            result,
+                            deltaBytes,
+                            staged == null ? 0L : staged.stagedHeapBytes(),
+                            outcome,
+                            currentEntry.entryHandle(),
+                            staged == null ? null : staged.entryHandle(),
+                            staged == null ? null : staged.stagedKey(),
+                            current,
+                            next,
+                            !transferOldValue,
+                            ttlMutation
+                    );
+                    staged = null;
+                    stored = null;
+                    ttlMutation = PreparedTtlMutation.NONE;
+                    return prepared;
+                } catch (RuntimeException | Error failure) {
+                    abortStaged(staged, stored, ttlMutation, failure);
+                    throw failure;
                 }
-                MutationOutcome outcome = MutationOutcome.of(computation.didSet(), ttlChanged);
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of(new SetStringValue(computation.didSet(), computation.oldValue()), outcome),
-                        computation.deltaBytes()
-                );
             }
         });
     }
@@ -154,60 +182,93 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     @Override
     public WriteResult<Long> append(byte[] keyBytes, BytesSlice value) {
         internals.checkThread();
+        Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
         byte[] suffix = bytesOf(value);
-        long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(
+        long estimatedUpperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(
                 keyBytes == null ? 0 : keyBytes.length,
                 suffix.length
         );
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Long>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
-                return upperBound;
+                return withScopeBookkeeping(Math.max(
+                        estimatedUpperBound,
+                        stringGrowthNativeUpperBound(keyBytes, suffix.length, now, true)
+                ));
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
-                return keyLifecycle.computeWithHandleResult(keyBytes, (k, oldRecord) -> {
-                    EntryRecord current = oldRecord;
-                    long oldEstimate = estimateRecordBytes(k, current);
-                    long deltaBytes = 0L;
-                    if (current != null && keyLifecycle.isKeyExpired(k, now)) {
-                        keyLifecycle.removeExpire(k);
-                        deltaBytes -= oldEstimate;
-                        current = null;
-                        oldEstimate = 0L;
-                    }
+            public PreparedEntryMutation<WriteResult<Long>> prepare() {
+                CurrentEntry currentEntry = currentEntry(keyBytes);
+                EntryRecord current = currentEntry.record();
+                if (current != null && keyLifecycle.isKeyExpired(currentEntry.keyHandle(), now)) {
+                    keyLifecycle.removeIfExpired(currentEntry.keyHandle(), current, now);
+                    currentEntry = currentEntry(keyBytes);
+                    current = currentEntry.record();
+                }
+
+                StagedEntry staged = null;
+                StoredString stored = null;
+                try {
+                    KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
                         ensureMaxStringLength(suffix.length);
-                        ValueHandle handle = stringRoot.store(suffix);
-                        EntryRecord next = stringRecord(k, handle, ValueEncoding.STRING_RAW, -1L, null);
-                        deltaBytes += estimateRecordBytes(k, next);
-                        return mutationResult(
-                                next,
-                                WriteResult.of((long) suffix.length, MutationOutcome.VALUE_CHANGED),
-                                deltaBytes
-                        );
-                    }
-
-                    requireString(current);
-                    ValueHandle handle = requireStringHandle(current);
-                    int beforeLen = stringRoot.length(handle);
-                    ensureMaxStringLength(Math.addExact(beforeLen, suffix.length));
-                    int newLen;
-                    if (suffix.length > 0) {
-                        newLen = stringRoot.append(handle, suffix);
+                        staged = stageNewEntry(keyBytes);
+                        targetKey = staged.keyHandle();
+                        stored = new StoredString(stringRoot.store(suffix), ValueEncoding.STRING_RAW);
                     } else {
-                        newLen = beforeLen;
+                        requireString(current);
+                        byte[] before = copyStringBytes(current);
+                        int beforeLen = before.length;
+                        ensureMaxStringLength(Math.addExact(beforeLen, suffix.length));
+                        int newLen = beforeLen + suffix.length;
+                        ValueHandle handle = requireStringHandle(current);
+                        if (suffix.length > 0) {
+                            byte[] replacement = Arrays.copyOf(before, newLen);
+                            System.arraycopy(suffix, 0, replacement, beforeLen, suffix.length);
+                            handle = stringRoot.store(replacement);
+                        }
+                        stored = new StoredString(handle, ValueEncoding.STRING_RAW);
                     }
-                    EntryRecord next = stringRecord(k, handle, ValueEncoding.STRING_RAW, current.expireAtMillis(), current);
-                    deltaBytes -= oldEstimate;
-                    deltaBytes += estimateRecordBytes(k, next);
+                    int newLen = current == null ? suffix.length : stringRoot.length(stored.handle());
+                    int beforeLen = current == null ? -1 : stringRoot.length(requireStringHandle(current));
+                    EntryRecord next = stringRecord(
+                            targetKey,
+                            stored.handle(),
+                            stored.encoding(),
+                            current == null ? -1L : current.expireAtMillis(),
+                            current
+                    );
                     WriteResult<Long> result = newLen != beforeLen
                             ? WriteResult.of((long) newLen, MutationOutcome.VALUE_CHANGED)
                             : WriteResult.unchanged((long) newLen);
-                    return mutationResult(next, result, deltaBytes);
-                });
+                    MutationOutcome outcome = result.mutationOutcome();
+                    long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
+                    PreparedEntryMutation<WriteResult<Long>> prepared = new PreparedEntryMutation<>(
+                            keyLifecycle,
+                            result,
+                            deltaBytes,
+                            staged == null ? 0L : staged.stagedHeapBytes(),
+                            outcome,
+                            currentEntry.entryHandle(),
+                            staged == null ? null : staged.entryHandle(),
+                            staged == null ? null : staged.stagedKey(),
+                            current,
+                            next,
+                            true,
+                            PreparedTtlMutation.NONE
+                    );
+                    staged = null;
+                    stored = null;
+                    return prepared;
+                } catch (RuntimeException | Error failure) {
+                    if (current != null && stored != null && current.valueHandle().equals(stored.handle())) {
+                        stored = null;
+                    }
+                    abortStaged(staged, stored, PreparedTtlMutation.NONE, failure);
+                    throw failure;
+                }
             }
         });
     }
@@ -215,73 +276,92 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     @Override
     public WriteResult<Integer> setBit(byte[] keyBytes, long offset, int value) {
         internals.checkThread();
+        Objects.requireNonNull(keyBytes, "keyBytes");
         validateBitValue(value);
         int requiredLen = requiredBitLength(offset);
         long now = System.currentTimeMillis();
-        long currentLen = stringLength(keyBytes);
+        long currentLen = currentStringLengthForEstimate(keyBytes, now);
         long growth = Math.max(0L, (long) requiredLen - currentLen);
-        long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(
+        long estimatedUpperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(
                 keyBytes == null ? 0 : keyBytes.length,
                 (int) growth
         );
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Integer>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Integer>>() {
             @Override
             public long upperBoundBytes() {
-                return upperBound;
+                return withScopeBookkeeping(Math.max(
+                        estimatedUpperBound,
+                        stringGrowthNativeUpperBound(keyBytes, requiredLen, now, true)
+                ));
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Integer>> apply() {
-                return keyLifecycle.computeWithHandleResult(keyBytes, (k, oldRecord) -> {
-                    EntryRecord current = oldRecord;
-                    long oldEstimate = estimateRecordBytes(k, current);
-                    long deltaBytes = 0L;
-                    if (current != null && keyLifecycle.isKeyExpired(k, now)) {
-                        keyLifecycle.removeExpire(k);
-                        deltaBytes -= oldEstimate;
-                        current = null;
-                        oldEstimate = 0L;
-                    }
+            public PreparedEntryMutation<WriteResult<Integer>> prepare() {
+                CurrentEntry currentEntry = currentEntry(keyBytes);
+                EntryRecord current = currentEntry.record();
+                if (current != null && keyLifecycle.isKeyExpired(currentEntry.keyHandle(), now)) {
+                    keyLifecycle.removeIfExpired(currentEntry.keyHandle(), current, now);
+                    currentEntry = currentEntry(keyBytes);
+                    current = currentEntry.record();
+                }
 
-                    ValueHandle handle;
+                StagedEntry staged = null;
+                StoredString stored = null;
+                try {
+                    KeyHandle targetKey = currentEntry.keyHandle();
                     boolean existed = current != null;
-                    int beforeLen = 0;
+                    byte[] before;
                     if (current == null) {
-                        handle = stringRoot.store((byte[]) null);
+                        staged = stageNewEntry(keyBytes);
+                        targetKey = staged.keyHandle();
+                        before = new byte[0];
                     } else {
                         requireString(current);
-                        handle = requireStringHandle(current);
-                        beforeLen = stringRoot.length(handle);
+                        before = copyStringBytes(current);
                     }
 
-                    boolean ok = false;
-                    try {
-                        int oldBit = getBit(handle, offset);
-                        stringRoot.ensureLength(handle, requiredLen);
-                        setBit(handle, offset, value);
-                        int afterLen = stringRoot.length(handle);
-                        boolean changed = !existed || oldBit != value || afterLen != beforeLen;
+                    int oldBit = getBit(before, offset);
+                    byte[] replacement = before.length >= requiredLen
+                            ? Arrays.copyOf(before, before.length)
+                            : Arrays.copyOf(before, requiredLen);
+                    setBitInArray(replacement, offset, value);
+                    stored = new StoredString(stringRoot.store(replacement), ValueEncoding.STRING_RAW);
+                    int afterLen = replacement.length;
+                    boolean changed = !existed || oldBit != value || afterLen != before.length;
 
-                        EntryRecord next = stringRecord(
-                                k,
-                                handle,
-                                ValueEncoding.STRING_RAW,
-                                current == null ? -1L : current.expireAtMillis(),
-                                current
-                        );
-                        deltaBytes -= oldEstimate;
-                        deltaBytes += estimateRecordBytes(k, next);
-                        ok = true;
-                        WriteResult<Integer> result = changed
-                                ? WriteResult.of(oldBit, MutationOutcome.VALUE_CHANGED)
-                                : WriteResult.unchanged(oldBit);
-                        return mutationResult(next, result, deltaBytes);
-                    } finally {
-                        if (!ok && current == null) {
-                            stringRoot.release(handle);
-                        }
-                    }
-                });
+                    EntryRecord next = stringRecord(
+                            targetKey,
+                            stored.handle(),
+                            stored.encoding(),
+                            current == null ? -1L : current.expireAtMillis(),
+                            current
+                    );
+                    WriteResult<Integer> result = changed
+                            ? WriteResult.of(oldBit, MutationOutcome.VALUE_CHANGED)
+                            : WriteResult.unchanged(oldBit);
+                    MutationOutcome outcome = result.mutationOutcome();
+                    long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
+                    PreparedEntryMutation<WriteResult<Integer>> prepared = new PreparedEntryMutation<>(
+                            keyLifecycle,
+                            result,
+                            deltaBytes,
+                            staged == null ? 0L : staged.stagedHeapBytes(),
+                            outcome,
+                            currentEntry.entryHandle(),
+                            staged == null ? null : staged.entryHandle(),
+                            staged == null ? null : staged.stagedKey(),
+                            current,
+                            next,
+                            true,
+                            PreparedTtlMutation.NONE
+                    );
+                    staged = null;
+                    stored = null;
+                    return prepared;
+                } catch (RuntimeException | Error failure) {
+                    abortStaged(staged, stored, PreparedTtlMutation.NONE, failure);
+                    throw failure;
+                }
             }
         });
     }
@@ -289,56 +369,73 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
     @Override
     public WriteResult<Long> incrBy(byte[] keyBytes, long delta) {
         internals.checkThread();
+        Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
-        long upperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, 32);
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Long>>() {
+        long estimatedUpperBound = YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, 32);
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Long>>() {
             @Override
             public long upperBoundBytes() {
-                return upperBound;
+                return withScopeBookkeeping(Math.max(
+                        estimatedUpperBound,
+                        stringGrowthNativeUpperBound(keyBytes, 32, now, true)
+                ));
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
-                return keyLifecycle.computeWithHandleResult(keyBytes, (k, oldRecord) -> {
-                    EntryRecord current = oldRecord;
-                    long oldEstimate = estimateRecordBytes(k, current);
-                    long deltaBytes = 0L;
-                    if (current != null && keyLifecycle.isKeyExpired(k, now)) {
-                        keyLifecycle.removeExpire(k);
-                        deltaBytes -= oldEstimate;
-                        current = null;
-                        oldEstimate = 0L;
-                    }
+            public PreparedEntryMutation<WriteResult<Long>> prepare() {
+                CurrentEntry currentEntry = currentEntry(keyBytes);
+                EntryRecord current = currentEntry.record();
+                if (current != null && keyLifecycle.isKeyExpired(currentEntry.keyHandle(), now)) {
+                    keyLifecycle.removeIfExpired(currentEntry.keyHandle(), current, now);
+                    currentEntry = currentEntry(keyBytes);
+                    current = currentEntry.record();
+                }
 
+                StagedEntry staged = null;
+                StoredString stored = null;
+                try {
+                    KeyHandle targetKey = currentEntry.keyHandle();
                     long currentValue = 0L;
                     if (current != null) {
                         requireString(current);
                         currentValue = parseLongAscii(copyStringBytes(current));
+                    } else {
+                        staged = stageNewEntry(keyBytes);
+                        targetKey = staged.keyHandle();
                     }
                     long result = safeAdd(currentValue, delta);
                     byte[] encoded = Long.toString(result).getBytes(StandardCharsets.US_ASCII);
-                    ValueHandle handle;
-                    if (current != null) {
-                        handle = requireStringHandle(current);
-                        stringRoot.overwrite(handle, encoded);
-                    } else {
-                        handle = stringRoot.store(encoded);
-                    }
+                    stored = new StoredString(stringRoot.store(encoded), ValueEncoding.STRING_INT);
                     EntryRecord next = stringRecord(
-                            k,
-                            handle,
-                            ValueEncoding.STRING_INT,
+                            targetKey,
+                            stored.handle(),
+                            stored.encoding(),
                             current == null ? -1L : current.expireAtMillis(),
                             current
                     );
-                    deltaBytes -= oldEstimate;
-                    deltaBytes += estimateRecordBytes(k, next);
-                    return mutationResult(
+                    WriteResult<Long> writeResult = WriteResult.of(result, MutationOutcome.VALUE_CHANGED);
+                    long deltaBytes = estimateRecordBytes(targetKey, next) - estimateRecordBytes(targetKey, current);
+                    PreparedEntryMutation<WriteResult<Long>> prepared = new PreparedEntryMutation<>(
+                            keyLifecycle,
+                            writeResult,
+                            deltaBytes,
+                            staged == null ? 0L : staged.stagedHeapBytes(),
+                            MutationOutcome.VALUE_CHANGED,
+                            currentEntry.entryHandle(),
+                            staged == null ? null : staged.entryHandle(),
+                            staged == null ? null : staged.stagedKey(),
+                            current,
                             next,
-                            WriteResult.of(result, MutationOutcome.VALUE_CHANGED),
-                            deltaBytes
+                            true,
+                            PreparedTtlMutation.NONE
                     );
-                });
+                    staged = null;
+                    stored = null;
+                    return prepared;
+                } catch (RuntimeException | Error failure) {
+                    abortStaged(staged, stored, PreparedTtlMutation.NONE, failure);
+                    throw failure;
+                }
             }
         });
     }
@@ -436,26 +533,6 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         return bitcountRange(bytes, (int) s, (int) ed);
     }
 
-    private int stringLength(byte[] keyBytes) {
-        internals.checkThread();
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyBytes);
-        if (record == null) {
-            return 0;
-        }
-        requireString(record);
-        return stringRoot.length(requireStringHandle(record));
-    }
-
-    private int stringLength(BytesView keyView) {
-        internals.checkThread();
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
-        if (record == null) {
-            return 0;
-        }
-        requireString(record);
-        return stringRoot.length(requireStringHandle(record));
-    }
-
     private EntryRecord liveTouchedStringRecord(byte[] keyBytes) {
         KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
         return liveTouchedStringRecord(keyHandle);
@@ -482,13 +559,7 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         byte[] storedBytes = parsed == null
                 ? bytes
                 : Long.toString(parsed).getBytes(StandardCharsets.US_ASCII);
-        ValueHandle handle;
-        if (current != null && current.type() == ValueType.STRING && stringRoot.contains(current.valueHandle())) {
-            handle = current.valueHandle();
-            stringRoot.overwrite(handle, storedBytes);
-        } else {
-            handle = stringRoot.store(storedBytes);
-        }
+        ValueHandle handle = stringRoot.store(storedBytes);
         return new StoredString(handle, encoding);
     }
 
@@ -532,6 +603,131 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
+    private CurrentEntry currentEntry(byte[] keyBytes) {
+        EntryHandle entryHandle = keyLifecycle.entryHandle(keyBytes);
+        EntryRecord record = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
+        KeyHandle keyHandle = entryHandle == null ? null : keyLifecycle.keyHandle(keyBytes);
+        return new CurrentEntry(entryHandle, keyHandle, record);
+    }
+
+    private StagedEntry stageNewEntry(byte[] keyBytes) {
+        EntryHandle entryHandle = keyLifecycle.entryTable().reserve();
+        NativeKeyDirectory.StagedInsert stagedKey = null;
+        try {
+            stagedKey = keyLifecycle.keyDirectory().stageInsert(keyBytes);
+            return new StagedEntry(entryHandle, stagedKey);
+        } catch (RuntimeException | Error failure) {
+            try {
+                keyLifecycle.entryTable().release(entryHandle);
+            } catch (RuntimeException | Error releaseFailure) {
+                failure.addSuppressed(releaseFailure);
+            }
+            if (stagedKey != null) {
+                try {
+                    stagedKey.close();
+                } catch (RuntimeException | Error closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+            throw failure;
+        }
+    }
+
+    private PreparedTtlMutation setTtlMutation(
+            KeyHandle keyHandle,
+            EntryRecord current,
+            boolean keepTtl,
+            Long expireAtMillis
+    ) {
+        if (keepTtl && current != null) {
+            return PreparedTtlMutation.NONE;
+        }
+        if (expireAtMillis != null) {
+            return keyLifecycle.prepareSetExpireAtMillis(keyHandle, expireAtMillis);
+        }
+        return keyLifecycle.prepareRemoveExpire(keyHandle);
+    }
+
+    private boolean ttlChangedForSet(
+            KeyHandle keyHandle,
+            EntryRecord current,
+            boolean keepTtl,
+            Long expireAtMillis
+    ) {
+        Long before = current == null ? null : keyLifecycle.expireAtMillis(keyHandle);
+        if (keepTtl && current != null) {
+            return false;
+        }
+        if (expireAtMillis != null) {
+            return true;
+        }
+        return before != null;
+    }
+
+    private <T> PreparedEntryMutation<T> preparedNoEntry(T result, MutationOutcome outcome) {
+        return new PreparedEntryMutation<>(
+                keyLifecycle,
+                result,
+                0L,
+                0L,
+                outcome,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
+                PreparedTtlMutation.NONE
+        );
+    }
+
+    private void abortStaged(
+            StagedEntry staged,
+            StoredString stored,
+            PreparedTtlMutation ttlMutation,
+            Throwable failure
+    ) {
+        if (ttlMutation != null) {
+            try {
+                ttlMutation.abort();
+            } catch (RuntimeException | Error abortFailure) {
+                failure.addSuppressed(abortFailure);
+            }
+        }
+        if (stored != null) {
+            try {
+                stringRoot.release(stored.handle());
+            } catch (RuntimeException | Error releaseFailure) {
+                failure.addSuppressed(releaseFailure);
+            }
+        }
+        if (staged != null) {
+            try {
+                staged.close();
+            } catch (RuntimeException | Error closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            try {
+                keyLifecycle.entryTable().release(staged.entryHandle());
+            } catch (RuntimeException | Error releaseFailure) {
+                failure.addSuppressed(releaseFailure);
+            }
+        }
+    }
+
+    private int currentStringLengthForEstimate(byte[] keyBytes, long nowMillis) {
+        EntryRecord current = keyLifecycle.entryRecord(keyBytes);
+        if (current == null) {
+            return 0;
+        }
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+            return 0;
+        }
+        requireString(current);
+        return stringRoot.length(requireStringHandle(current));
+    }
+
     private long setReservationUpperBound(byte[] keyBytes, SetMode mode, long newValueUpperBound, long nowMillis, boolean keepTtl) {
         EntryRecord current = keyLifecycle.entryRecord(keyBytes);
         if (current == null) {
@@ -567,9 +763,106 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         return nextEstimate - oldEstimate;
     }
 
+    private long setNativeUpperBound(byte[] keyBytes, SetMode mode, int valueLength, long nowMillis) {
+        EntryRecord current = keyLifecycle.entryRecord(keyBytes);
+        if (current == null) {
+            return mode == SetMode.XX ? 0L : nativePeak(keyLength(keyBytes), ENTRY_RECORD_NATIVE_BYTES, valueLength);
+        }
+
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+            return mode == SetMode.XX ? 0L : newStringNativeUpperBound(keyBytes, valueLength);
+        }
+        if (mode == SetMode.NX) {
+            return 0L;
+        }
+        return replacementValueNativeUpperBound(current, valueLength);
+    }
+
+    private long stringGrowthNativeUpperBound(
+            byte[] keyBytes,
+            int requiredValueLength,
+            long nowMillis,
+            boolean createWhenMissing
+    ) {
+        EntryRecord current = keyLifecycle.entryRecord(keyBytes);
+        if (current == null) {
+            return createWhenMissing ? newStringCreateUpperBound(keyBytes, requiredValueLength) : 0L;
+        }
+
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+            return createWhenMissing ? newStringCreateUpperBound(keyBytes, requiredValueLength) : 0L;
+        }
+        return replacementValueNativeUpperBound(current, requiredValueLength);
+    }
+
+    private long replacementValueNativeUpperBound(EntryRecord current, int requiredValueLength) {
+        return nativePeak(requiredValueLength);
+    }
+
+    private long setStagedNonNativeGrowthUpperBound(
+            byte[] keyBytes,
+            SetMode mode,
+            long nowMillis,
+            Long expireAtMillis
+    ) {
+        EntryRecord current = keyLifecycle.entryRecord(keyBytes);
+        if (current == null) {
+            return mode == SetMode.XX ? 0L : newEntryStagedNonNativeGrowth(expireAtMillis, true);
+        }
+
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+            boolean addingNewTtl = expireAtMillis != null && keyLifecycle.expireAtMillis(keyHandle) == null;
+            return mode == SetMode.XX ? 0L : newEntryStagedNonNativeGrowth(expireAtMillis, addingNewTtl);
+        }
+        if (mode == SetMode.NX || expireAtMillis == null) {
+            return 0L;
+        }
+
+        boolean addingNewTtl = keyLifecycle.expireAtMillis(keyHandle) == null;
+        return keyLifecycle.estimateExpireSetNonNativeGrowthBytes(addingNewTtl);
+    }
+
+    private long newStringCreateUpperBound(byte[] keyBytes, int valueLength) {
+        return addSaturating(
+                newStringNativeUpperBound(keyBytes, valueLength),
+                keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes()
+        );
+    }
+
+    private long newEntryStagedNonNativeGrowth(Long expireAtMillis, boolean addingNewTtl) {
+        long growth = keyLifecycle.keyDirectory().estimatedInsertHeapGrowthBytes();
+        if (expireAtMillis != null) {
+            growth = addSaturating(
+                    growth,
+                    keyLifecycle.estimateExpireSetNonNativeGrowthBytes(addingNewTtl)
+            );
+        }
+        return growth;
+    }
+
+    private long newStringNativeUpperBound(byte[] keyBytes, int valueLength) {
+        return nativePeak(keyLength(keyBytes), ENTRY_RECORD_NATIVE_BYTES, valueLength);
+    }
+
+    private long nativePeak(int... nativeAllocationSizes) {
+        return MutationMemoryEstimator.peakAdditionalBytes(
+                keyLifecycle.nativeAllocator(),
+                0L,
+                0L,
+                nativeAllocationSizes
+        );
+    }
+
     private static long stringMetadataBytes(ValueEncoding encoding) {
         return DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE
                 + (encoding == ValueEncoding.STRING_INT ? Long.BYTES : 0L);
+    }
+
+    private static int keyLength(byte[] keyBytes) {
+        return keyBytes == null ? 0 : keyBytes.length;
     }
 
     private static long addSaturating(long left, long right) {
@@ -582,9 +875,11 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         return left + right;
     }
 
-    private KeyHandle currentKeyHandle(byte[] keyBytes, KeyHandle fallback) {
-        KeyHandle current = keyLifecycle.keyHandle(keyBytes);
-        return current == null ? fallback : current;
+    private static long withScopeBookkeeping(long upperBound) {
+        return Math.max(
+                Math.max(0L, upperBound),
+                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes()
+        );
     }
 
     private static int valueLength(BytesSlice value) {
@@ -707,15 +1002,23 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         return (stringRoot.byteAt(handle, byteIndex) & mask) == 0 ? 0 : 1;
     }
 
-    private void setBit(ValueHandle handle, long offset, int value) {
+    private static int getBit(byte[] bytes, long offset) {
+        int byteIndex = bitByteIndex(offset);
+        if (byteIndex >= bytes.length) {
+            return 0;
+        }
+        int bit = (int) (offset & 7);
+        int mask = 1 << (7 - bit);
+        return (bytes[byteIndex] & mask) == 0 ? 0 : 1;
+    }
+
+    private static void setBitInArray(byte[] bytes, long offset, int value) {
         int byteIndex = (int) (offset >>> 3);
         int bit = (int) (offset & 7);
         int mask = 1 << (7 - bit);
-        byte oldByte = stringRoot.byteAt(handle, byteIndex);
-        byte nextByte = value == 1 ? (byte) (oldByte | mask) : (byte) (oldByte & ~mask);
-        if (nextByte != oldByte) {
-            stringRoot.setByteAt(handle, byteIndex, nextByte);
-        }
+        bytes[byteIndex] = value == 1
+                ? (byte) (bytes[byteIndex] | mask)
+                : (byte) (bytes[byteIndex] & ~mask);
     }
 
     private static long bitcountRange(byte[] bytes, int start, int end) {
@@ -752,14 +1055,49 @@ public final class YierdisStringOps implements StringReadOps, StringWriteOps {
         };
     }
 
-    private static <T> EntryMutationResult<YierdisDbMutationExecutor.MutationResult<T>> mutationResult(
-            EntryRecord record,
-            T value,
-            long deltaBytes
-    ) {
-        return EntryMutationResult.of(record, YierdisDbMutationExecutor.MutationResult.of(value, deltaBytes));
+    private record StoredString(ValueHandle handle, ValueEncoding encoding) {
     }
 
-    private record StoredString(ValueHandle handle, ValueEncoding encoding) {
+    private record CurrentEntry(
+            EntryHandle entryHandle,
+            KeyHandle keyHandle,
+            EntryRecord record
+    ) {
+    }
+
+    private record StagedEntry(
+            EntryHandle entryHandle,
+            NativeKeyDirectory.StagedInsert stagedKey
+    ) implements AutoCloseable {
+        private KeyHandle keyHandle() {
+            return stagedKey.keyHandle();
+        }
+
+        private long stagedHeapBytes() {
+            return stagedKey.stagedHeapBytes();
+        }
+
+        @Override
+        public void close() {
+            Throwable failure = null;
+            try {
+                stagedKey.close();
+            } catch (RuntimeException | Error e) {
+                failure = e;
+            }
+            if (failure != null) {
+                rethrow(failure);
+            }
+        }
+    }
+
+    private static void rethrow(Throwable failure) {
+        if (failure instanceof RuntimeException e) {
+            throw e;
+        }
+        if (failure instanceof Error e) {
+            throw e;
+        }
+        throw new IllegalStateException(failure);
     }
 }

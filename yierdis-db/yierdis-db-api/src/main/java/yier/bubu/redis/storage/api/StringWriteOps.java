@@ -3,6 +3,7 @@ package yier.bubu.redis.storage.api;
 // StringWriteOps：string 写能力边界。
 
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.storage.api.result.BulkStringValue;
 
 public interface StringWriteOps {
     WriteResult<SetStringValue> set(byte[] keyBytes, BytesSlice value, SetMode mode, ExpireOption expireOption, boolean returnOldValue);
@@ -17,6 +18,14 @@ public interface StringWriteOps {
 
     WriteResult<Long> incrBy(byte[] keyBytes, long delta);
 
-    record SetStringValue(boolean applied, byte[] oldValue) {
+    record SetStringValue(boolean applied, BulkStringValue oldValue) implements AutoCloseable {
+        public SetStringValue {
+            oldValue = oldValue == null ? BulkStringValue.nullValue() : oldValue;
+        }
+
+        @Override
+        public void close() {
+            oldValue.close();
+        }
     }
 }

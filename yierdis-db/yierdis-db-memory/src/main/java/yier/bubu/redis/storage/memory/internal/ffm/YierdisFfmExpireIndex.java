@@ -1,37 +1,38 @@
 package yier.bubu.redis.storage.memory.internal.ffm;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
+import java.util.ArrayDeque;
+import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.foreign.YierdisFfmAccess;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisFfmRegion;
 import yier.bubu.redis.memory.foreign.YierdisFfmSpan;
-
-import java.util.Objects;
-import java.util.ArrayDeque;
-import java.util.concurrent.ThreadLocalRandom;
+import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
+import yier.bubu.redis.storage.memory.internal.expire.YierdisExpireIndex;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 
 public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
+    @FunctionalInterface
+    public interface RegionAllocator {
+        YierdisFfmRegion allocateRegion(String owner, int bytes);
+    }
+
     private static final float LOAD_FACTOR = 0.75f;
     private static final int MIN_CAPACITY = 16;
     private static final byte STATE_EMPTY = 0;
     private static final byte STATE_FILLED = 1;
     private static final byte STATE_TOMBSTONE = 2;
+    private static final long ARRAY_HEADER_BYTES = 16L;
+    private static final long REFERENCE_BYTES = 8L;
+    private static final long TABLE_HEAP_BYTES_ESTIMATE = 512L;
 
-    private final YierdisFfmMemoryRuntime memoryRuntime;
     private final NativeAllocator nativeAllocator;
+    private final RegionAllocator regionAllocator;
     private final ArrayDeque<Table> retiredTables = new ArrayDeque<>();
 
     private Table table0;
@@ -39,8 +40,17 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     private int rehashIndex = -1;
 
     public YierdisFfmExpireIndex(YierdisFfmMemoryRuntime memoryRuntime, NativeAllocator nativeAllocator) {
-        this.memoryRuntime = Objects.requireNonNull(memoryRuntime, "memoryRuntime");
+        this(memoryRuntime, nativeAllocator, memoryRuntime::allocateRegion);
+    }
+
+    public YierdisFfmExpireIndex(
+            YierdisFfmMemoryRuntime memoryRuntime,
+            NativeAllocator nativeAllocator,
+            RegionAllocator regionAllocator
+    ) {
+        Objects.requireNonNull(memoryRuntime, "memoryRuntime");
         this.nativeAllocator = Objects.requireNonNull(nativeAllocator, "nativeAllocator");
+        this.regionAllocator = Objects.requireNonNull(regionAllocator, "regionAllocator");
     }
 
     @Override
@@ -72,6 +82,26 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
     public long nativeBytes() {
         return estimatedTableOverheadBytes();
+    }
+
+    public long estimatedInsertFfmRegionGrowthBytes() {
+        int capacity = tableCapacityAllocatedByNextInsert();
+        return capacity <= 0 ? 0L : tableRegionBytes(capacity);
+    }
+
+    public long estimatedInsertHeapGrowthBytes() {
+        int capacity = tableCapacityAllocatedByNextInsert();
+        return capacity <= 0 ? 0L : tableHeapBytes(capacity);
+    }
+
+    public long estimatedSetReplacementNonNativeGrowthBytes(boolean addingNewTtl) {
+        int currentSize = tableSize(table0) + tableSize(table1);
+        int replacementSize = currentSize + (addingNewTtl ? 1 : 0);
+        if (replacementSize <= 0) {
+            replacementSize = 1;
+        }
+        int capacity = Math.max(MIN_CAPACITY, tableSizeFor(replacementSize, LOAD_FACTOR));
+        return MemoryUsageSnapshot.addSaturating(tableRegionBytes(capacity), tableHeapBytes(capacity));
     }
 
     @Override
@@ -249,17 +279,75 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         }
     }
 
+    @Override
+    public PreparedTtlMutation prepareSetExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        closeRetiredTables();
+        KeyRef targetRef = keyRef(keyHandle);
+        int targetHash = hash(keyHandle);
+        return prepareReplacement(targetRef, targetHash, expireAtMillis);
+    }
+
+    @Override
+    public PreparedTtlMutation prepareRemoveExpire(KeyHandle keyHandle) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        closeRetiredTables();
+        int targetHash = hash(keyHandle);
+        int index = findIndex(table0, keyHandle, targetHash);
+        if (index >= 0) {
+            return new PreparedRemove(table0, index);
+        }
+        index = findIndex(table1, keyHandle, targetHash);
+        if (index >= 0) {
+            return new PreparedRemove(table1, index);
+        }
+        return PreparedTtlMutation.NONE;
+    }
+
     private void ensureTable0() {
         if (table0 == null) {
             table0 = new Table(MIN_CAPACITY);
         }
     }
 
+    private int tableCapacityAllocatedByNextInsert() {
+        Table t0 = table0;
+        if (t0 == null) {
+            return MIN_CAPACITY;
+        }
+        Table t1 = table1;
+        if (t1 != null) {
+            return t1.used + 2 > t1.threshold ? t1.capacity << 1 : 0;
+        }
+        if (t0.used + 1 <= t0.threshold) {
+            return 0;
+        }
+        int target = tableSizeFor(t0.size + 1, LOAD_FACTOR);
+        return Math.max(target, MIN_CAPACITY);
+    }
+
     private long tableBytes(Table table) {
         if (table == null) {
             return 0L;
         }
-        return (long) table.statesRegion.size() + table.hashesRegion.size() + table.expireAtRegion.size();
+        return tableRegionBytes(table.capacity);
+    }
+
+    private static long tableRegionBytes(int capacity) {
+        long statesBytes = capacity;
+        long hashesBytes = (long) capacity * Integer.BYTES;
+        long expireAtBytes = (long) capacity * Long.BYTES;
+        return MemoryUsageSnapshot.addSaturating(
+                MemoryUsageSnapshot.addSaturating(statesBytes, hashesBytes),
+                expireAtBytes
+        );
+    }
+
+    private static long tableHeapBytes(int capacity) {
+        return MemoryUsageSnapshot.addSaturating(
+                TABLE_HEAP_BYTES_ESTIMATE,
+                ARRAY_HEADER_BYTES + (long) capacity * REFERENCE_BYTES
+        );
     }
 
     private void clearTable(Table table) {
@@ -372,6 +460,81 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
     private void startRehash(int capacity) {
         table1 = new Table(capacity);
         rehashIndex = 0;
+    }
+
+    private PreparedTtlMutation prepareReplacement(KeyRef targetRef, int targetHash, Long expireAtMillis) {
+        boolean targetExists = containsRef(table0, targetRef, targetHash)
+                || containsRef(table1, targetRef, targetHash);
+        int currentSize = tableSize(table0) + tableSize(table1);
+        int replacementSize = currentSize - (targetExists ? 1 : 0) + (expireAtMillis == null ? 0 : 1);
+        Table replacement = null;
+        if (replacementSize > 0) {
+            int capacity = Math.max(MIN_CAPACITY, tableSizeFor(replacementSize, LOAD_FACTOR));
+            replacement = new Table(capacity);
+            copyTableExcluding(table0, replacement, targetRef, targetHash);
+            copyTableExcluding(table1, replacement, targetRef, targetHash);
+            if (expireAtMillis != null) {
+                insertIntoTable(replacement, targetRef, targetHash, expireAtMillis);
+            }
+            if (replacement.size != replacementSize) {
+                replacement.close();
+                throw new IllegalStateException("prepared expire replacement size mismatch");
+            }
+        }
+        long stagedBytes = replacement == null
+                ? 0L
+                : MemoryUsageSnapshot.addSaturating(
+                        tableRegionBytes(replacement.capacity),
+                        tableHeapBytes(replacement.capacity)
+                );
+        return new PreparedReplacement(replacement, stagedBytes);
+    }
+
+    private void copyTableExcluding(Table source, Table target, KeyRef excludedRef, int excludedHash) {
+        if (source == null || target == null) {
+            return;
+        }
+        for (int i = 0; i < source.capacity; i++) {
+            if (source.stateAt(i) != STATE_FILLED) {
+                continue;
+            }
+            KeyRef ref = source.refs[i];
+            int hash = source.hashAt(i);
+            if (hash == excludedHash && sameRef(ref, excludedRef)) {
+                continue;
+            }
+            insertIntoTable(target, ref, hash, source.expireAt(i));
+        }
+    }
+
+    private boolean containsRef(Table table, KeyRef ref, int hash) {
+        if (table == null) {
+            return false;
+        }
+        int index = findIndex(table, ref, hash);
+        return index >= 0;
+    }
+
+    private int findIndex(Table table, KeyRef ref, int hash) {
+        if (table == null) {
+            return -1;
+        }
+        int mask = table.capacity - 1;
+        int idx = hash & mask;
+        while (true) {
+            byte state = table.stateAt(idx);
+            if (state == STATE_EMPTY) {
+                return -1;
+            }
+            if (state == STATE_FILLED && table.hashAt(idx) == hash && sameRef(table.refs[idx], ref)) {
+                return idx;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+
+    private static int tableSize(Table table) {
+        return table == null ? 0 : table.size;
     }
 
     private void rehashStep() {
@@ -698,6 +861,129 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
         }
     }
 
+    private final class PreparedReplacement implements PreparedTtlMutation {
+        private Table replacement;
+        private Table oldTable0;
+        private Table oldTable1;
+        private final long stagedBytes;
+        private boolean committed;
+        private boolean released;
+        private boolean aborted;
+
+        private PreparedReplacement(Table replacement, long stagedBytes) {
+            this.replacement = replacement;
+            this.stagedBytes = stagedBytes;
+        }
+
+        @Override
+        public long stagedNonNativeGrowthBytes() {
+            return stagedBytes;
+        }
+
+        @Override
+        public void commit() {
+            if (aborted) {
+                throw new IllegalStateException("prepared ttl mutation is aborted");
+            }
+            if (committed) {
+                throw new IllegalStateException("prepared ttl mutation is already committed");
+            }
+            oldTable0 = table0;
+            oldTable1 = table1;
+            table0 = replacement;
+            table1 = null;
+            rehashIndex = -1;
+            replacement = null;
+            committed = true;
+        }
+
+        @Override
+        public void releaseSuperseded() {
+            if (!committed || released) {
+                return;
+            }
+            Throwable failure = null;
+            failure = closeTable(oldTable0, failure);
+            oldTable0 = null;
+            failure = closeTable(oldTable1, failure);
+            oldTable1 = null;
+            if (failure != null) {
+                rethrow(failure);
+            }
+            released = true;
+        }
+
+        @Override
+        public void abort() {
+            if (committed || aborted) {
+                return;
+            }
+            aborted = true;
+            Throwable failure = closeTable(replacement, null);
+            replacement = null;
+            if (failure != null) {
+                rethrow(failure);
+            }
+        }
+    }
+
+    private final class PreparedRemove implements PreparedTtlMutation {
+        private final Table table;
+        private final int index;
+        private KeyRef removedRef;
+        private boolean committed;
+        private boolean aborted;
+
+        private PreparedRemove(Table table, int index) {
+            this.table = Objects.requireNonNull(table, "table");
+            this.index = index;
+        }
+
+        @Override
+        public long stagedNonNativeGrowthBytes() {
+            return 0L;
+        }
+
+        @Override
+        public void commit() {
+            if (aborted) {
+                throw new IllegalStateException("prepared ttl remove is aborted");
+            }
+            if (committed) {
+                throw new IllegalStateException("prepared ttl remove is already committed");
+            }
+            if (table.stateAt(index) != STATE_FILLED) {
+                throw new IllegalStateException("prepared ttl remove target is no longer filled");
+            }
+            removedRef = table.refs[index];
+            table.setState(index, STATE_TOMBSTONE);
+            table.setHash(index, 0);
+            table.setExpireAt(index, 0L);
+            table.refs[index] = null;
+            table.size--;
+            if (table == table0) {
+                maybeStartRehashForDeleteOrTombstones();
+            }
+            committed = true;
+        }
+
+        @Override
+        public void releaseSuperseded() {
+            if (removedRef != null) {
+                removedRef.releaseFromIndex();
+                removedRef = null;
+            }
+        }
+
+        @Override
+        public void abort() {
+            if (committed || aborted) {
+                return;
+            }
+            aborted = true;
+        }
+    }
+
     private final class Table implements AutoCloseable {
         private final int capacity;
         private final YierdisFfmRegion statesRegion;
@@ -714,13 +1000,34 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
         private Table(int capacity) {
             this.capacity = capacity;
-            this.statesRegion = memoryRuntime.allocateRegion("ffm-expire-states", capacity);
-            this.states = statesRegion.span(0, capacity);
-            this.hashesRegion = memoryRuntime.allocateRegion("ffm-expire-hashes", capacity * Integer.BYTES);
-            this.hashes = hashesRegion.span(0, capacity * Integer.BYTES);
-            this.expireAtRegion = memoryRuntime.allocateRegion("ffm-expire-values", capacity * Long.BYTES);
-            this.expireAt = expireAtRegion.span(0, capacity * Long.BYTES);
-            this.refs = new KeyRef[capacity];
+            YierdisFfmRegion stagedStatesRegion = null;
+            YierdisFfmRegion stagedHashesRegion = null;
+            YierdisFfmRegion stagedExpireAtRegion = null;
+            YierdisFfmSpan stagedStates = null;
+            YierdisFfmSpan stagedHashes = null;
+            YierdisFfmSpan stagedExpireAt = null;
+            KeyRef[] stagedRefs = null;
+            try {
+                stagedStatesRegion = regionAllocator.allocateRegion("ffm-expire-states", capacity);
+                stagedStates = stagedStatesRegion.span(0, capacity);
+                stagedHashesRegion = regionAllocator.allocateRegion("ffm-expire-hashes", capacity * Integer.BYTES);
+                stagedHashes = stagedHashesRegion.span(0, capacity * Integer.BYTES);
+                stagedExpireAtRegion = regionAllocator.allocateRegion("ffm-expire-values", capacity * Long.BYTES);
+                stagedExpireAt = stagedExpireAtRegion.span(0, capacity * Long.BYTES);
+                stagedRefs = new KeyRef[capacity];
+            } catch (RuntimeException | Error failure) {
+                closeRegion(stagedExpireAtRegion, failure);
+                closeRegion(stagedHashesRegion, failure);
+                closeRegion(stagedStatesRegion, failure);
+                throw failure;
+            }
+            this.statesRegion = stagedStatesRegion;
+            this.states = stagedStates;
+            this.hashesRegion = stagedHashesRegion;
+            this.hashes = stagedHashes;
+            this.expireAtRegion = stagedExpireAtRegion;
+            this.expireAt = stagedExpireAt;
+            this.refs = stagedRefs;
             this.threshold = (int) (capacity * LOAD_FACTOR);
         }
 
@@ -750,10 +1057,56 @@ public final class YierdisFfmExpireIndex implements YierdisExpireIndex {
 
         @Override
         public void close() {
-            statesRegion.close();
-            hashesRegion.close();
-            expireAtRegion.close();
+            Throwable failure = null;
+            failure = closeRegion(statesRegion, failure);
+            failure = closeRegion(hashesRegion, failure);
+            failure = closeRegion(expireAtRegion, failure);
+            if (failure != null) {
+                rethrow(failure);
+            }
         }
+    }
+
+    private Throwable closeTable(Table table, Throwable failure) {
+        if (table == null) {
+            return failure;
+        }
+        try {
+            table.close();
+            return failure;
+        } catch (RuntimeException | Error closeFailure) {
+            return addFailure(failure, closeFailure);
+        }
+    }
+
+    private static Throwable closeRegion(YierdisFfmRegion region, Throwable failure) {
+        if (region == null) {
+            return failure;
+        }
+        try {
+            region.close();
+        } catch (RuntimeException | Error closeFailure) {
+            failure = addFailure(failure, closeFailure);
+        }
+        return failure;
+    }
+
+    private static Throwable addFailure(Throwable failure, Throwable next) {
+        if (failure == null) {
+            return next;
+        }
+        failure.addSuppressed(next);
+        return failure;
+    }
+
+    private static void rethrow(Throwable failure) {
+        if (failure instanceof RuntimeException e) {
+            throw e;
+        }
+        if (failure instanceof Error e) {
+            throw e;
+        }
+        throw new IllegalStateException(failure);
     }
 
     private static byte[] copyKey(KeyHandle keyHandle) {
