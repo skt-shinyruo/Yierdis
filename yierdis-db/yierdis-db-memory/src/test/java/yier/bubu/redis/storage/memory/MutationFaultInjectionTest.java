@@ -1,6 +1,8 @@
 package yier.bubu.redis.storage.memory;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -11,6 +13,7 @@ import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
+import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisFfmRegion;
@@ -30,16 +33,20 @@ import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.HashRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
 import yier.bubu.redis.storage.memory.internal.entry.SetRoot;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
 import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMemoryLedger;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.expire.YierdisTtlOps;
+import yier.bubu.redis.storage.memory.internal.value.YierdisHyperLogLog;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
@@ -282,6 +289,76 @@ public class MutationFaultInjectionTest {
         );
     }
 
+    @Test
+    public void zsetAndHllMutationFamiliesAreFailureAtomic() {
+        assertFailureAtomic(
+                new MutationCase(
+                        "new ZADD many",
+                        fixture -> {
+                        },
+                        fixture -> fixture.zsetOps.zadd(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("1"), b("a"), b("2"), b("b"), b("3"), b("c"))
+                        )
+                ),
+                new MutationCase(
+                        "existing ZADD score replacement",
+                        fixture -> fixture.zsetOps.zadd(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("1"), repeatedBytes('a', 65), b("2"), b("b"))
+                        ),
+                        fixture -> fixture.zsetOps.zadd(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("4"), repeatedBytes('a', 65))
+                        )
+                ),
+                new MutationCase(
+                        "ZADD packed promotion and multiple members",
+                        fixture -> fixture.zsetOps.zadd(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("1"), b("a"), b("2"), b("b"))
+                        ),
+                        fixture -> fixture.zsetOps.zadd(
+                                PRIMARY_KEY,
+                                Arrays.asList(
+                                        b("3"), repeatedBytes('c', 65),
+                                        b("4"), b("d"),
+                                        b("5"), b("e")
+                                )
+                        )
+                ),
+                new MutationCase(
+                        "new PFADD",
+                        fixture -> {
+                        },
+                        fixture -> fixture.hllOps.pfadd(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("alpha"), b("beta"), b("gamma"))
+                        )
+                ),
+                new MutationCase(
+                        "existing PFADD",
+                        fixture -> fixture.hllOps.pfadd(PRIMARY_KEY, Arrays.asList(b("alpha"), b("beta"))),
+                        fixture -> fixture.hllOps.pfadd(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("gamma"), b("delta"), b("epsilon"))
+                        )
+                ),
+                new MutationCase(
+                        "PFMERGE replaces destination",
+                        fixture -> {
+                            fixture.hllOps.pfadd(PRIMARY_KEY, List.of(b("dest-seed")));
+                            fixture.hllOps.pfadd(b("source-a"), Arrays.asList(b("a"), b("b"), b("c")));
+                            fixture.hllOps.pfadd(b("source-b"), Arrays.asList(b("c"), b("d"), b("e")));
+                        },
+                        fixture -> fixture.hllOps.pfmerge(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("source-a"), b("source-b"))
+                        )
+                )
+        );
+    }
+
     private static void assertFailureAtomic(MutationCase... cases) {
         for (MutationCase caseUnderTest : cases) {
             for (long failAt = 1; failAt <= 128; failAt++) {
@@ -300,7 +377,14 @@ public class MutationFaultInjectionTest {
                     } catch (YierdisCommandException expected) {
                         Assert.assertEquals(MaxmemoryErrors.OOM_ERR, expected.getMessage());
                         fixture.allocator.disableFailures();
-                        fixture.assertSnapshotEquals(before);
+                        try {
+                            fixture.assertSnapshotEquals(before);
+                        } catch (AssertionError failure) {
+                            throw new AssertionError(
+                                    caseUnderTest.name + " changed state after allocation failure " + failAt,
+                                    failure
+                            );
+                        }
                         Assert.assertArrayEquals(before.primaryValue, fixture.primaryStringValue());
                     }
                 }
@@ -339,6 +423,8 @@ public class MutationFaultInjectionTest {
         private final YierdisListOps listOps;
         private final YierdisHashOps hashOps;
         private final YierdisSetOps setOps;
+        private final YierdisZSetOps zsetOps;
+        private final YierdisHllOps hllOps;
         private final YierdisTtlOps ttlOps;
         private final YierdisDbOwnedResources resources;
 
@@ -360,6 +446,8 @@ public class MutationFaultInjectionTest {
                 YierdisListOps listOps,
                 YierdisHashOps hashOps,
                 YierdisSetOps setOps,
+                YierdisZSetOps zsetOps,
+                YierdisHllOps hllOps,
                 YierdisTtlOps ttlOps,
                 YierdisDbOwnedResources resources
         ) {
@@ -380,6 +468,8 @@ public class MutationFaultInjectionTest {
             this.listOps = listOps;
             this.hashOps = hashOps;
             this.setOps = setOps;
+            this.zsetOps = zsetOps;
+            this.hllOps = hllOps;
             this.ttlOps = ttlOps;
             this.resources = resources;
         }
@@ -441,6 +531,8 @@ public class MutationFaultInjectionTest {
             YierdisListOps listOps = new YierdisListOps(internals);
             YierdisHashOps hashOps = new YierdisHashOps(internals);
             YierdisSetOps setOps = new YierdisSetOps(internals);
+            YierdisZSetOps zsetOps = new YierdisZSetOps(internals);
+            YierdisHllOps hllOps = new YierdisHllOps(internals);
             YierdisTtlOps ttlOps = new YierdisTtlOps(internals);
             return new FaultFixture(
                     runtime,
@@ -460,6 +552,8 @@ public class MutationFaultInjectionTest {
                     listOps,
                     hashOps,
                     setOps,
+                    zsetOps,
+                    hllOps,
                     ttlOps,
                     resources
             );
@@ -483,13 +577,23 @@ public class MutationFaultInjectionTest {
                     allocator.stats().objectCount(NativeObjectKind.SET_ROOT),
                     allocator.stats().objectCount(NativeObjectKind.SET_MEMBER_BYTES),
                     allocator.stats().objectCount(NativeObjectKind.SET_TABLE),
+                    allocator.stats().objectCount(NativeObjectKind.ZSET_ROOT),
+                    allocator.stats().objectCount(NativeObjectKind.ZSET_MEMBER_BYTES),
+                    allocator.stats().objectCount(NativeObjectKind.SCORE_BYTES),
+                    allocator.stats().objectCount(NativeObjectKind.ZSET_TABLE),
+                    allocator.stats().objectCount(NativeObjectKind.ZSET_NODE),
+                    allocator.stats().objectCount(NativeObjectKind.STRING_BYTES),
                     keyDirectory.size(),
                     expires.size(),
                     primaryStringValue(),
                     primaryListValues(),
                     primaryHashPairs(),
                     primarySetMembers(),
-                    expires.get(PRIMARY_KEY)
+                    primaryZSetMembersAndScores(),
+                    primaryHllCount(),
+                    expires.get(PRIMARY_KEY),
+                    entrySnapshots(),
+                    nativeHandleGraph()
             );
         }
 
@@ -511,13 +615,23 @@ public class MutationFaultInjectionTest {
             Assert.assertEquals(before.setRoots, after.setRoots);
             Assert.assertEquals(before.setMembers, after.setMembers);
             Assert.assertEquals(before.setTables, after.setTables);
+            Assert.assertEquals(before.zsetRoots, after.zsetRoots);
+            Assert.assertEquals(before.zsetMembers, after.zsetMembers);
+            Assert.assertEquals(before.scoreBytes, after.scoreBytes);
+            Assert.assertEquals(before.zsetTables, after.zsetTables);
+            Assert.assertEquals(before.zsetNodes, after.zsetNodes);
+            Assert.assertEquals(before.stringBytes, after.stringBytes);
             Assert.assertEquals(before.keyCount, after.keyCount);
             Assert.assertEquals(before.expireCount, after.expireCount);
             Assert.assertArrayEquals(before.primaryValue, after.primaryValue);
             Assert.assertEquals(before.primaryListValues, after.primaryListValues);
             Assert.assertEquals(before.primaryHashPairs, after.primaryHashPairs);
             Assert.assertEquals(before.primarySetMembers, after.primarySetMembers);
+            Assert.assertEquals(before.primaryZSetMembersAndScores, after.primaryZSetMembersAndScores);
+            Assert.assertEquals(before.primaryHllCount, after.primaryHllCount);
             Assert.assertEquals(before.expireAtMillis, after.expireAtMillis);
+            Assert.assertEquals(before.entrySnapshots, after.entrySnapshots);
+            Assert.assertEquals(before.nativeHandleGraph, after.nativeHandleGraph);
         }
 
         private byte[] primaryStringValue() {
@@ -552,6 +666,109 @@ public class MutationFaultInjectionTest {
             List<String> values = strings(setOps.smembers(PRIMARY_KEY));
             values.sort(String::compareTo);
             return values;
+        }
+
+        private List<String> primaryZSetMembersAndScores() {
+            EntryRecord record = keyLifecycle.entryRecord(PRIMARY_KEY);
+            if (record == null || record.type() != ValueType.ZSET) {
+                return null;
+            }
+            return strings(zsetOps.zrange(PRIMARY_KEY, 0, -1, true));
+        }
+
+        private Long primaryHllCount() {
+            EntryRecord record = keyLifecycle.entryRecord(PRIMARY_KEY);
+            if (record == null || record.type() != ValueType.STRING) {
+                return null;
+            }
+            if (!YierdisHyperLogLog.isHllString(stringRoot, record.valueHandle())) {
+                return null;
+            }
+            return hllOps.pfcount(List.of(PRIMARY_KEY));
+        }
+
+        private List<String> entrySnapshots() {
+            List<String> snapshots = new ArrayList<>();
+            keyDirectory.forEachEntry((keyHandle, entryHandle) -> {
+                EntryRecord record = entries.get(entryHandle);
+                snapshots.add(entrySnapshot(keyHandle, entryHandle, record));
+            });
+            snapshots.sort(String::compareTo);
+            return snapshots;
+        }
+
+        private List<String> nativeHandleGraph() {
+            List<String> handles = new ArrayList<>();
+            YierdisDbNativeHandleGraph.visitReachable(keyLifecycle, (role, handle, record) ->
+                    handles.add(role.name()
+                            + "|"
+                            + handle.domain()
+                            + "|"
+                            + handle.kindCode()
+                            + "|"
+                            + handle.raw())
+            );
+            handles.sort(String::compareTo);
+            return handles;
+        }
+
+        private String entrySnapshot(KeyHandle keyHandle, EntryHandle entryHandle, EntryRecord record) {
+            String keyIdentity = nativeHandleIdentity(keyHandle);
+            if (record == null) {
+                return keyIdentity + "|" + entryHandle.raw() + "|null";
+            }
+            return keyIdentity
+                    + "|"
+                    + entryHandle.raw()
+                    + "|"
+                    + record
+                    + "|"
+                    + valueSnapshot(record);
+        }
+
+        private String valueSnapshot(EntryRecord record) {
+            return switch (record.type()) {
+                case STRING -> bytesToBase64(stringRoot.copy(record.valueHandle()));
+                case LIST -> bytesListSnapshot(listRoot.range(record.valueHandle(), 0, -1));
+                case HASH -> bytesPairsSnapshot(hashRoot.hgetallPairs(record.valueHandle()));
+                case SET -> bytesSetSnapshot(setRoot.members(record.valueHandle()));
+                case ZSET -> bytesListSnapshot(zsetRoot.zrange(record.valueHandle(), 0, -1, true));
+            };
+        }
+
+        private static String nativeHandleIdentity(KeyHandle keyHandle) {
+            NativeHandle nativeHandle = KeyHandleAccess.allocatorNativeHandleOrNull(keyHandle);
+            return nativeHandle == null ? "null" : Long.toString(nativeHandle.raw());
+        }
+
+        private static String bytesToBase64(byte[] bytes) {
+            return bytes == null ? "null" : Base64.getEncoder().encodeToString(bytes);
+        }
+
+        private static String bytesListSnapshot(List<byte[]> values) {
+            List<String> encoded = new ArrayList<>(values.size());
+            for (byte[] value : values) {
+                encoded.add(bytesToBase64(value));
+            }
+            return encoded.toString();
+        }
+
+        private static String bytesSetSnapshot(List<byte[]> values) {
+            List<String> encoded = new ArrayList<>(values.size());
+            for (byte[] value : values) {
+                encoded.add(bytesToBase64(value));
+            }
+            encoded.sort(String::compareTo);
+            return encoded.toString();
+        }
+
+        private static String bytesPairsSnapshot(List<byte[]> values) {
+            List<String> encoded = new ArrayList<>(values.size() / 2);
+            for (int i = 0; i < values.size(); i += 2) {
+                encoded.add(bytesToBase64(values.get(i)) + "=" + bytesToBase64(values.get(i + 1)));
+            }
+            encoded.sort(String::compareTo);
+            return encoded.toString();
         }
 
         @Override
@@ -609,19 +826,33 @@ public class MutationFaultInjectionTest {
             long setRoots,
             long setMembers,
             long setTables,
+            long zsetRoots,
+            long zsetMembers,
+            long scoreBytes,
+            long zsetTables,
+            long zsetNodes,
+            long stringBytes,
             int keyCount,
             int expireCount,
             byte[] primaryValue,
             List<String> primaryListValues,
             List<String> primaryHashPairs,
             List<String> primarySetMembers,
-            Long expireAtMillis
+            List<String> primaryZSetMembersAndScores,
+            Long primaryHllCount,
+            Long expireAtMillis,
+            List<String> entrySnapshots,
+            List<String> nativeHandleGraph
     ) {
         private DbStateSnapshot {
             primaryValue = primaryValue == null ? null : Arrays.copyOf(primaryValue, primaryValue.length);
             primaryListValues = primaryListValues == null ? null : List.copyOf(primaryListValues);
             primaryHashPairs = primaryHashPairs == null ? null : List.copyOf(primaryHashPairs);
             primarySetMembers = primarySetMembers == null ? null : List.copyOf(primarySetMembers);
+            primaryZSetMembersAndScores =
+                    primaryZSetMembersAndScores == null ? null : List.copyOf(primaryZSetMembersAndScores);
+            entrySnapshots = entrySnapshots == null ? null : List.copyOf(entrySnapshots);
+            nativeHandleGraph = nativeHandleGraph == null ? null : List.copyOf(nativeHandleGraph);
         }
     }
 

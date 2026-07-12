@@ -82,6 +82,18 @@ public final class NativeByteMap<V> implements AutoCloseable {
     }
 
     @SuppressWarnings("unchecked")
+    public V replace(byte[] keyBytes, V value) {
+        Objects.requireNonNull(keyBytes, "keyBytes");
+        int index = findIndex(keyBytes);
+        if (index < 0) {
+            return null;
+        }
+        V old = (V) values[index];
+        values[index] = value;
+        return old;
+    }
+
+    @SuppressWarnings("unchecked")
     public V remove(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         int index = findIndex(keyBytes);

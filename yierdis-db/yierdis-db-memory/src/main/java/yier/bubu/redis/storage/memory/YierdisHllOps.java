@@ -7,12 +7,16 @@ import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.WriteResult;
-import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.StringRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
-import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.EntryMutationResult;
+import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
+import yier.bubu.redis.storage.memory.internal.keyspace.NativeKeyDirectory;
+import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import yier.bubu.redis.storage.memory.internal.value.YierdisHyperLogLog;
@@ -21,6 +25,9 @@ import java.util.List;
 import java.util.Objects;
 
 public final class YierdisHllOps implements HllReadOps, HllWriteOps {
+    private static final int ENTRY_RECORD_NATIVE_BYTES = 56;
+    private static final long HLL_REGISTER_HEAP_BYTES = (long) YierdisHyperLogLog.REGISTERS * Integer.BYTES;
+
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final StringRoot stringRoot;
@@ -34,50 +41,79 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     @Override
     public WriteResult<Integer> pfadd(byte[] keyBytes, List<byte[]> elements) {
         internals.checkThread();
+        Objects.requireNonNull(keyBytes, "keyBytes");
         long now = System.currentTimeMillis();
-        long upperBound = estimatePfaddUpperBound(keyBytes, elements);
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
-                return upperBound;
+                return estimatePfaddUpperBound(keyBytes, elements, now);
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Integer>> apply() {
-                return keyLifecycle.computeWithHandleResult(keyBytes, (k, oldRecord) -> {
-                    EntryRecord current = oldRecord;
-                    long oldEstimate = estimateRecordBytes(k, current);
-                    long deltaBytes = 0L;
-                    if (current != null && keyLifecycle.isKeyExpired(k, now)) {
-                        keyLifecycle.removeExpire(k);
-                        deltaBytes -= oldEstimate;
-                        current = null;
-                        oldEstimate = 0L;
-                    }
+            public PreparedDbMutation<WriteResult<Integer>> prepare() {
+                CurrentEntry currentEntry = currentEntry(keyBytes);
+                EntryRecord current = currentEntry.record();
+                if (current != null && keyLifecycle.isKeyExpired(currentEntry.keyHandle(), now)) {
+                    keyLifecycle.removeIfExpired(currentEntry.keyHandle(), current, now);
+                    currentEntry = currentEntry(keyBytes);
+                    current = currentEntry.record();
+                }
 
-                    ValueHandle handle;
+                byte[] currentBytes = null;
+                if (current != null) {
+                    requireString(current);
+                    currentBytes = stringRoot.copy(requireHllHandle(current));
+                }
+                byte[] replacementBytes = YierdisHyperLogLog.prepareAdd(currentBytes, elements);
+                boolean changed = replacementBytes != null;
+                if (current != null && !changed) {
+                    return preparedNoEntry(WriteResult.of(0, MutationOutcome.NONE), MutationOutcome.NONE);
+                }
+                if (current == null && replacementBytes == null) {
+                    replacementBytes = YierdisHyperLogLog.newSparse();
+                }
+
+                StagedEntry staged = null;
+                ValueHandle replacement = null;
+                try {
+                    KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        handle = stringRoot.store(YierdisHyperLogLog.newSparse());
-                    } else {
-                        requireString(current);
-                        handle = requireHllHandle(current);
+                        staged = stageNewEntry(keyBytes);
+                        targetKey = staged.keyHandle();
                     }
 
-                    boolean ok = false;
-                    try {
-                        boolean changed = YierdisHyperLogLog.pfAdd(stringRoot, handle, elements);
-                        EntryRecord next = hllRecord(k, handle, current == null ? -1L : current.expireAtMillis(), current);
-                        deltaBytes -= oldEstimate;
-                        deltaBytes += estimateRecordBytes(k, next);
-                        ok = true;
-                        MutationOutcome outcome = changed ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
-                        return mutationResult(next, WriteResult.of(changed ? 1 : 0, outcome), deltaBytes);
-                    } finally {
-                        if (!ok && current == null) {
-                            stringRoot.release(handle);
-                        }
-                    }
-                });
+                    replacement = stringRoot.store(replacementBytes);
+                    EntryRecord next = hllRecord(
+                            targetKey,
+                            replacement,
+                            current == null ? -1L : current.expireAtMillis(),
+                            current
+                    );
+                    MutationOutcome outcome = changed ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                    WriteResult<Integer> result = WriteResult.of(changed ? 1 : 0, outcome);
+                    long deltaBytes = estimateRecordBytes(targetKey, next)
+                            - estimateRecordBytes(targetKey, current);
+                    PreparedEntryMutation<WriteResult<Integer>> prepared = new PreparedEntryMutation<>(
+                            keyLifecycle,
+                            result,
+                            deltaBytes,
+                            staged == null ? 0L : staged.stagedHeapBytes(),
+                            outcome,
+                            currentEntry.entryHandle(),
+                            staged == null ? null : staged.entryHandle(),
+                            staged == null ? null : staged.stagedKey(),
+                            current,
+                            next,
+                            true,
+                            PreparedTtlMutation.NONE
+                    );
+                    staged = null;
+                    replacement = null;
+                    return prepared;
+                } catch (RuntimeException | Error failure) {
+                    abortStaged(staged, replacement, PreparedTtlMutation.NONE, failure);
+                    throw failure;
+                }
             }
         });
     }
@@ -104,106 +140,226 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
     @Override
     public WriteResult<Void> pfmerge(byte[] destKeyBytes, List<byte[]> sourceKeys) {
         internals.checkThread();
+        Objects.requireNonNull(destKeyBytes, "destKeyBytes");
         if (sourceKeys == null || sourceKeys.isEmpty()) {
             throw new IllegalArgumentException("sourceKeys must not be empty");
         }
 
-        int[] registers = new int[YierdisHyperLogLog.REGISTERS];
-        for (byte[] keyBytes : sourceKeys) {
-            EntryRecord record = liveStringRecord(keyBytes);
-            if (record == null) {
-                continue;
-            }
-            ValueHandle handle = requireHllHandle(record);
-            YierdisHyperLogLog.mergeHllIntoRegisters(stringRoot.slice(handle), registers);
-        }
-
-        byte[] mergedDense = YierdisHyperLogLog.denseBytesFromRegisters(registers);
         long now = System.currentTimeMillis();
-        long upperBound = estimatePfmergeUpperBound(destKeyBytes, mergedDense.length);
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
-                return upperBound;
+                return estimatePfmergeUpperBound(destKeyBytes, sourceKeys, now);
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Void>> apply() {
-                record PfMergeComputation(
-                        KeyHandle keyHandle,
-                        YierdisDbMutationExecutor.MutationResult<WriteResult<Void>> mutation
-                ) {
+            public PreparedDbMutation<WriteResult<Void>> prepare() {
+                MergeRegisters merged = mergeSourceRegisters(sourceKeys);
+                CurrentEntry currentEntry = currentEntry(destKeyBytes);
+                EntryRecord current = currentEntry.record();
+                if (current != null && keyLifecycle.isKeyExpired(currentEntry.keyHandle(), now)) {
+                    keyLifecycle.removeIfExpired(currentEntry.keyHandle(), current, now);
+                    currentEntry = currentEntry(destKeyBytes);
+                    current = currentEntry.record();
                 }
 
-                PfMergeComputation computation = keyLifecycle.computeWithHandleResult(destKeyBytes, (k, oldRecord) -> {
-                    EntryRecord current = oldRecord;
-                    long oldEstimate = estimateRecordBytes(k, current);
-                    long deltaBytes = 0L;
-                    if (current != null && keyLifecycle.isKeyExpired(k, now)) {
-                        keyLifecycle.removeExpire(k);
-                        deltaBytes -= oldEstimate;
-                        current = null;
-                        oldEstimate = 0L;
-                    }
+                byte[] currentBytes = null;
+                ValueHandle currentHandle = null;
+                if (current != null) {
+                    requireString(current);
+                    currentHandle = requireHllHandle(current);
+                    currentBytes = stringRoot.copy(currentHandle);
+                }
 
-                    ValueHandle handle;
+                byte[] replacementBytes = YierdisHyperLogLog.prepareMerge(currentBytes, merged.registers());
+                boolean valueChanged = replacementBytes != null;
+                boolean ttlChanged = current != null && keyLifecycle.expireAtMillis(currentEntry.keyHandle()) != null;
+                MutationOutcome outcome = MutationOutcome.of(valueChanged, ttlChanged);
+                if (current != null && !outcome.changedAny()) {
+                    return preparedNoEntry(WriteResult.<Void>unchanged(null), MutationOutcome.NONE);
+                }
+
+                StagedEntry staged = null;
+                ValueHandle replacement = null;
+                PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
+                try {
+                    KeyHandle targetKey = currentEntry.keyHandle();
                     if (current == null) {
-                        handle = stringRoot.store(mergedDense);
-                    } else {
-                        requireString(current);
-                        handle = requireHllHandle(current);
-                        stringRoot.overwrite(handle, mergedDense);
+                        staged = stageNewEntry(destKeyBytes);
+                        targetKey = staged.keyHandle();
                     }
 
-                    EntryRecord next = hllRecord(k, handle, -1L, current);
-                    deltaBytes -= oldEstimate;
-                    deltaBytes += estimateRecordBytes(k, next);
-                    YierdisDbMutationExecutor.MutationResult<WriteResult<Void>> mutation =
-                            YierdisDbMutationExecutor.MutationResult.of(
-                                    WriteResult.of(null, MutationOutcome.VALUE_CHANGED),
-                                    deltaBytes
-                            );
-                    return EntryMutationResult.of(next, new PfMergeComputation(k, mutation));
-                });
-                keyLifecycle.removeExpire(currentKeyHandle(destKeyBytes, computation.keyHandle()));
-                return computation.mutation();
+                    if (valueChanged) {
+                        replacement = stringRoot.store(replacementBytes);
+                    } else {
+                        replacement = currentHandle;
+                    }
+                    if (ttlChanged) {
+                        ttlMutation = keyLifecycle.prepareRemoveExpire(targetKey);
+                    }
+
+                    EntryRecord next = hllRecord(targetKey, replacement, -1L, current);
+                    WriteResult<Void> result = WriteResult.of(null, outcome);
+                    long deltaBytes = estimateRecordBytes(targetKey, next)
+                            - estimateRecordBytes(targetKey, current);
+                    PreparedEntryMutation<WriteResult<Void>> prepared = new PreparedEntryMutation<>(
+                            keyLifecycle,
+                            result,
+                            deltaBytes,
+                            staged == null ? 0L : staged.stagedHeapBytes(),
+                            outcome,
+                            currentEntry.entryHandle(),
+                            staged == null ? null : staged.entryHandle(),
+                            staged == null ? null : staged.stagedKey(),
+                            current,
+                            next,
+                            valueChanged,
+                            ttlMutation
+                    );
+                    staged = null;
+                    if (valueChanged) {
+                        replacement = null;
+                    }
+                    ttlMutation = PreparedTtlMutation.NONE;
+                    return prepared;
+                } catch (RuntimeException | Error failure) {
+                    abortStaged(staged, valueChanged ? replacement : null, ttlMutation, failure);
+                    throw failure;
+                }
             }
         });
     }
 
-    private long estimatePfaddUpperBound(byte[] keyBytes, List<byte[]> elements) {
-        EntryRecord existing = keyLifecycle.liveEntryRecord(keyBytes);
+    private long estimatePfaddUpperBound(byte[] keyBytes, List<byte[]> elements, long nowMillis) {
+        EntryRecord existing = keyLifecycle.entryRecord(keyBytes);
+        int replacementLength = YierdisHyperLogLog.denseLength();
         if (existing == null) {
-            int upperValueLength = YierdisHyperLogLog.sparseLengthUpperBoundForElements(elements);
-            return YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, upperValueLength);
+            return hllNativeUpperBound(
+                    addSaturating(HLL_REGISTER_HEAP_BYTES, replacementLength),
+                    true,
+                    keyBytes,
+                    replacementLength
+            );
+        }
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+            return hllNativeUpperBound(
+                    addSaturating(HLL_REGISTER_HEAP_BYTES, replacementLength),
+                    true,
+                    keyBytes,
+                    replacementLength
+            );
         }
         if (existing.type() != ValueType.STRING) {
-            return 0L;
+            return withScopeBookkeeping(0L);
         }
         ValueHandle handle = requireHllHandle(existing);
-        if (YierdisHyperLogLog.isDense(stringRoot, handle)) {
-            return 0L;
-        }
         int existingLen = stringRoot.length(handle);
-        int sparseUpperBound = YierdisHyperLogLog.sparseLengthUpperBoundForElements(elements);
-        int targetLength = Math.min(
-                YierdisHyperLogLog.denseLength(),
-                Math.max(existingLen, existingLen + sparseUpperBound - YierdisHyperLogLog.HEADER_BYTES)
+        int targetLength = pfaddReplacementLengthUpperBound(existingLen, elements);
+        long heapGrowthBytes = addSaturating(
+                HLL_REGISTER_HEAP_BYTES,
+                addSaturating(existingLen, targetLength)
         );
-        return Math.max(0L, (long) targetLength - existingLen);
+        return hllNativeUpperBound(heapGrowthBytes, false, keyBytes, targetLength);
     }
 
-    private long estimatePfmergeUpperBound(byte[] keyBytes, int mergedDenseLength) {
-        EntryRecord existing = keyLifecycle.liveEntryRecord(keyBytes);
+    private long estimatePfmergeUpperBound(byte[] keyBytes, List<byte[]> sourceKeys, long nowMillis) {
+        int replacementLength = YierdisHyperLogLog.denseLength();
+        long sourceCopyBytes = sourceCopyBytesUpperBound(sourceKeys, nowMillis);
+        EntryRecord existing = keyLifecycle.entryRecord(keyBytes);
         if (existing == null) {
-            return YierdisDbMemoryEstimator.estimateStringWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, mergedDenseLength);
+            return hllNativeUpperBound(
+                    addSaturating(HLL_REGISTER_HEAP_BYTES, addSaturating(sourceCopyBytes, replacementLength)),
+                    true,
+                    keyBytes,
+                    replacementLength
+            );
+        }
+        KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+        if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+            return hllNativeUpperBound(
+                    addSaturating(HLL_REGISTER_HEAP_BYTES, addSaturating(sourceCopyBytes, replacementLength)),
+                    true,
+                    keyBytes,
+                    replacementLength
+            );
         }
         if (existing.type() != ValueType.STRING) {
-            return 0L;
+            return withScopeBookkeeping(0L);
         }
         ValueHandle handle = requireHllHandle(existing);
-        int existingLen = stringRoot.length(handle);
-        return Math.max(0L, (long) mergedDenseLength - existingLen);
+        long heapGrowthBytes = addSaturating(
+                HLL_REGISTER_HEAP_BYTES,
+                addSaturating(
+                        sourceCopyBytes,
+                        addSaturating(stringRoot.length(handle), replacementLength)
+                )
+        );
+        return hllNativeUpperBound(heapGrowthBytes, false, keyBytes, replacementLength);
+    }
+
+    private long hllNativeUpperBound(
+            long heapGrowthBytes,
+            boolean includeKeyAndEntry,
+            byte[] keyBytes,
+            int replacementLength
+    ) {
+        int valueLength = Math.max(1, replacementLength);
+        int[] sizes = includeKeyAndEntry
+                ? new int[]{
+                        Math.max(1, keyBytes == null ? 0 : keyBytes.length),
+                        ENTRY_RECORD_NATIVE_BYTES,
+                        valueLength
+                }
+                : new int[]{valueLength};
+        return withScopeBookkeeping(MutationMemoryEstimator.peakAdditionalBytes(
+                keyLifecycle.nativeAllocator(),
+                0L,
+                Math.max(0L, heapGrowthBytes),
+                sizes
+        ));
+    }
+
+    private static int pfaddReplacementLengthUpperBound(int existingLen, List<byte[]> elements) {
+        int batchSparseLength = YierdisHyperLogLog.sparseLengthUpperBoundForElements(elements);
+        long additionalSparseBytes = Math.max(0L, (long) batchSparseLength - YierdisHyperLogLog.HEADER_BYTES);
+        long sparseUpperBound = addSaturating(existingLen, additionalSparseBytes);
+        return (int) Math.min(YierdisHyperLogLog.denseLength(), sparseUpperBound);
+    }
+
+    private long sourceCopyBytesUpperBound(List<byte[]> sourceKeys, long nowMillis) {
+        long bytes = 0L;
+        if (sourceKeys == null) {
+            return bytes;
+        }
+        for (byte[] sourceKey : sourceKeys) {
+            EntryRecord record = keyLifecycle.entryRecord(sourceKey);
+            if (record == null) {
+                continue;
+            }
+            KeyHandle keyHandle = keyLifecycle.keyHandle(sourceKey);
+            if (keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+                continue;
+            }
+            requireString(record);
+            bytes = addSaturating(bytes, stringRoot.length(requireHllHandle(record)));
+        }
+        return bytes;
+    }
+
+    private MergeRegisters mergeSourceRegisters(List<byte[]> sourceKeys) {
+        int[] registers = new int[YierdisHyperLogLog.REGISTERS];
+        long copiedBytes = 0L;
+        for (byte[] sourceKey : sourceKeys) {
+            EntryRecord record = liveStringRecord(sourceKey);
+            if (record == null) {
+                continue;
+            }
+            byte[] raw = stringRoot.copy(requireHllHandle(record));
+            copiedBytes = addSaturating(copiedBytes, raw.length);
+            YierdisHyperLogLog.mergeHllIntoRegisters(raw, registers);
+        }
+        return new MergeRegisters(registers, copiedBytes);
     }
 
     private EntryRecord liveStringRecord(byte[] keyBytes) {
@@ -249,16 +405,126 @@ public final class YierdisHllOps implements HllReadOps, HllWriteOps {
         return keyLifecycle.estimatedBytesForRemoval(keyHandle, record);
     }
 
-    private KeyHandle currentKeyHandle(byte[] keyBytes, KeyHandle fallback) {
-        KeyHandle current = keyLifecycle.keyHandle(keyBytes);
-        return current == null ? fallback : current;
+    private CurrentEntry currentEntry(byte[] keyBytes) {
+        EntryHandle entryHandle = keyLifecycle.entryHandle(keyBytes);
+        EntryRecord record = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
+        KeyHandle keyHandle = entryHandle == null ? null : keyLifecycle.keyHandle(keyBytes);
+        return new CurrentEntry(entryHandle, keyHandle, record);
     }
 
-    private static <T> EntryMutationResult<YierdisDbMutationExecutor.MutationResult<T>> mutationResult(
-            EntryRecord record,
-            T value,
-            long deltaBytes
+    private StagedEntry stageNewEntry(byte[] keyBytes) {
+        EntryHandle entryHandle = keyLifecycle.entryTable().reserve();
+        NativeKeyDirectory.StagedInsert stagedKey = null;
+        try {
+            stagedKey = keyLifecycle.keyDirectory().stageInsert(keyBytes);
+            return new StagedEntry(entryHandle, stagedKey);
+        } catch (RuntimeException | Error failure) {
+            try {
+                keyLifecycle.entryTable().release(entryHandle);
+            } catch (RuntimeException | Error releaseFailure) {
+                failure.addSuppressed(releaseFailure);
+            }
+            if (stagedKey != null) {
+                try {
+                    stagedKey.close();
+                } catch (RuntimeException | Error closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+            throw failure;
+        }
+    }
+
+    private <T> PreparedEntryMutation<T> preparedNoEntry(T result, MutationOutcome outcome) {
+        return new PreparedEntryMutation<>(
+                keyLifecycle,
+                result,
+                0L,
+                0L,
+                outcome,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
+                PreparedTtlMutation.NONE
+        );
+    }
+
+    private void abortStaged(
+            StagedEntry staged,
+            ValueHandle replacement,
+            PreparedTtlMutation ttlMutation,
+            Throwable failure
     ) {
-        return EntryMutationResult.of(record, YierdisDbMutationExecutor.MutationResult.of(value, deltaBytes));
+        if (ttlMutation != null) {
+            try {
+                ttlMutation.abort();
+            } catch (RuntimeException | Error abortFailure) {
+                failure.addSuppressed(abortFailure);
+            }
+        }
+        if (replacement != null) {
+            try {
+                stringRoot.release(replacement);
+            } catch (RuntimeException | Error releaseFailure) {
+                failure.addSuppressed(releaseFailure);
+            }
+        }
+        if (staged != null) {
+            try {
+                staged.close();
+            } catch (RuntimeException | Error closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            try {
+                keyLifecycle.entryTable().release(staged.entryHandle());
+            } catch (RuntimeException | Error releaseFailure) {
+                failure.addSuppressed(releaseFailure);
+            }
+        }
+    }
+
+    private static long withScopeBookkeeping(long upperBound) {
+        return Math.max(
+                Math.max(0L, upperBound),
+                MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes()
+        );
+    }
+
+    private static long addSaturating(long left, long right) {
+        if (left < 0L || right < 0L || Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
+    }
+
+    private record CurrentEntry(
+            EntryHandle entryHandle,
+            KeyHandle keyHandle,
+            EntryRecord record
+    ) {
+    }
+
+    private record StagedEntry(
+            EntryHandle entryHandle,
+            NativeKeyDirectory.StagedInsert stagedKey
+    ) implements AutoCloseable {
+        private KeyHandle keyHandle() {
+            return stagedKey.keyHandle();
+        }
+
+        private long stagedHeapBytes() {
+            return stagedKey.stagedHeapBytes();
+        }
+
+        @Override
+        public void close() {
+            stagedKey.close();
+        }
+    }
+
+    private record MergeRegisters(int[] registers, long copiedBytes) {
     }
 }
