@@ -413,7 +413,13 @@ public class MutationExecutorReservationTest {
 
     @Test
     public void failedMutationRollsBackReservationAndDoesNotPoisonNextMutation() {
-        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(1024, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
+                PREPARED_TEST_UPPER_BOUND_BYTES,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5,
+                5
+        );
         db.bindToCurrentThread();
         try {
             YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(db);

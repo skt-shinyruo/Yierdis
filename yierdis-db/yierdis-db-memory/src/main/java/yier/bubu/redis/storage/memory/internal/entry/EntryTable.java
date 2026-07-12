@@ -141,22 +141,22 @@ public final class EntryTable implements AutoCloseable {
         if (closed) {
             return;
         }
-        RuntimeException failure = null;
+        Throwable failure = null;
         try {
             clear();
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
             failure = e;
         }
         if (ownsAllocator) {
             try {
                 allocator.close();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | Error e) {
                 failure = addFailure(failure, e);
             }
         }
         closed = true;
         if (failure != null) {
-            throw failure;
+            rethrow(failure);
         }
     }
 
@@ -248,11 +248,21 @@ public final class EntryTable implements AutoCloseable {
         }
     }
 
-    private static RuntimeException addFailure(RuntimeException failure, RuntimeException next) {
+    private static Throwable addFailure(Throwable failure, Throwable next) {
         if (failure == null) {
             return next;
         }
         failure.addSuppressed(next);
         return failure;
+    }
+
+    private static void rethrow(Throwable failure) {
+        if (failure instanceof RuntimeException e) {
+            throw e;
+        }
+        if (failure instanceof Error e) {
+            throw e;
+        }
+        throw new IllegalStateException(failure);
     }
 }

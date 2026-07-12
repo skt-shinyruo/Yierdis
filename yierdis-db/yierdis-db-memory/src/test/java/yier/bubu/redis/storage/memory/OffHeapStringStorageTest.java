@@ -1,27 +1,18 @@
 package yier.bubu.redis.storage.memory;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
-import yier.bubu.redis.storage.api.ValueType;
+import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.List;
 import org.junit.Assert;
 import org.junit.Test;
-import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
+import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
-
-import java.nio.charset.StandardCharsets;
-import java.util.Collections;
-import java.util.List;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
@@ -97,7 +88,7 @@ public class OffHeapStringStorageTest {
     }
 
     @Test
-    public void overwritePreservesStableStringHandle() {
+    public void overwritePublishesReplacementStringHandle() {
         YierdisDb db = new YierdisDb();
         try {
             db.bindToCurrentThread();
@@ -109,7 +100,7 @@ public class OffHeapStringStorageTest {
             long raw = db.keyLifecycle().liveEntryRecord(key).valueHandle().raw();
 
             Assert.assertTrue(db.writes().strings().setString(key, v2, SetMode.NORMAL, null).value());
-            Assert.assertEquals(raw, db.keyLifecycle().liveEntryRecord(key).valueHandle().raw());
+            Assert.assertNotEquals(raw, db.keyLifecycle().liveEntryRecord(key).valueHandle().raw());
 
             RecordingBulkOutput out = new RecordingBulkOutput();
             db.reads().strings().getStringValue(new TestBytesView(key)).writeTo(out);

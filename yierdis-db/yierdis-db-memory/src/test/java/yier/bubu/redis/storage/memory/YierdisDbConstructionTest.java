@@ -10,6 +10,11 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import org.junit.Assert;
 import org.junit.Test;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
+import yier.bubu.redis.memory.api.NativeAllocationGrowth;
+import yier.bubu.redis.memory.api.NativeAllocationScope;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
@@ -358,7 +363,7 @@ public class YierdisDbConstructionTest {
             );
             InMemoryLedger ledger = new InMemoryLedger(0);
             YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(() -> {
-            }, ledger);
+            }, ledger, allocator);
             YierdisStringOps strings = new YierdisStringOps(new YierdisDbInternals() {
                 @Override
                 public void checkThread() {
@@ -689,6 +694,11 @@ public class YierdisDbConstructionTest {
         }
 
         @Override
+        public NativeAllocationScope beginAllocationScope() {
+            return delegate.beginAllocationScope();
+        }
+
+        @Override
         public NativeObjectView resolve(NativeHandle handle, NativeAccessMode mode) {
             return delegate.resolve(handle, mode);
         }
@@ -706,6 +716,21 @@ public class YierdisDbConstructionTest {
         @Override
         public NativeAllocatorStats stats() {
             return delegate.stats();
+        }
+
+        @Override
+        public MemoryUsageSnapshot memoryUsage() {
+            return delegate.memoryUsage();
+        }
+
+        @Override
+        public MemoryReclaimResult trimEmptyPages(MemoryPressureBudget budget) {
+            return delegate.trimEmptyPages(budget);
+        }
+
+        @Override
+        public NativeAllocationGrowth estimateAdditionalGrowth(int... requestedBytes) {
+            return delegate.estimateAdditionalGrowth(requestedBytes);
         }
 
         @Override

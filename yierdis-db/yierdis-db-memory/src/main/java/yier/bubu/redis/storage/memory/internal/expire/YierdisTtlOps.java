@@ -1,22 +1,18 @@
 package yier.bubu.redis.storage.memory.internal.expire;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
+import java.util.Objects;
 import yier.bubu.redis.bytes.BytesView;
-import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
-import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.TtlReadOps;
 import yier.bubu.redis.storage.api.TtlWriteOps;
 import yier.bubu.redis.storage.api.WriteResult;
-
-import java.util.Objects;
+import yier.bubu.redis.storage.memory.YierdisDbInternals;
+import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle;
+import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
+import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
+import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
     private final YierdisDbInternals internals;
@@ -43,23 +39,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         }
 
         long expireAtMillis = safeExpireAtMillis(System.currentTimeMillis(), seconds);
-        long upperBound = keyLifecycle.expireAtMillis(handle) == null ? ttlEntryBytesEstimate() : 0;
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Boolean>>() {
-            @Override
-            public long upperBoundBytes() {
-                return upperBound;
-            }
-
-            @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
-                keyLifecycle.setExpireAtMillis(handle, expireAtMillis);
-                keyLifecycle.touchRecord(handle, record);
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED),
-                        0
-                );
-            }
-        });
+        return setExpirePrepared(handle, record, expireAtMillis);
     }
 
     @Override
@@ -79,23 +59,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         }
 
         long expireAtMillis = safeAddMillis(System.currentTimeMillis(), milliseconds);
-        long upperBound = keyLifecycle.expireAtMillis(handle) == null ? ttlEntryBytesEstimate() : 0;
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Boolean>>() {
-            @Override
-            public long upperBoundBytes() {
-                return upperBound;
-            }
-
-            @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
-                keyLifecycle.setExpireAtMillis(handle, expireAtMillis);
-                keyLifecycle.touchRecord(handle, record);
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED),
-                        0
-                );
-            }
-        });
+        return setExpirePrepared(handle, record, expireAtMillis);
     }
 
     @Override
@@ -126,23 +90,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             return deleteImmediately(handle, record);
         }
 
-        long upperBound = keyLifecycle.expireAtMillis(handle) == null ? ttlEntryBytesEstimate() : 0;
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Boolean>>() {
-            @Override
-            public long upperBoundBytes() {
-                return upperBound;
-            }
-
-            @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
-                keyLifecycle.setExpireAtMillis(handle, unixMillis);
-                keyLifecycle.touchRecord(handle, record);
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED),
-                        0
-                );
-            }
-        });
+        return setExpirePrepared(handle, record, unixMillis);
     }
 
     @Override
@@ -161,7 +109,7 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         if (expireAtMillis == null) {
             return WriteResult.unchanged(Boolean.FALSE);
         }
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Boolean>>() {
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
             @Override
             public long upperBoundBytes() {
                 return 0;
@@ -173,12 +121,28 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Boolean>> apply() {
-                keyLifecycle.removeExpire(handle);
-                keyLifecycle.touchRecord(handle, record);
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED),
-                        0
+            public PreparedEntryMutation<WriteResult<Boolean>> prepare() {
+                EntryHandle entryHandle = keyLifecycle.entryHandle(keyLifecycle.copyKeyBytes(handle));
+                EntryRecord current = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
+                if (current == null) {
+                    return preparedNoEntry(WriteResult.unchanged(Boolean.FALSE), MutationOutcome.NONE);
+                }
+                PreparedTtlMutation ttlMutation = keyLifecycle.prepareRemoveExpire(handle);
+                EntryRecord next = keyLifecycle.withExpireAtMillis(handle, current, -1L);
+                WriteResult<Boolean> result = WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED);
+                return new PreparedEntryMutation<>(
+                        keyLifecycle,
+                        result,
+                        0L,
+                        0L,
+                        MutationOutcome.TTL_CHANGED,
+                        entryHandle,
+                        null,
+                        null,
+                        current,
+                        next,
+                        false,
+                        ttlMutation
                 );
             }
         });
@@ -256,6 +220,59 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
         });
     }
 
+    private WriteResult<Boolean> setExpirePrepared(KeyHandle handle, EntryRecord record, long expireAtMillis) {
+        long upperBound = upperBoundForSetExpire(handle);
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<WriteResult<Boolean>>() {
+            @Override
+            public long upperBoundBytes() {
+                return upperBound;
+            }
+
+            @Override
+            public PreparedEntryMutation<WriteResult<Boolean>> prepare() {
+                EntryHandle entryHandle = keyLifecycle.entryHandle(keyLifecycle.copyKeyBytes(handle));
+                EntryRecord current = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
+                if (current == null) {
+                    return preparedNoEntry(WriteResult.unchanged(Boolean.FALSE), MutationOutcome.NONE);
+                }
+                PreparedTtlMutation ttlMutation = keyLifecycle.prepareSetExpireAtMillis(handle, expireAtMillis);
+                EntryRecord next = keyLifecycle.withExpireAtMillis(handle, current, expireAtMillis);
+                WriteResult<Boolean> result = WriteResult.of(Boolean.TRUE, MutationOutcome.TTL_CHANGED);
+                return new PreparedEntryMutation<>(
+                        keyLifecycle,
+                        result,
+                        0L,
+                        0L,
+                        MutationOutcome.TTL_CHANGED,
+                        entryHandle,
+                        null,
+                        null,
+                        current,
+                        next,
+                        false,
+                        ttlMutation
+                );
+            }
+        });
+    }
+
+    private <T> PreparedEntryMutation<T> preparedNoEntry(T result, MutationOutcome outcome) {
+        return new PreparedEntryMutation<>(
+                keyLifecycle,
+                result,
+                0L,
+                0L,
+                outcome,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
+                PreparedTtlMutation.NONE
+        );
+    }
+
     private EntryRecord liveRecord(KeyHandle handle) {
         EntryRecord record = keyLifecycle.entryRecord(handle);
         if (record == null) {
@@ -289,6 +306,22 @@ public final class YierdisTtlOps implements TtlReadOps, TtlWriteOps {
 
     private static long ttlEntryBytesEstimate() {
         return yier.bubu.redis.storage.api.DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE;
+    }
+
+    private long upperBoundForSetExpire(KeyHandle handle) {
+        boolean addingNewTtl = keyLifecycle.expireAtMillis(handle) == null;
+        long logicalGrowth = addingNewTtl ? ttlEntryBytesEstimate() : 0L;
+        return addSaturating(logicalGrowth, keyLifecycle.estimateExpireSetUpperBound(handle, addingNewTtl));
+    }
+
+    private static long addSaturating(long left, long right) {
+        if (right <= 0L) {
+            return left;
+        }
+        if (Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
 }

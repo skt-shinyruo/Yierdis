@@ -14,6 +14,7 @@ import yier.bubu.redis.storage.memory.internal.entry.ListRoot;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.YierdisDbKeyLifecycle.EntryMutationResult;
+import yier.bubu.redis.storage.memory.internal.ledger.MutationMemoryEstimator;
 import yier.bubu.redis.storage.memory.internal.ledger.YierdisDbMutationExecutor;
 
 import java.util.Collections;
@@ -23,6 +24,9 @@ import java.util.function.IntSupplier;
 
 public final class YierdisListOps implements ListReadOps, ListWriteOps {
     private static final long LIST_ELEMENT_OVERHEAD_BYTES_ESTIMATE = 32L;
+    private static final int ENTRY_RECORD_NATIVE_BYTES = 56;
+    private static final int LIST_ROOT_NATIVE_BYTES = Long.BYTES;
+    private static final int QUICKLIST_NODE_NATIVE_BYTES = 48;
 
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
@@ -197,13 +201,25 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
 
     private long estimateListWriteUpperBoundForMutation(byte[] keyBytes, List<byte[]> values) {
         EntryRecord existing = keyLifecycle.liveEntryRecord(keyBytes);
+        long logicalUpperBound;
+        long nativeUpperBound;
         if (existing == null) {
-            return estimateListWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, values);
+            logicalUpperBound = estimateListWriteUpperBound(keyBytes == null ? 0 : keyBytes.length, values);
+            nativeUpperBound = nativePeak(
+                    keyBytes == null ? 0 : keyBytes.length,
+                    ENTRY_RECORD_NATIVE_BYTES,
+                    LIST_ROOT_NATIVE_BYTES,
+                    QUICKLIST_NODE_NATIVE_BYTES,
+                    listPayloadNativeBytes(values)
+            );
+            return Math.max(logicalUpperBound, nativeUpperBound);
         }
         if (existing.type() != ValueType.LIST) {
-            return 0L;
+            return MutationMemoryEstimator.nativeAllocationScopeBookkeepingBytes();
         }
-        return estimateListWriteUpperBound(0, values);
+        logicalUpperBound = estimateListWriteUpperBound(0, values);
+        nativeUpperBound = nativePeak(listPayloadNativeBytes(values));
+        return Math.max(logicalUpperBound, nativeUpperBound);
     }
 
     private EntryRecord liveListRecord(byte[] keyBytes) {
@@ -253,6 +269,30 @@ public final class YierdisListOps implements ListReadOps, ListWriteOps {
                 YierdisDbMemoryEstimator.sumByteLengths(values),
                 Math.multiplyExact((long) itemCount, LIST_ELEMENT_OVERHEAD_BYTES_ESTIMATE)
         );
+    }
+
+    private long nativePeak(int... nativeAllocationSizes) {
+        return MutationMemoryEstimator.peakAdditionalBytes(
+                keyLifecycle.nativeAllocator(),
+                0L,
+                0L,
+                nativeAllocationSizes
+        );
+    }
+
+    private static int listPayloadNativeBytes(List<byte[]> values) {
+        if (values == null || values.isEmpty()) {
+            return 1;
+        }
+        long bytes = 0L;
+        for (byte[] value : values) {
+            int len = value == null ? 0 : value.length;
+            bytes += len + 8L;
+            if (bytes > Integer.MAX_VALUE) {
+                return Integer.MAX_VALUE;
+            }
+        }
+        return Math.max(1, (int) bytes);
     }
 
     private static BulkStringSequence sequenceOf(IntSupplier countSupplier, BulkEmitter emitter) {

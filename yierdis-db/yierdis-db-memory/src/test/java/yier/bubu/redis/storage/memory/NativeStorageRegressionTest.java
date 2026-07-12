@@ -20,6 +20,7 @@ import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.YierdisCommandException;
+import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.result.BulkStringSequence;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
@@ -40,6 +41,8 @@ import java.util.Set;
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class NativeStorageRegressionTest {
+    private static final long PREPARED_STRING_MAXMEMORY_TEST_BYTES = 1_000_000L;
+
     @Test
     public void allNativeRootsReleaseToZeroAfterDelete() {
         YierdisDb db = new YierdisDb();
@@ -636,13 +639,15 @@ public class NativeStorageRegressionTest {
     public void nativeAllocatorCleanupRemainsStableUnderNarrowMaxmemory() {
         for (int cycle = 0; cycle < 4; cycle++) {
             try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-maxmemory-repeat-" + cycle)) {
-                YierdisDb db = createNativeRegressionDb(runtime, 4096L, MaxmemoryPolicy.NOEVICTION);
+                YierdisDb db = createNativeRegressionDb(runtime, PREPARED_STRING_MAXMEMORY_TEST_BYTES, MaxmemoryPolicy.NOEVICTION);
                 db.bindToCurrentThread();
                 List<byte[]> written = new ArrayList<>();
                 try {
                     for (int i = 0; i < 16; i++) {
                         byte[] key = b("maxmemory:" + cycle + ":" + i);
-                        byte[] value = b("value-" + i + "-native-maxmemory");
+                        byte[] value = i == 0
+                                ? b("value-" + i + "-native-maxmemory")
+                                : new byte[(int) PREPARED_STRING_MAXMEMORY_TEST_BYTES + 1];
                         boolean accepted;
                         try {
                             accepted = db.writes().strings().setString(key, value, SetMode.NORMAL, null).value();
@@ -659,7 +664,7 @@ public class NativeStorageRegressionTest {
                         }
                         written.add(key);
                         assertMemoryStatsCoherent(db);
-                        Assert.assertTrue(db.usedBytesForMaxmemory() <= 4096L);
+                        Assert.assertTrue(db.usedBytesForMaxmemory() <= PREPARED_STRING_MAXMEMORY_TEST_BYTES);
                     }
 
                     Assert.assertTrue("expected at least one accepted write", written.size() > 0);
@@ -676,6 +681,47 @@ public class NativeStorageRegressionTest {
                 }
                 Assert.assertEquals(0L, runtime.usedBytes());
             }
+        }
+    }
+
+    @Test
+    public void legacyWrongTypeAbortDoesNotStalePreviouslyPublishedNativeHandles() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-wrongtype-abort")) {
+            YierdisDb db = createNativeRegressionDb(runtime, 0, MaxmemoryPolicy.NOEVICTION);
+            db.bindToCurrentThread();
+            Throwable primary = null;
+            try {
+                Assert.assertEquals(Long.valueOf(1L), db.writes().zsets().zadd(
+                        b("z"),
+                        List.of(b("1"), b("member"))
+                ).value());
+                Assert.assertTrue(db.writes().strings().setString(b("s"), b("v"), SetMode.NORMAL, null).value());
+
+                Assert.assertThrows(
+                        WrongTypeException.class,
+                        () -> db.writes().zsets().zadd(b("s"), List.of(b("2"), b("wrong")))
+                );
+
+                Assert.assertEquals(2, db.size());
+                YierdisDbNativeHandleGraph.visitReachable(db.keyLifecycle(), (role, handle, record) -> {
+                });
+                Assert.assertEquals(List.of("member"), strings(db.reads().zsets().zrange(b("z"), 0, -1, false)));
+                Assert.assertArrayEquals(b("v"), db.reads().strings().getStringBytes(b("s")));
+            } catch (Throwable t) {
+                primary = t;
+                throw t;
+            } finally {
+                try {
+                    db.shutdown();
+                } catch (Throwable shutdownFailure) {
+                    if (primary != null) {
+                        primary.addSuppressed(shutdownFailure);
+                    } else {
+                        throw shutdownFailure;
+                    }
+                }
+            }
+            Assert.assertEquals(0L, runtime.usedBytes());
         }
     }
 
@@ -924,7 +970,7 @@ public class NativeStorageRegressionTest {
         YierdisMemoryStats empty = db.memory().memoryStats();
         NativeAllocatorStats allocator = db.keyLifecycle().nativeAllocator().stats();
         Assert.assertEquals(0, db.size());
-        Assert.assertEquals(0L, db.usedBytesForMaxmemory());
+        Assert.assertEquals(nativeEmptyDebug(db), 0L, db.usedBytesForMaxmemory());
         Assert.assertEquals(0L, empty.keyCount());
         Assert.assertEquals(0L, empty.usedBytesForMaxmemory());
         Assert.assertEquals(0L, empty.heapDataBytesEstimate());
@@ -947,6 +993,22 @@ public class NativeStorageRegressionTest {
         Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.ZSET_MEMBER_BYTES));
         Assert.assertEquals(0L, allocator.logicalUsedBytes());
         Assert.assertEquals(0L, allocator.quarantinedObjects());
+    }
+
+    private static String nativeEmptyDebug(YierdisDb db) {
+        YierdisMemoryStats stats = db.memory().memoryStats();
+        NativeAllocatorStats allocator = db.keyLifecycle().nativeAllocator().stats();
+        return "ledgerUsed=" + db.memoryLedger().usedBytes()
+                + ", ledgerReserved=" + db.memoryLedger().reservedBytes()
+                + ", usedForMaxmemory=" + db.usedBytesForMaxmemory()
+                + ", heap=" + stats.heapDataBytesEstimate()
+                + ", offHeap=" + stats.offHeapUsedBytes()
+                + ", ttlCount=" + stats.expireCount()
+                + ", nativeLogical=" + allocator.logicalUsedBytes()
+                + ", listNative=" + db.keyLifecycle().listRoot().nativeBytes()
+                + ", hashNative=" + db.keyLifecycle().hashRoot().nativeBytes()
+                + ", setNative=" + db.keyLifecycle().setRoot().nativeBytes()
+                + ", zsetNative=" + db.keyLifecycle().zsetRoot().nativeBytes();
     }
 
     private static void writeOneOfEachCollection(YierdisDb db) {

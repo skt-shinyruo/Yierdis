@@ -1,13 +1,5 @@
 package yier.bubu.redis.storage.memory.internal.expire;
 
-import yier.bubu.redis.storage.memory.*;
-import yier.bubu.redis.storage.memory.internal.expire.*;
-import yier.bubu.redis.storage.memory.internal.ffm.*;
-import yier.bubu.redis.storage.memory.internal.key.*;
-import yier.bubu.redis.storage.memory.internal.keyspace.*;
-import yier.bubu.redis.storage.memory.internal.ledger.*;
-import yier.bubu.redis.storage.memory.internal.value.*;
-
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 
@@ -48,6 +40,28 @@ public interface YierdisExpireIndex {
      */
     void setExpireAtMillis(KeyHandle keyHandle, long expireAtMillis);
 
+    default PreparedTtlMutation prepareSetExpireAtMillis(KeyHandle keyHandle, long expireAtMillis) {
+        return new PreparedTtlMutation() {
+            @Override
+            public long stagedNonNativeGrowthBytes() {
+                return 0L;
+            }
+
+            @Override
+            public void commit() {
+                setExpireAtMillis(keyHandle, expireAtMillis);
+            }
+
+            @Override
+            public void releaseSuperseded() {
+            }
+
+            @Override
+            public void abort() {
+            }
+        };
+    }
+
     void removeExpire(byte[] keyBytes);
 
     /**
@@ -56,4 +70,26 @@ public interface YierdisExpireIndex {
      * <p>约束：实现不得为 remove 而隐式生成 canonical heap key copy。</p>
      */
     void removeExpire(KeyHandle keyHandle);
+
+    default PreparedTtlMutation prepareRemoveExpire(KeyHandle keyHandle) {
+        return new PreparedTtlMutation() {
+            @Override
+            public long stagedNonNativeGrowthBytes() {
+                return 0L;
+            }
+
+            @Override
+            public void commit() {
+                removeExpire(keyHandle);
+            }
+
+            @Override
+            public void releaseSuperseded() {
+            }
+
+            @Override
+            public void abort() {
+            }
+        };
+    }
 }
