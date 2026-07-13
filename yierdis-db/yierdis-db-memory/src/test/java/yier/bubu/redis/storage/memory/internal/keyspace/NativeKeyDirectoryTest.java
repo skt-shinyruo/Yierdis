@@ -13,6 +13,10 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkResult;
+import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandleAccess;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
@@ -25,6 +29,49 @@ import java.util.Map;
 import java.util.Set;
 
 public class NativeKeyDirectoryTest {
+    private static final HashSeed FIXED_SEED = new HashSeed(0x0123456789abcdefL, 0xfedcba9876543210L);
+
+    @Test
+    public void growPublishesTwoTablesAndMigratesAtMostBudgetedSlots() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-bounded-rehash-test");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 64);
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED)) {
+            for (int i = 0; i < 13; i++) {
+                int slot = i;
+                directory.compute(bytes("grow-" + i), (ignored, old) -> entryHandle(slot + 1L));
+            }
+
+            Assert.assertTrue(directory.metrics().rehashing());
+            Assert.assertEquals(32, directory.metrics().capacity());
+            Assert.assertEquals(16, directory.metrics().oldCapacity());
+
+            HashTableWorkResult step = directory.advanceRehash(HashTableWorkBudget.of(3L, Long.MAX_VALUE));
+            Assert.assertEquals(3L, step.inspectedSlots());
+            Assert.assertTrue(step.migratedSlots() <= 3L);
+            for (int i = 0; i < 13; i++) {
+                Assert.assertEquals(entryHandle(i + 1L), directory.get(bytes("grow-" + i)));
+            }
+        }
+    }
+
+    @Test
+    public void emptyAndTombstoneSlotsConsumeMigrationBudget() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-empty-slot-budget-test");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 64);
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED)) {
+            for (int slot = 1; slot <= 13; slot++) {
+                byte[] key = keyForInitialSlot(slot, 16);
+                int entrySlot = slot;
+                directory.compute(key, (ignored, old) -> entryHandle(entrySlot));
+            }
+
+            Assert.assertTrue(directory.metrics().rehashing());
+            HashTableWorkResult step = directory.advanceRehash(HashTableWorkBudget.of(1L, Long.MAX_VALUE));
+            Assert.assertEquals(1L, step.inspectedSlots());
+            Assert.assertEquals(0L, step.migratedSlots());
+        }
+    }
+
     @Test
     public void nativeKeyDirectoryMapsKeysToStableHandlesAndReleasesThem() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-test")) {
@@ -192,7 +239,7 @@ public class NativeKeyDirectoryTest {
                 directory.compute(bytes("two"), (key, old) -> entryHandle(2L));
 
                 int[] visited = {0};
-                ScanCursorV2 cursor = directory.scan(ScanCursorV2.start(), 8, (key, handle) -> {
+                ScanCursorV2 cursor = directory.scan(ScanCursorV2.start(), directory.metrics().capacity(), (key, handle) -> {
                     visited[0]++;
                     return false;
                 });
@@ -300,6 +347,17 @@ public class NativeKeyDirectoryTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] keyForInitialSlot(int expectedSlot, int capacity) {
+        for (int candidate = 0; candidate < 100_000; candidate++) {
+            byte[] key = bytes("slot-" + expectedSlot + '-' + candidate);
+            int hash = SipHash24.foldToInt(SipHash24.hash(FIXED_SEED, key));
+            if ((hash & (capacity - 1)) == expectedSlot) {
+                return key;
+            }
+        }
+        throw new AssertionError("unable to find a key for slot " + expectedSlot);
     }
 
     private static byte[] copy(KeyHandle keyHandle) {
