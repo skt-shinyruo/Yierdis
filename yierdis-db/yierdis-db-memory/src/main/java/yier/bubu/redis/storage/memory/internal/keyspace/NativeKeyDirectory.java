@@ -41,6 +41,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
     private long generation;
     private long completedRehashes;
     private int maximumProbeLength;
+    private boolean maintenanceDebt;
     private boolean closed;
 
     public NativeKeyDirectory(YierdisFfmMemoryRuntime runtime) {
@@ -118,6 +119,34 @@ public final class NativeKeyDirectory implements AutoCloseable {
         );
     }
 
+    public synchronized boolean hasMaintenanceDebt() {
+        ensureOpen();
+        return maintenanceDebt || old != null;
+    }
+
+    public synchronized StagedResize stageMaintenanceResize() {
+        ensureOpen();
+        if (old != null) {
+            return null;
+        }
+        HashCapacityPolicy.Decision decision = maintenanceDecision();
+        if (decision.action() == HashCapacityPolicy.Action.NONE) {
+            maintenanceDebt = false;
+            return null;
+        }
+        return new StagedResize(active, new Table(decision.targetCapacity()));
+    }
+
+    public synchronized void publishStagedResize(StagedResize staged) {
+        Objects.requireNonNull(staged, "staged");
+        ensureOpen();
+        staged.ensureActive();
+        if (old != null || active != staged.source) {
+            throw new IllegalStateException("staged key-directory resize is no longer current");
+        }
+        publishStagedDirectory(staged.publish());
+    }
+
     public synchronized HashTableWorkResult advanceRehash(HashTableWorkBudget budget) {
         Objects.requireNonNull(budget, "budget");
         ensureOpen();
@@ -148,6 +177,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
         rehashCursor = 0;
         completedRehashes++;
         generation++;
+        recordMaintenanceDebt();
         return new HashTableWorkResult(inspected, migrated, true, HashTableWorkResult.StopReason.COMPLETE);
     }
 
@@ -264,6 +294,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
             publishStagedDirectory(staged);
         }
         insertActive(allocateKey(keyBytes), newHandle, hash, keyBytes);
+        recordMaintenanceDebt();
         return newHandle;
     }
 
@@ -295,11 +326,13 @@ public final class NativeKeyDirectory implements AutoCloseable {
             publishStagedDirectory(staged.directory);
         }
         insertActive(staged.publish(), entryHandle, staged.hash, staged.keyBytes);
+        recordMaintenanceDebt();
     }
 
     public synchronized EntryHandle remove(byte[] keyBytes) {
         Objects.requireNonNull(keyBytes, "keyBytes");
         ensureOpen();
+        advanceRehashOnWrite();
         int hash = hash(keyBytes);
         int index = findIndex(active, keyBytes, hash);
         if (index >= 0) {
@@ -320,6 +353,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
         Objects.requireNonNull(keyBytes, "keyBytes");
         Objects.requireNonNull(expectedHandle, "expectedHandle");
         ensureOpen();
+        advanceRehashOnWrite();
         int hash = hash(keyBytes);
         int index = findIndex(active, keyBytes, hash);
         if (index >= 0) {
@@ -340,6 +374,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
     public synchronized boolean remove(EntryHandle handle) {
         Objects.requireNonNull(handle, "handle");
         ensureOpen();
+        advanceRehashOnWrite();
         int index = findHandleIndex(active, handle);
         if (index >= 0) {
             removeFromActive(index);
@@ -443,6 +478,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
         old = null;
         rehashCursor = 0;
         size = 0;
+        maintenanceDebt = false;
         generation++;
         if (failure != null) {
             rethrow(failure);
@@ -501,6 +537,7 @@ public final class NativeKeyDirectory implements AutoCloseable {
         old = active;
         active = Objects.requireNonNull(staged, "staged");
         rehashCursor = 0;
+        maintenanceDebt = true;
         generation++;
     }
 
@@ -569,6 +606,24 @@ public final class NativeKeyDirectory implements AutoCloseable {
         table.size--;
         table.tombstones++;
         size--;
+        recordMaintenanceDebt();
+    }
+
+    private HashCapacityPolicy.Decision maintenanceDecision() {
+        return HashCapacityPolicy.nextAction(
+                active.capacity,
+                active.size,
+                active.filled,
+                active.tombstones
+        );
+    }
+
+    private void recordMaintenanceDebt() {
+        if (old != null) {
+            maintenanceDebt = true;
+            return;
+        }
+        maintenanceDebt = maintenanceDecision().action() != HashCapacityPolicy.Action.NONE;
     }
 
     private void invalidateOldShadow(NativeHandle keyHandle, int hash) {
@@ -753,6 +808,45 @@ public final class NativeKeyDirectory implements AutoCloseable {
     @FunctionalInterface
     public interface ScanConsumer {
         boolean accept(KeyHandle keyHandle, EntryHandle entryHandle);
+    }
+
+    public final class StagedResize implements AutoCloseable {
+        private final Table source;
+        private Table replacement;
+        private boolean terminal;
+
+        private StagedResize(Table source, Table replacement) {
+            this.source = Objects.requireNonNull(source, "source");
+            this.replacement = Objects.requireNonNull(replacement, "replacement");
+        }
+
+        public long stagedHeapBytes() {
+            ensureActive();
+            return replacement.heapBytes;
+        }
+
+        private Table publish() {
+            ensureActive();
+            Table published = replacement;
+            replacement = null;
+            terminal = true;
+            return published;
+        }
+
+        private void ensureActive() {
+            if (terminal || replacement == null) {
+                throw new IllegalStateException("staged key-directory resize is closed");
+            }
+        }
+
+        @Override
+        public void close() {
+            if (terminal) {
+                return;
+            }
+            terminal = true;
+            replacement = null;
+        }
     }
 
     public final class StagedInsert implements AutoCloseable {

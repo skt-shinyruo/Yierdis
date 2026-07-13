@@ -73,6 +73,54 @@ public class NativeKeyDirectoryTest {
     }
 
     @Test
+    public void deletedKeysCompactAndShrinkThroughPreparedMaintenance() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-maintenance-test");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 4096);
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED)) {
+            for (int i = 0; i < 1024; i++) {
+                int slot = i;
+                directory.compute(bytes("maintenance-" + i), (ignored, old) -> entryHandle(slot + 1L));
+            }
+            drainRehash(directory);
+            int peakCapacity = directory.metrics().capacity();
+
+            for (int i = 0; i < 900; i++) {
+                Assert.assertNotNull(directory.remove(bytes("maintenance-" + i)));
+            }
+
+            Assert.assertTrue(directory.hasMaintenanceDebt());
+            while (directory.hasMaintenanceDebt()) {
+                try (NativeKeyDirectory.StagedResize staged = directory.stageMaintenanceResize()) {
+                    Assert.assertNotNull(staged);
+                    directory.publishStagedResize(staged);
+                }
+                drainRehash(directory);
+            }
+
+            Assert.assertTrue(directory.metrics().capacity() < peakCapacity);
+            Assert.assertTrue(directory.metrics().tombstones() <= Math.max(
+                    directory.metrics().size(),
+                    directory.metrics().capacity() / 8
+            ));
+            Assert.assertEquals(124, directory.size());
+            Assert.assertEquals(124L, allocator.stats().objectCount(NativeObjectKind.KEY_BYTES));
+            for (int i = 0; i < 900; i++) {
+                Assert.assertNull(directory.get(bytes("maintenance-" + i)));
+            }
+            for (int i = 900; i < 1024; i++) {
+                Assert.assertEquals(entryHandle(i + 1L), directory.get(bytes("maintenance-" + i)));
+            }
+
+            directory.clear();
+            Assert.assertEquals(16, directory.metrics().capacity());
+            Assert.assertEquals(0, directory.metrics().size());
+            Assert.assertEquals(0, directory.metrics().filledSlots());
+            Assert.assertEquals(0, directory.metrics().tombstones());
+            Assert.assertEquals(0L, allocator.stats().objectCount(NativeObjectKind.KEY_BYTES));
+        }
+    }
+
+    @Test
     public void nativeKeyDirectoryMapsKeysToStableHandlesAndReleasesThem() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-test")) {
             NativeKeyDirectory directory = new NativeKeyDirectory(runtime);
@@ -347,6 +395,15 @@ public class NativeKeyDirectoryTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static void drainRehash(NativeKeyDirectory directory) {
+        while (directory.metrics().rehashing()) {
+            HashTableWorkResult result = directory.advanceRehash(
+                    HashTableWorkBudget.of(Long.MAX_VALUE, Long.MAX_VALUE)
+            );
+            Assert.assertTrue(result.rehashComplete());
+        }
     }
 
     private static byte[] keyForInitialSlot(int expectedSlot, int capacity) {
