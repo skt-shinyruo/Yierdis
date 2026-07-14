@@ -18,6 +18,7 @@ import java.util.function.Consumer;
 
 public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTrackedValue {
     private static final long FIXED_HEAP_BYTES = 88L;
+    private final NativeAllocator allocator;
     private final NativeByteStore fieldStore;
     private final NativeByteStore valueStore;
     private final HashSeed hashSeed;
@@ -25,6 +26,7 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
 
     private NativeListpack packed;
     private NativeByteMap<NativeHandle> map;
+    private HashValue borrowedPackedSource;
     private Runnable heapChangeListener = () -> {
     };
 
@@ -42,6 +44,7 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
             HashTableMaintenanceRegistry maintenanceRegistry
     ) {
         NativeAllocator nativeAllocator = Objects.requireNonNull(allocator, "allocator");
+        this.allocator = nativeAllocator;
         this.fieldStore = new NativeByteStore(nativeAllocator, NativeObjectKind.HASH_FIELD_BYTES);
         this.valueStore = new NativeByteStore(nativeAllocator, NativeObjectKind.HASH_VALUE_BYTES);
         this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
@@ -129,6 +132,46 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
             convertToHashMap();
         }
         return 1;
+    }
+
+    public PreparedPackedHset preparePackedHset(byte[] field, byte[] value) {
+        Objects.requireNonNull(field, "field");
+        if (map != null || packed == null) {
+            return null;
+        }
+
+        int pairIndex = indexOfFieldPair(field);
+        if (pairIndex >= 0) {
+            if (isOversize(value)) {
+                return null;
+            }
+        } else if (packed.size() / 2 >= YierdisEncodingThresholds.HASH_MAX_LISTPACK_ENTRIES
+                || isOversize(field)
+                || isOversize(value)) {
+            return null;
+        }
+
+        HashValue replacement = new HashValue(allocator, hashSeed, maintenanceRegistry);
+        replacement.borrowedPackedSource = this;
+        try {
+            for (int index = 0; index < packed.size(); index++) {
+                replacement.packed.addBorrowed(packed.entryRefAt(index));
+            }
+            if (pairIndex >= 0) {
+                replacement.packed.replaceBorrowedAt(pairIndex + 1, value, NativeObjectKind.HASH_VALUE_BYTES);
+                return new PreparedPackedHset(replacement, 0);
+            }
+            replacement.packed.addLast(field, NativeObjectKind.HASH_FIELD_BYTES);
+            replacement.packed.addLast(value, NativeObjectKind.HASH_VALUE_BYTES);
+            return new PreparedPackedHset(replacement, 1);
+        } catch (RuntimeException | Error failure) {
+            try {
+                replacement.close();
+            } catch (RuntimeException | Error closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
+        }
     }
 
     public int hsetMany(List<byte[]> fieldValuePairs) {
@@ -299,6 +342,23 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
         return FIXED_HEAP_BYTES + representationBytes;
     }
 
+    public void releaseExcept(HashValue retained) {
+        Objects.requireNonNull(retained, "retained");
+        if (map != null || packed == null || retained.map != null || retained.packed == null) {
+            throw new IllegalStateException("packed hash ownership transfer requires packed values");
+        }
+        packed.closeExcept(retained.packed);
+        packed = null;
+        borrowedPackedSource = null;
+    }
+
+    public void activateBorrowedPackedOwnership(HashValue source) {
+        if (borrowedPackedSource != source) {
+            throw new IllegalStateException("packed hash ownership source does not match");
+        }
+        borrowedPackedSource = null;
+    }
+
     @Override
     public void setHeapChangeListener(Runnable listener) {
         heapChangeListener = Objects.requireNonNull(listener, "listener");
@@ -338,7 +398,11 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
         }
         if (packed != null) {
             try {
-                packed.close();
+                if (borrowedPackedSource == null || borrowedPackedSource.packed == null) {
+                    packed.close();
+                } else {
+                    packed.closeExcept(borrowedPackedSource.packed);
+                }
             } catch (RuntimeException e) {
                 if (failure == null) {
                     failure = e;
@@ -347,6 +411,7 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
                 }
             } finally {
                 packed = null;
+                borrowedPackedSource = null;
             }
         }
         if (failure != null) {
@@ -455,5 +520,14 @@ public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTra
             }
         }
         return false;
+    }
+
+    public record PreparedPackedHset(HashValue replacement, int added) {
+        public PreparedPackedHset {
+            Objects.requireNonNull(replacement, "replacement");
+            if (added < 0 || added > 1) {
+                throw new IllegalArgumentException("added must be 0 or 1");
+            }
+        }
     }
 }

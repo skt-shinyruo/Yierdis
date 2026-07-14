@@ -90,6 +90,19 @@ public final class NativeListpack implements AutoCloseable {
         insertAt(entries.size(), value, kind);
     }
 
+    void addBorrowed(NativeListEntryRef entry) {
+        Objects.requireNonNull(entry, "entry");
+        ensureEntryCapacityForAdd();
+        NativeHandle handle = entry.handle();
+        entries.add(handle);
+        encodedBytes += entryEncodedBytes(entry.payloadLength());
+        if (handle != null) {
+            byteStore.adopt(handle, entry.retainedBytes());
+            allocatedBytes += entry.retainedBytes();
+            rawBytes += entry.payloadLength();
+        }
+    }
+
     public void addFirst(byte[] value) {
         insertAt(0, value);
     }
@@ -230,6 +243,33 @@ public final class NativeListpack implements AutoCloseable {
         }
     }
 
+    void replaceBorrowedAt(int index, byte[] value, NativeObjectKind kind) {
+        NativeHandle old = entries.get(index);
+        NativeHandle next = store(value, kind);
+        boolean replaced = false;
+        try {
+            int oldLength = old == null ? -1 : byteStore.length(old);
+            int oldRetainedBytes = old == null ? 0 : byteStore.allocatedBytes(old);
+            entries.set(index, next);
+            encodedBytes += entryEncodedBytes(value == null ? -1 : value.length)
+                    - entryEncodedBytes(oldLength);
+            if (old != null) {
+                allocatedBytes -= oldRetainedBytes;
+                rawBytes -= oldLength;
+                byteStore.forget(old);
+            }
+            if (next != null) {
+                allocatedBytes += byteStore.allocatedBytes(next);
+                rawBytes += value.length;
+            }
+            replaced = true;
+        } finally {
+            if (!replaced && next != null) {
+                byteStore.release(next);
+            }
+        }
+    }
+
     public int indexOf(byte[] needle) {
         for (int i = 0; i < entries.size(); i++) {
             if (equalsAt(i, needle)) {
@@ -259,6 +299,32 @@ public final class NativeListpack implements AutoCloseable {
                 continue;
             }
             if (isRetained(handle, retained)) {
+                byteStore.forget(handle);
+                continue;
+            }
+            try {
+                byteStore.release(handle);
+            } catch (RuntimeException e) {
+                failure = addFailure(failure, e);
+            }
+        }
+        entries.clear();
+        encodedBytes = 0;
+        allocatedBytes = 0;
+        rawBytes = 0;
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    void closeExcept(NativeListpack retained) {
+        Objects.requireNonNull(retained, "retained");
+        RuntimeException failure = null;
+        for (NativeHandle handle : entries) {
+            if (handle == null) {
+                continue;
+            }
+            if (retained.containsHandle(handle)) {
                 byteStore.forget(handle);
                 continue;
             }
@@ -326,6 +392,19 @@ public final class NativeListpack implements AutoCloseable {
         long raw = handle.raw();
         for (NativeHandle candidate : retained) {
             if (candidate != null && candidate.raw() == raw) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean containsHandle(NativeHandle candidate) {
+        if (candidate == null) {
+            return false;
+        }
+        long raw = candidate.raw();
+        for (NativeHandle handle : entries) {
+            if (handle != null && handle.raw() == raw) {
                 return true;
             }
         }
