@@ -41,6 +41,8 @@ public final class KeyCommands implements CommandModule {
     private static final byte[] MEMORY_STATS_KEYS_STORED_OFFHEAP = "keys_stored_offheap".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_KEY_COUNT = "key_count".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_EXPIRE_COUNT = "expire_count".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] MEMORY_STATS_EXPIRED_ENTRIES_AWAITING_PHYSICAL_DELETION =
+            "expired_entries_awaiting_physical_deletion".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_KEYSPACE_REHASHING = "keyspace_rehashing".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_KEYSPACE_TABLE0_CAPACITY = "keyspace_table0_capacity".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] MEMORY_STATS_KEYSPACE_TABLE1_CAPACITY = "keyspace_table1_capacity".getBytes(StandardCharsets.US_ASCII);
@@ -124,7 +126,7 @@ public final class KeyCommands implements CommandModule {
             }
             // Flat key/value pairs map naturally to RESP3 maps and RESP2 key/value arrays.
             out.requireReply(memoryStatsReplyPlan(s));
-            out.mapHeader(20);
+            out.mapHeader(21);
 
             out.bulkString(MEMORY_STATS_MAXMEMORY_BYTES);
             out.integer(s.maxmemoryBytes());
@@ -167,6 +169,9 @@ public final class KeyCommands implements CommandModule {
 
             out.bulkString(MEMORY_STATS_EXPIRE_COUNT);
             out.integer(s.expireCount());
+
+            out.bulkString(MEMORY_STATS_EXPIRED_ENTRIES_AWAITING_PHYSICAL_DELETION);
+            out.integer(s.expiredEntriesAwaitingPhysicalDeletion());
 
             out.bulkString(MEMORY_STATS_KEYSPACE_REHASHING);
             out.integer(s.keyspaceRehashing() ? 1 : 0);
@@ -229,6 +234,11 @@ public final class KeyCommands implements CommandModule {
         encodedElementBytes = addMemoryStatsPair(encodedElementBytes, MEMORY_STATS_EXPIRE_COUNT, stats.expireCount());
         encodedElementBytes = addMemoryStatsPair(
                 encodedElementBytes,
+                MEMORY_STATS_EXPIRED_ENTRIES_AWAITING_PHYSICAL_DELETION,
+                stats.expiredEntriesAwaitingPhysicalDeletion()
+        );
+        encodedElementBytes = addMemoryStatsPair(
+                encodedElementBytes,
                 MEMORY_STATS_KEYSPACE_REHASHING,
                 stats.keyspaceRehashing() ? 1L : 0L
         );
@@ -257,7 +267,7 @@ public final class KeyCommands implements CommandModule {
                 MEMORY_STATS_EXPIRE_TABLE1_CAPACITY,
                 stats.expireTable1Capacity()
         );
-        return ReplyPlans.bulkStringArray(40, encodedElementBytes, 0L);
+        return ReplyPlans.bulkStringArray(42, encodedElementBytes, 0L);
     }
 
     private static long addMemoryStatsPair(long current, byte[] key, long value) {

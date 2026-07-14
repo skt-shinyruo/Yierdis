@@ -30,6 +30,7 @@ public final class DbMemoryAccounting {
             MemoryUsageSnapshot usage,
             long reservedBytes,
             int keyCount,
+            long expiredEntriesAwaitingPhysicalDeletion,
             YierdisExpireIndex expires,
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
             boolean keysStoredOffHeap,
@@ -113,7 +114,8 @@ public final class DbMemoryAccounting {
                 pendingHashTableCount,
                 lastHashTableMaintenanceStopReason,
                 nativeAllocatorStats == null ? 0L : nativeAllocatorStats.liveObjects(),
-                Math.max(0L, nativeLiveRegionCount)
+                Math.max(0L, nativeLiveRegionCount),
+                Math.max(0L, expiredEntriesAwaitingPhysicalDeletion)
         );
     }
 

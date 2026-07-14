@@ -174,7 +174,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         }
         if (newRecord != null) {
             if (existingEntryHandle != null) {
-                keyLifecycle.entryTable().replace(existingEntryHandle, newRecord);
+                keyLifecycle.replaceEntry(existingEntryHandle, oldRecord, newRecord);
                 entryPublished = true;
             } else if (stagedEntryHandle != null && stagedKey != null) {
                 keyLifecycle.entryTable().writeReserved(stagedEntryHandle, newRecord);
@@ -185,7 +185,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             }
         } else if (deletingEntry) {
             keyLifecycle.keyDirectory().remove(existingEntryHandle);
-            keyLifecycle.entryTable().release(existingEntryHandle);
+            keyLifecycle.releaseEntry(existingEntryHandle, oldRecord);
             entryPublished = true;
         }
         if (!deletingEntry) {

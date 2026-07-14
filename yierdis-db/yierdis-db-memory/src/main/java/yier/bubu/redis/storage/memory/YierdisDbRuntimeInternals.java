@@ -71,12 +71,25 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
     @Override
     public boolean reclaimExpired(KeyHandle keyHandle, EntryRecord expectedRecord, long nowMillis) {
         Objects.requireNonNull(keyHandle, "keyHandle");
+        ReclamationAttempt attempt = new ReclamationAttempt();
         if (!keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
             return false;
         }
         try {
-            return reclaim(keyHandle, expectedRecord, DbCommitKind.EXPIRED, nowMillis, true);
+            return reclaim(keyHandle, expectedRecord, DbCommitKind.EXPIRED, nowMillis, true, attempt);
         } catch (DbCommitStreamUnavailableException unavailable) {
+            if (attempt.entryHandle == null) {
+                attempt.track(
+                        keyLifecycle.entryHandle(keyLifecycle.copyKeyBytes(keyHandle)),
+                        expectedRecord
+                );
+            }
+            keyLifecycle.markExpiredEntryAwaitingPhysicalDeletion(
+                    keyHandle,
+                    attempt.entryHandle,
+                    attempt.record,
+                    nowMillis
+            );
             return false;
         }
     }
@@ -84,7 +97,7 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
     @Override
     public boolean evict(KeyHandle keyHandle, EntryRecord expectedRecord) {
         Objects.requireNonNull(keyHandle, "keyHandle");
-        return reclaim(keyHandle, expectedRecord, DbCommitKind.EVICTED, 0L, false);
+        return reclaim(keyHandle, expectedRecord, DbCommitKind.EVICTED, 0L, false, null);
     }
 
     @Override
@@ -102,7 +115,8 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
             EntryRecord expectedRecord,
             DbCommitKind commitKind,
             long nowMillis,
-            boolean requireExpired
+            boolean requireExpired,
+            ReclamationAttempt attempt
     ) {
         return mutationExecutor.execute(new YierdisDbMutationExecutor.MutationPlan<>() {
             private byte[] deletedKey;
@@ -144,6 +158,9 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
                 if (entryHandle == null) {
                     return preparedNoDeletion();
                 }
+                if (attempt != null) {
+                    attempt.track(entryHandle, current);
+                }
                 long removalBytes = keyLifecycle.estimatedBytesForRemoval(keyHandle, current);
                 PreparedTtlMutation ttlMutation = keyLifecycle.prepareRemoveExpire(keyHandle);
                 deletedKey = keyBytes;
@@ -180,5 +197,15 @@ public final class YierdisDbRuntimeInternals implements YierdisDbInternals {
                 );
             }
         });
+    }
+
+    private static final class ReclamationAttempt {
+        private EntryHandle entryHandle;
+        private EntryRecord record;
+
+        private void track(EntryHandle entryHandle, EntryRecord record) {
+            this.entryHandle = entryHandle;
+            this.record = record;
+        }
     }
 }

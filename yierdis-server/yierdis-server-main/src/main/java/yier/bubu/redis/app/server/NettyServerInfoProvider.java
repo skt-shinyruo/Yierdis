@@ -415,6 +415,8 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             sb.append("yierdis_native_reclaimable_bytes:").append(memStats.nativeReclaimableBytes()).append("\r\n");
             sb.append("yierdis_native_live_objects:").append(memStats.nativeLiveObjects()).append("\r\n");
             sb.append("yierdis_native_live_regions:").append(memStats.nativeLiveRegions()).append("\r\n");
+            sb.append("yierdis_expired_entries_awaiting_physical_deletion:")
+                    .append(memStats.expiredEntriesAwaitingPhysicalDeletion()).append("\r\n");
             sb.append("yierdis_native_defrag_last_scanned_objects:").append(memStats.nativeDefragLastScannedObjects()).append("\r\n");
             sb.append("yierdis_native_defrag_last_moved_objects:").append(memStats.nativeDefragLastMovedObjects()).append("\r\n");
             sb.append("yierdis_native_defrag_last_moved_bytes:").append(memStats.nativeDefragLastMovedBytes()).append("\r\n");

@@ -4,6 +4,7 @@ import java.util.Objects;
 import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
+import yier.bubu.redis.storage.api.DbCommitStreamUnavailableException;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
@@ -92,6 +93,8 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
             try {
                 // coordinator 接管跨 DB/全局预算判定；本地 ledger 仍保留 reservation，保证 commit/rollback 对账。
                 coordinator.prepareWrite(maxmemoryParticipantSupplier.get(), estimatedExtraBytes);
+            } catch (DbCommitStreamUnavailableException unavailable) {
+                throw unavailable;
             } catch (YierdisCommandException e) {
                 throw new MemoryLedgerOutOfMemoryException();
             }
