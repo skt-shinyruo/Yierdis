@@ -166,12 +166,36 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 This repository is not accepted merely because this guide exists. Before final acceptance, record one candidate in this section with its candidate commit, baseline commit and artifact checksum, current artifact checksum, JDK/OS/CPU, exact commands, focused/full suite totals, smoke result, soak seed and peak/final counters, and GET/SET/HSET/ZADD medians and ratios. All evidence must come from the same candidate artifact; a rerun after rebuilding is a new candidate.
 
+### Candidate `ee6d548ea1eabb6d2440bb7096c70ac1f891da53`
+
+The non-performance gates below passed on 2026-07-14. This is deliberately **not** a final Stage 7 acceptance record: the active execution constraint prohibited benchmark commands, so the mandatory GET, SET, HSET, and ZADD throughput comparison was not run. No throughput ratio is inferred from the functional, smoke, or soak evidence.
+
 | Field | Acceptance value |
 | --- | --- |
-| Candidate commit and current artifact SHA-256 | Pending final acceptance |
-| Baseline commit and artifact SHA-256 | Pending final acceptance |
-| JDK / OS / CPU | Pending final acceptance |
-| Focused, architecture, and full Maven suites | Pending final acceptance |
-| Smoke and 600-second soak | Pending final acceptance |
-| GET / SET / HSET / ZADD median ratios | Pending final acceptance |
-| Final inbound, commit-stream, reply, and child ownership counters | Pending final acceptance |
+| Candidate commit and current artifact SHA-256 | `ee6d548ea1eabb6d2440bb7096c70ac1f891da53`; `b817758e2bcd47ad779e1e0962e1a2e5113b632e9fa9702e6972b7684d91ccf1` |
+| Baseline commit and artifact SHA-256 | `fb857980^` = `d9d3d36fe9eea93246d4daacd649536508e15d14`; `eb16b734b072131224f82fc72d92a8e2d250a7a1f453af89bb9a7af3bedfecf5` |
+| JDK / OS / CPU | OpenJDK `25.0.3+9-2-24.04.2-Ubuntu`; Linux `6.6.87.2-microsoft-standard-WSL2`; AMD Ryzen 9 9950X, 16 cores / 32 threads |
+| Focused, architecture, and full Maven suites | PASS: Stage 2 memory/DB reactor; Stage 7 focused matrix plus reply-preflight and configuration coverage; `ArchitectureBoundaryTest`; `mvn -q -pl '!yierdis-benchmark' test` with `1,147` tests, `0` failures, `0` errors, `0` skipped |
+| Smoke and 600-second soak | PASS: `SKIP_BUILD=1 ./scripts/smoke.sh`; soak seed `20260710`, `600039` ms, `5,222` samples, report `target/production-hardening-soak/20260714T152819Z-seed-20260710/soak-20260710-1784042910662.jsonl` |
+| Soak peaks | heap `467357824`; native `1933520`; maxmemory-used `2044780`; inbound reserved `140344`; commit events/bytes `19` / `133752`; outbound reserved/allocated `6968` / `2872`; reply slots/sources/chunks `1` / `0` / `1`; child channels `1`; RSS `703594496` bytes |
+| Cycle baselines | Cycles 0-3 each returned to `0` native live objects, `4` native live regions, `294912` metadata-committed bytes, and `208` data-committed bytes |
+| GET / SET / HSET / ZADD median ratios | NOT RUN: benchmark execution is prohibited by the active task constraint; final performance acceptance remains incomplete |
+| Final inbound, commit-stream, reply, and child ownership counters | All zero: inbound reserved/read-credit/retained/consolidation; outbound reserved/allocated/slots; reply sources/chunks; child channels. Ordering sequence `86567`; delayed commit callbacks `63382`; soak failure empty |
+
+Commands used for this candidate, all under JDK 25:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  mvn -q -pl yierdis-db,yierdis-networking,yierdis-command,yierdis-server,yierdis-tests/yierdis-integration-tests -am \
+  -Dtest=OutboundMemoryBudgetTest,ConnectionReplySequencerTest,BoundedChunkedReplySinkTest,OrderedReplyPipelineTest,ReplyShutdownTest,OrderedReplyIntegrationTest,OutboundReplyPressureTest,ReplyResultUnknownTest,CommitStreamIntegrationTest,CommitStreamShutdownTest,ReplyPreflightCommandTest,ClosingSkipSideEffectsIntegrationTest,YierdisServerBootstrapCommandWiringTest,YierdisServerArgsTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  mvn -q -pl yierdis-tests/yierdis-architecture-tests -am \
+  -Dtest=ArchitectureBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  mvn -q -pl '!yierdis-benchmark' test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  SKIP_BUILD=1 ./scripts/smoke.sh
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+  ./scripts/production-hardening-soak.sh --duration-seconds 600 --seed 20260710
+```
