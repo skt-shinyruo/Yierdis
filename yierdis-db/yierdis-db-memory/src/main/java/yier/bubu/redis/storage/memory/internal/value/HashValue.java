@@ -5,6 +5,10 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.BulkStringValue;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMetrics;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -12,17 +16,36 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 
-public final class HashValue implements YierdisValue, NativeHandleOwner {
+public final class HashValue implements YierdisValue, NativeHandleOwner, HeapTrackedValue {
+    private static final long FIXED_HEAP_BYTES = 88L;
     private final NativeByteStore fieldStore;
     private final NativeByteStore valueStore;
+    private final HashSeed hashSeed;
+    private final HashTableMaintenanceRegistry maintenanceRegistry;
 
     private NativeListpack packed;
     private NativeByteMap<NativeHandle> map;
+    private Runnable heapChangeListener = () -> {
+    };
 
     public HashValue(NativeAllocator allocator) {
+        this(allocator, HashSeed.random());
+    }
+
+    public HashValue(NativeAllocator allocator, HashSeed hashSeed) {
+        this(allocator, hashSeed, null);
+    }
+
+    public HashValue(
+            NativeAllocator allocator,
+            HashSeed hashSeed,
+            HashTableMaintenanceRegistry maintenanceRegistry
+    ) {
         NativeAllocator nativeAllocator = Objects.requireNonNull(allocator, "allocator");
         this.fieldStore = new NativeByteStore(nativeAllocator, NativeObjectKind.HASH_FIELD_BYTES);
         this.valueStore = new NativeByteStore(nativeAllocator, NativeObjectKind.HASH_VALUE_BYTES);
+        this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
+        this.maintenanceRegistry = maintenanceRegistry;
         this.packed = new NativeListpack(fieldStore, NativeObjectKind.HASH_FIELD_BYTES);
     }
 
@@ -41,6 +64,22 @@ public final class HashValue implements YierdisValue, NativeHandleOwner {
             return map.size();
         }
         return packed.size() / 2;
+    }
+
+    public long preparedCopyHeapUpperBound(List<byte[]> fieldValuePairs) {
+        return heapUpperBoundForEntryCount(addSaturating(size(), pairCount(fieldValuePairs)));
+    }
+
+    public static long preparedNewHeapUpperBound(List<byte[]> fieldValuePairs) {
+        return heapUpperBoundForEntryCount(pairCount(fieldValuePairs));
+    }
+
+    public HashTableMetrics memberTableMetrics() {
+        return map == null ? null : map.metrics();
+    }
+
+    public boolean hasMemberTableMaintenanceDebt() {
+        return map != null && map.hasMaintenanceDebt();
     }
 
     public int hset(byte[] field, byte[] value) {
@@ -113,6 +152,20 @@ public final class HashValue implements YierdisValue, NativeHandleOwner {
             return null;
         }
         return packed.get(pairIndex + 1);
+    }
+
+    public BulkStringValue hgetValue(byte[] field) {
+        Objects.requireNonNull(field, "field");
+        if (map != null) {
+            NativeHandle ref = map.get(field);
+            return ref == null ? BulkStringValue.nullValue() : valueStore.retainedValue(ref);
+        }
+        int pairIndex = indexOfFieldPair(field);
+        if (pairIndex < 0) {
+            return BulkStringValue.nullValue();
+        }
+        NativeListEntryRef ref = packed.entryRefAt(pairIndex + 1);
+        return ref.handle() == null ? BulkStringValue.nullValue() : fieldStore.retainedValue(ref.handle());
     }
 
     public int hdel(List<byte[]> fields) {
@@ -239,6 +292,19 @@ public final class HashValue implements YierdisValue, NativeHandleOwner {
     }
 
     @Override
+    public long heapEstimatedBytes() {
+        long representationBytes = map != null
+                ? map.heapEstimatedBytes()
+                : packed == null ? 0L : packed.heapEstimatedBytes();
+        return FIXED_HEAP_BYTES + representationBytes;
+    }
+
+    @Override
+    public void setHeapChangeListener(Runnable listener) {
+        heapChangeListener = Objects.requireNonNull(listener, "listener");
+    }
+
+    @Override
     public void forEachNativeHandle(Consumer<NativeHandle> consumer) {
         Objects.requireNonNull(consumer, "consumer");
         if (map != null) {
@@ -308,7 +374,13 @@ public final class HashValue implements YierdisValue, NativeHandleOwner {
         if (map != null) {
             return;
         }
-        NativeByteMap<NativeHandle> out = new NativeByteMap<>(fieldStore, NativeObjectKind.HASH_FIELD_BYTES);
+        NativeByteMap<NativeHandle> out = new NativeByteMap<>(
+                fieldStore,
+                NativeObjectKind.HASH_FIELD_BYTES,
+                hashSeed,
+                maintenanceRegistry,
+                this::notifyHeapChanged
+        );
         boolean ok = false;
         try {
             for (int i = 0; i + 1 < packed.size(); i += 2) {
@@ -340,10 +412,40 @@ public final class HashValue implements YierdisValue, NativeHandleOwner {
         packed.close();
         packed = null;
         map = out;
+        notifyHeapChanged();
     }
 
     private static boolean isOversize(byte[] b) {
         return b != null && b.length > YierdisEncodingThresholds.HASH_MAX_LISTPACK_VALUE_BYTES;
+    }
+
+    private static long heapUpperBoundForEntryCount(long expectedEntries) {
+        if (expectedEntries < 0L) {
+            return Long.MAX_VALUE;
+        }
+        long packedEntries = multiplySaturating(expectedEntries, 2L);
+        long packedBytes = addSaturating(FIXED_HEAP_BYTES, NativeListpack.heapUpperBoundForEntries(packedEntries));
+        long mapBytes = addSaturating(FIXED_HEAP_BYTES, NativeByteMap.heapUpperBoundForEntries(expectedEntries));
+        return Math.max(packedBytes, mapBytes);
+    }
+
+    private static long pairCount(List<byte[]> fieldValuePairs) {
+        return fieldValuePairs == null ? 0L : fieldValuePairs.size() / 2L;
+    }
+
+    private static long addSaturating(long left, long right) {
+        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
+    }
+
+    private static long multiplySaturating(long left, long right) {
+        if (left == 0L || right == 0L) {
+            return 0L;
+        }
+        return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
+    }
+
+    private void notifyHeapChanged() {
+        heapChangeListener.run();
     }
 
     private static boolean containsDuplicateBefore(List<byte[]> values, int endExclusive, byte[] candidate) {

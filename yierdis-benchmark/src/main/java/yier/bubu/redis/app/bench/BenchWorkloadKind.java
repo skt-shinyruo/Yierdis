@@ -2,6 +2,8 @@ package yier.bubu.redis.app.bench;
 
 public enum BenchWorkloadKind {
     PING,
+    GET,
+    SET,
     SET_GET,
     APPEND,
     HLL_SPARSE,
@@ -15,5 +17,6 @@ public enum BenchWorkloadKind {
     SET_SADD,
     ZSET_ZADD,
     SCAN,
-    MIXED_READ_WRITE
+    MIXED_READ_WRITE,
+    LARGE_PIPELINED_REPLY
 }

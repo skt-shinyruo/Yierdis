@@ -34,4 +34,8 @@ public record SuiteRunResult(
         comparisons = comparisons == null ? List.of() : List.copyOf(comparisons);
         findings = findings == null ? List.of() : List.copyOf(findings);
     }
+
+    public boolean hasCriticalFindings() {
+        return findings.stream().anyMatch(finding -> finding.level() == ThresholdFinding.Level.CRITICAL);
+    }
 }

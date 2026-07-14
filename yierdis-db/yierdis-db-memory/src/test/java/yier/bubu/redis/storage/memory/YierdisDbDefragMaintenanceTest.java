@@ -64,7 +64,7 @@ public class YierdisDbDefragMaintenanceTest {
 
                 Assert.assertArrayEquals(b("hello"), db.reads().strings().getStringBytes(b("string")));
                 Assert.assertEquals(1, db.reads().lists().lrange(b("list"), 0, -1).count());
-                Assert.assertArrayEquals(b("v"), db.reads().hashes().hget(b("hash"), b("f")));
+                Assert.assertArrayEquals(b("v"), OwnedReplyValueAssertions.bytes(db.reads().hashes().hget(b("hash"), b("f"))));
                 Assert.assertTrue(db.reads().sets().sismember(b("set"), b("m")));
                 Assert.assertEquals(1, db.reads().zsets().zrange(b("zset"), 0, -1, false).count());
 

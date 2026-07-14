@@ -8,7 +8,9 @@ import yier.bubu.redis.storage.memory.internal.keyspace.*;
 import yier.bubu.redis.storage.memory.internal.ledger.*;
 import yier.bubu.redis.storage.memory.internal.value.*;
 
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.memory.internal.ffm.YierdisFfmExpireIndex;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeDefragReport;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
@@ -25,18 +27,21 @@ public final class DbMemoryAccounting {
 
     public static YierdisMemoryStats snapshot(
             long maxmemoryBytes,
-            long heapDataBytesEstimate,
+            MemoryUsageSnapshot usage,
             long reservedBytes,
-            long directNativeBytes,
             int keyCount,
             YierdisExpireIndex expires,
+            HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
             boolean keysStoredOffHeap,
-            boolean includeOffHeapInMaxmemory,
             NativeAllocatorStats nativeAllocatorStats,
             NativeDefragReport nativeDefragReport
     ) {
-        long directNativeUsedBytes = Math.max(0L, directNativeBytes);
-        long offHeapUsedBytes = directNativeUsedBytes;
+        MemoryUsageSnapshot physicalUsage = usage == null ? MemoryUsageSnapshot.zero() : usage;
+        long heapDataBytesEstimate = physicalUsage.heapEstimatedBytes();
+        long offHeapUsedBytes = MemoryUsageSnapshot.addSaturating(
+                physicalUsage.nativeMetadataCommittedBytes(),
+                physicalUsage.nativeDataCommittedBytes()
+        );
 
         int expireCount = expires == null ? 0 : expires.size();
 
@@ -57,17 +62,15 @@ public final class DbMemoryAccounting {
             expireOverhead = ffm.estimatedTableOverheadBytes();
         }
 
-        long usedBytesForMaxmemory = heapDataBytesEstimate + (includeOffHeapInMaxmemory ? offHeapUsedBytes : 0);
-        long ttlBytesEstimate = estimateTtlBytesForMaxmemory(expireCount);
-        if (ttlBytesEstimate > 0) {
-            if (Long.MAX_VALUE - usedBytesForMaxmemory < ttlBytesEstimate) {
-                usedBytesForMaxmemory = Long.MAX_VALUE;
-            } else {
-                usedBytesForMaxmemory += ttlBytesEstimate;
-            }
-        }
-        long effectiveUsedBytesForMaxmemory = usedBytesForMaxmemory + Math.max(0L, reservedBytes);
-        long totalEstimatedBytes = heapDataBytesEstimate + directNativeUsedBytes;
+        long totalEstimatedBytes = physicalUsage.effectiveBytesForMaxmemory();
+        long usedBytesForMaxmemory = totalEstimatedBytes;
+        long effectiveUsedBytesForMaxmemory = addSaturating(totalEstimatedBytes, Math.max(0L, reservedBytes));
+        int pendingHashTableCount = hashTableMaintenanceRegistry == null
+                ? 0
+                : hashTableMaintenanceRegistry.pendingTableCount();
+        String lastHashTableMaintenanceStopReason = hashTableMaintenanceRegistry == null
+                ? "COMPLETE"
+                : hashTableMaintenanceRegistry.lastStopReason().name();
 
         return new YierdisMemoryStats(
                 maxmemoryBytes,
@@ -76,7 +79,7 @@ public final class DbMemoryAccounting {
                 offHeapUsedBytes,
                 reservedBytes,
                 effectiveUsedBytesForMaxmemory,
-                includeOffHeapInMaxmemory,
+                true,
                 keysStoredOffHeap,
                 keyCount,
                 expireCount,
@@ -102,8 +105,23 @@ public final class DbMemoryAccounting {
                 nativeAllocatorStats == null ? 0L : nativeAllocatorStats.quarantineBytes(),
                 nativeAllocatorStats == null ? 0L : nativeAllocatorStats.staleHandleDetections(),
                 nativeAllocatorStats == null ? 0L : nativeAllocatorStats.defragReclaimedPages(),
-                nativeAllocatorStats == null ? 0L : nativeAllocatorStats.metadataCommittedBytes()
+                physicalUsage.nativeMetadataCommittedBytes(),
+                physicalUsage.nativeDataCommittedBytes(),
+                physicalUsage.nativeDataLiveBytes(),
+                physicalUsage.nativeReclaimableBytes(),
+                pendingHashTableCount,
+                lastHashTableMaintenanceStopReason
         );
+    }
+
+    private static long addSaturating(long left, long right) {
+        if (left < 0 || right < 0) {
+            return Long.MAX_VALUE;
+        }
+        if (Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     private static long estimateTtlBytesForMaxmemory(int expireCount) {

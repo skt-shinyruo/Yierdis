@@ -21,7 +21,8 @@ public record ScenarioDefinition(
         boolean latency,
         ServerOverrides serverOverrides,
         RedisComparable redisComparable,
-        String redisNonComparableReason
+        String redisNonComparableReason,
+        ComparisonRole comparisonRole
 ) {
     private static final Pattern STABLE_ID_PATTERN = Pattern.compile("[a-z0-9]+(?:-[a-z0-9]+)*");
 
@@ -62,6 +63,28 @@ public record ScenarioDefinition(
         if (redisComparable != RedisComparable.YES && redisNonComparableReason.isBlank()) {
             throw new IllegalArgumentException("redisNonComparableReason must be provided when redisComparable is not YES");
         }
+        comparisonRole = comparisonRole == null ? ComparisonRole.STANDARD : comparisonRole;
+    }
+
+    public ScenarioDefinition(
+            String id,
+            String displayName,
+            BenchWorkloadKind workload,
+            int keyspace,
+            int dataSize,
+            int requests,
+            int clients,
+            int pipeline,
+            int warmupIterations,
+            int repeatIterations,
+            boolean latency,
+            ServerOverrides serverOverrides,
+            RedisComparable redisComparable,
+            String redisNonComparableReason
+    ) {
+        this(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
+                warmupIterations, repeatIterations, latency, serverOverrides, redisComparable,
+                redisNonComparableReason, ComparisonRole.STANDARD);
     }
 
     public ScenarioDefinition(
@@ -78,7 +101,27 @@ public record ScenarioDefinition(
             boolean latency
     ) {
         this(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
-                warmupIterations, repeatIterations, latency, ServerOverrides.none(), RedisComparable.YES, "");
+                warmupIterations, repeatIterations, latency, ServerOverrides.none(), RedisComparable.YES, "",
+                ComparisonRole.STANDARD);
+    }
+
+    public ScenarioDefinition(
+            String id,
+            String displayName,
+            BenchWorkloadKind workload,
+            int keyspace,
+            int dataSize,
+            int requests,
+            int clients,
+            int pipeline,
+            int warmupIterations,
+            int repeatIterations,
+            boolean latency,
+            ComparisonRole comparisonRole
+    ) {
+        this(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
+                warmupIterations, repeatIterations, latency, ServerOverrides.none(), RedisComparable.YES, "",
+                comparisonRole);
     }
 
     public ScenarioDefinition(
@@ -96,13 +139,20 @@ public record ScenarioDefinition(
             ServerOverrides serverOverrides
     ) {
         this(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
-                warmupIterations, repeatIterations, latency, serverOverrides, RedisComparable.YES, "");
+                warmupIterations, repeatIterations, latency, serverOverrides, RedisComparable.YES, "",
+                ComparisonRole.STANDARD);
     }
 
     public enum RedisComparable {
         YES,
         EXTERNAL_CONFIG_REQUIRED,
         NO
+    }
+
+    public enum ComparisonRole {
+        STANDARD,
+        PRODUCTION_HARDENING_MEDIAN_QPS_GATE,
+        DIAGNOSTIC
     }
 
     public void applyServerOverrides(YierdisBenchServerArgs serverArgs) {

@@ -31,9 +31,6 @@ import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.NativeReallocPolicy;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.memory.foreign.YierdisStableNativeAllocator;
-import yier.bubu.redis.storage.api.DbChange;
-import yier.bubu.redis.storage.api.DbChangeContext;
-import yier.bubu.redis.storage.api.DbChangeKind;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
@@ -375,6 +372,16 @@ public class YierdisDbConstructionTest {
                 }
 
                 @Override
+                public boolean reclaimExpired(KeyHandle keyHandle, EntryRecord expectedRecord, long nowMillis) {
+                    return false;
+                }
+
+                @Override
+                public boolean evict(KeyHandle keyHandle, EntryRecord expectedRecord) {
+                    return false;
+                }
+
+                @Override
                 public YierdisDbKeyLifecycle keyLifecycle() {
                     return lifecycle;
                 }
@@ -525,28 +532,6 @@ public class YierdisDbConstructionTest {
     }
 
     @Test
-    public void evictionEmitsSyntheticDeleteChange() {
-        YierdisDb db = new YierdisDb();
-        try {
-            db.bindToCurrentThread();
-            byte[] key = bytes("native-evict-event");
-            List<DbChange> changes = new ArrayList<>();
-
-            db.writes().strings().setString(key, bytes("value"), SetMode.NORMAL, null);
-            MaxmemoryCandidate candidate = db.sampleCandidate(MaxmemoryPolicy.ALLKEYS_RANDOM, System.currentTimeMillis());
-            Assert.assertNotNull(candidate);
-
-            try (DbChangeContext.Scope ignored = DbChangeContext.open(changes::add)) {
-                Assert.assertTrue(db.evict(candidate, System.currentTimeMillis()));
-            }
-
-            assertSyntheticDelete(changes, "native-evict-event", DbChangeKind.EVICTED);
-        } finally {
-            db.shutdown();
-        }
-    }
-
-    @Test
     public void scannedMaxmemoryCandidateIsOwnedByPublicDbAndEvictableByIt() {
         YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(1024 * 1024, MaxmemoryPolicy.ALLKEYS_LRU, 5, 5, 5);
         try {
@@ -593,19 +578,6 @@ public class YierdisDbConstructionTest {
         } catch (IllegalArgumentException e) {
             Assert.assertTrue(e.getMessage().contains(messagePart));
         }
-    }
-
-    private static void assertSyntheticDelete(List<DbChange> changes, String key, DbChangeKind kind) {
-        Assert.assertEquals(1, changes.size());
-        DbChange change = changes.get(0);
-        Assert.assertEquals(kind, change.kind());
-        Assert.assertEquals(0, change.dbIndex());
-        Assert.assertEquals("DEL", changeArg(change, 0));
-        Assert.assertEquals(key, changeArg(change, 1));
-    }
-
-    private static String changeArg(DbChange change, int index) {
-        return new String(change.commandArgv()[index], StandardCharsets.US_ASCII);
     }
 
     private static byte[] bytes(String value) {

@@ -9,8 +9,8 @@ public final class PreparedCallbackMutation<T> extends AbstractPreparedMutation<
 
     private final T result;
     private final Runnable commit;
-    private final Runnable releaseSuperseded;
-    private final Runnable abort;
+    private Runnable releaseSuperseded;
+    private Runnable abort;
 
     public PreparedCallbackMutation(
             T result,
@@ -36,11 +36,15 @@ public final class PreparedCallbackMutation<T> extends AbstractPreparedMutation<
 
     @Override
     protected void releaseSupersededPrepared() {
-        releaseSuperseded.run();
+        Runnable callback = releaseSuperseded;
+        releaseSuperseded = NOOP;
+        callback.run();
     }
 
     @Override
     protected void abortPrepared() {
-        abort.run();
+        Runnable callback = abort;
+        abort = NOOP;
+        callback.run();
     }
 }

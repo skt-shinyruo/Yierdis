@@ -81,28 +81,61 @@ final class CommandExecutorDrainLoop<C extends ExecutionConnection> {
                 break;
             }
             processed++;
-            executionSupport.execute(task, touchedConnections);
+            ExecutionAttempt attempt = executionSupport.execute(task, touchedConnections);
+            if (attempt == ExecutionAttempt.REPLY_CAPACITY_BLOCKED) {
+                registerBlockedReplyTask(task);
+            }
         }
 
         executionSupport.flushPending(touchedConnections);
 
-        boolean pendingAfterDrain = taskQueue.hasPendingTasks();
-        if (pendingAfterDrain) {
+        boolean runnableAfterDrain = taskQueue.hasRunnableTasks();
+        if (runnableAfterDrain) {
             if (hitMaxDrainCommands) {
                 drainLimitedByMaxCommands.increment();
             } else if (hitDrainTimeBudget) {
                 drainLimitedByTimeBudget.increment();
             }
         }
-        if (pendingAfterDrain) {
+        if (runnableAfterDrain) {
             ownerExecutor.execute(this::drainLoop);
             return;
         }
 
         drainScheduled.set(false);
-        if (taskQueue.hasPendingTasks() && drainScheduled.compareAndSet(false, true)) {
+        if (taskQueue.hasRunnableTasks() && drainScheduled.compareAndSet(false, true)) {
             ownerExecutor.execute(this::drainLoop);
         }
+    }
+
+    private void registerBlockedReplyTask(CommandExecutorTask<C> task) {
+        if (task == null || task.connection == null || task.reply == null || !taskQueue.block(task.connection, task)) {
+            executionSupport.recycleAndRelease(task);
+            return;
+        }
+
+        boolean waiting;
+        try {
+            waiting = task.reply.awaitCapacity(() -> {
+                if (taskQueue.resumeBlocked(task.connection, task)) {
+                    scheduleDrain();
+                }
+            });
+        } catch (Throwable ignored) {
+            waiting = false;
+        }
+        if (!waiting) {
+            if (taskQueue.cancelBlocked(task.connection, task)) {
+                executionSupport.recycleAndRelease(task);
+            }
+            return;
+        }
+
+        executionSupport.onConnectionClosed(task.connection, () -> ownerExecutor.execute(() -> {
+            if (taskQueue.cancelBlocked(task.connection, task)) {
+                executionSupport.recycleAndRelease(task);
+            }
+        }));
     }
 
     long drainLimitedByMaxCommands() {

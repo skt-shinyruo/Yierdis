@@ -29,7 +29,7 @@ Yierdis 的测试大致分成七层：
 先跑最窄协议测试：
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-networking/yierdis-networking-netty,yierdis-networking/yierdis-networking-resp -am -Dtest=RespRequestDecoderTest,RespExecutionAdapterTest,RespReplyWriterTest -Dsurefire.failIfNoSpecifiedTests=false test
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-networking/yierdis-networking-netty,yierdis-networking/yierdis-networking-resp -am -Dtest=RespRequestDecoderTest,RespIngressAdmissionTest,RespReplyWriterTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 再跑 server 协议集成：
@@ -38,7 +38,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH mvn -pl yierdis-server/yierdis-server-main -am -Dtest=RespProtocolIntegrationTest,RespProtocolErrorIntegrationTest,RespHandshakeIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-排障顺序：`RespRequestDecoder` 看线上 bytes 是否被正确切成 request，`RespCommandAdapter` / `RespExecutionAdapter` 看是否正确变成 `ExecutionRequest`，`RespReplyWriter` 看 reply 语义是否被正确编码。
+排障顺序：`RespRequestDecoder` 看线上 bytes 是否在 admission 后正确切成 `RetainedRespExecutionRequest`，`InboundMemoryBudget` 看 lease 是否在最后一个消费者释放，`RespReplyWriter` 看 reply 语义是否被正确编码。
 
 ## 改命令时
 
@@ -148,7 +148,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
 
 当改动可能触碰协议边界、command/internal 边界或 runtime 访问约束时，优先补护栏测试：
 
-- `RespBoundaryGuardTest`：检查 RESP DTO 不能穿透进 command 层，必要时连同 `RespExecutionAdapterTest` 一起跑。
+- `ArchitectureBoundaryTest`：检查网络层直接以 `ExecutionRequest` 为边界，必要时连同 `RespRequestDecoderTest` 一起跑。
 - `YierdisDbArchitectureGuardTest`：检查 command/runtime 不能直接依赖 DB internal，必要时连同 `DbEngineReadWriteBoundaryTest` 一起跑。
 - `ArchitectureDependencyRuleTest`：检查 Maven/module 依赖方向没有回退。
 
@@ -177,3 +177,7 @@ git diff --check -- docs/project-docs README.md
 DB/native 语义改动：目标 direct ops 测试 + 相关命令家族测试。
 
 executor/server 改动：executor 单元测试 + server main 集成测试 + 相关协议测试。
+
+## Production Hardening Gates
+
+有界 ingress、commit-stream、maxmemory、ordered reply 和 shutdown 改动都要运行与影响面相符的 focused tests，并用 JDK 25 运行架构守卫。完整的 reply matrix、smoke、deterministic soak、四命令 `0.90` benchmark gate、最终 ownership counter 和候选证据要求见 [`production-hardening-operations.md`](./production-hardening-operations.md)。

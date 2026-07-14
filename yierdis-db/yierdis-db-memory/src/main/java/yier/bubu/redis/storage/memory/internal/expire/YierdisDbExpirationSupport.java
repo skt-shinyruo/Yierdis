@@ -10,6 +10,7 @@ import yier.bubu.redis.storage.memory.internal.value.*;
 
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.YierdisDbInternals;
 
 import java.util.Objects;
 
@@ -18,15 +19,18 @@ public final class YierdisDbExpirationSupport {
     private static final int CLEANUP_MAX_LOOPS = 16;
 
     private final Runnable threadChecker;
+    private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
     private final long expireCleanupTimeLimitNanos;
 
     public YierdisDbExpirationSupport(
             Runnable threadChecker,
+            YierdisDbInternals internals,
             YierdisDbKeyLifecycle keyLifecycle,
             long expireCleanupTimeLimitNanos
     ) {
         this.threadChecker = Objects.requireNonNull(threadChecker, "threadChecker");
+        this.internals = Objects.requireNonNull(internals, "internals");
         this.keyLifecycle = Objects.requireNonNull(keyLifecycle, "keyLifecycle");
         this.expireCleanupTimeLimitNanos = expireCleanupTimeLimitNanos;
     }
@@ -87,7 +91,7 @@ public final class YierdisDbExpirationSupport {
                 continue;
             }
 
-            if (expireAtMillis <= nowMillis && keyLifecycle.removeIfExpired(keyHandle, record, nowMillis)) {
+            if (expireAtMillis <= nowMillis && internals.reclaimExpired(keyHandle, record, nowMillis)) {
                 expired++;
             }
         }

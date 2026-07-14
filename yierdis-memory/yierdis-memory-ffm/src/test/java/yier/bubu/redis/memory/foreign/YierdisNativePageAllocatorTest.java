@@ -168,6 +168,19 @@ public class YierdisNativePageAllocatorTest {
     }
 
     @Test
+    public void conservativeGrowthReusesAvailableSmallPageCapacity() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-page-conservative-growth");
+             YierdisNativePageAllocator allocator = new YierdisNativePageAllocator(runtime)) {
+
+            YierdisNativeBlock existing = allocator.allocate(32);
+            YierdisNativePageAllocator.PageGrowth projected = allocator.estimateConservativeAdditionalGrowth(32);
+
+            Assert.assertEquals(0L, projected.nativeDataCommittedBytes());
+            existing.close();
+        }
+    }
+
+    @Test
     public void allocatesMediumSpansForObjectsAboveSmallLimit() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("native-medium");
              YierdisNativePageAllocator allocator = new YierdisNativePageAllocator(runtime)) {

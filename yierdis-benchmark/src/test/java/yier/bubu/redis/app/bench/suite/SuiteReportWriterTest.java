@@ -59,6 +59,51 @@ public class SuiteReportWriterTest {
     }
 
     @Test
+    public void reportsMedianGateRatioAndOutboundReplyDiagnosticsWithoutChangingExistingObservationMaps() {
+        ScenarioDefinition scenario = new ScenarioDefinition("release-get-256b-c64-p8", "GET throughput",
+                BenchWorkloadKind.GET, 100, 256, 1_000, 8, 4, 0, 1, false,
+                ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE);
+        ObservationSnapshot before = new ObservationSnapshot(Map.of("INFO", "raw before"),
+                Map.of("outbound_peak_reserved_bytes", 128L));
+        ObservationSnapshot after = new ObservationSnapshot(Map.of("INFO", "raw after"), Map.of(
+                "outbound_peak_reserved_bytes", 65_536L,
+                "outbound_peak_allocated_bytes", 65_536L,
+                "outbound_waiting_connections", 0L,
+                "outbound_write_failures", 0L
+        ));
+        ScenarioPassResult baseline = throughputPass("baseline", scenario, 1_000.0, before, after);
+        ScenarioPassResult current = throughputPass("current", scenario, 900.0, before, after);
+        ScenarioComparison comparison = ScenarioComparison.compare(scenario, baseline, current);
+        SuiteRunResult result = new SuiteRunResult(
+                "hardening-gate-report",
+                SuiteProfileName.RELEASE,
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:01Z"),
+                new SuiteEnvironment(Map.of()),
+                List.of(
+                        new SuiteArtifact("baseline", Path.of("/tmp/baseline.jar"), "base"),
+                        new SuiteArtifact("current", Path.of("/tmp/current.jar"), "head")
+                ),
+                List.of(scenario),
+                List.of(baseline, current),
+                List.of(comparison),
+                ThresholdEvaluator.evaluate(comparison, ThresholdPolicy.defaults())
+        );
+
+        String json = SuiteJsonWriter.write(result);
+        String csv = SuiteCsvWriter.comparisonsCsv(result);
+        String markdown = SuiteMarkdownWriter.write(result);
+
+        Assert.assertFalse(result.hasCriticalFindings());
+        Assert.assertTrue(json.contains("\"before\":{\"INFO\":\"raw before\"}"));
+        Assert.assertTrue(json.contains("\"afterOutboundReplyGauges\":{\"outbound_peak_allocated_bytes\":65536"));
+        Assert.assertTrue(json.contains("\"medianQpsRatio\":0.900"));
+        Assert.assertTrue(csv.contains("release-get-256b-c64-p8,baseline,current,median_qps_ratio,1000.000,900.000,-10.000,0.900,true,,ok"));
+        Assert.assertTrue(markdown.contains("## Outbound Reply Diagnostics"));
+        Assert.assertTrue(markdown.contains("outbound_write_failures"));
+    }
+
+    @Test
     public void escapesCsvJsonAndMarkdownTableContent() {
         ScenarioDefinition scenario = new ScenarioDefinition("release-ping-latency", "PING, \"latency\"\ncase",
                 BenchWorkloadKind.PING, 10, 0, 100, 1, 1, 0, 1, true);
@@ -350,5 +395,20 @@ public class SuiteReportWriterTest {
                         new SuiteMetric("errors", errors)
                 ))
         ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
+    }
+
+    private static ScenarioPassResult throughputPass(
+            String artifact,
+            ScenarioDefinition scenario,
+            double qps,
+            ObservationSnapshot before,
+            ObservationSnapshot after
+    ) {
+        return ScenarioPassResult.completed(artifact, SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
+                IterationResult.repeat(0, List.of(
+                        new SuiteMetric("qps", qps),
+                        new SuiteMetric("errors", 0.0)
+                ))
+        ), before, after);
     }
 }

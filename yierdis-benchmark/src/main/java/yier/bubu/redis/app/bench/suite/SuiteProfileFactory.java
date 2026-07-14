@@ -33,6 +33,16 @@ public final class SuiteProfileFactory {
                         ScenarioDefinition.ServerOverrides.redisComparisonCurrentSideDatabasesAndNativeSlots(1, RELEASE_SMOKE_NATIVE_SLOT_CAPACITY)),
                 scenario("release-set-get-1024b-c64-p8", "SET/GET 1024B c64 p8", BenchWorkloadKind.SET_GET, 200_000, 1024, 200_000, 64, 8, 1, 5, true,
                         ScenarioDefinition.ServerOverrides.redisComparisonCurrentSideDatabasesAndNativeSlots(1, RELEASE_SMOKE_NATIVE_SLOT_CAPACITY)),
+                scenario("release-get-256b-c64-p8", "GET 256B c64 p8", BenchWorkloadKind.GET, 500_000, 256, 500_000, 64, 8, 1, 5, false,
+                        ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE),
+                scenario("release-set-256b-c64-p8", "SET 256B c64 p8", BenchWorkloadKind.SET, 500_000, 256, 500_000, 64, 8, 1, 5, false,
+                        ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE),
+                scenario("release-hset-256b-c64-p8", "HSET 256B c64 p8", BenchWorkloadKind.HASH_HSET, 100_000, 256, 300_000, 64, 8, 1, 5, false,
+                        ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE),
+                scenario("release-zadd-256b-c64-p8", "ZADD 256B c64 p8", BenchWorkloadKind.ZSET_ZADD, 100_000, 256, 300_000, 64, 8, 1, 5, false,
+                        ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE),
+                scenario("release-large-pipelined-reply", "Large pipelined GET reply diagnostics", BenchWorkloadKind.LARGE_PIPELINED_REPLY,
+                        128, 64 * 1024, 1_000, 8, 8, 1, 3, false, ScenarioDefinition.ComparisonRole.DIAGNOSTIC),
                 scenario("release-append-256b-c64-p8", "APPEND 256B c64 p8", BenchWorkloadKind.APPEND, 200_000, 256, 300_000, 64, 8, 1, 5, true,
                         ScenarioDefinition.ServerOverrides.redisComparisonCurrentSideDatabasesAndNativeSlots(1, RELEASE_SMOKE_NATIVE_SLOT_CAPACITY)),
                 scenario("release-hll-sparse-c64-p8", "HLL sparse PFADD c64 p8", BenchWorkloadKind.HLL_SPARSE, 200_000, 0, 300_000, 64, 8, 1, 5, true,
@@ -77,6 +87,24 @@ public final class SuiteProfileFactory {
     ) {
         return new ScenarioDefinition(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
                 warmupIterations, repeatIterations, latency);
+    }
+
+    private static ScenarioDefinition scenario(
+            String id,
+            String displayName,
+            BenchWorkloadKind workload,
+            int keyspace,
+            int dataSize,
+            int requests,
+            int clients,
+            int pipeline,
+            int warmupIterations,
+            int repeatIterations,
+            boolean latency,
+            ScenarioDefinition.ComparisonRole comparisonRole
+    ) {
+        return new ScenarioDefinition(id, displayName, workload, keyspace, dataSize, requests, clients, pipeline,
+                warmupIterations, repeatIterations, latency, comparisonRole);
     }
 
     private static ScenarioDefinition scenario(

@@ -8,6 +8,7 @@ import yier.bubu.redis.execution.executor.ExecutionConnection;
 import yier.bubu.redis.execution.executor.ExecutionConnectionContext;
 
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 
 final class NettyExecutionConnection implements ExecutionConnection {
     private static final AttributeKey<NettyExecutionConnection> KEY =
@@ -43,6 +44,7 @@ final class NettyExecutionConnection implements ExecutionConnection {
     private final Channel channel;
     private final EngineSession session;
     private final ExecutionConnectionContext context;
+    private volatile NettyReplyDecodedMessageGate replyGate;
 
     private NettyExecutionConnection(Channel channel, EngineSession session, ExecutionConnectionContext context) {
         this.channel = Objects.requireNonNull(channel, "channel");
@@ -52,6 +54,32 @@ final class NettyExecutionConnection implements ExecutionConnection {
 
     Channel channel() {
         return channel;
+    }
+
+    void bindReplyGate(NettyReplyDecodedMessageGate replyGate) {
+        this.replyGate = Objects.requireNonNull(replyGate, "replyGate");
+    }
+
+    NettyReplyDecodedMessageGate replyGate() {
+        return replyGate;
+    }
+
+    CompletableFuture<Void> shutdownReplyGracefully() {
+        NettyReplyDecodedMessageGate gate = replyGate;
+        if (gate != null) {
+            return gate.shutdownGracefully();
+        }
+
+        CompletableFuture<Void> closed = new CompletableFuture<>();
+        channel.closeFuture().addListener(future -> {
+            if (future.isSuccess()) {
+                closed.complete(null);
+            } else {
+                closed.completeExceptionally(future.cause());
+            }
+        });
+        channel.close();
+        return closed;
     }
 
     @Override

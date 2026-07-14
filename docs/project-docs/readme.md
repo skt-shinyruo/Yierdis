@@ -21,6 +21,10 @@
 - 开发导航: [`development-navigation.md`](./development-navigation.md), [`testing-and-debugging.md`](./testing-and-debugging.md)。负责把常见改动类型、排障路径和验证范围连接起来。
 - 参考资料: [`core-logic-index.md`](./core-logic-index.md), [`code-logic-coverage.md`](./code-logic-coverage.md), [`glossary.md`](./glossary.md)。负责集中索引核心类、核心方法、覆盖追踪和高频术语，方便读源码时快速定位。
 
+## Production Hardening
+
+部署、容量调参、事故排查或发布验收前，先读 [`production-hardening-operations.md`](./production-hardening-operations.md)。它统一说明 ingress、commit-stream、maxmemory 和有界回复的容量口径，result-unknown 关闭语义、graceful shutdown、soak 和四命令性能门槛。
+
 ## 推荐第一轮阅读
 
 1. [`project-overview.md`](./project-overview.md)

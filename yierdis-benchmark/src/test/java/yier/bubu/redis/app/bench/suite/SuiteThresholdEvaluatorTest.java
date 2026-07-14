@@ -105,6 +105,57 @@ public class SuiteThresholdEvaluatorTest {
     }
 
     @Test
+    public void productionHardeningMedianQpsGateFailsBelowPointNineAndPassesAtPointNine() {
+        ScenarioDefinition scenario = productionHardeningGateScenario("release-get-256b-c64-p8", BenchWorkloadKind.GET);
+        ScenarioPassResult baseline = pass("baseline", scenario, 1_000.0, 10.0, 20.0, 0.0);
+
+        ScenarioComparison belowBoundary = ScenarioComparison.compare(scenario, baseline,
+                pass("current", scenario, 899.9, 10.0, 20.0, 0.0));
+        List<ThresholdFinding> belowFindings = ThresholdEvaluator.evaluate(belowBoundary, ThresholdPolicy.defaults());
+
+        assertFinding(belowFindings, "median_qps_ratio", ThresholdFinding.Level.CRITICAL);
+        Assert.assertTrue(belowFindings.toString().contains("0.8999"));
+
+        ScenarioComparison atBoundary = ScenarioComparison.compare(scenario, baseline,
+                pass("current", scenario, 900.0, 10.0, 20.0, 0.0));
+        List<ThresholdFinding> atBoundaryFindings = ThresholdEvaluator.evaluate(atBoundary, ThresholdPolicy.defaults());
+
+        Assert.assertFalse(atBoundaryFindings.toString(), atBoundaryFindings.stream()
+                .anyMatch(finding -> finding.metric().equals("median_qps_ratio")));
+    }
+
+    @Test
+    public void productionHardeningMedianQpsGateRejectsMissingAndErroredSamples() {
+        ScenarioDefinition scenario = productionHardeningGateScenario("release-set-256b-c64-p8", BenchWorkloadKind.SET);
+        ScenarioPassResult baseline = pass("baseline", scenario, 1_000.0, 10.0, 20.0, 0.0);
+        ScenarioPassResult missingErrors = passWithMetrics("current", scenario, new SuiteMetric("qps", 900.0));
+        ScenarioPassResult errored = pass("current", scenario, 900.0, 10.0, 20.0, 1.0);
+
+        List<ThresholdFinding> missingFindings = ThresholdEvaluator.evaluate(
+                ScenarioComparison.compare(scenario, baseline, missingErrors), ThresholdPolicy.defaults());
+        List<ThresholdFinding> errorFindings = ThresholdEvaluator.evaluate(
+                ScenarioComparison.compare(scenario, baseline, errored), ThresholdPolicy.defaults());
+
+        assertFinding(missingFindings, "comparability", ThresholdFinding.Level.CRITICAL);
+        assertFinding(errorFindings, "comparability", ThresholdFinding.Level.CRITICAL);
+        assertFinding(errorFindings, "errors", ThresholdFinding.Level.CRITICAL);
+    }
+
+    @Test
+    public void productionHardeningMedianQpsGateRejectsZeroBaselineMedian() {
+        ScenarioDefinition scenario = productionHardeningGateScenario("release-zadd-256b-c64-p8", BenchWorkloadKind.ZSET_ZADD);
+        ScenarioPassResult baseline = ScenarioPassResult.completed("baseline", SuiteArtifact.Kind.YIERDIS_JAR, scenario, List.of(
+                IterationResult.repeat(0, List.of(new SuiteMetric("qps", 0.0), new SuiteMetric("errors", 0.0))),
+                IterationResult.repeat(1, List.of(new SuiteMetric("qps", 0.0), new SuiteMetric("errors", 0.0))),
+                IterationResult.repeat(2, List.of(new SuiteMetric("qps", 100.0), new SuiteMetric("errors", 0.0)))
+        ), ObservationSnapshot.empty(), ObservationSnapshot.empty());
+        ScenarioComparison comparison = ScenarioComparison.compare(scenario, baseline,
+                pass("current", scenario, 100.0, 10.0, 20.0, 0.0));
+
+        assertNonComparableFindingMentions(comparison, "median");
+    }
+
+    @Test
     public void thresholdPolicyRejectsInvalidValues() {
         Assert.assertThrows(IllegalArgumentException.class, () -> new ThresholdPolicy(-0.001, 15.0));
         Assert.assertThrows(IllegalArgumentException.class, () -> new ThresholdPolicy(10.0, -0.001));
@@ -202,6 +253,11 @@ public class SuiteThresholdEvaluatorTest {
     private static ScenarioDefinition scenario() {
         return new ScenarioDefinition("release-set-get-256b-c64-p8", "SET/GET", BenchWorkloadKind.SET_GET,
                 100, 256, 1000, 8, 4, 0, 1, true);
+    }
+
+    private static ScenarioDefinition productionHardeningGateScenario(String id, BenchWorkloadKind workload) {
+        return new ScenarioDefinition(id, id, workload, 100, 256, 1_000, 8, 4, 0, 1, false,
+                ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE);
     }
 
     private static ScenarioPassResult pass(String artifact, ScenarioDefinition scenario, double qps, double p95, double p99, double errors) {

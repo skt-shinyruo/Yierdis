@@ -172,6 +172,39 @@ public class StringDirectOpsTest {
     }
 
     @Test
+    public void allkeysLruEvictsOldStringDuringSetWithoutInternalFailure() {
+        byte[] value = repeat((byte) 'x', 64 * 1024);
+        long maxmemoryBytes = maxmemoryThatFitsOneLocalStringButNotTwo(value);
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(maxmemoryBytes, MaxmemoryPolicy.ALLKEYS_LRU, 1000, 5, 5);
+        try {
+            db.bindToCurrentThread();
+
+            Assert.assertTrue(db.writes().strings().setString(b("a"), value, SetMode.NORMAL, null).value());
+            Assert.assertTrue(db.writes().strings().setString(b("c"), value, SetMode.NORMAL, null).value());
+
+            Assert.assertNull(db.reads().strings().getStringBytes(b("a")));
+            Assert.assertArrayEquals(value, db.reads().strings().getStringBytes(b("c")));
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void appendReservesTheFullReplacementValueAcrossNativePageBoundary() {
+        withDb(db -> {
+            byte[] initial = repeat((byte) 'x', 64 * 1024);
+            Assert.assertTrue(db.writes().strings().setString(b("k"), initial, SetMode.NORMAL, null).value());
+
+            Assert.assertEquals(Long.valueOf(initial.length + 1L),
+                    db.writes().strings().append(b("k"), slice("!")).value());
+
+            byte[] expected = java.util.Arrays.copyOf(initial, initial.length + 1);
+            expected[expected.length - 1] = '!';
+            Assert.assertArrayEquals(expected, db.reads().strings().getStringBytes(b("k")));
+        });
+    }
+
+    @Test
     public void setGetReturnsOwnedSupersededNativeValue() {
         withDb(db -> {
             byte[] key = b("k");
@@ -307,6 +340,29 @@ public class StringDirectOpsTest {
                 return false;
             }
             throw ignored;
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    private static long maxmemoryThatFitsOneLocalStringButNotTwo(byte[] value) {
+        long usedAfterOne = probeLocalStringUsedBytes(value, 1);
+        long usedAfterTwo = probeLocalStringUsedBytes(value, 2);
+        Assert.assertTrue("probe must show physical growth for the second local key", usedAfterTwo > usedAfterOne);
+        return usedAfterOne + ((usedAfterTwo - usedAfterOne) / 2L);
+    }
+
+    private static long probeLocalStringUsedBytes(byte[] value, int keyCount) {
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(100_000_000L, MaxmemoryPolicy.ALLKEYS_LRU, 1000, 5, 5);
+        try {
+            db.bindToCurrentThread();
+            if (keyCount >= 1) {
+                db.writes().strings().setString(b("a"), value, SetMode.NORMAL, null);
+            }
+            if (keyCount >= 2) {
+                db.writes().strings().setString(b("c"), value, SetMode.NORMAL, null);
+            }
+            return db.usedBytesForMaxmemory();
         } finally {
             db.shutdown();
         }

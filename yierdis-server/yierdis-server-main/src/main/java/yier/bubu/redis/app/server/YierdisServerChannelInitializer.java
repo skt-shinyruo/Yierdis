@@ -7,12 +7,15 @@ import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
+import io.netty.util.concurrent.ImmediateEventExecutor;
 import io.netty.util.concurrent.ScheduledFuture;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.executor.CommandExecutor;
-import yier.bubu.redis.protocol.resp.netty.RespCommandAdapter;
-import yier.bubu.redis.protocol.resp.netty.RespProtocolErrorReplyHandler;
+import yier.bubu.redis.protocol.resp.netty.InboundByteAccountingHandler;
+import yier.bubu.redis.protocol.resp.netty.InboundConnectionMemory;
+import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
+import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
 import yier.bubu.redis.protocol.resp.netty.RespRequestDecoder;
 
 import java.util.Objects;
@@ -22,30 +25,161 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
     private final YierdisServerRuntimeConfig config;
     private final CommandExecutor<NettyExecutionConnection> executor;
     private final RedisReplyWriterFactory replyWriterFactory;
+    private final InboundMemoryBudget inboundMemoryBudget;
+    private final OutboundMemoryBudget outboundMemoryBudget;
+    private final ChildChannelRegistry childChannelRegistry;
+    private final ReplyEgressStats replyEgressStats;
 
     YierdisServerChannelInitializer(
             YierdisServerRuntimeConfig config,
             CommandExecutor<NettyExecutionConnection> executor,
             RedisReplyWriterFactory replyWriterFactory
     ) {
+        this(
+                config,
+                executor,
+                replyWriterFactory,
+                new InboundMemoryBudget(config.protocolGlobalInFlightBytes()),
+                new OutboundMemoryBudget(config.replyGlobalCapacityBytes()),
+                new ChildChannelRegistry(),
+                ReplyEgressStats.noop()
+        );
+    }
+
+    YierdisServerChannelInitializer(
+            YierdisServerRuntimeConfig config,
+            CommandExecutor<NettyExecutionConnection> executor,
+            RedisReplyWriterFactory replyWriterFactory,
+            InboundMemoryBudget inboundMemoryBudget
+    ) {
+        this(
+                config,
+                executor,
+                replyWriterFactory,
+                inboundMemoryBudget,
+                new OutboundMemoryBudget(config.replyGlobalCapacityBytes()),
+                new ChildChannelRegistry(),
+                ReplyEgressStats.noop()
+        );
+    }
+
+    YierdisServerChannelInitializer(
+            YierdisServerRuntimeConfig config,
+            CommandExecutor<NettyExecutionConnection> executor,
+            RedisReplyWriterFactory replyWriterFactory,
+            InboundMemoryBudget inboundMemoryBudget,
+            OutboundMemoryBudget outboundMemoryBudget
+    ) {
+        this(
+                config,
+                executor,
+                replyWriterFactory,
+                inboundMemoryBudget,
+                outboundMemoryBudget,
+                new ChildChannelRegistry(),
+                ReplyEgressStats.noop()
+        );
+    }
+
+    YierdisServerChannelInitializer(
+            YierdisServerRuntimeConfig config,
+            CommandExecutor<NettyExecutionConnection> executor,
+            RedisReplyWriterFactory replyWriterFactory,
+            InboundMemoryBudget inboundMemoryBudget,
+            OutboundMemoryBudget outboundMemoryBudget,
+            ChildChannelRegistry childChannelRegistry
+    ) {
+        this(
+                config,
+                executor,
+                replyWriterFactory,
+                inboundMemoryBudget,
+                outboundMemoryBudget,
+                childChannelRegistry,
+                ReplyEgressStats.noop()
+        );
+    }
+
+    YierdisServerChannelInitializer(
+            YierdisServerRuntimeConfig config,
+            CommandExecutor<NettyExecutionConnection> executor,
+            RedisReplyWriterFactory replyWriterFactory,
+            InboundMemoryBudget inboundMemoryBudget,
+            OutboundMemoryBudget outboundMemoryBudget,
+            ChildChannelRegistry childChannelRegistry,
+            ReplyEgressStats replyEgressStats
+    ) {
         this.config = Objects.requireNonNull(config, "config");
         this.executor = Objects.requireNonNull(executor, "executor");
         this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
+        this.inboundMemoryBudget = Objects.requireNonNull(inboundMemoryBudget, "inboundMemoryBudget");
+        this.outboundMemoryBudget = Objects.requireNonNull(outboundMemoryBudget, "outboundMemoryBudget");
+        this.childChannelRegistry = Objects.requireNonNull(childChannelRegistry, "childChannelRegistry");
+        this.replyEgressStats = Objects.requireNonNull(replyEgressStats, "replyEgressStats");
     }
 
     @Override
     protected void initChannel(SocketChannel ch) {
+        if (!childChannelRegistry.register(ch)) {
+            return;
+        }
         if (config.clientOutputBufferLimitBytes() > 0) {
             int high = (int) Math.min(Integer.MAX_VALUE, config.clientOutputBufferLimitBytes());
             int low = Math.max(1, high / 2);
             ch.config().setWriteBufferWaterMark(new WriteBufferWaterMark(low, high));
         }
 
-        NettyExecutionConnection.getOrCreate(
+        NettyExecutionConnection executionConnection = NettyExecutionConnection.getOrCreate(
                 ch,
                 config.transactionQueueMaxCommands(),
                 config.transactionQueueMaxBytes()
         );
+
+        InboundConnectionMemory inboundConnection = new InboundConnectionMemory(
+                ch.id().asLongText(),
+                perConnectionHardLimit(config),
+                ImmediateEventExecutor.INSTANCE,
+                () -> { }
+        );
+        InboundReadCreditHandler inboundReadCredit = new InboundReadCreditHandler(
+                inboundMemoryBudget,
+                inboundConnection,
+                receiveBufferCapacity(config)
+        );
+        OutboundConnectionMemory outboundConnection = outboundMemoryBudget.openConnection(
+                config.replyPerConnectionCapacityBytes()
+        );
+        ConnectionReplySequencer replySequencer = new ConnectionReplySequencer(
+                ch,
+                outboundConnection,
+                inboundReadCredit::pauseIngress,
+                slot -> BoundedChunkedReplySink.forChannel(
+                        slot,
+                        ch,
+                        config.replyChunkPayloadBytes(),
+                        config.replyControlReservationBytes(),
+                        config.replyMaxTotalBytes(),
+                        resource -> executor.executeOwnerTask(() -> closeReplyResource(resource))
+                ),
+                replyEgressStats
+        );
+        NettyReplyDecodedMessageGate replyGate = new NettyReplyDecodedMessageGate(
+                config.replyControlReservationBytes(),
+                config.replyMaxTotalBytes(),
+                outboundConnection,
+                replySequencer
+        );
+        executionConnection.bindReplyGate(replyGate);
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                config.protocolMaxBulkBytes(),
+                config.protocolMaxArgs(),
+                config.protocolMaxLineBytes(),
+                config.protocolMaxCommandBytes(),
+                inboundMemoryBudget,
+                inboundConnection,
+                replyGate
+        );
+        decoder.setReadControl(inboundReadCredit);
 
         ch.pipeline().addLast("writeBufferBackpressure", new WriteBufferBackpressureHandler(
                 executor,
@@ -59,25 +193,9 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
                     .addLast("idleTimeoutCloser", new CloseOnReadIdleHandler());
         }
         ch.pipeline()
-                .addLast("respRequestDecoder", new RespRequestDecoder(
-                        config.protocolMaxBulkBytes(),
-                        config.protocolMaxArgs(),
-                        config.protocolMaxLineBytes(),
-                        config.protocolMaxCommandBytes()
-                ))
-                .addLast("respProtocolErrorReply", new RespProtocolErrorReplyHandler(
-                        replyWriterFactory,
-                        ctx -> {
-                            NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
-                            return connection == null ? null : connection.session();
-                        },
-                        ctx -> {
-                            NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
-                            return connection != null && connection.context().isClosing();
-                        },
-                        YierdisServerChannelInitializer::markProtocolErrorClosing
-                ))
-                .addLast("respCommandAdapter", new RespCommandAdapter())
+                .addLast("inboundReadCredit", inboundReadCredit)
+                .addLast("inboundByteAccounting", new InboundByteAccountingHandler(inboundReadCredit))
+                .addLast("respRequestDecoder", decoder)
                 .addLast("commandHandler", new YierdisFastCommandHandler(executor, replyWriterFactory));
     }
 
@@ -87,8 +205,44 @@ final class YierdisServerChannelInitializer extends ChannelInitializer<SocketCha
         }
         NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
         if (connection != null && connection.markClosing()) {
-            safeSetAutoRead(ctx, false);
+            InboundReadCreditHandler readCredits = ctx.pipeline().get(InboundReadCreditHandler.class);
+            if (readCredits != null) {
+                readCredits.pauseIngress();
+            } else {
+                safeSetAutoRead(ctx, false);
+            }
         }
+    }
+
+    static long perConnectionHardLimit(YierdisServerRuntimeConfig config) {
+        Objects.requireNonNull(config, "config");
+        long total = saturatedAdd(Math.max(0L, config.protocolMaxCommandBytes()), 48L);
+        return saturatedAdd(total, saturatedMultiply(Math.max(0L, config.protocolMaxArgs()), 32L));
+    }
+
+    private static int receiveBufferCapacity(YierdisServerRuntimeConfig config) {
+        return Math.max(1, Math.min(8 * 1024, config.protocolMaxCommandBytes()));
+    }
+
+    private static void closeReplyResource(AutoCloseable resource) {
+        try {
+            resource.close();
+        } catch (RuntimeException | Error failure) {
+            throw failure;
+        } catch (Exception failure) {
+            throw new IllegalStateException("reply resource close failed", failure);
+        }
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
+    }
+
+    private static long saturatedMultiply(long left, long right) {
+        if (left <= 0L || right <= 0L) {
+            return 0L;
+        }
+        return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
     }
 
     private static void safeSetAutoRead(io.netty.channel.ChannelHandlerContext ctx, boolean enabled) {

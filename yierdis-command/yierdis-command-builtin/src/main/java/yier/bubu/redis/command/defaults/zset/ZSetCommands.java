@@ -9,10 +9,9 @@ import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
-import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
-import yier.bubu.redis.storage.api.result.BulkStringSequence;
+import yier.bubu.redis.storage.api.result.MeasuredBulkStringSequence;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
@@ -71,10 +70,9 @@ public final class ZSetCommands implements CommandModule {
         ExecutionRequest request = args.request();
         support.sliceResetFromRequest(request, 2, pairsLen);
         try {
-            long added = support.recordWriteValue(
-                    ctx,
-                    support.commandDb(ctx).writes().zsets().zadd(request.readOnlyByteArray(1), support.slice())
-            );
+            long added = support.commandDb(ctx).writes().zsets()
+                    .zadd(request.readOnlyByteArray(1), support.slice())
+                    .value();
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
@@ -121,15 +119,10 @@ public final class ZSetCommands implements CommandModule {
 
     private void zrange(ZRangeArgs args, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        BulkStringSequence seq = args.rev()
+        MeasuredBulkStringSequence seq = args.rev()
                 ? support.commandDb(ctx).reads().zsets().zrevrange(args.key(), args.start(), args.stop(), args.withScores())
                 : support.commandDb(ctx).reads().zsets().zrange(args.key(), args.start(), args.stop(), args.withScores());
-        int count = seq.count();
-        out.arrayHeader(count);
-        if (count == 0) {
-            return;
-        }
-        seq.emitTo(new BulkStringReplyAdapter(out));
+        CommandSupport.writeMeasuredBulkStringArray(out, seq);
     }
 
     private void zrevrange(ExecutionRequest request, CommandContext ctx) {
@@ -151,13 +144,8 @@ public final class ZSetCommands implements CommandModule {
         }
 
         byte[] key = request.readOnlyByteArray(1);
-        BulkStringSequence seq = support.commandDb(ctx).reads().zsets().zrevrange(key, start, stop, withScores);
-        int count = seq.count();
-        out.arrayHeader(count);
-        if (count == 0) {
-            return;
-        }
-        seq.emitTo(new BulkStringReplyAdapter(out));
+        MeasuredBulkStringSequence seq = support.commandDb(ctx).reads().zsets().zrevrange(key, start, stop, withScores);
+        CommandSupport.writeMeasuredBulkStringArray(out, seq);
     }
 
     private record ZRangeByScoreArgs(
@@ -220,7 +208,7 @@ public final class ZSetCommands implements CommandModule {
 
     private void zrangebyscore(ZRangeByScoreArgs args, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        BulkStringSequence seq = support.commandDb(ctx).reads().zsets().zrangeByScore(
+        MeasuredBulkStringSequence seq = support.commandDb(ctx).reads().zsets().zrangeByScore(
                 args.key(),
                 args.min().value,
                 args.min().exclusive,
@@ -230,12 +218,7 @@ public final class ZSetCommands implements CommandModule {
                 args.offset(),
                 args.count()
         );
-        int replyCount = seq.count();
-        out.arrayHeader(replyCount);
-        if (replyCount == 0) {
-            return;
-        }
-        seq.emitTo(new BulkStringReplyAdapter(out));
+        CommandSupport.writeMeasuredBulkStringArray(out, seq);
     }
 
     private void zremrangebyscore(ExecutionRequest request, CommandContext ctx) {
@@ -254,12 +237,12 @@ public final class ZSetCommands implements CommandModule {
                 max.value,
                 max.exclusive
         );
-        out.integer(support.recordWriteValue(ctx, result));
+        out.integer(result.value());
     }
 
     private void zrevrangebyscore(ZRangeByScoreArgs args, CommandContext ctx) {
         RedisReplyWriter out = ctx.out();
-        BulkStringSequence seq = support.commandDb(ctx).reads().zsets().zrevrangeByScore(
+        MeasuredBulkStringSequence seq = support.commandDb(ctx).reads().zsets().zrevrangeByScore(
                 args.key(),
                 args.min().value,
                 args.min().exclusive,
@@ -269,12 +252,7 @@ public final class ZSetCommands implements CommandModule {
                 args.offset(),
                 args.count()
         );
-        int replyCount = seq.count();
-        out.arrayHeader(replyCount);
-        if (replyCount == 0) {
-            return;
-        }
-        seq.emitTo(new BulkStringReplyAdapter(out));
+        CommandSupport.writeMeasuredBulkStringArray(out, seq);
     }
 
     private void zremrangebyrank(ExecutionRequest request, CommandContext ctx) {
@@ -285,10 +263,9 @@ public final class ZSetCommands implements CommandModule {
         }
         long start = CommandSupport.parseLong(request, 2, "start");
         long stop = CommandSupport.parseLong(request, 3, "stop");
-        long removed = support.recordWriteValue(
-                ctx,
-                support.commandDb(ctx).writes().zsets().zremrangeByRank(request.readOnlyByteArray(1), start, stop)
-        );
+        long removed = support.commandDb(ctx).writes().zsets()
+                .zremrangeByRank(request.readOnlyByteArray(1), start, stop)
+                .value();
         out.integer(removed);
     }
 
@@ -301,10 +278,9 @@ public final class ZSetCommands implements CommandModule {
         int membersLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, membersLen);
         try {
-            long removed = support.recordWriteValue(
-                    ctx,
-                    support.commandDb(ctx).writes().zsets().zrem(request.readOnlyByteArray(1), support.slice())
-            );
+            long removed = support.commandDb(ctx).writes().zsets()
+                    .zrem(request.readOnlyByteArray(1), support.slice())
+                    .value();
             out.integer(removed);
         } finally {
             support.clearScratch(membersLen);

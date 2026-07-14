@@ -18,4 +18,8 @@ public interface DbEngine {
     MemoryOps memory();
 
     DbLifecycleOps lifecycle();
+
+    default DbHealthSnapshot health() {
+        return DbHealthSnapshot.healthy();
+    }
 }

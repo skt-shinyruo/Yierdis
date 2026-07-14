@@ -70,6 +70,7 @@ printf '*2\r\n$3\r\nGET\r\n$1\r\na\r\n' | nc 127.0.0.1 6378
 | 协议边界和 RESP 行为 | [`docs/project-docs/protocol-reference.md`](docs/project-docs/protocol-reference.md) |
 | 命令层和数据模型 | [`docs/project-docs/commands-and-data-model.md`](docs/project-docs/commands-and-data-model.md) |
 | 配置、maxmemory、backpressure 和运行场景 | [`docs/project-docs/configuration-and-operations.md`](docs/project-docs/configuration-and-operations.md) |
+| 生产 hardening 限制、关闭和验收操作 | [`docs/project-docs/production-hardening-operations.md`](docs/project-docs/production-hardening-operations.md) |
 | native memory 和 off-heap copy 边界 | [`docs/project-docs/native-memory-runtime.md`](docs/project-docs/native-memory-runtime.md) |
 | CLI 和 benchmark 内部实现 | [`docs/project-docs/client-and-bench-internals.md`](docs/project-docs/client-and-bench-internals.md) |
 | 改代码前的源码导航 | [`docs/project-docs/development-navigation.md`](docs/project-docs/development-navigation.md) |

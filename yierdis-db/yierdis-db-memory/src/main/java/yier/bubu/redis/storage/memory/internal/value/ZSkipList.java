@@ -9,12 +9,16 @@ public final class ZSkipList {
     // https://github.com/redis/redis/blob/unstable/src/server.h
     private static final int MAX_LEVEL = 32;
     private static final double P = 0.25d;
+    private static final long FIXED_HEAP_BYTES = 72L;
+    private static final long ARRAY_HEADER_BYTES = 16L;
+    private static final long NODE_FIXED_HEAP_BYTES = 48L;
 
     private final NativeByteStore memberStore;
     private final Node header = new Node(MAX_LEVEL, null, 0);
     private Node tail;
     private int level = 1;
     private int length = 0;
+    private long nodeLevelCount;
 
     public ZSkipList(NativeByteStore memberStore) {
         this.memberStore = Objects.requireNonNull(memberStore, "memberStore");
@@ -103,6 +107,7 @@ public final class ZSkipList {
         }
 
         length++;
+        nodeLevelCount += newLevel;
         return newNode;
     }
 
@@ -145,6 +150,7 @@ public final class ZSkipList {
         }
 
         length--;
+        nodeLevelCount -= x.forward.length;
         return true;
     }
 
@@ -165,6 +171,37 @@ public final class ZSkipList {
             }
         }
         return null;
+    }
+
+    public long heapEstimatedBytes() {
+        long headerBytes = NODE_FIXED_HEAP_BYTES
+                + ARRAY_HEADER_BYTES + (long) MAX_LEVEL * Long.BYTES
+                + ARRAY_HEADER_BYTES + (long) MAX_LEVEL * Integer.BYTES;
+        long nodes = (long) length * (NODE_FIXED_HEAP_BYTES + ARRAY_HEADER_BYTES * 2L);
+        return FIXED_HEAP_BYTES + headerBytes + nodes + nodeLevelCount * (Long.BYTES + Integer.BYTES);
+    }
+
+    static long heapUpperBoundForNodes(long nodeCount) {
+        if (nodeCount < 0L) {
+            return Long.MAX_VALUE;
+        }
+        long headerBytes = NODE_FIXED_HEAP_BYTES
+                + ARRAY_HEADER_BYTES + (long) MAX_LEVEL * Long.BYTES
+                + ARRAY_HEADER_BYTES + (long) MAX_LEVEL * Integer.BYTES;
+        long perNodeBytes = NODE_FIXED_HEAP_BYTES + ARRAY_HEADER_BYTES * 2L
+                + (long) MAX_LEVEL * (Long.BYTES + Integer.BYTES);
+        long nodes = multiplySaturating(nodeCount, perNodeBytes);
+        return addSaturating(FIXED_HEAP_BYTES + headerBytes, nodes);
+    }
+
+    private static long addSaturating(long left, long right) {
+        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
+    }
+
+    private static long multiplySaturating(long left, long right) {
+        return left == 0L || right == 0L || left <= Long.MAX_VALUE / right
+                ? left * right
+                : Long.MAX_VALUE;
     }
 
     private boolean lessThan(Node node, double score, NativeHandle member) {

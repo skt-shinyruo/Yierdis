@@ -50,7 +50,10 @@ public final class TestYierdisInstances {
                 .nativeDefragEnabled(config.nativeDefragEnabled())
                 .nativeDefragMaxMoveBytes(config.nativeDefragMaxMoveBytes())
                 .nativeDefragMaxObjects(config.nativeDefragMaxObjects())
-                .nativeDefragTimeLimitMillis(config.nativeDefragTimeLimitMillis());
+                .nativeDefragTimeLimitMillis(config.nativeDefragTimeLimitMillis())
+                .commitStreamMaxEvents(config.commitStreamMaxEvents())
+                .commitStreamMaxRetainedBytes(config.commitStreamMaxRetainedBytes())
+                .commitStreamShutdownTimeoutMillis(config.commitStreamShutdownTimeoutMillis());
     }
 
     private static NativeDefragOptions nativeDefragOptions(YierdisInstanceConfig config) {

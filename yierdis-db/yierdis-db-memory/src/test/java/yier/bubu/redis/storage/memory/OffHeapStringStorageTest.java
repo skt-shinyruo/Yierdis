@@ -6,19 +6,22 @@ import java.util.List;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.ExpireOption;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
 import yier.bubu.redis.storage.api.ValueType;
+import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.BulkStringValue;
 
 import static yier.bubu.redis.storage.testkit.TestBytes.b;
 
 public class OffHeapStringStorageTest {
     @Test
-    public void setGetUsesNativeStringSliceAndDelFreesStableAllocatorBytes() {
+    public void setGetUsesNativeStringSliceAndDelReleasesLiveAllocatorObjects() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             try {
@@ -30,14 +33,21 @@ public class OffHeapStringStorageTest {
                 Assert.assertTrue(runtime.usedBytes() > 0);
                 Assert.assertTrue(db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES) > 0L);
 
-                RecordingBulkOutput out = new RecordingBulkOutput();
-                db.reads().strings().getStringValue(new TestBytesView(key)).writeTo(out);
-                Assert.assertTrue(out.usedBytesSlice);
-                Assert.assertArrayEquals(value, out.bytes);
+                try (BulkStringValue replyValue = db.reads().strings().getStringValue(new TestBytesView(key))) {
+                    RecordingBulkOutput out = new RecordingBulkOutput();
+                    replyValue.writeTo(out);
+                    Assert.assertTrue(out.usedBytesSlice);
+                    Assert.assertArrayEquals(value, out.bytes);
+                    Assert.assertTrue("GET must retain the native reply source", replyValue.retainedMemoryBytes() > 0L);
 
-                Assert.assertEquals(1L, (long) db.writes().keyspace().del(Collections.singletonList(key)).value());
+                    Assert.assertEquals(1L, (long) db.writes().keyspace().del(Collections.singletonList(key)).value());
+                    Assert.assertTrue(
+                            "deleting a pinned GET value must defer physical release until reply cleanup",
+                            db.keyLifecycle().nativeAllocator().stats().pinnedObjects() > 0L
+                    );
+                }
                 Assert.assertEquals(0, db.size());
-                Assert.assertEquals(0L, db.usedBytesForMaxmemory());
+                assertPhysicalStatsConsistent(db);
                 Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES));
                 Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.ENTRY_RECORD));
                 Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().liveObjects());
@@ -49,7 +59,35 @@ public class OffHeapStringStorageTest {
     }
 
     @Test
-    public void cleanupExpiredFreesFfmStrings() {
+    public void replyPreflightStringValueDoesNotTouchTheLruClock() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.ALLKEYS_LRU, 5, 5, 5);
+            try {
+                db.bindToCurrentThread();
+                byte[] key = b("k");
+                byte[] value = b("value");
+                db.writes().strings().setString(key, value, SetMode.NORMAL, null).value();
+                long accessClockBeforePreflight = db.keyLifecycle().entryRecord(key).lruOrLfu();
+
+                try (BulkStringValue replyValue = db.reads().strings().previewStringValue(new TestBytesView(key))) {
+                    RecordingBulkOutput out = new RecordingBulkOutput();
+                    replyValue.writeTo(out);
+                    Assert.assertTrue(out.usedBytesSlice);
+                    Assert.assertArrayEquals(value, out.bytes);
+                }
+
+                Assert.assertEquals(
+                        accessClockBeforePreflight,
+                        db.keyLifecycle().entryRecord(key).lruOrLfu()
+                );
+            } finally {
+                db.shutdown();
+            }
+        }
+    }
+
+    @Test
+    public void cleanupExpiredReleasesFfmStringObjects() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
             YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 0, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
             try {
@@ -61,7 +99,7 @@ public class OffHeapStringStorageTest {
                 db.cleanupExpired();
                 Assert.assertEquals(0, db.size());
                 Assert.assertEquals(0, db.memory().memoryStats().expireCount());
-                Assert.assertEquals(0L, db.usedBytesForMaxmemory());
+                assertPhysicalStatsConsistent(db);
             } finally {
                 db.shutdown();
             }
@@ -102,10 +140,12 @@ public class OffHeapStringStorageTest {
             Assert.assertTrue(db.writes().strings().setString(key, v2, SetMode.NORMAL, null).value());
             Assert.assertNotEquals(raw, db.keyLifecycle().liveEntryRecord(key).valueHandle().raw());
 
-            RecordingBulkOutput out = new RecordingBulkOutput();
-            db.reads().strings().getStringValue(new TestBytesView(key)).writeTo(out);
-            Assert.assertTrue(out.usedBytesSlice);
-            Assert.assertArrayEquals(v2, out.bytes);
+            try (BulkStringValue replyValue = db.reads().strings().getStringValue(new TestBytesView(key))) {
+                RecordingBulkOutput out = new RecordingBulkOutput();
+                replyValue.writeTo(out);
+                Assert.assertTrue(out.usedBytesSlice);
+                Assert.assertArrayEquals(v2, out.bytes);
+            }
         } finally {
             db.shutdown();
         }
@@ -153,6 +193,21 @@ public class OffHeapStringStorageTest {
             usedBytesSlice = false;
             bytes = Long.toString(value).getBytes(StandardCharsets.US_ASCII);
         }
+    }
+
+    private static void assertPhysicalStatsConsistent(YierdisDb db) {
+        YierdisMemoryStats stats = db.memory().memoryStats();
+        Assert.assertEquals(db.usedBytesForMaxmemory(), stats.usedBytesForMaxmemory());
+        Assert.assertEquals(stats.usedBytesForMaxmemory(), stats.totalEstimatedBytes());
+        Assert.assertEquals(
+                MemoryUsageSnapshot.addSaturating(
+                        stats.nativeMetadataCommittedBytes(),
+                        stats.nativeDataCommittedBytes()
+                ),
+                stats.offHeapUsedBytes()
+        );
+        Assert.assertTrue(stats.usedBytesForMaxmemory() > 0L);
+        Assert.assertTrue(stats.nativeReclaimableBytes() <= stats.nativeDataCommittedBytes());
     }
 
     private static final class TestBytesView implements yier.bubu.redis.bytes.BytesView {

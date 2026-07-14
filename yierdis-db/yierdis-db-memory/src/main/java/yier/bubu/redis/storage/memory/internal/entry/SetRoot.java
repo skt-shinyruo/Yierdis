@@ -5,6 +5,8 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.value.SetValue;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 
@@ -14,9 +16,25 @@ import java.util.function.Consumer;
 
 public final class SetRoot implements TypeRoot {
     private final NativeCollectionRootTable<SetValue> sets;
+    private final HashSeed hashSeed;
+    private final HashTableMaintenanceRegistry maintenanceRegistry;
     private boolean closed;
 
     public SetRoot(NativeAllocator allocator) {
+        this(allocator, HashSeed.random());
+    }
+
+    public SetRoot(NativeAllocator allocator, HashSeed hashSeed) {
+        this(allocator, hashSeed, null);
+    }
+
+    public SetRoot(
+            NativeAllocator allocator,
+            HashSeed hashSeed,
+            HashTableMaintenanceRegistry maintenanceRegistry
+    ) {
+        this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
+        this.maintenanceRegistry = maintenanceRegistry;
         this.sets = new NativeCollectionRootTable<>(
                 Objects.requireNonNull(allocator, "allocator"),
                 NativeObjectKind.SET_ROOT,
@@ -59,7 +77,7 @@ public final class SetRoot implements TypeRoot {
         ValueHandle handle = create();
         boolean ok = false;
         try {
-            requireSet(handle).addAll(value.members());
+            sadd(handle, value.members());
             ok = true;
             return handle;
         } finally {
@@ -71,12 +89,22 @@ public final class SetRoot implements TypeRoot {
 
     public synchronized int sadd(ValueHandle handle, List<byte[]> members) {
         ensureOpen();
-        return requireSet(handle).addAll(members);
+        SetValue set = requireSet(handle);
+        try {
+            return set.addAll(members);
+        } finally {
+            sets.refreshAdapter(handle);
+        }
     }
 
     public synchronized int srem(ValueHandle handle, List<byte[]> members) {
         ensureOpen();
-        return requireSet(handle).removeAll(members);
+        SetValue set = requireSet(handle);
+        try {
+            return set.removeAll(members);
+        } finally {
+            sets.refreshAdapter(handle);
+        }
     }
 
     public synchronized int countAdditions(ValueHandle handle, List<byte[]> members) {
@@ -109,6 +137,29 @@ public final class SetRoot implements TypeRoot {
         return requireSet(handle).size();
     }
 
+    public synchronized long estimatedPreparedAddHeapGrowthBytes(
+            ValueHandle source,
+            List<byte[]> members,
+            int expectedNativeAllocationCount
+    ) {
+        ensureOpen();
+        Objects.requireNonNull(members, "members");
+        long replacementHeapBytes = source == null
+                ? SetValue.preparedNewHeapUpperBound(members)
+                : requireSet(source).preparedCopyHeapUpperBound(members);
+        return sets.estimatedNewAdapterHeapGrowthBytes(replacementHeapBytes, expectedNativeAllocationCount);
+    }
+
+    public synchronized long retainedHeapBytes() {
+        ensureOpen();
+        long registryHeapBytes = maintenanceRegistry == null ? 0L : maintenanceRegistry.heapEstimatedBytes();
+        return addSaturating(sets.heapBytes(), registryHeapBytes);
+    }
+
+    public synchronized long positiveRetainedHeapGrowthBytes(long before) {
+        return positiveDelta(retainedHeapBytes(), before);
+    }
+
     public synchronized void membersInto(ValueHandle handle, BulkStringSink out) {
         ensureOpen();
         requireSet(handle).membersInto(out);
@@ -122,6 +173,19 @@ public final class SetRoot implements TypeRoot {
 
     public synchronized long nativeBytes() {
         return sets.adapterBytes(SetValue::estimatedBytes);
+    }
+
+    public synchronized long heapBytes() {
+        ensureOpen();
+        return sets.heapBytes();
+    }
+
+    public synchronized void armIterationTrapForTesting() {
+        sets.armIterationTrapForTesting();
+    }
+
+    public synchronized void disarmIterationTrapForTesting() {
+        sets.disarmIterationTrapForTesting();
     }
 
     public synchronized void forEachNativeHandle(ValueHandle handle, Consumer<NativeHandle> consumer) {
@@ -154,7 +218,15 @@ public final class SetRoot implements TypeRoot {
     }
 
     private SetValue newSetValue() {
-        return new SetValue(sets.allocator());
+        return new SetValue(sets.allocator(), hashSeed, maintenanceRegistry);
+    }
+
+    private static long positiveDelta(long after, long before) {
+        return after > before ? after - before : 0L;
+    }
+
+    private static long addSaturating(long left, long right) {
+        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
     }
 
     private void ensureOpen() {

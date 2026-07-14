@@ -48,6 +48,7 @@ public class YierdisServerArgsTest {
                 "--protocolMaxArgs", "128",
                 "--protocolMaxLineBytes", "4096",
                 "--protocolMaxCommandBytes", "65536",
+                "--protocolGlobalInFlightBytes", "1048576",
                 "--maxmemoryBytes", "1048576",
                 "--maxmemoryScope", "Per_Db",
                 "--maxmemoryPolicy", "ALLKEYS-RANDOM",
@@ -90,6 +91,7 @@ public class YierdisServerArgsTest {
         Assert.assertEquals(128, runtimeConfig.get("protocolMaxArgs"));
         Assert.assertEquals(4096, runtimeConfig.get("protocolMaxLineBytes"));
         Assert.assertEquals(65536, runtimeConfig.get("protocolMaxCommandBytes"));
+        Assert.assertEquals(1048576L, runtimeConfig.get("protocolGlobalInFlightBytes"));
         Assert.assertEquals(1048576L, runtimeConfig.get("maxmemoryBytes"));
         Assert.assertEquals(YierdisServerRuntimeConfig.MaxmemoryScope.PER_DB, runtimeConfig.get("maxmemoryScope"));
         Assert.assertEquals(MaxmemoryPolicy.ALLKEYS_RANDOM, runtimeConfig.get("maxmemoryPolicy"));
@@ -146,6 +148,82 @@ public class YierdisServerArgsTest {
         Assert.assertEquals(1000, config.clientIdleTimeoutMillis());
         Assert.assertEquals(2048, config.clientOutputBufferLimitBytes());
         Assert.assertEquals(3000, config.clientOutputBufferOverLimitMillis());
+    }
+
+    @Test
+    public void replyCapacityArgsRoundTripWithExactDefaultsAndRuntimeConfig() {
+        YierdisServerArgs defaults = new YierdisServerArgs();
+        defaults.normalizeAndValidate();
+        YierdisServerRuntimeConfig defaultConfig = defaults.toRuntimeConfig();
+        Assert.assertEquals(256L * 1024L * 1024L, defaultConfig.replyGlobalCapacityBytes());
+        Assert.assertEquals(128L * 1024L * 1024L, defaultConfig.replyPerConnectionCapacityBytes());
+        Assert.assertEquals(64L * 1024L * 1024L, defaultConfig.replyMaxTotalBytes());
+        Assert.assertEquals(64 * 1024, defaultConfig.replyChunkPayloadBytes());
+        Assert.assertEquals(4L * 1024L, defaultConfig.replyControlReservationBytes());
+        Assert.assertEquals(5_000L, defaultConfig.replyDrainTimeoutMillis());
+
+        YierdisServerArgs args = parse(
+                "--replyGlobalCapacityBytes", "8192",
+                "--replyPerConnectionCapacityBytes", "4096",
+                "--replyMaxTotalBytes", "4096",
+                "--replyChunkPayloadBytes", "128",
+                "--replyControlReservationBytes", "1536",
+                "--replyDrainTimeoutMillis", "17"
+        );
+        args.normalizeAndValidate();
+
+        YierdisServerArgs copy = args.copy();
+        Assert.assertEquals(args.toArgv(), copy.toArgv());
+        YierdisServerArgs reparsed = parse(copy.toArgv().toArray(new String[0]));
+        reparsed.normalizeAndValidate();
+        Assert.assertEquals(copy.toRuntimeConfig(), reparsed.toRuntimeConfig());
+
+        YierdisServerRuntimeConfig config = args.toRuntimeConfig();
+        Assert.assertEquals(8192L, config.replyGlobalCapacityBytes());
+        Assert.assertEquals(4096L, config.replyPerConnectionCapacityBytes());
+        Assert.assertEquals(4096L, config.replyMaxTotalBytes());
+        Assert.assertEquals(128, config.replyChunkPayloadBytes());
+        Assert.assertEquals(1536L, config.replyControlReservationBytes());
+        Assert.assertEquals(17L, config.replyDrainTimeoutMillis());
+    }
+
+    @Test
+    public void replyCapacityArgsRejectInvalidIndividualAndRelativeLimits() {
+        assertInvalidReplyConfig("--replyGlobalCapacityBytes", "0");
+        assertInvalidReplyConfig("--replyGlobalCapacityBytes", "-1");
+        assertInvalidReplyConfig("--replyPerConnectionCapacityBytes", "0");
+        assertInvalidReplyConfig("--replyPerConnectionCapacityBytes", "-1");
+        assertInvalidReplyConfig("--replyMaxTotalBytes", "0");
+        assertInvalidReplyConfig("--replyMaxTotalBytes", "-1");
+        assertInvalidReplyConfig("--replyChunkPayloadBytes", "0");
+        assertInvalidReplyConfig("--replyChunkPayloadBytes", "-1");
+        assertInvalidReplyConfig("--replyControlReservationBytes", "0");
+        assertInvalidReplyConfig("--replyControlReservationBytes", "-1");
+        assertInvalidReplyConfig(
+                "--replyControlReservationBytes",
+                Integer.toString(YierdisServerRuntimeConfig.REPLY_FIXED_OVERHEAD_BYTES)
+        );
+        assertInvalidReplyConfig("--replyDrainTimeoutMillis", "0");
+        assertInvalidReplyConfig("--replyDrainTimeoutMillis", "-1");
+        assertInvalidReplyConfig(
+                "--replyControlReservationBytes", "4097",
+                "--replyMaxTotalBytes", "4096"
+        );
+        assertInvalidReplyConfig(
+                "--replyMaxTotalBytes", "4097",
+                "--replyPerConnectionCapacityBytes", "4096"
+        );
+        assertInvalidReplyConfig(
+                "--replyPerConnectionCapacityBytes", "8193",
+                "--replyGlobalCapacityBytes", "8192"
+        );
+        assertInvalidReplyConfig(
+                "--replyChunkPayloadBytes", "65536",
+                "--replyControlReservationBytes", "4096",
+                "--replyMaxTotalBytes", Integer.toString(
+                        65536 + 4096 + YierdisServerRuntimeConfig.REPLY_FIXED_OVERHEAD_BYTES - 1
+                )
+        );
     }
 
     @Test
@@ -208,6 +286,36 @@ public class YierdisServerArgsTest {
     }
 
     @Test
+    public void protocolGlobalInFlightBytesPreservesRawCliValueAndDerivesRuntimeDefault() {
+        YierdisServerArgs explicit = parse(
+                "--executorQueueMaxBytes", "67108864",
+                "--protocolGlobalInFlightBytes", "1048576"
+        );
+        explicit.normalizeAndValidate();
+
+        Assert.assertEquals(1048576L, explicit.protocolGlobalInFlightBytes);
+        Assert.assertEquals(1048576L, explicit.copy().protocolGlobalInFlightBytes);
+        Assert.assertTrue(explicit.toArgv().contains("--protocolGlobalInFlightBytes"));
+        Assert.assertEquals(1048576L, explicit.toRuntimeConfig().protocolGlobalInFlightBytes());
+
+        YierdisServerArgs minimum = parse("--executorQueueMaxBytes", "67108864");
+        minimum.normalizeAndValidate();
+        Assert.assertEquals(0L, minimum.protocolGlobalInFlightBytes);
+        Assert.assertEquals(128L * 1024L * 1024L, minimum.toRuntimeConfig().protocolGlobalInFlightBytes());
+
+        YierdisServerArgs doubledQueue = parse("--executorQueueMaxBytes", "83886080");
+        doubledQueue.normalizeAndValidate();
+        Assert.assertEquals(160L * 1024L * 1024L, doubledQueue.toRuntimeConfig().protocolGlobalInFlightBytes());
+
+        YierdisServerArgs overflow = parse("--executorQueueMaxBytes", Long.toString(Long.MAX_VALUE));
+        overflow.normalizeAndValidate();
+        Assert.assertEquals(Long.MAX_VALUE, overflow.toRuntimeConfig().protocolGlobalInFlightBytes());
+
+        YierdisServerArgs negative = parse("--protocolGlobalInFlightBytes", "-1");
+        assertThrows(IllegalArgumentException.class, negative::normalizeAndValidate);
+    }
+
+    @Test
     public void nativeSlotCapacityParsesCopiesAndRoundTrips() {
         YierdisServerArgs args = parse("--nativeSlotCapacity", "2097152");
 
@@ -252,6 +360,11 @@ public class YierdisServerArgsTest {
         YierdisServerArgs args = new YierdisServerArgs();
         new CommandLine(args).parseArgs(argv);
         return args;
+    }
+
+    private static void assertInvalidReplyConfig(String... argv) {
+        YierdisServerArgs args = parse(argv);
+        assertThrows(IllegalArgumentException.class, args::normalizeAndValidate);
     }
 
     private static Map<String, Object> recordValues(Object record) {

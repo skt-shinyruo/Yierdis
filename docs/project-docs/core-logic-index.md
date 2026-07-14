@@ -15,6 +15,7 @@
 - TTL / 过期：[`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)
 - maxmemory / 淘汰：[`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)
 - executor：[`executor-and-backpressure.md`](./executor-and-backpressure.md)
+- 生产 hardening 操作和验收：[`production-hardening-operations.md`](./production-hardening-operations.md)
 - 代理和变更事件：[`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)
 - native memory：[`native-memory-runtime.md`](./native-memory-runtime.md)、[`native-allocator-and-handles.md`](./native-allocator-and-handles.md)、[`offheap-copy-behavior.md`](./offheap-copy-behavior.md)
 - 测试入口：[`testing-and-debugging.md`](./testing-and-debugging.md)
@@ -29,6 +30,7 @@
 | [`CommandExecutorConfigs`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/CommandExecutorConfigs.java) | runtime config 到 executor config 的映射 | `from(...)` | [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 | [`YierdisServerBootstrap`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerBootstrap.java) | composition root，选择默认 `YierdisDbEngineFactory` / memory runtime，并组装 `YierdisInstance`、`DefaultYierdisEngine`、`CommandExecutor`、Netty pipeline | `start(...)`, `startInternal()`, `close()` | [`request-execution-flow.md`](./request-execution-flow.md) |
 | [`YierdisServerChannelInitializer`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisServerChannelInitializer.java) | 组装每条连接的 Netty handler 链 | `initChannel(...)` | [`protocol-reference.md`](./protocol-reference.md) |
+| `OutboundMemoryBudget` / `ConnectionReplySequencer` / `BoundedChunkedReplySink` | 全局、连接和单回复容量账户；receive-order slot；固定容量 chunk 写回 | reserve/ready/drain methods | [`production-hardening-operations.md`](./production-hardening-operations.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 | [`YierdisFastCommandHandler`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/YierdisFastCommandHandler.java) | handler / I/O 边界上的提交入口、拒绝回包和异常 fallback | `channelRead0(...)`, `exceptionCaught(...)` | [`request-execution-flow.md`](./request-execution-flow.md), [`executor-and-backpressure.md`](./executor-and-backpressure.md) |
 
 边界：`yierdis-server-main` 可以接触 Netty、runtime、engine、executor 和 server-only command；不应该承载普通 Redis 命令语义。
@@ -155,6 +157,7 @@
 | `ArchitectureDependencyRuleTest` | Maven/module 依赖方向 | [`module-architecture.md`](./module-architecture.md) |
 | `RespBoundaryGuardTest` | RESP DTO 不越过协议边界 | [`protocol-reference.md`](./protocol-reference.md) |
 | `YierdisDbArchitectureGuardTest` | DB internal 边界和 owner thread 假设 | [`db-internals.md`](./db-internals.md) |
+| `ArchitectureBoundaryTest` | 生产 hardening 文档、回复写回 owner 和模块边界 | [`production-hardening-operations.md`](./production-hardening-operations.md) |
 
 ## 边界清单
 

@@ -14,6 +14,7 @@ import yier.bubu.redis.command.defaults.CommandSupport;
 
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyPlans;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
@@ -56,7 +57,7 @@ public final class CoreConnectionCommands {
             return;
         }
         if (request.argc() == 2) {
-            out.bulkString(request.readOnlyByteArray(1));
+            writeRetainedArgument(request, 1, out);
             return;
         }
         CommandSupport.wrongArity(out, "ping");
@@ -68,7 +69,7 @@ public final class CoreConnectionCommands {
             CommandSupport.wrongArity(out, "echo");
             return;
         }
-        out.bulkString(request.readOnlyByteArray(1));
+        writeRetainedArgument(request, 1, out);
     }
 
     private void select(ExecutionRequest request, CommandContext ctx) {
@@ -161,8 +162,23 @@ public final class CoreConnectionCommands {
                 return;
             }
         }
-        support.recordMutation(ctx, support.commandDb(ctx).lifecycle().flushDb());
+        support.commandDb(ctx).lifecycle().flushDb();
         out.simpleString("OK");
+    }
+
+    private static void writeRetainedArgument(ExecutionRequest request, int index, RedisReplyWriter out) {
+        ExecutionRequest retained = request.retain();
+        boolean ownershipTransferred = false;
+        try {
+            out.requireReply(ReplyPlans.bulkString(request.len(index), retained.admittedMemoryBytes()));
+            out.bulkString(request.readOnlyByteArray(index));
+            out.transferReplyOwnership(retained);
+            ownershipTransferred = true;
+        } finally {
+            if (!ownershipTransferred) {
+                retained.close();
+            }
+        }
     }
 
     private static void command(ExecutionRequest request, RedisReplyWriter out, CommandModule.Registration registration) {

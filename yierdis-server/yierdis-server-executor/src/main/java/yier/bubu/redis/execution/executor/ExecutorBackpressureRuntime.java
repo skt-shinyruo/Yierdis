@@ -17,5 +17,8 @@ public interface ExecutorBackpressureRuntime<K> {
     boolean autoReadDisabledByExecutor(K key);
 
     boolean clearAutoReadDisabledByExecutor(K key);
-}
 
+    default boolean inputPausedByReply(K key) {
+        return false;
+    }
+}

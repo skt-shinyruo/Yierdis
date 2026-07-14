@@ -20,6 +20,8 @@ import static yier.bubu.redis.testutil.TestBytes.cmd;
 import static yier.bubu.redis.testutil.TestDbs.forEachDb;
 
 public class HllCommandTest {
+    private static final long DENSE_HLL_PHYSICAL_MAXMEMORY_BYTES = 700_000L;
+
     @Test
     public void hllCommandsUseReadWriteBoundariesInsteadOfLegacyValueOps() throws IOException {
         String source = CommandSourceFiles.readCommandDefaults("HllCommands.java");
@@ -99,17 +101,27 @@ public class HllCommandTest {
     @Test
     public void densePfaddNearMaxmemoryDoesNotFalseOom() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("db")) {
-            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(runtime, 13000, MaxmemoryPolicy.NOEVICTION, 5, 5, 5);
+            YierdisDb db = YierdisDb.createWithSharedFfmRuntime(
+                    runtime,
+                    DENSE_HLL_PHYSICAL_MAXMEMORY_BYTES,
+                    MaxmemoryPolicy.NOEVICTION,
+                    5,
+                    5,
+                    5
+            );
             db.bindToCurrentThread();
             try {
                 YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
                 try (FastTestClient client = new FastTestClient(processor)) {
-                    client.execute(cmd("PFADD", "src", "a", "b"));
-                    client.execute(cmd("PFMERGE", "dense", "src"));
-                    client.execute(cmd("DEL", "src"));
+                    ReplyObject sourceAdd = client.execute(cmd("PFADD", "src", "a", "b"));
+                    Assert.assertTrue("initial PFADD reply: " + replyDescription(sourceAdd), sourceAdd instanceof ReplyInteger);
+                    ReplyObject merge = client.execute(cmd("PFMERGE", "dense", "src"));
+                    Assert.assertTrue("PFMERGE reply: " + replyDescription(merge), merge instanceof ReplySimpleString);
+                    ReplyObject delete = client.execute(cmd("DEL", "src"));
+                    Assert.assertTrue("DEL reply: " + replyDescription(delete), delete instanceof ReplyInteger);
 
                     ReplyObject add = client.execute(cmd("PFADD", "dense", "c"));
-                    Assert.assertTrue(add instanceof ReplyInteger);
+                    Assert.assertTrue("PFADD reply: " + replyDescription(add), add instanceof ReplyInteger);
                     Assert.assertEquals(1, ((ReplyInteger) add).value());
 
                     ReplyInteger count = (ReplyInteger) client.execute(cmd("PFCOUNT", "dense"));
@@ -133,5 +145,9 @@ public class HllCommandTest {
                 Assert.assertEquals("WRONGTYPE Operation against a key holding the wrong kind of value", ((ReplyError) err).message());
             }
         });
+    }
+
+    private static String replyDescription(ReplyObject reply) {
+        return reply instanceof ReplyError error ? error.message() : String.valueOf(reply);
     }
 }

@@ -1,13 +1,17 @@
 package yier.bubu.redis.storage.api;
 
 /**
- * Participant view used by a global maxmemory governor.
+ * 全局 maxmemory governor 使用的参与者视图。
+ *
+ * 每个参与者必须报告其独占的物理内存快照；全局 governor 将各快照相加，不能再补充共享运行时计数。
  */
-public interface MaxmemoryParticipant {
+public interface MaxmemoryParticipant extends MemoryUsageParticipant {
     /**
-     * Dataset usage for maxmemory accounting, excluding shared usage sources.
+     * 兼容旧调用方的 maxmemory 使用量投影。
      */
-    long usedBytesForMaxmemory();
+    default long usedBytesForMaxmemory() {
+        return memoryUsage().effectiveBytesForMaxmemory();
+    }
 
     /**
      * Returns a non-negative estimate of evictable keys currently held by this participant.

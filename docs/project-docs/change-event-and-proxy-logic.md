@@ -231,3 +231,7 @@ synthetic 事件不表示客户端真的发送了 `DEL`。它是 DB lifecycle �
 | observability provider | `INFO` / `STATS` / global `MEMORY STATS` 通过 provider 汇总 server/runtime 统计 | `YierdisServerBootstrapCommandWiringTest`, `MemoryStatsCommandTest` |
 
 同时检查架构边界：command-builtin 不应依赖 command-kernel internal；command-core 不应 import server-main、runtime change sink 或 DB change scope；server-main 是把这些接口接起来的 composition root。
+
+## Commit-Stream Operations
+
+runtime change delivery is a bounded in-process commit-stream, not a durable replication log. Its reserved event/byte counters and shutdown timeout are independent of command reply capacity and maxmemory. Production pressure, recovery, and acceptance rules are collected in [`production-hardening-operations.md`](./production-hardening-operations.md); do not promise restart recovery or exactly-once delivery from the current stream.

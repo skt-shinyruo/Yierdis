@@ -61,7 +61,7 @@ public final class ListRoot implements TypeRoot {
         ListValue stored = requireList(handle);
         boolean ok = false;
         try {
-            stored.rpushAll(value.range(0, -1));
+            rpush(handle, value.range(0, -1));
             ok = true;
             return handle;
         } finally {
@@ -76,7 +76,12 @@ public final class ListRoot implements TypeRoot {
         if (values == null || values.isEmpty()) {
             return;
         }
-        requireList(handle).lpushAll(values);
+        ListValue value = requireList(handle);
+        try {
+            value.lpushAll(values);
+        } finally {
+            lists.refreshAdapter(handle);
+        }
     }
 
     public synchronized void rpush(ValueHandle handle, List<byte[]> values) {
@@ -84,17 +89,32 @@ public final class ListRoot implements TypeRoot {
         if (values == null || values.isEmpty()) {
             return;
         }
-        requireList(handle).rpushAll(values);
+        ListValue value = requireList(handle);
+        try {
+            value.rpushAll(values);
+        } finally {
+            lists.refreshAdapter(handle);
+        }
     }
 
     public synchronized List<byte[]> lpop(ValueHandle handle, int count) {
         ensureOpen();
-        return requireList(handle).lpop(count);
+        ListValue value = requireList(handle);
+        try {
+            return value.lpop(count);
+        } finally {
+            lists.refreshAdapter(handle);
+        }
     }
 
     public synchronized List<byte[]> rpop(ValueHandle handle, int count) {
         ensureOpen();
-        return requireList(handle).rpop(count);
+        ListValue value = requireList(handle);
+        try {
+            return value.rpop(count);
+        } finally {
+            lists.refreshAdapter(handle);
+        }
     }
 
     public synchronized List<byte[]> range(ValueHandle handle, int start, int stop) {
@@ -142,6 +162,38 @@ public final class ListRoot implements TypeRoot {
         return requireList(handle).size();
     }
 
+    public synchronized long estimatedPreparedPushHeapGrowthBytes(
+            ValueHandle source,
+            List<byte[]> values,
+            int expectedNativeAllocationCount
+    ) {
+        ensureOpen();
+        Objects.requireNonNull(values, "values");
+        long replacementHeapBytes = source == null
+                ? ListValue.preparedNewHeapUpperBound(values)
+                : requireList(source).preparedCopyHeapUpperBound(values);
+        return lists.estimatedNewAdapterHeapGrowthBytes(replacementHeapBytes, expectedNativeAllocationCount);
+    }
+
+    public synchronized long estimatedPreparedPopHeapGrowthBytes(
+            int remainingElements,
+            int expectedNativeAllocationCount
+    ) {
+        ensureOpen();
+        long replacementHeapBytes = ListValue.preparedHeapUpperBoundForElementCount(remainingElements);
+        return lists.estimatedNewAdapterHeapGrowthBytes(replacementHeapBytes, expectedNativeAllocationCount);
+    }
+
+    public synchronized long retainedHeapBytes() {
+        ensureOpen();
+        return lists.heapBytes();
+    }
+
+    public synchronized long positiveRetainedHeapGrowthBytes(long before) {
+        long after = retainedHeapBytes();
+        return after > before ? after - before : 0L;
+    }
+
     @Override
     public synchronized long estimatedBytes(ValueHandle handle) {
         ensureOpen();
@@ -150,6 +202,19 @@ public final class ListRoot implements TypeRoot {
 
     public synchronized long nativeBytes() {
         return lists.adapterBytes(ListValue::estimatedBytes);
+    }
+
+    public synchronized long heapBytes() {
+        ensureOpen();
+        return lists.heapBytes();
+    }
+
+    public synchronized void armIterationTrapForTesting() {
+        lists.armIterationTrapForTesting();
+    }
+
+    public synchronized void disarmIterationTrapForTesting() {
+        lists.disarmIterationTrapForTesting();
     }
 
     public synchronized void forEachNativeHandle(ValueHandle handle, Consumer<NativeHandle> consumer) {

@@ -83,7 +83,6 @@ modules:
   yierdis-db-memory:
     allowed_dependencies:
       - yierdis-db-api
-      - yierdis-server-runtime-api
       - yierdis-common-bytes
       - yierdis-memory-ffm
       - yierdis-memory-api
@@ -92,6 +91,7 @@ modules:
       - yierdis-command-core
       - yierdis-command-builtin
       - yierdis-core-runtime
+      - yierdis-server-runtime-api
       - yierdis-networking-model
       - yierdis-networking-codec
       - yierdis-networking-netty
@@ -107,6 +107,7 @@ modules:
       - yier.bubu.redis.protocol.resp
       - yier.bubu.redis.app.server
       - yier.bubu.redis.execution.executor
+      - yier.bubu.redis.runtime
       - io.netty
     source_ownership:
       - concrete_in_memory_storage_only

@@ -28,6 +28,12 @@ public record YierdisServerRuntimeConfig(
         long clientIdleTimeoutMillis,
         long clientOutputBufferLimitBytes,
         long clientOutputBufferOverLimitMillis,
+        long replyGlobalCapacityBytes,
+        long replyPerConnectionCapacityBytes,
+        long replyMaxTotalBytes,
+        int replyChunkPayloadBytes,
+        long replyControlReservationBytes,
+        long replyDrainTimeoutMillis,
         long maxmemoryBytes,
         MaxmemoryScope maxmemoryScope,
         MaxmemoryPolicy maxmemoryPolicy,
@@ -40,8 +46,11 @@ public record YierdisServerRuntimeConfig(
         long nativeDefragTimeLimitMillis,
         int nativeSlotCapacity,
         long keysTimeBudgetMillis,
-        int keysMaxResults
+        int keysMaxResults,
+        long protocolGlobalInFlightBytes
 ) {
+    public static final int REPLY_FIXED_OVERHEAD_BYTES = 1_024;
+
     public YierdisServerRuntimeConfig {
         Objects.requireNonNull(executorSchedulingPolicy, "executorSchedulingPolicy");
         Objects.requireNonNull(maxmemoryScope, "maxmemoryScope");
@@ -58,6 +67,53 @@ public record YierdisServerRuntimeConfig(
         if (nativeSlotCapacity < 0) {
             throw new IllegalArgumentException("nativeSlotCapacity must be >= 0");
         }
+        if (protocolGlobalInFlightBytes < 0) {
+            throw new IllegalArgumentException("protocolGlobalInFlightBytes must be >= 0");
+        }
+        if (replyGlobalCapacityBytes <= 0L) {
+            throw new IllegalArgumentException("replyGlobalCapacityBytes must be > 0");
+        }
+        if (replyPerConnectionCapacityBytes <= 0L) {
+            throw new IllegalArgumentException("replyPerConnectionCapacityBytes must be > 0");
+        }
+        if (replyMaxTotalBytes <= 0L) {
+            throw new IllegalArgumentException("replyMaxTotalBytes must be > 0");
+        }
+        if (replyChunkPayloadBytes <= 0) {
+            throw new IllegalArgumentException("replyChunkPayloadBytes must be > 0");
+        }
+        if (replyControlReservationBytes <= 0L) {
+            throw new IllegalArgumentException("replyControlReservationBytes must be > 0");
+        }
+        if (replyControlReservationBytes <= REPLY_FIXED_OVERHEAD_BYTES) {
+            throw new IllegalArgumentException("replyControlReservationBytes must exceed reply fixed overhead");
+        }
+        if (replyDrainTimeoutMillis <= 0L) {
+            throw new IllegalArgumentException("replyDrainTimeoutMillis must be > 0");
+        }
+        if (replyControlReservationBytes > replyMaxTotalBytes) {
+            throw new IllegalArgumentException("replyControlReservationBytes must be <= replyMaxTotalBytes");
+        }
+        if (replyMaxTotalBytes > replyPerConnectionCapacityBytes) {
+            throw new IllegalArgumentException("replyMaxTotalBytes must be <= replyPerConnectionCapacityBytes");
+        }
+        if (replyPerConnectionCapacityBytes > replyGlobalCapacityBytes) {
+            throw new IllegalArgumentException("replyPerConnectionCapacityBytes must be <= replyGlobalCapacityBytes");
+        }
+        long minimumReplyCharge = saturatedAdd(
+                saturatedAdd(replyControlReservationBytes, replyChunkPayloadBytes),
+                REPLY_FIXED_OVERHEAD_BYTES
+        );
+        if (minimumReplyCharge > replyMaxTotalBytes) {
+            throw new IllegalArgumentException("reply chunk, control, and fixed overhead must fit replyMaxTotalBytes");
+        }
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     public enum ExecutorSchedulingPolicy {

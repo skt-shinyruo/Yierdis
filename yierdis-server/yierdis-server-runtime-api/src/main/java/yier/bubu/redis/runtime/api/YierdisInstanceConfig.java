@@ -36,6 +36,9 @@ public final class YierdisInstanceConfig {
     private final long nativeDefragMaxMoveBytes;
     private final long nativeDefragMaxObjects;
     private final long nativeDefragTimeLimitMillis;
+    private final int commitStreamMaxEvents;
+    private final long commitStreamMaxRetainedBytes;
+    private final long commitStreamShutdownTimeoutMillis;
 
     private YierdisInstanceConfig(Builder b) {
         this.databases = b.databases;
@@ -52,6 +55,9 @@ public final class YierdisInstanceConfig {
         this.nativeDefragMaxMoveBytes = b.nativeDefragMaxMoveBytes;
         this.nativeDefragMaxObjects = b.nativeDefragMaxObjects;
         this.nativeDefragTimeLimitMillis = b.nativeDefragTimeLimitMillis;
+        this.commitStreamMaxEvents = b.commitStreamMaxEvents;
+        this.commitStreamMaxRetainedBytes = b.commitStreamMaxRetainedBytes;
+        this.commitStreamShutdownTimeoutMillis = b.commitStreamShutdownTimeoutMillis;
     }
 
     public static Builder builder() {
@@ -114,6 +120,18 @@ public final class YierdisInstanceConfig {
         return nativeDefragTimeLimitMillis;
     }
 
+    public int commitStreamMaxEvents() {
+        return commitStreamMaxEvents;
+    }
+
+    public long commitStreamMaxRetainedBytes() {
+        return commitStreamMaxRetainedBytes;
+    }
+
+    public long commitStreamShutdownTimeoutMillis() {
+        return commitStreamShutdownTimeoutMillis;
+    }
+
     public static final class Builder {
         private int databases = 1;
         private EngineFactoryBinding engineFactoryBinding;
@@ -130,6 +148,9 @@ public final class YierdisInstanceConfig {
         private long nativeDefragMaxMoveBytes = 64L * 1024L;
         private long nativeDefragMaxObjects = 64L;
         private long nativeDefragTimeLimitMillis = 1L;
+        private int commitStreamMaxEvents = 8_192;
+        private long commitStreamMaxRetainedBytes = 64L * 1024L * 1024L;
+        private long commitStreamShutdownTimeoutMillis = 5_000L;
 
         private Builder() {
         }
@@ -206,6 +227,21 @@ public final class YierdisInstanceConfig {
             return this;
         }
 
+        public Builder commitStreamMaxEvents(int commitStreamMaxEvents) {
+            this.commitStreamMaxEvents = commitStreamMaxEvents;
+            return this;
+        }
+
+        public Builder commitStreamMaxRetainedBytes(long commitStreamMaxRetainedBytes) {
+            this.commitStreamMaxRetainedBytes = commitStreamMaxRetainedBytes;
+            return this;
+        }
+
+        public Builder commitStreamShutdownTimeoutMillis(long commitStreamShutdownTimeoutMillis) {
+            this.commitStreamShutdownTimeoutMillis = commitStreamShutdownTimeoutMillis;
+            return this;
+        }
+
         public YierdisInstanceConfig build() {
             int dbs = Math.max(1, databases);
             if (maxmemoryBytes < 0) {
@@ -228,6 +264,15 @@ public final class YierdisInstanceConfig {
             }
             if (nativeDefragTimeLimitMillis < 0) {
                 throw new IllegalArgumentException("nativeDefragTimeLimitMillis must be >= 0");
+            }
+            if (commitStreamMaxEvents <= 0) {
+                throw new IllegalArgumentException("commitStreamMaxEvents must be > 0");
+            }
+            if (commitStreamMaxRetainedBytes <= 0L) {
+                throw new IllegalArgumentException("commitStreamMaxRetainedBytes must be > 0");
+            }
+            if (commitStreamShutdownTimeoutMillis <= 0L) {
+                throw new IllegalArgumentException("commitStreamShutdownTimeoutMillis must be > 0");
             }
             MaxmemoryScope scope = maxmemoryScope == null ? MaxmemoryScope.PER_DB : maxmemoryScope;
             MaxmemoryPolicy policy = maxmemoryPolicy == null ? MaxmemoryPolicy.NOEVICTION : maxmemoryPolicy;

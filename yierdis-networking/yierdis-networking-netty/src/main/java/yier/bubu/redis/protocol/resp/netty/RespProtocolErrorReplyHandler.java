@@ -1,12 +1,8 @@
 package yier.bubu.redis.protocol.resp.netty;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
-import yier.bubu.redis.bytes.netty.NettyByteBufSink;
-import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.api.Session;
 
@@ -16,8 +12,6 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 
 public final class RespProtocolErrorReplyHandler extends ChannelInboundHandlerAdapter {
-    private final RedisReplyWriterFactory replyWriterFactory;
-    private final Function<ChannelHandlerContext, Session> sessionProvider;
     private final Predicate<ChannelHandlerContext> closingStateProvider;
     private final Consumer<ChannelHandlerContext> closeAfterReplyObserver;
     private final Consumer<Object> droppedMessageCloser;
@@ -56,8 +50,7 @@ public final class RespProtocolErrorReplyHandler extends ChannelInboundHandlerAd
             Consumer<ChannelHandlerContext> closeAfterReplyObserver,
             Consumer<Object> droppedMessageCloser
     ) {
-        this.replyWriterFactory = Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
-        this.sessionProvider = sessionProvider == null ? ctx -> null : sessionProvider;
+        Objects.requireNonNull(replyWriterFactory, "replyWriterFactory");
         this.closingStateProvider = closingStateProvider == null ? ctx -> false : closingStateProvider;
         this.closeAfterReplyObserver = closeAfterReplyObserver == null ? ctx -> {} : closeAfterReplyObserver;
         this.droppedMessageCloser = droppedMessageCloser == null
@@ -80,24 +73,7 @@ public final class RespProtocolErrorReplyHandler extends ChannelInboundHandlerAd
             safeDisableAutoRead(ctx);
             closeAfterReplyObserver.accept(ctx);
         }
-        ByteBuf out = ctx.alloc().buffer();
-        try {
-            Session session = sessionProvider.apply(ctx);
-            RedisReplyWriter writer = session == null
-                    ? replyWriterFactory.newWriter(new NettyByteBufSink(out))
-                    : replyWriterFactory.newWriter(session, new NettyByteBufSink(out));
-            writer.protocolError(error.message());
-            if (error.closeAfterReply()) {
-                ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
-            } else {
-                ctx.writeAndFlush(out);
-            }
-            out = null;
-        } finally {
-            if (out != null) {
-                out.release();
-            }
-        }
+        super.channelRead(ctx, msg);
     }
 
     private static void closeIfPossible(Object msg) {

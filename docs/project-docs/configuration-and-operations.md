@@ -70,7 +70,7 @@ java -jar yierdis-cli/target/yierdis-cli-0.1.0-SNAPSHOT.jar STATS
 
 `--protocolMaxBulkBytes`、`--protocolMaxArgs`、`--protocolMaxLineBytes` 和 `--protocolMaxCommandBytes` 会直接传给 `RespRequestDecoder`。它们分别约束 bulk body、参数个数、header/inline 行长度，以及单条命令累计字节数。暴露在不可信网络里时，优先收紧这四个入口上限，再考虑更深层的内存调参。
 
-解析失败会走 RESP protocol error 路径：`RespRequestDecoder` 只负责 RESP 解析和限制，出错时产出 `RespProtocolError`；`RespProtocolErrorReplyHandler` 统一回协议错误并关闭连接，避免请求和回包错位。这个路径不会进入 `RespCommandAdapter` 或 `YierdisFastCommandHandler` 的命令提交主链。
+解析失败会走 RESP protocol error 路径：`RespRequestDecoder` 负责 RESP 解析、入口限制和 ingress admission，出错时产出 `RespProtocolError`；`RespProtocolErrorReplyHandler` 统一回协议错误并关闭连接，避免请求和回包错位。这个路径不会进入 `YierdisFastCommandHandler` 的命令提交主链。
 
 ## executor 和 backpressure
 
@@ -229,3 +229,7 @@ java -jar yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SN
 关闭是 best-effort，顺序大致是：server channel、cleanup future、executor graceful shutdown、engine、instance runtime access、command group、boss group、worker group。runtime access 的关闭会通过 `executor.executeOwnerTask(runtimeAccess::close)` 回到 owner thread，避免在错误线程释放已绑定 DB runtime。
 
 脚本层关闭逻辑也要按真实进程处理：`scripts/smoke.sh` 用 trap 杀掉临时 server；benchmark 的 `ServerProcess.stop()` 先 `destroy()`，超时后 `destroyForcibly()`。
+
+## Production Hardening Operations
+
+reply global/per-connection/single limits、ingress admission、commit-stream、maxmemory、result-unknown 和 graceful shutdown 共同构成运行时容量边界。精确默认值、启动校验、INFO/STATS 字段、漏账排查和发布命令以 [`production-hardening-operations.md`](./production-hardening-operations.md) 为准；不要只用 `clientOutputBufferLimitBytes` 或 JVM heap 来判断这些硬限制是否生效。

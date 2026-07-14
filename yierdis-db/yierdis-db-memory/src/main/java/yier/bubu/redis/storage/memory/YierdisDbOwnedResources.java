@@ -116,6 +116,13 @@ public final class YierdisDbOwnedResources implements AutoCloseable {
         } catch (Throwable t) {
             failure = recordFailure(failure, t);
         }
+        if (expires instanceof YierdisFfmExpireIndex ffmExpires) {
+            try {
+                ffmExpires.close();
+            } catch (Throwable t) {
+                failure = recordFailure(failure, t);
+            }
+        }
         if (entries != null) {
             try {
                 entries.close();

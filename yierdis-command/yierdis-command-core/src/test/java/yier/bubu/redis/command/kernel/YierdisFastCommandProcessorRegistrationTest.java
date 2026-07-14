@@ -310,11 +310,6 @@ public class YierdisFastCommandProcessorRegistrationTest {
         }
 
         @Override
-        public void bulkStringArray(List<byte[]> values) {
-            throw unsupported();
-        }
-
-        @Override
         public void emptyArray() {
             throw unsupported();
         }

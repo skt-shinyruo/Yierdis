@@ -4,9 +4,6 @@ import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.NativeAllocator;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbMemoryConstants;
-import yier.bubu.redis.storage.api.DbChange;
-import yier.bubu.redis.storage.api.DbChangeContext;
-import yier.bubu.redis.storage.api.DbChangeKind;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
@@ -61,7 +58,6 @@ public final class YierdisDbKeyLifecycle {
     private final ZSetRoot zsetRoot;
     private final LongSupplier lruClockSupplier;
     private final LongConsumer adjustUsedBytesCallback;
-    private final int dbIndex;
 
     YierdisDbKeyLifecycle(
             YierdisExpireIndex expires,
@@ -77,38 +73,6 @@ public final class YierdisDbKeyLifecycle {
             LongSupplier lruClockSupplier,
             LongConsumer adjustUsedBytesCallback
     ) {
-        this(
-                expires,
-                nativeAllocator,
-                memoryRuntime,
-                entryTable,
-                keyDirectory,
-                stringRoot,
-                listRoot,
-                hashRoot,
-                setRoot,
-                zsetRoot,
-                lruClockSupplier,
-                adjustUsedBytesCallback,
-                0
-        );
-    }
-
-    YierdisDbKeyLifecycle(
-            YierdisExpireIndex expires,
-            NativeAllocator nativeAllocator,
-            YierdisFfmMemoryRuntime memoryRuntime,
-            EntryTable entryTable,
-            NativeKeyDirectory keyDirectory,
-            StringRoot stringRoot,
-            ListRoot listRoot,
-            HashRoot hashRoot,
-            SetRoot setRoot,
-            ZSetRoot zsetRoot,
-            LongSupplier lruClockSupplier,
-            LongConsumer adjustUsedBytesCallback,
-            int dbIndex
-    ) {
         this.expires = Objects.requireNonNull(expires, "expires");
         this.nativeAllocator = java.util.Objects.requireNonNull(nativeAllocator, "nativeAllocator");
         this.memoryRuntime = memoryRuntime;
@@ -121,7 +85,6 @@ public final class YierdisDbKeyLifecycle {
         this.zsetRoot = Objects.requireNonNull(zsetRoot, "zsetRoot");
         this.lruClockSupplier = Objects.requireNonNull(lruClockSupplier, "lruClockSupplier");
         this.adjustUsedBytesCallback = Objects.requireNonNull(adjustUsedBytesCallback, "adjustUsedBytesCallback");
-        this.dbIndex = Math.max(0, dbIndex);
     }
 
     public NativeAllocator nativeAllocator() {
@@ -242,10 +205,6 @@ public final class YierdisDbKeyLifecycle {
             return null;
         }
         long now = System.currentTimeMillis();
-        // 读路径承担 lazy expire：先尝试把过期 key 从 entry、TTL index、账本和变更流中一起收敛。
-        if (removeIfExpired(keyHandle, record, now)) {
-            return null;
-        }
         if (isKeyExpired(keyHandle, now)) {
             return null;
         }
@@ -427,6 +386,15 @@ public final class YierdisDbKeyLifecycle {
         return keyDirectory.scan(cursor, maxSteps, (keyHandle, entryHandle) -> consumer.accept(keyHandle, entryRecord(entryHandle)));
     }
 
+    public NativeKeyDirectory.ScanResult scanWithWork(
+            ScanCursorV2 cursor,
+            long maxSteps,
+            YierdisKeyspace.ScanConsumer<EntryRecord> consumer
+    ) {
+        return keyDirectory.scanWithWork(cursor, maxSteps, (keyHandle, entryHandle) ->
+                consumer.accept(keyHandle, entryRecord(entryHandle)));
+    }
+
     public boolean removeEntry(KeyHandle keyHandle, EntryRecord expectedRecord) {
         if (keyHandle == null) {
             return false;
@@ -450,38 +418,6 @@ public final class YierdisDbKeyLifecycle {
         return true;
     }
 
-    public boolean removeIfExpired(KeyHandle keyHandle, EntryRecord record, long nowMillis) {
-        Long expireAtMillis = expireAtMillis(keyHandle);
-        if (expireAtMillis == null || expireAtMillis > nowMillis) {
-            return false;
-        }
-        // removeEntry 会释放 key/value handle；synthetic delete 必须先拷出稳定 key bytes。
-        byte[] keyBytes = keyBytes(keyHandle);
-        long removalBytes = estimatedBytesForRemoval(keyHandle, record);
-        // 先摘 TTL index，再删 entry，避免删除成功后过期扫描再次随机命中同一个 key。
-        removeExpireIndexOnly(keyHandle);
-        if (removeEntry(keyHandle, record)) {
-            adjustUsedBytesCallback.accept(-removalBytes);
-            emitSyntheticDelete(keyBytes, DbChangeKind.EXPIRED);
-            return true;
-        }
-        return false;
-    }
-
-    public void emitSyntheticDelete(KeyHandle keyHandle, DbChangeKind kind) {
-        if (keyHandle == null || kind == null) {
-            return;
-        }
-        emitSyntheticDelete(keyBytes(keyHandle), kind);
-    }
-
-    public void emitSyntheticDelete(byte[] keyBytes, DbChangeKind kind) {
-        if (keyBytes == null || kind == null) {
-            return;
-        }
-        DbChangeContext.emit(DbChange.syntheticDelete(dbIndex, kind, keyBytes));
-    }
-
     public byte[] copyKeyBytes(KeyHandle keyHandle) {
         if (keyHandle == null) {
             return null;
@@ -491,6 +427,14 @@ public final class YierdisDbKeyLifecycle {
 
     public boolean isKeyExpired(KeyHandle keyHandle, long nowMillis) {
         Long expireAtMillis = expireAtMillis(keyHandle);
+        return expireAtMillis != null && expireAtMillis <= nowMillis;
+    }
+
+    public boolean isKeyExpiredForScan(KeyHandle keyHandle, long nowMillis) {
+        if (keyHandle == null) {
+            return false;
+        }
+        Long expireAtMillis = expires.getForScan(keyHandle);
         return expireAtMillis != null && expireAtMillis <= nowMillis;
     }
 

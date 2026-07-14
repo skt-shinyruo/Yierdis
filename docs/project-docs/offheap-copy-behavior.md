@@ -10,7 +10,7 @@ Yierdis 的 native memory 主要降低稳态 heap 占用、改善 GC 压力并�
 
 常见写入链路从 heap 开始。
 
-RESP decode 后，`RespCommandRequest` / `ExecutionRequest` 保存稳定 argv snapshot，通常是 heap `byte[]`。这是协议帧跨过 Netty decoder lifecycle 和 executor queue 的 ownership 边界。
+RESP decode 后，`RetainedRespExecutionRequest` / `ExecutionRequest` 保存稳定 argv snapshot，通常是 heap `byte[]`，并持有脱离 Netty 对象的 memory lease。这是协议帧跨过 Netty decoder lifecycle 和 executor queue 的 ownership 边界。
 
 DB lookup 当前也会 materialize heap key。虽然 DB read/write API 接受 `BytesView`，`YierdisDbKeyLifecycle` 进入 `NativeKeyDirectory` 前会把 key view 转成 heap `byte[]`，因为 `NativeKeyDirectory` 当前 lookup/compute API 是 byte-array based。
 

@@ -2,8 +2,11 @@ package yier.bubu.redis.storage.memory;
 
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.api.NativeDefragReport;
+import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.storage.api.DbCommitPublisher;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
+import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.memory.internal.ledger.MemoryLedgerOutOfMemoryException;
@@ -28,6 +31,9 @@ final class YierdisDbRuntimeState {
     private final DbThreadGuard threadGuard = new DbThreadGuard();
 
     private volatile MaxmemoryCoordinator maxmemoryCoordinator;
+    private volatile MaxmemoryParticipant maxmemoryParticipant;
+    private volatile DbCommitPublisher commitPublisher = DbCommitPublisher.NOOP;
+    private volatile int commitDbIndex;
     private NativeDefragReport lastNativeDefragReport = EMPTY_NATIVE_DEFRAG_REPORT;
     private boolean lruEnabled;
     private long lruClock;
@@ -38,6 +44,7 @@ final class YierdisDbRuntimeState {
 
     YierdisDbRuntimeState(int dbIndex) {
         this.dbIndex = Math.max(0, dbIndex);
+        this.commitDbIndex = this.dbIndex;
     }
 
     int dbIndex() {
@@ -68,6 +75,30 @@ final class YierdisDbRuntimeState {
 
     void attachMaxmemoryCoordinator(MaxmemoryCoordinator coordinator) {
         this.maxmemoryCoordinator = coordinator;
+    }
+
+    void attachCommitPublisher(DbCommitPublisher publisher, int dbIndex) {
+        if (dbIndex < 0) {
+            throw new IllegalArgumentException("dbIndex must be non-negative");
+        }
+        this.commitPublisher = Objects.requireNonNull(publisher, "publisher");
+        this.commitDbIndex = dbIndex;
+    }
+
+    DbCommitPublisher commitPublisher() {
+        return commitPublisher;
+    }
+
+    int commitDbIndex() {
+        return commitDbIndex;
+    }
+
+    void bindMaxmemoryParticipant(MaxmemoryParticipant participant) {
+        this.maxmemoryParticipant = Objects.requireNonNull(participant, "participant");
+    }
+
+    MaxmemoryParticipant maxmemoryParticipant() {
+        return maxmemoryParticipant;
     }
 
     MaxmemoryCoordinator maxmemoryCoordinator() {
@@ -120,6 +151,10 @@ final class YierdisDbRuntimeState {
         return ledger();
     }
 
+    NativeAllocator nativeAllocator() {
+        return keyLifecycle().nativeAllocator();
+    }
+
     void shutdown() {
         threadGuard.checkThreadForShutdown();
         if (!threadGuard.tryMarkClosed()) {
@@ -140,12 +175,18 @@ final class YierdisDbRuntimeState {
         );
     }
 
-    MutationOutcome flushDb() {
+    FlushPreparation prepareFlushDb() {
         checkThread();
         YierdisDbKeyLifecycle currentKeyLifecycle = keyLifecycle();
         YierdisDbStorageComponents currentStorage = storage();
         boolean hadKeys = currentKeyLifecycle.keyCount() != 0;
         boolean hadTtl = currentStorage.expires.size() != 0;
+        return new FlushPreparation(MutationOutcome.of(hadKeys, hadTtl), -ledger().usedBytes());
+    }
+
+    void commitFlushDb() {
+        checkThread();
+        YierdisDbStorageComponents currentStorage = storage();
         currentStorage.resources.clearData(
                 currentStorage.expires,
                 currentStorage.entries,
@@ -156,8 +197,6 @@ final class YierdisDbRuntimeState {
                 currentStorage.setRoot,
                 currentStorage.zsetRoot
         );
-        ledger().resetUsage();
-        return MutationOutcome.of(hadKeys, hadTtl);
     }
 
     int size() {
@@ -184,5 +223,8 @@ final class YierdisDbRuntimeState {
             throw new IllegalStateException("runtime state is not bound");
         }
         return keyLifecycle;
+    }
+
+    record FlushPreparation(MutationOutcome outcome, long committedMemoryDelta) {
     }
 }

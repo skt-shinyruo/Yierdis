@@ -37,6 +37,15 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
     }
 
     CommandExecutor.SubmitRejectReason trySubmit(C connection, ExecutionRequest request, Runnable scheduleDrain) {
+        return trySubmit(connection, request, null, scheduleDrain);
+    }
+
+    CommandExecutor.SubmitRejectReason trySubmit(
+            C connection,
+            ExecutionRequest request,
+            ExecutionReply reply,
+            Runnable scheduleDrain
+    ) {
         Objects.requireNonNull(connection, "connection");
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(scheduleDrain, "scheduleDrain");
@@ -82,7 +91,7 @@ final class CommandExecutorSubmitter<C extends ExecutionConnection> {
             }
             reservedBytes = true;
 
-            boolean accepted = taskQueue.offer(connection, new CommandExecutorTask<>(connection, request, retainedBytes));
+            boolean accepted = taskQueue.offer(connection, new CommandExecutorTask<>(connection, request, retainedBytes, reply));
             if (!accepted) {
                 backlogBudget.releaseQueuedBytes(retainedBytes);
                 backlogBudget.releaseSlot();

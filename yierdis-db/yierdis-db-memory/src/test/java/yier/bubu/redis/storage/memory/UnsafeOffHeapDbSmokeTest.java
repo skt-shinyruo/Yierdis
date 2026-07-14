@@ -39,7 +39,7 @@ public class UnsafeOffHeapDbSmokeTest {
                 Assert.assertArrayEquals(b("c"), rangeOut.values.get(2));
 
                 Assert.assertEquals(2L, (long) db.writes().hashes().hset(b("h"), List.of(b("f1"), b("v1"), b("f2"), b("v2"))).value());
-                Assert.assertArrayEquals(b("v1"), db.reads().hashes().hget(b("h"), b("f1")));
+                Assert.assertArrayEquals(b("v1"), OwnedReplyValueAssertions.bytes(db.reads().hashes().hget(b("h"), b("f1"))));
                 Assert.assertEquals(2, db.reads().hashes().hgetall(b("h")).pairCount());
 
                 Assert.assertEquals(3L, (long) db.writes().sets().sadd(b("set"), List.of(b("x"), b("y"), b("z"))).value());

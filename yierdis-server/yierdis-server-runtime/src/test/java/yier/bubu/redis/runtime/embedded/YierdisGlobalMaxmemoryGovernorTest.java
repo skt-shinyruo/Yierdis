@@ -3,12 +3,14 @@ package yier.bubu.redis.runtime.embedded;
 import org.junit.Assert;
 import org.junit.Assume;
 import org.junit.Test;
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryReclaimResult;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.KeyHandle;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.storage.api.MaxmemoryUsageSource;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -20,8 +22,8 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         long maxmemoryBytes = 100;
         MaxmemoryParticipant participant = new MaxmemoryParticipant() {
             @Override
-            public long usedBytesForMaxmemory() {
-                return maxmemoryBytes;
+            public MemoryUsageSnapshot memoryUsage() {
+                return snapshot(maxmemoryBytes);
             }
 
             @Override
@@ -46,7 +48,6 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
                 new MaxmemoryParticipant[]{participant},
-                new MaxmemoryUsageSource[0],
                 maxmemoryBytes,
                 MaxmemoryPolicy.NOEVICTION,
                 5,
@@ -54,11 +55,192 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         );
 
         try {
-            governor.prepareWrite(1);
+            governor.prepareWrite(null, 1);
             Assert.fail("expected OOM");
         } catch (RuntimeException e) {
             Assert.assertEquals(MaxmemoryErrors.OOM_ERR, e.getMessage());
         }
+    }
+
+    @Test
+    public void prepareWriteUsesPhysicalMemoryUsageSnapshotsForAdmission() {
+        long maxmemoryBytes = 60;
+        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
+            @Override
+            public MemoryUsageSnapshot memoryUsage() {
+                return new MemoryUsageSnapshot(10, 20, 30, 0, 0);
+            }
+
+            @Override
+            public long usedBytesForMaxmemory() {
+                return 0L;
+            }
+
+            @Override
+            public int keyCountEstimate() {
+                return 0;
+            }
+
+            @Override
+            public void cleanupExpired(long nowMillis) {
+            }
+
+            @Override
+            public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
+                return null;
+            }
+
+            @Override
+            public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
+                return false;
+            }
+        };
+
+        YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
+                new MaxmemoryParticipant[]{participant},
+                maxmemoryBytes,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                0
+        );
+
+        try {
+            governor.prepareWrite(null, 1);
+            Assert.fail("expected OOM when physical snapshot exceeds admitted limit");
+        } catch (RuntimeException e) {
+            Assert.assertEquals(MaxmemoryErrors.OOM_ERR, e.getMessage());
+        }
+    }
+
+    @Test
+    public void prepareWriteTrimsReclaimableMemoryAcrossDatabasesBeforeOom() {
+        long maxmemoryBytes = 100;
+        AtomicLong reclaimableUsedBytes = new AtomicLong(90);
+        AtomicInteger trimCalls = new AtomicInteger(0);
+
+        MaxmemoryParticipant reclaimable = new MaxmemoryParticipant() {
+            @Override
+            public MemoryUsageSnapshot memoryUsage() {
+                return snapshot(reclaimableUsedBytes.get());
+            }
+
+            @Override
+            public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
+                trimCalls.incrementAndGet();
+                long before = reclaimableUsedBytes.getAndSet(20);
+                return new MemoryReclaimResult(1, 1, Math.max(0L, before - 20), MemoryReclaimResult.StopReason.COMPLETE);
+            }
+
+            @Override
+            public int keyCountEstimate() {
+                return 0;
+            }
+
+            @Override
+            public void cleanupExpired(long nowMillis) {
+            }
+
+            @Override
+            public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
+                return null;
+            }
+
+            @Override
+            public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
+                return false;
+            }
+        };
+
+        MaxmemoryParticipant requester = new MaxmemoryParticipant() {
+            @Override
+            public MemoryUsageSnapshot memoryUsage() {
+                return snapshot(20);
+            }
+
+            @Override
+            public int keyCountEstimate() {
+                return 0;
+            }
+
+            @Override
+            public void cleanupExpired(long nowMillis) {
+            }
+
+            @Override
+            public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
+                return null;
+            }
+
+            @Override
+            public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
+                return false;
+            }
+        };
+
+        YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
+                new MaxmemoryParticipant[]{reclaimable, requester},
+                maxmemoryBytes,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                0
+        );
+
+        governor.prepareWrite(null, 10);
+
+        Assert.assertTrue("global admission must pressure-trim all participants before OOM", trimCalls.get() > 0);
+        Assert.assertEquals(20L, reclaimableUsedBytes.get());
+    }
+
+    @Test
+    public void prepareWriteUsesBoundedTrimBudgetWithMinimumInspectionAllowance() {
+        AtomicLong usedBytes = new AtomicLong(90L);
+        AtomicReference<MemoryPressureBudget> observedBudget = new AtomicReference<>();
+        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
+            @Override
+            public MemoryUsageSnapshot memoryUsage() {
+                return snapshot(usedBytes.get());
+            }
+
+            @Override
+            public MemoryReclaimResult trimMemory(MemoryPressureBudget budget) {
+                observedBudget.set(budget);
+                usedBytes.set(0L);
+                return new MemoryReclaimResult(1L, 1L, 90L, MemoryReclaimResult.StopReason.COMPLETE);
+            }
+
+            @Override
+            public int keyCountEstimate() {
+                return 0;
+            }
+
+            @Override
+            public void cleanupExpired(long nowMillis) {
+            }
+
+            @Override
+            public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
+                return null;
+            }
+
+            @Override
+            public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
+                return false;
+            }
+        };
+        YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
+                new MaxmemoryParticipant[]{participant},
+                100L,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                1_000_000_000L
+        );
+
+        governor.prepareWrite(null, 10L);
+
+        Assert.assertNotNull(observedBudget.get());
+        Assert.assertEquals(16L, observedBudget.get().maxInspectedUnits());
+        Assert.assertTrue(observedBudget.get().timeLimitNanos() > 0L);
+        Assert.assertTrue(observedBudget.get().timeLimitNanos() < Long.MAX_VALUE);
     }
 
     @Test
@@ -72,8 +254,8 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         MaxmemoryParticipant participant = new MaxmemoryParticipant() {
             @Override
-            public long usedBytesForMaxmemory() {
-                return usedBytes.get();
+            public MemoryUsageSnapshot memoryUsage() {
+                return snapshot(usedBytes.get());
             }
 
             @Override
@@ -103,14 +285,13 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
                 new MaxmemoryParticipant[]{participant},
-                new MaxmemoryUsageSource[0],
                 maxmemoryBytes,
                 MaxmemoryPolicy.ALLKEYS_RANDOM,
                 5,
                 0
         );
 
-        governor.prepareWrite(extraBytes);
+        governor.prepareWrite(null, extraBytes);
 
         long limitBytes = maxmemoryBytes - extraBytes;
         Assert.assertTrue("must evict until under limit", usedBytes.get() <= limitBytes);
@@ -128,8 +309,8 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         MaxmemoryParticipant participant = new MaxmemoryParticipant() {
             @Override
-            public long usedBytesForMaxmemory() {
-                return usedBytes.get();
+            public MemoryUsageSnapshot memoryUsage() {
+                return snapshot(usedBytes.get());
             }
 
             @Override
@@ -159,18 +340,69 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
                 new MaxmemoryParticipant[]{participant},
-                new MaxmemoryUsageSource[0],
                 maxmemoryBytes,
                 MaxmemoryPolicy.ALLKEYS_RANDOM,
                 5,
                 0
         );
 
-        governor.prepareWrite(extraBytes);
+        governor.prepareWrite(null, extraBytes);
 
         long limitBytes = maxmemoryBytes - extraBytes;
         Assert.assertTrue("must evict until under limit", usedBytes.get() <= limitBytes);
         Assert.assertTrue("must evict beyond 64 attempts", evictions.get() > 64);
+    }
+
+    @Test
+    public void prepareWriteStopsWhenEvictionMakesNoPhysicalProgress() {
+        long maxmemoryBytes = 100;
+        long extraBytes = 10;
+
+        AtomicInteger evictions = new AtomicInteger(0);
+
+        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
+            @Override
+            public MemoryUsageSnapshot memoryUsage() {
+                return snapshot(150);
+            }
+
+            @Override
+            public int keyCountEstimate() {
+                return 1;
+            }
+
+            @Override
+            public void cleanupExpired(long nowMillis) {
+            }
+
+            @Override
+            public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
+                return new MaxmemoryCandidate(this, handle(new byte[]{'k'}), 0);
+            }
+
+            @Override
+            public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
+                evictions.incrementAndGet();
+                return true;
+            }
+        };
+
+        YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
+                new MaxmemoryParticipant[]{participant},
+                maxmemoryBytes,
+                MaxmemoryPolicy.ALLKEYS_RANDOM,
+                5,
+                0
+        );
+
+        try {
+            governor.prepareWrite(null, extraBytes);
+            Assert.fail("expected OOM after eviction fails to reduce physical usage");
+        } catch (RuntimeException e) {
+            Assert.assertEquals(MaxmemoryErrors.OOM_ERR, e.getMessage());
+        }
+
+        Assert.assertEquals("must not repeat a full candidate pass without physical progress", 1, evictions.get());
     }
 
     @Test
@@ -187,8 +419,8 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         MaxmemoryParticipant participant = new MaxmemoryParticipant() {
             @Override
-            public long usedBytesForMaxmemory() {
-                return usedBytes.get();
+            public MemoryUsageSnapshot memoryUsage() {
+                return snapshot(usedBytes.get());
             }
 
             @Override
@@ -215,14 +447,13 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
                 new MaxmemoryParticipant[]{participant},
-                new MaxmemoryUsageSource[0],
                 maxmemoryBytes,
                 MaxmemoryPolicy.ALLKEYS_RANDOM,
                 5,
                 evictionTimeLimitNanos
         );
 
-        governor.prepareWrite(extraBytes);
+        governor.prepareWrite(null, extraBytes);
 
         long limitBytes = maxmemoryBytes - extraBytes;
         Assert.assertTrue("must evict until under limit", usedBytes.get() <= limitBytes);
@@ -241,8 +472,8 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         MaxmemoryParticipant participant = new MaxmemoryParticipant() {
             @Override
-            public long usedBytesForMaxmemory() {
-                return usedBytes.get();
+            public MemoryUsageSnapshot memoryUsage() {
+                return snapshot(usedBytes.get());
             }
 
             @Override
@@ -275,14 +506,13 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
                 new MaxmemoryParticipant[]{participant},
-                new MaxmemoryUsageSource[0],
                 maxmemoryBytes,
                 MaxmemoryPolicy.ALLKEYS_LRU,
                 5,
                 0
         );
 
-        governor.prepareWrite(extraBytes);
+        governor.prepareWrite(null, extraBytes);
 
         Assert.assertEquals("sampling should not be used", 0, sampled.get());
         Assert.assertArrayEquals("must evict expected key", expectedKey, evictedKey.get());
@@ -319,14 +549,18 @@ public class YierdisGlobalMaxmemoryGovernorTest {
         return out;
     }
 
+    private static MemoryUsageSnapshot snapshot(long usedBytes) {
+        return new MemoryUsageSnapshot(Math.max(0L, usedBytes), 0L, 0L, 0L, 0L);
+    }
+
     @Test
     public void prepareWriteDoesNotThrowUnderNoevictionForNoGrowthWrites() {
         long maxmemoryBytes = 100;
 
         MaxmemoryParticipant participant = new MaxmemoryParticipant() {
             @Override
-            public long usedBytesForMaxmemory() {
-                return maxmemoryBytes + 1;
+            public MemoryUsageSnapshot memoryUsage() {
+                return snapshot(maxmemoryBytes + 1);
             }
 
             @Override
@@ -351,62 +585,13 @@ public class YierdisGlobalMaxmemoryGovernorTest {
 
         YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
                 new MaxmemoryParticipant[]{participant},
-                new MaxmemoryUsageSource[0],
                 maxmemoryBytes,
                 MaxmemoryPolicy.NOEVICTION,
                 5,
                 0
         );
 
-        governor.prepareWrite(0);
+        governor.prepareWrite(null, 0);
     }
 
-    @Test
-    public void prepareWriteCountsSharedUsageSourcesInOomDecision() {
-        long maxmemoryBytes = 100;
-
-        MaxmemoryUsageSource sharedUsage = () -> maxmemoryBytes;
-
-        MaxmemoryParticipant participant = new MaxmemoryParticipant() {
-            @Override
-            public long usedBytesForMaxmemory() {
-                return 0;
-            }
-
-            @Override
-            public int keyCountEstimate() {
-                return 0;
-            }
-
-            @Override
-            public void cleanupExpired(long nowMillis) {
-            }
-
-            @Override
-            public MaxmemoryCandidate sampleCandidate(MaxmemoryPolicy policy, long nowMillis) {
-                return null;
-            }
-
-            @Override
-            public boolean evict(MaxmemoryCandidate candidate, long nowMillis) {
-                return false;
-            }
-        };
-
-        YierdisGlobalMaxmemoryGovernor governor = new YierdisGlobalMaxmemoryGovernor(
-                new MaxmemoryParticipant[]{participant},
-                new MaxmemoryUsageSource[]{sharedUsage},
-                maxmemoryBytes,
-                MaxmemoryPolicy.NOEVICTION,
-                5,
-                0
-        );
-
-        try {
-            governor.prepareWrite(1);
-            Assert.fail("expected OOM");
-        } catch (RuntimeException e) {
-            Assert.assertEquals(MaxmemoryErrors.OOM_ERR, e.getMessage());
-        }
-    }
 }

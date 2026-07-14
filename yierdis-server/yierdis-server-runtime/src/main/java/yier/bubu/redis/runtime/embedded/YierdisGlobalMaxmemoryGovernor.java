@@ -1,11 +1,12 @@
 package yier.bubu.redis.runtime.embedded;
 
+import yier.bubu.redis.common.memory.MemoryPressureBudget;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.storage.api.MaxmemoryCandidate;
 import yier.bubu.redis.storage.api.MaxmemoryCoordinator;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryParticipant;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
-import yier.bubu.redis.storage.api.MaxmemoryUsageSource;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 
 import java.util.Objects;
@@ -16,21 +17,19 @@ import java.util.concurrent.atomic.AtomicLong;
  * SPI-driven global maxmemory governor (Redis-like best-effort semantics).
  * <p>
  * This governor depends only on {@code yierdis-db-api} maxmemory SPI and can coordinate across multiple
- * independent participants (e.g. multiple DBs) plus optional shared usage sources (e.g. a shared allocator)
- * that should be counted once.
+ * independent participants (e.g. multiple DBs). Each participant reports an owned physical snapshot.
  */
 public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinator {
     private final MaxmemoryParticipant[] participants;
-    private final MaxmemoryUsageSource[] sharedUsage;
     private final long maxmemoryBytes;
     private final MaxmemoryPolicy policy;
     private final int samples;
     private final long evictionTimeLimitNanos;
     private final AtomicLong globalLruClock = new AtomicLong(0);
+    private int nextTrimParticipantIndex;
 
     public YierdisGlobalMaxmemoryGovernor(
             MaxmemoryParticipant[] participants,
-            MaxmemoryUsageSource[] sharedUsage,
             long maxmemoryBytes,
             MaxmemoryPolicy policy,
             int samples,
@@ -38,7 +37,6 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
     ) {
         Objects.requireNonNull(participants, "participants");
         this.participants = participants.clone();
-        this.sharedUsage = sharedUsage == null ? new MaxmemoryUsageSource[0] : sharedUsage.clone();
         this.maxmemoryBytes = Math.max(0, maxmemoryBytes);
         this.policy = policy == null ? MaxmemoryPolicy.NOEVICTION : policy;
         this.samples = Math.max(1, samples);
@@ -53,12 +51,12 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
     /**
      * Best-effort maintenance tick for global maxmemory without assuming write growth.
      */
-    public void enforceMaintenance() {
-        prepareWrite(0);
+    public synchronized void enforceMaintenance() {
+        prepareWrite(null, 0);
     }
 
     @Override
-    public void prepareWrite(long estimatedExtraBytes) {
+    public synchronized void prepareWrite(MaxmemoryParticipant requester, long estimatedExtraBytes) {
         if (estimatedExtraBytes < 0) {
             throw new IllegalArgumentException("estimatedExtraBytes < 0: " + estimatedExtraBytes);
         }
@@ -66,9 +64,11 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
             return;
         }
 
+        long deadline = evictionDeadline(System.nanoTime());
         // Best-effort: try to reclaim expired keys first (Redis does this too under pressure).
         long nowMillis = System.currentTimeMillis();
         cleanupExpiredAll(nowMillis);
+        trimAllParticipants(deadline);
 
         long extra = estimatedExtraBytes;
         if (extra > 0 && extra > maxmemoryBytes) {
@@ -90,7 +90,8 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
             return;
         }
 
-        evictUntilUnder(limit, nowMillis);
+        evictUntilUnder(limit, nowMillis, deadline);
+        trimAllParticipants(deadline);
         if (globalUsedBytesForMaxmemory() > limit && extra > 0) {
             throw oom();
         }
@@ -109,6 +110,24 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
         }
     }
 
+    private void trimAllParticipants(long deadline) {
+        if (participants.length == 0) {
+            return;
+        }
+        int start = Math.floorMod(nextTrimParticipantIndex, participants.length);
+        nextTrimParticipantIndex = (start + 1) % participants.length;
+        for (int i = 0; i < participants.length; i++) {
+            if (deadlineReached(deadline)) {
+                return;
+            }
+            MaxmemoryParticipant participant = participants[(start + i) % participants.length];
+            if (participant == null) {
+                continue;
+            }
+            participant.trimMemory(trimBudget(deadline));
+        }
+    }
+
     private long globalUsedBytesForMaxmemory() {
         long total = 0;
 
@@ -116,26 +135,8 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
             if (participant == null) {
                 continue;
             }
-            long used = participant.usedBytesForMaxmemory();
-            if (used <= 0) {
-                continue;
-            }
-            if (Long.MAX_VALUE - total < used) {
-                return Long.MAX_VALUE;
-            }
-            total += used;
-        }
-
-        for (MaxmemoryUsageSource source : sharedUsage) {
-            if (source == null) {
-                continue;
-            }
-            long used;
-            try {
-                used = source.usedBytes();
-            } catch (Throwable ignored) {
-                used = 0;
-            }
+            MemoryUsageSnapshot usage = participant.memoryUsage();
+            long used = usage == null ? 0L : usage.effectiveBytesForMaxmemory();
             if (used <= 0) {
                 continue;
             }
@@ -171,7 +172,7 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
         return total;
     }
 
-    private void evictUntilUnder(long limitBytes, long nowMillis) {
+    private void evictUntilUnder(long limitBytes, long nowMillis, long deadline) {
         if (limitBytes < 0) {
             limitBytes = 0;
         }
@@ -188,18 +189,12 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
         }
         int maxAttempts = Math.max(64, maxAttemptsFromKeys);
 
-        long startNanos = System.nanoTime();
-        long deadline;
-        if (evictionTimeLimitNanos <= 0) {
-            deadline = 0;
-        } else if (startNanos > Long.MAX_VALUE - evictionTimeLimitNanos) {
-            deadline = Long.MAX_VALUE;
-        } else {
-            deadline = startNanos + evictionTimeLimitNanos;
-        }
         int attempts = 0;
-        while (globalUsedBytesForMaxmemory() > limitBytes && attempts++ < maxAttempts) {
-            if (evictionTimeLimitNanos > 0 && System.nanoTime() >= deadline) {
+        int stalledAttempts = 0;
+        int maxStalledAttempts = Math.max(1, totalKeys);
+        long currentUsed = globalUsedBytesForMaxmemory();
+        while (currentUsed > limitBytes && attempts++ < maxAttempts) {
+            if (deadlineReached(deadline)) {
                 break;
             }
 
@@ -207,8 +202,45 @@ public final class YierdisGlobalMaxmemoryGovernor implements MaxmemoryCoordinato
             if (victim == null) {
                 break;
             }
+            long beforeEvictionBytes = currentUsed;
             evictCandidate(victim, nowMillis);
+            trimAllParticipants(deadline);
+            currentUsed = globalUsedBytesForMaxmemory();
+            if (currentUsed < beforeEvictionBytes) {
+                stalledAttempts = 0;
+                continue;
+            }
+            stalledAttempts++;
+            if (stalledAttempts >= maxStalledAttempts) {
+                break;
+            }
         }
+    }
+
+    private long evictionDeadline(long startedNanos) {
+        if (evictionTimeLimitNanos <= 0L) {
+            return Long.MAX_VALUE;
+        }
+        if (startedNanos > Long.MAX_VALUE - evictionTimeLimitNanos) {
+            return Long.MAX_VALUE;
+        }
+        return startedNanos + evictionTimeLimitNanos;
+    }
+
+    private boolean deadlineReached(long deadline) {
+        return deadline != Long.MAX_VALUE && System.nanoTime() >= deadline;
+    }
+
+    private MemoryPressureBudget trimBudget(long deadline) {
+        long timeLimitNanos = Long.MAX_VALUE;
+        if (deadline != Long.MAX_VALUE) {
+            timeLimitNanos = Math.max(0L, deadline - System.nanoTime());
+        }
+        return new MemoryPressureBudget(
+                Math.max(16L, samples),
+                Long.MAX_VALUE,
+                timeLimitNanos
+        );
     }
 
     private MaxmemoryCandidate pickVictim(long nowMillis, int totalKeys) {

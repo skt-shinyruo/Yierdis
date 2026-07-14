@@ -3,8 +3,10 @@ package yier.bubu.redis.command.kernel;
 import yier.bubu.redis.command.api.CommandDescriptor;
 import yier.bubu.redis.command.api.CommandModule;
 import yier.bubu.redis.command.api.CommandParsers;
+import yier.bubu.redis.common.command.CommandRecordScope;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.TransactionState;
 
@@ -80,12 +82,16 @@ final class TransactionCommands implements CommandModule {
             return;
         }
 
+        out.requireReply(ReplyPlan.maximum());
+
         List<ExecutionRequest> queued = tx.drain();
         out.arrayHeader(queued.size());
         for (ExecutionRequest queuedRequest : queued) {
             try (ExecutionRequest replay = queuedRequest) {
                 CommandContext replayCtx = new CommandContext(ctx.sessionCapabilities(), out);
-                replayer.replay(replay, replayCtx);
+                try (CommandRecordScope.Scope ignored = CommandRecordScope.open(replay)) {
+                    replayer.replay(replay, replayCtx);
+                }
             }
         }
     }

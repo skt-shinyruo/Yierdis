@@ -11,10 +11,20 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 public final class ObservationClient {
     private static final int CONNECT_TIMEOUT_MILLIS = 1000;
     private static final int READ_TIMEOUT_MILLIS = 1000;
+    private static final Set<String> OUTBOUND_REPLY_GAUGE_KEYS = Set.of(
+            "yierdis_outbound_reserved_bytes",
+            "yierdis_outbound_allocated_bytes",
+            "yierdis_outbound_peak_reserved_bytes",
+            "yierdis_outbound_peak_allocated_bytes",
+            "yierdis_outbound_capacity_rejects",
+            "yierdis_outbound_waiting_connections",
+            "yierdis_outbound_write_failures"
+    );
 
     public ObservationSnapshot capture(SuiteArtifact artifact) {
         Objects.requireNonNull(artifact, "artifact");
@@ -31,7 +41,7 @@ public final class ObservationClient {
         values.put("STATS", captureCommand(host, port, "STATS"));
         values.put("MEMORY STATS", captureCommand(host, port, "MEMORY", "STATS"));
         values.put("INFO", captureCommand(host, port, "INFO"));
-        return new ObservationSnapshot(values);
+        return snapshot(values);
     }
 
     public Map<String, String> captureEnvironmentMetadata(SuiteArtifact artifact) {
@@ -49,7 +59,36 @@ public final class ObservationClient {
         Map<String, String> values = new LinkedHashMap<>();
         values.put("INFO", captureCommand(artifact, "INFO"));
         values.put("MEMORY STATS", captureCommand(artifact, "MEMORY", "STATS"));
-        return new ObservationSnapshot(values);
+        return snapshot(values);
+    }
+
+    static Map<String, Long> extractOutboundReplyGauges(String info) {
+        if (info == null || info.isBlank()) {
+            return Map.of();
+        }
+        Map<String, Long> gauges = new LinkedHashMap<>();
+        for (String line : info.split("\\R")) {
+            int separator = line.indexOf(':');
+            if (separator <= 0) {
+                continue;
+            }
+            String sourceKey = line.substring(0, separator).trim();
+            if (!OUTBOUND_REPLY_GAUGE_KEYS.contains(sourceKey)) {
+                continue;
+            }
+            try {
+                long value = Long.parseLong(line.substring(separator + 1).trim());
+                if (value >= 0L) {
+                    gauges.put(sourceKey.substring("yierdis_".length()), value);
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return Map.copyOf(gauges);
+    }
+
+    private static ObservationSnapshot snapshot(Map<String, String> values) {
+        return new ObservationSnapshot(values, extractOutboundReplyGauges(values.get("INFO")));
     }
 
     static String formatReply(RespClientCodec.RespReply reply) {

@@ -9,9 +9,14 @@ import java.util.Objects;
 import java.util.function.Consumer;
 
 public final class NativeListpack implements AutoCloseable {
+    private static final long ARRAY_HEADER_BYTES = 16L;
+    private static final long REFERENCE_BYTES = 8L;
+    private static final long FIXED_HEAP_BYTES = 72L;
+
     private final NativeByteStore byteStore;
     private final NativeObjectKind valueKind;
     private final ArrayList<NativeHandle> entries = new ArrayList<>();
+    private int entryCapacity;
 
     private int encodedBytes;
     private int allocatedBytes;
@@ -40,6 +45,27 @@ public final class NativeListpack implements AutoCloseable {
 
     public long estimatedBytes() {
         return allocatedBytes;
+    }
+
+    public long heapEstimatedBytes() {
+        return FIXED_HEAP_BYTES + ARRAY_HEADER_BYTES + (long) entryCapacity * REFERENCE_BYTES;
+    }
+
+    static long heapUpperBoundForEntries(long expectedEntries) {
+        if (expectedEntries < 0L || expectedEntries > Integer.MAX_VALUE) {
+            return Long.MAX_VALUE;
+        }
+        long capacity = 0L;
+        while (capacity < expectedEntries) {
+            capacity = capacity == 0L ? 10L : capacity + (capacity >>> 1);
+            if (capacity > Integer.MAX_VALUE) {
+                return Long.MAX_VALUE;
+            }
+        }
+        return addSaturating(
+                FIXED_HEAP_BYTES + ARRAY_HEADER_BYTES,
+                multiplySaturating(capacity, REFERENCE_BYTES)
+        );
     }
 
     public int rawBytesSize() {
@@ -81,6 +107,7 @@ public final class NativeListpack implements AutoCloseable {
             throw new IndexOutOfBoundsException();
         }
         NativeHandle handle = store(value, kind);
+        ensureEntryCapacityForAdd();
         entries.add(index, handle);
         encodedBytes += entryEncodedBytes(value == null ? -1 : value.length);
         if (handle != null) {
@@ -264,6 +291,26 @@ public final class NativeListpack implements AutoCloseable {
             return null;
         }
         return byteStore.store(value, kind);
+    }
+
+    private void ensureEntryCapacityForAdd() {
+        if (entries.size() < entryCapacity) {
+            return;
+        }
+        int next = entryCapacity == 0 ? 10 : entryCapacity + (entryCapacity >>> 1);
+        entries.ensureCapacity(next);
+        entryCapacity = next;
+    }
+
+    private static long multiplySaturating(long left, long right) {
+        if (left == 0L || right == 0L) {
+            return 0L;
+        }
+        return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
+    }
+
+    private static long addSaturating(long left, long right) {
+        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
     }
 
     private void release(NativeHandle handle) {

@@ -5,13 +5,22 @@ import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import yier.bubu.redis.memory.api.NativeAllocator;
 
 public final class MutationMemoryEstimator {
-    private static final long NATIVE_ALLOCATION_SCOPE_BOOKKEEPING_BYTES = 4096L;
-
     private MutationMemoryEstimator() {
     }
 
-    public static long nativeAllocationScopeBookkeepingBytes() {
-        return NATIVE_ALLOCATION_SCOPE_BOOKKEEPING_BYTES;
+    public static long nativeAllocationScopeBookkeepingBytes(
+            NativeAllocator allocator,
+            int expectedNativeAllocationCount
+    ) {
+        Objects.requireNonNull(allocator, "allocator");
+        if (expectedNativeAllocationCount < 0) {
+            throw new IllegalArgumentException("expectedNativeAllocationCount must be >= 0");
+        }
+        long bytes = allocator.estimateAllocationScopeBookkeepingBytes(expectedNativeAllocationCount);
+        if (bytes < 0L) {
+            throw new IllegalStateException("native allocation scope bookkeeping estimate must be non-negative");
+        }
+        return bytes;
     }
 
     public static long peakAdditionalBytes(
@@ -23,11 +32,11 @@ public final class MutationMemoryEstimator {
         Objects.requireNonNull(allocator, "allocator");
         requireNonNegative(ffmRegionGrowthBytes, "ffmRegionGrowthBytes");
         requireNonNegative(heapGrowthBytes, "heapGrowthBytes");
+        int[] physicalSizes = physicalSizes(nativeAllocationSizes);
         long total = MemoryUsageSnapshot.addSaturating(
-                nativeAllocationScopeBookkeepingBytes(),
+                nativeAllocationScopeBookkeepingBytes(allocator, physicalSizes.length),
                 MemoryUsageSnapshot.addSaturating(ffmRegionGrowthBytes, heapGrowthBytes)
         );
-        int[] physicalSizes = physicalSizes(nativeAllocationSizes);
         if (physicalSizes.length == 0) {
             return total;
         }

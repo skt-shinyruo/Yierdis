@@ -1,21 +1,20 @@
 package yier.bubu.redis.app.server;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.DecoderException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import yier.bubu.redis.bytes.netty.NettyByteBufSink;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.executor.CommandExecutor;
+import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
+import yier.bubu.redis.protocol.resp.netty.RespProtocolError;
 
 import java.util.Objects;
 
-public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler<ExecutionRequest> {
+public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapter {
     private static final Logger log = LoggerFactory.getLogger(YierdisFastCommandHandler.class);
 
     private final CommandExecutor<NettyExecutionConnection> executor;
@@ -30,29 +29,66 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
     }
 
     @Override
-    protected void channelRead0(ChannelHandlerContext ctx, ExecutionRequest msg) {
-        NettyExecutionConnection connection = requireConnection(ctx);
-        CommandExecutor.SubmitRejectReason reject = executor.trySubmit(connection, msg);
-        if (reject == null) {
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        if (msg instanceof RegisteredRespMessage registered) {
+            handleRegistered(ctx, registered);
             return;
         }
-        if (reject == CommandExecutor.SubmitRejectReason.CONNECTION_CLOSING) {
-            msg.close();
+        if (msg instanceof ExecutionRequest request) {
+            closeRequest(request);
+            ctx.close();
+            return;
+        }
+        super.channelRead(ctx, msg);
+    }
+
+    private void handleRegistered(ChannelHandlerContext ctx, RegisteredRespMessage registered) {
+        NettyExecutionConnection connection = requireConnection(ctx);
+        Object message;
+        try {
+            message = registered.takeMessage();
+        } catch (Throwable ignored) {
+            registered.close();
             return;
         }
 
-        ByteBuf out = ctx.alloc().buffer();
-        try {
-            RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), new NettyByteBufSink(out));
-            writer.error("ERR busy " + reject.code());
-            ctx.writeAndFlush(out);
-            out = null;
-        } finally {
-            msg.close();
-            if (out != null) {
-                out.release();
+        if (message instanceof ExecutionRequest request) {
+            CommandExecutor.SubmitRejectReason reject = executor.trySubmit(connection, request, registered.slot());
+            if (reject == null) {
+                return;
             }
+            if (reject == CommandExecutor.SubmitRejectReason.CONNECTION_CLOSING) {
+                closeRequest(request);
+                registered.slot().cancel(ReplyCleanupOwner.SEQUENCER);
+                return;
+            }
+            try {
+                RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), registered.slot().sink());
+                writer.error("ERR busy " + reject.code());
+                registered.slot().markReady(false);
+            } catch (Throwable ignored) {
+                registered.slot().cancel(ReplyCleanupOwner.SEQUENCER);
+            } finally {
+                closeRequest(request);
+            }
+            return;
         }
+
+        if (message instanceof RespProtocolError error) {
+            try {
+                if (connection.markClosing()) {
+                    safeDisableAutoRead(ctx);
+                }
+                RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), registered.slot().sink());
+                writer.protocolError(error.message());
+                registered.slot().markReady(true);
+            } catch (Throwable ignored) {
+                registered.slot().cancel(ReplyCleanupOwner.SEQUENCER);
+            }
+            return;
+        }
+
+        registered.slot().cancel(ReplyCleanupOwner.SEQUENCER);
     }
 
     @Override
@@ -66,28 +102,29 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         String remote = String.valueOf(ctx.channel().remoteAddress());
         log.error("Internal error from {}: {}", remote, logMessage, root);
 
-        ByteBuf out = ctx.alloc().buffer();
-        try {
-            NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
-            if (connection != null && connection.markClosing()) {
-                safeDisableAutoRead(ctx);
-            }
-
-            RedisReplyWriter writer = newReplyWriter(out, connection);
-            writer.internalError("ERR internal error");
-            ctx.writeAndFlush(out).addListener(ChannelFutureListener.CLOSE);
-            out = null;
-        } finally {
-            if (out != null) {
-                out.release();
-            }
+        NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
+        if (connection == null || connection.replyGate() == null) {
+            ctx.close();
+            return;
         }
-    }
+        if (connection.markClosing()) {
+            safeDisableAutoRead(ctx);
+        }
 
-    private RedisReplyWriter newReplyWriter(ByteBuf out, NettyExecutionConnection connection) {
-        return connection == null
-                ? replyWriterFactory.newWriter(new NettyByteBufSink(out))
-                : replyWriterFactory.newWriter(connection.session(), new NettyByteBufSink(out));
+        ReplySlot slot = connection.replyGate().tryRegisterTerminalSlot().orElse(null);
+        if (slot == null) {
+            ctx.close();
+            return;
+        }
+        try {
+            RedisReplyWriter writer = replyWriterFactory.newWriter(connection.session(), slot.sink());
+            writer.internalError("ERR internal error");
+            writer.requestCloseAfterReply();
+            slot.markReady(true);
+        } catch (Throwable ignored) {
+            slot.cancel(ReplyCleanupOwner.SEQUENCER);
+            ctx.close();
+        }
     }
 
     private static NettyExecutionConnection requireConnection(ChannelHandlerContext ctx) {
@@ -98,8 +135,24 @@ public final class YierdisFastCommandHandler extends SimpleChannelInboundHandler
         return connection;
     }
 
+    private static void closeRequest(ExecutionRequest request) {
+        if (request == null) {
+            return;
+        }
+        try {
+            request.close();
+        } catch (Throwable ignored) {
+            // 拒绝路径仍需释放 slot，不能因请求清理异常中断。
+        }
+    }
+
     private static void safeDisableAutoRead(ChannelHandlerContext ctx) {
         if (ctx == null) {
+            return;
+        }
+        InboundReadCreditHandler readCredits = ctx.pipeline().get(InboundReadCreditHandler.class);
+        if (readCredits != null) {
+            readCredits.pauseIngress();
             return;
         }
         try {

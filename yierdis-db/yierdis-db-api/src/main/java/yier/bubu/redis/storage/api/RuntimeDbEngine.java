@@ -36,24 +36,10 @@ public interface RuntimeDbEngine extends DbEngine, MaxmemoryParticipant, Maxmemo
     }
 
     /**
-     * Returns an identity object for shared off-heap bytes that should be counted once across DBs,
-     * or {@code null} when this engine does not participate in instance-level shared off-heap accounting.
+     * 在 runtime 组装阶段绑定 DB 的唯一 commit publication 端口。
      */
-    default Object globalSharedOffHeapUsageIdentity() {
-        return null;
-    }
-
-    /**
-     * Returns the current shared off-heap bytes for the identity exposed by
-     * {@link #globalSharedOffHeapUsageIdentity()}.
-     */
-    default long globalSharedOffHeapUsedBytes() {
-        return 0L;
-    }
-
-    @Override
-    default long usedBytesForMaxmemory() {
-        return 0L;
+    default void attachCommitPublisher(DbCommitPublisher publisher, int dbIndex) {
+        // Optional for test doubles and lightweight runtimes.
     }
 
     @Override

@@ -6,6 +6,9 @@ import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMetrics;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -14,13 +17,16 @@ import java.util.Objects;
 import java.util.function.Consumer;
 import java.nio.charset.StandardCharsets;
 
-public final class ZSetValue implements YierdisValue, NativeHandleOwner {
+public final class ZSetValue implements YierdisValue, NativeHandleOwner, HeapTrackedValue {
     public record ZAddResult(int added, boolean changedAny) {
     }
 
     private static final int REF_BYTES = 8;
+    private static final long FIXED_HEAP_BYTES = 96L;
 
     private final NativeByteStore memberStore;
+    private final HashSeed hashSeed;
+    private final HashTableMaintenanceRegistry maintenanceRegistry;
 
     // Redis uses listpack for small ZSETs and upgrades to dict+skiplist as needed.
     // We approximate that behavior with an in-Java "listpack-like" sorted array and upgrade to
@@ -29,10 +35,26 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
     private NativeByteMap<ZSkipList.Node> byMember;
     private ZSkipList byScore;
     private long skiplistLevels;
+    private Runnable heapChangeListener = () -> {
+    };
 
     public ZSetValue(NativeAllocator allocator) {
+        this(allocator, HashSeed.random());
+    }
+
+    public ZSetValue(NativeAllocator allocator, HashSeed hashSeed) {
+        this(allocator, hashSeed, null);
+    }
+
+    public ZSetValue(
+            NativeAllocator allocator,
+            HashSeed hashSeed,
+            HashTableMaintenanceRegistry maintenanceRegistry
+    ) {
         NativeAllocator nativeAllocator = Objects.requireNonNull(allocator, "allocator");
         this.memberStore = new NativeByteStore(nativeAllocator, NativeObjectKind.ZSET_MEMBER_BYTES);
+        this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
+        this.maintenanceRegistry = maintenanceRegistry;
         this.listpack = new NativePackedZSet(memberStore);
     }
 
@@ -53,12 +75,59 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
         return byMember.size();
     }
 
+    public long preparedCopyHeapUpperBound(List<byte[]> scoreMemberPairs) {
+        long expectedMembers = size();
+        if (scoreMemberPairs != null) {
+            for (int i = 1; i < scoreMemberPairs.size(); i += 2) {
+                if (scoreMemberPairs.get(i) != null) {
+                    expectedMembers = addSaturating(expectedMembers, 1L);
+                }
+            }
+        }
+        return heapUpperBoundForMemberCount(expectedMembers);
+    }
+
+    public static long preparedNewHeapUpperBound(List<byte[]> scoreMemberPairs) {
+        long expectedMembers = 0L;
+        if (scoreMemberPairs != null) {
+            for (int i = 1; i < scoreMemberPairs.size(); i += 2) {
+                if (scoreMemberPairs.get(i) != null) {
+                    expectedMembers = addSaturating(expectedMembers, 1L);
+                }
+            }
+        }
+        return heapUpperBoundForMemberCount(expectedMembers);
+    }
+
+    public HashTableMetrics memberTableMetrics() {
+        return byMember == null ? null : byMember.metrics();
+    }
+
+    public boolean hasMemberTableMaintenanceDebt() {
+        return byMember != null && byMember.hasMaintenanceDebt();
+    }
+
     public long estimatedBytes() {
         if (listpack != null) {
             return listpack.estimatedBytes();
         }
         // dict (hash map) + raw member bytes + skiplist forward/span arrays (approximate by level count).
         return memberStore.nativeBytes() + skiplistLevels * (REF_BYTES + Integer.BYTES);
+    }
+
+    @Override
+    public long heapEstimatedBytes() {
+        if (listpack != null) {
+            return FIXED_HEAP_BYTES + listpack.heapEstimatedBytes();
+        }
+        long memberTableBytes = byMember == null ? 0L : byMember.heapEstimatedBytes();
+        long skipListBytes = byScore == null ? 0L : byScore.heapEstimatedBytes();
+        return FIXED_HEAP_BYTES + memberTableBytes + skipListBytes;
+    }
+
+    @Override
+    public void setHeapChangeListener(Runnable listener) {
+        heapChangeListener = Objects.requireNonNull(listener, "listener");
     }
 
     public int[] nativePayloadSizes() {
@@ -153,6 +222,24 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
         return removed;
     }
 
+    public int countExistingMembers(List<byte[]> members) {
+        Objects.requireNonNull(members, "members");
+        int removed = 0;
+        for (int index = 0; index < members.size(); index++) {
+            byte[] member = members.get(index);
+            if (appearedEarlier(members, index, member)) {
+                continue;
+            }
+            boolean exists = listpack != null
+                    ? indexOfMember(member) >= 0
+                    : byMember.get(member) != null;
+            if (exists) {
+                removed++;
+            }
+        }
+        return removed;
+    }
+
     public List<byte[]> zrangeByScore(double min, boolean minExclusive, double max, boolean maxExclusive, boolean withScores, long offset, long count) {
         if (count <= 0) {
             return new ArrayList<>();
@@ -181,7 +268,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
             for (int i = listpack.size() - 1; i >= 0; i--) {
                 double s = listpack.scoreAt(i);
                 if (scoreInRange(s, min, minExclusive, max, maxExclusive)) {
-                    listpack.removeAt(i);
+                    listpack.removeAtDiscard(i);
                     removed++;
                 }
             }
@@ -193,8 +280,10 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
         while (node != null && scoreInRange(node.score, min, minExclusive, max, maxExclusive)) {
             ZSkipList.Node next = node.forward[0];
             skiplistLevels -= node.forward.length;
-            byte[] memberBytes = memberStore.toByteArray(node.member);
-            byMember.remove(memberBytes);
+            ZSkipList.Node removedNode = byMember.remove(node.member);
+            if (removedNode != node) {
+                throw new IllegalStateException("zset member index is missing a score-range node");
+            }
             byScore.delete(node.score, node.member);
             memberStore.release(node.member);
             removed++;
@@ -228,7 +317,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
         if (listpack != null) {
             int removed = 0;
             for (long i = normalizedStop; i >= normalizedStart; i--) {
-                listpack.removeAt((int) i);
+                listpack.removeAtDiscard((int) i);
                 removed++;
             }
             return removed;
@@ -243,14 +332,58 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
         for (int i = 0; i < remaining && node != null; i++) {
             ZSkipList.Node next = node.forward[0];
             skiplistLevels -= node.forward.length;
-            byte[] memberBytes = memberStore.toByteArray(node.member);
-            byMember.remove(memberBytes);
+            ZSkipList.Node removedNode = byMember.remove(node.member);
+            if (removedNode != node) {
+                throw new IllegalStateException("zset member index is missing a rank-range node");
+            }
             byScore.delete(node.score, node.member);
             memberStore.release(node.member);
             removed++;
             node = next;
         }
         return removed;
+    }
+
+    public int countRemovalsByScore(double min, boolean minExclusive, double max, boolean maxExclusive) {
+        if (listpack != null) {
+            int removed = 0;
+            for (int index = 0; index < listpack.size(); index++) {
+                if (scoreInRange(listpack.scoreAt(index), min, minExclusive, max, maxExclusive)) {
+                    removed++;
+                }
+            }
+            return removed;
+        }
+
+        int removed = 0;
+        ZSkipList.Node node = firstNodeForMin(min, minExclusive);
+        while (node != null && scoreInRange(node.score, min, minExclusive, max, maxExclusive)) {
+            removed++;
+            node = node.forward[0];
+        }
+        return removed;
+    }
+
+    public int countRemovalsByRank(long start, long stop) {
+        int size = size();
+        if (size == 0) {
+            return 0;
+        }
+        long normalizedStart = normalizeIndex(start, size);
+        long normalizedStop = normalizeIndex(stop, size);
+        if (normalizedStart < 0) {
+            normalizedStart = 0;
+        }
+        if (normalizedStop < 0) {
+            return 0;
+        }
+        if (normalizedStop >= size) {
+            normalizedStop = size - 1;
+        }
+        if (normalizedStart > normalizedStop) {
+            return 0;
+        }
+        return Math.toIntExact(normalizedStop - normalizedStart + 1L);
     }
 
     public List<byte[]> zrange(long start, long stop, boolean withScores) {
@@ -1055,6 +1188,15 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
         return (long) size + idx;
     }
 
+    private static boolean appearedEarlier(List<byte[]> values, int limit, byte[] candidate) {
+        for (int index = 0; index < limit; index++) {
+            if (Arrays.equals(values.get(index), candidate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static int compareLex(byte[] a, byte[] b) {
         int min = Math.min(a.length, b.length);
         for (int i = 0; i < min; i++) {
@@ -1098,7 +1240,13 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
 
     private int skiplistZadd(double score, byte[] memberBytes) {
         if (byMember == null) {
-            byMember = new NativeByteMap<>(memberStore, NativeObjectKind.ZSET_MEMBER_BYTES);
+            byMember = new NativeByteMap<>(
+                    memberStore,
+                    NativeObjectKind.ZSET_MEMBER_BYTES,
+                    hashSeed,
+                    maintenanceRegistry,
+                    this::notifyHeapChanged
+            );
             byScore = new ZSkipList(memberStore);
         }
 
@@ -1217,7 +1365,13 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
             return;
         }
         int size = listpack.size();
-        NativeByteMap<ZSkipList.Node> outByMember = new NativeByteMap<>(memberStore, NativeObjectKind.ZSET_MEMBER_BYTES);
+        NativeByteMap<ZSkipList.Node> outByMember = new NativeByteMap<>(
+                memberStore,
+                NativeObjectKind.ZSET_MEMBER_BYTES,
+                hashSeed,
+                maintenanceRegistry,
+                this::notifyHeapChanged
+        );
         ZSkipList outByScore = new ZSkipList(memberStore);
         skiplistLevels = 0;
         for (int i = 0; i < size; i++) {
@@ -1232,6 +1386,7 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
         this.byScore = outByScore;
         this.listpack.close();
         this.listpack = null;
+        notifyHeapChanged();
     }
 
     @Override
@@ -1249,6 +1404,8 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
     }
 
     private static final class NativePackedZSet implements AutoCloseable {
+        private static final long FIXED_HEAP_BYTES = 56L;
+        private static final long ARRAY_HEADER_BYTES = 16L;
         private final NativeListpack members;
         private double[] scores = new double[0];
         private int size;
@@ -1263,6 +1420,12 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
 
         long estimatedBytes() {
             return members.estimatedBytes() + (long) scores.length * Double.BYTES;
+        }
+
+        long heapEstimatedBytes() {
+            return FIXED_HEAP_BYTES
+                    + members.heapEstimatedBytes()
+                    + ARRAY_HEADER_BYTES + (long) scores.length * Double.BYTES;
         }
 
         double scoreAt(int index) {
@@ -1316,6 +1479,15 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
             size--;
         }
 
+        void removeAtDiscard(int index) {
+            checkIndex(index);
+            members.removeAtDiscard(index);
+            if (size - index - 1 > 0) {
+                System.arraycopy(scores, index + 1, scores, index, size - index - 1);
+            }
+            size--;
+        }
+
         @Override
         public void close() {
             members.close();
@@ -1339,6 +1511,24 @@ public final class ZSetValue implements YierdisValue, NativeHandleOwner {
                 throw new IndexOutOfBoundsException();
             }
         }
+    }
+
+    private void notifyHeapChanged() {
+        heapChangeListener.run();
+    }
+
+    private static long heapUpperBoundForMemberCount(long memberCount) {
+        return addSaturating(
+                FIXED_HEAP_BYTES,
+                addSaturating(
+                        NativeByteMap.heapUpperBoundForEntries(memberCount),
+                        ZSkipList.heapUpperBoundForNodes(memberCount)
+                )
+        );
+    }
+
+    private static long addSaturating(long left, long right) {
+        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
     }
 
     private static final class PackedZSet {

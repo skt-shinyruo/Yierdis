@@ -19,6 +19,11 @@ public class SuiteProfileFactoryTest {
             "release-set-get-128b-c32-p4",
             "release-set-get-256b-c64-p8",
             "release-set-get-1024b-c64-p8",
+            "release-get-256b-c64-p8",
+            "release-set-256b-c64-p8",
+            "release-hset-256b-c64-p8",
+            "release-zadd-256b-c64-p8",
+            "release-large-pipelined-reply",
             "release-append-256b-c64-p8",
             "release-hll-sparse-c64-p8",
             "release-hll-dense-c64-p8",
@@ -49,6 +54,31 @@ public class SuiteProfileFactoryTest {
         Assert.assertEquals(8, setGet.pipeline());
         Assert.assertTrue(setGet.repeatIterations() >= 3);
         Assert.assertTrue(setGet.warmupIterations() >= 1);
+    }
+
+    @Test
+    public void releaseProfileContainsTheFourMandatoryMedianQpsGatesAndOneDiagnosticLargeReplyScenario() {
+        List<ScenarioDefinition> scenarios = SuiteProfileFactory.expand(SuiteProfileName.RELEASE);
+
+        List<ScenarioDefinition> gates = scenarios.stream()
+                .filter(scenario -> scenario.comparisonRole()
+                        == ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE)
+                .toList();
+
+        Assert.assertEquals(4, gates.size());
+        Assert.assertEquals(Set.of(
+                BenchWorkloadKind.GET,
+                BenchWorkloadKind.SET,
+                BenchWorkloadKind.HASH_HSET,
+                BenchWorkloadKind.ZSET_ZADD
+        ), gates.stream().map(ScenarioDefinition::workload).collect(java.util.stream.Collectors.toSet()));
+        Assert.assertEquals(0.90, ThresholdPolicy.defaults().productionHardeningMinimumMedianQpsRatio(), 0.0);
+
+        ScenarioDefinition diagnostic = scenario(scenarios, "release-large-pipelined-reply");
+        Assert.assertEquals(ScenarioDefinition.ComparisonRole.DIAGNOSTIC, diagnostic.comparisonRole());
+        Assert.assertEquals(BenchWorkloadKind.LARGE_PIPELINED_REPLY, diagnostic.workload());
+        Assert.assertTrue(diagnostic.dataSize() >= 64 * 1024);
+        Assert.assertTrue(diagnostic.pipeline() > 1);
     }
 
     @Test

@@ -2,10 +2,12 @@ package yier.bubu.redis.storage.memory.internal.entry;
 
 import yier.bubu.redis.memory.api.NativeAccessMode;
 import yier.bubu.redis.memory.api.NativeAllocator;
+import yier.bubu.redis.memory.api.NativeAllocatorStats;
 import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.memory.api.NativeObjectView;
 import yier.bubu.redis.memory.api.StaleNativeHandleException;
+import yier.bubu.redis.storage.memory.internal.value.HeapTrackedValue;
 import yier.bubu.redis.storage.memory.internal.value.YierdisValue;
 
 import java.util.Arrays;
@@ -18,6 +20,7 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
     private static final int ROOT_RECORD_BYTES = Long.BYTES;
     private static final int ADAPTER_SLOTS_PER_SEGMENT = 4096;
     private static final int INITIAL_DIRECTORY_SEGMENTS = 4;
+    private static final long ADAPTER_SLOT_HEAP_BYTES = 32L;
 
     private final NativeAllocator allocator;
     private final NativeObjectKind kind;
@@ -26,6 +29,9 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
     private Object[][] adapterSegments = new Object[INITIAL_DIRECTORY_SEGMENTS][];
     private int[] adapterSegmentLiveCounts = new int[INITIAL_DIRECTORY_SEGMENTS];
     private int adapterSegmentCount;
+    private long directoryHeapBytes;
+    private long adapterHeapBytes;
+    private boolean iterationTrapForTesting;
 
     NativeCollectionRootTable(
             NativeAllocator allocator,
@@ -37,6 +43,10 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
         this.kind = Objects.requireNonNull(kind, "kind");
         this.label = Objects.requireNonNull(label, "label");
         this.ownsAllocator = ownsAllocator;
+        this.directoryHeapBytes = addSaturating(
+                heapBytesForObjectArray(adapterSegments.length),
+                heapBytesForIntArray(adapterSegmentLiveCounts.length)
+        );
     }
 
     NativeAllocator allocator() {
@@ -55,6 +65,9 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
         try {
             writeRootRecord(nativeHandle);
             adapter = adapterFactory.apply(nativeHandle);
+            if (adapter instanceof HeapTrackedValue heapTracked) {
+                heapTracked.setHeapChangeListener(() -> refreshAdapter(nativeHandle));
+            }
             putAdapter(nativeHandle, adapter);
             return ValueHandle.fromNativeHandle(nativeHandle);
         } catch (RuntimeException | Error e) {
@@ -99,6 +112,7 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
 
     long adapterBytes(ToLongFunction<? super T> estimator) {
         Objects.requireNonNull(estimator, "estimator");
+        failIfIterationTrapped();
         long total = 0L;
         for (Object[] segment : adapterSegments) {
             if (segment == null) {
@@ -112,6 +126,30 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
             }
         }
         return total;
+    }
+
+    long heapBytes() {
+        return addSaturating(directoryHeapBytes, adapterHeapBytes);
+    }
+
+    long estimatedNewAdapterHeapGrowthBytes(long adapterValueHeapBytes) {
+        return estimatedNewAdapterHeapGrowthBytes(adapterValueHeapBytes, 1);
+    }
+
+    long estimatedNewAdapterHeapGrowthBytes(long adapterValueHeapBytes, int expectedNativeAllocationCount) {
+        if (expectedNativeAllocationCount < 1) {
+            throw new IllegalArgumentException("expectedNativeAllocationCount must be >= 1");
+        }
+        long growth = addSaturating(ADAPTER_SLOT_HEAP_BYTES, nonNegative(adapterValueHeapBytes));
+        int possibleSegmentCount = possibleAdapterSegmentCount(expectedNativeAllocationCount);
+        int highestPossibleSegmentIndex = possibleSegmentCount - 1;
+        growth = addSaturating(growth, directoryExpansionAllocationBytes(highestPossibleSegmentIndex));
+        for (int segmentIndex = 0; segmentIndex <= highestPossibleSegmentIndex; segmentIndex++) {
+            if (segmentIndex >= adapterSegments.length || adapterSegments[segmentIndex] == null) {
+                growth = addSaturating(growth, heapBytesForObjectArray(ADAPTER_SLOTS_PER_SEGMENT));
+            }
+        }
+        return growth;
     }
 
     void release(ValueHandle handle) {
@@ -176,6 +214,21 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
         return adapterSegmentCount;
     }
 
+    void refreshAdapter(ValueHandle handle) {
+        if (handle == null || handle.isNull()) {
+            return;
+        }
+        refreshAdapter(handle.nativeHandle());
+    }
+
+    void armIterationTrapForTesting() {
+        iterationTrapForTesting = true;
+    }
+
+    void disarmIterationTrapForTesting() {
+        iterationTrapForTesting = false;
+    }
+
     private void putAdapter(NativeHandle handle, T adapter) {
         int segmentIndex = adapterSegmentIndex(handle);
         ensureDirectoryCapacity(segmentIndex);
@@ -184,13 +237,17 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
             segment = new Object[ADAPTER_SLOTS_PER_SEGMENT];
             adapterSegments[segmentIndex] = segment;
             adapterSegmentCount++;
+            directoryHeapBytes = addSaturating(directoryHeapBytes, heapBytesForObjectArray(segment.length));
         }
         int offset = adapterSegmentOffset(handle);
         if (segment[offset] != null) {
             throw new IllegalStateException(label + " adapter slot is already occupied: " + handle.slotId());
         }
-        segment[offset] = new AdapterSlot<>(handle.raw(), adapter);
+        long adapterValueHeapBytes = heapEstimatedBytes(adapter);
+        segment[offset] = new AdapterSlot<>(handle.raw(), adapter, adapterValueHeapBytes);
         adapterSegmentLiveCounts[segmentIndex]++;
+        adapterHeapBytes = addSaturating(adapterHeapBytes, ADAPTER_SLOT_HEAP_BYTES);
+        adapterHeapBytes = addSaturating(adapterHeapBytes, adapterValueHeapBytes);
     }
 
     private AdapterSlot<T> adapterSlot(NativeHandle handle) {
@@ -224,10 +281,13 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
             return;
         }
         segment[offset] = null;
+        adapterHeapBytes = subtractSaturating(adapterHeapBytes, ADAPTER_SLOT_HEAP_BYTES);
+        adapterHeapBytes = subtractSaturating(adapterHeapBytes, expected.adapterHeapBytes);
         int remaining = --adapterSegmentLiveCounts[segmentIndex];
         if (remaining == 0) {
             adapterSegments[segmentIndex] = null;
             adapterSegmentCount--;
+            directoryHeapBytes = subtractSaturating(directoryHeapBytes, heapBytesForObjectArray(segment.length));
         }
     }
 
@@ -239,8 +299,59 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
         while (nextLength <= segmentIndex) {
             nextLength = Math.multiplyExact(nextLength, 2);
         }
+        long previousDirectoryArrays = addSaturating(
+                heapBytesForObjectArray(adapterSegments.length),
+                heapBytesForIntArray(adapterSegmentLiveCounts.length)
+        );
         adapterSegments = Arrays.copyOf(adapterSegments, nextLength);
         adapterSegmentLiveCounts = Arrays.copyOf(adapterSegmentLiveCounts, nextLength);
+        long nextDirectoryArrays = addSaturating(
+                heapBytesForObjectArray(adapterSegments.length),
+                heapBytesForIntArray(adapterSegmentLiveCounts.length)
+        );
+        directoryHeapBytes = subtractSaturating(directoryHeapBytes, previousDirectoryArrays);
+        directoryHeapBytes = addSaturating(directoryHeapBytes, nextDirectoryArrays);
+    }
+
+    private int possibleAdapterSegmentCount(int expectedNativeAllocationCount) {
+        NativeAllocatorStats stats = allocator.stats();
+        long activeSegments = Math.max(0L, stats.activeMetadataSegments());
+        long freeSlots = Math.max(0L, stats.freeSlots());
+        long additionalAllocations = Math.max(0L, (long) expectedNativeAllocationCount - freeSlots);
+        long additionalSegments = divideRoundingUp(additionalAllocations, ADAPTER_SLOTS_PER_SEGMENT);
+        long totalSegments = addSaturating(activeSegments, additionalSegments);
+        if (totalSegments == 0L) {
+            totalSegments = 1L;
+        }
+        return totalSegments > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) totalSegments;
+    }
+
+    private long directoryExpansionAllocationBytes(int segmentIndex) {
+        if (segmentIndex < adapterSegments.length) {
+            return 0L;
+        }
+        int nextLength = adapterSegments.length;
+        while (nextLength <= segmentIndex) {
+            if (nextLength > Integer.MAX_VALUE / 2) {
+                return Long.MAX_VALUE;
+            }
+            nextLength *= 2;
+        }
+        return addSaturating(
+                heapBytesForObjectArray(nextLength),
+                heapBytesForIntArray(nextLength)
+        );
+    }
+
+    private void refreshAdapter(NativeHandle handle) {
+        AdapterSlot<T> slot = adapterSlot(handle);
+        if (slot == null) {
+            return;
+        }
+        long nextAdapterHeapBytes = heapEstimatedBytes(slot.adapter);
+        adapterHeapBytes = subtractSaturating(adapterHeapBytes, slot.adapterHeapBytes);
+        adapterHeapBytes = addSaturating(adapterHeapBytes, nextAdapterHeapBytes);
+        slot.adapterHeapBytes = nextAdapterHeapBytes;
     }
 
     private static int adapterSegmentIndex(NativeHandle handle) {
@@ -337,6 +448,36 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
         return left + right;
     }
 
+    private static long subtractSaturating(long left, long right) {
+        return right >= left ? 0L : left - right;
+    }
+
+    private static long divideRoundingUp(long value, long divisor) {
+        if (value == 0L) {
+            return 0L;
+        }
+        return (value - 1L) / divisor + 1L;
+    }
+
+    private static long nonNegative(long value) {
+        return Math.max(0L, value);
+    }
+
+    private static long heapEstimatedBytes(YierdisValue adapter) {
+        if (!(adapter instanceof HeapTrackedValue heapTracked)) {
+            return 0L;
+        }
+        return nonNegative(heapTracked.heapEstimatedBytes());
+    }
+
+    private static long heapBytesForObjectArray(int length) {
+        return addSaturating(16L, (long) length * Long.BYTES);
+    }
+
+    private static long heapBytesForIntArray(int length) {
+        return addSaturating(16L, (long) length * Integer.BYTES);
+    }
+
     private static RuntimeException addFailure(RuntimeException failure, RuntimeException next) {
         if (failure == null) {
             return next;
@@ -345,13 +486,21 @@ final class NativeCollectionRootTable<T extends YierdisValue> {
         return failure;
     }
 
+    private void failIfIterationTrapped() {
+        if (iterationTrapForTesting) {
+            throw new AssertionError("collection adapter iteration is forbidden while taking a memory snapshot");
+        }
+    }
+
     private static final class AdapterSlot<T extends YierdisValue> {
         private final long rawHandle;
         private final T adapter;
+        private long adapterHeapBytes;
 
-        private AdapterSlot(long rawHandle, T adapter) {
+        private AdapterSlot(long rawHandle, T adapter, long adapterHeapBytes) {
             this.rawHandle = rawHandle;
             this.adapter = Objects.requireNonNull(adapter, "adapter");
+            this.adapterHeapBytes = adapterHeapBytes;
         }
     }
 }

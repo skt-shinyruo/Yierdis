@@ -3,6 +3,8 @@ package yier.bubu.redis.storage.memory.internal.ledger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 import org.junit.After;
 import org.junit.Before;
@@ -21,7 +23,9 @@ import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.MutationOutcome;
+import yier.bubu.redis.storage.api.PostCommitMutationException;
 import yier.bubu.redis.storage.api.SetMode;
+import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.memory.api.NativeCapacityExceededException;
 import yier.bubu.redis.memory.api.NativeHandle;
@@ -122,6 +126,115 @@ public class MutationExecutorReservationTest {
         org.junit.Assert.assertThrows(IllegalStateException.class, prepared::commit);
         prepared.releaseSuperseded();
         org.junit.Assert.assertEquals(List.of("commit", "release"), order);
+    }
+
+    @Test
+    public void releaseFailureDoesNotRetryAnAlreadyClaimedCallback() {
+        AtomicInteger releaseCalls = new AtomicInteger();
+        PreparedCallbackMutation<String> prepared = new PreparedCallbackMutation<>(
+                "ok",
+                0L,
+                0L,
+                MutationOutcome.NONE,
+                () -> {
+                },
+                () -> {
+                    releaseCalls.incrementAndGet();
+                    throw new IllegalStateException("release failed");
+                },
+                () -> {
+                }
+        );
+
+        prepared.commit();
+        org.junit.Assert.assertThrows(IllegalStateException.class, prepared::releaseSuperseded);
+        prepared.releaseSuperseded();
+
+        org.junit.Assert.assertEquals(1, releaseCalls.get());
+    }
+
+    @Test
+    public void reAdmitsWhenAdmissionChangesMutationUpperBound() {
+        AtomicLong upperBound = new AtomicLong(10_000L);
+        AdmissionChangingLedger ledger = new AdmissionChangingLedger(
+                new InMemoryLedger(0),
+                () -> upperBound.set(20_000L)
+        );
+        YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(
+                () -> {
+                },
+                ledger,
+                preparedAllocator
+        );
+        PreparedDbMutation<String> prepared = prepared(
+                0L,
+                0L,
+                MutationOutcome.NONE,
+                () -> "ok",
+                () -> {
+                },
+                () -> {
+                }
+        );
+
+        org.junit.Assert.assertEquals(
+                "ok",
+                executor.execute(new YierdisDbMutationExecutor.MutationPlan<String>() {
+                    @Override
+                    public long upperBoundBytes() {
+                        return upperBound.get();
+                    }
+
+                    @Override
+                    public PreparedDbMutation<String> prepare() {
+                        return prepared;
+                    }
+                })
+        );
+        org.junit.Assert.assertEquals(2, ledger.normalReservationCalls());
+        org.junit.Assert.assertEquals(0L, ledger.reservedBytes());
+    }
+
+    @Test
+    public void reAdmitsAfterRejectedAdmissionShrinksMutationUpperBound() {
+        AtomicLong upperBound = new AtomicLong(20_000L);
+        AdmissionFailingLedger ledger = new AdmissionFailingLedger(
+                new InMemoryLedger(0),
+                () -> upperBound.set(10_000L)
+        );
+        YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(
+                () -> {
+                },
+                ledger,
+                preparedAllocator
+        );
+        PreparedDbMutation<String> prepared = prepared(
+                0L,
+                0L,
+                MutationOutcome.NONE,
+                () -> "ok",
+                () -> {
+                },
+                () -> {
+                }
+        );
+
+        org.junit.Assert.assertEquals(
+                "ok",
+                executor.execute(new YierdisDbMutationExecutor.MutationPlan<String>() {
+                    @Override
+                    public long upperBoundBytes() {
+                        return upperBound.get();
+                    }
+
+                    @Override
+                    public PreparedDbMutation<String> prepare() {
+                        return prepared;
+                    }
+                })
+        );
+        org.junit.Assert.assertEquals(2, ledger.normalReservationCalls());
+        org.junit.Assert.assertEquals(0L, ledger.reservedBytes());
     }
 
     @Test
@@ -254,13 +367,13 @@ public class MutationExecutorReservationTest {
     }
 
     @Test
-    public void legacyNonCapacityOffHeapFailureIsNotMappedToOom() {
+    public void legacyNonCapacityOffHeapFailureAfterApplyStartsIsResultUnknown() {
         YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(() -> {
         }, preparedLedger);
         OffHeapOutOfMemoryException failure = new OffHeapOutOfMemoryException("not capacity");
 
-        OffHeapOutOfMemoryException thrown = org.junit.Assert.assertThrows(
-                OffHeapOutOfMemoryException.class,
+        PostCommitMutationException thrown = org.junit.Assert.assertThrows(
+                PostCommitMutationException.class,
                 () -> executor.execute(new YierdisDbMutationExecutor.LegacyMutationPlan<Void>() {
                     @Override
                     public long upperBoundBytes() {
@@ -271,11 +384,93 @@ public class MutationExecutorReservationTest {
                     public YierdisDbMutationExecutor.MutationResult<Void> apply() {
                         throw failure;
                     }
-                })
+            })
         );
 
-        org.junit.Assert.assertSame(failure, thrown);
+        org.junit.Assert.assertSame(failure, thrown.getCause());
         org.junit.Assert.assertEquals(0L, preparedLedger.reservedBytes());
+    }
+
+    @Test
+    public void legacyCommandFailureBeforeVisibilityDoesNotDegradeDb() {
+        YierdisDb db = new YierdisDb();
+        db.bindToCurrentThread();
+        try {
+            YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(db);
+
+            WrongTypeException failure = org.junit.Assert.assertThrows(
+                    WrongTypeException.class,
+                    () -> executor.execute(new YierdisDbMutationExecutor.LegacyMutationPlan<Void>() {
+                        @Override
+                        public long upperBoundBytes() {
+                            return 0L;
+                        }
+
+                        @Override
+                        public void validateBeforeMutation() {
+                            throw new WrongTypeException();
+                        }
+
+                        @Override
+                        public YierdisDbMutationExecutor.MutationResult<Void> apply() {
+                            throw new AssertionError("apply must not run after preflight failure");
+                        }
+                    })
+            );
+
+            org.junit.Assert.assertEquals("WRONGTYPE Operation against a key holding the wrong kind of value", failure.getMessage());
+            org.junit.Assert.assertFalse(db.health().degraded());
+            org.junit.Assert.assertEquals(0L, db.memoryLedger().reservedBytes());
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    public void legacyCapacityFailureAfterApplyStartsDegradesDbAndSettlesConservatively() {
+        YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
+                PREPARED_TEST_UPPER_BOUND_BYTES,
+                MaxmemoryPolicy.NOEVICTION,
+                5,
+                5,
+                5
+        );
+        db.bindToCurrentThread();
+        try {
+            YierdisDbMutationExecutor executor = new YierdisDbMutationExecutor(db);
+            AtomicBoolean visibilityMayHaveChanged = new AtomicBoolean();
+
+            PostCommitMutationException failure = org.junit.Assert.assertThrows(
+                    PostCommitMutationException.class,
+                    () -> executor.execute(new YierdisDbMutationExecutor.LegacyMutationPlan<Void>() {
+                        @Override
+                        public long upperBoundBytes() {
+                            return 64L;
+                        }
+
+                        @Override
+                        public YierdisDbMutationExecutor.MutationResult<Void> apply() {
+                            visibilityMayHaveChanged.set(true);
+                            throw new NativeCapacityExceededException("injected after visibility");
+                        }
+                    })
+            );
+
+            org.junit.Assert.assertTrue(visibilityMayHaveChanged.get());
+            org.junit.Assert.assertTrue(failure.getCause() instanceof IllegalStateException);
+            org.junit.Assert.assertTrue(failure.getCause().getCause() instanceof NativeCapacityExceededException);
+            org.junit.Assert.assertTrue(db.health().degraded());
+            org.junit.Assert.assertEquals(64L, db.memoryLedger().usedBytes());
+            org.junit.Assert.assertEquals(0L, db.memoryLedger().reservedBytes());
+
+            YierdisCommandException rejected = org.junit.Assert.assertThrows(
+                    YierdisCommandException.class,
+                    () -> db.writes().strings().setString(bytes("later"), bytes("value"), SetMode.NORMAL, null)
+            );
+            org.junit.Assert.assertEquals(YierdisDbHealth.MISCONF_DEGRADED, rejected.getMessage());
+        } finally {
+            db.shutdown();
+        }
     }
 
     @Test
@@ -297,7 +492,7 @@ public class MutationExecutorReservationTest {
                 () -> preparedExecutor.execute(plan(PREPARED_TEST_UPPER_BOUND_BYTES, prepared))
         );
 
-        org.junit.Assert.assertEquals("prepared mutation exceeded its reservation", failure.getMessage());
+        org.junit.Assert.assertTrue(failure.getMessage().startsWith("prepared mutation exceeded its reservation"));
         org.junit.Assert.assertEquals(1, failure.getSuppressed().length);
         org.junit.Assert.assertEquals("abort failed", failure.getSuppressed()[0].getMessage());
         org.junit.Assert.assertEquals(0L, preparedLedger.reservedBytes());
@@ -394,6 +589,124 @@ public class MutationExecutorReservationTest {
         };
     }
 
+    private static final class AdmissionChangingLedger implements MemoryLedger {
+        private final MemoryLedger delegate;
+        private final Runnable afterFirstNormalReservation;
+        private final AtomicInteger normalReservationCalls = new AtomicInteger();
+
+        private AdmissionChangingLedger(MemoryLedger delegate, Runnable afterFirstNormalReservation) {
+            this.delegate = delegate;
+            this.afterFirstNormalReservation = afterFirstNormalReservation;
+        }
+
+        @Override
+        public long limitBytes() {
+            return delegate.limitBytes();
+        }
+
+        @Override
+        public long usedBytes() {
+            return delegate.usedBytes();
+        }
+
+        @Override
+        public long reservedBytes() {
+            return delegate.reservedBytes();
+        }
+
+        @Override
+        public MemoryReservation reserve(long estimatedExtraBytes) {
+            MemoryReservation reservation = delegate.reserve(estimatedExtraBytes);
+            if (normalReservationCalls.incrementAndGet() == 1) {
+                afterFirstNormalReservation.run();
+            }
+            return reservation;
+        }
+
+        @Override
+        public void reconcile(MemoryReservation reservation, long requiredBytes) {
+            delegate.reconcile(reservation, requiredBytes);
+        }
+
+        @Override
+        public MemoryReservation beginReclamation() {
+            return delegate.beginReclamation();
+        }
+
+        @Override
+        public void commit(MemoryReservation reservation, long actualDeltaBytes) {
+            delegate.commit(reservation, actualDeltaBytes);
+        }
+
+        @Override
+        public void rollback(MemoryReservation reservation) {
+            delegate.rollback(reservation);
+        }
+
+        private int normalReservationCalls() {
+            return normalReservationCalls.get();
+        }
+    }
+
+    private static final class AdmissionFailingLedger implements MemoryLedger {
+        private final MemoryLedger delegate;
+        private final Runnable afterFirstRejectedReservation;
+        private final AtomicInteger normalReservationCalls = new AtomicInteger();
+
+        private AdmissionFailingLedger(MemoryLedger delegate, Runnable afterFirstRejectedReservation) {
+            this.delegate = delegate;
+            this.afterFirstRejectedReservation = afterFirstRejectedReservation;
+        }
+
+        @Override
+        public long limitBytes() {
+            return delegate.limitBytes();
+        }
+
+        @Override
+        public long usedBytes() {
+            return delegate.usedBytes();
+        }
+
+        @Override
+        public long reservedBytes() {
+            return delegate.reservedBytes();
+        }
+
+        @Override
+        public MemoryReservation reserve(long estimatedExtraBytes) {
+            if (normalReservationCalls.incrementAndGet() == 1) {
+                afterFirstRejectedReservation.run();
+                throw new MemoryLedgerOutOfMemoryException();
+            }
+            return delegate.reserve(estimatedExtraBytes);
+        }
+
+        @Override
+        public void reconcile(MemoryReservation reservation, long requiredBytes) {
+            delegate.reconcile(reservation, requiredBytes);
+        }
+
+        @Override
+        public MemoryReservation beginReclamation() {
+            return delegate.beginReclamation();
+        }
+
+        @Override
+        public void commit(MemoryReservation reservation, long actualDeltaBytes) {
+            delegate.commit(reservation, actualDeltaBytes);
+        }
+
+        @Override
+        public void rollback(MemoryReservation reservation) {
+            delegate.rollback(reservation);
+        }
+
+        private int normalReservationCalls() {
+            return normalReservationCalls.get();
+        }
+    }
+
     private static <T> YierdisDbMutationExecutor.MutationPlan<T> plan(
             long upperBoundBytes,
             PreparedDbMutation<T> prepared
@@ -412,7 +725,7 @@ public class MutationExecutorReservationTest {
     }
 
     @Test
-    public void failedMutationRollsBackReservationAndDoesNotPoisonNextMutation() {
+    public void legacyPreflightFailureRollsBackReservationAndDoesNotPoisonNextMutation() {
         YierdisDb db = YierdisDb.createWithOwnedFfmRuntime(
                 PREPARED_TEST_UPPER_BOUND_BYTES,
                 MaxmemoryPolicy.NOEVICTION,
@@ -432,13 +745,18 @@ public class MutationExecutorReservationTest {
                     }
 
                     @Override
+                    public void validateBeforeMutation() {
+                        throw new WrongTypeException();
+                    }
+
+                    @Override
                     public YierdisDbMutationExecutor.MutationResult<Void> apply() {
-                        throw new IllegalStateException("boom");
+                        throw new AssertionError("apply must not run after preflight failure");
                     }
                 });
                 Assert.fail("expected mutation failure");
-            } catch (IllegalStateException expected) {
-                Assert.assertEquals("boom", expected.getMessage());
+            } catch (WrongTypeException expected) {
+                Assert.assertEquals("WRONGTYPE Operation against a key holding the wrong kind of value", expected.getMessage());
             }
 
             Assert.assertEquals(0L, db.memory().memoryStats().reservedBytes());

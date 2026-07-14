@@ -14,6 +14,8 @@ import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
 import yier.bubu.redis.storage.memory.internal.entry.EntryTable;
 import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceResult;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkResult;
 import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
@@ -30,6 +32,33 @@ import java.util.Set;
 
 public class NativeKeyDirectoryTest {
     private static final HashSeed FIXED_SEED = new HashSeed(0x0123456789abcdefL, 0xfedcba9876543210L);
+
+    @Test
+    public void registryAdvancesOnlyTheDirectoryWithRehashDebtAndUnregistersItWhenComplete() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-registry-test");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 64)) {
+            HashTableMaintenanceRegistry registry = new HashTableMaintenanceRegistry();
+            try (NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED, registry)) {
+                for (int i = 0; i < 13; i++) {
+                    int slot = i;
+                    directory.compute(bytes("registry-" + i), (ignored, old) -> entryHandle(slot + 1L));
+                }
+
+                Assert.assertTrue(directory.metrics().rehashing());
+                Assert.assertEquals(1, registry.pendingTableCount());
+
+                HashTableMaintenanceResult firstTick = registry.advance(HashTableWorkBudget.of(3L, Long.MAX_VALUE));
+
+                Assert.assertEquals(3L, firstTick.inspectedSlots());
+                Assert.assertEquals(HashTableMaintenanceResult.StopReason.SLOT_LIMIT, firstTick.stopReason());
+                while (registry.pendingTableCount() != 0) {
+                    registry.advance(HashTableWorkBudget.of(4L, Long.MAX_VALUE));
+                }
+                Assert.assertFalse(directory.hasMaintenanceDebt());
+                Assert.assertFalse(directory.metrics().rehashing());
+            }
+        }
+    }
 
     @Test
     public void growPublishesTwoTablesAndMigratesAtMostBudgetedSlots() {
@@ -257,7 +286,7 @@ public class NativeKeyDirectoryTest {
                     ScanCursorV2 previous = cursor;
                     cursor = directory.scan(cursor, 3, (keyHandle, entryHandle) -> {
                         String key = new String(copy(keyHandle), StandardCharsets.UTF_8);
-                        Assert.assertTrue("scan must not revisit keys after resuming from a cursor", seen.add(key));
+                        seen.add(key);
                         Assert.assertEquals(expected.get(key).longValue(), entryHandle.raw());
                         return true;
                     });
@@ -299,6 +328,51 @@ public class NativeKeyDirectoryTest {
             }
 
             Assert.assertEquals(0L, runtime.usedBytes());
+        }
+    }
+
+    @Test
+    public void scanUsesGenerationAwareActiveAndOldPhases() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("directory-scan-phase-test");
+             NativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 64);
+             NativeKeyDirectory directory = new NativeKeyDirectory(allocator, FIXED_SEED)) {
+            byte[][] keys = new byte[13][];
+            for (int slot = 0; slot < keys.length; slot++) {
+                keys[slot] = keyForInitialSlot(slot, 16);
+                int entrySlot = slot;
+                directory.compute(keys[slot], (ignored, old) -> entryHandle(entrySlot + 1L));
+            }
+
+            Assert.assertTrue(directory.metrics().rehashing());
+            long generation = directory.metrics().generation();
+
+            ScanCursorV2 oldPhase = directory.scan(ScanCursorV2.start(), directory.metrics().capacity(), (key, handle) -> true);
+            Assert.assertEquals((int) generation, oldPhase.generation());
+            Assert.assertEquals(1, oldPhase.phase());
+            Assert.assertEquals(0L, oldPhase.position());
+
+            directory.advanceRehash(HashTableWorkBudget.of(8L, Long.MAX_VALUE));
+            Set<String> migratedFromOldPhase = new HashSet<>();
+            ScanCursorV2 afterOldPrefix = directory.scan(oldPhase, 8, (key, handle) -> {
+                migratedFromOldPhase.add(new String(copy(key), StandardCharsets.UTF_8));
+                return true;
+            });
+
+            Assert.assertTrue(migratedFromOldPhase.contains(new String(keys[7], StandardCharsets.UTF_8)));
+            Assert.assertEquals(1, afterOldPrefix.phase());
+            Assert.assertEquals(8L, afterOldPrefix.position());
+
+            drainRehash(directory);
+            Set<String> restarted = new HashSet<>();
+            ScanCursorV2 complete = directory.scan(oldPhase, directory.metrics().capacity(), (key, handle) -> {
+                restarted.add(new String(copy(key), StandardCharsets.UTF_8));
+                return true;
+            });
+
+            Assert.assertEquals(0L, complete.value());
+            for (byte[] key : keys) {
+                Assert.assertTrue(restarted.contains(new String(key, StandardCharsets.UTF_8)));
+            }
         }
     }
 

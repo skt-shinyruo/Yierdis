@@ -9,9 +9,7 @@ flowchart LR
   client["client RESP bytes"]
   decoder["RespRequestDecoder"]
   protocolError["RespProtocolErrorReplyHandler"]
-  request["RespCommandRequest"]
-  adapter["RespCommandAdapter + RespExecutionAdapter"]
-  execRequest["ByteArrayExecutionRequest / ExecutionRequest"]
+  execRequest["RetainedRespExecutionRequest / ExecutionRequest"]
   handler["YierdisFastCommandHandler"]
   executor["CommandExecutor"]
   engine["DefaultYierdisEngine"]
@@ -24,7 +22,7 @@ flowchart LR
   io["NettyExecutionIoAdapter"]
   flush["transport flush"]
 
-  client --> decoder --> protocolError --> request --> adapter --> execRequest --> handler --> executor
+  client --> decoder --> protocolError --> execRequest --> handler --> executor
   executor --> engine --> processor --> command --> db --> memory --> reply --> respReply --> io --> flush
 ```
 
@@ -60,7 +58,7 @@ flowchart LR
 
 `YierdisServerBootstrap` 的组装和关闭顺序也在这条链里固定下来：先创建 `YierdisInstance`、engine 和 executor，再创建 Netty groups 和 `ServerBootstrap`；关闭时则反向释放 server、event loop、executor 和 runtime owned resources，避免半初始化状态泄漏。
 
-`YierdisServerChannelInitializer` 的 pipeline 只做连接级装配，不承载命令语义。顺序是 decode -> protocol error reply -> RESP adapter -> fast command handler。连接级 close 和 protocol error 也在这条 pipeline 上闭环，而不是让 handler 自己猜测 channel 生命周期。
+`YierdisServerChannelInitializer` 的 pipeline 只做连接级装配，不承载命令语义。顺序是 read credit/accounting -> decode -> protocol error reply -> fast command handler。连接级 close 和 protocol error 也在这条 pipeline 上闭环，而不是让 handler 自己猜测 channel 生命周期。
 
 ## Netty pipeline
 
@@ -68,24 +66,23 @@ flowchart LR
 
 关键节点是：
 
-- `RespRequestDecoder`：从 `ByteBuf` 解析 RESP array 或 inline command，执行 bulk/argc/line/command-bytes 四类入口限制，只产出 `RespCommandRequest` 或 `RespProtocolError`
+- `RespRequestDecoder`：从 `ByteBuf` 解析 RESP array 或 inline command，执行 bulk/argc/line/command-bytes 四类入口限制，直接产出 `RetainedRespExecutionRequest` 或 `RespProtocolError`
 - `RespProtocolErrorReplyHandler`：统一回写 RESP protocol error，并在需要时标记 closing / close-after-reply
-- `RespCommandAdapter`：把 `RespCommandRequest` 转成 `ExecutionRequest`
 - `YierdisFastCommandHandler`：接收 `ExecutionRequest`，只调用 `CommandExecutor.trySubmit(...)`
 
 这条路径里，I/O 线程不执行命令，只做协议适配和提交。
 
 ## RESP 到 ExecutionRequest
 
-`RespExecutionAdapter` 是协议和执行层之间的转换器。它读取 `RespCommandRequest` 的 argv 视图，包装成 read-only `ByteArrayExecutionRequest`，再以 `ExecutionRequest` 形式交给后续层。RESP array 里的 null bulk string 会在这里原样保留为 null argv 元素；命令是否合法由后面的 command-kernel 决定。
+`RespRequestDecoder` 是协议和执行层之间的直接边界。它在 argv 与 payload 分配前完成 ingress admission，构造不可变的 `RetainedRespExecutionRequest`，并将它作为 `ExecutionRequest` 交给后续层。每个请求持有脱离 Netty 对象的 reference-counted request-memory lease；RESP array 里的 null bulk string 会原样保留为 null argv 元素，命令是否合法仍由后面的 command-kernel 决定。
 
 这里的意义有三个：
 
-1. 协议 DTO 停留在 networking 边界内。
-2. 命令层只认识 `ExecutionRequest`。
+1. 命令层只认识 `ExecutionRequest`，不会看到 RESP DTO。
+2. 请求 lease 会一直保留到 executor、事务队列或最后一个 retained view 释放。
 3. 事务 replay 和普通执行共享同一个请求模型。
 
-`ByteArrayExecutionRequest` 是生产路径里的具体实现，但主线语义是 `ExecutionRequest`，不是 RESP DTO。
+`RetainedRespExecutionRequest` 是网络主链的具体实现；`ByteArrayExecutionRequest` 用于 heap 输入、显式 copy 和事务 snapshot。主线语义始终是 `ExecutionRequest`。
 
 ## 提交到 CommandExecutor
 
@@ -148,11 +145,7 @@ executor 交给 engine 的只有三样东西：
 ```text
 Netty ByteBuf
   -> RespRequestDecoder
-  -> RespCommandRequest
-  -> RespCommandAdapter
-  -> RespExecutionAdapter
-  -> ByteArrayExecutionRequest
-  -> ExecutionRequest
+  -> RetainedRespExecutionRequest / ExecutionRequest
   -> YierdisFastCommandHandler
   -> CommandExecutor
   -> DefaultYierdisEngine

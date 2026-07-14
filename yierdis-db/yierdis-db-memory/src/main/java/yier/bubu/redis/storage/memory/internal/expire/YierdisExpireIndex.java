@@ -22,6 +22,15 @@ public interface YierdisExpireIndex {
      */
     Long get(KeyHandle keyHandle);
 
+    /**
+     * 不推进增量 rehash 等实现维护工作的 TTL 查询。
+     *
+     * <p>枚举必须走此路径，确保 discovery 和 replay 都不会改变表结构。</p>
+     */
+    default Long getForScan(KeyHandle keyHandle) {
+        return get(keyHandle);
+    }
+
     byte[] randomKey();
 
     /**

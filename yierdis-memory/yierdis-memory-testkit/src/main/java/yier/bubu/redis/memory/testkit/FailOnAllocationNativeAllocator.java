@@ -145,6 +145,16 @@ public final class FailOnAllocationNativeAllocator implements NativeAllocator {
     }
 
     @Override
+    public NativeAllocationGrowth estimateConservativeAdditionalGrowth(int... requestedBytes) {
+        return delegate.estimateConservativeAdditionalGrowth(requestedBytes);
+    }
+
+    @Override
+    public long estimateAllocationScopeBookkeepingBytes(int expectedAllocationCount) {
+        return delegate.estimateAllocationScopeBookkeepingBytes(expectedAllocationCount);
+    }
+
+    @Override
     public void close() {
         knownCapacities.clear();
         delegate.close();

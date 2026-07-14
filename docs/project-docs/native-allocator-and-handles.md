@@ -329,3 +329,7 @@ collection internals also use allocator-backed native handles. List quicklist me
 - `internalFragmentationBytes`：reserved 与 logical 的差。
 - `externalFragmentationBytes`：page allocator 可复用空闲。
 - `quarantineBytes`：freed quarantined object 和 moved old block 仍占用的 bytes。
+
+## Production Boundary
+
+allocator 的 native usage 是 maxmemory 和 DB mutation ledger 的输入，不是 RESP reply capacity 的替代指标。生产排查必须同时看 native/maxmemory、ingress、commit-stream 和 outbound reply 账户；这些账户的关闭与验收口径见 [`production-hardening-operations.md`](./production-hardening-operations.md)。

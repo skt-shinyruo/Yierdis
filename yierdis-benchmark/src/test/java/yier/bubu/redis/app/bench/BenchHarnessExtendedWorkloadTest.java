@@ -41,6 +41,9 @@ public class BenchHarnessExtendedWorkloadTest {
         assertFrameContains(BenchWorkloadKind.SET_SADD, 3, 7, value, "SADD");
         assertFrameContains(BenchWorkloadKind.ZSET_ZADD, 3, 7, value, "ZADD");
         assertFrameContains(BenchWorkloadKind.SCAN, 3, 7, value, "SCAN");
+        assertFrameContains(BenchWorkloadKind.GET, 3, 7, value, "GET");
+        assertFrameContains(BenchWorkloadKind.SET, 3, 7, value, "SET");
+        assertFrameContains(BenchWorkloadKind.LARGE_PIPELINED_REPLY, 3, 7, value, "GET");
         assertFrameContains(BenchWorkloadKind.MIXED_READ_WRITE, 3, 11, value, "GET");
         assertFrameContains(BenchWorkloadKind.MIXED_READ_WRITE, 3, 10, value, "SET");
         assertFrameContains(BenchWorkloadKind.SET_GET, 3, 7, value, "GET");
@@ -58,7 +61,10 @@ public class BenchHarnessExtendedWorkloadTest {
                 BenchWorkloadKind.ZSET_ZADD,
                 BenchWorkloadKind.SCAN,
                 BenchWorkloadKind.MIXED_READ_WRITE,
-                BenchWorkloadKind.SET_GET
+                BenchWorkloadKind.SET_GET,
+                BenchWorkloadKind.GET,
+                BenchWorkloadKind.SET,
+                BenchWorkloadKind.LARGE_PIPELINED_REPLY
         )) {
             Assert.assertTrue(workload.name(), BenchHarness.isExtendedWorkload(workload));
         }
@@ -249,6 +255,38 @@ public class BenchHarnessExtendedWorkloadTest {
             Assert.assertEquals(0, result.errors());
             Assert.assertEquals(List.of("SET", "SET", "SET", "SET", "GET", "SET", "GET"),
                     server.awaitCommands(7));
+        }
+    }
+
+    @Test
+    public void isolatedGetAndLargeReplyWorkloadsPrefillKeysBeforeTimedGets() throws Exception {
+        assertGetWorkloadPrefillsKeys(BenchWorkloadKind.GET);
+        assertGetWorkloadPrefillsKeys(BenchWorkloadKind.LARGE_PIPELINED_REPLY);
+    }
+
+    @Test
+    public void isolatedSetWorkloadDoesNotNeedAReadPrefill() throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> ok())) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    BenchWorkloadKind.SET,
+                    "127.0.0.1",
+                    server.port(),
+                    2,
+                    1,
+                    1,
+                    3,
+                    4,
+                    false,
+                    true
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(2, result.ops());
+            Assert.assertEquals(0, result.errors());
+            Assert.assertEquals(List.of("SET", "SET"), server.awaitCommands(2));
         }
     }
 
@@ -600,6 +638,64 @@ public class BenchHarnessExtendedWorkloadTest {
         for (BenchWorkloadKind workload : List.of(BenchWorkloadKind.HASH_HSET, BenchWorkloadKind.SET_SADD,
                 BenchWorkloadKind.ZSET_ZADD)) {
             assertWrongIntegerReplyIsStrictFailure(workload, 2);
+        }
+    }
+
+    @Test
+    public void hashAndZsetUpdatesAcceptRedisZeroMutationCounts() throws Exception {
+        for (BenchWorkloadKind workload : List.of(BenchWorkloadKind.HASH_HSET, BenchWorkloadKind.ZSET_ZADD)) {
+            try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> integer(0))) {
+                Assert.assertTrue(server.awaitListening());
+                BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+                BenchWorkloadRequest request = new BenchWorkloadRequest(
+                        workload,
+                        "127.0.0.1",
+                        server.port(),
+                        1,
+                        1,
+                        1,
+                        1,
+                        8,
+                        false,
+                        true
+                );
+
+                BenchWorkloadResult result = harness.runWorkload(request);
+
+                Assert.assertEquals(workload.name(), 1, result.ops());
+                Assert.assertEquals(workload.name(), 0, result.errors());
+            }
+        }
+    }
+
+    private static void assertGetWorkloadPrefillsKeys(BenchWorkloadKind workload) throws Exception {
+        try (ScriptedRespServer server = ScriptedRespServer.start((command, index) -> {
+            if ("GET".equals(command)) {
+                return bulk("xxxx");
+            }
+            return ok();
+        })) {
+            Assert.assertTrue(server.awaitListening());
+            BenchHarness harness = new BenchHarness(new NoopDenseHllPreparer(), 1_000);
+            BenchWorkloadRequest request = new BenchWorkloadRequest(
+                    workload,
+                    "127.0.0.1",
+                    server.port(),
+                    2,
+                    1,
+                    1,
+                    3,
+                    4,
+                    false,
+                    true
+            );
+
+            BenchWorkloadResult result = harness.runWorkload(request);
+
+            Assert.assertEquals(workload.name(), 2, result.ops());
+            Assert.assertEquals(workload.name(), 0, result.errors());
+            Assert.assertEquals(workload.name(), List.of("SET", "SET", "SET", "GET", "GET"),
+                    server.awaitCommands(5));
         }
     }
 

@@ -6,12 +6,13 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.memory.internal.hash.HashCapacityPolicy;
 import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableMetrics;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkBudget;
 import yier.bubu.redis.storage.memory.internal.hash.HashTableWorkResult;
 import yier.bubu.redis.storage.memory.internal.hash.SipHash24;
 
-public final class NativeByteMap<V> implements AutoCloseable {
+public final class NativeByteMap<V> implements AutoCloseable, HashTableMaintenanceRegistry.Participant {
     private static final byte STATE_EMPTY = 0;
     private static final byte STATE_FILLED = 1;
     private static final byte STATE_TOMBSTONE = 2;
@@ -25,6 +26,9 @@ public final class NativeByteMap<V> implements AutoCloseable {
     private final NativeObjectKind keyKind;
     private final HashSeed hashSeed;
     private final ToIntFunction<byte[]> hashOverride;
+    private final HashTableMaintenanceRegistry maintenanceRegistry;
+    private final HashTableMaintenanceRegistry.Registration maintenanceRegistration;
+    private final Runnable heapChangeListener;
     private Table active;
     private Table old;
     private int rehashCursor;
@@ -33,13 +37,33 @@ public final class NativeByteMap<V> implements AutoCloseable {
     private long generation;
     private long completedRehashes;
     private int maximumProbeLength;
+    private boolean maintenanceDebt;
 
     public NativeByteMap(NativeByteStore byteStore, NativeObjectKind keyKind) {
         this(byteStore, keyKind, HashSeed.random());
     }
 
     public NativeByteMap(NativeByteStore byteStore, NativeObjectKind keyKind, HashSeed hashSeed) {
-        this(byteStore, keyKind, hashSeed, null);
+        this(byteStore, keyKind, hashSeed, null, null, null);
+    }
+
+    public NativeByteMap(
+            NativeByteStore byteStore,
+            NativeObjectKind keyKind,
+            HashSeed hashSeed,
+            HashTableMaintenanceRegistry maintenanceRegistry
+    ) {
+        this(byteStore, keyKind, hashSeed, maintenanceRegistry, null);
+    }
+
+    public NativeByteMap(
+            NativeByteStore byteStore,
+            NativeObjectKind keyKind,
+            HashSeed hashSeed,
+            HashTableMaintenanceRegistry maintenanceRegistry,
+            Runnable heapChangeListener
+    ) {
+        this(byteStore, keyKind, hashSeed, null, maintenanceRegistry, heapChangeListener);
     }
 
     NativeByteMap(
@@ -48,10 +72,34 @@ public final class NativeByteMap<V> implements AutoCloseable {
             HashSeed hashSeed,
             ToIntFunction<byte[]> hashOverride
     ) {
+        this(byteStore, keyKind, hashSeed, hashOverride, null, null);
+    }
+
+    NativeByteMap(
+            NativeByteStore byteStore,
+            NativeObjectKind keyKind,
+            HashSeed hashSeed,
+            ToIntFunction<byte[]> hashOverride,
+            HashTableMaintenanceRegistry maintenanceRegistry
+    ) {
+        this(byteStore, keyKind, hashSeed, hashOverride, maintenanceRegistry, null);
+    }
+
+    NativeByteMap(
+            NativeByteStore byteStore,
+            NativeObjectKind keyKind,
+            HashSeed hashSeed,
+            ToIntFunction<byte[]> hashOverride,
+            HashTableMaintenanceRegistry maintenanceRegistry,
+            Runnable heapChangeListener
+    ) {
         this.byteStore = Objects.requireNonNull(byteStore, "byteStore");
         this.keyKind = Objects.requireNonNull(keyKind, "keyKind");
         this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
         this.hashOverride = hashOverride;
+        this.maintenanceRegistry = maintenanceRegistry;
+        this.maintenanceRegistration = maintenanceRegistry == null ? null : maintenanceRegistry.registration(this);
+        this.heapChangeListener = heapChangeListener;
         this.active = new Table(HashCapacityPolicy.MIN_CAPACITY);
     }
 
@@ -156,6 +204,25 @@ public final class NativeByteMap<V> implements AutoCloseable {
         return previous;
     }
 
+    @SuppressWarnings("unchecked")
+    public V remove(NativeHandle keyHandle) {
+        Objects.requireNonNull(keyHandle, "keyHandle");
+        advanceRehashOnWrite();
+        int index = findIndex(active, keyHandle);
+        if (index >= 0) {
+            V previous = (V) active.values[index];
+            removeFromActive(index);
+            return previous;
+        }
+        index = findIndex(old, keyHandle);
+        if (index < 0) {
+            return null;
+        }
+        V previous = (V) old.values[index];
+        removeFromOld(index);
+        return previous;
+    }
+
     public void forEach(EntryConsumer<V> consumer) {
         Objects.requireNonNull(consumer, "consumer");
         forEach(active, consumer);
@@ -170,7 +237,10 @@ public final class NativeByteMap<V> implements AutoCloseable {
         rehashCursor = 0;
         size = 0;
         nativeBytes = 0L;
+        maintenanceDebt = false;
+        refreshMaintenanceRegistration();
         generation++;
+        notifyHeapChanged();
     }
 
     public long nativeBytes() {
@@ -179,6 +249,23 @@ public final class NativeByteMap<V> implements AutoCloseable {
 
     public long heapBytes() {
         return active.heapBytes + (old == null ? 0L : old.heapBytes);
+    }
+
+    public long heapEstimatedBytes() {
+        return heapBytes();
+    }
+
+    static long heapUpperBoundForEntries(long expectedEntries) {
+        if (expectedEntries < 0L || expectedEntries > HashCapacityPolicy.MAX_CAPACITY / 2L) {
+            return Long.MAX_VALUE;
+        }
+        long requiredCapacity = Math.max(HashCapacityPolicy.MIN_CAPACITY, expectedEntries * 2L);
+        int capacity = HashCapacityPolicy.MIN_CAPACITY;
+        while (capacity < requiredCapacity) {
+            capacity <<= 1;
+        }
+        long tableBytes = heapBytesForCapacity(capacity);
+        return tableBytes > Long.MAX_VALUE - tableBytes ? Long.MAX_VALUE : tableBytes + tableBytes;
     }
 
     public long estimatedInsertHeapGrowthBytes() {
@@ -217,6 +304,84 @@ public final class NativeByteMap<V> implements AutoCloseable {
         );
     }
 
+    @Override
+    public boolean hasMaintenanceDebt() {
+        return maintenanceDebt || old != null;
+    }
+
+    @Override
+    public long estimatedMaintenanceGrowthBytes() {
+        if (old != null) {
+            return 0L;
+        }
+        HashCapacityPolicy.Decision decision = maintenanceDecision();
+        return decision.action() == HashCapacityPolicy.Action.NONE
+                ? 0L
+                : heapBytesForCapacity(decision.targetCapacity());
+    }
+
+    @Override
+    public HashTableMaintenanceRegistry.MaintenancePreparation prepareMaintenance() {
+        StagedResize staged = stageMaintenanceResize();
+        if (staged == null) {
+            return null;
+        }
+        return new HashTableMaintenanceRegistry.MaintenancePreparation() {
+            private StagedResize pending = staged;
+
+            @Override
+            public long stagedNonNativeGrowthBytes() {
+                return requirePending().stagedHeapBytes();
+            }
+
+            @Override
+            public void commit() {
+                StagedResize current = requirePending();
+                pending = null;
+                publishStagedResize(current);
+            }
+
+            @Override
+            public void abort() {
+                StagedResize current = pending;
+                pending = null;
+                if (current != null) {
+                    current.close();
+                }
+            }
+
+            private StagedResize requirePending() {
+                if (pending == null) {
+                    throw new IllegalStateException("staged native byte-map maintenance resize is closed");
+                }
+                return pending;
+            }
+        };
+    }
+
+    public StagedResize stageMaintenanceResize() {
+        if (old != null) {
+            return null;
+        }
+        HashCapacityPolicy.Decision decision = maintenanceDecision();
+        if (decision.action() == HashCapacityPolicy.Action.NONE) {
+            maintenanceDebt = false;
+            refreshMaintenanceRegistration();
+            return null;
+        }
+        return new StagedResize(active, new Table(decision.targetCapacity()));
+    }
+
+    public void publishStagedResize(StagedResize staged) {
+        Objects.requireNonNull(staged, "staged");
+        staged.ensureActive();
+        if (old != null || active != staged.source) {
+            throw new IllegalStateException("staged native byte-map resize is no longer current");
+        }
+        publishStagedTable(staged.publish());
+    }
+
+    @Override
     public HashTableWorkResult advanceRehash(HashTableWorkBudget budget) {
         Objects.requireNonNull(budget, "budget");
         if (old == null) {
@@ -245,6 +410,8 @@ public final class NativeByteMap<V> implements AutoCloseable {
         rehashCursor = 0;
         completedRehashes++;
         generation++;
+        recordMaintenanceDebt();
+        notifyHeapChanged();
         return new HashTableWorkResult(inspected, migrated, true, HashTableWorkResult.StopReason.COMPLETE);
     }
 
@@ -312,7 +479,10 @@ public final class NativeByteMap<V> implements AutoCloseable {
         old = active;
         active = Objects.requireNonNull(staged, "staged");
         rehashCursor = 0;
+        maintenanceDebt = true;
+        refreshMaintenanceRegistration();
         generation++;
+        notifyHeapChanged();
     }
 
     private void insertActive(NativeHandle key, V value, int hash) {
@@ -382,6 +552,45 @@ public final class NativeByteMap<V> implements AutoCloseable {
         table.size--;
         table.tombstones++;
         size--;
+        recordMaintenanceDebt();
+    }
+
+    private HashCapacityPolicy.Decision maintenanceDecision() {
+        return HashCapacityPolicy.nextAction(
+                active.capacity,
+                active.size,
+                active.filled,
+                active.tombstones
+        );
+    }
+
+    private void recordMaintenanceDebt() {
+        if (old != null) {
+            maintenanceDebt = true;
+            refreshMaintenanceRegistration();
+            return;
+        }
+        maintenanceDebt = maintenanceDecision().action() != HashCapacityPolicy.Action.NONE;
+        refreshMaintenanceRegistration();
+    }
+
+    private void refreshMaintenanceRegistration() {
+        if (maintenanceRegistration == null) {
+            return;
+        }
+        if (maintenanceDebt || old != null) {
+            if (!maintenanceRegistration.registered()) {
+                maintenanceRegistry.register(maintenanceRegistration);
+            }
+        } else {
+            maintenanceRegistry.unregister(maintenanceRegistration);
+        }
+    }
+
+    private void notifyHeapChanged() {
+        if (heapChangeListener != null) {
+            heapChangeListener.run();
+        }
     }
 
     private void invalidateOldShadow(NativeHandle key, int hash) {
@@ -428,6 +637,19 @@ public final class NativeByteMap<V> implements AutoCloseable {
                 return index;
             }
             index = (index + 1) & mask;
+        }
+        return -1;
+    }
+
+    private int findIndex(Table table, NativeHandle keyHandle) {
+        if (table == null) {
+            return -1;
+        }
+        for (int index = 0; index < table.capacity; index++) {
+            if (table.states[index] == STATE_FILLED
+                    && byteStore.compareLex(table.keys[index], keyHandle) == 0) {
+                return index;
+            }
         }
         return -1;
     }
@@ -480,6 +702,45 @@ public final class NativeByteMap<V> implements AutoCloseable {
     @FunctionalInterface
     public interface EntryConsumer<V> {
         void accept(NativeHandle keyHandle, V value);
+    }
+
+    public final class StagedResize implements AutoCloseable {
+        private final Table source;
+        private Table replacement;
+        private boolean terminal;
+
+        private StagedResize(Table source, Table replacement) {
+            this.source = Objects.requireNonNull(source, "source");
+            this.replacement = Objects.requireNonNull(replacement, "replacement");
+        }
+
+        public long stagedHeapBytes() {
+            ensureActive();
+            return replacement.heapBytes;
+        }
+
+        private Table publish() {
+            ensureActive();
+            Table published = replacement;
+            replacement = null;
+            terminal = true;
+            return published;
+        }
+
+        private void ensureActive() {
+            if (terminal || replacement == null) {
+                throw new IllegalStateException("staged native byte-map resize is closed");
+            }
+        }
+
+        @Override
+        public void close() {
+            if (terminal) {
+                return;
+            }
+            terminal = true;
+            replacement = null;
+        }
     }
 
     private static final class Table {

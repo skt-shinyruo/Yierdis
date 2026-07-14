@@ -94,8 +94,35 @@ public final class SuiteCsvWriter {
                         status(metric, entry.getValue())
                 ));
             }
+            appendProductionHardeningMedianQpsGateRow(out, comparison);
         }
         return out.toString();
+    }
+
+    private static void appendProductionHardeningMedianQpsGateRow(StringBuilder out, ScenarioComparison comparison) {
+        if (comparison.scenario().comparisonRole()
+                != ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE) {
+            return;
+        }
+        MetricSummary baseline = comparison.baseline().summaries().get("qps");
+        MetricSummary current = comparison.current().summaries().get("qps");
+        if (baseline == null || current == null || baseline.median() == 0.0) {
+            return;
+        }
+        double ratio = current.median() / baseline.median();
+        appendRow(out, List.of(
+                comparison.scenario().id(),
+                comparison.baseline().artifactLabel(),
+                comparison.current().artifactLabel(),
+                "median_qps_ratio",
+                number(baseline.median()),
+                number(current.median()),
+                number((ratio - 1.0) * 100.0),
+                number(ratio),
+                Boolean.toString(true),
+                "",
+                ratio < DEFAULT_POLICY.productionHardeningMinimumMedianQpsRatio() ? "critical" : "ok"
+        ));
     }
 
     private static String status(String metric, double deltaPercent) {

@@ -10,6 +10,11 @@ public interface StringReadOps {
 
     BulkStringValue getStringValue(BytesView keyView);
 
+    /**
+     * 返回仅用于回复容量预检的值视图；该读取不会更新访问时钟或回收过期键，调用方必须关闭结果。
+     */
+    BulkStringValue previewStringValue(BytesView keyView);
+
     long strlen(BytesView keyView);
 
     int getBit(BytesView keyView, long offset);

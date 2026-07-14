@@ -20,5 +20,6 @@
     <modules>
         <module>yierdis-common-bytes</module>
         <module>yierdis-common-memory</module>
+        <module>yierdis-common-command</module>
     </modules>
 </project>

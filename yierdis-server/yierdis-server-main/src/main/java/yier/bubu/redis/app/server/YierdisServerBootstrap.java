@@ -16,18 +16,19 @@ import org.slf4j.LoggerFactory;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
 import yier.bubu.redis.command.api.YierdisDbRouter;
-import yier.bubu.redis.command.kernel.YierdisCommandProcessorOptions;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.RedisReplyWriterFactory;
 import yier.bubu.redis.execution.engine.DefaultYierdisEngine;
 import yier.bubu.redis.execution.engine.YierdisEngine;
+import yier.bubu.redis.execution.executor.CommandExecutionEngine;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.execution.executor.CommandExecutorConfig;
 import yier.bubu.redis.memory.api.NativeDefragOptions;
 import yier.bubu.redis.memory.foreign.YierdisFfmMemoryRuntime;
 import yier.bubu.redis.storage.api.DbEngine;
 import yier.bubu.redis.protocol.resp.RespReplyWriterFactory;
+import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
 import yier.bubu.redis.storage.memory.YierdisDbEngineFactory;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
@@ -36,8 +37,15 @@ import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
 import yier.bubu.redis.runtime.embedded.YierdisInstanceRuntimeAccess;
 
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 
 /**
  * Server bootstrap wrapper that encapsulates wiring and lifecycle management.
@@ -49,6 +57,8 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
     private final ServerConfig config;
     private final YierdisServerRuntimeConfig runtimeConfig;
+    private final UnaryOperator<CommandExecutionEngine> commandEngineDecorator;
+    private final Consumer<YierdisInstanceConfig.Builder> instanceConfigCustomizer;
 
     private Channel serverChannel;
     private ScheduledFuture<?> cleanupFuture;
@@ -58,13 +68,34 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     private YierdisEngine engine;
     private CommandExecutor<NettyExecutionConnection> executor;
     private NettyServerInfoProvider infoProvider;
+    private InboundMemoryBudget inboundMemoryBudget;
+    private OutboundMemoryBudget outboundMemoryBudget;
+    private ChildChannelRegistry childChannelRegistry;
+    private ReplyEgressStats replyEgressStats;
     private EventExecutorGroup commandGroup;
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
 
     private YierdisServerBootstrap(ServerConfig config) {
+        this(config, UnaryOperator.identity(), ignored -> { });
+    }
+
+    private YierdisServerBootstrap(
+            ServerConfig config,
+            UnaryOperator<CommandExecutionEngine> commandEngineDecorator
+    ) {
+        this(config, commandEngineDecorator, ignored -> { });
+    }
+
+    private YierdisServerBootstrap(
+            ServerConfig config,
+            UnaryOperator<CommandExecutionEngine> commandEngineDecorator,
+            Consumer<YierdisInstanceConfig.Builder> instanceConfigCustomizer
+    ) {
         this.config = Objects.requireNonNull(config, "config");
         this.runtimeConfig = config.runtimeConfig();
+        this.commandEngineDecorator = Objects.requireNonNull(commandEngineDecorator, "commandEngineDecorator");
+        this.instanceConfigCustomizer = Objects.requireNonNull(instanceConfigCustomizer, "instanceConfigCustomizer");
     }
 
     public static YierdisServerBootstrap start(String... args) throws Exception {
@@ -76,7 +107,49 @@ public final class YierdisServerBootstrap implements AutoCloseable {
     }
 
     static YierdisServerBootstrap start(ServerConfig config) throws Exception {
-        YierdisServerBootstrap server = new YierdisServerBootstrap(config);
+        return start(config, UnaryOperator.identity());
+    }
+
+    static YierdisServerBootstrap startForTests(
+            UnaryOperator<CommandExecutionEngine> commandEngineDecorator,
+            String... args
+    ) throws Exception {
+        ServerConfig config = ServerConfig.fromArgs(args);
+        if (config == null) {
+            throw new IllegalArgumentException("No server config (help requested or invalid args)");
+        }
+        return start(config, commandEngineDecorator);
+    }
+
+    static YierdisServerBootstrap startForTests(
+            UnaryOperator<CommandExecutionEngine> commandEngineDecorator,
+            Consumer<YierdisInstanceConfig.Builder> instanceConfigCustomizer,
+            String... args
+    ) throws Exception {
+        ServerConfig config = ServerConfig.fromArgs(args);
+        if (config == null) {
+            throw new IllegalArgumentException("No server config (help requested or invalid args)");
+        }
+        return start(config, commandEngineDecorator, instanceConfigCustomizer);
+    }
+
+    private static YierdisServerBootstrap start(
+            ServerConfig config,
+            UnaryOperator<CommandExecutionEngine> commandEngineDecorator
+    ) throws Exception {
+        return start(config, commandEngineDecorator, ignored -> { });
+    }
+
+    private static YierdisServerBootstrap start(
+            ServerConfig config,
+            UnaryOperator<CommandExecutionEngine> commandEngineDecorator,
+            Consumer<YierdisInstanceConfig.Builder> instanceConfigCustomizer
+    ) throws Exception {
+        YierdisServerBootstrap server = new YierdisServerBootstrap(
+                config,
+                commandEngineDecorator,
+                instanceConfigCustomizer
+        );
         boolean ok = false;
         try {
             server.startInternal();
@@ -129,6 +202,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .nativeDefragMaxObjects(runtimeConfig.nativeDefragMaxObjects())
                 .nativeDefragTimeLimitMillis(runtimeConfig.nativeDefragTimeLimitMillis());
         configureDefaultDbEngineFactory(instanceConfig, scope, runtimeConfig);
+        instanceConfigCustomizer.accept(instanceConfig);
         instance = YierdisInstance.create(instanceConfig.build());
         YierdisInstanceRuntimeAccess runtimeAccess = instance.runtimeAccess();
         Runnable maintenanceTick = new YierdisInstanceMaintenance(instance)::maintenanceTick;
@@ -136,6 +210,14 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
         infoProvider = new NettyServerInfoProvider(runtimeConfig);
         infoProvider.bindObservability(observability);
+        inboundMemoryBudget = new InboundMemoryBudget(runtimeConfig.protocolGlobalInFlightBytes());
+        infoProvider.bindInboundMemoryBudget(inboundMemoryBudget);
+        outboundMemoryBudget = new OutboundMemoryBudget(runtimeConfig.replyGlobalCapacityBytes());
+        childChannelRegistry = new ChildChannelRegistry();
+        replyEgressStats = new ReplyEgressStats();
+        infoProvider.bindOutboundMemoryBudget(outboundMemoryBudget);
+        infoProvider.bindChildChannelRegistry(childChannelRegistry);
+        infoProvider.bindReplyEgressStats(replyEgressStats);
         SlowCommandGovernor slowGovernor = new SlowCommandGovernor() {
             private final long timeBudgetNanos = runtimeConfig.keysTimeBudgetMillis() <= 0
                     ? 0
@@ -151,11 +233,7 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 return runtimeConfig.keysMaxResults();
             }
         };
-        YierdisCommandProcessorOptions commandProcessorOptions = YierdisCommandProcessorOptions.builder()
-                .changeObserver(RuntimeChangeSinkCommandChangeObserver.fromSink(instance.config().changeSink()))
-                .build();
         YierdisFastCommandProcessor commandProcessor = ServerCommandComposition.createProcessor(
-                commandProcessorOptions,
                 dbRouter(instance),
                 infoProvider,
                 slowGovernor
@@ -165,12 +243,16 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 maintenanceTick
         );
         engine = commandEngine;
+        CommandExecutionEngine executionEngine = Objects.requireNonNull(
+                commandEngineDecorator.apply(commandEngine::execute),
+                "commandEngineDecorator result"
+        );
         commandGroup = new DefaultEventExecutorGroup(1);
         RedisReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
         CommandExecutorConfig executorConfig = CommandExecutorConfigs.from(runtimeConfig);
         executor = new CommandExecutor<>(
                 runtimeAccess::bindToCurrentThread,
-                commandEngine::execute,
+                executionEngine,
                 commandGroup.next(),
                 replyWriterFactory,
                 new NettyExecutionIoAdapter(),
@@ -213,7 +295,15 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 .channel(NioServerSocketChannel.class)
                 .childOption(ChannelOption.TCP_NODELAY, true)
                 .childOption(ChannelOption.SO_KEEPALIVE, true)
-                .childHandler(new YierdisServerChannelInitializer(runtimeConfig, executor, replyWriterFactory));
+                .childHandler(new YierdisServerChannelInitializer(
+                        runtimeConfig,
+                        executor,
+                        replyWriterFactory,
+                        inboundMemoryBudget,
+                        outboundMemoryBudget,
+                        childChannelRegistry,
+                        replyEgressStats
+                ));
 
         serverChannel = bootstrap.bind(runtimeConfig.port()).sync().channel();
     }
@@ -263,6 +353,17 @@ public final class YierdisServerBootstrap implements AutoCloseable {
         }
         serverChannel = null;
 
+        ChildChannelRegistry children = childChannelRegistry;
+        List<Channel> acceptedChildren = List.of();
+        if (children != null) {
+            try {
+                acceptedChildren = children.beginShutdown();
+                markChildrenClosing(acceptedChildren);
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
+            }
+        }
+
         ScheduledFuture<?> f = cleanupFuture;
         if (f != null) {
             f.cancel(false);
@@ -277,6 +378,35 @@ public final class YierdisServerBootstrap implements AutoCloseable {
                 failure = recordCloseFailure(failure, t);
             }
         }
+
+        ChildDrainResult childDrain = drainChildReplies(children, acceptedChildren, ex);
+        failure = recordCloseFailure(failure, childDrain.failure());
+        if (!childDrain.drained()) {
+            rethrowIfNeeded(failure);
+            return;
+        }
+        childChannelRegistry = null;
+
+        InboundMemoryBudget inboundBudget = inboundMemoryBudget;
+        if (inboundBudget != null) {
+            try {
+                inboundBudget.close();
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
+            }
+        }
+        inboundMemoryBudget = null;
+
+        OutboundMemoryBudget outboundBudget = outboundMemoryBudget;
+        if (outboundBudget != null) {
+            try {
+                outboundBudget.close();
+            } catch (Throwable t) {
+                failure = recordCloseFailure(failure, t);
+            }
+        }
+        outboundMemoryBudget = null;
+        replyEgressStats = null;
 
         YierdisEngine eng = engine;
         if (eng != null) {
@@ -335,6 +465,142 @@ public final class YierdisServerBootstrap implements AutoCloseable {
 
     NettyServerInfoProvider infoProviderForTests() {
         return infoProvider;
+    }
+
+    InboundMemoryBudget inboundMemoryBudgetForTests() {
+        return inboundMemoryBudget;
+    }
+
+    OutboundMemoryBudget outboundMemoryBudgetForTests() {
+        return outboundMemoryBudget;
+    }
+
+    ReplyEgressStats replyEgressStatsForTests() {
+        return replyEgressStats;
+    }
+
+    ChildChannelRegistry childChannelRegistryForTests() {
+        return childChannelRegistry;
+    }
+
+    private ChildDrainResult drainChildReplies(
+            ChildChannelRegistry children,
+            List<Channel> acceptedChildren,
+        CommandExecutor<NettyExecutionConnection> commandExecutor
+    ) {
+        if (children == null) {
+            return ChildDrainResult.success();
+        }
+
+        List<CompletableFuture<Void>> replyDrains = new ArrayList<>(acceptedChildren.size());
+        for (Channel child : acceptedChildren) {
+            NettyExecutionConnection connection = NettyExecutionConnection.get(child);
+            replyDrains.add(connection == null ? closeUninitializedChild(child) : connection.shutdownReplyGracefully());
+        }
+        CompletableFuture<Void> replies = CompletableFuture.allOf(replyDrains.toArray(CompletableFuture[]::new));
+        CompletableFuture<Void> allChildren = CompletableFuture.allOf(replies, children.drainedFuture());
+        try {
+            awaitDrain(allChildren);
+            flushReplyCleanupTasks(commandExecutor);
+            return ChildDrainResult.success();
+        } catch (TimeoutException timeout) {
+            IllegalStateException timeoutFailure = replyDrainTimeout(children, timeout);
+            children.forceClose();
+            try {
+                awaitDrain(allChildren);
+                flushReplyCleanupTasks(commandExecutor);
+                return ChildDrainResult.drainedWithFailure(timeoutFailure);
+            } catch (Throwable forcedCloseFailure) {
+                timeoutFailure.addSuppressed(forcedCloseFailure);
+                return ChildDrainResult.notDrained(timeoutFailure);
+            }
+        } catch (Throwable drainFailure) {
+            children.forceClose();
+            try {
+                awaitDrain(allChildren);
+                flushReplyCleanupTasks(commandExecutor);
+            } catch (Throwable forcedCloseFailure) {
+                drainFailure.addSuppressed(forcedCloseFailure);
+                return ChildDrainResult.notDrained(drainFailure);
+            }
+            return ChildDrainResult.drainedWithFailure(drainFailure);
+        }
+    }
+
+    private void awaitDrain(CompletableFuture<Void> future)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        future.get(runtimeConfig.replyDrainTimeoutMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    private static void markChildrenClosing(List<Channel> children) {
+        for (Channel child : children) {
+            NettyExecutionConnection connection = NettyExecutionConnection.get(child);
+            if (connection != null) {
+                connection.markClosing();
+            }
+        }
+    }
+
+    private static CompletableFuture<Void> closeUninitializedChild(Channel child) {
+        CompletableFuture<Void> closed = new CompletableFuture<>();
+        child.closeFuture().addListener(future -> {
+            if (future.isSuccess()) {
+                closed.complete(null);
+            } else {
+                closed.completeExceptionally(future.cause());
+            }
+        });
+        try {
+            if (child.isRegistered()) {
+                child.close();
+            } else {
+                child.unsafe().closeForcibly();
+            }
+        } catch (Throwable closeFailure) {
+            closed.completeExceptionally(closeFailure);
+        }
+        return closed;
+    }
+
+    private void flushReplyCleanupTasks(CommandExecutor<NettyExecutionConnection> commandExecutor) {
+        if (commandExecutor != null) {
+            commandExecutor.executeOwnerTask(() -> { }).join();
+        }
+    }
+
+    private IllegalStateException replyDrainTimeout(ChildChannelRegistry children, TimeoutException cause) {
+        ReplyEgressStats statsCollector = replyEgressStats;
+        if (statsCollector != null) {
+            statsCollector.shutdownTimeout();
+        }
+        OutboundMemoryBudgetStats stats = outboundMemoryBudget == null
+                ? null
+                : outboundMemoryBudget.stats();
+        String diagnostics = stats == null
+                ? "liveChildren=" + children.activeChannelCount()
+                : "liveChildren=" + children.activeChannelCount()
+                + ", reservedBytes=" + stats.reservedBytes()
+                + ", allocatedBytes=" + stats.allocatedBytes()
+                + ", activeConnections=" + stats.activeConnections()
+                + ", activeSlots=" + stats.activeSlots();
+        return new IllegalStateException(
+                "reply shutdown timed out after " + runtimeConfig.replyDrainTimeoutMillis() + " ms: " + diagnostics,
+                cause
+        );
+    }
+
+    private record ChildDrainResult(boolean drained, Throwable failure) {
+        private static ChildDrainResult success() {
+            return new ChildDrainResult(true, null);
+        }
+
+        private static ChildDrainResult drainedWithFailure(Throwable failure) {
+            return new ChildDrainResult(true, failure);
+        }
+
+        private static ChildDrainResult notDrained(Throwable failure) {
+            return new ChildDrainResult(false, failure);
+        }
     }
 
     private static void closeRuntimeAccess(CommandExecutor<?> executor, YierdisInstanceRuntimeAccess runtimeAccess) throws Throwable {

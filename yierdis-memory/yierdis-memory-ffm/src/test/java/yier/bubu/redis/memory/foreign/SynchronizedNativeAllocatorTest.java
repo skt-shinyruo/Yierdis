@@ -72,6 +72,8 @@ public class SynchronizedNativeAllocatorTest {
             opened.await();
 
             completed.abort();
+            completed.promote();
+            completed.close();
             Assert.assertThrows(
                     IllegalStateException.class,
                     () -> allocator.allocate(NativeObjectKind.STRING_BYTES, 32)

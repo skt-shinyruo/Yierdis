@@ -5,6 +5,8 @@ import yier.bubu.redis.memory.api.NativeHandle;
 import yier.bubu.redis.memory.api.NativeObjectKind;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.memory.internal.hash.HashSeed;
+import yier.bubu.redis.storage.memory.internal.hash.HashTableMaintenanceRegistry;
 import yier.bubu.redis.storage.memory.internal.value.ValueEncoding;
 import yier.bubu.redis.storage.memory.internal.value.ZSetValue;
 import yier.bubu.redis.storage.memory.internal.value.ZSetValue.ZAddResult;
@@ -16,9 +18,25 @@ import java.util.function.Consumer;
 
 public final class ZSetRoot implements TypeRoot {
     private final NativeCollectionRootTable<ZSetValue> zsets;
+    private final HashSeed hashSeed;
+    private final HashTableMaintenanceRegistry maintenanceRegistry;
     private boolean closed;
 
     public ZSetRoot(NativeAllocator allocator) {
+        this(allocator, HashSeed.random());
+    }
+
+    public ZSetRoot(NativeAllocator allocator, HashSeed hashSeed) {
+        this(allocator, hashSeed, null);
+    }
+
+    public ZSetRoot(
+            NativeAllocator allocator,
+            HashSeed hashSeed,
+            HashTableMaintenanceRegistry maintenanceRegistry
+    ) {
+        this.hashSeed = Objects.requireNonNull(hashSeed, "hashSeed");
+        this.maintenanceRegistry = maintenanceRegistry;
         this.zsets = new NativeCollectionRootTable<>(
                 Objects.requireNonNull(allocator, "allocator"),
                 NativeObjectKind.ZSET_ROOT,
@@ -61,7 +79,7 @@ public final class ZSetRoot implements TypeRoot {
         ValueHandle replacement = create();
         boolean ok = false;
         try {
-            requireZSet(replacement).zaddMany(memberScorePairsToScoreMemberPairs(current.zrange(0, -1, true)));
+            zadd(replacement, memberScorePairsToScoreMemberPairs(current.zrange(0, -1, true)));
             ok = true;
             return replacement;
         } finally {
@@ -74,21 +92,52 @@ public final class ZSetRoot implements TypeRoot {
     public synchronized PreparedAddResult prepareAdd(ValueHandle source, List<byte[]> scoreMemberPairs) {
         ensureOpen();
         Objects.requireNonNull(scoreMemberPairs, "scoreMemberPairs");
+        long heapBefore = retainedHeapBytes();
         ValueHandle replacement = source == null ? create() : copy(source);
         boolean ok = false;
         try {
-            ZAddResult added = requireZSet(replacement).prepareAdd(scoreMemberPairs);
+            ZSetValue value = requireZSet(replacement);
+            ZAddResult added;
+            try {
+                added = value.prepareAdd(scoreMemberPairs);
+            } finally {
+                zsets.refreshAdapter(replacement);
+            }
             if (source != null && !added.changedAny()) {
                 release(replacement);
-                return new PreparedAddResult(null, added);
+                return new PreparedAddResult(null, added, 0L);
             }
             ok = true;
-            return new PreparedAddResult(replacement, added);
+            return new PreparedAddResult(
+                    replacement,
+                    added,
+                    positiveDelta(retainedHeapBytes(), heapBefore)
+            );
         } finally {
             if (!ok && replacement != null) {
                 release(replacement);
             }
         }
+    }
+
+    public synchronized long estimatedPreparedAddHeapGrowthBytes(
+            ValueHandle source,
+            List<byte[]> scoreMemberPairs
+    ) {
+        return estimatedPreparedAddHeapGrowthBytes(source, scoreMemberPairs, 1);
+    }
+
+    public synchronized long estimatedPreparedAddHeapGrowthBytes(
+            ValueHandle source,
+            List<byte[]> scoreMemberPairs,
+            int expectedNativeAllocationCount
+    ) {
+        ensureOpen();
+        Objects.requireNonNull(scoreMemberPairs, "scoreMemberPairs");
+        long replacementHeapBytes = source == null
+                ? ZSetValue.preparedNewHeapUpperBound(scoreMemberPairs)
+                : requireZSet(source).preparedCopyHeapUpperBound(scoreMemberPairs);
+        return zsets.estimatedNewAdapterHeapGrowthBytes(replacementHeapBytes, expectedNativeAllocationCount);
     }
 
     public synchronized ValueHandle store(ZSetValue value) {
@@ -97,7 +146,7 @@ public final class ZSetRoot implements TypeRoot {
         ValueHandle handle = create();
         boolean ok = false;
         try {
-            requireZSet(handle).zaddMany(memberScorePairsToScoreMemberPairs(value.zrange(0, -1, true)));
+            zadd(handle, memberScorePairsToScoreMemberPairs(value.zrange(0, -1, true)));
             ok = true;
             return handle;
         } finally {
@@ -109,22 +158,52 @@ public final class ZSetRoot implements TypeRoot {
 
     public synchronized ZAddResult zaddResult(ValueHandle handle, List<byte[]> scoreMemberPairs) {
         ensureOpen();
-        return requireZSet(handle).zaddManyResult(scoreMemberPairs);
+        ZSetValue value = requireZSet(handle);
+        try {
+            return value.zaddManyResult(scoreMemberPairs);
+        } finally {
+            zsets.refreshAdapter(handle);
+        }
     }
 
     public synchronized int zadd(ValueHandle handle, List<byte[]> scoreMemberPairs) {
         ensureOpen();
-        return requireZSet(handle).zaddMany(scoreMemberPairs);
+        ZSetValue value = requireZSet(handle);
+        try {
+            return value.zaddMany(scoreMemberPairs);
+        } finally {
+            zsets.refreshAdapter(handle);
+        }
     }
 
     public synchronized int zrem(ValueHandle handle, List<byte[]> members) {
         ensureOpen();
-        return requireZSet(handle).zrem(members);
+        ZSetValue value = requireZSet(handle);
+        try {
+            return value.zrem(members);
+        } finally {
+            zsets.refreshAdapter(handle);
+        }
+    }
+
+    public synchronized int countExistingMembers(ValueHandle handle, List<byte[]> members) {
+        ensureOpen();
+        return requireZSet(handle).countExistingMembers(members);
     }
 
     public synchronized int zremrangeByRank(ValueHandle handle, long start, long stop) {
         ensureOpen();
-        return requireZSet(handle).zremrangeByRank(start, stop);
+        ZSetValue value = requireZSet(handle);
+        try {
+            return value.zremrangeByRank(start, stop);
+        } finally {
+            zsets.refreshAdapter(handle);
+        }
+    }
+
+    public synchronized int countRemovalsByRank(ValueHandle handle, long start, long stop) {
+        ensureOpen();
+        return requireZSet(handle).countRemovalsByRank(start, stop);
     }
 
     public synchronized int zremrangeByScore(
@@ -135,7 +214,23 @@ public final class ZSetRoot implements TypeRoot {
             boolean maxExclusive
     ) {
         ensureOpen();
-        return requireZSet(handle).zremrangeByScore(min, minExclusive, max, maxExclusive);
+        ZSetValue value = requireZSet(handle);
+        try {
+            return value.zremrangeByScore(min, minExclusive, max, maxExclusive);
+        } finally {
+            zsets.refreshAdapter(handle);
+        }
+    }
+
+    public synchronized int countRemovalsByScore(
+            ValueHandle handle,
+            double min,
+            boolean minExclusive,
+            double max,
+            boolean maxExclusive
+    ) {
+        ensureOpen();
+        return requireZSet(handle).countRemovalsByScore(min, minExclusive, max, maxExclusive);
     }
 
     public synchronized int zrangeCount(ValueHandle handle, long start, long stop, boolean withScores) {
@@ -241,6 +336,19 @@ public final class ZSetRoot implements TypeRoot {
         return zsets.adapterBytes(ZSetValue::estimatedBytes);
     }
 
+    public synchronized long heapBytes() {
+        ensureOpen();
+        return zsets.heapBytes();
+    }
+
+    public synchronized void armIterationTrapForTesting() {
+        zsets.armIterationTrapForTesting();
+    }
+
+    public synchronized void disarmIterationTrapForTesting() {
+        zsets.disarmIterationTrapForTesting();
+    }
+
     public synchronized void forEachNativeHandle(ValueHandle handle, Consumer<NativeHandle> consumer) {
         ensureOpen();
         requireZSet(handle).forEachNativeHandle(consumer);
@@ -271,7 +379,7 @@ public final class ZSetRoot implements TypeRoot {
     }
 
     private ZSetValue newZSetValue() {
-        return new ZSetValue(zsets.allocator());
+        return new ZSetValue(zsets.allocator(), hashSeed, maintenanceRegistry);
     }
 
     private void ensureOpen() {
@@ -289,7 +397,7 @@ public final class ZSetRoot implements TypeRoot {
         return out;
     }
 
-    public record PreparedAddResult(ValueHandle handle, ZAddResult result) {
+    public record PreparedAddResult(ValueHandle handle, ZAddResult result, long stagedNonNativeGrowthBytes) {
         public boolean changedAny() {
             return result.changedAny();
         }
@@ -297,6 +405,18 @@ public final class ZSetRoot implements TypeRoot {
         public int added() {
             return result.added();
         }
+    }
+
+    private long retainedHeapBytes() {
+        long registryHeapBytes = maintenanceRegistry == null ? 0L : maintenanceRegistry.heapEstimatedBytes();
+        long rootHeapBytes = zsets.heapBytes();
+        return rootHeapBytes > Long.MAX_VALUE - registryHeapBytes
+                ? Long.MAX_VALUE
+                : rootHeapBytes + registryHeapBytes;
+    }
+
+    private static long positiveDelta(long after, long before) {
+        return after > before ? after - before : 0L;
     }
 
 }

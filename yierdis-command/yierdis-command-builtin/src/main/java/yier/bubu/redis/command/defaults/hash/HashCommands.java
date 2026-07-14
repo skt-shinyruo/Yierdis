@@ -9,10 +9,10 @@ import yier.bubu.redis.command.api.CommandParseResult;
 import yier.bubu.redis.command.api.CommandParsers;
 import yier.bubu.redis.command.api.ServerInfoProvider;
 import yier.bubu.redis.command.api.SlowCommandGovernor;
-import yier.bubu.redis.command.defaults.BulkStringReplyAdapter;
 import yier.bubu.redis.command.defaults.CommandSupport;
 
-import yier.bubu.redis.storage.api.result.BulkStringMapPairs;
+import yier.bubu.redis.storage.api.result.BulkStringMapMetrics;
+import yier.bubu.redis.storage.api.result.BulkStringValue;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
@@ -47,10 +47,9 @@ public final class HashCommands implements CommandModule {
         ExecutionRequest request = args.request();
         support.sliceResetFromRequest(request, 2, pairsLen);
         try {
-            long added = support.recordWriteValue(
-                    ctx,
-                    support.commandDb(ctx).writes().hashes().hset(request.readOnlyByteArray(1), support.slice())
-            );
+            long added = support.commandDb(ctx).writes().hashes()
+                    .hset(request.readOnlyByteArray(1), support.slice())
+                    .value();
             out.integer(added);
         } finally {
             support.clearScratch(pairsLen);
@@ -63,7 +62,9 @@ public final class HashCommands implements CommandModule {
             CommandSupport.wrongArity(out, "hget");
             return;
         }
-        out.bulkString(support.commandDb(ctx).reads().hashes().hget(request.readOnlyByteArray(1), request.readOnlyByteArray(2)));
+        BulkStringValue value = support.commandDb(ctx).reads().hashes()
+                .hget(request.readOnlyByteArray(1), request.readOnlyByteArray(2));
+        CommandSupport.writeOwnedBulkString(out, value);
     }
 
     private void hgetall(ExecutionRequest request, CommandContext ctx) {
@@ -74,13 +75,8 @@ public final class HashCommands implements CommandModule {
         }
 
         byte[] key = request.readOnlyByteArray(1);
-        BulkStringMapPairs pairsResult = support.commandDb(ctx).reads().hashes().hgetall(key);
-        int pairs = pairsResult.pairCount();
-        out.mapHeader(pairs);
-        if (pairs == 0) {
-            return;
-        }
-        pairsResult.emitPairsTo(new BulkStringReplyAdapter(out));
+        BulkStringMapMetrics pairsResult = support.commandDb(ctx).reads().hashes().hgetall(key);
+        CommandSupport.writeMeasuredBulkStringMap(out, pairsResult);
     }
 
     private void hlen(ExecutionRequest request, CommandContext ctx) {
@@ -101,10 +97,9 @@ public final class HashCommands implements CommandModule {
         int fieldsLen = request.argc() - 2;
         support.sliceResetFromRequest(request, 2, fieldsLen);
         try {
-            long deleted = support.recordWriteValue(
-                    ctx,
-                    support.commandDb(ctx).writes().hashes().hdel(request.readOnlyByteArray(1), support.slice())
-            );
+            long deleted = support.commandDb(ctx).writes().hashes()
+                    .hdel(request.readOnlyByteArray(1), support.slice())
+                    .value();
             out.integer(deleted);
         } finally {
             support.clearScratch(fieldsLen);

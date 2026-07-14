@@ -112,12 +112,6 @@ public class CoreContractSmokeTest {
         Assert.assertEquals("client", ctx.clientMetadataSession().clientName());
         Assert.assertTrue(ctx.clientMetadataSession().authenticated());
         Assert.assertEquals(3, ctx.protocolNegotiationSession().respVersion());
-        ctx.recordMutation(true, false);
-        Assert.assertTrue(ctx.valueChanged());
-        Assert.assertFalse(ctx.ttlChanged());
-        Assert.assertTrue(ctx.changedAny());
-        ctx.clearMutationOutcome();
-        Assert.assertFalse(ctx.changedAny());
         writer.requestCloseAfterReply();
         Assert.assertTrue(writer.closeAfterReplyRequested());
     }
@@ -178,10 +172,6 @@ public class CoreContractSmokeTest {
 
             @Override
             public void arrayHeader(int count) {
-            }
-
-            @Override
-            public void bulkStringArray(List<byte[]> values) {
             }
 
             @Override

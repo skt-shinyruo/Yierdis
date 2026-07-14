@@ -86,8 +86,14 @@ public final class SuiteJsonWriter {
             out.name("before");
             writeStringMap(out, pass.before().values());
             out.comma();
+            out.name("beforeOutboundReplyGauges");
+            writeLongMap(out, pass.before().outboundReplyGauges());
+            out.comma();
             out.name("after");
             writeStringMap(out, pass.after().values());
+            out.comma();
+            out.name("afterOutboundReplyGauges");
+            writeLongMap(out, pass.after().outboundReplyGauges());
             out.comma();
             out.name("summaries");
             writeSummaries(out, pass);
@@ -122,6 +128,18 @@ public final class SuiteJsonWriter {
                 }
             }
             out.objectEnd();
+            if (comparison.scenario().comparisonRole()
+                    == ScenarioDefinition.ComparisonRole.PRODUCTION_HARDENING_MEDIAN_QPS_GATE) {
+                MetricSummary baselineQps = comparison.baseline().summaries().get("qps");
+                MetricSummary currentQps = comparison.current().summaries().get("qps");
+                if (baselineQps != null && currentQps != null && baselineQps.median() > 0.0) {
+                    out.comma();
+                    out.name("medianQpsRatio").number(currentQps.median() / baselineQps.median());
+                    out.comma();
+                    out.name("minimumMedianQpsRatio")
+                            .number(ThresholdPolicy.defaults().productionHardeningMinimumMedianQpsRatio());
+                }
+            }
             out.objectEnd();
             if (i + 1 < result.comparisons().size()) {
                 out.comma();
@@ -161,7 +179,8 @@ public final class SuiteJsonWriter {
         out.name("repeatIterations").number(scenario.repeatIterations()).comma();
         out.name("latency").bool(scenario.latency()).comma();
         out.name("redisComparable").string(scenario.redisComparable().name()).comma();
-        out.name("redisNonComparableReason").string(scenario.redisNonComparableReason());
+        out.name("redisNonComparableReason").string(scenario.redisNonComparableReason()).comma();
+        out.name("comparisonRole").string(scenario.comparisonRole().name());
         out.objectEnd();
     }
 
@@ -222,6 +241,19 @@ public final class SuiteJsonWriter {
         for (int i = 0; i < keys.size(); i++) {
             String key = keys.get(i);
             out.name(key).string(values.get(key));
+            if (i + 1 < keys.size()) {
+                out.comma();
+            }
+        }
+        out.objectEnd();
+    }
+
+    private static void writeLongMap(Json out, Map<String, Long> values) {
+        out.objectStart();
+        List<String> keys = values.keySet().stream().sorted().toList();
+        for (int i = 0; i < keys.size(); i++) {
+            String key = keys.get(i);
+            out.name(key).number(values.get(key));
             if (i + 1 < keys.size()) {
                 out.comma();
             }
@@ -298,6 +330,11 @@ public final class SuiteJsonWriter {
         }
 
         Json number(int value) {
+            out.append(value);
+            return this;
+        }
+
+        Json number(long value) {
             out.append(value);
             return this;
         }

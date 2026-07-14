@@ -3,6 +3,7 @@ package yier.bubu.redis.storage.memory;
 import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.memory.api.NativeAllocatorStats;
@@ -23,6 +24,7 @@ import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.storage.api.WrongTypeException;
 import yier.bubu.redis.storage.api.result.BulkStringSequence;
 import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.KeyScanWindow;
 import yier.bubu.redis.storage.api.result.PoppedValueSequence;
 import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
@@ -68,13 +70,7 @@ public class NativeStorageRegressionTest {
                     b("hll")
             )).value());
 
-            YierdisMemoryStats stats = db.memory().memoryStats();
-            Assert.assertEquals(0, db.size());
-            Assert.assertEquals(0L, db.usedBytesForMaxmemory());
-            Assert.assertEquals(0L, stats.usedBytesForMaxmemory());
-            Assert.assertEquals(0L, stats.heapDataBytesEstimate());
-            Assert.assertEquals(0L, stats.offHeapUsedBytes());
-            Assert.assertEquals(0L, stats.totalEstimatedBytes());
+            assertNativeDbHasNoLiveData(db);
         } finally {
             db.shutdown();
         }
@@ -166,7 +162,7 @@ public class NativeStorageRegressionTest {
                             b("zset")
                     )).value());
                     assertCollectionRootCounts(db, 0L);
-                    assertNativeDbEmpty(db);
+                    assertNativeDbHasNoLiveData(db);
                 } finally {
                     db.shutdown();
                 }
@@ -201,8 +197,8 @@ public class NativeStorageRegressionTest {
                 db.defragMaintenance();
 
                 Assert.assertEquals(List.of("a", "b", "c"), strings(db.reads().lists().lrange(b("list"), 0, -1)));
-                Assert.assertArrayEquals(b("v1"), db.reads().hashes().hget(b("hash"), b("f1")));
-                Assert.assertArrayEquals(b("v2"), db.reads().hashes().hget(b("hash"), b("f2")));
+                Assert.assertArrayEquals(b("v1"), OwnedReplyValueAssertions.bytes(db.reads().hashes().hget(b("hash"), b("f1"))));
+                Assert.assertArrayEquals(b("v2"), OwnedReplyValueAssertions.bytes(db.reads().hashes().hget(b("hash"), b("f2"))));
                 Assert.assertTrue(strings(db.reads().sets().smembers(b("set"))).containsAll(List.of("m1", "m2")));
                 Assert.assertEquals(List.of("z1", "z2"), strings(db.reads().zsets().zrange(b("zset"), 0, -1, false)));
 
@@ -212,7 +208,7 @@ public class NativeStorageRegressionTest {
                         b("set"),
                         b("zset")
                 )).value());
-                assertNativeDbEmpty(db);
+                assertNativeDbHasNoLiveData(db);
             } finally {
                 db.shutdown();
             }
@@ -231,9 +227,7 @@ public class NativeStorageRegressionTest {
 
             Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(b("set"))).value());
 
-            Assert.assertEquals(0, db.size());
-            Assert.assertEquals(0L, db.usedBytesForMaxmemory());
-            Assert.assertEquals(0L, db.memory().memoryStats().usedBytesForMaxmemory());
+            assertNativeDbHasNoLiveData(db);
         } finally {
             db.shutdown();
         }
@@ -296,26 +290,50 @@ public class NativeStorageRegressionTest {
                 byte[] keep = b("scan-keep");
                 Assert.assertTrue(db.writes().strings().setString(keep, b("value"), SetMode.NORMAL, null).value());
 
-                List<byte[]> scanned = new ArrayList<byte[]>() {
-                    private boolean deleted;
+                List<byte[]> scanned = new ArrayList<>();
+                try (KeyScanWindow window = db.reads().keyspace().scan(ScanCursorV2.start(), b("scan-*"), 2)) {
+                    Assert.assertEquals(0L, window.nextCursor().value());
+                    window.emitTo(new BulkStringSink() {
+                        private boolean deleted;
 
-                    @Override
-                    public boolean add(byte[] value) {
-                        boolean added = super.add(value);
-                        if (added && !deleted) {
+                        @Override
+                        public void bulkString(byte[] data) {
+                            add(data);
+                        }
+
+                        @Override
+                        public void bulkString(byte[] data, int off, int len) {
+                            byte[] copy = new byte[len];
+                            System.arraycopy(data, off, copy, 0, len);
+                            add(copy);
+                        }
+
+                        @Override
+                        public void bulkString(BytesSlice slice) {
+                            byte[] copy = new byte[slice.length()];
+                            slice.getBytes(0, copy, 0, copy.length);
+                            add(copy);
+                        }
+
+                        @Override
+                        public void bulkStringLongAscii(long value) {
+                            add(Long.toString(value).getBytes(StandardCharsets.US_ASCII));
+                        }
+
+                        private void add(byte[] value) {
+                            scanned.add(value);
+                            if (deleted) {
+                                return;
+                            }
                             deleted = true;
                             Assert.assertEquals(Long.valueOf(1L), db.writes().keyspace().del(List.of(keep)).value());
                             YierdisMemoryStats quarantined = db.memory().memoryStats();
                             Assert.assertTrue(quarantined.nativeDefragQuarantinedObjects() > 0L);
                             Assert.assertTrue(quarantined.nativeDefragQuarantineBytes() > 0L);
                         }
-                        return added;
-                    }
-                };
+                    });
+                }
 
-                ScanCursorV2 cursor = db.reads().keyspace().scan(ScanCursorV2.start(), b("scan-*"), 2, scanned);
-
-                Assert.assertEquals(0L, cursor.value());
                 Assert.assertEquals(1, scanned.size());
                 Assert.assertArrayEquals(keep, scanned.get(0));
                 Assert.assertNull(db.reads().strings().getStringBytes(keep));
@@ -522,7 +540,7 @@ public class NativeStorageRegressionTest {
                         Long.valueOf(keyCount),
                         Long.valueOf(deleteDeterministicKeysInBatches(db, "slot:string:", keyCount, 1024))
                 );
-                assertNativeDbEmpty(db);
+                assertNativeDbHasNoLiveData(db);
             } finally {
                 db.shutdown();
             }
@@ -542,12 +560,14 @@ public class NativeStorageRegressionTest {
             assertNativeStringOnly(db, stringKey, b("hello"));
             Assert.assertTrue(db.reads().keyspace().existsKey(view(stringKey)));
             Assert.assertEquals(ValueType.STRING, db.reads().keyspace().typeOf(view(stringKey)));
-            Assert.assertEquals(List.of("native-string"), strings(db.reads().keyspace().keys(b("native-*"), 16, 0)));
+            try (KeyScanWindow window = db.reads().keyspace().keys(b("native-*"), 16, 0)) {
+                Assert.assertEquals(List.of("native-string"), strings(window));
+            }
 
-            List<byte[]> scanned = new ArrayList<>();
-            ScanCursorV2 cursor = db.reads().keyspace().scan(ScanCursorV2.start(), b("native-*"), 16, scanned);
-            Assert.assertEquals(0L, cursor.value());
-            Assert.assertEquals(List.of("native-string"), strings(scanned));
+            try (KeyScanWindow window = db.reads().keyspace().scan(ScanCursorV2.start(), b("native-*"), 16)) {
+                Assert.assertEquals(0L, window.nextCursor().value());
+                Assert.assertEquals(List.of("native-string"), strings(window));
+            }
 
             Assert.assertEquals(Long.valueOf(11L), db.writes().strings().append(stringKey, sliceOf(b(" world"))).value());
             assertNativeStringOnly(db, stringKey, b("hello world"));
@@ -564,8 +584,7 @@ public class NativeStorageRegressionTest {
             Assert.assertEquals(ValueEncoding.STRING_INT, counterRecord.encoding());
 
             Assert.assertEquals(Long.valueOf(2L), db.writes().keyspace().del(List.of(stringKey, counterKey)).value());
-            Assert.assertEquals(0, db.size());
-            Assert.assertEquals(0L, db.usedBytesForMaxmemory());
+            assertNativeDbHasNoLiveData(db);
         } finally {
             db.shutdown();
         }
@@ -624,11 +643,7 @@ public class NativeStorageRegressionTest {
                 Assert.assertTrue(afterDelete.usedBytesForMaxmemory() <= populated.usedBytesForMaxmemory());
 
                 Assert.assertEquals(Long.valueOf(keys.size() - evens.size()), db.writes().keyspace().del(keys).value());
-                Assert.assertEquals(0, db.size());
-                Assert.assertEquals(0L, db.memory().memoryStats().usedBytesForMaxmemory());
-                Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.STRING_BYTES));
-                Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().objectCount(NativeObjectKind.KEY_BYTES));
-                Assert.assertEquals(0L, db.keyLifecycle().nativeAllocator().stats().logicalUsedBytes());
+                assertNativeDbHasNoLiveData(db);
             } finally {
                 db.shutdown();
             }
@@ -676,7 +691,7 @@ public class NativeStorageRegressionTest {
                     Assert.assertTrue(populated.logicalUsedBytes() > 0L);
 
                     Assert.assertEquals(Long.valueOf(written.size()), db.writes().keyspace().del(written).value());
-                    assertNativeDbEmpty(db);
+                    assertNativeDbHasNoLiveData(db);
                 } finally {
                     db.shutdown();
                 }
@@ -748,7 +763,7 @@ public class NativeStorageRegressionTest {
                 db.bindToCurrentThread();
                 try {
                     runDeterministicMixedNativeDbChurn(db, 0x5EED_7A11L + cycle, 128);
-                    assertNativeDbEmpty(db);
+                    assertNativeDbHasNoLiveData(db);
                 } finally {
                     db.shutdown();
                 }
@@ -897,7 +912,7 @@ public class NativeStorageRegressionTest {
                 case 9 -> {
                     Assert.assertEquals(Long.valueOf(1L),
                             db.writes().hashes().hset(b("mix:hash"), List.of(b("f" + op), b("h" + op))).value());
-                    Assert.assertArrayEquals(b("h" + op), db.reads().hashes().hget(b("mix:hash"), b("f" + op)));
+                    Assert.assertArrayEquals(b("h" + op), OwnedReplyValueAssertions.bytes(db.reads().hashes().hget(b("mix:hash"), b("f" + op))));
                     Assert.assertEquals(Long.valueOf(1L),
                             db.writes().hashes().hdel(b("mix:hash"), List.of(b("f" + op))).value());
                     trackedKeys.add("mix:hash");
@@ -925,9 +940,10 @@ public class NativeStorageRegressionTest {
                     trackedKeys.add("mix:hll");
                 }
                 case 13 -> {
-                    List<byte[]> scanned = new ArrayList<>();
-                    ScanCursorV2 scan = db.reads().keyspace().scan(ScanCursorV2.start(), b("mix:*"), 32, scanned);
-                    Assert.assertEquals(0L, scan.value());
+                    try (KeyScanWindow window = db.reads().keyspace().scan(ScanCursorV2.start(), b("mix:*"), 32)) {
+                        Assert.assertEquals(0L, window.nextCursor().value());
+                        strings(window);
+                    }
                     List<YierdisSnapshotEntry> snapshot = new ArrayList<>();
                     ScanCursorV2 snapshotCursor = db.introspection().snapshot(ScanCursorV2.start(), 32, snapshot);
                     Assert.assertEquals(0L, snapshotCursor.value());
@@ -964,19 +980,42 @@ public class NativeStorageRegressionTest {
         }
         int sizeBeforeDelete = db.size();
         Assert.assertEquals(Long.valueOf(sizeBeforeDelete), db.writes().keyspace().del(deleteKeys).value());
-        assertNativeDbEmpty(db);
+        assertNativeDbHasNoLiveData(db);
     }
 
-    private static void assertNativeDbEmpty(YierdisDb db) {
+    private static void assertNativeDbHasNoLiveData(YierdisDb db) {
         YierdisMemoryStats empty = db.memory().memoryStats();
+        MemoryUsageSnapshot usage = db.memoryUsage();
         NativeAllocatorStats allocator = db.keyLifecycle().nativeAllocator().stats();
         Assert.assertEquals(0, db.size());
-        Assert.assertEquals(nativeEmptyDebug(db), 0L, db.usedBytesForMaxmemory());
+        Assert.assertEquals(nativeEmptyDebug(db), 0L, db.memoryLedger().usedBytes());
+        Assert.assertEquals(nativeEmptyDebug(db), 0L, db.memoryLedger().reservedBytes());
         Assert.assertEquals(0L, empty.keyCount());
-        Assert.assertEquals(0L, empty.usedBytesForMaxmemory());
-        Assert.assertEquals(0L, empty.heapDataBytesEstimate());
-        Assert.assertEquals(0L, empty.offHeapUsedBytes());
-        Assert.assertEquals(0L, empty.totalEstimatedBytes());
+        Assert.assertEquals(nativeEmptyDebug(db), usage.effectiveBytesForMaxmemory(), db.usedBytesForMaxmemory());
+        Assert.assertEquals(nativeEmptyDebug(db), usage.effectiveBytesForMaxmemory(), empty.usedBytesForMaxmemory());
+        Assert.assertEquals(nativeEmptyDebug(db), usage.heapEstimatedBytes(), empty.heapDataBytesEstimate());
+        Assert.assertEquals(
+                nativeEmptyDebug(db),
+                MemoryUsageSnapshot.addSaturating(
+                        usage.nativeMetadataCommittedBytes(),
+                        usage.nativeDataCommittedBytes()
+                ),
+                empty.offHeapUsedBytes()
+        );
+        Assert.assertEquals(nativeEmptyDebug(db), empty.usedBytesForMaxmemory(), empty.totalEstimatedBytes());
+        Assert.assertEquals(
+                nativeEmptyDebug(db),
+                MemoryUsageSnapshot.addSaturating(empty.totalEstimatedBytes(), empty.reservedBytes()),
+                empty.effectiveUsedBytesForMaxmemory()
+        );
+        Assert.assertEquals(nativeEmptyDebug(db), usage.nativeMetadataCommittedBytes(), empty.nativeMetadataCommittedBytes());
+        Assert.assertEquals(nativeEmptyDebug(db), usage.nativeDataCommittedBytes(), empty.nativeDataCommittedBytes());
+        Assert.assertEquals(nativeEmptyDebug(db), usage.nativeDataLiveBytes(), empty.nativeDataLiveBytes());
+        Assert.assertEquals(nativeEmptyDebug(db), usage.nativeReclaimableBytes(), empty.nativeReclaimableBytes());
+        Assert.assertTrue(
+                nativeEmptyDebug(db),
+                empty.nativeReclaimableBytes() <= empty.nativeDataCommittedBytes()
+        );
         Assert.assertEquals(0L, empty.nativeDefragQuarantinedObjects());
         Assert.assertEquals(0L, empty.nativeDefragQuarantineBytes());
         Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.STRING_BYTES));
@@ -993,6 +1032,7 @@ public class NativeStorageRegressionTest {
         Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.SET_MEMBER_BYTES));
         Assert.assertEquals(0L, allocator.objectCount(NativeObjectKind.ZSET_MEMBER_BYTES));
         Assert.assertEquals(0L, allocator.logicalUsedBytes());
+        Assert.assertEquals(0L, allocator.liveObjects());
         Assert.assertEquals(0L, allocator.quarantinedObjects());
     }
 

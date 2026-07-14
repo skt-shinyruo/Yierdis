@@ -32,7 +32,10 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
     private long emptySmallPages;
     private long liveSpanDescriptors;
     private long nextPageSequence;
+    private long retainedPageHeapBytes;
     private AllocationScopeCheckpoint activeAllocationScope;
+    private boolean allocationScopeAbortInProgress;
+    private boolean heapIterationTrapForTesting;
 
     public YierdisNativePageAllocator(YierdisFfmMemoryRuntime runtime) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -115,8 +118,22 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
     }
 
     PageGrowth estimateAdditionalGrowth(int... requestedBytes) {
+        return estimateAdditionalGrowth(true, false, requestedBytes);
+    }
+
+    PageGrowth estimateConservativeAdditionalGrowth(int... requestedBytes) {
+        return estimateAdditionalGrowth(true, true, requestedBytes);
+    }
+
+    private PageGrowth estimateAdditionalGrowth(
+            boolean useAvailableSmallBlocks,
+            boolean includeDirectoryRematerializationMargin,
+            int... requestedBytes
+    ) {
         Objects.requireNonNull(requestedBytes, "requestedBytes");
-        long[] availableBlocks = freeBlocksByClass.clone();
+        long[] availableBlocks = useAvailableSmallBlocks
+                ? freeBlocksByClass.clone()
+                : new long[YierdisNativeSizeClass.values().length];
         int additionalEntries = 0;
         long heapBytes = 0L;
         long dataBytes = 0L;
@@ -153,6 +170,12 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
                 heapBytes,
                 pageDirectory.estimateAdditionalHeapBytes(additionalEntries)
         );
+        if (includeDirectoryRematerializationMargin) {
+            heapBytes = MemoryUsageSnapshot.addSaturating(
+                    heapBytes,
+                    pageDirectory.worstCaseSegmentRematerializationHeapBytes(additionalEntries)
+            );
+        }
         return new PageGrowth(heapBytes, dataBytes);
     }
 
@@ -161,16 +184,29 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         bytes = MemoryUsageSnapshot.addSaturating(bytes, (long) nonFullHeads.length * 8L);
         bytes = MemoryUsageSnapshot.addSaturating(bytes, (long) emptyByClass.length * 8L);
         bytes = MemoryUsageSnapshot.addSaturating(bytes, (long) freeBlocksByClass.length * Long.BYTES);
-        for (SmallPage page = liveSmallHead; page != null; page = page.liveNext) {
-            bytes = MemoryUsageSnapshot.addSaturating(
-                    bytes,
-                    SMALL_PAGE_HEAP_BYTES + REGION_WRAPPER_HEAP_BYTES + (long) page.freeOffsets.length * Integer.BYTES
-            );
-        }
-        for (SpanAllocation span = liveSpanHead; span != null; span = span.liveNext) {
-            bytes = MemoryUsageSnapshot.addSaturating(bytes, SPAN_HEAP_BYTES + REGION_WRAPPER_HEAP_BYTES);
-        }
-        return bytes;
+        return MemoryUsageSnapshot.addSaturating(bytes, retainedPageHeapBytes);
+    }
+
+    void armHeapIterationTrapsForTesting() {
+        heapIterationTrapForTesting = true;
+        pageDirectory.armHeapIterationTrapForTesting();
+    }
+
+    void disarmHeapIterationTrapsForTesting() {
+        heapIterationTrapForTesting = false;
+        pageDirectory.disarmHeapIterationTrapForTesting();
+    }
+
+    void armAllocationScopeAbortAllocationTrackingForTesting() {
+        pageDirectory.armAllocationScopeAbortAllocationTrackingForTesting();
+    }
+
+    void disarmAllocationScopeAbortAllocationTrackingForTesting() {
+        pageDirectory.disarmAllocationScopeAbortAllocationTrackingForTesting();
+    }
+
+    boolean allocationScopeAbortAllocatedForTesting() {
+        return pageDirectory.allocationScopeAbortAllocatedForTesting();
     }
 
     AllocationScopeCheckpoint beginAllocationScope() {
@@ -188,10 +224,24 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         return checkpoint;
     }
 
+    long allocationScopeCheckpointHeapEstimatedBytes() {
+        ensureOpen();
+        return ALLOCATION_SCOPE_CHECKPOINT_HEAP_BYTES
+                + pageDirectory.allocationScopeCheckpointHeapEstimatedBytes();
+    }
+
     void promoteAllocationScope(AllocationScopeCheckpoint checkpoint) {
         if (activeAllocationScope == checkpoint) {
             activeAllocationScope = null;
         }
+    }
+
+    void beginAllocationScopeAbort(AllocationScopeCheckpoint checkpoint) {
+        ensureOpen();
+        if (activeAllocationScope != checkpoint) {
+            throw new IllegalStateException("native page allocation scope is not active");
+        }
+        allocationScopeAbortInProgress = true;
     }
 
     void restoreAllocationScope(AllocationScopeCheckpoint checkpoint) {
@@ -212,6 +262,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
             pageDirectory.restoreAllocationScopeCheckpoint(checkpoint.directoryCheckpoint);
             nextPageSequence = checkpoint.nextPageSequence;
         } finally {
+            allocationScopeAbortInProgress = false;
             activeAllocationScope = null;
         }
     }
@@ -238,6 +289,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         liveLargeSpanPages = 0L;
         emptySmallPages = 0L;
         liveSpanDescriptors = 0L;
+        retainedPageHeapBytes = 0L;
         if (failure != null) {
             throw failure;
         }
@@ -332,6 +384,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
                 capacity
         );
         span.pageId = pageDirectory.add(span);
+        retainedPageHeapBytes = MemoryUsageSnapshot.addSaturating(retainedPageHeapBytes, spanHeapBytes());
         linkLiveSpan(span);
         committedBytes += capacity;
         usedBytes += capacity;
@@ -360,6 +413,10 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         YierdisFfmRegion region = runtime.allocateRegion("native-small-page", PAGE_BYTES);
         SmallPage page = new SmallPage(nextPageSequence++, sizeClass, region);
         page.pageId = pageDirectory.add(page);
+        retainedPageHeapBytes = MemoryUsageSnapshot.addSaturating(
+                retainedPageHeapBytes,
+                smallPageHeapBytes(page)
+        );
         linkLiveSmall(page);
         linkNonFull(page);
         committedBytes += PAGE_BYTES;
@@ -412,7 +469,8 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         usedBytes = nextUsed;
         committedBytes = nextCommitted;
         unlinkLiveSpan(span);
-        pageDirectory.remove(span.pageId, span);
+        pageDirectory.remove(span.pageId, span, !allocationScopeAbortInProgress);
+        subtractRetainedPageHeapBytes(spanHeapBytes());
         liveSpanDescriptors--;
         if (span.pageClass == YierdisNativePageClass.MEDIUM_SPAN) {
             liveMediumSpanPages -= span.pageCount;
@@ -493,7 +551,8 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         unlinkEmpty(page);
         unlinkNonFull(page);
         unlinkLiveSmall(page);
-        pageDirectory.remove(page.pageId, page);
+        pageDirectory.remove(page.pageId, page, !allocationScopeAbortInProgress);
+        subtractRetainedPageHeapBytes(smallPageHeapBytes(page));
         committedBytes -= PAGE_BYTES;
         smallFreeBytes -= (long) page.freeCount * page.sizeClass.bytes();
         freeBlocksByClass[page.sizeClass.ordinal()] -= page.freeCount;
@@ -507,6 +566,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         unlinkNonFullIfPresent(page);
         unlinkLiveSmall(page);
         pageDirectory.remove(page.pageId, page);
+        subtractRetainedPageHeapBytes(smallPageHeapBytes(page));
         page.closed = true;
         return closeRegion(page.region, failure);
     }
@@ -514,6 +574,7 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
     private RuntimeException closeSpanOnShutdown(SpanAllocation span, RuntimeException failure) {
         unlinkLiveSpan(span);
         pageDirectory.remove(span.pageId, span);
+        subtractRetainedPageHeapBytes(spanHeapBytes());
         span.closed = true;
         return closeRegion(span.region, failure);
     }
@@ -663,6 +724,21 @@ public final class YierdisNativePageAllocator implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("native page allocator is closed");
         }
+    }
+
+    private static long smallPageHeapBytes(SmallPage page) {
+        return SMALL_PAGE_HEAP_BYTES + REGION_WRAPPER_HEAP_BYTES + (long) page.freeOffsets.length * Integer.BYTES;
+    }
+
+    private static long spanHeapBytes() {
+        return SPAN_HEAP_BYTES + REGION_WRAPPER_HEAP_BYTES;
+    }
+
+    private void subtractRetainedPageHeapBytes(long bytes) {
+        if (bytes < 0L || retainedPageHeapBytes < bytes) {
+            throw new IllegalStateException("native page heap accounting underflow");
+        }
+        retainedPageHeapBytes -= bytes;
     }
 
     private static RuntimeException closeRegion(YierdisFfmRegion region, RuntimeException failure) {

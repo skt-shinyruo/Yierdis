@@ -118,6 +118,13 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     }
 
     @Override
+    public NativeObjectView resolvePinned(NativeHandle handle, NativeAccessMode mode) {
+        synchronized (lock) {
+            return new SynchronizedObjectView(delegate.resolvePinned(handle, mode));
+        }
+    }
+
+    @Override
     public NativeDefragResult defragOne(NativeHandle handle, long maxMoveBytes) {
         synchronized (lock) {
             return delegate.defragOne(handle, maxMoveBytes);
@@ -163,6 +170,20 @@ public final class SynchronizedNativeAllocator implements NativeAllocator {
     public NativeAllocationGrowth estimateAdditionalGrowth(int... requestedBytes) {
         synchronized (lock) {
             return delegate.estimateAdditionalGrowth(requestedBytes);
+        }
+    }
+
+    @Override
+    public NativeAllocationGrowth estimateConservativeAdditionalGrowth(int... requestedBytes) {
+        synchronized (lock) {
+            return delegate.estimateConservativeAdditionalGrowth(requestedBytes);
+        }
+    }
+
+    @Override
+    public long estimateAllocationScopeBookkeepingBytes(int expectedAllocationCount) {
+        synchronized (lock) {
+            return delegate.estimateAllocationScopeBookkeepingBytes(expectedAllocationCount);
         }
     }
 

@@ -189,6 +189,35 @@ public class SuiteRunnerOrchestrationTest {
     }
 
     @Test
+    public void diagnosticLargeReplyScenarioPreservesOutboundGaugesWithoutAddingAThroughputGate() throws Exception {
+        ScenarioDefinition diagnostic = SuiteProfileFactory.expand(SuiteProfileName.RELEASE).stream()
+                .filter(scenario -> scenario.id().equals("release-large-pipelined-reply"))
+                .findFirst()
+                .orElseThrow();
+        SuiteConfig config = TestSuiteConfigs.comparison(Files.createTempDirectory("suite-runner-diagnostic-reply-"), 16378);
+        FakeHarness harness = new FakeHarness();
+        harness.diagnosticObservation = new ObservationSnapshot(
+                Map.of("INFO", "yierdis_outbound_peak_reserved_bytes:65536"),
+                Map.of(
+                        "outbound_peak_reserved_bytes", 65_536L,
+                        "outbound_peak_allocated_bytes", 65_536L,
+                        "outbound_waiting_connections", 0L,
+                        "outbound_write_failures", 0L
+                )
+        );
+
+        SuiteRunResult result = new SuiteRunner(config, harness, List.of(diagnostic)).run();
+
+        Assert.assertEquals(2, result.passes().size());
+        for (ScenarioPassResult pass : result.passes()) {
+            Assert.assertEquals(65_536L,
+                    pass.after().outboundReplyGauges().get("outbound_peak_reserved_bytes").longValue());
+        }
+        Assert.assertFalse(result.findings().toString(), result.findings().stream()
+                .anyMatch(finding -> finding.metric().equals("median_qps_ratio")));
+    }
+
+    @Test
     public void highButSufficientPortBaseStaysInContiguousSafeRange() throws Exception {
         ScenarioDefinition scenario = scenario("release-ping-latency", BenchWorkloadKind.PING, 1, 1, true);
         SuiteConfig config = TestSuiteConfigs.comparison(Files.createTempDirectory("suite-runner-port-report-"), 65534);
@@ -402,6 +431,7 @@ public class SuiteRunnerOrchestrationTest {
         private boolean failStopOnce;
         private boolean failStopCheckedOnce;
         private List<SuiteMetric> repeatMetrics;
+        private ObservationSnapshot diagnosticObservation;
         private int observationCount;
         private final List<String> observations = new ArrayList<>();
 
@@ -429,6 +459,9 @@ public class SuiteRunnerOrchestrationTest {
             Assert.assertNotNull(active);
             observations.add(active.artifactLabel() + "@" + host + ":" + port);
             observationCount++;
+            if (diagnosticObservation != null && active.scenarioId().equals("release-large-pipelined-reply")) {
+                return diagnosticObservation;
+            }
             String phase = observationCount == 1 ? "before" : "after";
             return new ObservationSnapshot(Map.of("phase",
                     active.artifactLabel() + ":" + active.scenarioId() + ":" + phase));

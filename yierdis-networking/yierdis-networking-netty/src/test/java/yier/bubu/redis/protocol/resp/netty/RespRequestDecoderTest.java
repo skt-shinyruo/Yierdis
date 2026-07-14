@@ -5,9 +5,9 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.execution.api.ExecutionRequest;
-import yier.bubu.redis.protocol.resp.RespCommandRequest;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class RespRequestDecoderTest {
     @Test
@@ -29,11 +29,12 @@ public class RespRequestDecoderTest {
                     StandardCharsets.US_ASCII
             )));
 
-            RespCommandRequest req = ch.readInbound();
-            Assert.assertEquals(2, req.argc());
-            Assert.assertArrayEquals(bytes("PING"), req.readOnlyArg(0));
-            Assert.assertArrayEquals(bytes("hey"), req.readOnlyArg(1));
-            Assert.assertEquals(7, req.retainedBytes());
+            try (ExecutionRequest req = readExecutionRequest(ch)) {
+                Assert.assertEquals(2, req.argc());
+                Assert.assertArrayEquals(bytes("PING"), req.readOnlyByteArray(0));
+                Assert.assertArrayEquals(bytes("hey"), req.readOnlyByteArray(1));
+                Assert.assertEquals(7, req.retainedBytes());
+            }
             Assert.assertNull(ch.readInbound());
         } finally {
             ch.finishAndReleaseAll();
@@ -49,11 +50,12 @@ public class RespRequestDecoderTest {
                     StandardCharsets.US_ASCII
             )));
 
-            RespCommandRequest req = ch.readInbound();
-            Assert.assertEquals(2, req.argc());
-            Assert.assertArrayEquals(bytes("ECHO"), req.readOnlyArg(0));
-            Assert.assertNull(req.readOnlyArg(1));
-            Assert.assertEquals(4, req.retainedBytes());
+            try (ExecutionRequest req = readExecutionRequest(ch)) {
+                Assert.assertEquals(2, req.argc());
+                Assert.assertArrayEquals(bytes("ECHO"), req.readOnlyByteArray(0));
+                Assert.assertNull(req.readOnlyByteArray(1));
+                Assert.assertEquals(4, req.retainedBytes());
+            }
             Assert.assertNull(ch.readInbound());
         } finally {
             ch.finishAndReleaseAll();
@@ -68,10 +70,11 @@ public class RespRequestDecoderTest {
             Assert.assertFalse(ch.writeInbound(Unpooled.copiedBuffer("NG\r\n$3\r\nhe", StandardCharsets.US_ASCII)));
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("y\r\n", StandardCharsets.US_ASCII)));
 
-            RespCommandRequest req = ch.readInbound();
-            Assert.assertEquals(2, req.argc());
-            Assert.assertArrayEquals(bytes("PING"), req.readOnlyArg(0));
-            Assert.assertArrayEquals(bytes("hey"), req.readOnlyArg(1));
+            try (ExecutionRequest req = readExecutionRequest(ch)) {
+                Assert.assertEquals(2, req.argc());
+                Assert.assertArrayEquals(bytes("PING"), req.readOnlyByteArray(0));
+                Assert.assertArrayEquals(bytes("hey"), req.readOnlyByteArray(1));
+            }
         } finally {
             ch.finishAndReleaseAll();
         }
@@ -103,8 +106,11 @@ public class RespRequestDecoderTest {
                     StandardCharsets.US_ASCII
             )));
 
-            Assert.assertArrayEquals(bytes("PING"), ((RespCommandRequest) ch.readInbound()).readOnlyArg(0));
-            Assert.assertArrayEquals(bytes("ECHO"), ((RespCommandRequest) ch.readInbound()).readOnlyArg(0));
+            try (ExecutionRequest ping = readExecutionRequest(ch);
+                 ExecutionRequest echo = readExecutionRequest(ch)) {
+                Assert.assertArrayEquals(bytes("PING"), ping.readOnlyByteArray(0));
+                Assert.assertArrayEquals(bytes("ECHO"), echo.readOnlyByteArray(0));
+            }
             Assert.assertNull(ch.readInbound());
         } finally {
             ch.finishAndReleaseAll();
@@ -117,12 +123,13 @@ public class RespRequestDecoderTest {
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("SET a 1\r\n", StandardCharsets.US_ASCII)));
 
-            RespCommandRequest req = ch.readInbound();
-            Assert.assertEquals(3, req.argc());
-            Assert.assertArrayEquals(bytes("SET"), req.readOnlyArg(0));
-            Assert.assertArrayEquals(bytes("a"), req.readOnlyArg(1));
-            Assert.assertArrayEquals(bytes("1"), req.readOnlyArg(2));
-            Assert.assertEquals(5, req.retainedBytes());
+            try (ExecutionRequest req = readExecutionRequest(ch)) {
+                Assert.assertEquals(3, req.argc());
+                Assert.assertArrayEquals(bytes("SET"), req.readOnlyByteArray(0));
+                Assert.assertArrayEquals(bytes("a"), req.readOnlyByteArray(1));
+                Assert.assertArrayEquals(bytes("1"), req.readOnlyByteArray(2));
+                Assert.assertEquals(5, req.retainedBytes());
+            }
         } finally {
             ch.finishAndReleaseAll();
         }
@@ -134,12 +141,13 @@ public class RespRequestDecoderTest {
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("SET \"a\\x20b\" \"\\x41\"\r\n", StandardCharsets.US_ASCII)));
 
-            RespCommandRequest req = ch.readInbound();
-            Assert.assertEquals(3, req.argc());
-            Assert.assertArrayEquals(bytes("SET"), req.readOnlyArg(0));
-            Assert.assertArrayEquals(bytes("a b"), req.readOnlyArg(1));
-            Assert.assertArrayEquals(bytes("A"), req.readOnlyArg(2));
-            Assert.assertEquals(7, req.retainedBytes());
+            try (ExecutionRequest req = readExecutionRequest(ch)) {
+                Assert.assertEquals(3, req.argc());
+                Assert.assertArrayEquals(bytes("SET"), req.readOnlyByteArray(0));
+                Assert.assertArrayEquals(bytes("a b"), req.readOnlyByteArray(1));
+                Assert.assertArrayEquals(bytes("A"), req.readOnlyByteArray(2));
+                Assert.assertEquals(7, req.retainedBytes());
+            }
         } finally {
             ch.finishAndReleaseAll();
         }
@@ -219,11 +227,8 @@ public class RespRequestDecoderTest {
     }
 
     @Test
-    public void adapterConvertsRespCommandRequestToExecutionRequest() {
-        EmbeddedChannel ch = new EmbeddedChannel(
-                new RespRequestDecoder(1024, 16, 1024, 1024),
-                new RespCommandAdapter()
-        );
+    public void decoderEmitsExecutionRequestDirectly() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
         ExecutionRequest request = null;
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer("*1\r\n$4\r\nPING\r\n", StandardCharsets.US_ASCII)));
@@ -242,11 +247,8 @@ public class RespRequestDecoderTest {
     }
 
     @Test
-    public void adapterPreservesNullBulkStringThroughExecutionRequest() {
-        EmbeddedChannel ch = new EmbeddedChannel(
-                new RespRequestDecoder(1024, 16, 1024, 1024),
-                new RespCommandAdapter()
-        );
+    public void decoderPreservesNullBulkStringThroughExecutionRequest() {
+        EmbeddedChannel ch = new EmbeddedChannel(new RespRequestDecoder(1024, 16, 1024, 1024));
         ExecutionRequest request = null;
         try {
             Assert.assertTrue(ch.writeInbound(Unpooled.copiedBuffer(
@@ -270,8 +272,72 @@ public class RespRequestDecoderTest {
         }
     }
 
+    @Test
+    public void decodedRetainedRequestReleasesDetachedLeaseAfterChannelCloseFromAnotherThread() throws Exception {
+        InboundMemoryBudget budget = new InboundMemoryBudget(4_096);
+        InboundConnectionMemory connection = new InboundConnectionMemory("detached", 4_096, Runnable::run, () -> { });
+        RespRequestDecoder decoder = RespRequestDecoder.withIngressAdmission(
+                1_024,
+                16,
+                1_024,
+                1_024,
+                budget,
+                connection,
+                RespDecodedMessageGate.PASS_THROUGH
+        );
+        EmbeddedChannel channel = new EmbeddedChannel(decoder);
+        ExecutionRequest retained = null;
+        try {
+            Assert.assertTrue(channel.writeInbound(Unpooled.copiedBuffer(
+                    "*1\r\n$4\r\nPING\r\n",
+                    StandardCharsets.US_ASCII
+            )));
+
+            Object decoded = channel.readInbound();
+            Assert.assertTrue(decoded instanceof RetainedRespExecutionRequest);
+            ExecutionRequest request = (ExecutionRequest) decoded;
+            retained = request.retain();
+            request.close();
+
+            Assert.assertTrue("the retained request must own the post-decode reservation",
+                    budget.stats().reservedBytes() > 0L);
+            channel.finishAndReleaseAll();
+            connection.close();
+
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            ExecutionRequest finalRetained = retained;
+            Thread finalizer = Thread.ofPlatform().start(() -> {
+                try {
+                    finalRetained.close();
+                } catch (Throwable t) {
+                    failure.set(t);
+                }
+            });
+            finalizer.join(1_000L);
+
+            Assert.assertFalse("detached close must not block on the closed channel", finalizer.isAlive());
+            Assert.assertNull(failure.get());
+            Assert.assertEquals(0L, budget.stats().reservedBytes());
+            Assert.assertEquals(0L, connection.reservedBytes());
+            Assert.assertEquals(0L, budget.stats().retainedInputCapacityBytes());
+            retained = null;
+        } finally {
+            if (retained != null) {
+                retained.close();
+            }
+            channel.finishAndReleaseAll();
+            connection.close();
+        }
+    }
+
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static ExecutionRequest readExecutionRequest(EmbeddedChannel channel) {
+        Object message = channel.readInbound();
+        Assert.assertTrue(message instanceof ExecutionRequest);
+        return (ExecutionRequest) message;
     }
 
     private static Object writeInboundAndReadFirst(EmbeddedChannel ch, String payload) {

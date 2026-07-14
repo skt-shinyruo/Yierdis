@@ -26,8 +26,8 @@ Netty 侧还有 `YierdisFastCommandHandler` 和 `YierdisServerChannelInitializer
 
 ```text
 RespRequestDecoder
-  -> RespCommandRequest
-  -> RespCommandAdapter / ExecutionRequest
+  -> RespRequestDecoder
+  -> RetainedRespExecutionRequest / ExecutionRequest
   -> YierdisFastCommandHandler.channelRead0(...)
   -> CommandExecutor.trySubmit(connection, request)
   -> CommandExecutorSubmitter.trySubmit(...)
@@ -190,3 +190,9 @@ executor 热路径用 `LongAdder` 和 connection context 记录观测值：
 - connection stats：pending、pendingBytes、closing、inputDisabledByExecutor、commandsEnqueued、commandsRejected
 
 这些数据进入 `CommandExecutor.StatsSnapshot`、`ExecutionConnectionContext.ConnectionStatsSnapshot`，再被 `STATS` / `INFO yierdis` 等观测命令使用。
+
+## Bounded Reply Egress
+
+executor 队列背压和 reply egress 是不同层次的 admission。每个请求先拥有 receive-order reply slot，`ReplyCapacityUnavailableException` 只在尚未产生可见 bytes 或 mutation 结果时允许延后重试；超过单回复上限或结果已经未知时连接必须关闭，不能补写普通 internal error。`FAIR` 可以让独立可运行连接绕过另一连接的本地回复等待，`GLOBAL` 保持全局 FIFO 头部不被跨越。
+
+容量层级、slot/source/chunk 的终结所有权和 shutdown drain 的运维语义见 [`production-hardening-operations.md`](./production-hardening-operations.md)。

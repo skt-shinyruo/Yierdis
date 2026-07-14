@@ -4,10 +4,10 @@ import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.command.kernel.YierdisFastCommandProcessor;
 import yier.bubu.redis.integration.command.TestCommandProcessors;
-import yier.bubu.redis.storage.memory.YierdisDb;
-import yier.bubu.redis.storage.api.DbMemoryConstants;
+import yier.bubu.redis.storage.api.MaxmemoryErrors;
 import yier.bubu.redis.storage.api.MaxmemoryPolicy;
 import yier.bubu.redis.storage.api.SetMode;
+import yier.bubu.redis.storage.api.YierdisCommandException;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.testutil.FastTestClient;
@@ -23,11 +23,10 @@ import static yier.bubu.redis.testutil.TestBytes.b;
 public class GlobalMaxmemoryLruAcrossDbsTest {
     @Test
     public void globalLruEvictsLeastRecentlyUsedAcrossDbs() {
-        byte[] value = new byte[100];
+        byte[] value = new byte[64 * 1024];
         Arrays.fill(value, (byte) 'a');
 
-        long writeUpperBound = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 1L + value.length;
-        long maxmemoryBytes = maxmemoryBudgetThatFitsThreeKeysButNotFour(value, writeUpperBound);
+        long maxmemoryBytes = minGlobalMaxmemoryThatAllowsKeyCount(value, 4) - 1L;
 
         YierdisInstanceConfig config = YierdisInstanceConfig.builder()
                 .databases(2)
@@ -69,36 +68,45 @@ public class GlobalMaxmemoryLruAcrossDbsTest {
         }
     }
 
-    private static long maxmemoryBudgetThatFitsThreeKeysButNotFour(byte[] value, long writeUpperBound) {
-        long usedAfterDistributedTwoKeys = probeGlobalUsedBytes(value, false);
-        long usedAfterThreeKeys = probeGlobalUsedBytes(value, true);
-        long lowerBound = usedAfterDistributedTwoKeys + writeUpperBound;
-        long upperExclusive = usedAfterThreeKeys + writeUpperBound;
-        Assert.assertTrue("probe budget must leave room between 3rd and 4th write", upperExclusive > lowerBound);
-        long span = upperExclusive - lowerBound;
-        return lowerBound + Math.max(0L, (span - 1L) / 2L);
+    private static long minGlobalMaxmemoryThatAllowsKeyCount(byte[] value, int count) {
+        long high = 1L;
+        while (!allowsGlobalKeyCount(high, value, count)) {
+            high = Math.multiplyExact(high, 2L);
+        }
+
+        long low = 0L;
+        while (low + 1L < high) {
+            long mid = low + (high - low) / 2L;
+            if (allowsGlobalKeyCount(mid, value, count)) {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        return high;
     }
 
-    private static long probeGlobalUsedBytes(byte[] value, boolean includeSecondDb0Key) {
+    private static boolean allowsGlobalKeyCount(long maxmemoryBytes, byte[] value, int count) {
         YierdisInstanceConfig probeConfig = YierdisInstanceConfig.builder()
                 .databases(2)
                 .maxmemoryScope(YierdisInstanceConfig.MaxmemoryScope.GLOBAL)
-                .maxmemoryBytes(1_000_000)
-                .maxmemoryPolicy(MaxmemoryPolicy.ALLKEYS_LRU)
+                .maxmemoryBytes(maxmemoryBytes)
+                .maxmemoryPolicy(MaxmemoryPolicy.NOEVICTION)
                 .maxmemorySamples(10)
                 .evictionTimeLimitMillis(1000)
                 .build();
 
         try (YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(probeConfig)) {
             instance.bindToCurrentThread();
-            YierdisDb db0 = (YierdisDb) instance.engine(0);
-            YierdisDb db1 = (YierdisDb) instance.engine(1);
-            db0.writes().strings().setString(b("a"), value, SetMode.NORMAL, null);
-            if (includeSecondDb0Key) {
-                db0.writes().strings().setString(b("b"), value, SetMode.NORMAL, null);
+            for (int i = 0; i < count; i++) {
+                instance.engine(i % 2).writes().strings().setString(b("probe-" + i), value, SetMode.NORMAL, null);
             }
-            db1.writes().strings().setString(b("c"), value, SetMode.NORMAL, null);
-            return instance.observability().memoryStats().usedBytesForMaxmemory();
+            return true;
+        } catch (YierdisCommandException e) {
+            if (MaxmemoryErrors.OOM_ERR.equals(e.getMessage())) {
+                return false;
+            }
+            throw e;
         }
     }
 }

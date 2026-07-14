@@ -21,50 +21,17 @@ public class YierdisFastCommandProcessorArchitectureTest {
         assertNotContains(source, "import yier.bubu.redis.runtime.api.YierdisChangeEventBridge;");
         assertNotContains(source, "import yier.bubu.redis.execution.api.ExecutionRecord;");
         assertNotContains(source, "DbChangeContext.open(");
+        assertNotContains(source, "changeEmitter");
+        assertNotContains(source, "YierdisCommandProcessorOptions");
         assertNotContains(source, ".tryEnqueue(");
         assertNotContains(source, ".markAborted(");
     }
 
     @Test
-    public void changeEmitterDoesNotOwnRuntimeChangeBridgeOrDbChangeScopeDetails() throws IOException {
-        String source = Files.readString(sourceFile("CommandChangeEmitter.java"), StandardCharsets.UTF_8);
-
-        assertContains(source, "CommandChangeObserver");
-        assertNotContains(source, "import yier.bubu.redis.runtime.api.YierdisChangeEvent;");
-        assertNotContains(source, "import yier.bubu.redis.runtime.api.YierdisChangeEventBridge;");
-        assertNotContains(source, "import yier.bubu.redis.runtime.api.YierdisChangeSink;");
-        assertNotContains(source, "import yier.bubu.redis.storage.api.DbChangeContext;");
-        assertNotContains(source, "import yier.bubu.redis.storage.api.DbChangeListener;");
-        assertNotContains(source, "DbChangeContext.open(");
-        assertNotContains(source, "new YierdisChangeEvent(");
-    }
-
-    @Test
-    public void processorOptionsUseCommandObserverAsPrimaryChangeContract() throws IOException {
-        String source = Files.readString(sourceFile("YierdisCommandProcessorOptions.java"), StandardCharsets.UTF_8);
-
-        assertContains(source, "private final CommandChangeObserver changeObserver;");
-        assertContains(source, "public CommandChangeObserver changeObserver()");
-        assertNotContains(source, "private final YierdisChangeSink changeSink;");
-        assertNotContains(source, "import yier.bubu.redis.runtime.api.YierdisChangeSink;");
-        assertNotContains(source, "public YierdisChangeSink changeSink()");
-        assertNotContains(source, "Builder changeSink");
-        assertNotContains(source, "changeSink(YierdisChangeSink");
-        assertNotContains(source, "YierdisChangeSinkCommandChangeObserver");
-    }
-
-    @Test
-    public void commandCoreDoesNotOwnRuntimeChangeSinkCompatibilityAdapter() throws IOException {
-        String processor = Files.readString(processorSource(), StandardCharsets.UTF_8);
-        String oldAdapter = "Yierdis" + "ChangeSinkCommandChangeObserver";
-
-        assertNotContains(processor, "import yier.bubu.redis.runtime.api.YierdisChangeSink;");
-        assertNotContains(processor, "public YierdisFastCommandProcessor(YierdisChangeSink");
-        assertNotContains(processor, oldAdapter);
-        Assert.assertFalse(
-                "command-core should not keep a runtime change-sink adapter",
-                sourceFileOrNull(oldAdapter + ".java") != null
-        );
+    public void legacyChangeRecordingTypesAreAbsent() {
+        Assert.assertNull(sourceFileOrNull("CommandChangeEmitter.java"));
+        Assert.assertNull(sourceFileOrNull("CommandChangeObserver.java"));
+        Assert.assertNull(sourceFileOrNull("YierdisCommandProcessorOptions.java"));
     }
 
     private static Path processorSource() {
@@ -101,7 +68,4 @@ public class YierdisFastCommandProcessorArchitectureTest {
         Assert.assertFalse("source should not contain: " + forbidden, source.contains(forbidden));
     }
 
-    private static void assertContains(String source, String required) {
-        Assert.assertTrue("source should contain: " + required, source.contains(required));
-    }
 }

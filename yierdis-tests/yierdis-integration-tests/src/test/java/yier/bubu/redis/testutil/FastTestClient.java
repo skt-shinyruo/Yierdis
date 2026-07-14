@@ -212,18 +212,6 @@ public final class FastTestClient implements AutoCloseable {
         }
 
         @Override
-        public void bulkStringArray(List<byte[]> values) {
-            if (values == null) {
-                nullArray();
-                return;
-            }
-            arrayHeader(values.size());
-            for (int i = 0; i < values.size(); i++) {
-                bulkString(values.get(i));
-            }
-        }
-
-        @Override
         public void emptyArray() {
             arrayHeader(0);
         }

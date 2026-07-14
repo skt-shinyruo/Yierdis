@@ -135,3 +135,7 @@ YierdisNativePageAllocator
 - `realloc` 可以移动 native block，同时保持 handle 不变。
 - active defrag 可以移动 allocator-backed objects，并通过 object table 发布新 location。
 - pin、epoch 和 quarantine 防止 view 或扫描期间过早回收 memory。
+
+## Operations Cross-Check
+
+native runtime 的 committed/reserved usage 参与 DB 和 maxmemory 诊断，但不会解除请求或回复的独立硬容量限制。运行时出现 native allocation failure 时，按 mutation 的 preflight/commit 边界判断是否可安全返回 OOM，还是必须走 result-unknown close；操作流程见 [`production-hardening-operations.md`](./production-hardening-operations.md)。

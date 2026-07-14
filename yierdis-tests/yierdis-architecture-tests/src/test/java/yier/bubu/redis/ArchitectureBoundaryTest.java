@@ -21,6 +21,93 @@ import javax.xml.parsers.DocumentBuilderFactory;
 
 public class ArchitectureBoundaryTest {
     @Test
+    public void productionHardeningOperationsMustRemainDocumented() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("cannot locate repository root", repoRoot);
+
+        Path operationsGuide = repoRoot.resolve("docs/project-docs/production-hardening-operations.md");
+        Assert.assertTrue("missing production hardening operations guide", Files.isRegularFile(operationsGuide));
+        String guide = Files.readString(operationsGuide, StandardCharsets.UTF_8);
+        for (String requiredTerm : List.of(
+                "JDK 25",
+                "--replyGlobalCapacityBytes",
+                "268435456",
+                "--replyPerConnectionCapacityBytes",
+                "134217728",
+                "--replyMaxTotalBytes",
+                "67108864",
+                "--replyChunkPayloadBytes",
+                "65536",
+                "--replyControlReservationBytes",
+                "4096",
+                "--replyDrainTimeoutMillis",
+                "5000",
+                "--protocolGlobalInFlightBytes",
+                "commit-stream",
+                "maxmemory",
+                "FAIR",
+                "GLOBAL",
+                "result-unknown",
+                "graceful shutdown",
+                "production-hardening-soak.sh",
+                "smoke.sh",
+                "0.90",
+                "GET",
+                "SET",
+                "HSET",
+                "ZADD"
+        )) {
+            Assert.assertTrue(
+                    "production hardening operations guide is missing: " + requiredTerm,
+                    guide.contains(requiredTerm)
+            );
+        }
+
+        String readme = Files.readString(repoRoot.resolve("README.md"), StandardCharsets.UTF_8);
+        String logicIndex = Files.readString(
+                repoRoot.resolve("docs/project-docs/core-logic-index.md"),
+                StandardCharsets.UTF_8
+        );
+        Assert.assertTrue(
+                "README must link to the production hardening operations guide",
+                readme.contains("production-hardening-operations.md")
+        );
+        Assert.assertTrue(
+                "core logic index must link to the production hardening operations guide",
+                logicIndex.contains("production-hardening-operations.md")
+        );
+
+        for (Path legacyDocument : List.of(
+                repoRoot.resolve("README.md"),
+                repoRoot.resolve("docs/project-docs")
+        )) {
+            String content;
+            if (Files.isDirectory(legacyDocument)) {
+                try (Stream<Path> files = Files.walk(legacyDocument)) {
+                    content = files
+                            .filter(path -> path.toString().endsWith(".md"))
+                            .map(path -> {
+                                try {
+                                    return Files.readString(path, StandardCharsets.UTF_8);
+                                } catch (IOException e) {
+                                    throw new IllegalStateException(e);
+                                }
+                            })
+                            .reduce("", (left, right) -> left + '\n' + right);
+                }
+            } else {
+                content = Files.readString(legacyDocument, StandardCharsets.UTF_8);
+            }
+            Assert.assertFalse("legacy docs still describe one growable ByteBuf", content.contains("one growable ByteBuf"));
+            Assert.assertFalse("legacy docs still make command handlers publish changes", content.contains("command handlers publish changes"));
+            Assert.assertFalse(
+                    "legacy docs still allow successful close with active leases",
+                    content.contains("successful close can ignore active leases")
+            );
+        }
+    }
+
+    @Test
     public void commonMemoryMustRemainAProductionDependencyFreeContractModule() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("cannot locate repository root", repoRoot);
@@ -445,12 +532,6 @@ public class ArchitectureBoundaryTest {
                 commandKernelFile(repoRoot, "YierdisFastCommandProcessor.java"),
                 offenders,
                 "tx.tryEnqueue(ByteArrayExecutionRequest.copyOf(request))"
-        );
-        scanFileForForbiddenText(
-                repoRoot,
-                repoRoot.resolve("yierdis-networking/yierdis-networking-netty/src/main/java/yier/bubu/redis/protocol/resp/netty/RespCommandAdapter.java").normalize(),
-                offenders,
-                "new AdaptedCommand("
         );
         scanFileForForbiddenText(
                 repoRoot,
@@ -1852,7 +1933,6 @@ public class ArchitectureBoundaryTest {
         String storageMemoryPomText = Files.readString(storageMemoryPom, StandardCharsets.UTF_8);
         for (String dependency : List.of(
                 "yierdis-db-api",
-                "yierdis-server-runtime-api",
                 "yierdis-common-bytes",
                 "yierdis-memory-ffm",
                 "yierdis-memory-api"
@@ -1867,6 +1947,7 @@ public class ArchitectureBoundaryTest {
                 "yierdis-command-core",
                 "yierdis-command-builtin",
                 "yierdis-core-runtime",
+                "yierdis-server-runtime-api",
                 "yierdis-networking-model",
                 "yierdis-networking-codec",
                 "yierdis-networking-netty",
@@ -1883,6 +1964,10 @@ public class ArchitectureBoundaryTest {
                     pomHasProductionDependency(storageMemoryPom, forbiddenDependency)
             );
         }
+        Assert.assertFalse(
+                "yierdis-db-memory must not declare yierdis-server-runtime-api in production",
+                pomHasProductionDependency(storageMemoryPom, "yierdis-server-runtime-api")
+        );
 
         String storageTestkitPomText = Files.readString(storageTestkitPom, StandardCharsets.UTF_8);
         Assert.assertTrue(
@@ -1942,7 +2027,6 @@ public class ArchitectureBoundaryTest {
         String storageTestkitPolicy = policySection(policy, "yierdis-db-testkit");
         for (String dependency : List.of(
                 "yierdis-db-api",
-                "yierdis-server-runtime-api",
                 "yierdis-common-bytes",
                 "yierdis-memory-ffm",
                 "yierdis-memory-api"
@@ -1957,6 +2041,7 @@ public class ArchitectureBoundaryTest {
                 "yierdis-command-core",
                 "yierdis-command-builtin",
                 "yierdis-core-runtime",
+                "yierdis-server-runtime-api",
                 "yierdis-networking-model",
                 "yierdis-networking-codec",
                 "yierdis-networking-netty",
@@ -1971,6 +2056,7 @@ public class ArchitectureBoundaryTest {
                 "yier.bubu.redis.protocol",
                 "yier.bubu.redis.app.server",
                 "yier.bubu.redis.execution.executor",
+                "yier.bubu.redis.runtime",
                 "io.netty"
         )) {
             Assert.assertTrue(
@@ -1987,17 +2073,21 @@ public class ArchitectureBoundaryTest {
                 "import yier.bubu.redis.protocol.",
                 "import yier.bubu.redis.app.server.",
                 "import yier.bubu.redis.execution.executor.",
+                "import yier.bubu.redis.runtime.",
                 "import io.netty.",
                 "yier.bubu.redis.command.",
                 "yier.bubu.redis.protocol.",
                 "yier.bubu.redis.app.server.",
                 "yier.bubu.redis.execution.executor.",
+                "yier.bubu.redis.runtime.",
+                "DbChangeContext",
+                "recordMutation(",
                 "io.netty."
         );
         Assert.assertTrue("架构护栏扫描未扫描到任何 yierdis-db-memory Java 文件", storageMemoryScanned > 0);
         if (!storageMemoryOffenders.isEmpty()) {
             Assert.fail(
-                    "检测到 yierdis-db-memory 依赖 command、protocol、server、executor 或 Netty：\n"
+                    "检测到 yierdis-db-memory 依赖 command、protocol、server、runtime、executor 或 Netty：\n"
                             + String.join("\n", storageMemoryOffenders)
             );
         }
@@ -2387,17 +2477,19 @@ public class ArchitectureBoundaryTest {
     }
 
     @Test
-    public void protocolRequestAndServerReplyBoundariesMustStayDocumented() throws IOException {
+    public void executionRequestAndServerReplyBoundariesMustStayDocumented() throws IOException {
         Path repoRoot = resolveRepoRoot();
         Assert.assertNotNull("无法定位仓库根目录（未找到 yierdis-server/yierdis-db-memory 模块）", repoRoot);
 
         Path requestFile = repoRoot.resolve(
-                "yierdis-networking/yierdis-networking-resp/src/main/java/yier/bubu/redis/protocol/resp/RespCommandRequest.java"
+                "yierdis-server/yierdis-server-api/src/main/java/yier/bubu/redis/execution/api/ExecutionRequest.java"
         );
-        Assert.assertTrue("缺少 RespCommandRequest.java", Files.isRegularFile(requestFile));
+        Assert.assertTrue("缺少 ExecutionRequest.java", Files.isRegularFile(requestFile));
         String requestSource = Files.readString(requestFile, StandardCharsets.UTF_8);
-        Assert.assertTrue("request model must stay in RESP protocol package", requestSource.contains("package yier.bubu.redis.protocol.resp;"));
+        Assert.assertTrue("request model must stay in execution API package", requestSource.contains("package yier.bubu.redis.execution.api;"));
+        Assert.assertTrue("request model must expose direct execution contract", requestSource.contains("interface ExecutionRequest"));
         Assert.assertTrue("request model must expose retained byte accounting", requestSource.contains("retainedBytes()"));
+        Assert.assertTrue("request model must expose admission accounting", requestSource.contains("admittedMemoryBytes()"));
 
     }
 
@@ -2422,6 +2514,55 @@ public class ArchitectureBoundaryTest {
                             + String.join("\n", offenders)
             );
         }
+    }
+
+    @Test
+    public void productionReplyWritesAndBuffersMustStayInsideTheOrderedEgressOwners() throws IOException {
+        Path repoRoot = resolveRepoRoot();
+        Assert.assertNotNull("cannot locate repository root", repoRoot);
+
+        Path serverMain = repoRoot.resolve("yierdis-server/yierdis-server-main/src/main/java").normalize();
+        Path sequencer = serverMain.resolve(
+                "yier/bubu/redis/app/server/ConnectionReplySequencer.java"
+        ).normalize();
+        Path chunkSink = serverMain.resolve(
+                "yier/bubu/redis/app/server/BoundedChunkedReplySink.java"
+        ).normalize();
+        Assert.assertTrue("missing ordered reply sequencer", Files.isRegularFile(sequencer));
+        Assert.assertTrue("missing bounded reply chunk sink", Files.isRegularFile(chunkSink));
+
+        List<String> offenders = new ArrayList<>();
+        int scanned = scanForForbiddenTextExcluding(
+                repoRoot,
+                serverMain,
+                offenders,
+                List.of(sequencer, chunkSink),
+                "channel.write(",
+                "channel.writeAndFlush(",
+                "channel.alloc().buffer(",
+                "ctx.write(",
+                "ctx.writeAndFlush(",
+                "ctx.channel().write",
+                "ctx.channel().alloc().buffer("
+        );
+        scanned += scanForForbiddenText(
+                repoRoot,
+                repoRoot.resolve("yierdis-networking/yierdis-networking-netty/src/main/java").normalize(),
+                offenders,
+                "channel.write(",
+                "channel.writeAndFlush(",
+                "channel.alloc().buffer(",
+                "ctx.write(",
+                "ctx.writeAndFlush(",
+                "ctx.channel().write",
+                "ctx.channel().alloc().buffer("
+        );
+        Assert.assertTrue("ordered egress guard scanned no production Java files", scanned > 0);
+        Assert.assertTrue(
+                "direct production reply writes or growable buffers remain outside ordered egress owners:\n"
+                        + String.join("\n", offenders),
+                offenders.isEmpty()
+        );
     }
 
     @Test

@@ -5,7 +5,6 @@ package yier.bubu.redis.app.client;
 import org.junit.Assert;
 import org.junit.Test;
 import yier.bubu.redis.app.server.YierdisServerBootstrap;
-import yier.bubu.redis.storage.api.DbMemoryConstants;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -15,9 +14,12 @@ import java.util.List;
 import java.util.Map;
 
 public class MaxmemoryScopeTest {
+    private static final String PROBE_MAXMEMORY_BYTES = "100000000";
+    private static final int EVICTION_VALUE_BYTES = 64 * 1024;
+
     @Test
     public void globalScopeEvictsAcrossDbsUsingLru() throws Exception {
-        byte[] value = bytesOfLen(256, (byte) 'x');
+        byte[] value = bytesOfLen(EVICTION_VALUE_BYTES, (byte) 'x');
         try (TestServer server = TestServer.startWithArgs(
                 "--databases", "2",
                 "--maxmemoryBytes", Long.toString(globalBudgetThatFitsTwoKeysButNotThree(value)),
@@ -50,7 +52,7 @@ public class MaxmemoryScopeTest {
 
     @Test
     public void perDbScopeEvictsOnlyWithinSelectedDb() throws Exception {
-        byte[] value = bytesOfLen(256, (byte) 'x');
+        byte[] value = bytesOfLen(EVICTION_VALUE_BYTES, (byte) 'x');
         try (TestServer server = TestServer.startWithArgs(
                 "--databases", "2",
                 "--maxmemoryBytes", Long.toString(perDbBudgetThatFitsOneKeyButNotTwo(value)),
@@ -81,32 +83,30 @@ public class MaxmemoryScopeTest {
     }
 
     private static long globalBudgetThatFitsTwoKeysButNotThree(byte[] value) throws Exception {
-        long writeUpperBound = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 1L + value.length;
-        long usedAfterOneKey = probeGlobalUsedBytes(value, false);
-        long usedAfterTwoKeys = probeGlobalUsedBytes(value, true);
+        long usedAfterTwoKeys = probeGlobalUsedBytes(value, 1);
+        long usedAfterThreeKeys = probeGlobalUsedBytes(value, 2);
         return midpointBudget(
-                usedAfterOneKey + writeUpperBound,
-                usedAfterTwoKeys + writeUpperBound,
+                usedAfterTwoKeys,
+                usedAfterThreeKeys,
                 "global"
         );
     }
 
     private static long perDbBudgetThatFitsOneKeyButNotTwo(byte[] value) throws Exception {
-        long writeUpperBound = DbMemoryConstants.ENTRY_OVERHEAD_BYTES_ESTIMATE + 1L + value.length;
-        long usedAfterRemoteKey = probePerDbDb0UsedBytes(value, false);
-        long usedAfterRemoteAndOneLocalKey = probePerDbDb0UsedBytes(value, true);
+        long usedAfterOneLocalKey = probePerDbDb0UsedBytes(value, 1);
+        long usedAfterTwoLocalKeys = probePerDbDb0UsedBytes(value, 2);
         long perDbBudget = midpointBudget(
-                usedAfterRemoteKey + writeUpperBound,
-                usedAfterRemoteAndOneLocalKey + writeUpperBound,
+                usedAfterOneLocalKey,
+                usedAfterTwoLocalKeys,
                 "per-db"
         );
         return Math.multiplyExact(perDbBudget, 2L);
     }
 
-    private static long probeGlobalUsedBytes(byte[] value, boolean includeSecondKey) throws Exception {
+    private static long probeGlobalUsedBytes(byte[] value, int localKeyCount) throws Exception {
         try (TestServer server = TestServer.startWithArgs(
                 "--databases", "2",
-                "--maxmemoryBytes", "1000000",
+                "--maxmemoryBytes", PROBE_MAXMEMORY_BYTES,
                 "--maxmemoryScope", "global",
                 "--maxmemoryPolicy", "allkeys-lru",
                 "--maxmemorySamples", "1000"
@@ -114,18 +114,21 @@ public class MaxmemoryScopeTest {
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
             ok(client, b("SELECT"), b("1"));
             ok(client, b("SET"), b("b"), value);
-            if (includeSecondKey) {
+            if (localKeyCount > 0) {
                 ok(client, b("SELECT"), b("0"));
                 ok(client, b("SET"), b("a"), value);
+            }
+            if (localKeyCount > 1) {
+                ok(client, b("SET"), b("c"), value);
             }
             return globalUsedBytesForMaxmemory(client);
         }
     }
 
-    private static long probePerDbDb0UsedBytes(byte[] value, boolean includeLocalKey) throws Exception {
+    private static long probePerDbDb0UsedBytes(byte[] value, int localKeyCount) throws Exception {
         try (TestServer server = TestServer.startWithArgs(
                 "--databases", "2",
-                "--maxmemoryBytes", "1000000",
+                "--maxmemoryBytes", PROBE_MAXMEMORY_BYTES,
                 "--maxmemoryScope", "per-db",
                 "--maxmemoryPolicy", "allkeys-lru",
                 "--maxmemorySamples", "1000"
@@ -133,9 +136,12 @@ public class MaxmemoryScopeTest {
              YierdisClient client = YierdisClient.connect("127.0.0.1", server.port())) {
             ok(client, b("SELECT"), b("1"));
             ok(client, b("SET"), b("b"), value);
-            if (includeLocalKey) {
+            if (localKeyCount > 0) {
                 ok(client, b("SELECT"), b("0"));
                 ok(client, b("SET"), b("a"), value);
+            }
+            if (localKeyCount > 1) {
+                ok(client, b("SET"), b("c"), value);
             }
             return memoryStats(client, 0).getOrDefault("used_bytes_for_maxmemory", -1L);
         }
@@ -217,6 +223,9 @@ public class MaxmemoryScopeTest {
         Assert.assertNotNull(reply);
         if (reply.kind() == YierdisClient.RespReply.Kind.SIMPLE_STRING) {
             return reply.text();
+        }
+        if (reply.kind() == YierdisClient.RespReply.Kind.ERROR) {
+            Assert.fail("unexpected error reply: " + reply.text());
         }
         Assert.assertEquals(YierdisClient.RespReply.Kind.BULK_STRING, reply.kind());
         return new String(reply.bytes(), StandardCharsets.UTF_8);

@@ -2,10 +2,11 @@ package yier.bubu.redis.protocol.resp;
 
 import yier.bubu.redis.bytes.BytesSink;
 import yier.bubu.redis.bytes.BytesSlice;
+import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyReservationSink;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.Objects;
 import java.util.function.IntSupplier;
 
@@ -34,6 +35,23 @@ public final class RespReplyWriter implements RedisReplyWriter {
     @Override
     public boolean closeAfterReplyRequested() {
         return closeAfterReplyRequested;
+    }
+
+    @Override
+    public void requireReply(ReplyPlan plan) {
+        Objects.requireNonNull(plan, "plan");
+        if (out instanceof ReplyReservationSink reservationSink) {
+            reservationSink.require(plan);
+        }
+    }
+
+    @Override
+    public void transferReplyOwnership(AutoCloseable resource) {
+        Objects.requireNonNull(resource, "resource");
+        if (out instanceof ReplyReservationSink reservationSink && reservationSink.transferOwnership(resource)) {
+            return;
+        }
+        RedisReplyWriter.super.transferReplyOwnership(resource);
     }
 
     @Override
@@ -202,18 +220,6 @@ public final class RespReplyWriter implements RedisReplyWriter {
     @Override
     public void arrayHeader(int count) {
         writeAsciiLine('*', Integer.toString(Math.max(0, count)));
-    }
-
-    @Override
-    public void bulkStringArray(List<byte[]> values) {
-        if (values == null) {
-            nullArray();
-            return;
-        }
-        arrayHeader(values.size());
-        for (int i = 0; i < values.size(); i++) {
-            bulkString(values.get(i));
-        }
     }
 
     @Override

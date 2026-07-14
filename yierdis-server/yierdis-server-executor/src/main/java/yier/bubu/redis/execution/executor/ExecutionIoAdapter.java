@@ -13,6 +13,9 @@ public interface ExecutionIoAdapter<C extends ExecutionConnection> {
 
     void onClose(C connection, Runnable callback);
 
+    default void closeConnection(C connection) {
+    }
+
     BytesSink newReplySink(C connection);
 
     void writeBufferedReply(C connection, boolean closeAfterReply);

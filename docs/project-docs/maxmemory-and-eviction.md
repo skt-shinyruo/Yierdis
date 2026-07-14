@@ -139,3 +139,7 @@ TTL index、random/LRU eviction candidates 和 synthetic delete 都使用 native
 - `YierdisGlobalMaxmemoryGovernorTest`：全局 cleanup/eviction/OOM 路径、deterministic LRU scan 和时间预算分支。
 - `GlobalMaxmemoryLruAcrossDbsTest`：global scope 下跨 DB 的真实 LRU 淘汰。
 - `MemoryStatsAccountingConsistencyTest`、`MaxmemoryScopeTest`：观测口径与 enforcement 口径保持一致，global/per-db scope 的统计差异可解释。
+
+## Independent Capacity Domains
+
+maxmemory protects DB growth and native-backed values. It does not replace ingress admission, bounded commit-stream capacity, or hard outbound reply limits. A successful deletion/eviction can lower DB usage while an existing reply source still owns outbound capacity until its slot reaches a terminal cleanup state. Use [`production-hardening-operations.md`](./production-hardening-operations.md) when correlating `MEMORY STATS` with `INFO stats` during pressure or shutdown.

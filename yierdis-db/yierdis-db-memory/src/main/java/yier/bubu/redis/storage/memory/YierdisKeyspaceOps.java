@@ -12,6 +12,11 @@ import yier.bubu.redis.bytes.BytesView;
 import yier.bubu.redis.memory.api.NativeEpochKind;
 import yier.bubu.redis.memory.api.NativeEpochScope;
 import yier.bubu.redis.storage.memory.internal.entry.EntryRecord;
+import yier.bubu.redis.storage.memory.internal.entry.EntryHandle;
+import yier.bubu.redis.storage.memory.internal.expire.PreparedTtlMutation;
+import yier.bubu.redis.storage.memory.internal.ledger.AbstractPreparedMutation;
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedDbMutation;
+import yier.bubu.redis.storage.memory.internal.ledger.PreparedEntryMutation;
 import yier.bubu.redis.storage.memory.internal.key.KeyHandle;
 import yier.bubu.redis.storage.api.KeyspaceReadOps;
 import yier.bubu.redis.storage.api.KeyspaceWriteOps;
@@ -19,14 +24,17 @@ import yier.bubu.redis.storage.api.MutationOutcome;
 import yier.bubu.redis.storage.api.ScanCursorV2;
 import yier.bubu.redis.storage.api.ValueType;
 import yier.bubu.redis.storage.api.WriteResult;
+import yier.bubu.redis.storage.api.result.BulkStringSink;
+import yier.bubu.redis.storage.api.result.KeyScanWindow;
 
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
 import java.util.Objects;
 
 public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteOps {
+    private static final long KEYS_SCAN_CHUNK_SLOTS = 1024L;
+    private static final long SCAN_MIN_SLOT_BUDGET = 64L;
+    private static final long SCAN_SLOT_MULTIPLIER = 10L;
+
     private final YierdisDbInternals internals;
     private final YierdisDbKeyLifecycle keyLifecycle;
 
@@ -38,10 +46,13 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
     @Override
     public WriteResult<Long> del(Collection<byte[]> keys) {
         internals.checkThread();
-        return internals.executeMutation(new YierdisDbMutationExecutor.LegacyMutationPlan<WriteResult<Long>>() {
+        Objects.requireNonNull(keys, "keys");
+        long nowMillis = System.currentTimeMillis();
+        reclaimExpiredBeforeDeletion(keys, nowMillis);
+        return internals.executeMutation(new YierdisDbMutationExecutor.MutationPlan<>() {
             @Override
             public long upperBoundBytes() {
-                return 0;
+                return 0L;
             }
 
             @Override
@@ -50,216 +61,508 @@ public final class YierdisKeyspaceOps implements KeyspaceReadOps, KeyspaceWriteO
             }
 
             @Override
-            public YierdisDbMutationExecutor.MutationResult<WriteResult<Long>> apply() {
-                long now = System.currentTimeMillis();
-                long removed = 0;
-                long deltaBytes = 0;
+            public PreparedDbMutation<WriteResult<Long>> prepare() {
+                PreparedDeletion[] deletions = new PreparedDeletion[keys.size()];
+                int deletionCount = 0;
+                long deltaBytes = 0L;
                 for (byte[] keyBytes : keys) {
+                    Objects.requireNonNull(keyBytes, "key");
+                    if (containsDeletionForKey(deletions, deletionCount, keyBytes)) {
+                        continue;
+                    }
                     KeyHandle handle = keyLifecycle.keyHandle(keyBytes);
                     if (handle == null) {
                         continue;
                     }
-                    EntryRecord record = keyLifecycle.entryRecord(handle);
-                    if (record == null) {
+                    EntryHandle entryHandle = keyLifecycle.entryHandle(keyBytes);
+                    EntryRecord current = entryHandle == null ? null : keyLifecycle.entryRecord(entryHandle);
+                    if (current == null) {
                         continue;
                     }
-                    if (keyLifecycle.removeIfExpired(handle, record, now)) {
-                        continue;
+                    if (keyLifecycle.isKeyExpired(handle, nowMillis)) {
+                        throw new IllegalStateException("expired key was not reclaimed before DEL preparation");
                     }
-                    long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, record);
-                    keyLifecycle.removeExpireIndexOnly(handle);
-                    if (keyLifecycle.removeEntry(handle, record)) {
-                        deltaBytes -= removalBytes;
-                        removed++;
+                    PreparedTtlMutation ttlMutation = PreparedTtlMutation.NONE;
+                    try {
+                        ttlMutation = keyLifecycle.prepareRemoveExpire(handle);
+                        long removalBytes = keyLifecycle.estimatedBytesForRemoval(handle, current);
+                        PreparedEntryMutation<Void> mutation = new PreparedEntryMutation<>(
+                                keyLifecycle,
+                                null,
+                                -removalBytes,
+                                0L,
+                                MutationOutcome.VALUE_CHANGED,
+                                entryHandle,
+                                null,
+                                null,
+                                current,
+                                null,
+                                true,
+                                ttlMutation
+                        );
+                        deletions[deletionCount++] = new PreparedDeletion(keyBytes, mutation);
+                        deltaBytes = Math.addExact(deltaBytes, -removalBytes);
+                    } catch (RuntimeException | Error failure) {
+                        try {
+                            ttlMutation.abort();
+                        } catch (RuntimeException | Error abortFailure) {
+                            failure.addSuppressed(abortFailure);
+                        }
+                        abortPreparedDeletions(deletions, deletionCount, failure);
+                        throw failure;
                     }
                 }
-                MutationOutcome outcome = removed > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
-                return YierdisDbMutationExecutor.MutationResult.of(
-                        WriteResult.of(removed, outcome),
-                        deltaBytes
+                MutationOutcome outcome = deletionCount > 0 ? MutationOutcome.VALUE_CHANGED : MutationOutcome.NONE;
+                return new PreparedDeletionBatch(
+                        deletions,
+                        deletionCount,
+                        WriteResult.of((long) deletionCount, outcome),
+                        deltaBytes,
+                        outcome
                 );
             }
         });
     }
 
+    private void reclaimExpiredBeforeDeletion(Collection<byte[]> keys, long nowMillis) {
+        for (byte[] keyBytes : keys) {
+            Objects.requireNonNull(keyBytes, "key");
+            KeyHandle keyHandle = keyLifecycle.keyHandle(keyBytes);
+            if (keyHandle == null) {
+                continue;
+            }
+            EntryRecord record = keyLifecycle.entryRecord(keyHandle);
+            if (record != null && keyLifecycle.isKeyExpired(keyHandle, nowMillis)) {
+                internals.reclaimExpired(keyHandle, record, nowMillis);
+            }
+        }
+    }
+
+    private static boolean containsDeletionForKey(PreparedDeletion[] deletions, int deletionCount, byte[] keyBytes) {
+        for (int index = 0; index < deletionCount; index++) {
+            if (java.util.Arrays.equals(deletions[index].keyBytes, keyBytes)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void abortPreparedDeletions(PreparedDeletion[] deletions, int deletionCount, Throwable failure) {
+        for (int index = 0; index < deletionCount; index++) {
+            try {
+                deletions[index].mutation.abort();
+            } catch (RuntimeException | Error abortFailure) {
+                failure.addSuppressed(abortFailure);
+            }
+        }
+    }
+
     @Override
     public ValueType typeOf(BytesView keyView) {
         internals.checkThread();
-        EntryRecord record = keyLifecycle.liveEntryRecord(keyView);
+        EntryRecord record = internals.liveEntryRecord(keyLifecycle.keyHandle(keyView));
         return record == null ? null : record.type();
     }
 
     @Override
     public boolean existsKey(BytesView keyView) {
         internals.checkThread();
-        return keyLifecycle.liveEntryRecord(keyView) != null;
+        return internals.liveEntryRecord(keyLifecycle.keyHandle(keyView)) != null;
     }
 
     @Override
-    public List<byte[]> keys(byte[] globPattern, int maxMatches, long timeBudgetNanos) {
+    public KeyScanWindow keys(byte[] globPattern, int maxMatches, long timeBudgetNanos) {
         internals.checkThread();
-        if (globPattern == null) {
-            return Collections.emptyList();
-        }
         int limit = maxMatches <= 0 ? 0 : maxMatches;
-        if (limit == 0) {
-            return Collections.emptyList();
+        long nowMillis = System.currentTimeMillis();
+        if (globPattern == null || limit == 0) {
+            return emptyWindow(ScanCursorV2.start(), globPattern, nowMillis);
         }
 
-        long deadlineNanos = Long.MAX_VALUE;
-        if (timeBudgetNanos > 0) {
-            long nowNanos = System.nanoTime();
-            try {
-                deadlineNanos = Math.addExact(nowNanos, timeBudgetNanos);
-            } catch (ArithmeticException e) {
-                deadlineNanos = Long.MAX_VALUE;
-            }
-        }
-        final long deadline = deadlineNanos;
+        long deadlineNanos = deadlineNanos(timeBudgetNanos);
+        NativeEpochScope epoch = keyLifecycle.nativeAllocator().beginEpoch(NativeEpochKind.SCAN);
+        boolean transferred = false;
+        try {
+            ScanCursorV2 next = ScanCursorV2.start();
+            ScanCursorV2 start = next;
+            long inspected = 0L;
+            long generation = keyLifecycle.keyDirectory().tableGeneration();
+            KeyDiscovery discovery = new KeyDiscovery();
+            boolean firstStep = true;
 
-        try (NativeEpochScope ignored = keyLifecycle.nativeAllocator().beginEpoch(NativeEpochKind.SCAN)) {
-            long nowMillis = System.currentTimeMillis();
-            List<byte[]> out = new ArrayList<>();
-            List<byte[]> expiredKeys = new ArrayList<>();
-            DeadlineState deadlineState = new DeadlineState(deadline);
-
-            ScanCursorV2 cursor = ScanCursorV2.start();
-            int guard = 0;
-            while (true) {
-                if (deadlineState.reached()) {
-                    deadlineState.markTimedOut();
+            while (firstStep || (next.value() != 0L && !deadlineReached(deadlineNanos) && discovery.count < limit)) {
+                firstStep = false;
+                if (deadlineReached(deadlineNanos)) {
+                    NativeKeyDirectory.ScanResult initial = keyLifecycle.scanWithWork(next, 0L, (key, record) -> true);
+                    start = initial.startCursor();
+                    next = initial.nextCursor();
+                    generation = initial.tableGeneration();
                     break;
                 }
-                ScanCursorV2 next = keyLifecycle.scan(cursor, 1024, (k, record) -> {
-                    if (k == null) {
-                        return true;
-                    }
-                    if (record == null) {
-                        return true;
-                    }
-                    if (keyLifecycle.isKeyExpired(k, nowMillis)) {
-                        expiredKeys.add(YierdisDb.toByteArray(k));
-                        return true;
-                    }
-                    if (YierdisGlobMatcher.matches(globPattern, k)) {
-                        out.add(YierdisDb.toByteArray(k));
-                        if (out.size() >= limit) {
+                NativeKeyDirectory.ScanResult step = keyLifecycle.scanWithWork(next, KEYS_SCAN_CHUNK_SLOTS, (key, record) -> {
+                    if (matchesForWindow(globPattern, key, record, nowMillis)) {
+                        discovery.record(key.length());
+                        if (discovery.count >= limit) {
                             return false;
                         }
                     }
-                    if (deadlineState.reached()) {
-                        deadlineState.markTimedOut();
-                        return false;
-                    }
-                    return true;
+                    return !deadlineReached(deadlineNanos);
                 });
-                cursor = next;
-                if (cursor.value() == 0) {
-                    break;
+                if (inspected == 0L) {
+                    start = step.startCursor();
                 }
-                if (out.size() >= limit || deadlineState.timedOut()) {
+                inspected = addSaturating(inspected, step.inspectedSlots());
+                next = step.nextCursor();
+                generation = step.tableGeneration();
+                if (step.inspectedSlots() == 0L) {
                     break;
-                }
-                if (++guard > 1_000_000) {
-                    throw new IllegalStateException("KEYS scan did not make progress");
                 }
             }
 
-            for (int i = 0; i < expiredKeys.size(); i++) {
-                byte[] key = expiredKeys.get(i);
-                KeyHandle handle = keyLifecycle.keyHandle(key);
-                if (handle == null) {
-                    continue;
-                }
-                EntryRecord record = keyLifecycle.entryRecord(handle);
-                if (record != null) {
-                    keyLifecycle.removeIfExpired(handle, record, nowMillis);
-                }
+            KeyScanWindow window = new KeyWindow(
+                    epoch,
+                    start,
+                    next,
+                    globPattern,
+                    discovery.count,
+                    discovery.encodedElementBytes,
+                    inspected,
+                    generation,
+                    keyLifecycle.keyDirectory().metrics().capacity(),
+                    keyLifecycle.keyDirectory().metrics().oldCapacity(),
+                    nowMillis
+            );
+            // window 持有 SCAN epoch，直到响应同步重放完成或被丢弃，避免 key handle 在此期间被回收。
+            transferred = true;
+            return window;
+        } finally {
+            if (!transferred) {
+                epoch.close();
             }
-            return out;
         }
     }
 
     @Override
-    public ScanCursorV2 scan(ScanCursorV2 cursor, byte[] globPattern, int count, List<byte[]> out) {
+    public KeyScanWindow scan(ScanCursorV2 cursor, byte[] globPattern, int count) {
         internals.checkThread();
-        Objects.requireNonNull(out, "out");
         if (count <= 0) {
             throw new IllegalArgumentException("count must be > 0");
         }
 
-        try (NativeEpochScope ignored = keyLifecycle.nativeAllocator().beginEpoch(NativeEpochKind.SCAN)) {
-            long now = System.currentTimeMillis();
-            List<byte[]> expiredKeys = new ArrayList<>();
-            int maxSteps = Math.max(64, count * 10);
-            RemainingLimit remaining = new RemainingLimit(count);
-
-            ScanCursorV2 next = keyLifecycle.scan(cursor == null ? ScanCursorV2.start() : cursor, maxSteps, (k, record) -> {
-                if (k == null) {
-                    return true;
-                }
-                if (record == null) {
-                    return true;
-                }
-                if (keyLifecycle.isKeyExpired(k, now)) {
-                    expiredKeys.add(YierdisDb.toByteArray(k));
-                    return true;
-                }
-                if (globPattern == null || YierdisGlobMatcher.matches(globPattern, k)) {
-                    out.add(YierdisDb.toByteArray(k));
-                    if (!remaining.consume()) {
-                        return false;
+        long nowMillis = System.currentTimeMillis();
+        NativeEpochScope epoch = keyLifecycle.nativeAllocator().beginEpoch(NativeEpochKind.SCAN);
+        boolean transferred = false;
+        try {
+            KeyDiscovery discovery = new KeyDiscovery();
+            NativeKeyDirectory.ScanResult result = keyLifecycle.scanWithWork(
+                    cursor == null ? ScanCursorV2.start() : cursor,
+                    scanSlotBudget(count),
+                    (key, record) -> {
+                        if (!matchesForWindow(globPattern, key, record, nowMillis)) {
+                            return true;
+                        }
+                        discovery.record(key.length());
+                        return discovery.count < count;
                     }
+            );
+            KeyScanWindow window = new KeyWindow(
+                    epoch,
+                    result.startCursor(),
+                    result.nextCursor(),
+                    globPattern,
+                    discovery.count,
+                    discovery.encodedElementBytes,
+                    result.inspectedSlots(),
+                    result.tableGeneration(),
+                    keyLifecycle.keyDirectory().metrics().capacity(),
+                    keyLifecycle.keyDirectory().metrics().oldCapacity(),
+                    nowMillis
+            );
+            // 与 KEYS 相同，epoch 的所有权随 window 转移给命令层的 try-with-resources。
+            transferred = true;
+            return window;
+        } finally {
+            if (!transferred) {
+                epoch.close();
+            }
+        }
+    }
+
+    private KeyScanWindow emptyWindow(ScanCursorV2 cursor, byte[] globPattern, long nowMillis) {
+        NativeKeyDirectory.ScanResult result = keyLifecycle.scanWithWork(cursor, 0L, (key, record) -> true);
+        return new KeyWindow(
+                null,
+                result.startCursor(),
+                result.nextCursor(),
+                globPattern,
+                0,
+                0L,
+                0L,
+                result.tableGeneration(),
+                keyLifecycle.keyDirectory().metrics().capacity(),
+                keyLifecycle.keyDirectory().metrics().oldCapacity(),
+                nowMillis
+        );
+    }
+
+    private boolean matchesForWindow(byte[] globPattern, KeyHandle key, EntryRecord record, long expiryEvaluationMillis) {
+        return key != null
+                && record != null
+                && !keyLifecycle.isKeyExpiredForScan(key, expiryEvaluationMillis)
+                && (globPattern == null || YierdisGlobMatcher.matches(globPattern, key));
+    }
+
+    private static long deadlineNanos(long timeBudgetNanos) {
+        if (timeBudgetNanos <= 0L) {
+            return Long.MAX_VALUE;
+        }
+        try {
+            return Math.addExact(System.nanoTime(), timeBudgetNanos);
+        } catch (ArithmeticException e) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    private static boolean deadlineReached(long deadlineNanos) {
+        return deadlineNanos != Long.MAX_VALUE && System.nanoTime() >= deadlineNanos;
+    }
+
+    private static long scanSlotBudget(int count) {
+        return Math.max(SCAN_MIN_SLOT_BUDGET, (long) count * SCAN_SLOT_MULTIPLIER);
+    }
+
+    private static long encodedBulkStringBytes(int payloadLength) {
+        long prefix = 1L + decimalDigits(payloadLength) + 2L;
+        return addSaturating(addSaturating(prefix, payloadLength), 2L);
+    }
+
+    private static int decimalDigits(int value) {
+        int digits = 1;
+        int remaining = value;
+        while (remaining >= 10) {
+            remaining /= 10;
+            digits++;
+        }
+        return digits;
+    }
+
+    private static long addSaturating(long left, long right) {
+        if (right <= 0L) {
+            return left;
+        }
+        return Long.MAX_VALUE - left < right ? Long.MAX_VALUE : left + right;
+    }
+
+    private static final class PreparedDeletion {
+        private final byte[] keyBytes;
+        private final PreparedEntryMutation<Void> mutation;
+
+        private PreparedDeletion(byte[] keyBytes, PreparedEntryMutation<Void> mutation) {
+            this.keyBytes = keyBytes;
+            this.mutation = mutation;
+        }
+    }
+
+    private static final class PreparedDeletionBatch extends AbstractPreparedMutation<WriteResult<Long>> {
+        private final PreparedDeletion[] deletions;
+        private final int deletionCount;
+        private final WriteResult<Long> result;
+
+        private PreparedDeletionBatch(
+                PreparedDeletion[] deletions,
+                int deletionCount,
+                WriteResult<Long> result,
+                long actualDeltaBytes,
+                MutationOutcome outcome
+        ) {
+            super(actualDeltaBytes, 0L, outcome);
+            this.deletions = deletions;
+            this.deletionCount = deletionCount;
+            this.result = result;
+        }
+
+        @Override
+        protected WriteResult<Long> commitPrepared() {
+            for (int index = 0; index < deletionCount; index++) {
+                deletions[index].mutation.commit();
+            }
+            return result;
+        }
+
+        @Override
+        protected void releaseSupersededPrepared() {
+            for (int index = 0; index < deletionCount; index++) {
+                deletions[index].mutation.releaseSuperseded();
+            }
+        }
+
+        @Override
+        protected void abortPrepared() {
+            for (int index = 0; index < deletionCount; index++) {
+                deletions[index].mutation.abort();
+            }
+        }
+    }
+
+    private static final class KeyDiscovery {
+        private int count;
+        private long encodedElementBytes;
+
+        void record(int payloadLength) {
+            if (count == Integer.MAX_VALUE) {
+                throw new IllegalStateException("key scan count exceeds Integer.MAX_VALUE");
+            }
+            count++;
+            encodedElementBytes = addSaturating(encodedElementBytes, encodedBulkStringBytes(payloadLength));
+        }
+    }
+
+    private final class KeyWindow implements KeyScanWindow {
+        private final NativeEpochScope epoch;
+        private final ScanCursorV2 startCursor;
+        private final ScanCursorV2 nextCursor;
+        private final byte[] globPattern;
+        private final int count;
+        private final long encodedElementBytes;
+        private final long inspectedSlots;
+        private final long tableGeneration;
+        private final int activeTableCapacity;
+        private final int oldTableCapacity;
+        private final long expiryEvaluationMillis;
+        private boolean emitted;
+        private boolean closed;
+
+        private KeyWindow(
+                NativeEpochScope epoch,
+                ScanCursorV2 startCursor,
+                ScanCursorV2 nextCursor,
+                byte[] globPattern,
+                int count,
+                long encodedElementBytes,
+                long inspectedSlots,
+                long tableGeneration,
+                int activeTableCapacity,
+                int oldTableCapacity,
+                long expiryEvaluationMillis
+        ) {
+            this.epoch = epoch;
+            this.startCursor = Objects.requireNonNull(startCursor, "startCursor");
+            this.nextCursor = Objects.requireNonNull(nextCursor, "nextCursor");
+            this.globPattern = globPattern;
+            this.count = count;
+            this.encodedElementBytes = encodedElementBytes;
+            this.inspectedSlots = inspectedSlots;
+            this.tableGeneration = tableGeneration;
+            this.activeTableCapacity = activeTableCapacity;
+            this.oldTableCapacity = oldTableCapacity;
+            this.expiryEvaluationMillis = expiryEvaluationMillis;
+        }
+
+        @Override
+        public ScanCursorV2 nextCursor() {
+            return nextCursor;
+        }
+
+        @Override
+        public long encodedElementBytes() {
+            return encodedElementBytes;
+        }
+
+        @Override
+        public long inspectedSlots() {
+            return inspectedSlots;
+        }
+
+        @Override
+        public long tableGeneration() {
+            return tableGeneration;
+        }
+
+        @Override
+        public long expiryEvaluationMillis() {
+            return expiryEvaluationMillis;
+        }
+
+        @Override
+        public boolean current() {
+            if (closed || keyLifecycle.keyDirectory().tableGeneration() != tableGeneration) {
+                return false;
+            }
+            var metrics = keyLifecycle.keyDirectory().metrics();
+            return metrics.capacity() == activeTableCapacity && metrics.oldCapacity() == oldTableCapacity;
+        }
+
+        @Override
+        public int count() {
+            return count;
+        }
+
+        @Override
+        public void emitTo(BulkStringSink out) {
+            Objects.requireNonNull(out, "out");
+            ensureOpen();
+            if (emitted) {
+                throw new IllegalStateException("key scan window has already been emitted");
+            }
+            emitted = true;
+            if (count == 0 || !current()) {
+                return;
+            }
+
+            ReplayDiscovery replay = new ReplayDiscovery();
+            NativeKeyDirectory.ScanResult result = keyLifecycle.scanWithWork(startCursor, inspectedSlots, (key, record) -> {
+                if (!matchesForWindow(globPattern, key, record, expiryEvaluationMillis)) {
+                    return true;
                 }
+                if (replay.count < count) {
+                    out.bulkString(new NativeBytesSlice(
+                            keyLifecycle.nativeAllocator(),
+                            KeyHandleAccess.allocatorNativeHandle(key),
+                            0,
+                            key.length()
+                    ));
+                    replay.count++;
+                } else {
+                    replay.extraMatch = true;
+                }
+                // 即使已经输出 count 个元素，也要走完 discovery 的物理 slot 范围，才能验证同一结束游标。
                 return true;
             });
-
-            for (int i = 0; i < expiredKeys.size(); i++) {
-                byte[] key = expiredKeys.get(i);
-                KeyHandle handle = keyLifecycle.keyHandle(key);
-                if (handle == null) {
-                    continue;
-                }
-                EntryRecord record = keyLifecycle.entryRecord(handle);
-                if (record != null) {
-                    keyLifecycle.removeIfExpired(handle, record, now);
-                }
+            if (replay.count != count || replay.extraMatch || result.nextCursor().value() != nextCursor.value()) {
+                throw new IllegalStateException(
+                        "key scan window changed before replay: expected count=" + count
+                                + ", actual count=" + replay.count
+                                + ", extra match=" + replay.extraMatch
+                                + ", expected next=" + nextCursor.value()
+                                + ", actual next=" + result.nextCursor().value()
+                                + ", start=" + startCursor.value()
+                                + ", inspected=" + inspectedSlots
+                                + ", generation=" + keyLifecycle.keyDirectory().tableGeneration()
+                                + ", old capacity=" + keyLifecycle.keyDirectory().metrics().oldCapacity()
+                );
             }
-            return next;
+        }
+
+        @Override
+        public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            if (epoch != null) {
+                epoch.close();
+            }
+        }
+
+        private void ensureOpen() {
+            if (closed) {
+                throw new IllegalStateException("key scan window is closed");
+            }
         }
     }
 
-    private static final class DeadlineState {
-        private final long deadlineNanos;
-        private boolean timedOut;
-
-        DeadlineState(long deadlineNanos) {
-            this.deadlineNanos = deadlineNanos;
-        }
-
-        boolean reached() {
-            return System.nanoTime() >= deadlineNanos;
-        }
-
-        void markTimedOut() {
-            timedOut = true;
-        }
-
-        boolean timedOut() {
-            return timedOut;
-        }
-    }
-
-    private static final class RemainingLimit {
-        private int remaining;
-
-        RemainingLimit(int remaining) {
-            this.remaining = remaining;
-        }
-
-        boolean consume() {
-            remaining--;
-            return remaining > 0;
-        }
+    private static final class ReplayDiscovery {
+        private int count;
+        private boolean extraMatch;
     }
 }
