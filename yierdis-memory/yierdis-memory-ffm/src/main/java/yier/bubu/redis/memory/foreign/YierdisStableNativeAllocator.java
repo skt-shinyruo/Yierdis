@@ -28,6 +28,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
     private static final int REALLOC_COPY_CHUNK_BYTES = 64 * 1024;
     private static final long ALLOCATION_SCOPE_HEAP_BYTES = 96L;
     private static final long ARRAY_HEADER_BYTES = 16L;
+    private static final long[] EMPTY_ALLOCATION_SCOPE_HANDLES = new long[0];
 
     private final YierdisNativePageAllocator pageAllocator;
     private final YierdisNativeObjectTable objectTable;
@@ -1008,7 +1009,7 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
         private final MemoryUsageSnapshot baseline;
         private final YierdisNativeObjectTable.AllocationScopeCheckpoint tableCheckpoint;
         private final YierdisNativePageAllocator.AllocationScopeCheckpoint pageCheckpoint;
-        private long[] handles = new long[0];
+        private long[] handles = EMPTY_ALLOCATION_SCOPE_HANDLES;
         private int handleCount;
         private NativeAllocationGrowth peakGrowth = NativeAllocationGrowth.zero();
         private boolean terminal;
@@ -1061,8 +1062,10 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                 return;
             }
             pageAllocator.promoteAllocationScope(pageCheckpoint);
+            objectTable.promoteAllocationScope(tableCheckpoint);
             terminal = true;
             handleCount = 0;
+            handles = EMPTY_ALLOCATION_SCOPE_HANDLES;
             activeAllocationScope = null;
         }
 
@@ -1072,26 +1075,31 @@ public final class YierdisStableNativeAllocator implements NativeAllocator {
                 return;
             }
             pageAllocator.beginAllocationScopeAbort(pageCheckpoint);
+            objectTable.beginAllocationScopeAbort(tableCheckpoint);
             terminal = true;
             activeAllocationScope = null;
             RuntimeException failure = null;
-            for (int i = handleCount - 1; i >= 0; i--) {
-                try {
-                    free(NativeHandle.fromRaw(handles[i]));
-                } catch (RuntimeException releaseFailure) {
-                    failure = addFailure(failure, releaseFailure);
+            try {
+                for (int i = handleCount - 1; i >= 0; i--) {
+                    try {
+                        free(NativeHandle.fromRaw(handles[i]));
+                    } catch (RuntimeException releaseFailure) {
+                        failure = addFailure(failure, releaseFailure);
+                    }
                 }
-            }
-            handleCount = 0;
-            try {
-                pageAllocator.restoreAllocationScope(pageCheckpoint);
-            } catch (RuntimeException trimFailure) {
-                failure = addFailure(failure, trimFailure);
-            }
-            try {
-                objectTable.restoreAllocationScopeCheckpoint(tableCheckpoint);
-            } catch (RuntimeException trimFailure) {
-                failure = addFailure(failure, trimFailure);
+                try {
+                    pageAllocator.restoreAllocationScope(pageCheckpoint);
+                } catch (RuntimeException trimFailure) {
+                    failure = addFailure(failure, trimFailure);
+                }
+                try {
+                    objectTable.restoreAllocationScopeCheckpoint(tableCheckpoint);
+                } catch (RuntimeException trimFailure) {
+                    failure = addFailure(failure, trimFailure);
+                }
+            } finally {
+                handleCount = 0;
+                handles = EMPTY_ALLOCATION_SCOPE_HANDLES;
             }
             if (failure != null) {
                 throw failure;

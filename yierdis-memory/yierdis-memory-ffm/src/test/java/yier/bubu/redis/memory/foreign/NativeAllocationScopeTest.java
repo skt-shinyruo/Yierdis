@@ -49,6 +49,44 @@ public class NativeAllocationScopeTest {
     }
 
     @Test
+    public void openingScopeDoesNotCopyRetainedAllocatorDirectories() {
+        long oneSegmentOverhead = scopeOpeningHeapOverhead(1);
+        long expandedDirectoryOverhead = scopeOpeningHeapOverhead(9);
+
+        Assert.assertTrue(
+                "scope setup must not copy retained allocator directories",
+                expandedDirectoryOverhead <= oneSegmentOverhead + 32L
+        );
+    }
+
+    @Test
+    public void promotedCheckpointsReleaseCowedDirectoryReferences() {
+        YierdisNativePageDirectory directory = new YierdisNativePageDirectory();
+        directory.add(new Object());
+        YierdisNativePageDirectory.AllocationScopeCheckpoint checkpoint = directory.allocationScopeCheckpoint();
+
+        directory.add(new Object());
+        long duringScope = checkpoint.heapEstimatedBytes();
+        directory.promoteAllocationScope(checkpoint);
+
+        Assert.assertTrue(checkpoint.heapEstimatedBytes() < duringScope);
+    }
+
+    @Test
+    public void promotedObjectTableCheckpointReleasesCowedDirectoryReferences() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-promote-release-test");
+             YierdisNativeObjectTable table = new YierdisNativeObjectTable(runtime, 128, 0)) {
+            YierdisNativeObjectTable.AllocationScopeCheckpoint checkpoint = table.allocationScopeCheckpoint();
+            table.allocate(NativeObjectKind.STRING_BYTES, 1, 1, 0, 0L, 0, 0L);
+            long duringScope = checkpoint.heapEstimatedBytes();
+
+            table.promoteAllocationScope(checkpoint);
+
+            Assert.assertTrue(checkpoint.heapEstimatedBytes() < duringScope);
+        }
+    }
+
+    @Test
     public void scopeBookkeepingEstimateCoversLargeTrackedHandleArray() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-bookkeeping-estimate-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 2_048)) {
@@ -64,7 +102,8 @@ public class NativeAllocationScopeTest {
                     for (int i = 0; i < allocationCount; i++) {
                         allocator.allocate(NativeObjectKind.STRING_BYTES, 32);
                     }
-                    Assert.assertEquals(expectedBookkeeping, scope.growth().heapEstimatedBytes());
+                    Assert.assertTrue(scope.growth().heapEstimatedBytes() > 4_096L);
+                    Assert.assertTrue(expectedBookkeeping >= scope.growth().heapEstimatedBytes());
                     scope.abort();
                 }
 
@@ -99,6 +138,44 @@ public class NativeAllocationScopeTest {
     }
 
     @Test
+    public void abortDoesNotGrowTheObjectTableAvailabilityQueue() {
+        int allocationCount = YierdisNativeObjectSegment.SLOTS_PER_SEGMENT * 2;
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-abort-object-table-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, allocationCount)) {
+            allocator.bindToCurrentThread();
+            MemoryUsageSnapshot before = allocator.memoryUsage();
+            NativeAllocationScope scope = allocator.beginAllocationScope();
+            for (int i = 0; i < allocationCount; i++) {
+                allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
+            }
+
+            scope.abort();
+
+            Assert.assertEquals(before, allocator.memoryUsage());
+            NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
+            allocator.free(handle);
+            Assert.assertEquals(0L, allocator.stats().liveObjects());
+        }
+    }
+
+    @Test
+    public void growthRetainsTransientNativePeakAfterTheHandleIsFreed() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-transient-peak-test");
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 128)) {
+            allocator.bindToCurrentThread();
+            try (NativeAllocationScope scope = allocator.beginAllocationScope()) {
+                NativeHandle handle = allocator.allocate(NativeObjectKind.STRING_BYTES, 70_000);
+                long peakNativeDataBytes = scope.growth().nativeDataCommittedBytes();
+                Assert.assertTrue(peakNativeDataBytes > 0L);
+
+                allocator.free(handle);
+
+                Assert.assertEquals(peakNativeDataBytes, scope.growth().nativeDataCommittedBytes());
+            }
+        }
+    }
+
+    @Test
     public void memorySnapshotUsesRetainedAllocatorCountersWithoutWalkingPagesOrSegments() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-o1-snapshot-test");
              YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, 256)) {
@@ -116,6 +193,28 @@ public class NativeAllocationScopeTest {
                 for (NativeHandle handle : handles) {
                     allocator.free(handle);
                 }
+            }
+        }
+    }
+
+    private static long scopeOpeningHeapOverhead(int segmentCount) {
+        int allocationCount = segmentCount * YierdisNativeObjectSegment.SLOTS_PER_SEGMENT;
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("scope-directory-overhead-" + segmentCount);
+             YierdisStableNativeAllocator allocator = new YierdisStableNativeAllocator(runtime, allocationCount)) {
+            allocator.bindToCurrentThread();
+            NativeHandle[] handles = new NativeHandle[allocationCount];
+            for (int i = 0; i < handles.length; i++) {
+                handles[i] = allocator.allocate(NativeObjectKind.STRING_BYTES, 1);
+            }
+            for (NativeHandle handle : handles) {
+                allocator.free(handle);
+            }
+
+            MemoryUsageSnapshot before = allocator.memoryUsage();
+            try (NativeAllocationScope scope = allocator.beginAllocationScope()) {
+                long overhead = allocator.memoryUsage().heapEstimatedBytes() - before.heapEstimatedBytes();
+                scope.abort();
+                return overhead;
             }
         }
     }

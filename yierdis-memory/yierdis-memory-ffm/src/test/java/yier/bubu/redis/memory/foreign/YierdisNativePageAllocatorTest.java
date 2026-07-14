@@ -47,6 +47,22 @@ public class YierdisNativePageAllocatorTest {
     }
 
     @Test
+    public void failedScopeRestoreDoesNotLeavePageDirectoryScopeActive() {
+        try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("failed-scope-restore");
+             YierdisNativePageAllocator allocator = new YierdisNativePageAllocator(runtime)) {
+            YierdisNativePageAllocator.AllocationScopeCheckpoint checkpoint = allocator.beginAllocationScope();
+            YierdisNativeBlock span = allocator.allocate(32_769);
+            allocator.beginAllocationScopeAbort(checkpoint);
+
+            Assert.assertThrows(IllegalStateException.class, () -> allocator.restoreAllocationScope(checkpoint));
+            span.close();
+
+            YierdisNativePageAllocator.AllocationScopeCheckpoint next = allocator.beginAllocationScope();
+            allocator.promoteAllocationScope(next);
+        }
+    }
+
+    @Test
     public void trimUsesTheEmptyPageIndexAndHonorsInspectionBudget() {
         try (YierdisFfmMemoryRuntime runtime = new YierdisFfmMemoryRuntime("bounded-trim");
              YierdisNativePageAllocator allocator = new YierdisNativePageAllocator(runtime)) {

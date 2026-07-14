@@ -20,6 +20,8 @@ final class YierdisNativePageDirectory {
     private int nextId = 1;
     private int liveEntries;
     private long retainedHeapBytes;
+    private AllocationScopeCheckpoint activeAllocationScope;
+    private boolean allocationScopeAbortInProgress;
     private boolean heapIterationTrapForTesting;
     private boolean allocationScopeAbortAllocationTracking;
     private boolean allocationScopeAbortAllocated;
@@ -46,6 +48,7 @@ final class YierdisNativePageDirectory {
         ensureDirectoryCapacity(segmentIndex + 1);
         Object[] segment = segments[segmentIndex];
         if (segment == null) {
+            detachSegmentsForActiveAllocationScope();
             segment = new Object[ENTRIES_PER_SEGMENT];
             segments[segmentIndex] = segment;
             retainedHeapBytes = MemoryUsageSnapshot.addSaturating(retainedHeapBytes, segmentHeapBytes());
@@ -54,6 +57,7 @@ final class YierdisNativePageDirectory {
         if (segment[offset] != null) {
             throw new IllegalStateException("page id is already live: " + pageId);
         }
+        detachSegmentCountsForActiveAllocationScope();
         segment[offset] = entry;
         segmentCounts[segmentIndex]++;
         liveEntries++;
@@ -84,16 +88,19 @@ final class YierdisNativePageDirectory {
         if (segments[segmentIndex][offset] != expected) {
             throw new IllegalStateException("page id owner mismatch: " + pageId);
         }
+        detachSegmentCountsForActiveAllocationScope();
         segments[segmentIndex][offset] = null;
         segmentCounts[segmentIndex]--;
         liveEntries--;
         if (segmentCounts[segmentIndex] == 0) {
+            detachSegmentsForActiveAllocationScope();
             segments[segmentIndex] = null;
             subtractRetainedHeapBytes(segmentHeapBytes());
         }
         if (!recycleId) {
             return;
         }
+        detachFreeIdsForActiveAllocationScope();
         ensureFreeIdCapacity(freeIdCount + 1);
         freeIds[freeIdCount++] = pageId;
     }
@@ -175,15 +182,20 @@ final class YierdisNativePageDirectory {
     }
 
     AllocationScopeCheckpoint allocationScopeCheckpoint() {
-        return new AllocationScopeCheckpoint(
-                segments.clone(),
-                segmentCounts.clone(),
-                freeIds.clone(),
+        if (activeAllocationScope != null) {
+            throw new IllegalStateException("native page-directory allocation scope is already active");
+        }
+        AllocationScopeCheckpoint checkpoint = new AllocationScopeCheckpoint(
+                segments,
+                segmentCounts,
+                freeIds,
                 freeIdCount,
                 nextId,
                 liveEntries,
                 retainedHeapBytes
         );
+        activeAllocationScope = checkpoint;
+        return checkpoint;
     }
 
     long allocationScopeCheckpointHeapEstimatedBytes() {
@@ -194,19 +206,51 @@ final class YierdisNativePageDirectory {
         );
     }
 
+    void promoteAllocationScope(AllocationScopeCheckpoint checkpoint) {
+        if (activeAllocationScope == checkpoint) {
+            activeAllocationScope = null;
+            allocationScopeAbortInProgress = false;
+            checkpoint.releaseReferences();
+        }
+    }
+
+    void beginAllocationScopeAbort(AllocationScopeCheckpoint checkpoint) {
+        if (activeAllocationScope != checkpoint) {
+            throw new IllegalStateException("native page-directory allocation scope is not active");
+        }
+        allocationScopeAbortInProgress = true;
+    }
+
+    void discardAllocationScope(AllocationScopeCheckpoint checkpoint) {
+        if (activeAllocationScope == checkpoint) {
+            allocationScopeAbortInProgress = false;
+            activeAllocationScope = null;
+        }
+        checkpoint.releaseReferences();
+    }
+
     void restoreAllocationScopeCheckpoint(AllocationScopeCheckpoint checkpoint) {
         if (checkpoint == null) {
             throw new NullPointerException("checkpoint");
         }
-        if (liveEntries != checkpoint.liveEntries) {
-            throw new IllegalStateException("allocation scope left a live native page");
+        if (activeAllocationScope != checkpoint) {
+            throw new IllegalStateException("native page-directory allocation scope is not active");
         }
-        segments = checkpoint.segments;
-        segmentCounts = checkpoint.segmentCounts;
-        freeIds = checkpoint.freeIds;
-        freeIdCount = checkpoint.freeIdCount;
-        nextId = checkpoint.nextId;
-        retainedHeapBytes = checkpoint.retainedHeapBytes;
+        try {
+            if (liveEntries != checkpoint.liveEntries) {
+                throw new IllegalStateException("allocation scope left a live native page");
+            }
+            segments = checkpoint.segments;
+            segmentCounts = checkpoint.segmentCounts;
+            freeIds = checkpoint.freeIds;
+            freeIdCount = checkpoint.freeIdCount;
+            nextId = checkpoint.nextId;
+            retainedHeapBytes = checkpoint.retainedHeapBytes;
+        } finally {
+            allocationScopeAbortInProgress = false;
+            activeAllocationScope = null;
+            checkpoint.releaseReferences();
+        }
     }
 
     void clear() {
@@ -217,12 +261,16 @@ final class YierdisNativePageDirectory {
         nextId = 1;
         liveEntries = 0;
         retainedHeapBytes = baseHeapBytes();
+        activeAllocationScope = null;
+        allocationScopeAbortInProgress = false;
     }
 
     private void ensureDirectoryCapacity(int required) {
         if (required <= segments.length) {
             return;
         }
+        failIfAllocationScopeAbortWouldAllocate();
+        retainDirectoryArraysForActiveAllocationScope();
         long previousHeapBytes = directoryArrayHeapBytes();
         int capacity = grownCapacity(segments.length, required);
         segments = Arrays.copyOf(segments, capacity);
@@ -234,12 +282,65 @@ final class YierdisNativePageDirectory {
         if (required <= freeIds.length) {
             return;
         }
+        failIfAllocationScopeAbortWouldAllocate();
         if (allocationScopeAbortAllocationTracking) {
             allocationScopeAbortAllocated = true;
         }
+        retainFreeIdsForActiveAllocationScope();
         long previousHeapBytes = arrayHeapBytes(freeIds.length, INT_BYTES);
         freeIds = Arrays.copyOf(freeIds, grownCapacity(freeIds.length, required));
         replaceRetainedHeapBytes(previousHeapBytes, arrayHeapBytes(freeIds.length, INT_BYTES));
+    }
+
+    private void detachSegmentsForActiveAllocationScope() {
+        if (activeAllocationScope == null || segments != activeAllocationScope.segments) {
+            return;
+        }
+        failIfAllocationScopeAbortWouldAllocate();
+        segments = segments.clone();
+        activeAllocationScope.retainSegments();
+    }
+
+    private void detachSegmentCountsForActiveAllocationScope() {
+        if (activeAllocationScope == null || segmentCounts != activeAllocationScope.segmentCounts) {
+            return;
+        }
+        failIfAllocationScopeAbortWouldAllocate();
+        segmentCounts = segmentCounts.clone();
+        activeAllocationScope.retainSegmentCounts();
+    }
+
+    private void detachFreeIdsForActiveAllocationScope() {
+        if (activeAllocationScope == null || freeIds != activeAllocationScope.freeIds) {
+            return;
+        }
+        failIfAllocationScopeAbortWouldAllocate();
+        freeIds = freeIds.clone();
+        activeAllocationScope.retainFreeIds();
+    }
+
+    private void retainDirectoryArraysForActiveAllocationScope() {
+        if (activeAllocationScope == null) {
+            return;
+        }
+        if (segments == activeAllocationScope.segments) {
+            activeAllocationScope.retainSegments();
+        }
+        if (segmentCounts == activeAllocationScope.segmentCounts) {
+            activeAllocationScope.retainSegmentCounts();
+        }
+    }
+
+    private void retainFreeIdsForActiveAllocationScope() {
+        if (activeAllocationScope != null && freeIds == activeAllocationScope.freeIds) {
+            activeAllocationScope.retainFreeIds();
+        }
+    }
+
+    private void failIfAllocationScopeAbortWouldAllocate() {
+        if (allocationScopeAbortInProgress) {
+            throw new IllegalStateException("native page-directory allocation scope abort must not allocate");
+        }
     }
 
     private static int grownCapacity(int current, int required) {
@@ -292,21 +393,69 @@ final class YierdisNativePageDirectory {
         return (pageId - 1) % ENTRIES_PER_SEGMENT;
     }
 
-    record AllocationScopeCheckpoint(
-            Object[][] segments,
-            int[] segmentCounts,
-            int[] freeIds,
-            int freeIdCount,
-            int nextId,
-            int liveEntries,
-            long retainedHeapBytes
-    ) {
+    static final class AllocationScopeCheckpoint {
+        private Object[][] segments;
+        private int[] segmentCounts;
+        private int[] freeIds;
+        private final int freeIdCount;
+        private final int nextId;
+        private final int liveEntries;
+        private final long retainedHeapBytes;
+        private boolean retainsSegments;
+        private boolean retainsSegmentCounts;
+        private boolean retainsFreeIds;
+
+        private AllocationScopeCheckpoint(
+                Object[][] segments,
+                int[] segmentCounts,
+                int[] freeIds,
+                int freeIdCount,
+                int nextId,
+                int liveEntries,
+                long retainedHeapBytes
+        ) {
+            this.segments = segments;
+            this.segmentCounts = segmentCounts;
+            this.freeIds = freeIds;
+            this.freeIdCount = freeIdCount;
+            this.nextId = nextId;
+            this.liveEntries = liveEntries;
+            this.retainedHeapBytes = retainedHeapBytes;
+        }
+
+        private void retainSegments() {
+            retainsSegments = true;
+        }
+
+        private void retainSegmentCounts() {
+            retainsSegmentCounts = true;
+        }
+
+        private void retainFreeIds() {
+            retainsFreeIds = true;
+        }
+
+        private void releaseReferences() {
+            segments = null;
+            segmentCounts = null;
+            freeIds = null;
+            retainsSegments = false;
+            retainsSegmentCounts = false;
+            retainsFreeIds = false;
+        }
+
         long heapEstimatedBytes() {
-            return allocationScopeCheckpointHeapEstimatedBytes(
-                    segments.length,
-                    segmentCounts.length,
-                    freeIds.length
-            );
+            long bytes = CHECKPOINT_OBJECT_BYTES;
+            if (retainsSegments) {
+                bytes = MemoryUsageSnapshot.addSaturating(bytes, arrayHeapBytes(segments.length, REFERENCE_BYTES));
+            }
+            if (retainsSegmentCounts) {
+                bytes = MemoryUsageSnapshot.addSaturating(bytes, arrayHeapBytes(segmentCounts.length, INT_BYTES));
+            }
+            if (retainsFreeIds) {
+                bytes = MemoryUsageSnapshot.addSaturating(bytes, arrayHeapBytes(freeIds.length, INT_BYTES));
+            }
+            return bytes;
         }
     }
 
