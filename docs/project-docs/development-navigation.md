@@ -233,7 +233,7 @@
 - `YierdisDbMemoryReporterTest`
 - `YierdisDbIntrospectionTest`
 
-## 改代理 / 变更事件 / AOF replication 起点
+## 改代理 / DB 提交事件 / AOF replication 起点
 
 先打开：
 
@@ -242,22 +242,25 @@
 - [`YierdisDbRouter.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/YierdisDbRouter.java)
 - [`CommandSupport.java`](../../yierdis-command/yierdis-command-builtin/src/main/java/yier/bubu/redis/command/defaults/CommandSupport.java)
 - [`ServerInfoProvider.java`](../../yierdis-command/yierdis-command-api/src/main/java/yier/bubu/redis/command/api/ServerInfoProvider.java)
-- [`CommandChangeEmitter.java`](../../yierdis-command/yierdis-command-core/src/main/java/yier/bubu/redis/command/kernel/CommandChangeEmitter.java)
-- [`RuntimeChangeSinkCommandChangeObserver.java`](../../yierdis-server/yierdis-server-main/src/main/java/yier/bubu/redis/app/server/RuntimeChangeSinkCommandChangeObserver.java)
-- [`YierdisChangeEventBridge.java`](../../yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeEventBridge.java)
-- [`DbChangeContext.java`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/DbChangeContext.java)
+- [`CommandRecordScope.java`](../../yierdis-common/yierdis-common-command/src/main/java/yier/bubu/redis/common/command/CommandRecordScope.java)
+- [`DbCommitPublisher.java`](../../yierdis-db/yierdis-db-api/src/main/java/yier/bubu/redis/storage/api/DbCommitPublisher.java)
+- [`YierdisDbMutationExecutor.java`](../../yierdis-db/yierdis-db-memory/src/main/java/yier/bubu/redis/storage/memory/internal/ledger/YierdisDbMutationExecutor.java)
+- [`CommitStream.java`](../../yierdis-server/yierdis-server-runtime/src/main/java/yier/bubu/redis/runtime/embedded/CommitStream.java)
+- [`YierdisChangeEvent.java`](../../yierdis-server/yierdis-server-runtime-api/src/main/java/yier/bubu/redis/runtime/api/YierdisChangeEvent.java)
 
 继续追：
 
 - 请求主链和 engine/session 边界看 [`request-execution-flow.md`](./request-execution-flow.md)。
-- 命令如何记录 mutation outcome 看 [`commands-and-data-model.md`](./commands-and-data-model.md)。
-- expire / eviction synthetic delete 的 DB 生命周期看 [`db-internals.md`](./db-internals.md)。
+- 命令 record scope 和 DB commit publication 的顺序看 [`change-event-and-proxy-logic.md`](./change-event-and-proxy-logic.md)。
+- expire / eviction synthetic delete 的 DB lifecycle 看 [`db-internals.md`](./db-internals.md)。
 
 测试优先级：
 
 - `YierdisFastCommandProcessorPolicyTest`
 - `YierdisFastCommandProcessorArchitectureTest`
-- `RuntimeChangeSinkCommandChangeObserverTest`
+- `DbCommitPublisherTest`
+- `CommitStreamTest`
+- `CommitStreamShutdownTest`
 - `YierdisChangeSinkTest`
 - `ExpireIndexTest`
 - `YierdisDbConstructionTest`

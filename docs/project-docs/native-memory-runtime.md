@@ -19,10 +19,10 @@ Yierdis 当前 native-memory runtime 建在 JDK 25 `java.lang.foreign` 上。最
 
 生产启动路径的默认 DB backend 由 `YierdisServerBootstrap` 组装，并通过 `YierdisInstanceConfig` 注入 `YierdisInstance.create(config)`。runtime 的 strict create 入口要求 `engineFactory` 非空，不再在生产入口里偷偷选择默认 DB backend。
 
-- global scope：`YierdisServerBootstrap` 创建 instance-level `YierdisFfmMemoryRuntime("instance")` 和 `YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions)`，多个 DB 共享 instance-level runtime，global governor 额外把 shared off-heap usage source 纳入预算。这个 shared runtime 作为 factory-owned resource 交给 instance 关闭。
+- global scope：`YierdisServerBootstrap` 创建 instance-level `YierdisFfmMemoryRuntime("instance")` 和 `YierdisDbEngineFactory(memoryRuntime, nativeDefragOptions)`，多个 DB 共享 instance-level runtime。global governor 汇总 DB participant 的 owned physical snapshots；这个 shared runtime 作为 factory-owned resource 交给 instance 关闭。
 - per-db scope：`YierdisServerBootstrap` 创建 `YierdisDbEngineFactory(nativeDefragOptions)`，每个 DB storage components 在没有外部 runtime 时创建 DB-owned `YierdisFfmMemoryRuntime("db")`。
 
-embedded/test 兼容路径可以显式调用 `YierdisInstance.createWithDefaults(config)` 使用同样的默认组装规则；方法名本身表明这是默认组装，而不是 strict runtime 入口的隐式行为。
+embedded/test 调用方与生产 bootstrap 一样，必须在 `YierdisInstanceConfig` 中显式提供 `DbEngineFactory` 或 `EngineFactoryBinding`；`YierdisInstance.create(config)` 不包含默认 DB backend 的回退逻辑。
 
 `YierdisDbStorageComponents.create(...)` 负责把 runtime 装配成 DB 内部结构：
 
@@ -43,7 +43,7 @@ DB resources 会记录哪些对象由当前 DB 拥有。关闭 DB 时，只关�
 
 - runtime name。
 - `usedBytes`。
-- live region set。
+- `liveRegionCount`。
 - closed 状态。
 
 `allocateRegion(owner, bytes)` 会：
@@ -52,9 +52,9 @@ DB resources 会记录哪些对象由当前 DB 拥有。关闭 DB 时，只关�
 2. 创建 `Arena.ofShared()`。
 3. 从 arena 分配 `MemorySegment`。
 4. 包成 `YierdisFfmRegion`。
-5. 加入 live region set，并增加 `usedBytes`。
+5. 原子递增 `liveRegionCount` 和 `usedBytes`。
 
-`close()` 不主动释放 live regions，而是先把 runtime 标记 closed，再检查 live region set。如果还有 region 没有关闭，会抛 native memory leak 异常。
+`close()` 不主动释放 regions，而是先把 runtime 标记 closed，再检查原子 region counter。如果还有 region 没有关闭，会抛 native memory leak 异常。
 
 `YierdisFfmRegion` 是一块 arena-backed memory 的 owner。它保存 runtime、owner label、arena、segment 和 size。`span(offset, length)` 先确认 region open，再检查范围，最后返回 `new YierdisFfmSpan(segment.asSlice(offset, length))`。`close()` 会关闭 arena，并通知 runtime 扣减 region accounting。
 
@@ -66,7 +66,7 @@ DB resources 会记录哪些对象由当前 DB 拥有。关闭 DB 时，只关�
 
 runtime ownership 和 maxmemory scope 是相关但不同的概念。
 
-global maxmemory scope 下，instance 层有一个 shared `YierdisFfmMemoryRuntime`。每个 DB 仍然有自己的 keyspace、entry table、type roots、ledger 和 allocator实例，但底层 FFM region accounting 来自 shared runtime。global maxmemory governor 汇总各 DB participant usage，并通过 shared off-heap usage source 避免把 shared native memory 在每个 DB 上重复计算。
+global maxmemory scope 下，instance 层有一个 shared `YierdisFfmMemoryRuntime`。每个 DB 仍然有自己的 keyspace、entry table、type roots、ledger 和 allocator实例，但底层 FFM region accounting 来自 shared runtime。global maxmemory governor 汇总各 DB participant 的 owned `MemoryUsageSnapshot`；runtime counter 负责生命周期 leak detection，不是一个额外的 maxmemory 账本。
 
 per-db maxmemory scope 下，每个 DB 使用自己的 runtime / allocator resources。per-DB ledger reserve、evict 和 memory stats 都以当前 DB 的预算为边界。
 
@@ -90,7 +90,7 @@ FFM-backed storage paths 当前集中在这些结构：
 
 ## maxmemory 和 memory stats
 
-Yierdis 把 native-memory usage 纳入 maxmemory 预算入口。写路径通过 `YierdisDbMutationExecutor` 先 reserve upper bound，再执行 mutation，最后按 actual delta commit 或 rollback。global scope 下，`YierdisGlobalMaxmemoryGovernor` 汇总 DB participant usage 和 shared off-heap usage source；per-db scope 下，DB ledger 按自己的 limit 做 cleanup、evict 或 reject。
+Yierdis 把 native-memory usage 纳入 maxmemory 预算入口。写路径通过 `YierdisDbMutationExecutor` 先 reserve upper bound，再执行 mutation，最后按 actual delta commit 或 rollback。global scope 下，`YierdisGlobalMaxmemoryGovernor` 汇总 DB participant 的 physical snapshots；per-db scope 下，DB ledger 按自己的 limit 做 cleanup、evict 或 reject。
 
 需要注意两点：
 

@@ -147,7 +147,7 @@ protocol owns wire shape and reply encoding, not DB semantics.
 
 `yierdis-server-main` 负责最终组装，是真正的 composition root。生产启动路径在这里选择默认 DB backend：按 maxmemory scope 构造 `YierdisDbEngineFactory`，global scope 额外构造 instance-level `YierdisFfmMemoryRuntime("instance")`，再通过 `YierdisInstanceConfig` 注入 runtime。
 
-`YierdisInstance.create(config)` 是 strict runtime 入口，要求调用方已经提供 `DbEngineFactory`。需要兼容 embedded/test 默认组装时，应显式调用 `YierdisInstance.createWithDefaults(config)`，避免 runtime 的生产入口偷偷决定默认 DB backend。
+`YierdisInstance.create(config)` 是 strict runtime 入口，要求调用方已经提供 `DbEngineFactory` 或 `EngineFactoryBinding`。embedded/test 同样显式组装这些依赖；runtime 本身不选择默认 DB backend。
 
 ## command 车道
 

@@ -62,6 +62,25 @@ public class ReplyPreflightCommandTest {
     }
 
     @Test
+    public void uncountedPopCapacityRejectionLeavesTheListUntouched() {
+        forEachDb(db -> {
+            YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);
+            try (FastTestClient client = new FastTestClient(processor)) {
+                client.execute(cmd("RPUSH", "list", "value"));
+
+                TrackingReplyWriter writer = TrackingReplyWriter.rejecting();
+                Assert.assertThrows(
+                        ReplyCapacityUnavailableException.class,
+                        () -> execute(processor, new EngineSession(16, 16 * 1024L), writer, cmd("LPOP", "list"))
+                );
+
+                Assert.assertEquals(1, db.reads().lists().lrange(b("list"), 0, -1).count());
+                Assert.assertEquals(ReplyPlans.bulkString(5, 0L).encodedUpperBoundBytes(), writer.requiredPlan().encodedUpperBoundBytes());
+            }
+        });
+    }
+
+    @Test
     public void getHgetAndEchoPreflightAndTransferTheirReplySources() {
         forEachDb(db -> {
             YierdisFastCommandProcessor processor = TestCommandProcessors.forDb(db);

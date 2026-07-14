@@ -24,7 +24,7 @@ import yier.bubu.redis.storage.memory.internal.entry.ValueHandle;
 import yier.bubu.redis.storage.memory.internal.entry.ZSetRoot;
 import yier.bubu.redis.common.memory.MemoryUsageSnapshot;
 
-import java.util.function.BooleanSupplier;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 public final class YierdisDbMemoryReporter {
@@ -39,6 +39,7 @@ public final class YierdisDbMemoryReporter {
     private final MemoryLedger ledger;
     private final YierdisDbMemoryEstimator memoryEstimator;
     private final Supplier<NativeDefragReport> nativeDefragReportSupplier;
+    private final LongSupplier nativeLiveRegionCountSupplier;
 
     YierdisDbMemoryReporter(
             Runnable threadChecker,
@@ -50,7 +51,8 @@ public final class YierdisDbMemoryReporter {
             long maxmemoryBytes,
             MemoryLedger ledger,
             YierdisDbMemoryEstimator memoryEstimator,
-            Supplier<NativeDefragReport> nativeDefragReportSupplier
+            Supplier<NativeDefragReport> nativeDefragReportSupplier,
+            LongSupplier nativeLiveRegionCountSupplier
     ) {
         this.threadChecker = java.util.Objects.requireNonNull(threadChecker, "threadChecker");
         this.internals = internals;
@@ -67,6 +69,10 @@ public final class YierdisDbMemoryReporter {
         this.nativeDefragReportSupplier = java.util.Objects.requireNonNull(
                 nativeDefragReportSupplier,
                 "nativeDefragReportSupplier"
+        );
+        this.nativeLiveRegionCountSupplier = java.util.Objects.requireNonNull(
+                nativeLiveRegionCountSupplier,
+                "nativeLiveRegionCountSupplier"
         );
     }
 
@@ -106,7 +112,8 @@ public final class YierdisDbMemoryReporter {
                 hashTableMaintenanceRegistry,
                 true,
                 safeNativeAllocatorStats(),
-                nativeDefragReportSupplier.get()
+                nativeDefragReportSupplier.get(),
+                safeNativeLiveRegionCount()
         );
     }
 
@@ -231,6 +238,14 @@ public final class YierdisDbMemoryReporter {
             return allocator.stats();
         } catch (Throwable ignored) {
             return null;
+        }
+    }
+
+    private long safeNativeLiveRegionCount() {
+        try {
+            return Math.max(0L, nativeLiveRegionCountSupplier.getAsLong());
+        } catch (Throwable ignored) {
+            return 0L;
         }
     }
 

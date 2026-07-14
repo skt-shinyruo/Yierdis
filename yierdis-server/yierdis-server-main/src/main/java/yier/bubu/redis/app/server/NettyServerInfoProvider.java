@@ -3,11 +3,14 @@ package yier.bubu.redis.app.server;
 // INFO/STATS 提供器：基于 transport-neutral executor 统计与连接态输出可观测性摘要，避免在热路径做额外分配。
 
 import yier.bubu.redis.command.api.ServerInfoProvider;
+import yier.bubu.redis.bytes.BytesSlice;
 import yier.bubu.redis.storage.api.YierdisMemoryStats;
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ConnectionStatsView;
 import yier.bubu.redis.execution.api.ExecutionRequest;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
+import yier.bubu.redis.execution.api.ReplyPlan;
+import yier.bubu.redis.execution.api.ReplyPlans;
 import yier.bubu.redis.app.server.args.YierdisServerRuntimeConfig;
 import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.protocol.resp.netty.InboundMemoryBudget;
@@ -18,6 +21,7 @@ import yier.bubu.redis.runtime.embedded.YierdisInstanceObservability;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 /**
  * Server-side INFO/STATS provider backed by {@link CommandExecutor}.
@@ -170,11 +174,42 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
 
         String section = request != null && request.argc() == 2 ? asciiLower(request, 1) : null;
         if ("yierdis".equals(section)) {
-            writeYierdisStructuredInfo(out, ex);
+            CommandExecutor.StatsSnapshot stats = ex.statsSnapshot();
+            long uptimeMillis = Math.max(0L, System.currentTimeMillis() - startedMillis);
+            InboundMemoryBudgetStats inboundStats = inboundStats();
+            CommitStreamStats streamStats = commitStreamStats();
+            OutboundMemoryBudgetStats outboundStats = outboundStats();
+            ReplyEgressStats.Snapshot egressStats = replyEgressStats();
+            int liveChildChannels = liveChildChannels();
+            requireMeasuredReply(
+                    out,
+                    writer -> writeYierdisStructuredInfo(
+                            writer,
+                            stats,
+                            uptimeMillis,
+                            inboundStats,
+                            streamStats,
+                            outboundStats,
+                            egressStats,
+                            liveChildChannels
+                    )
+            );
+            writeYierdisStructuredInfo(
+                    out,
+                    stats,
+                    uptimeMillis,
+                    inboundStats,
+                    streamStats,
+                    outboundStats,
+                    egressStats,
+                    liveChildChannels
+            );
             return;
         }
 
-        out.bulkString(buildRedisInfo(section, ex).getBytes(StandardCharsets.UTF_8));
+        byte[] response = buildRedisInfo(section, ex).getBytes(StandardCharsets.UTF_8);
+        out.requireReply(ReplyPlans.bulkString(response.length, 0L));
+        out.bulkString(response);
     }
 
     @Override
@@ -193,7 +228,50 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         CommitStreamStats streamStats = commitStreamStats();
         OutboundMemoryBudgetStats outboundStats = outboundStats();
         ReplyEgressStats.Snapshot egressStats = replyEgressStats();
+        int liveChildChannels = liveChildChannels();
+        requireMeasuredReply(
+                out,
+                writer -> writeStats(
+                        writer,
+                        s,
+                        stats,
+                        inboundStats,
+                        streamStats,
+                        outboundStats,
+                        egressStats,
+                        liveChildChannels
+                )
+        );
+        writeStats(
+                out,
+                s,
+                stats,
+                inboundStats,
+                streamStats,
+                outboundStats,
+                egressStats,
+                liveChildChannels
+        );
+    }
 
+    @Override
+    public YierdisMemoryStats memoryStats(CommandContext ctx) {
+        if (config.maxmemoryScope() != YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL) {
+            return null;
+        }
+        return aggregatedMemoryStats();
+    }
+
+    private void writeStats(
+            RedisReplyWriter out,
+            CommandExecutor.StatsSnapshot s,
+            ConnectionStatsView stats,
+            InboundMemoryBudgetStats inboundStats,
+            CommitStreamStats streamStats,
+            OutboundMemoryBudgetStats outboundStats,
+            ReplyEgressStats.Snapshot egressStats,
+            int liveChildChannels
+    ) {
         int pairs = 59 + (stats == null ? 0 : 11);
         writeHeader(out, pairs);
 
@@ -217,7 +295,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_DEFERRED_GLOBAL_REPLY_HEADS, s.deferredGlobalReplyHeads());
         writeInboundStats(out, inboundStats);
         writeCommitStreamStats(out, streamStats);
-        writeOutboundStats(out, outboundStats, egressStats, liveChildChannels());
+        writeOutboundStats(out, outboundStats, egressStats, liveChildChannels);
 
         if (stats == null) {
             return;
@@ -236,23 +314,16 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_CONN_BACKPRESSURE_EXIT, stats.backpressureExit());
     }
 
-    @Override
-    public YierdisMemoryStats memoryStats(CommandContext ctx) {
-        if (config.maxmemoryScope() != YierdisServerRuntimeConfig.MaxmemoryScope.GLOBAL) {
-            return null;
-        }
-        return aggregatedMemoryStats();
-    }
-
-    private void writeYierdisStructuredInfo(RedisReplyWriter out, CommandExecutor<NettyExecutionConnection> ex) {
-        CommandExecutor.StatsSnapshot s = ex.statsSnapshot();
-        long nowMillis = System.currentTimeMillis();
-        long uptimeMillis = Math.max(0, nowMillis - startedMillis);
-
-        InboundMemoryBudgetStats inboundStats = inboundStats();
-        CommitStreamStats streamStats = commitStreamStats();
-        OutboundMemoryBudgetStats outboundStats = outboundStats();
-        ReplyEgressStats.Snapshot egressStats = replyEgressStats();
+    private void writeYierdisStructuredInfo(
+            RedisReplyWriter out,
+            CommandExecutor.StatsSnapshot s,
+            long uptimeMillis,
+            InboundMemoryBudgetStats inboundStats,
+            CommitStreamStats streamStats,
+            OutboundMemoryBudgetStats outboundStats,
+            ReplyEgressStats.Snapshot egressStats,
+            int liveChildChannels
+    ) {
         int pairs = 58;
         writeHeader(out, pairs);
 
@@ -275,7 +346,7 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_DEFERRED_GLOBAL_REPLY_HEADS, s.deferredGlobalReplyHeads());
         writeInboundStats(out, inboundStats);
         writeCommitStreamStats(out, streamStats);
-        writeOutboundStats(out, outboundStats, egressStats, liveChildChannels());
+        writeOutboundStats(out, outboundStats, egressStats, liveChildChannels);
     }
 
     private String buildRedisInfo(String section, CommandExecutor<NettyExecutionConnection> ex) {
@@ -336,6 +407,14 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
             sb.append("yierdis_offheap_included_in_maxmemory:").append(memStats.offHeapIncludedInMaxmemory() ? 1 : 0).append("\r\n");
             sb.append("yierdis_offheap_used_bytes:").append(memStats.offHeapUsedBytes()).append("\r\n");
             sb.append("yierdis_offheap_max_bytes:0\r\n");
+            sb.append("yierdis_native_metadata_committed_bytes:")
+                    .append(memStats.nativeMetadataCommittedBytes()).append("\r\n");
+            sb.append("yierdis_native_data_committed_bytes:")
+                    .append(memStats.nativeDataCommittedBytes()).append("\r\n");
+            sb.append("yierdis_native_data_live_bytes:").append(memStats.nativeDataLiveBytes()).append("\r\n");
+            sb.append("yierdis_native_reclaimable_bytes:").append(memStats.nativeReclaimableBytes()).append("\r\n");
+            sb.append("yierdis_native_live_objects:").append(memStats.nativeLiveObjects()).append("\r\n");
+            sb.append("yierdis_native_live_regions:").append(memStats.nativeLiveRegions()).append("\r\n");
             sb.append("yierdis_native_defrag_last_scanned_objects:").append(memStats.nativeDefragLastScannedObjects()).append("\r\n");
             sb.append("yierdis_native_defrag_last_moved_objects:").append(memStats.nativeDefragLastMovedObjects()).append("\r\n");
             sb.append("yierdis_native_defrag_last_moved_bytes:").append(memStats.nativeDefragLastMovedBytes()).append("\r\n");
@@ -593,6 +672,202 @@ final class NettyServerInfoProvider implements ServerInfoProvider {
         writePair(out, KEY_COMMIT_STREAM_SHUTDOWN_TIMED_OUT, stats.shutdownTimedOut() ? 1L : 0L);
         writePair(out, KEY_COMMIT_STREAM_FIRST_FAILURE_TYPE, ascii(stats.firstFailureType()));
         writePair(out, KEY_COMMIT_STREAM_FIRST_FAILURE_MESSAGE, ascii(stats.firstFailureMessage()));
+    }
+
+    private static void requireMeasuredReply(RedisReplyWriter out, Consumer<RedisReplyWriter> responseWriter) {
+        ReplyPlanMeasurer measurer = new ReplyPlanMeasurer();
+        responseWriter.accept(measurer);
+        out.requireReply(measurer.toReplyPlan());
+    }
+
+    private static final class ReplyPlanMeasurer implements RedisReplyWriter {
+        private long encodedBytes;
+        private boolean closeAfterReply;
+
+        private ReplyPlan toReplyPlan() {
+            return ReplyPlans.raw(encodedBytes, 0L);
+        }
+
+        @Override
+        public void requireReply(ReplyPlan plan) {
+        }
+
+        @Override
+        public void transferReplyOwnership(AutoCloseable resource) {
+        }
+
+        @Override
+        public void requestCloseAfterReply() {
+            closeAfterReply = true;
+        }
+
+        @Override
+        public boolean closeAfterReplyRequested() {
+            return closeAfterReply;
+        }
+
+        @Override
+        public void simpleString(String value) {
+            add(3L + asciiLength(value == null ? "" : value.replace('\r', ' ').replace('\n', ' ')));
+        }
+
+        @Override
+        public void error(String message) {
+            long messageBytes = utf8Length(message == null ? "ERR error" : message);
+            add(3L + Math.min(512L, saturatedAdd(4L, messageBytes)));
+        }
+
+        @Override
+        public void integer(long value) {
+            add(3L + Long.toString(value).length());
+        }
+
+        @Override
+        public void booleanValue(boolean value) {
+            add(4L);
+        }
+
+        @Override
+        public void doubleValue(double value) {
+            long textBytes = asciiLength(Double.toString(value));
+            add(Math.max(3L + textBytes, bulkStringEncodedBytes(textBytes)));
+        }
+
+        @Override
+        public void bigNumberAscii(String value) {
+            long textBytes = asciiLength(value == null ? "" : value);
+            add(Math.max(3L + textBytes, bulkStringEncodedBytes(textBytes)));
+        }
+
+        @Override
+        public void verbatimString(String format, byte[] data) {
+            long dataBytes = data == null ? 0L : data.length;
+            long bodyBytes = saturatedAdd(4L, dataBytes);
+            long resp3Bytes = saturatedAdd(3L + decimalDigits(bodyBytes), saturatedAdd(bodyBytes, 2L));
+            add(Math.max(resp3Bytes, bulkStringEncodedBytes(dataBytes)));
+        }
+
+        @Override
+        public void blobError(String message) {
+            long messageBytes = Math.min(512L, saturatedAdd(4L, utf8Length(message == null ? "ERR error" : message)));
+            add(Math.max(3L + messageBytes, bulkStringEncodedBytes(messageBytes)));
+        }
+
+        @Override
+        public void bulkString(byte[] data) {
+            if (data == null) {
+                nullValue();
+                return;
+            }
+            add(bulkStringEncodedBytes(data.length));
+        }
+
+        @Override
+        public void bulkString(byte[] data, int off, int len) {
+            if (data == null) {
+                nullValue();
+                return;
+            }
+            Objects.checkFromIndexSize(off, len, data.length);
+            add(bulkStringEncodedBytes(len));
+        }
+
+        @Override
+        public void bulkString(BytesSlice slice) {
+            if (slice == null) {
+                nullValue();
+                return;
+            }
+            add(bulkStringEncodedBytes(slice.length()));
+        }
+
+        @Override
+        public void bulkStringLongAscii(long value) {
+            add(bulkStringEncodedBytes(Long.toString(value).length()));
+        }
+
+        @Override
+        public void nullValue() {
+            add(5L);
+        }
+
+        @Override
+        public void nullArray() {
+            add(5L);
+        }
+
+        @Override
+        public void arrayHeader(int count) {
+            add(3L + decimalDigits(Math.max(0L, count)));
+        }
+
+        @Override
+        public void emptyArray() {
+            arrayHeader(0);
+        }
+
+        @Override
+        public void mapHeader(int pairs) {
+            arrayHeader(saturatedDouble(Math.max(0, pairs)));
+        }
+
+        @Override
+        public void setHeader(int count) {
+            arrayHeader(count);
+        }
+
+        @Override
+        public void pushHeader(int count) {
+            arrayHeader(count);
+        }
+
+        @Override
+        public void attributeHeader(int pairs) {
+            arrayHeader(saturatedDouble(Math.max(0, pairs)));
+        }
+
+        private void add(long bytes) {
+            encodedBytes = saturatedAdd(encodedBytes, bytes);
+        }
+
+        private static long bulkStringEncodedBytes(long payloadBytes) {
+            if (payloadBytes < 0L) {
+                return 5L;
+            }
+            return saturatedAdd(3L + decimalDigits(payloadBytes), saturatedAdd(payloadBytes, 2L));
+        }
+
+        private static long asciiLength(String value) {
+            return value.getBytes(StandardCharsets.US_ASCII).length;
+        }
+
+        private static long utf8Length(String value) {
+            return value.getBytes(StandardCharsets.UTF_8).length;
+        }
+
+        private static int saturatedDouble(int value) {
+            return value > Integer.MAX_VALUE / 2 ? Integer.MAX_VALUE : value * 2;
+        }
+
+        private static int decimalDigits(long value) {
+            long nonNegative = Math.max(0L, value);
+            if (nonNegative < 10L) {
+                return 1;
+            }
+            int digits = 0;
+            while (nonNegative > 0L) {
+                nonNegative /= 10L;
+                digits++;
+            }
+            return digits;
+        }
+
+        private static long saturatedAdd(long left, long right) {
+            if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
+                return Long.MAX_VALUE;
+            }
+            return left + right;
+        }
     }
 
     private static void writeHeader(RedisReplyWriter out, int pairs) {

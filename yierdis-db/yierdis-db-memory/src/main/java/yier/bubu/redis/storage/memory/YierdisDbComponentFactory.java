@@ -118,7 +118,8 @@ public final class YierdisDbComponentFactory {
                 config.maxmemoryBytes,
                 ledger,
                 memoryEstimator,
-                runtimeState::lastNativeDefragReport
+                runtimeState::lastNativeDefragReport,
+                storage.memoryRuntime::liveRegionCount
         );
         YierdisDbIntrospection introspection = new YierdisDbIntrospection(owner::checkThread, internals, keyLifecycle);
         YierdisDbMaxmemorySupport maxmemorySupport = new YierdisDbMaxmemorySupport(

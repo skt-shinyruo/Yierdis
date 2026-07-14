@@ -59,8 +59,11 @@ public final class YierdisInstanceObservability {
         long nativeDefragQuarantineBytes = 0;
         long nativeStaleHandleDetections = 0;
         long nativeDefragReclaimedPages = 0;
+        long nativeLiveObjects = 0;
+        long nativeLiveRegions = 0;
         int pendingHashTableCount = 0;
         String lastHashTableMaintenanceStopReason = "COMPLETE";
+        boolean sharedNativeRuntime = instance.config().maxmemoryScope() == YierdisInstanceConfig.MaxmemoryScope.GLOBAL;
 
         for (int dbIndex = 0; dbIndex < databases; dbIndex++) {
             var engine = instance.runtimeEngine(dbIndex);
@@ -94,6 +97,12 @@ public final class YierdisInstanceObservability {
             nativeDefragQuarantineBytes = addSaturating(nativeDefragQuarantineBytes, s.nativeDefragQuarantineBytes());
             nativeStaleHandleDetections = addSaturating(nativeStaleHandleDetections, s.nativeStaleHandleDetections());
             nativeDefragReclaimedPages = addSaturating(nativeDefragReclaimedPages, s.nativeDefragReclaimedPages());
+            nativeLiveObjects = addSaturating(nativeLiveObjects, s.nativeLiveObjects());
+            if (sharedNativeRuntime) {
+                nativeLiveRegions = Math.max(nativeLiveRegions, Math.max(0L, s.nativeLiveRegions()));
+            } else {
+                nativeLiveRegions = addSaturating(nativeLiveRegions, s.nativeLiveRegions());
+            }
             pendingHashTableCount = addSaturating(pendingHashTableCount, s.pendingHashTableCount());
             if (!"COMPLETE".equals(s.lastHashTableMaintenanceStopReason())) {
                 lastHashTableMaintenanceStopReason = s.lastHashTableMaintenanceStopReason();
@@ -145,7 +154,9 @@ public final class YierdisInstanceObservability {
                 physicalUsage.nativeDataLiveBytes(),
                 physicalUsage.nativeReclaimableBytes(),
                 pendingHashTableCount,
-                lastHashTableMaintenanceStopReason
+                lastHashTableMaintenanceStopReason,
+                nativeLiveObjects,
+                nativeLiveRegions
         );
     }
 

@@ -115,107 +115,53 @@ MEMORY STATS
 - `KeyCommands.memory(...)`
 - `YierdisInstanceObservability`
 
-## Change Event Bridge
+## DB Commit Stream
 
-change event 当前是最小可重放事件契约。它适合作为 AOF / replication / audit 的起点，但不是完整 Redis replication 或持久化协议保证。
+change event 是 DB 提交事实的有界、顺序化视图。它适合作为 AOF、replication 或 audit 的后续输入，但当前实现不是完整 Redis replication 或持久化协议。
 
-生产组装时，`YierdisServerBootstrap` 把 runtime config 里的 `YierdisChangeSink` 包成 command-core 能理解的 `CommandChangeObserver`：
-
-```text
-YierdisServerBootstrap
-  -> YierdisCommandProcessorOptions.changeObserver(...)
-  -> RuntimeChangeSinkCommandChangeObserver.fromSink(config.changeSink())
-  -> DefaultYierdisEngine
-  -> YierdisFastCommandProcessor
-```
-
-用户命令事件和 DB 内部 synthetic 事件走同一个 sink，但触发位置不同。
+生产组装时，`YierdisInstance` 只在 `YierdisChangeSink` 不是 `NOOP` 时创建 `CommitStream`，并把它作为 `DbCommitPublisher` 附着到每个 DB。command-core 不持有 sink，也不负责从命令语义推断 DB 是否已提交。
 
 用户命令路径：
 
 ```text
-YierdisFastCommandProcessor
-  -> CommandChangeEmitter.execute(request, ctx, action)
-     -> ctx.clearMutationOutcome()
-     -> observer.observeExecution(action)
-     -> if ctx.changedAny()
-        -> observer.onCommandChange(dbIndex, request)
-        -> YierdisChangeEvent(ExecutionRecord(dbIndex, request))
+DefaultYierdisEngine
+  -> CommandRecordScope.open(request)
+  -> YierdisFastCommandProcessor
+  -> command handler / DbWrites
+  -> YierdisDbMutationExecutor
+     -> reserve immutable commit record before visibility
+     -> storage + ledger commit
+     -> DbCommitPublisher.publish(reservation)
+  -> CommitStream worker
+  -> YierdisChangeSink.onChange(callback-scoped event)
 ```
 
-这里真正被传递的是 `ExecutionRecord`：它把 `dbIndex` 和已复制的 `ExecutionRequest` 绑成不可变快照，所以 change sink 看到的是可重放事实，而不是原始 mutable request 引用。`YierdisChangeEvent` 只是再包一层 kind / synthetic 标记。
+`CommandRecordScope` 是 owner-thread scope，向 DB 提供当前请求的 immutable command record。`YierdisDbMutationExecutor` 仅在 prepared mutation 的 outcome 表示真实变化时预留 stream slot；预留失败发生在 storage commit 之前，因此不会把不可发布的写入变成可见状态。发布转换本身不分配、不回调，也不进行新的容量判断。
 
-DB 内部 synthetic 路径有两个 owner-thread scope。命令执行期间的 lazy expire / eviction 由 command observer 打开 DB change scope；maintenance tick 则由 runtime access 打开同类 scope。
-
-```text
-command execution scope
-RuntimeChangeSinkCommandChangeObserver.observeExecution(...)
-  -> DbChangeContext.open(YierdisChangeEventBridge.forSink(sink))
-  -> DB lifecycle / expire / eviction logic
-  -> DbChangeContext.emit(DbChange.syntheticDelete(...))
-  -> YierdisChangeEventBridge
-  -> YierdisChangeEvent(ExecutionRecord(dbIndex, DEL key), kind, synthetic=true)
-
-maintenance scope
-YierdisInstanceRuntimeAccess.maintenanceTick()
-  -> DbChangeContext.open(instance.changeListener())
-  -> expire cleanup / defrag / maxmemory maintenance
-  -> DbChangeContext.emit(DbChange.syntheticDelete(...))
-  -> YierdisChangeEventBridge
-```
-
-惰性过期、cleanup 和 synthetic `EXPIRED` delete 的细节见 [`ttl-and-expiration-lifecycle.md`](./ttl-and-expiration-lifecycle.md)；victim 选择和 synthetic `EVICTED` delete 的细节见 [`maxmemory-and-eviction.md`](./maxmemory-and-eviction.md)。
-
-`CommandSupport.recordMutation(...)` 是用户命令路径里的关键连接点。命令 handler 通过它把 DB 返回的 `MutationOutcome` 记录到 `CommandContext`。没有真实 value/TTL 变化的命令不应该发用户命令事件。
-
-事件消费失败是 best-effort：bridge 和 observer 都会吞掉 sink 异常，不能让消费端失败影响命令执行、expire cleanup 或 eviction。
-
-源码入口：
-
-- `YierdisCommandProcessorOptions`
-- `YierdisFastCommandProcessor`
-- `CommandChangeEmitter`
-- `CommandChangeObserver`
-- `RuntimeChangeSinkCommandChangeObserver`
-- `YierdisInstanceRuntimeAccess`
-- `YierdisChangeSink`
-- `YierdisChangeEventBridge`
-- `DbChangeContext`
-- `DbChange`
+expire 和 eviction 的路径也经同一个 DB commit boundary。DB lifecycle 为实际删除构造规范化的 `DEL key` record，并分别使用 `EXPIRED` 或 `EVICTED` kind；客户端并没有真的发送这条 `DEL` 命令。
 
 ## Event Semantics
 
-| kind | 来源 | synthetic | payload | replay 语义 |
+| kind | 来源 | synthetic | payload | 交付语义 |
 | --- | --- | --- | --- | --- |
-| `USER_COMMAND` | 成功执行并记录了真实 mutation outcome 的用户命令 | `false` | 原始 `ExecutionRequest` 快照和 DB index | 表示“这个写命令可被重放”，不携带 DB internal diff |
-| `EXPIRED` | lazy expiration 或 maintenance cleanup 删除过期 key | `true` | 规范化 `DEL key` 的 `ExecutionRequest` 快照和 DB index | 表示最终状态等价于删除该 key |
-| `EVICTED` | maxmemory eviction 删除 victim key | `true` | 规范化 `DEL key` 的 `ExecutionRequest` 快照和 DB index | 表示最终状态等价于删除该 key |
+| `USER_COMMAND` | 已提交且改变状态的用户 mutation | `false` | 当前命令的 immutable record、DB index、提交时的 memory delta 和时间戳 | 表示 DB 已接受这个可重放命令事实，不携带 internal diff |
+| `EXPIRED` | lazy expiration 或 maintenance cleanup 的已提交删除 | `true` | 规范化 `DEL key` record 和 DB index | 表示最终状态等价于删除该 key |
+| `EVICTED` | maxmemory eviction 的已提交删除 | `true` | 规范化 `DEL key` record 和 DB index | 表示最终状态等价于删除该 key |
 
-用户命令事件的判断标准是 `CommandContext.changedAny()`。这意味着读命令、未改变值的条件写入、解析失败、unknown command、事务入队阶段都不应该直接产出用户命令事件。
+读命令、parse error、unknown command、条件写入的 no-op 和 `MULTI` 的 `QUEUED` 阶段不会获得 reservation，也不会生成事件。只有 `EXEC` replay 中实际提交的 mutation 会走这一流程。
 
-synthetic 事件不表示客户端真的发送了 `DEL`。它是 DB lifecycle 为了可重放最小记录构造的等价命令。
+worker 交给 `YierdisChangeSink` 的 `YierdisChangeEvent` 是 callback-scoped borrowed view。sink 不得保留 request/view，也不得在 callback 返回后访问它；event 在 callback 返回时关闭。commit stream 保留内部 immutable record 直到 callback 成功确认，随后释放该记录并推进 sequence。
 
-## change event 不是完整持久化协议
+## Failure And Durability Boundaries
 
-当前 change event contract 只承诺“哪些事实值得被重放”，不承诺“这些事实已经被可靠持久化或复制”。
+commit stream 是 in-process fixed ring，不是 durable log：它不提供 AOF、fsync、crash recovery、PSYNC、replication backlog、ACK 或 exactly-once delivery。
 
-- `CommandChangeEmitter` 只有在 command handler 记录了真实 mutation outcome 后才发用户命令事件。
-- `EXPIRED` / `EVICTED` synthetic delete 只说明最终状态等价于 `DEL key`，不携带 DB internal diff。
-- sink 消费失败不会回滚命令、cleanup 或 eviction；当前语义始终是 best-effort。
-- maintenance 路径和用户命令路径都能发事件，但它们共用的是最小 replay contract，不是 Redis replication backlog、AOF fsync 或 crash-recovery 日志。
+- stream 容量不足或已失败时，新的需要发布的 mutation 在可见性提交前被拒绝。
+- 若 storage 已提交后发布不变量失败，stream 保留该 reservation 并进入 failed state；DB 不能回滚已可见状态，调用方必须把该结果当作 post-commit failure 处理。
+- sink callback 抛出异常会使 stream failed，而不是被静默吞掉；后续需要 stream 的 mutation 将被拒绝，直到实例按故障流程停止或替换。
+- stream 的 sequence 只说明本进程本轮生命周期内的 delivery ordering，不能用于恢复或跨进程去重。
 
-## Non-Guarantees
-
-当前 change event contract 不保证：
-
-- 完整 Redis replication 协议、ACK、offset、PSYNC 或 backlog。
-- AOF 持久化、fsync 策略、落盘顺序或崩溃恢复。
-- exactly-once 交付、消费失败重试或死信队列。
-- 跨线程异步消费安全；sink 被执行路径调用，消费端不能阻塞热路径。
-- DB internal diff、entry/value/root 结构变化、native handle 或 allocator address。
-- 事件消费失败会回滚命令；当前语义是 best-effort。
-
-如果以后要实现 AOF 或 replication，应在这个最小事件契约之上增加持久化队列、顺序号、消费失败处理和明确的生命周期边界，而不是把当前 sink 当成完整复制层。
+如果以后要实现 AOF 或 replication，应在这个提交事实边界之外增加 durable queue、offset/ack、重试、恢复和明确的 backpressure policy，而不是把当前 sink 当成完整复制层。
 
 ## Tests And Guards
 
@@ -223,14 +169,15 @@ synthetic 事件不表示客户端真的发送了 `DEL`。它是 DB lifecycle �
 
 | 主题 | 关注点 | 测试入口 |
 | --- | --- | --- |
-| command change event | 只有真实 mutation 后发用户命令事件；command-core 不依赖 runtime sink 或 DB change scope | `YierdisFastCommandProcessorPolicyTest`, `YierdisFastCommandProcessorArchitectureTest` |
-| runtime change sink bridge | 用户事件和 synthetic DB event 都能转换成 `YierdisChangeEvent`，NOOP sink 不安装 observer | `RuntimeChangeSinkCommandChangeObserverTest`, `YierdisChangeSinkTest` |
-| DB synthetic event | expire cleanup / eviction 删除 key 时发 synthetic delete | `ExpireIndexTest`, `YierdisDbConstructionTest`, maxmemory 相关测试 |
+| command record scope | engine 为每次实际执行建立并关闭 owner-thread command record | `DefaultYierdisEngineTest`, engine/session contract tests |
+| DB commit reservation | reservation 在可见性前完成，发布后才递送，post-commit failure 不被取消 | `DbCommitPublisherTest`, DB mutation tests |
+| commit stream | ring capacity、顺序、borrowed callback view、sink failure 和 shutdown ownership | `CommitStreamTest`, `CommitStreamShutdownTest`, `CommitStreamIntegrationTest` |
+| DB synthetic event | expire cleanup / eviction 删除 key 时只在实际 commit 后发布对应 kind | `ExpireIndexTest`, `YierdisDbConstructionTest`, maxmemory 相关测试 |
 | DB routing | `SELECT`、session DB index 和 router 选择一致 | connection command tests, embedded/runtime DB routing tests |
 | session capabilities | engine 要求显式 command session capability | engine/session contract tests |
 | observability provider | `INFO` / `STATS` / global `MEMORY STATS` 通过 provider 汇总 server/runtime 统计 | `YierdisServerBootstrapCommandWiringTest`, `MemoryStatsCommandTest` |
 
-同时检查架构边界：command-builtin 不应依赖 command-kernel internal；command-core 不应 import server-main、runtime change sink 或 DB change scope；server-main 是把这些接口接起来的 composition root。
+同时检查架构边界：command-builtin 不应依赖 command-kernel internal；command-core 不应 import runtime sink 或 DB commit implementation；DB API 只暴露 publisher port；runtime 持有 stream worker；server-main 是把这些接口接起来的 composition root。
 
 ## Commit-Stream Operations
 
