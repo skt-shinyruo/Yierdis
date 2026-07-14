@@ -29,6 +29,7 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
     private final Consumer<AutoCloseable> ownerResourceCloser;
 
     private ReplyPlan plan;
+    private long maximumRetainedSourceBytes;
     private long writtenBytes;
     private ByteBuf current;
     private int currentWritable;
@@ -114,6 +115,11 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
         Objects.requireNonNull(requestedPlan, "requestedPlan");
         ensureOpen();
 
+        if (plan != null && plan.reserveMaximum()) {
+            reserveNestedMaximumPlan(requestedPlan);
+            return;
+        }
+
         long target = reservationTarget(requestedPlan);
         if (target > maxTotalBytes) {
             throw tooLarge("reply exceeds configured single-reply capacity");
@@ -129,6 +135,9 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
             slot.cancelCapacityWait();
         }
         slot.clearCapacityWaitAfterReservation();
+        if (requestedPlan.reserveMaximum()) {
+            maximumRetainedSourceBytes = plan == null ? 0L : plan.retainedSourceBytes();
+        }
         plan = requestedPlan;
     }
 
@@ -142,6 +151,9 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
         }
         if (plan == null) {
             ensureControlWriteFits(length);
+        } else if (plan.reserveMaximum() && !fitsMaximumWrite(length)) {
+            slot.fail(ReplyCleanupOwner.SEQUENCER);
+            throw tooLarge("reply encoded bytes exceed its maximum reservation");
         } else if (!plan.reserveMaximum() && exceedsExactPlan(length)) {
             slot.fail(ReplyCleanupOwner.SEQUENCER);
             throw tooLarge("reply encoded bytes exceed its preflight plan");
@@ -277,6 +289,42 @@ final class BoundedChunkedReplySink implements ReplyReservationSink, AutoCloseab
 
     private boolean exceedsExactPlan(int additionalBytes) {
         return additionalBytes > plan.encodedUpperBoundBytes() - writtenBytes;
+    }
+
+    private void reserveNestedMaximumPlan(ReplyPlan requestedPlan) {
+        if (requestedPlan.reserveMaximum()) {
+            return;
+        }
+        long encodedCharge = saturatedAdd(
+                requestedPlan.encodedUpperBoundBytes(),
+                saturatedMultiply(
+                        chunkCount(requestedPlan.encodedUpperBoundBytes()),
+                        CHUNK_COMPONENT_OVERHEAD_BYTES
+                )
+        );
+        long nestedCharge = saturatedAdd(encodedCharge, requestedPlan.retainedSourceBytes());
+        if (!fitsMaximumCharge(nestedCharge)) {
+            throw tooLarge("nested reply exceeds its maximum reservation");
+        }
+        maximumRetainedSourceBytes = saturatedAdd(maximumRetainedSourceBytes, requestedPlan.retainedSourceBytes());
+    }
+
+    private boolean fitsMaximumWrite(int additionalBytes) {
+        long remainingBytes = additionalBytes;
+        if (current != null && currentWritable > 0) {
+            remainingBytes = Math.max(0L, remainingBytes - currentWritable);
+        }
+        long chunkCharge = saturatedAdd(
+                remainingBytes,
+                saturatedMultiply(chunkCount(remainingBytes), CHUNK_COMPONENT_OVERHEAD_BYTES)
+        );
+        return fitsMaximumCharge(chunkCharge);
+    }
+
+    private boolean fitsMaximumCharge(long additionalCharge) {
+        long currentCharge = saturatedAdd(slot.lease().allocatedBytes(), maximumRetainedSourceBytes);
+        long projectedCharge = saturatedAdd(currentCharge, additionalCharge);
+        return projectedCharge <= maxTotalBytes - controlReservationBytes;
     }
 
     private void ensureOpen() {

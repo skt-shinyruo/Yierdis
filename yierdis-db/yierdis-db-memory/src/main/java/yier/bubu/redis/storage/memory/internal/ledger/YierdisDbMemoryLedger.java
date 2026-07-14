@@ -83,6 +83,9 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
         if (estimatedExtraBytes < 0) {
             throw new IllegalArgumentException("estimatedExtraBytes must be >= 0");
         }
+        long nextReservedBytes = estimatedExtraBytes == 0L
+                ? reservedBytes
+                : checkedReservationTotal(reservedBytes, estimatedExtraBytes);
 
         MaxmemoryCoordinator coordinator = maxmemoryCoordinatorSupplier.get();
         if (coordinator != null) {
@@ -95,7 +98,7 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
             if (estimatedExtraBytes == 0) {
                 return NoopReservation.INSTANCE;
             }
-            reservedBytes += estimatedExtraBytes;
+            reservedBytes = nextReservedBytes;
             return new ReservationToken(this, estimatedExtraBytes);
         }
 
@@ -132,7 +135,7 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
         if (estimatedExtraBytes == 0) {
             return NoopReservation.INSTANCE;
         }
-        reservedBytes += estimatedExtraBytes;
+        reservedBytes = nextReservedBytes;
         return new ReservationToken(this, estimatedExtraBytes);
     }
 
@@ -162,6 +165,7 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
     @Override
     public void commit(MemoryReservation reservation, long actualDeltaBytes) {
         ReservationToken token = ReservationToken.validate(reservation, this);
+        long nextUsedBytes = checkedCommittedUsage(usedBytes, actualDeltaBytes);
         if (token != null) {
             token.finish();
             reservedBytes -= token.reservedBytes;
@@ -170,13 +174,7 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
             }
         }
 
-        if (actualDeltaBytes == 0) {
-            return;
-        }
-        usedBytes += actualDeltaBytes;
-        if (usedBytes < 0) {
-            throw new IllegalStateException("usedBytes underflow");
-        }
+        usedBytes = nextUsedBytes;
     }
 
     @Override
@@ -195,6 +193,27 @@ public final class YierdisDbMemoryLedger implements MemoryLedger {
     public void resetUsage() {
         usedBytes = 0;
         reservedBytes = 0;
+    }
+
+    private static long checkedReservationTotal(long current, long increment) {
+        try {
+            return Math.addExact(current, increment);
+        } catch (ArithmeticException overflow) {
+            throw new MemoryLedgerOutOfMemoryException();
+        }
+    }
+
+    private static long checkedCommittedUsage(long current, long delta) {
+        final long next;
+        try {
+            next = Math.addExact(current, delta);
+        } catch (ArithmeticException overflow) {
+            throw new IllegalStateException("usedBytes overflow", overflow);
+        }
+        if (next < 0L) {
+            throw new IllegalStateException("usedBytes underflow");
+        }
+        return next;
     }
 
     private enum NoopReservation implements MemoryReservation {

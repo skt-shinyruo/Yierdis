@@ -59,14 +59,15 @@ public final class InMemoryLedger implements MemoryLedger {
             return NoopReservation.INSTANCE;
         }
 
+        long nextReservedBytes = checkedReservationTotal(reservedBytes, estimatedExtraBytes);
         if (limitBytes > 0) {
-            long next = effectiveUsedBytes() + estimatedExtraBytes;
+            long next = checkedEffectiveTotal(usedBytes, nextReservedBytes);
             if (next > limitBytes) {
                 throw new MemoryLedgerOutOfMemoryException();
             }
         }
 
-        reservedBytes += estimatedExtraBytes;
+        reservedBytes = nextReservedBytes;
         return new ReservationToken(this, estimatedExtraBytes);
     }
 
@@ -95,6 +96,7 @@ public final class InMemoryLedger implements MemoryLedger {
     @Override
     public void commit(MemoryReservation reservation, long actualDeltaBytes) {
         ReservationToken token = ReservationToken.validate(reservation, this);
+        long nextUsedBytes = checkedCommittedUsage(usedBytes, actualDeltaBytes);
         if (token != null) {
             token.finish();
             reservedBytes -= token.reservedBytes;
@@ -103,14 +105,7 @@ public final class InMemoryLedger implements MemoryLedger {
             }
         }
 
-        if (actualDeltaBytes == 0) {
-            return;
-        }
-
-        usedBytes += actualDeltaBytes;
-        if (usedBytes < 0) {
-            throw new IllegalStateException("usedBytes underflow");
-        }
+        usedBytes = nextUsedBytes;
     }
 
     @Override
@@ -132,6 +127,35 @@ public final class InMemoryLedger implements MemoryLedger {
 
     int reclamationBegins() {
         return reclamationBegins;
+    }
+
+    private static long checkedReservationTotal(long current, long increment) {
+        try {
+            return Math.addExact(current, increment);
+        } catch (ArithmeticException overflow) {
+            throw new MemoryLedgerOutOfMemoryException();
+        }
+    }
+
+    private static long checkedEffectiveTotal(long usedBytes, long reservedBytes) {
+        try {
+            return Math.addExact(usedBytes, reservedBytes);
+        } catch (ArithmeticException overflow) {
+            throw new MemoryLedgerOutOfMemoryException();
+        }
+    }
+
+    private static long checkedCommittedUsage(long current, long delta) {
+        final long next;
+        try {
+            next = Math.addExact(current, delta);
+        } catch (ArithmeticException overflow) {
+            throw new IllegalStateException("usedBytes overflow", overflow);
+        }
+        if (next < 0L) {
+            throw new IllegalStateException("usedBytes underflow");
+        }
+        return next;
     }
 
     private enum NoopReservation implements MemoryReservation {
