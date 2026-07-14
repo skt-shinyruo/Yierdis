@@ -192,9 +192,19 @@ public class YierdisDbArchitectureGuardTest {
         Pattern extractedMatcherCall = Pattern.compile("YierdisGlobMatcher\\s*\\.\\s*matches\\s*\\(");
         int extractedMatcherCalls = countMatches(extractedMatcherCall, code);
         Assert.assertTrue(
-                "YierdisKeyspaceOps must use YierdisGlobMatcher.matches in both KEYS and SCAN paths; found "
+                "YierdisKeyspaceOps must use YierdisGlobMatcher.matches from its shared key-window matcher; found "
                         + extractedMatcherCalls + " executable call site(s)",
-                extractedMatcherCalls >= 2
+                extractedMatcherCalls >= 1
+        );
+
+        Pattern keyWindowMatcherCall = Pattern.compile(
+                "matchesForWindow\\s*\\(\\s*globPattern\\s*,\\s*key\\s*,\\s*record\\s*,\\s*nowMillis\\s*\\)"
+        );
+        int keyWindowMatcherCalls = countMatches(keyWindowMatcherCall, code);
+        Assert.assertTrue(
+                "YierdisKeyspaceOps must route both KEYS and SCAN through its shared key-window matcher; found "
+                        + keyWindowMatcherCalls + " executable call site(s)",
+                keyWindowMatcherCalls >= 2
         );
     }
 

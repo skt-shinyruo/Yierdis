@@ -18,6 +18,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
     private Runnable releaseReplacedValueHook;
     private final PreparedTtlMutation ttlMutation;
     private AutoCloseable abortResource;
+    private Runnable abortNewValueHook;
 
     private EntryHandle existingEntryHandle;
     private EntryHandle stagedEntryHandle;
@@ -86,6 +87,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
                 releaseReplacedValue,
                 releaseReplacedValueHook,
                 ttlMutation,
+                null,
                 null
         );
     }
@@ -106,6 +108,42 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             PreparedTtlMutation ttlMutation,
             AutoCloseable abortResource
     ) {
+        this(
+                keyLifecycle,
+                result,
+                actualDeltaBytes,
+                stagedNonNativeGrowthBytes,
+                outcome,
+                existingEntryHandle,
+                stagedEntryHandle,
+                stagedKey,
+                oldRecord,
+                newRecord,
+                releaseReplacedValue,
+                releaseReplacedValueHook,
+                ttlMutation,
+                abortResource,
+                null
+        );
+    }
+
+    public PreparedEntryMutation(
+            YierdisDbKeyLifecycle keyLifecycle,
+            T result,
+            long actualDeltaBytes,
+            long stagedNonNativeGrowthBytes,
+            MutationOutcome outcome,
+            EntryHandle existingEntryHandle,
+            EntryHandle stagedEntryHandle,
+            NativeKeyDirectory.StagedInsert stagedKey,
+            EntryRecord oldRecord,
+            EntryRecord newRecord,
+            boolean releaseReplacedValue,
+            Runnable releaseReplacedValueHook,
+            PreparedTtlMutation ttlMutation,
+            AutoCloseable abortResource,
+            Runnable abortNewValueHook
+    ) {
         super(
                 actualDeltaBytes,
                 MemoryUsageSnapshot.addSaturating(
@@ -125,6 +163,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
         this.releaseReplacedValueHook = releaseReplacedValueHook;
         this.ttlMutation = ttlMutation == null ? PreparedTtlMutation.NONE : ttlMutation;
         this.abortResource = abortResource;
+        this.abortNewValueHook = abortNewValueHook;
     }
 
     @Override
@@ -183,6 +222,7 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             }
         }
         existingEntryHandle = null;
+        abortNewValueHook = null;
         if (failure != null) {
             rethrow(failure);
         }
@@ -215,10 +255,20 @@ public final class PreparedEntryMutation<T> extends AbstractPreparedMutation<T> 
             }
         }
         if (!entryPublished && newRecord != null && !sameValue(oldRecord, newRecord)) {
-            try {
-                keyLifecycle.releaseValue(newRecord);
-            } catch (RuntimeException | Error e) {
-                failure = addFailure(failure, e);
+            if (abortNewValueHook != null) {
+                Runnable abortHook = abortNewValueHook;
+                abortNewValueHook = null;
+                try {
+                    abortHook.run();
+                } catch (RuntimeException | Error e) {
+                    failure = addFailure(failure, e);
+                }
+            } else {
+                try {
+                    keyLifecycle.releaseValue(newRecord);
+                } catch (RuntimeException | Error e) {
+                    failure = addFailure(failure, e);
+                }
             }
         }
         if (abortResource != null) {

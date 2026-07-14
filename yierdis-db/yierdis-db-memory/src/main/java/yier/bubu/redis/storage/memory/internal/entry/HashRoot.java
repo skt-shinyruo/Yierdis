@@ -108,6 +108,26 @@ public final class HashRoot implements TypeRoot {
         }
     }
 
+    public synchronized PreparedPackedHset preparePackedHset(ValueHandle source, byte[] field, byte[] value) {
+        ensureOpen();
+        HashValue sourceValue = requireHash(source);
+        HashValue.PreparedPackedHset staged = sourceValue.preparePackedHset(field, value);
+        if (staged == null) {
+            return null;
+        }
+        try {
+            ValueHandle replacement = hashes.create(staged::replacement);
+            return new PreparedPackedHset(replacement, staged.added());
+        } catch (RuntimeException | Error failure) {
+            try {
+                staged.replacement().close();
+            } catch (RuntimeException | Error closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
+        }
+    }
+
     public synchronized byte[] hget(ValueHandle handle, byte[] field) {
         ensureOpen();
         return requireHash(handle).hget(field);
@@ -214,6 +234,23 @@ public final class HashRoot implements TypeRoot {
         hashes.release(handle);
     }
 
+    public synchronized void releaseExcept(ValueHandle source, ValueHandle retained) {
+        ensureOpen();
+        HashValue sourceValue = requireHash(source);
+        HashValue retainedValue = requireHash(retained);
+        sourceValue.releaseExcept(retainedValue);
+        retainedValue.activateBorrowedPackedOwnership(sourceValue);
+        hashes.release(source);
+    }
+
+    public synchronized void discardPackedHset(ValueHandle replacement, ValueHandle source) {
+        ensureOpen();
+        HashValue replacementValue = requireHash(replacement);
+        HashValue sourceValue = requireHash(source);
+        replacementValue.releaseExcept(sourceValue);
+        hashes.release(replacement);
+    }
+
     @Override
     public synchronized void clear() {
         ensureOpen();
@@ -248,6 +285,15 @@ public final class HashRoot implements TypeRoot {
     private void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("hash root is closed");
+        }
+    }
+
+    public record PreparedPackedHset(ValueHandle replacementHandle, int added) {
+        public PreparedPackedHset {
+            Objects.requireNonNull(replacementHandle, "replacementHandle");
+            if (added < 0 || added > 1) {
+                throw new IllegalArgumentException("added must be 0 or 1");
+            }
         }
     }
 }

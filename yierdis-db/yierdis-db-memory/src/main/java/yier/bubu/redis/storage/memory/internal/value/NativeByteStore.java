@@ -58,6 +58,14 @@ public final class NativeByteStore {
         nativeBytes -= allocatedBytes(handle);
     }
 
+    void adopt(NativeHandle handle, int retainedBytes) {
+        Objects.requireNonNull(handle, "handle");
+        if (retainedBytes < 0) {
+            throw new IllegalArgumentException("retainedBytes must be >= 0");
+        }
+        nativeBytes += retainedBytes;
+    }
+
     public byte[] toByteArray(NativeHandle handle) {
         Objects.requireNonNull(handle, "handle");
         try (NativeObjectView view = allocator.resolve(handle, NativeAccessMode.READ_ONLY)) {

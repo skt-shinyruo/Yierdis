@@ -75,6 +75,51 @@ public final class YierdisHashOps implements HashReadOps, HashWriteOps {
                     if (current == null) {
                         staged = stageNewEntry(keyBytes);
                         targetKey = staged.keyHandle();
+                    } else if (fieldValuePairs.size() == 2) {
+                        ValueHandle source = requireHashHandle(current);
+                        HashRoot.PreparedPackedHset packed = hashRoot.preparePackedHset(
+                                source,
+                                fieldValuePairs.get(0),
+                                fieldValuePairs.get(1)
+                        );
+                        if (packed != null) {
+                            ValueHandle packedReplacement = packed.replacementHandle();
+                            try {
+                                EntryRecord next = hashRecord(
+                                        targetKey,
+                                        packedReplacement,
+                                        current.expireAtMillis(),
+                                        current
+                                );
+                                WriteResult<Long> result = WriteResult.of((long) packed.added(), MutationOutcome.VALUE_CHANGED);
+                                long deltaBytes = estimateRecordBytes(targetKey, next)
+                                        - estimateRecordBytes(targetKey, current);
+                                return new PreparedEntryMutation<>(
+                                        keyLifecycle,
+                                        result,
+                                        deltaBytes,
+                                        hashRoot.positiveRetainedHeapGrowthBytes(rootHeapBefore),
+                                        MutationOutcome.VALUE_CHANGED,
+                                        currentEntry.entryHandle(),
+                                        null,
+                                        null,
+                                        current,
+                                        next,
+                                        true,
+                                        () -> hashRoot.releaseExcept(source, packedReplacement),
+                                        PreparedTtlMutation.NONE,
+                                        null,
+                                        () -> hashRoot.discardPackedHset(packedReplacement, source)
+                                );
+                            } catch (RuntimeException | Error failure) {
+                                try {
+                                    hashRoot.discardPackedHset(packedReplacement, source);
+                                } catch (RuntimeException | Error releaseFailure) {
+                                    failure.addSuppressed(releaseFailure);
+                                }
+                                throw failure;
+                            }
+                        }
                     }
 
                     replacement = hashRoot.create();

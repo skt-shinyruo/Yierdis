@@ -236,6 +236,14 @@ public class MutationFaultInjectionTest {
                         )
                 ),
                 new MutationCase(
+                        "existing single HSET packed",
+                        fixture -> fixture.hashOps.hset(
+                                PRIMARY_KEY,
+                                Arrays.asList(b("a"), b("1"), b("b"), b("2"))
+                        ),
+                        fixture -> fixture.hashOps.hset(PRIMARY_KEY, Arrays.asList(b("c"), b("3")))
+                ),
+                new MutationCase(
                         "existing HSET replace and add",
                         fixture -> fixture.hashOps.hset(
                                 PRIMARY_KEY,
@@ -287,6 +295,26 @@ public class MutationFaultInjectionTest {
                         fixture -> fixture.setOps.srem(PRIMARY_KEY, Arrays.asList(b("alpha"), b("gamma")))
                 )
         );
+    }
+
+    @Test
+    public void existingPackedHsetStagesOnlyChangedPayloads() {
+        try (FaultFixture fixture = FaultFixture.open()) {
+            List<byte[]> initialPairs = new ArrayList<>();
+            for (int index = 0; index < 16; index++) {
+                initialPairs.add(b("field-" + index));
+                initialPairs.add(b("value-" + index));
+            }
+            fixture.hashOps.hset(PRIMARY_KEY, initialPairs);
+
+            fixture.allocator.resetAttempts();
+            fixture.hashOps.hset(PRIMARY_KEY, Arrays.asList(b("next"), b("value")));
+
+            Assert.assertTrue(
+                    "an existing packed HSET must allocate only its replacement root and new field/value payloads",
+                    fixture.allocator.allocationAttempts() <= 4L
+            );
+        }
     }
 
     @Test
