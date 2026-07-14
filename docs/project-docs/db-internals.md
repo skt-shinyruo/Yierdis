@@ -183,7 +183,7 @@ per-DB maxmemory scope 下，`reserve(...)` 的顺序是：
 
 `YierdisDbMaxmemorySupport` 在 owner thread 内选 victim：random 策略随机采样，LRU 策略按 samples 选择 LRU clock 最小的 key；samples 覆盖所有 key 时可以扫描最佳候选，减少测试不稳定性。删除 victim 仍走 lifecycle，ledger delta callback 会扣减 usage。
 
-global maxmemory scope 下，ledger 把预算准备委托给 instance 级 `YierdisGlobalMaxmemoryGovernor.prepareWrite(...)`。governor 汇总各 DB participant usage 和 shared off-heap usage source，跨 DB cleanup/evict，并避免把 shared FFM usage 在每个 DB 上重复计算。
+global maxmemory scope 下，ledger 把预算准备委托给 instance 级 `YierdisGlobalMaxmemoryGovernor.prepareWrite(...)`。governor 汇总各 DB participant 的 owned `MemoryUsageSnapshot`，跨 DB cleanup/evict，并以这些 participant snapshots 作为唯一的物理使用量输入。
 
 ## 更细的 maxmemory 行为
 

@@ -50,6 +50,9 @@ public record YierdisServerRuntimeConfig(
         long protocolGlobalInFlightBytes
 ) {
     public static final int REPLY_FIXED_OVERHEAD_BYTES = 1_024;
+    public static final int REPLY_MAX_CONTROL_ERROR_FRAME_BYTES = 515;
+    public static final long MIN_REPLY_CONTROL_RESERVATION_BYTES =
+            (long) REPLY_FIXED_OVERHEAD_BYTES + REPLY_MAX_CONTROL_ERROR_FRAME_BYTES;
 
     public YierdisServerRuntimeConfig {
         Objects.requireNonNull(executorSchedulingPolicy, "executorSchedulingPolicy");
@@ -85,8 +88,10 @@ public record YierdisServerRuntimeConfig(
         if (replyControlReservationBytes <= 0L) {
             throw new IllegalArgumentException("replyControlReservationBytes must be > 0");
         }
-        if (replyControlReservationBytes <= REPLY_FIXED_OVERHEAD_BYTES) {
-            throw new IllegalArgumentException("replyControlReservationBytes must exceed reply fixed overhead");
+        if (replyControlReservationBytes < MIN_REPLY_CONTROL_RESERVATION_BYTES) {
+            throw new IllegalArgumentException(
+                    "replyControlReservationBytes must fit reply fixed overhead and the largest scalar error frame"
+            );
         }
         if (replyDrainTimeoutMillis <= 0L) {
             throw new IllegalArgumentException("replyDrainTimeoutMillis must be > 0");

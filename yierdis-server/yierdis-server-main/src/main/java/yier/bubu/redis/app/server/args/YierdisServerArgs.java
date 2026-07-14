@@ -396,8 +396,10 @@ public final class YierdisServerArgs {
         if (replyControlReservationBytes <= 0L) {
             throw new IllegalArgumentException("replyControlReservationBytes must be > 0");
         }
-        if (replyControlReservationBytes <= YierdisServerRuntimeConfig.REPLY_FIXED_OVERHEAD_BYTES) {
-            throw new IllegalArgumentException("replyControlReservationBytes must exceed reply fixed overhead");
+        if (replyControlReservationBytes < YierdisServerRuntimeConfig.MIN_REPLY_CONTROL_RESERVATION_BYTES) {
+            throw new IllegalArgumentException(
+                    "replyControlReservationBytes must fit reply fixed overhead and the largest scalar error frame"
+            );
         }
         if (replyDrainTimeoutMillis <= 0L) {
             throw new IllegalArgumentException("replyDrainTimeoutMillis must be > 0");

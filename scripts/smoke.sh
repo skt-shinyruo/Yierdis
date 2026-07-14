@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Build control
-MVN_ARGS="${MVN_ARGS:--q -DskipTests package}"
+MVN_ARGS="${MVN_ARGS:--q -pl yierdis-server/yierdis-server-main,yierdis-cli -am -DskipTests package}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 
 # Smoke config
@@ -13,13 +13,6 @@ PORT="${PORT:-16379}"
 SERVER_LOG="${SERVER_LOG:-$ROOT_DIR/.tmp-smoke-server.log}"
 READY_TIMEOUT_SEC="${READY_TIMEOUT_SEC:-30}"
 ALLOCATOR_SMOKE="${ALLOCATOR_SMOKE:-0}"
-
-# Bench smoke (keep tiny; correctness only)
-KEYSPACE="${KEYSPACE:-10}"
-DATA_SIZE="${DATA_SIZE:-8}"
-REQUESTS="${REQUESTS:-50}"
-CLIENTS="${CLIENTS:-1}"
-PIPELINE="${PIPELINE:-1}"
 
 server_pid=""
 
@@ -74,13 +67,11 @@ wait_ready() {
 main() {
   build_if_needed
 
-  local server_jar bench_jar client_jar
+  local server_jar client_jar
   server_jar="$(pick_jar "$ROOT_DIR/yierdis-server/yierdis-server-main/target/yierdis-server-main-*.jar" "original-")"
-  bench_jar="$(pick_jar "$ROOT_DIR/yierdis-benchmark/target/yierdis-benchmark-*.jar" "original-")"
   client_jar="$(pick_jar "$ROOT_DIR/yierdis-cli/target/yierdis-cli-*.jar" "original-")"
 
   printf "[smoke] serverJar: %s\n" "$server_jar"
-  printf "[smoke] benchJar : %s\n" "$bench_jar"
   printf "[smoke] clientJar: %s\n" "$client_jar"
   printf "[smoke] log      : %s\n" "$SERVER_LOG"
 
@@ -135,19 +126,6 @@ main() {
       printf "[smoke] allocator path skipped: redis-cli unavailable and Java CLI fallback only covers scalar commands\n"
     fi
   fi
-
-  printf "[smoke] bench（connect-only + strictReplies）\n"
-  java -jar "$bench_jar" \
-    --noStartServer \
-    --host "$HOST" \
-    --portBase "$PORT" \
-    --keyspace "$KEYSPACE" \
-    --dataSize "$DATA_SIZE" \
-    --requests "$REQUESTS" \
-    --clients "$CLIENTS" \
-    --pipeline "$PIPELINE" \
-    --skipLatency \
-    --strictReplies
 
   printf "[smoke] done\n"
 }

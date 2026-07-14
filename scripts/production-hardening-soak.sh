@@ -61,23 +61,23 @@ mkdir -p "$report_dir"
 
 candidate_commit="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || printf unknown)"
 server_jar="$ROOT_DIR/yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar"
-benchmark_jar="$ROOT_DIR/yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar"
 
 if [[ "$SKIP_PACKAGE" == "0" ]]; then
   printf '[production-hardening-soak] packaging current candidate\n'
   (
     cd "$ROOT_DIR"
-    mvn -q -DskipTests package
+    mvn -q \
+      -pl yierdis-server/yierdis-server-main,yierdis-tests/yierdis-integration-tests \
+      -am \
+      -DskipTests package
   ) 2>&1 | tee "$report_dir/package.log"
 else
   printf '[production-hardening-soak] using pre-packaged frozen candidate\n'
 fi
 
 [[ -f "$server_jar" ]] || die "server candidate artifact is missing: $server_jar"
-[[ -f "$benchmark_jar" ]] || die "benchmark candidate artifact is missing: $benchmark_jar"
 
 server_sha256="$(sha256sum "$server_jar" | awk '{print $1}')"
-benchmark_sha256="$(sha256sum "$benchmark_jar" | awk '{print $1}')"
 {
   printf 'candidate_commit=%s\n' "$candidate_commit"
   printf 'duration_seconds=%s\n' "$DURATION_SECONDS"
@@ -89,8 +89,6 @@ benchmark_sha256="$(sha256sum "$benchmark_jar" | awk '{print $1}')"
   printf 'os='; uname -a
   printf 'server_jar=%s\n' "$server_jar"
   printf 'server_jar_sha256=%s\n' "$server_sha256"
-  printf 'benchmark_jar=%s\n' "$benchmark_jar"
-  printf 'benchmark_jar_sha256=%s\n' "$benchmark_sha256"
 } > "$report_dir/environment.txt"
 
 printf '[production-hardening-soak] report directory: %s\n' "$report_dir"

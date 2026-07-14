@@ -109,13 +109,11 @@ public final class ListCommands implements CommandModule {
             }
         }
 
-        ReplyPlan preflight = null;
-        if (hasCount) {
-            try (PoppedValueSequence preview = support.commandDb(ctx).reads().lists()
-                    .previewPop(request.readOnlyByteArray(1), count, left)) {
-                preflight = popReplyPlan(preview, true);
-                out.requireReply(preflight);
-            }
+        ReplyPlan preflight;
+        try (PoppedValueSequence preview = support.commandDb(ctx).reads().lists()
+                .previewPop(request.readOnlyByteArray(1), count, left)) {
+            preflight = popReplyPlan(preview, hasCount);
+            out.requireReply(preflight);
         }
 
         PoppedValueSequence popped = (left
@@ -124,8 +122,8 @@ public final class ListCommands implements CommandModule {
                 .value();
         boolean ownershipTransferred = false;
         try {
-            if (preflight != null && !matchesPreflight(preflight, popped)) {
-                throw new ResultUnknownException("counted pop reply source changed after mutation");
+            if (!matchesPreflight(preflight, popped, hasCount)) {
+                throw new ResultUnknownException("pop reply source changed after mutation");
             }
             popResponse(out, popped, hasCount);
             if (popped != null) {
@@ -141,7 +139,10 @@ public final class ListCommands implements CommandModule {
 
     private static ReplyPlan popReplyPlan(PoppedValueSequence popped, boolean hasCount) {
         if (!hasCount) {
-            throw new IllegalArgumentException("only counted pop replies have a preflight plan");
+            if (popped == null || popped.isNull() || popped.count() == 0) {
+                return ReplyPlans.bulkString(-1, 0L);
+            }
+            return ReplyPlans.raw(popped.encodedElementBytes(), popped.retainedMemoryBytes());
         }
         if (popped == null || popped.isNull()) {
             return ReplyPlans.raw(5L, 0L);
@@ -149,8 +150,8 @@ public final class ListCommands implements CommandModule {
         return ReplyPlans.bulkStringArray(popped.count(), popped.encodedElementBytes(), popped.retainedMemoryBytes());
     }
 
-    private static boolean matchesPreflight(ReplyPlan plan, PoppedValueSequence popped) {
-        return popReplyPlan(popped, true).equals(plan);
+    private static boolean matchesPreflight(ReplyPlan plan, PoppedValueSequence popped, boolean hasCount) {
+        return popReplyPlan(popped, hasCount).equals(plan);
     }
 
     private static void popResponse(RedisReplyWriter out, PoppedValueSequence popped, boolean hasCount) {

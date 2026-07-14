@@ -167,7 +167,7 @@ public class YierdisServerArgsTest {
                 "--replyPerConnectionCapacityBytes", "4096",
                 "--replyMaxTotalBytes", "4096",
                 "--replyChunkPayloadBytes", "128",
-                "--replyControlReservationBytes", "1536",
+                "--replyControlReservationBytes", "1539",
                 "--replyDrainTimeoutMillis", "17"
         );
         args.normalizeAndValidate();
@@ -183,7 +183,7 @@ public class YierdisServerArgsTest {
         Assert.assertEquals(4096L, config.replyPerConnectionCapacityBytes());
         Assert.assertEquals(4096L, config.replyMaxTotalBytes());
         Assert.assertEquals(128, config.replyChunkPayloadBytes());
-        Assert.assertEquals(1536L, config.replyControlReservationBytes());
+        Assert.assertEquals(1539L, config.replyControlReservationBytes());
         Assert.assertEquals(17L, config.replyDrainTimeoutMillis());
     }
 
@@ -203,6 +203,7 @@ public class YierdisServerArgsTest {
                 "--replyControlReservationBytes",
                 Integer.toString(YierdisServerRuntimeConfig.REPLY_FIXED_OVERHEAD_BYTES)
         );
+        assertInvalidReplyConfig("--replyControlReservationBytes", "1538");
         assertInvalidReplyConfig("--replyDrainTimeoutMillis", "0");
         assertInvalidReplyConfig("--replyDrainTimeoutMillis", "-1");
         assertInvalidReplyConfig(

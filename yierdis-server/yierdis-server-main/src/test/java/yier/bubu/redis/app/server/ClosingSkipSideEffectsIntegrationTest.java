@@ -19,11 +19,46 @@ import yier.bubu.redis.protocol.resp.netty.RespProtocolErrorReplyHandler;
 import yier.bubu.redis.runtime.embedded.YierdisInstance;
 import yier.bubu.redis.runtime.api.YierdisInstanceConfig;
 
+import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 public class ClosingSkipSideEffectsIntegrationTest {
+    @Test
+    public void peerDisconnectClosesWithoutSchedulingAnInternalErrorReply() throws Exception {
+        DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);
+        EventExecutor eventExecutor = group.next();
+
+        YierdisInstance instance = TestYierdisInstances.createWithDefaultMemory(YierdisInstanceConfig.builder().build());
+        YierdisEngine engine = TestYierdisEngines.forInstance(instance);
+        RespReplyWriterFactory replyWriterFactory = new RespReplyWriterFactory();
+        CommandExecutor<NettyExecutionConnection> executor = new CommandExecutor<>(
+                instance::bindToCurrentThread,
+                engine::execute,
+                eventExecutor,
+                replyWriterFactory,
+                new NettyExecutionIoAdapter(),
+                new CommandExecutorConfig(16, 0, 256, 128, 0, 0, 128, 10, SchedulingPolicy.FAIR)
+        );
+        executor.start();
+
+        OrderedReplyTestFixture replies = OrderedReplyTestFixture.open(executor, replyWriterFactory);
+        try {
+            EmbeddedChannel channel = replies.channel();
+
+            channel.pipeline().fireExceptionCaught(new SocketException("Connection reset"));
+
+            Assert.assertNull("peer disconnect must not synthesize an internal error reply", readOutbound(channel));
+            Assert.assertFalse("peer disconnect must close the channel", channel.isOpen());
+        } finally {
+            executor.shutdownGracefully().join();
+            executor.executeOwnerTask(instance::close).join();
+            group.shutdownGracefully().syncUninterruptibly();
+            replies.close();
+        }
+    }
+
     @Test
     public void protocolErrorReplyHandlerMarksClosingAndClosesAfterReply() throws Exception {
         DefaultEventExecutorGroup group = new DefaultEventExecutorGroup(1);

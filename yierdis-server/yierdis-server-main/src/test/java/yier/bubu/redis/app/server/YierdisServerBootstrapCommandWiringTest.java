@@ -269,6 +269,75 @@ public class YierdisServerBootstrapCommandWiringTest {
     }
 
     @Test
+    public void structuredInfoAndStatsPreflightBeyondTheControlReservation() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--replyControlReservationBytes", "1539"
+        )) {
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+                socket.setSoTimeout(2000);
+
+                OutputStream out = socket.getOutputStream();
+                InputStream in = socket.getInputStream();
+
+                Map<String, Object> info = respMap(roundTrip(out, in, "INFO", "yierdis"));
+                Assert.assertEquals("yierdis", asString(info.get("server")));
+
+                Map<String, Object> stats = respMap(roundTrip(out, in, "STATS"));
+                Assert.assertTrue(stats.containsKey("outbound_reserved_bytes"));
+            }
+        }
+    }
+
+    @Test
+    public void metadataAndSessionRepliesPreflightBeyondTheControlReservation() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--replyControlReservationBytes", "1539"
+        )) {
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+                socket.setSoTimeout(2000);
+
+                OutputStream out = socket.getOutputStream();
+                InputStream in = socket.getInputStream();
+
+                Map<String, Object> memoryStats = respMap(roundTrip(out, in, "MEMORY", "STATS"));
+                Assert.assertTrue(memoryStats.containsKey("maxmemory_bytes"));
+
+                List<Object> commands = respArray(roundTrip(out, in, "COMMAND"));
+                Assert.assertFalse(commands.isEmpty());
+
+                String name = "n".repeat(1024);
+                Assert.assertEquals("OK", asString(roundTrip(out, in, "CLIENT", "SETNAME", name)));
+                Assert.assertEquals(name, asString(roundTrip(out, in, "CLIENT", "GETNAME")));
+            }
+        }
+    }
+
+    @Test
+    public void uncountedListPopPreflightsThePoppedValueBeforeMutation() throws Exception {
+        try (YierdisServerBootstrap server = YierdisServerBootstrap.start(
+                "--port", "0",
+                "--replyControlReservationBytes", "1539"
+        )) {
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress("127.0.0.1", server.port()), 2000);
+                socket.setSoTimeout(2000);
+
+                OutputStream out = socket.getOutputStream();
+                InputStream in = socket.getInputStream();
+                String value = "v".repeat(2048);
+
+                Assert.assertEquals(1L, asLong(roundTrip(out, in, "LPUSH", "pop:preflight", value)));
+                Assert.assertEquals(value, asString(roundTrip(out, in, "LPOP", "pop:preflight")));
+                Assert.assertNull(roundTrip(out, in, "LPOP", "pop:preflight"));
+            }
+        }
+    }
+
+    @Test
     public void channelInitializerUsesRuntimeConfigForSessionAndProtocolLimits() throws Exception {
         try (InitializerTestEnv env = new InitializerTestEnv()) {
             YierdisServerRuntimeConfig commandLimitedConfig = runtimeConfig(1, 0, 3, 2, 4, 5);

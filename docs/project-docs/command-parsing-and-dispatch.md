@@ -58,8 +58,7 @@ lookup 不是用 `Map<String, ...>` 在热路径里做字符串分配。`Command
 4. 进入 `CommandExceptionTranslator.run(...)`
 5. 用 `registry.spec(request)` 查表
 6. 找不到命令时回 `ERR unknown command ...`
-7. 通过 `CommandChangeEmitter.execute(...)` 包住真正的 `executeSpec(...)`
-8. `executeSpec(...)` 先 `spec.parse(request)`，解析成功后再 `spec.executeParsed(...)`
+7. `executeSpec(...)` 先 `spec.parse(request)`，解析成功后再 `spec.executeParsed(...)`
 
 可以简化成：
 
@@ -68,7 +67,6 @@ sanity checks
   -> transaction queue policy
   -> exception translator
   -> registry lookup
-  -> change emitter gate
   -> parse
   -> execute handler
 ```
@@ -77,7 +75,6 @@ sanity checks
 
 - 事务排队不写进 processor 主体里
 - 异常翻译不写进各个 handler 里
-- change event gate 不写进各个命令实现里
 
 这样 command-kernel 小组件的职责边界清楚，测试也能直接针对每个策略层写。
 
@@ -152,25 +149,23 @@ RESP frame 级别的 protocol error 发生在 `RespRequestDecoder` / `RespProtoc
 
 真正保存进队列的也不是原始请求引用，而是 `EngineSession.DefaultTransactionState.tryEnqueue(...)` 里的 `ByteArrayExecutionRequest.copyOf(request)` 快照。队列保存的是后续可 replay 的执行请求，不是另一套内部 IR。
 
-## change observer / mutation gate
+## 命令记录与 DB 提交边界
 
-`YierdisFastCommandProcessor` 不直接在执行后无条件发 change event。它通过 `CommandChangeEmitter.execute(...)` 包住 `executeSpec(...)`，只在真实 mutation outcome 出现后才通知 observer。
+命令层只负责解析、执行和写回 Redis 语义，不根据 handler 返回值推断或发布变更事件。`DefaultYierdisEngine.execute(...)` 在进入 processor 前打开 owner-thread `CommandRecordScope`，为当前请求提供不可变的命令记录；scope 在本次 engine 调用结束时关闭。
 
-这条规则有两个直接后果：
+真正的变更发布由 DB 持有。`YierdisDbMutationExecutor` 只会在 prepared mutation 确认实际发生变化后，先向 `DbCommitPublisher` 预留记录容量，再开始可见性提交；storage 和 ledger 都提交后才把预留转换为已发布事件。这样读命令、parse error、unknown command、条件写入的 no-op 以及 `MULTI` 的 `QUEUED` 阶段都不会产生 commit-stream 事件。
 
-- read-only command 即使执行成功，也不会产生用户变更事件
-- 事务里 `MUTATE` 命令在 `QUEUED` 阶段不会产生事件，只有 `EXEC` 真正 replay 到 handler 时才会产出事件
-
-这也是 `YierdisFastCommandProcessorPolicyTest` 里 replay 事件测试保护的重点：不能把“入队成功”误当成“已经发生真实变更”。
+`EXEC` replay 仍经 engine 和同一条 DB mutation 路径执行。每条真正提交的 mutation 都有自己的命令记录和 commit reservation；不能把“入队成功”或“handler 已返回”误当成已经提交。
 
 ## 相关测试
 
-- `YierdisFastCommandProcessorPolicyTest`：事务排队、abort、replay、change event gate
+- `YierdisFastCommandProcessorPolicyTest`：事务排队、abort 和 replay
 - `YierdisFastCommandProcessorRegistrationTest`：registry / module 注册面
 - `YierdisFastCommandProcessorModuleTest`：命令模块装配面
 - `YierdisFastCommandProcessorArchitectureTest`：processor 不越界拥有 transaction / exception 细节
 - `CommandSupportFastPathTest`：常用 helper 的 fast path 约束
 - `DefaultYierdisEngineTest`：engine 到 processor 的桥接
+- `DbCommitPublisherTest`、`CommitStreamTest`：DB commit reservation、发布和 callback 生命周期
 - `NettyExecutionAdapterIntegrationTest`：handler submit reject、close-after-reply 等 Netty 边界
 
 事务状态机和 replay 主链的完整展开见 [`transaction-and-replay.md`](./transaction-and-replay.md)。

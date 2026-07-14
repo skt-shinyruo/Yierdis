@@ -14,6 +14,7 @@ import yier.bubu.redis.command.defaults.CommandSupport;
 
 import yier.bubu.redis.execution.api.CommandContext;
 import yier.bubu.redis.execution.api.ExecutionRequest;
+import yier.bubu.redis.execution.api.ReplyPlan;
 import yier.bubu.redis.execution.api.ReplyPlans;
 import yier.bubu.redis.execution.api.RedisReplyWriter;
 import java.nio.charset.StandardCharsets;
@@ -138,7 +139,9 @@ public final class CoreConnectionCommands {
             if (name == null) {
                 out.nullValue();
             } else {
-                out.bulkString(name.getBytes(StandardCharsets.UTF_8));
+                byte[] nameBytes = name.getBytes(StandardCharsets.UTF_8);
+                out.requireReply(ReplyPlans.bulkString(nameBytes.length, 0L));
+                out.bulkString(nameBytes);
             }
             return;
         }
@@ -184,6 +187,7 @@ public final class CoreConnectionCommands {
     private static void command(ExecutionRequest request, RedisReplyWriter out, CommandModule.Registration registration) {
         if (request.argc() == 1) {
             String[] names = registration.upperNamesSorted();
+            out.requireReply(commandListReplyPlan(names, registration));
             out.arrayHeader(names.length);
             for (String upper : names) {
                 CommandDescriptor descriptor = registration.descriptorByUpperName(upper);
@@ -207,18 +211,14 @@ public final class CoreConnectionCommands {
                 return;
             }
             int n = request.argc() - 2;
+            out.requireReply(commandInfoReplyPlan(request, registration));
             out.arrayHeader(n);
             for (int i = 2; i < request.argc(); i++) {
-                if (request.isNull(i) || request.len(i) <= 0) {
+                String upper = commandInfoName(request, i);
+                if (upper == null) {
                     out.nullArray();
                     continue;
                 }
-                String upper = CommandSupport.utf8(request, i);
-                if (upper == null || upper.isBlank()) {
-                    out.nullArray();
-                    continue;
-                }
-                upper = upper.trim().toUpperCase(Locale.ROOT);
                 CommandDescriptor descriptor = registration.descriptorByUpperName(upper);
                 if (descriptor == null) {
                     out.nullArray();
@@ -230,6 +230,68 @@ public final class CoreConnectionCommands {
         }
 
         out.error("ERR syntax error");
+    }
+
+    private static ReplyPlan commandListReplyPlan(String[] names, CommandModule.Registration registration) {
+        long encodedElementBytes = 0L;
+        for (String upper : names) {
+            CommandDescriptor descriptor = registration.descriptorByUpperName(upper);
+            encodedElementBytes = saturatingAdd(
+                    encodedElementBytes,
+                    descriptor == null ? 5L : commandInfoEncodedBytes(upper, descriptor)
+            );
+        }
+        return ReplyPlans.bulkStringArray(names.length, encodedElementBytes, 0L);
+    }
+
+    private static ReplyPlan commandInfoReplyPlan(ExecutionRequest request, CommandModule.Registration registration) {
+        int count = request.argc() - 2;
+        long encodedElementBytes = 0L;
+        for (int index = 2; index < request.argc(); index++) {
+            String upper = commandInfoName(request, index);
+            CommandDescriptor descriptor = upper == null ? null : registration.descriptorByUpperName(upper);
+            encodedElementBytes = saturatingAdd(
+                    encodedElementBytes,
+                    descriptor == null ? 5L : commandInfoEncodedBytes(upper, descriptor)
+            );
+        }
+        return ReplyPlans.bulkStringArray(count, encodedElementBytes, 0L);
+    }
+
+    private static String commandInfoName(ExecutionRequest request, int index) {
+        if (request.isNull(index) || request.len(index) <= 0) {
+            return null;
+        }
+        String upper = CommandSupport.utf8(request, index);
+        if (upper == null || upper.isBlank()) {
+            return null;
+        }
+        return upper.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static long commandInfoEncodedBytes(String nameUpper, CommandDescriptor descriptor) {
+        byte[] name = nameUpper.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII);
+        long encodedElementBytes = ReplyPlans.bulkString(name.length, 0L).encodedUpperBoundBytes();
+        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(descriptor.arity()));
+        encodedElementBytes = saturatingAdd(
+                encodedElementBytes,
+                ReplyPlans.bulkStringArray(0, 0L, 0L).encodedUpperBoundBytes()
+        );
+        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(descriptor.firstKeyIndex()));
+        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(descriptor.lastKeyIndex()));
+        encodedElementBytes = saturatingAdd(encodedElementBytes, integerEncodedBytes(descriptor.keyStep()));
+        return ReplyPlans.bulkStringArray(6, encodedElementBytes, 0L).encodedUpperBoundBytes();
+    }
+
+    private static long integerEncodedBytes(long value) {
+        return 3L + Long.toString(value).length();
+    }
+
+    private static long saturatingAdd(long left, long right) {
+        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     private static void writeCommandInfo(RedisReplyWriter out, String nameUpper, CommandDescriptor descriptor) {

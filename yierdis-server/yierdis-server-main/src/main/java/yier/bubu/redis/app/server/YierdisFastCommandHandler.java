@@ -12,6 +12,7 @@ import yier.bubu.redis.execution.executor.CommandExecutor;
 import yier.bubu.redis.protocol.resp.netty.InboundReadCreditHandler;
 import yier.bubu.redis.protocol.resp.netty.RespProtocolError;
 
+import java.io.IOException;
 import java.util.Objects;
 
 public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapter {
@@ -100,9 +101,18 @@ public final class YierdisFastCommandHandler extends ChannelInboundHandlerAdapte
         Throwable root = unwrapDecoderException(cause);
         String logMessage = safeLogMessage(root);
         String remote = String.valueOf(ctx.channel().remoteAddress());
-        log.error("Internal error from {}: {}", remote, logMessage, root);
 
         NettyExecutionConnection connection = NettyExecutionConnection.get(ctx.channel());
+        if (root instanceof IOException) {
+            log.debug("Transport closed from {}: {}", remote, logMessage);
+            if (connection != null && connection.markClosing()) {
+                safeDisableAutoRead(ctx);
+            }
+            ctx.close();
+            return;
+        }
+
+        log.error("Internal error from {}: {}", remote, logMessage, root);
         if (connection == null || connection.replyGate() == null) {
             ctx.close();
             return;

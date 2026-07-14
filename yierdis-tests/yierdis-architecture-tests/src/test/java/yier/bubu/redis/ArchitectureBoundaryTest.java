@@ -55,7 +55,11 @@ public class ArchitectureBoundaryTest {
                 "GET",
                 "SET",
                 "HSET",
-                "ZADD"
+                "ZADD",
+                "yierdis_native_live_objects",
+                "yierdis_native_live_regions",
+                "RSS",
+                "16 MiB"
         )) {
             Assert.assertTrue(
                     "production hardening operations guide is missing: " + requiredTerm,
@@ -104,6 +108,21 @@ public class ArchitectureBoundaryTest {
                     "legacy docs still allow successful close with active leases",
                     content.contains("successful close can ignore active leases")
             );
+            for (String removedPath : List.of(
+                    "CommandChangeEmitter",
+                    "CommandChangeObserver",
+                    "RuntimeChangeSinkCommandChangeObserver",
+                    "YierdisChangeEventBridge",
+                    "DbChangeContext",
+                    "createWithDefaults",
+                    "shared off-heap usage source",
+                    "live region set"
+            )) {
+                Assert.assertFalse(
+                        "project docs still describe retired production-hardening path: " + removedPath,
+                        content.contains(removedPath)
+                );
+            }
         }
     }
 

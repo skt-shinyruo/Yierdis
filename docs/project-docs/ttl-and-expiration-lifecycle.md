@@ -95,7 +95,7 @@ Netty worker timer
 
 `YierdisServerBootstrap` 用 `cleanupPending` 把重复 tick coalesce 掉，避免 executor 忙时堆出追赶式 cleanup 队列。真正的 DB cleanup 仍只在 owner thread 上执行。
 
-如果配置了 change sink，`YierdisInstanceRuntimeAccess.maintenanceTick()` 会先打开 `DbChangeContext`，这样 cleanup 删除过期 key 时发出的 synthetic `EXPIRED` 事件就能桥接到 runtime change sink。
+如果配置了 change sink，过期清理仍直接走 DB mutation boundary。删除实际提交后，DB 以 `EXPIRED` kind 向固定容量 commit stream 发布规范化的删除记录；stream worker 再把 callback-scoped event 交给 runtime sink。maintenance 不创建命令层观察 scope，也不会在未提交的 cleanup 上发布事件。
 
 ## `EntryRecord.expireAtMillis` 与 expire index 的双写约束
 

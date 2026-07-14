@@ -138,9 +138,9 @@ maxmemory 参数：
 - `--maxmemorySamples`：采样数量，默认 `5`。
 - `--evictionTimeLimitMillis`：单次 eviction 时间预算，默认 `5` ms。
 
-`YierdisServerBootstrap` 把 server runtime scope 映射成 `YierdisInstanceConfig.MaxmemoryScope`，并在生产启动路径里选择默认 DB factory。`YierdisInstance.create(config)` 是 strict 入口，要求 `YierdisInstanceConfig` 已经注入 `engineFactory`；embedded/test 兼容默认组装需要显式调用 `YierdisInstance.createWithDefaults(config)`。
+`YierdisServerBootstrap` 把 server runtime scope 映射成 `YierdisInstanceConfig.MaxmemoryScope`，并在生产启动路径里选择默认 DB factory。`YierdisInstance.create(config)` 是 strict 入口，要求 `YierdisInstanceConfig` 已经注入 `engineFactory` 或 `EngineFactoryBinding`；embedded/test 调用方也必须显式提供相同的 factory 依赖，runtime 不再隐式选择默认 DB backend。
 
-- `global`：server-main 默认 factory 下所有 DB 共享一个 instance-level `YierdisFfmMemoryRuntime("instance")`。每个 DB 仍有自己的 keyspace、entry table、roots、ledger 和 allocator 视图，但 maxmemory 由 `YierdisGlobalMaxmemoryGovernor` 跨 DB 协调。governor 汇总各 DB participant usage，并通过 shared usage source 把共享 off-heap usage 按实例口径计一次。
+- `global`：server-main 默认 factory 下所有 DB 共享一个 instance-level `YierdisFfmMemoryRuntime("instance")`。每个 DB 仍有自己的 keyspace、entry table、roots、ledger 和 allocator 视图，但 maxmemory 由 `YierdisGlobalMaxmemoryGovernor` 跨 DB 协调。governor 汇总每个 participant 报告的 owned `MemoryUsageSnapshot`，不另加一个 runtime 级 usage source。
 - `per-db`：兼容模式。`YierdisInstance` 把 `maxmemoryBytes` 按 DB 数硬分摊，整数除法后的余数按 DB 创建顺序每个 DB 多给 1 byte。server-main 默认 factory 下每个 DB 创建自己的 DB-owned `YierdisFfmMemoryRuntime("db")`，evict/reserve/memory stats 都按单 DB 预算运行。
 
 `global` 是共享实例级 runtime/governor；`per-db` 是拆分预算和 runtime ownership。不要把 `ioThreads`、Netty 连接数或 DB 数误解成 maxmemory 的并发写入模型，mutation 仍经 owner thread。

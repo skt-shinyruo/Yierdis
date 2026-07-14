@@ -34,7 +34,8 @@ public final class DbMemoryAccounting {
             HashTableMaintenanceRegistry hashTableMaintenanceRegistry,
             boolean keysStoredOffHeap,
             NativeAllocatorStats nativeAllocatorStats,
-            NativeDefragReport nativeDefragReport
+            NativeDefragReport nativeDefragReport,
+            long nativeLiveRegionCount
     ) {
         MemoryUsageSnapshot physicalUsage = usage == null ? MemoryUsageSnapshot.zero() : usage;
         long heapDataBytesEstimate = physicalUsage.heapEstimatedBytes();
@@ -110,7 +111,9 @@ public final class DbMemoryAccounting {
                 physicalUsage.nativeDataLiveBytes(),
                 physicalUsage.nativeReclaimableBytes(),
                 pendingHashTableCount,
-                lastHashTableMaintenanceStopReason
+                lastHashTableMaintenanceStopReason,
+                nativeAllocatorStats == null ? 0L : nativeAllocatorStats.liveObjects(),
+                Math.max(0L, nativeLiveRegionCount)
         );
     }
 

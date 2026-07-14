@@ -123,6 +123,7 @@ public final class KeyCommands implements CommandModule {
                 s = support.commandDb(ctx).memory().memoryStats();
             }
             // Flat key/value pairs map naturally to RESP3 maps and RESP2 key/value arrays.
+            out.requireReply(memoryStatsReplyPlan(s));
             out.mapHeader(20);
 
             out.bulkString(MEMORY_STATS_MAXMEMORY_BYTES);
@@ -188,6 +189,88 @@ public final class KeyCommands implements CommandModule {
         }
 
         out.error("ERR syntax error");
+    }
+
+    private static ReplyPlan memoryStatsReplyPlan(YierdisMemoryStats stats) {
+        long encodedElementBytes = 0L;
+        encodedElementBytes = addMemoryStatsPair(encodedElementBytes, MEMORY_STATS_MAXMEMORY_BYTES, stats.maxmemoryBytes());
+        encodedElementBytes = addMemoryStatsPair(encodedElementBytes, MEMORY_STATS_USED_BYTES_FOR_MAXMEMORY, stats.usedBytesForMaxmemory());
+        encodedElementBytes = addMemoryStatsPair(encodedElementBytes, MEMORY_STATS_EFFECTIVE_USED_BYTES_FOR_MAXMEMORY, stats.effectiveUsedBytesForMaxmemory());
+        encodedElementBytes = addMemoryStatsPair(encodedElementBytes, MEMORY_STATS_LEDGER_USED_BYTES, stats.heapDataBytesEstimate());
+        encodedElementBytes = addMemoryStatsPair(encodedElementBytes, MEMORY_STATS_OFFHEAP_USED_BYTES, stats.offHeapUsedBytes());
+        encodedElementBytes = addMemoryStatsPair(encodedElementBytes, MEMORY_STATS_LEDGER_RESERVED_BYTES, stats.reservedBytes());
+        encodedElementBytes = addMemoryStatsPair(
+                encodedElementBytes,
+                MEMORY_STATS_OFFHEAP_INCLUDED_IN_MAXMEMORY,
+                stats.offHeapIncludedInMaxmemory() ? 1L : 0L
+        );
+        encodedElementBytes = addMemoryStatsPair(
+                encodedElementBytes,
+                MEMORY_STATS_KEYSPACE_TABLE_OVERHEAD_BYTES_ESTIMATE,
+                stats.keyspaceTableOverheadBytesEstimate()
+        );
+        encodedElementBytes = addMemoryStatsPair(
+                encodedElementBytes,
+                MEMORY_STATS_EXPIRE_TABLE_OVERHEAD_BYTES_ESTIMATE,
+                stats.expireTableOverheadBytesEstimate()
+        );
+        encodedElementBytes = addMemoryStatsPair(
+                encodedElementBytes,
+                MEMORY_STATS_EXPIRE_VALUE_OBJECTS_BYTES_ESTIMATE,
+                stats.expireValueObjectsBytesEstimate()
+        );
+        encodedElementBytes = addMemoryStatsPair(encodedElementBytes, MEMORY_STATS_TOTAL_ESTIMATED_BYTES, stats.totalEstimatedBytes());
+        encodedElementBytes = addMemoryStatsPair(
+                encodedElementBytes,
+                MEMORY_STATS_KEYS_STORED_OFFHEAP,
+                stats.keysStoredOffHeap() ? 1L : 0L
+        );
+        encodedElementBytes = addMemoryStatsPair(encodedElementBytes, MEMORY_STATS_KEY_COUNT, stats.keyCount());
+        encodedElementBytes = addMemoryStatsPair(encodedElementBytes, MEMORY_STATS_EXPIRE_COUNT, stats.expireCount());
+        encodedElementBytes = addMemoryStatsPair(
+                encodedElementBytes,
+                MEMORY_STATS_KEYSPACE_REHASHING,
+                stats.keyspaceRehashing() ? 1L : 0L
+        );
+        encodedElementBytes = addMemoryStatsPair(
+                encodedElementBytes,
+                MEMORY_STATS_KEYSPACE_TABLE0_CAPACITY,
+                stats.keyspaceTable0Capacity()
+        );
+        encodedElementBytes = addMemoryStatsPair(
+                encodedElementBytes,
+                MEMORY_STATS_KEYSPACE_TABLE1_CAPACITY,
+                stats.keyspaceTable1Capacity()
+        );
+        encodedElementBytes = addMemoryStatsPair(
+                encodedElementBytes,
+                MEMORY_STATS_EXPIRE_REHASHING,
+                stats.expireRehashing() ? 1L : 0L
+        );
+        encodedElementBytes = addMemoryStatsPair(
+                encodedElementBytes,
+                MEMORY_STATS_EXPIRE_TABLE0_CAPACITY,
+                stats.expireTable0Capacity()
+        );
+        encodedElementBytes = addMemoryStatsPair(
+                encodedElementBytes,
+                MEMORY_STATS_EXPIRE_TABLE1_CAPACITY,
+                stats.expireTable1Capacity()
+        );
+        return ReplyPlans.bulkStringArray(40, encodedElementBytes, 0L);
+    }
+
+    private static long addMemoryStatsPair(long current, byte[] key, long value) {
+        long keyBytes = ReplyPlans.bulkString(key.length, 0L).encodedUpperBoundBytes();
+        long valueBytes = 3L + Long.toString(value).length();
+        return saturatingAdd(current, saturatingAdd(keyBytes, valueBytes));
+    }
+
+    private static long saturatingAdd(long left, long right) {
+        if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     private void object(ExecutionRequest request, CommandContext ctx) {

@@ -37,7 +37,7 @@ The following reply limits are hard startup-validated capacities. A request cann
 | `--replyControlReservationBytes` | `4096` | Per-request control allowance before streamed chunks are needed. |
 | `--replyDrainTimeoutMillis` | `5000` | Graceful reply-drain deadline during shutdown. |
 
-The server rejects invalid ordering at startup: control reservation must exceed the fixed reply overhead, control reservation must not exceed one-reply capacity, one-reply capacity must not exceed the per-connection capacity, and the per-connection capacity must not exceed the global capacity. The control allowance, one chunk, and fixed overhead must also fit the one-reply limit. Treat a startup validation failure as a configuration error, not as a runtime backpressure signal.
+The server rejects invalid ordering at startup: control reservation must cover the fixed reply overhead plus the largest normalized scalar error frame (`1539` bytes minimum), control reservation must not exceed one-reply capacity, one-reply capacity must not exceed the per-connection capacity, and the per-connection capacity must not exceed the global capacity. The control allowance, one chunk, and fixed overhead must also fit the one-reply limit. Treat a startup validation failure as a configuration error, not as a runtime backpressure signal.
 
 `OutboundMemoryBudget` accounts two different values:
 
@@ -86,9 +86,11 @@ Operators should distinguish a result-unknown close from a capacity reject by ch
 | Reply ownership | `yierdis_outbound_active_connections`, `yierdis_outbound_active_slots`, `yierdis_outbound_active_chunks`, `yierdis_outbound_active_sources`, `yierdis_live_child_channels` |
 | Reply failures and scheduling | `yierdis_outbound_capacity_rejects`, `yierdis_outbound_oversized_replies`, `yierdis_outbound_cancelled_slots`, `yierdis_outbound_failed_slots`, `yierdis_outbound_write_failures`, `yierdis_result_unknown_closes`, `yierdis_deferred_fair_reply_heads`, `yierdis_deferred_global_reply_heads` |
 | Shutdown | `yierdis_reply_shutdown_timeouts`, commit-stream timeout state, inbound closed state, and final ownership gauges |
-| Maxmemory/native | `MEMORY STATS` fields including `used_bytes_for_maxmemory`, `effective_used_bytes_for_maxmemory`, `ledger_reserved_bytes`, `offheap_used_bytes`, and native defrag summaries |
+| Maxmemory/native | `INFO memory` fields including `yierdis_maxmemory_used_bytes`, `yierdis_maxmemory_effective_used_bytes`, `yierdis_ledger_reserved_bytes`, `yierdis_offheap_used_bytes`, `yierdis_native_metadata_committed_bytes`, `yierdis_native_data_committed_bytes`, `yierdis_native_live_objects`, `yierdis_native_live_regions`, and native defrag summaries |
 
 During normal steady state, peaks may remain non-zero while current reserved/allocated bytes return to zero. After a test fixture or successful graceful shutdown, active slots, chunks, sources, child channels, inbound reservation, and commit-stream ownership must converge to zero. A non-zero current gauge after clients disconnect is a leak signal; capture `INFO stats`, `MEMORY STATS`, process logs, the exact workload seed, and the candidate artifact checksum before restarting.
+
+The soak workload uses one warmup cycle followed by three measured fill/cleanup cycles. At each completed cycle, live native objects and FFM regions must return to the warm baseline, and committed native bytes must remain below the metadata high-water mark plus the configured one-warm-page-per-size-class bound. The main client keeps one fixed inbound read credit while it remains connected; that standing credit is its cycle baseline, while retained input, consolidation, commit records, reply slots, sources, chunks, and outbound reservations must drain. RSS is supplementary evidence: the harness reports it for every sample and fails on uninterrupted growth above 16 MiB across the final three completed cycles. Native counters and ownership gauges remain the required leak assertions.
 
 ## Graceful Shutdown
 
@@ -130,20 +132,19 @@ JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-a
   ./scripts/smoke.sh
 ```
 
-The bounded soak harness records its seed, argv, environment, server/benchmark artifact SHA-256 values, peaks, samples, and final counters under `target/production-hardening-soak`. Use a short deterministic duration while developing and the required ten-minute duration for acceptance:
+The bounded soak harness records its seed, argv, environment, server artifact SHA-256 value, peaks, samples, cycle baselines, RSS observations, and final counters under `target/production-hardening-soak`. The soak wrapper does not require a benchmark artifact; the separate performance gate records its own artifact identities. Use a short deterministic duration while developing and the required ten-minute duration for acceptance:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   ./scripts/production-hardening-soak.sh --duration-seconds 600 --seed 20260710
 ```
 
-For final acceptance, package the candidate exactly once. Record the resulting SHA-256 values, then keep those artifacts frozen through smoke, soak, and the comparison suite. `SKIP_BUILD=1` prevents smoke from rebuilding; `--skip-package` makes the soak wrapper fail if the already-packaged server or benchmark artifact is unavailable instead of silently producing a new candidate.
+For final acceptance, package the candidate exactly once. Record the resulting SHA-256 values, then keep those artifacts frozen through smoke, soak, and the comparison suite. `SKIP_BUILD=1` prevents smoke from rebuilding; `--skip-package` makes the soak wrapper fail if the already-packaged server artifact is unavailable instead of silently producing a new candidate.
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
-  mvn -DskipTests package
-sha256sum yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar \
-  yierdis-benchmark/target/yierdis-benchmark-0.1.0-SNAPSHOT.jar
+  mvn -pl yierdis-server/yierdis-server-main,yierdis-cli -am -DskipTests package
+sha256sum yierdis-server/yierdis-server-main/target/yierdis-server-main-0.1.0-SNAPSHOT.jar
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
   SKIP_BUILD=1 ./scripts/smoke.sh
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
